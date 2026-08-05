@@ -484,12 +484,17 @@ export function PanelZone({
     // тогда смена проигрывается плавно через transition на :root (см. @property --cc-fab-*).
     const root = document.documentElement;
     root.style.setProperty('--cc-fab-inset', fabCompact ? '6px' : '20px');
+    // Снизу в компактном режиме кнопка равняется на острова (ISLAND.pad — отступ холста
+    // островов от низа окна), а не прижимается к краю: иначе малый круг висит ниже
+    // нижней кромки панели и выбивается из общей линии. В обычном режиме — уютный угол.
+    root.style.setProperty('--cc-fab-bottom', fabCompact ? `${ISLAND.pad}px` : '20px');
     root.style.setProperty('--cc-fab-size', fabCompact ? '36px' : '54px');
     // Подъём при наведении: в большом состоянии кнопка не растёт — вместо этого чуть
     // приподнимается (-2px). В малом (компактном) подъёма нет (растёт до 54).
     root.style.setProperty('--cc-fab-lift', fabCompact ? '0px' : '-2px');
     return () => {
       root.style.removeProperty('--cc-fab-inset');
+      root.style.removeProperty('--cc-fab-bottom');
       root.style.removeProperty('--cc-fab-size');
       root.style.removeProperty('--cc-fab-lift');
     };

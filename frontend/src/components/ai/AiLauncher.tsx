@@ -509,11 +509,13 @@ function Kbd({ children }: { children: React.ReactNode }) {
 }
 
 const fabStyle: React.CSSProperties = {
-  // Всегда в правом нижнем углу экрана. Отступ по обоим краям — var --cc-fab-inset: обычно
+  // Всегда в правом нижнем углу экрана. Боковой отступ — var --cc-fab-inset: обычно
   // 20px (уютный угол), но когда справа открыт остров-панель во всю высоту, PanelZone ставит
-  // 6px и кнопка прижимается плотнее к краю (меньше налезает на остров). Снизу — safe-area.
+  // 6px и кнопка прижимается плотнее к краю (меньше налезает на остров). Нижний отступ
+  // отдельный (--cc-fab-bottom): в компактном режиме он равен отступу холста островов,
+  // чтобы кнопка стояла на одной линии с их нижней кромкой. Снизу ещё safe-area.
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-inset, 20px))',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
   // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
   // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
   // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
@@ -577,9 +579,9 @@ const toggleThumb: React.CSSProperties = {
 };
 
 const balloonStyle: React.CSSProperties = {
-  // Над кнопкой в покое — отступ края как у FAB (var) + текущая высота кнопки (var, −8 нахлёст)
+  // Над кнопкой в покое — её нижний отступ (var) + текущая высота кнопки (var, −8 нахлёст)
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-inset, 20px) + var(--cc-fab-size, 54px) - 8px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -598,9 +600,9 @@ const balloonGhost: React.CSSProperties = {
 
 // Hover-балун со списком рекомендаций (шире проактивного, с прокруткой при длинном списке)
 const hoverBalloonStyle: React.CSSProperties = {
-  // Показывается на наведении, когда кнопка выросла до 54 — отступ края как у FAB (var) + её высота
+  // Показывается на наведении, когда кнопка выросла до 54 — её нижний отступ (var) + высота
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-inset, 20px) + 46px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

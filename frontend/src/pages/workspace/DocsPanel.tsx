@@ -13,7 +13,7 @@ import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSens
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
-import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, FileQuestion, FolderCog, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -82,6 +82,10 @@ const TREE_SQUEEZE_H = 64;
 // Свёрнутые папки — привязаны к проекту: в разных репозиториях папки разные, и общий
 // список сворачивал бы в одном то, чего в другом нет
 const COLLAPSED_KEY = 'cc_docs_collapsed';
+// Отдельно от COLLAPSED_KEY: «глубокое» сворачивание раздела прячет всё его поддерево
+// (вложенные разделы целиком), а не только свои документы — это разные жесты и разные
+// множества, иначе одиночный шеврон начал бы утаскивать подпапки
+const DEEP_COLLAPSED_KEY = 'cc_docs_deep_collapsed';
 
 // Закреплённые документы — тоже по проекту
 const PINNED_KEY = 'cc_docs_pinned';
@@ -175,7 +179,7 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage }: {
+function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false }: {
   folder: string;
   // Подпись группы: у раздела это заголовок его страницы («Расширения»), у обычной папки —
   // её путь (значение по умолчанию). Считает панель: она знает, есть ли у папки пара
@@ -191,17 +195,31 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
   // Тогда шеврон выносится из подписи наружу — иначе кнопка сворачивания оказалась бы
   // вложена в кнопку открытия, а вложенные кнопки html не разрешает
   onOpenPage?: () => void;
+  // Глубокое сворачивание (двойной шеврон + правая линия): прячет всё поддерево. Есть
+  // только у раздела с вложенными подпапками — иначе прятать сверх своих документов нечего
+  onCollapseSubtree?: () => void;
+  subtreeCollapsed?: boolean;
 }) {
   const title = titleProp ?? groupLabel(folder);
+  // Наведение на любую часть зоны сворачивания (линия, левый или двойной шеврон)
+  // подсвечивает оба шеврона — они управляют одним и тем же разделом
+  const [foldHover, setFoldHover] = useState(false);
   const chevron = (
     <ChevronRight
       size={12} strokeWidth={2.4}
       style={{
-        color: flash ? C.accent : C.textMuted,
+        // Постоянно акцентом когда раздел свёрнут (как двойной у свёрнутого поддерева);
+        // плюс под курсором на линии или шевронах
+        color: (flash || collapsed || foldHover) ? C.accent : C.textMuted,
         transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease',
       }}
     />
   );
+  // Наведение на зону сворачивания вешаем одинаково на все её части
+  const foldHoverProps = {
+    onMouseEnter: () => setFoldHover(true),
+    onMouseLeave: () => setFoldHover(false),
+  };
   if (onOpenPage) return (
     <div style={{
       position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
@@ -210,6 +228,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
     }}>
       <button
         onClick={onToggle}
+        {...foldHoverProps}
         title={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
         style={{
           width: 16, flexShrink: 0, height: 20, padding: 0, border: 'none',
@@ -225,14 +244,44 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
           align="left" dense flash={flash}
           onClick={onOpenPage}
           highlightOnHover
-          onLineClick={onToggle}
-          lineTitleAttr={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
+          // Правая линия делает то же, что двойной шеврон: у раздела с поддеревом —
+          // глубокое сворачивание, у листового — обычное (прятать нечего сверх документов)
+          onLineClick={onCollapseSubtree ?? onToggle}
+          onLineHover={setFoldHover}
+          lineTitleAttr={onCollapseSubtree
+            ? `${title} — ${subtreeCollapsed ? 'показать' : 'скрыть'} весь раздел со вложенными`
+            : `${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
           titleAttr={`${title} — открыть страницу раздела`}
           trailing={collapsed
             ? <span style={{ flexShrink: 0, fontSize: 10, color: C.textMuted }}>{hidden}</span>
             : undefined}
         />
       </div>
+      {/* Двойной шеврон справа от линии — свернуть/развернуть всё поддерево. Отдельной
+          кнопкой (а не внутри подписи): подпись — кнопка открытия, а button в button
+          html не разрешает. Есть только у раздела с вложенными подпапками */}
+      {onCollapseSubtree && (
+        <button
+          onClick={onCollapseSubtree}
+          {...foldHoverProps}
+          title={`${title} — ${subtreeCollapsed ? 'развернуть' : 'свернуть'} весь раздел со вложенными`}
+          style={{
+            width: 16, flexShrink: 0, height: 20, padding: 0, border: 'none',
+            background: 'transparent', cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}
+        >
+          <ChevronsRight
+            size={12} strokeWidth={2.4}
+            style={{
+              // Постоянно акцентом когда поддерево свёрнуто; плюс под курсором на линии
+              // или любом шевроне зоны
+              color: (subtreeCollapsed || foldHover) ? C.accent : C.textMuted,
+              transform: subtreeCollapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease',
+            }}
+          />
+        </button>
+      )}
     </div>
   );
   return (
@@ -283,14 +332,18 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
 // Строка папки в списке переходов (поповер и закреплённый блок — один и тот же список).
 // Отдельным компонентом ради собственного состояния наведения: в списке из десятка папок
 // без подсветки не видно, куда попадёт клик.
-function FolderRow({ folder, count, current, onJump }: {
-  folder: string;
+function FolderRow({ label, iconPath, count, current, onJump }: {
+  // Готовая подпись: у раздела — заголовок его файла, у чистой папки — путь. Считает
+  // владелец списка (ему доступны sectionPages), чтобы правило совпадало с деревом
+  label: string;
+  // Путь файла-страницы раздела: под него рисуем бейдж расширения (md), как у документов.
+  // Нет — обычная папка, ей иконка папки
+  iconPath?: string;
   count: number;
   current: boolean;
   onJump: () => void;
 }) {
   const [hover, setHover] = useState(false);
-  const label = folder ? groupLabel(folder) : 'корень проекта';
   return (
     <button
       onClick={onJump}
@@ -307,6 +360,9 @@ function FolderRow({ folder, count, current, onJump }: {
         fontWeight: current ? 600 : 400,
       }}
     >
+      {iconPath
+        ? <DocBadge path={iconPath} />
+        : <Folder size={13} strokeWidth={2.2} style={{ flexShrink: 0, color: C.textMuted }} />}
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{count}</span>
     </button>
@@ -478,6 +534,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       return new Set<string>(raw ? JSON.parse(raw) as string[] : []);
     } catch { return new Set<string>(); }
   });
+  // Разделы, у которых скрыто всё поддерево (глубокое сворачивание двойным шевроном)
+  const [deepCollapsed, setDeepCollapsed] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem(`${DEEP_COLLAPSED_KEY}:${project.id}`);
+      return new Set<string>(raw ? JSON.parse(raw) as string[] : []);
+    } catch { return new Set<string>(); }
+  });
   // Закреплённые — СПИСОК, а не множество: их порядок задаёт пользователь перетаскиванием,
   // и «как пришло из индекса» тут не годится
   const [pinnedOrder, setPinnedOrder] = useState<string[]>(() => {
@@ -509,9 +572,39 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   };
 
   const toggleFolder = (folder: string) => {
+    // Раздел глубоко свёрнут: одиночный шеврон (и правая линия листового раздела)
+    // разворачивают его целиком. Иначе жест выглядит мёртвым — документы всё равно
+    // скрыты глубоким сворачиванием, и toggle обычного collapsed ничего не меняет
+    if (deepCollapsed.has(folder)) {
+      const nd = new Set(deepCollapsed);
+      nd.delete(folder);
+      saveDeepCollapsed(nd);
+      if (collapsed.has(folder)) {
+        const nc = new Set(collapsed);
+        nc.delete(folder);
+        saveCollapsed(nc);
+      }
+      return;
+    }
     const next = new Set(collapsed);
     if (!next.delete(folder)) next.add(folder);
     saveCollapsed(next);
+  };
+
+  const saveDeepCollapsed = (next: Set<string>) => {
+    setDeepCollapsed(next);
+    try {
+      localStorage.setItem(`${DEEP_COLLAPSED_KEY}:${project.id}`, JSON.stringify([...next]));
+    } catch { /* приватный режим — обойдёмся без запоминания */ }
+  };
+
+  // Глубокое сворачивание раздела: прячет всё его поддерево. Виден только заголовок самого
+  // раздела, вложенные подпапки (заголовки и документы) уходят целиком — рендер не рисует
+  // блоки под свёрнутым предком (см. isUnderDeepCollapsed)
+  const collapseSubtree = (folder: string) => {
+    const next = new Set(deepCollapsed);
+    if (!next.delete(folder)) next.add(folder);
+    saveDeepCollapsed(next);
   };
 
   const savePinned = (next: string[]) => {
@@ -661,6 +754,28 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     walk('');
     return out;
   }, [index]);
+
+  // Папки, у которых есть вложенные подпапки-блоки: только им нужен двойной шеврон
+  // «свернуть поддерево» — у листового раздела прятать сверх своих документов нечего
+  const foldersWithSubtree = useMemo(() => {
+    const s = new Set<string>();
+    for (const b of blocks) {
+      const parent = b.folder ? folderOf(b.folder) : '';
+      if (parent) s.add(parent);
+    }
+    return s;
+  }, [blocks]);
+
+  // Блок под глубоко свёрнутым предком: его не рисуем вовсе — так поддерево исчезает
+  // целиком, а не просто пустеет. Поднимаемся по цепочке папок до корня
+  const isUnderDeepCollapsed = useCallback((folder: string) => {
+    let p = folderOf(folder);
+    while (p) {
+      if (deepCollapsed.has(p)) return true;
+      p = folderOf(p);
+    }
+    return false;
+  }, [deepCollapsed]);
 
   // Подпись группы: у раздела — заголовок его страницы, у прочих папок — путь как раньше.
   // Родитель приписывается приглушённо: полный путь в подписи читается хуже, чем
@@ -967,15 +1082,22 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
 
   // Строка папки — одна на поповер и на закреплённый блок: это один и тот же список,
   // и расходиться в поведении они не должны
-  const folderRow = (folder: string, count: number, current: boolean) => (
-    <FolderRow
-      key={folder || '__root'}
-      folder={folder}
-      count={count}
-      current={current}
-      onJump={() => jumpToFolder(folder)}
-    />
-  );
+  const folderRow = (folder: string, count: number, current: boolean) => {
+    // Подпись — заголовок файла раздела (если есть пара), иначе путь папки; под страницу
+    // раздела рисуем md-бейдж, как у документов
+    const page = folder ? sectionPages.get(folder) : undefined;
+    const label = folder ? groupTitle(folder).title : 'корень проекта';
+    return (
+      <FolderRow
+        key={folder || '__root'}
+        label={label}
+        iconPath={page?.path}
+        count={count}
+        current={current}
+        onJump={() => jumpToFolder(folder)}
+      />
+    );
+  };
 
 
   // Кнопка и блок нужны, только когда есть что выбирать: с единственной папкой
@@ -1326,8 +1448,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                   />
                 )}
                 {blocks.map(({ key, folder, docs }) => {
-                  // Корневая группа без подписи — сворачивать её нечем и незачем
-                  const isCollapsed = !!folder && collapsed.has(folder);
+                  // Блок под глубоко свёрнутым предком не рисуем вовсе — так поддерево
+                  // исчезает целиком, а не просто пустеет
+                  if (folder && isUnderDeepCollapsed(folder)) return null;
+                  // Корневая группа без подписи — сворачивать её нечем и незачем.
+                  // Глубокое сворачивание тоже прячет свои документы (grid ниже)
+                  const isCollapsed = !!folder && (collapsed.has(folder) || deepCollapsed.has(folder));
                   const page = sectionPages.get(folder);
                   const { title, subtitle } = groupTitle(folder);
                   return (
@@ -1356,6 +1482,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         // У папки с парной страницей подпись открывает её — как узел
                         // дерева в wiki; сворачивание переезжает на шеврон
                         onOpenPage={page ? () => handleRowClick(page.path) : undefined}
+                        subtreeCollapsed={deepCollapsed.has(folder)}
+                        // Двойной шеврон — только у раздела с вложенными подпапками
+                        onCollapseSubtree={foldersWithSubtree.has(folder) ? () => collapseSubtree(folder) : undefined}
                       />
                     )}
                     {/* Сворачивание высотой grid-строки: она анимируется от 0fr к 1fr, и

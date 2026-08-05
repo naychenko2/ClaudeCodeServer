@@ -31,7 +31,7 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  */
 export function ListDateDivider({
   title, subtitle, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
-  highlightOnHover = false, onLineClick, lineTitleAttr,
+  highlightOnHover = false, onLineClick, lineTitleAttr, onLineHover,
 }: {
   title: string;
   // Приписка сразу после подписи, приглушённо: у групп документации это родительский
@@ -54,6 +54,9 @@ export function ListDateDivider({
   // остаётся под сворачивание группы — как шеврон. Клик по ней не всплывает к onClick
   onLineClick?: () => void;
   lineTitleAttr?: string;
+  // Наведение на правую линию: сообщаем наружу, чтобы подсветить тот шеврон, чьё действие
+  // линия дублирует (одиночный у листового раздела, двойной у раздела с поддеревом)
+  onLineHover?: (hovering: boolean) => void;
 }) {
   const [hover, setHover] = useState(false);
   const lineColor = flash ? C.accent : C.divider;
@@ -88,6 +91,8 @@ export function ListDateDivider({
         // stopPropagation держит жест отдельно от onClick подписи (та открывает документ)
         <div
           onClick={e => { e.stopPropagation(); onLineClick(); }}
+          onMouseEnter={onLineHover ? () => onLineHover(true) : undefined}
+          onMouseLeave={onLineHover ? () => onLineHover(false) : undefined}
           title={lineTitleAttr}
           style={{
             flex: 1, alignSelf: 'stretch', cursor: 'pointer',

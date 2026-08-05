@@ -871,6 +871,129 @@ public class DocsIndexTests : IDisposable
         DocsIndexService.RelativeLink(from, to).Should().Be(expected);
     }
 
+    // ─── Перенос между папками ──────────────────────────────────────────────
+
+    [Fact]
+    public void Перенос_Документа_ФайлИВходящиеСсылки()
+    {
+        Write("# Vision\n\nсм. [бриф](brief.md)", "docs", "vision.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocMoveStatus.Ok);
+        result.Path.Should().Be("docs/adr/brief.md");
+        File.Exists(Path.Combine(_root, "docs", "adr", "brief.md")).Should().BeTrue();
+        Read("docs", "vision.md").Should().Contain("[бриф](adr/brief.md)");
+    }
+
+    [Fact]
+    public void Перенос_ПересчитываетСобственныеСсылкиПереехавшего()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Бриф\n\nсм. [vision](vision.md)", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        // Глубина изменилась: ссылка на неподвижную цель тоже поехала. Именно этим
+        // перенос отличается от переименования, где глубина сохраняется
+        Read("docs", "adr", "brief.md").Should().Contain("[vision](../vision.md)");
+    }
+
+    [Fact]
+    public void Перенос_Раздела_ПараИПоддерево()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Directory.CreateDirectory(Path.Combine(_root, "docs", "архив"));
+        Write("# Старое", "docs", "архив", "old.md");
+
+        var result = Creating().MoveDoc(_root, "docs/decisions.md", "docs/архив", updateLinks: true);
+
+        result.Path.Should().Be("docs/архив/decisions.md");
+        Directory.Exists(Path.Combine(_root, "docs", "архив", "decisions")).Should().BeTrue();
+        Directory.Exists(Path.Combine(_root, "docs", "decisions")).Should().BeFalse();
+        result.Moved!.Keys.Should().BeEquivalentTo(["docs/decisions.md", "docs/decisions/0001.md"]);
+    }
+
+    [Fact]
+    public void Перенос_МеняетOrderОбеихПапок()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+        Write("vision\nbrief\n", "docs", ".order");
+        Write("0001\n", "docs", "adr", ".order");
+
+        Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        // Из старой папки имя уходит, в новую дописывается в хвост
+        ReadOrderFile("docs").Should().Be("vision\n");
+        ReadOrderFile("docs", "adr").Should().Be("0001\nbrief\n");
+    }
+
+    [Fact]
+    public void Перенос_РазделаВСамогоСебя_ЭтоОтказ()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+
+        // Папка не может стать собственным потомком, а ФС отвечает на это невнятной
+        // ошибкой уже после того, как страница переименована
+        Creating().MoveDoc(_root, "docs/decisions.md", "docs/decisions", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocMoveStatus.BadTarget);
+        File.Exists(Path.Combine(_root, "docs", "decisions.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Перенос_ЗанятоеИмяВЦелевойПапке_ЭтоКонфликт()
+    {
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Другой бриф", "docs", "adr", "brief.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocMoveStatus.Conflict);
+        Read("docs", "adr", "brief.md").Should().Be("# Другой бриф");
+    }
+
+    [Fact]
+    public void Перенос_ВПапкуВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Бриф", "docs", "brief.md");
+        Directory.CreateDirectory(Path.Combine(_root, "backend"));
+
+        Creating().MoveDoc(_root, "docs/brief.md", "backend", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocMoveStatus.BadTarget);
+        File.Exists(Path.Combine(_root, "docs", "brief.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Перенос_ВТуЖеПапку_НичегоНеДелает()
+    {
+        Write("# Бриф", "docs", "brief.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocMoveStatus.Ok);
+        result.Moved.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Перенос_БезПочинкиСсылок_СообщаетЧислоБитых()
+    {
+        Write("# Vision\n\nсм. [бриф](brief.md)", "docs", "vision.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: false);
+
+        result.BrokenLinks.Should().Be(1);
+        Read("docs", "vision.md").Should().Contain("(brief.md)");
+    }
+
     // ─── Удаление ───────────────────────────────────────────────────────────
 
     [Fact]

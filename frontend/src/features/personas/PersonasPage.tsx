@@ -2,14 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, FONT } from '../../lib/design';
+import { C } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
 import { ConfirmDialog, IslandScaffold } from '../../components/ui';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../../components/ui/PageCanvas';
 import { useIsMobile } from '../../lib/breakpoints';
 import { PanelZone } from '../../pages/workspace/PanelZone';
 import { personasPanels } from '../../pages/workspace/panelStackState';
@@ -255,9 +255,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader value="personas" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
       {deleteTarget && (
@@ -270,7 +268,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
           onCancel={() => setDeleteTarget(null)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }
 

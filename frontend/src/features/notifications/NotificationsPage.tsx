@@ -3,7 +3,7 @@ import { Bell, CheckCheck, Search, Trash2, Columns, SlidersHorizontal, Folder } 
 import { C, FONT, FS, R, SP, SHADOW, CONTENT_MAX_W } from '../../lib/design';
 import { NotificationAvatar, hasPersona, notifAccentColor } from './NotificationAvatar';
 import { HubHeader } from '../../components/HubHeader';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../../components/ui/PageCanvas';
 import { ConfirmDialog } from '../../components/ui';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -245,9 +245,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgMain, position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas style={{ height: '100%' }}>
       <HubHeader value="notifications" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
       <div style={{
@@ -500,6 +498,6 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
           onCancel={() => setConfirmClear(false)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }

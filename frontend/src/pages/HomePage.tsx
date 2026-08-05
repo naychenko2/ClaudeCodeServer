@@ -4,7 +4,7 @@ import { C, FONT, HOME_MAX_W } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { HubHeader } from '../components/HubHeader';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import type { HubTabValue } from '../components/HubTabs';
 import { useHomeSummary } from '../features/home/useHomeSummary';
 import { ActivityWidget } from '../features/home/ActivityWidget';
@@ -48,9 +48,7 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
   const today = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
 
   return (
-    <div style={{ height: '100dvh', display: 'flex', flexDirection: 'column', background: C.bgMain, position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       {/* Ширина дашборда — своя (HOME_MAX_W): почему не колонка чтения и не сетка
           раздела, объяснено при константе. Боковые отступы — на скролл-контейнере,
@@ -119,6 +117,6 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
           )}
         </div>
       </div>
-    </div>
+    </PageCanvas>
   );
 }

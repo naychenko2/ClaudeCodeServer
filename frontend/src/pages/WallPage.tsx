@@ -21,7 +21,7 @@ import { useWindowWidth, MOBILE_MAX } from '../lib/breakpoints';
 import { setWallActive } from '../lib/wallMode';
 import { api } from '../lib/api';
 import { HubHeader } from '../components/HubHeader';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import { Button } from '../components/ui';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
@@ -162,8 +162,7 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
 
   if (!active) {
     return (
-      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-        <CanvasBackdrop />
+      <PageCanvas>
         <HubHeader value="wall" onTab={onHubTab} auth={auth} onLogout={onLogout} />
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', textAlign: 'center', maxWidth: 380, gap: 10 }}>
@@ -181,7 +180,7 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
             </Button>
           </div>
         </div>
-      </div>
+      </PageCanvas>
     );
   }
 
@@ -200,8 +199,7 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
   };
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      <CanvasBackdrop />
+    <PageCanvas>
       {/* Хлебная крошка у логотипа — проект ФОКУСНОЙ колонки (на стене чаты разных
           проектов, и «где я» отвечает та колонка, в которой сейчас работают) вместе
           с кнопкой его настроек — тот же диалог, что в воркспейсе */}
@@ -369,6 +367,6 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
           onClose={() => setEditProject(null)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }

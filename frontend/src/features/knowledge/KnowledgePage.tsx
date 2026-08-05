@@ -7,7 +7,7 @@ import { useKnowledge, useKnowledgeConfigured, ensureKnowledgeLoaded, bumpKnowle
 import { api } from '../../lib/api';
 import { parseHash, navPush, navReplace, getNav, type NavSnapshot } from '../../lib/nav';
 import { IslandScaffold, ConfirmDialog } from '../../components/ui';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../../components/ui/PageCanvas';
 import { useIsMobile } from '../../lib/breakpoints';
 import { PanelZone } from '../../pages/workspace/PanelZone';
 import { knowledgePanels } from '../../pages/workspace/panelStackState';
@@ -156,10 +156,10 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   // --- Dify не настроен — весь раздел недоступен ---
   if (!configured) {
     return (
-      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <PageCanvas>
         <HubHeader value="knowledge" onTab={onHubTab} auth={auth} onLogout={onLogout} />
         <div style={{ flex: 1, minHeight: 0 }}><KnowledgeEmptyState configured={false} onNew={() => setNewDialog(true)} /></div>
-      </div>
+      </PageCanvas>
     );
   }
 
@@ -182,9 +182,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader value="knowledge" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>
         {body}
@@ -213,7 +211,7 @@ export function KnowledgePage({ auth, onLogout, onHubTab }: {
           onCancel={() => setDeleteKb(null)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }
 

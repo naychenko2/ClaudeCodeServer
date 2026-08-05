@@ -7,7 +7,7 @@ import { C, FONT, FS, R, MODAL_W, SHADOW, CHAT_MAX_W } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { EmptyState } from './EmptyState';
 import { HubHeader } from './HubHeader';
-import { CanvasBackdrop } from './ui/CanvasBackdrop';
+import { PageCanvas } from './ui/PageCanvas';
 import type { HubTabValue } from './HubTabs';
 import { Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -422,12 +422,9 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
   );
 
   return (
-    <div style={{
-      position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', flexDirection: 'column',
-      background: C.bgMain, fontFamily: FONT.sans, isolation: 'isolate',
-    }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    // Страница-оверлей поверх раздела: отсюда position:'fixed' вместо потока
+    // (уровень наложения — прежний, на одной ступени с модалками)
+    <PageCanvas style={{ position: 'fixed', inset: 0, zIndex: 1000 }}>
       {/* Шапка — та же, что у остальных разделов (логотип, разделы, аватар):
           уход в любой раздел закрывает страницу */}
       <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} historyActive />
@@ -451,7 +448,7 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
           }
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }
 

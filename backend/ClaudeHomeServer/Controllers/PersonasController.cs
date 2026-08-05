@@ -33,6 +33,7 @@ public class PersonasController : ControllerBase
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly PersonaAskService _ask;
     private readonly PersonaAutomationService _automation;
+    private readonly SpecialtyTemplatesService _specialtyTemplates;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
@@ -42,7 +43,8 @@ public class PersonasController : ControllerBase
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
         FalImageService falImage,
         Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
-        PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation, IConfiguration config,
+        PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation,
+        SpecialtyTemplatesService specialtyTemplates, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _cheap = cheap;
@@ -59,6 +61,7 @@ public class PersonasController : ControllerBase
         _promptBuilder = promptBuilder;
         _ask = ask;
         _automation = automation;
+        _specialtyTemplates = specialtyTemplates;
         _config = config;
         _log = log;
         _hub = hub;
@@ -223,13 +226,20 @@ public class PersonasController : ControllerBase
             }
         }
 
+        // Шаблон специальности: при выборе специальности неподставленные
+        // access/tools/disallowedTools берутся из эффективного шаблона;
+        // явные поля запроса всегда побеждают, после создания поля правятся вручную.
+        var createSpecialty = req.Specialty ?? PersonaSpecialty.None;
+        var templated = _specialtyTemplates.Apply(UserId, createSpecialty, currentSpecialty: null,
+            access, req.Tools, req.DisallowedTools);
+
         Persona persona;
         try
         {
             persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled ?? true, req.Tools, req.Contract,
-                access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
+                req.MemoryEnabled ?? true, templated.Tools, req.Contract,
+                templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
                 req.AllProjectsAccess ?? false, req.Handle, req.ModelTier);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
@@ -273,13 +283,19 @@ public class PersonasController : ControllerBase
                 return BadRequest(new { error = tooBig });
         }
 
+        // Шаблон специальности: применяется только при реальной СМЕНЕ специальности;
+        // неподставленные access/tools/disallowedTools берутся из шаблона, явные поля
+        // запроса побеждают. Та же специальность в запросе — поля не трогает.
+        var templated = _specialtyTemplates.Apply(UserId, req.Specialty ?? current.Specialty, current.Specialty,
+            access, req.Tools, req.DisallowedTools);
+
         Persona persona;
         try
         {
             persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
-                req.AllProjectsAccess, req.Handle, req.ModelTier);
+                req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
+                req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         await Broadcast("updated", id);

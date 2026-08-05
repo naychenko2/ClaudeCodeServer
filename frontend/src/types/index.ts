@@ -691,8 +691,11 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'git_turn_commit'; sessionId: string; projectId: string; sha: string; subject: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   // Чат переключён на другой аккаунт/провайдер: auto — тихий фейловер пула подписок
-  // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции
-  | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean }
+  // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции.
+  // reason — классификация причины фолбэка с бэкенда (TurnErrorClassifier.WireName:
+  // rate_limit|usage_limit|provider_error|unreachable) для подсказки «Ответила … — … была
+  // недоступна» (см. providerSwitchReasonLabel в lib/providerLimit.ts)
+  | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean; reason?: string }
   // Лимит подписки исчерпан, в пуле переключиться некуда — предложение продолжить
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
@@ -1210,6 +1213,15 @@ export type ChatItem =
   | { kind: 'companion_switched'; label: string; personaId?: string }
   // Разделитель «Продолжено на …» — явная миграция чата на другого провайдера
   | { kind: 'provider_switched'; label: string }
+  // Разделитель «Ответила …» — рантайм-фолбэк сменил именно МОДЕЛЬ (уровень 2 цепочки —
+  // другой провайдер), не просто подписку того же провайдера: та ротация модель не трогает
+  // и своей пометки не получает (см. блок G model-providers-rework.md). model/previousModel —
+  // id из каталога моделей, подпись собирается на рендере (useModelLabel). reason —
+  // канонический класс причины с бэкенда (rate_limit|usage_limit|provider_error|unreachable,
+  // персистится в StoredModelSwitchedMessage.Reason). rawLabel — сырой label маркера
+  // provider_switched, фолбэк подсказки, когда reason не пришёл или не распознан
+  // (см. providerSwitchReasonLabel в lib/providerLimit.ts)
+  | { kind: 'model_switched'; model: string; previousModel: string; reason?: string; rawLabel?: string }
   // Карточка-предложение: лимит подписки исчерпан — продолжить на стороннем провайдере.
   // resolved — миграция состоялась (карточка гаснет)
   | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }
@@ -1573,9 +1585,67 @@ export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 // Специальность персоны — функциональная роль для оркестрации (НЕ отображаемое имя роли):
 // конвейер (analyst→planner→reviewer→executor), голос брифинга (secretary),
 // группировка/статус команды, роутинг памяти команды. none — не задана.
+// backendExecutor/frontendExecutor — профильные исполнители; wire-значения совпадают
+// с ключами бэкендного SpecialtyCatalog (camelCase от enum).
 export type PersonaSpecialty =
   | 'none' | 'analyst' | 'planner' | 'reviewer' | 'executor' | 'secretary'
-  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian' | 'tester';
+  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian' | 'tester'
+  | 'backendExecutor' | 'frontendExecutor';
+
+// Шаблон прав и инструментов специальности: подставляется в поля персоны
+// при выборе специальности, дальше правится вручную.
+export interface SpecialtyTemplate {
+  access: PersonaAccess;
+  // null — все возможности (tasks+notes+web)
+  tools: string[] | null;
+  // Имеет смысл только при access === 'custom'
+  disallowedTools: string[] | null;
+}
+
+// Запись каталога специальностей из GET /api/specialties: подписи и эффективный
+// шаблон прав вызывающего (настройки поверх дефолтов кода) приходят с бэкенда.
+export interface SpecialtyCatalogEntry {
+  key: PersonaSpecialty;
+  label: string;
+  executorFamily: boolean;
+  template: SpecialtyTemplate | null;
+}
+
+// Правило выбора модели в пресете: для специальности (ключ или "any") — маршрут.
+// Лексика маршрутов — как у назначений мест: tier:strong|medium|weak, id модели,
+// local, claude, default.
+export interface ModelRouteRule {
+  specialty: string;
+  route: string;
+}
+
+// Именованный пресет правил выбора модели (порядок правил значим)
+export interface ModelRoutePreset {
+  id: string;
+  name: string;
+  description?: string | null;
+  rules: ModelRouteRule[];
+}
+
+// Настройка шаблона специальности в слое (глобальном или личном)
+export interface SpecialtyTemplateSettings {
+  access: PersonaAccess;
+  tools?: string[] | null;
+  disallowedTools?: string[] | null;
+}
+
+// Слой настроек специальностей и пресетов: шаблоны + пресеты правил
+export interface SpecialtySettingsLayer {
+  specialties: Record<string, SpecialtyTemplateSettings>;
+  presets: ModelRoutePreset[];
+}
+
+// Ответ GET /api/specialties/settings: глобальный слой и личный слой вызывающего
+export interface SpecialtySettingsResponse {
+  version: number;
+  global: SpecialtySettingsLayer;
+  owner: SpecialtySettingsLayer;
+}
 
 // Параметры кропа загруженного аватара: масштаб + смещение центра окна
 // от центра картинки (в пикселях исходника)

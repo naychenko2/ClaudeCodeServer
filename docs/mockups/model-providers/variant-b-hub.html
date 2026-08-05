@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Поставщики моделей — вариант B · Хаб-раздел</title>
+<style>
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2; --c-on-nav-ink:#F4ECE1;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4;
+  --c-nav-ink:#2A251F;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05); --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18; --c-on-nav-ink:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B;
+  --c-nav-ink:#EDE6DB;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35); --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--c-bg-main);color:var(--c-text-primary);min-height:100vh}
+.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--c-bg-white);border-bottom:1px solid var(--c-border)}
+.topbar h1{font-family:'PT Serif',Georgia,serif;font-size:15px;margin:0 12px 0 0;color:var(--c-text-heading);font-weight:700}
+.btn{font:inherit;font-size:12px;color:var(--c-text-secondary);background:var(--c-bg-panel);
+  border:1px solid var(--c-border);border-radius:8px;padding:6px 10px;cursor:pointer}
+.btn.on{background:var(--c-accent-light);color:var(--c-accent);border-color:var(--c-accent-muted)}
+.siblings{margin-left:auto;display:flex;gap:6px;font-size:12px}
+.siblings a{color:var(--c-text-muted);text-decoration:none;padding:6px 8px;border-radius:8px}
+.siblings a:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.siblings a.self{color:var(--c-accent);font-weight:600}
+
+/* --- Хаб-шапка --- */
+.hub-head{display:flex;align-items:center;gap:4px;padding:10px 20px;background:var(--c-bg-main);
+  border-bottom:1px solid var(--c-border);overflow-x:auto}
+.hub-pill{font-size:12.5px;font-weight:600;color:var(--c-text-secondary);padding:7px 13px;border-radius:9px;
+  white-space:nowrap;cursor:default}
+.hub-pill.active{background:var(--c-nav-ink);color:var(--c-on-nav-ink)}
+
+/* --- Каркас раздела --- */
+.stage{padding:0}
+.scaffold{display:flex;gap:8px;padding:16px;align-items:flex-start}
+.island{background:var(--c-bg-panel);border:1px solid var(--c-border-light);border-radius:14px;
+  box-shadow:var(--shadow-island);overflow:hidden}
+.sidebar{width:280px;flex-shrink:0;display:flex;flex-direction:column}
+.sidebar-head{height:40px;display:flex;align-items:center;padding:0 14px;font-size:11px;font-weight:700;
+  color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.06em;background:var(--c-bg-inset);
+  border-bottom:1px solid var(--c-border-light)}
+.sidebar-body{padding:8px;display:flex;flex-direction:column;gap:2px;max-height:calc(100vh - 180px);overflow-y:auto}
+.nav-item{display:flex;align-items:center;gap:8px;padding:9px 10px;border-radius:9px;cursor:pointer;
+  font-size:13px;font-weight:600;color:var(--c-text-primary)}
+.nav-item:hover{background:var(--c-bg-selected)}
+.nav-item.active{background:var(--c-accent-light);color:var(--c-accent)}
+.nav-item .cnt{margin-left:auto;font-size:10.5px;font-weight:700;color:var(--c-text-muted)}
+.nav-item.active .cnt{color:var(--c-accent)}
+.nav-sub{display:flex;flex-direction:column;gap:1px;margin:2px 0 6px 14px;border-left:1px solid var(--c-border);padding-left:10px}
+.nav-sub-item{display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:7px;cursor:pointer;
+  font-size:12px;color:var(--c-text-secondary)}
+.nav-sub-item:hover{background:var(--c-bg-selected)}
+.nav-sub-item.active{background:var(--c-bg-white);color:var(--c-text-heading);font-weight:600}
+.badge{font-size:9.5px;font-weight:700;padding:1px 6px;border-radius:8px;white-space:nowrap;flex-shrink:0}
+.badge.new{background:var(--c-info-bg);color:var(--c-info)}
+.badge.manual{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.badge.tpl{background:var(--c-bg-selected);color:var(--c-text-secondary)}
+
+.center{flex:1;min-width:0;display:flex;flex-direction:column}
+.center-head{height:40px;display:flex;align-items:center;gap:10px;padding:0 16px;background:var(--c-bg-inset);
+  border-bottom:1px solid var(--c-border-light);flex-shrink:0}
+.center-head .t{font-size:13.5px;font-weight:700;color:var(--c-text-heading)}
+.center-head .s{font-size:11.5px;color:var(--c-text-muted)}
+.backbtn{display:none;font-size:16px;color:var(--c-text-secondary);cursor:pointer;background:none;border:none;padding:0}
+.center-body{padding:18px 20px 28px;display:flex;flex-direction:column;gap:10px}
+
+.pane{display:none;flex-direction:column;gap:10px}
+.pane.active{display:flex}
+
+.section-title{font-size:11px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;
+  letter-spacing:.06em;margin:6px 0 0}
+.hint{font-size:12px;color:var(--c-text-muted);line-height:1.5;max-width:640px}
+
+/* --- Провайдеры --- */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:760px}
+.tile{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;padding:12px 14px;
+  display:flex;flex-direction:column;gap:5px}
+.tile .name{font-size:14px;font-weight:600;color:var(--c-text-heading)}
+.tile .stat{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--c-text-secondary)}
+.dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.dot.on{background:var(--c-success)} .dot.off{background:var(--c-text-muted)}
+
+/* --- Специальность (детальная карточка) --- */
+.spec-card{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:14px;padding:18px 20px;
+  max-width:640px;display:flex;flex-direction:column;gap:16px}
+.spec-card h3{font-family:'PT Serif',Georgia,serif;font-size:17px;margin:0;color:var(--c-text-heading);
+  display:flex;align-items:center;gap:8px}
+.spec-card .desc{font-size:12.5px;color:var(--c-text-secondary);margin-top:2px}
+.field-block{display:flex;flex-direction:column;gap:6px}
+.field-block .flabel{font-size:11px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mini-card{background:var(--c-bg-panel);border:1px solid var(--c-border);border-radius:10px;padding:9px 11px}
+.mini-card .k{font-size:10.5px;color:var(--c-text-muted)}
+.mini-card .v{font-size:13px;font-weight:600;color:var(--c-text-heading);margin-top:1px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:11px;padding:3px 9px;border-radius:999px;background:var(--c-bg-panel);border:1px solid var(--c-border);color:var(--c-text-secondary)}
+.chip.off{color:var(--c-text-muted);border-style:dashed;text-decoration:line-through}
+.tpl-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}
+.link-btn{font:inherit;font-size:12px;color:var(--c-accent);background:transparent;border:none;cursor:pointer;padding:0;text-decoration:underline}
+
+/* --- Единый контрол --- */
+.ctrl-wrap{position:relative}
+.ctrl-btn{display:flex;align-items:center;gap:6px;font:inherit;font-size:12.5px;color:var(--c-text-secondary);
+  background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:9px;padding:7px 11px;cursor:pointer}
+.popover{display:none;position:absolute;top:calc(100% + 6px);right:0;width:300px;max-width:calc(100vw - 40px);
+  background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:14px;box-shadow:var(--shadow-dropdown);
+  padding:10px;z-index:30;flex-direction:column;gap:8px}
+.popover.left{right:auto;left:0}
+.popover.open{display:flex}
+.segmented{display:flex;background:var(--c-bg-selected);border-radius:9px;padding:3px;gap:2px}
+.seg-btn{flex:1;font:inherit;font-size:11.5px;font-weight:600;color:var(--c-text-secondary);background:transparent;
+  border:none;border-radius:7px;padding:6px 4px;cursor:pointer}
+.seg-btn.active{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.seg-panel{display:none;flex-direction:column;gap:5px;max-height:220px;overflow-y:auto}
+.seg-panel.active{display:flex}
+.opt{display:flex;flex-direction:column;gap:1px;padding:7px 9px;border-radius:8px;cursor:pointer;
+  border:1px solid transparent;text-align:left}
+.opt:hover{background:var(--c-bg-selected)}
+.opt.sel{border-color:var(--c-accent);background:var(--c-accent-light)}
+.opt .t{font-size:12.5px;font-weight:600;color:var(--c-text-heading)}
+.opt .s{font-size:10.5px;color:var(--c-text-muted)}
+.chain-mini{display:flex;flex-direction:column;gap:5px}
+.chain-mini-row{display:flex;align-items:center;gap:6px;background:var(--c-bg-panel);border:1px solid var(--c-border);
+  border-radius:8px;padding:5px 8px;font-size:11.5px}
+.chain-mini-row .n{width:16px;height:16px;border-radius:50%;background:var(--c-bg-selected);color:var(--c-text-secondary);
+  font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.chain-mini-row select{flex:1;font:inherit;font-size:11.5px;border:none;background:transparent;color:var(--c-text-heading)}
+.chain-mini-row .rm{cursor:pointer;color:var(--c-text-muted);font-size:12px;flex-shrink:0}
+.add-step{font:inherit;font-size:11.5px;color:var(--c-accent);background:var(--c-accent-light);border:1px dashed var(--c-accent-muted);
+  border-radius:8px;padding:6px;cursor:pointer;text-align:center}
+.cap{font-size:10.5px;color:var(--c-text-muted);text-align:center}
+.manage-link{font-size:11px;text-align:center;padding-top:2px;border-top:1px solid var(--c-border-light)}
+
+/* --- Пресеты --- */
+.preset-card{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:14px;padding:13px 15px;
+  display:flex;flex-direction:column;gap:6px;max-width:520px}
+.preset-head{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.preset-head .name{font-size:14px;font-weight:600;color:var(--c-text-heading)}
+.preset-chain{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--c-text-secondary);
+  overflow-x:auto;white-space:nowrap;padding-bottom:2px}
+.preset-foot{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.preset-usage{font-size:11.5px;color:var(--c-text-muted)}
+.icon-actions{display:flex;gap:4px}
+.icon-actions button{width:27px;height:27px;border-radius:8px;border:1px solid var(--c-border);background:var(--c-bg-white);
+  color:var(--c-text-muted);cursor:pointer;font-size:12px}
+.icon-actions button:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.create-preset{font:inherit;font-size:13px;font-weight:600;color:var(--c-accent);background:var(--c-accent-light);
+  border:1px dashed var(--c-accent-muted);border-radius:12px;padding:11px;cursor:pointer;text-align:center;max-width:520px}
+
+/* --- Применение --- */
+.tgroup{max-width:760px}
+.table{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px}
+.trow{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 14px;
+  border-top:1px solid var(--c-border-light)}
+.trow:first-child{border-top:none}
+.trow .tname{font-size:12.5px;color:var(--c-text-secondary)}
+
+/* --- В чате --- */
+.chat-preview{background:var(--c-bg-inset);border:1px solid var(--c-border);border-radius:14px;padding:18px;
+  display:flex;flex-direction:column;gap:10px;max-width:520px}
+.bubble{background:var(--c-bg-white);border:1px solid var(--c-border-light);border-radius:14px;padding:10px 13px;
+  font-size:13px;line-height:1.55;color:var(--c-text-primary)}
+.divider-pill{align-self:center;display:flex;align-items:center;gap:8px;width:100%}
+.divider-pill .line{flex:1;height:1px;background:var(--c-border)}
+.divider-pill .pill{font-size:12px;white-space:nowrap;padding:3px 10px;border-radius:999px;
+  background:var(--c-bg-selected);border:1px solid var(--c-border);color:var(--c-text-secondary)}
+.divider-pill.warn .pill{background:var(--c-warning-bg);border-color:var(--c-warning);color:var(--c-warning-text)}
+.chat-note{font-size:11.5px;color:var(--c-text-muted);line-height:1.5;max-width:520px}
+
+/* --- Мобильная раскладка: list | item --- */
+@media(max-width:760px){
+  .scaffold{padding:0;gap:0}
+  .sidebar{width:100%;border-radius:0;border:none;border-bottom:1px solid var(--c-border)}
+  .center{border-radius:0}
+  .island{border-radius:0}
+  .tiles{grid-template-columns:1fr}
+  .two-col{grid-template-columns:1fr}
+}
+.stage.mob .scaffold{padding:0;gap:0}
+.stage.mob .sidebar{width:100%;border-radius:0;border:none;border-bottom:1px solid var(--c-border)}
+.stage.mob .center{border-radius:0}
+.stage.mob .island{border-radius:0}
+.stage.mob .tiles{grid-template-columns:1fr}
+.stage.mob .two-col{grid-template-columns:1fr}
+.stage.mob{max-width:390px;margin:0 auto;border-left:6px solid #000;border-right:6px solid #000}
+/* показываем один экран за раз ниже порога/в режиме mob */
+.show-center .sidebar{display:none}
+.scaffold:not(.show-center) .center{display:none}
+@media(min-width:761px){ .scaffold .sidebar,.scaffold .center{display:flex !important} .backbtn{display:none !important} }
+@media(max-width:760px){ .backbtn{display:inline-flex} }
+.stage.mob .backbtn{display:inline-flex}
+.stage.mob .scaffold:not(.show-center) .center{display:none}
+.stage.mob .show-center .sidebar{display:none}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Поставщики моделей — Вариант B · Хаб-раздел</h1>
+  <button class="btn" id="themeBtn" onclick="toggleTheme()">Тёмная тема</button>
+  <button class="btn" id="mobBtn" onclick="toggleMobile()">Мобильная раскладка 390px</button>
+  <div class="siblings">
+    <a href="variant-a-tabs.html">A · Вкладки</a>
+    <a class="self" href="variant-b-hub.html">B · Хаб-раздел</a>
+    <a href="variant-c-drilldown.html">C · Мастер вглубь</a>
+  </div>
+</div>
+
+<div class="hub-head">
+  <span class="hub-pill">Проекты</span>
+  <span class="hub-pill">Персоны</span>
+  <span class="hub-pill">Задачи</span>
+  <span class="hub-pill active">Поставщики моделей</span>
+  <span class="hub-pill">Использование</span>
+</div>
+
+<div class="stage" id="stage">
+  <div class="scaffold" id="scaffold">
+    <aside class="island sidebar">
+      <div class="sidebar-head">Поставщики моделей</div>
+      <div class="sidebar-body">
+        <div class="nav-item active" onclick="selectPane('providers', this)">Провайдеры</div>
+
+        <div class="nav-item" onclick="selectPane('spec-be', this)">Специальности <span class="cnt">13</span></div>
+        <div class="nav-sub">
+          <div class="nav-sub-item active" data-nav="spec-be" onclick="selectPane('spec-be', this.parentElement.previousElementSibling); markSub(this)">Испол. — бэкенд <span class="badge new">новая</span></div>
+          <div class="nav-sub-item" data-nav="spec-fe" onclick="selectPane('spec-fe', this.parentElement.previousElementSibling); markSub(this)">Испол. — фронтенд <span class="badge new">новая</span></div>
+          <div class="nav-sub-item" data-nav="spec-univ" onclick="selectPane('spec-univ', this.parentElement.previousElementSibling); markSub(this)">Испол. (универсальный)</div>
+          <div class="nav-sub-item" data-nav="spec-analyst" onclick="selectPane('spec-analyst', this.parentElement.previousElementSibling); markSub(this)">Аналитик</div>
+          <div class="nav-sub-item" data-nav="spec-reviewer" onclick="selectPane('spec-reviewer', this.parentElement.previousElementSibling); markSub(this)">Ревьюер</div>
+          <div class="nav-sub-item" style="color:var(--c-text-muted)">+ 8 остальных…</div>
+        </div>
+
+        <div class="nav-item" onclick="selectPane('presets', this)">Пресеты правил <span class="cnt">3</span></div>
+        <div class="nav-item" onclick="selectPane('apply', this)">Применение</div>
+        <div class="nav-item" onclick="selectPane('chat', this)">Превью в чате</div>
+      </div>
+    </aside>
+
+    <section class="island center">
+      <div class="center-head">
+        <button class="backbtn" onclick="backToList()">←</button>
+        <div>
+          <div class="t" id="centerTitle">Провайдеры</div>
+        </div>
+      </div>
+      <div class="center-body">
+
+        <!-- === Провайдеры === -->
+        <div class="pane active" id="pane-providers">
+          <div class="hint">Ротация подписок внутри провайдера (блок F) — первый уровень фолбэка, до
+            перехода к следующему провайдеру.</div>
+          <div class="tiles">
+            <div class="tile"><div class="name">Anthropic</div><div class="stat"><span class="dot on"></span> 2 подписки — «Основная», «Резервная»</div></div>
+            <div class="tile"><div class="name">GLM</div><div class="stat"><span class="dot on"></span> Активен</div></div>
+            <div class="tile"><div class="name">DeepSeek</div><div class="stat"><span class="dot on"></span> Активен</div></div>
+            <div class="tile"><div class="name">Ollama (локальная)</div><div class="stat"><span class="dot on"></span> llama3</div></div>
+            <div class="tile"><div class="name">MiniMax</div><div class="stat"><span class="dot off"></span> Не настроен</div></div>
+          </div>
+        </div>
+
+        <!-- === Специальность: бэкенд === -->
+        <div class="pane" id="pane-spec-be">
+          <div class="spec-card">
+            <div>
+              <h3>Исполнитель — бэкенд-разработчик <span class="badge new">новая</span></h3>
+              <div class="desc">C#/.NET, ASP.NET Core, Services/Llm — правки в backend/, миграции, тесты</div>
+            </div>
+            <div class="field-block">
+              <div class="flabel">Модель по умолчанию</div>
+              <div class="two-col">
+                <div class="mini-card"><div class="k">Глобально (для всех)</div><div class="v">Sonnet 5 · Anthropic</div></div>
+                <div class="ctrl-wrap">
+                  <div class="mini-card" style="cursor:pointer" onclick="toggleP('pop-be')">
+                    <div class="k">Моё переопределение</div><div class="v" style="color:var(--c-text-muted);font-weight:500">Как у всех</div>
+                  </div>
+                  <div class="popover" id="pop-be">
+                    <div class="segmented">
+                      <button class="seg-btn active" onclick="showSeg(this,'sg-be-m')">Модель</button>
+                      <button class="seg-btn" onclick="showSeg(this,'sg-be-p')">Пресет</button>
+                      <button class="seg-btn" onclick="showSeg(this,'sg-be-c')">Цепочка</button>
+                    </div>
+                    <div class="seg-panel active" id="sg-be-m">
+                      <div class="opt sel"><div class="t">Как у всех</div><div class="s">наследует глобальное значение</div></div>
+                      <div class="opt"><div class="t">Sonnet 5</div><div class="s">Anthropic</div></div>
+                      <div class="opt"><div class="t">Opus 5</div><div class="s">Anthropic · сильный</div></div>
+                    </div>
+                    <div class="seg-panel" id="sg-be-p">
+                      <div class="opt"><div class="t">Дёшево и быстро</div><div class="s">GLM-4.7 → DeepSeek V4 → Локальная</div></div>
+                      <div class="opt"><div class="t">Только Anthropic</div><div class="s">Sonnet 5 → Opus 5</div></div>
+                      <div class="manage-link"><button class="link-btn" onclick="selectPane('presets', document.querySelectorAll('.nav-item')[2])">Управлять пресетами →</button></div>
+                    </div>
+                    <div class="seg-panel" id="sg-be-c">
+                      <div class="chain-mini">
+                        <div class="chain-mini-row"><span class="n">1</span><select><option>Sonnet 5</option></select><span class="rm">✕</span></div>
+                        <div class="chain-mini-row"><span class="n">2</span><select><option>GLM-4.7</option></select><span class="rm">✕</span></div>
+                      </div>
+                      <button class="add-step">+ Добавить шаг (2 / 5)</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="field-block">
+              <div class="flabel">Шаблон прав и инструментов</div>
+              <div class="mini-card" style="max-width:200px"><div class="k">Доступ</div><div class="v">Полный</div></div>
+              <div class="chips">
+                <span class="chip">Read</span><span class="chip">Grep</span><span class="chip">Glob</span>
+                <span class="chip">Write</span><span class="chip">Edit</span><span class="chip">Bash</span>
+                <span class="chip">git</span><span class="chip">notes</span><span class="chip">tasks</span>
+                <span class="chip off">browser</span><span class="chip off">kb-manage</span>
+              </div>
+              <div class="tpl-foot">
+                <span class="badge manual">изменено вручную у 1 персоны</span>
+                <button class="link-btn">Вернуть шаблон</button>
+              </div>
+              <div class="hint">Шаблон применяется один раз при выборе специальности; дальше персона — источник
+                правды (блок C).</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- === Специальность: фронтенд === -->
+        <div class="pane" id="pane-spec-fe">
+          <div class="spec-card">
+            <div><h3>Исполнитель — фронтенд-разработчик <span class="badge new">новая</span></h3>
+              <div class="desc">React 18 + TypeScript, дизайн-система — правки в frontend/src</div></div>
+            <div class="field-block">
+              <div class="flabel">Модель по умолчанию</div>
+              <div class="two-col">
+                <div class="mini-card"><div class="k">Глобально</div><div class="v">Sonnet 5 · Anthropic</div></div>
+                <div class="mini-card"><div class="k">Моё переопределение</div><div class="v" style="color:var(--c-text-muted);font-weight:500">Как у всех</div></div>
+              </div>
+            </div>
+            <div class="field-block">
+              <div class="flabel">Шаблон прав и инструментов</div>
+              <div class="chips">
+                <span class="chip">Read</span><span class="chip">Grep</span><span class="chip">Glob</span>
+                <span class="chip">Write</span><span class="chip">Edit</span><span class="chip">Bash</span>
+                <span class="chip">git</span><span class="chip off">kb-manage</span>
+              </div>
+              <span class="badge tpl">без ручных правок</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- === Специальность: универсальный === -->
+        <div class="pane" id="pane-spec-univ">
+          <div class="spec-card">
+            <div><h3>Исполнитель (универсальный)</h3>
+              <div class="desc">Без специализации — прежняя специальность «Исполнитель», сменилась только подпись</div></div>
+            <div class="two-col">
+              <div class="mini-card"><div class="k">Глобально</div><div class="v">Sonnet 5 · Anthropic</div></div>
+              <div class="mini-card"><div class="k">Моё переопределение</div><div class="v" style="color:var(--c-text-muted);font-weight:500">Как у всех</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="pane" id="pane-spec-analyst">
+          <div class="spec-card">
+            <div><h3>Аналитик</h3><div class="desc">Данные, выводы, риски — без домыслов</div></div>
+            <div class="two-col">
+              <div class="mini-card"><div class="k">Глобально</div><div class="v">Sonnet 5 · Anthropic</div></div>
+              <div class="mini-card"><div class="k">Моё переопределение</div><div class="v" style="color:var(--c-text-muted);font-weight:500">Как у всех</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="pane" id="pane-spec-reviewer">
+          <div class="spec-card">
+            <div><h3>Ревьюер</h3><div class="desc">Жёсткая проверка кода и текста</div></div>
+            <div class="two-col">
+              <div class="mini-card"><div class="k">Глобально</div><div class="v">Opus 5 · Anthropic</div></div>
+              <div class="mini-card"><div class="k">Моё переопределение</div><div class="v" style="color:var(--c-text-muted);font-weight:500">Как у всех</div></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- === Пресеты === -->
+        <div class="pane" id="pane-presets">
+          <div class="hint">Именованный пресет — переиспользуемая цепочка моделей. Меняешь пресет — меняются
+            все места, которые на него ссылаются.</div>
+          <div class="preset-card">
+            <div class="preset-head"><span class="name">Дёшево и быстро</span>
+              <div class="icon-actions"><button title="Редактировать">✎</button><button title="Дублировать">⧉</button><button title="Удалить">🗑</button></div></div>
+            <div class="preset-chain">GLM-4.7 → DeepSeek V4 → Локальная (llama3)</div>
+            <div class="preset-foot"><span class="preset-usage">Используется в 4 местах</span></div>
+          </div>
+          <div class="preset-card">
+            <div class="preset-head"><span class="name">Только Anthropic</span>
+              <div class="icon-actions"><button title="Редактировать">✎</button><button title="Дублировать">⧉</button><button title="Удалить">🗑</button></div></div>
+            <div class="preset-chain">Sonnet 5 → Opus 5</div>
+            <div class="preset-foot"><span class="preset-usage">Используется в 2 местах</span></div>
+          </div>
+          <div class="preset-card">
+            <div class="preset-head"><span class="name">Резерв для критичных задач</span>
+              <div class="icon-actions"><button title="Редактировать">✎</button><button title="Дублировать">⧉</button><button title="Удалить">🗑</button></div></div>
+            <div class="preset-chain">Opus 5 → Sonnet 5 → GLM-4.7</div>
+            <div class="preset-foot"><span class="preset-usage">Используется в 1 месте</span></div>
+          </div>
+          <button class="create-preset">+ Создать пресет</button>
+        </div>
+
+        <!-- === Применение === -->
+        <div class="pane" id="pane-apply">
+          <div class="hint">Каждая строка — тот же единый контрол: конкретная модель, слот, пресет или своя цепочка.</div>
+          <div class="tgroup">
+            <div class="section-title">Чаты и персоны</div>
+            <div class="table">
+              <div class="trow"><span class="tname">Новый чат</span>
+                <div class="ctrl-wrap"><button class="ctrl-btn" onclick="toggleP('pop-b1')">Слот · Сильная ▾</button>
+                  <div class="popover left" id="pop-b1">
+                    <div class="segmented">
+                      <button class="seg-btn active" onclick="showSeg(this,'sg-b1-m')">Модель</button>
+                      <button class="seg-btn" onclick="showSeg(this,'sg-b1-p')">Пресет</button>
+                      <button class="seg-btn" onclick="showSeg(this,'sg-b1-c')">Цепочка</button>
+                    </div>
+                    <div class="seg-panel active" id="sg-b1-m">
+                      <div class="opt sel"><div class="t">Слот · Сильная</div><div class="s">Sonnet 5</div></div>
+                      <div class="opt"><div class="t">Opus 5</div><div class="s">конкретная модель</div></div>
+                    </div>
+                    <div class="seg-panel" id="sg-b1-p"><div class="opt"><div class="t">Только Anthropic</div></div></div>
+                    <div class="seg-panel" id="sg-b1-c"><div class="cap">До 5 записей.</div></div>
+                  </div>
+                </div>
+              </div>
+              <div class="trow"><span class="tname">Чат с персоной</span><div class="ctrl-wrap"><button class="ctrl-btn">Слот · Сильная ▾</button></div></div>
+              <div class="trow"><span class="tname">Исполнитель задачи</span><div class="ctrl-wrap"><button class="ctrl-btn">Слот · Средняя ▾</button></div></div>
+              <div class="trow"><span class="tname">Персона-консультант</span><div class="ctrl-wrap"><button class="ctrl-btn">Пресет · Только Anthropic ▾</button></div></div>
+              <div class="trow"><span class="tname">Модули (LLM)</span><div class="ctrl-wrap"><button class="ctrl-btn">Слот · Средняя ▾</button></div></div>
+            </div>
+          </div>
+          <div class="tgroup">
+            <div class="section-title">Фоновые действия</div>
+            <div class="table">
+              <div class="trow"><span class="tname">Теги чата</span><div class="ctrl-wrap"><button class="ctrl-btn">Слот · Слабая ▾</button></div></div>
+              <div class="trow"><span class="tname">Заголовок чата</span><div class="ctrl-wrap"><button class="ctrl-btn">Слот · Слабая ▾</button></div></div>
+              <div class="trow"><span class="tname">Утренний бриф</span><div class="ctrl-wrap"><button class="ctrl-btn">GLM-4.7 ▾</button></div></div>
+              <div class="trow"><span class="tname">Сводка документа</span><div class="ctrl-wrap"><button class="ctrl-btn">Локальная · llama3 ▾</button></div></div>
+              <div class="trow"><span class="tname">Авто-обучение памяти</span>
+                <div class="ctrl-wrap"><button class="ctrl-btn" onclick="toggleP('pop-b2')">Цепочка · 2 шага ▾</button>
+                  <div class="popover left" id="pop-b2">
+                    <div class="segmented">
+                      <button class="seg-btn" onclick="showSeg(this,'sg-b2-m')">Модель</button>
+                      <button class="seg-btn" onclick="showSeg(this,'sg-b2-p')">Пресет</button>
+                      <button class="seg-btn active" onclick="showSeg(this,'sg-b2-c')">Цепочка</button>
+                    </div>
+                    <div class="seg-panel" id="sg-b2-m"><div class="opt"><div class="t">Слот · Слабая</div></div></div>
+                    <div class="seg-panel" id="sg-b2-p"><div class="opt"><div class="t">Дёшево и быстро</div></div></div>
+                    <div class="seg-panel active" id="sg-b2-c">
+                      <div class="chain-mini">
+                        <div class="chain-mini-row"><span class="n">1</span><select><option>Sonnet 5</option></select><span class="rm">✕</span></div>
+                        <div class="chain-mini-row"><span class="n">2</span><select><option>GLM-4.7</option></select><span class="rm">✕</span></div>
+                      </div>
+                      <button class="add-step">+ Добавить шаг (2 / 5)</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- === Превью в чате === -->
+        <div class="pane" id="pane-chat">
+          <div class="hint">Блок G — пометка «Продолжено на подписке «…»» переиспользована из существующего
+            разделителя ChatItemView 1:1; подмена модели — тот же паттерн, warning-тоном.</div>
+          <div class="chat-preview">
+            <div class="bubble">Смотрю миграцию 0042 — колонка добавляется без дефолта, на 50 млн строк это
+              заблокирует таблицу на время бэкфилла.</div>
+            <div class="divider-pill warn"><div class="line"></div><div class="pill">⚡ Ответила GLM-4.7 — Opus была недоступна</div><div class="line"></div></div>
+            <div class="bubble">Дальше два варианта: добавить колонку nullable и бэкфилить пачками, либо
+              развести на две миграции. Первый безопаснее для прод-трафика.</div>
+          </div>
+          <div class="chat-note">Подмена происходит посреди уже начатого ответа — верхняя часть пузыря не
+            переписывается, факт замены остаётся виден в ленте.</div>
+          <div class="chat-preview" style="margin-top:4px">
+            <div class="bubble">Есть контекст по инциденту — гружу лог за последний час.</div>
+            <div class="divider-pill"><div class="line"></div><div class="pill">Продолжено на подписке «Anthropic — резервная»</div><div class="line"></div></div>
+            <div class="bubble">Нашла: три ретрая подряд на 502 от аплинка, дальше цепочка ушла на вторую
+              подписку автоматически (ротация внутри провайдера).</div>
+          </div>
+        </div>
+
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+const TITLES = {
+  providers:'Провайдеры','spec-be':'Специальности · Исполнитель — бэкенд','spec-fe':'Специальности · Исполнитель — фронтенд',
+  'spec-univ':'Специальности · Исполнитель (универсальный)','spec-analyst':'Специальности · Аналитик','spec-reviewer':'Специальности · Ревьюер',
+  presets:'Пресеты правил', apply:'Применение · «Кто что выполняет»', chat:'Превью в чате',
+};
+function selectPane(name, navEl){
+  document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
+  document.getElementById('pane-'+name).classList.add('active');
+  document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
+  if(navEl) navEl.classList.add('active');
+  document.getElementById('centerTitle').textContent = TITLES[name] || name;
+  document.querySelectorAll('.popover.open').forEach(p=>p.classList.remove('open'));
+  document.getElementById('scaffold').classList.add('show-center');
+}
+function markSub(el){
+  document.querySelectorAll('.nav-sub-item').forEach(n=>n.classList.remove('active'));
+  el.classList.add('active');
+}
+function backToList(){
+  document.getElementById('scaffold').classList.remove('show-center');
+}
+function toggleTheme(){
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  document.getElementById('themeBtn').textContent = dark ? 'Тёмная тема' : 'Светлая тема';
+  document.getElementById('themeBtn').classList.toggle('on', !dark);
+}
+function toggleMobile(){
+  const st = document.getElementById('stage');
+  st.classList.toggle('mob');
+  document.getElementById('mobBtn').classList.toggle('on', st.classList.contains('mob'));
+}
+function toggleP(id){
+  const el = document.getElementById(id);
+  const willOpen = !el.classList.contains('open');
+  document.querySelectorAll('.popover.open').forEach(p=>p.classList.remove('open'));
+  if(willOpen) el.classList.add('open');
+  event.stopPropagation();
+}
+function showSeg(btn, panelId){
+  const seg = btn.parentElement;
+  seg.querySelectorAll('.seg-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  const pop = seg.parentElement;
+  pop.querySelectorAll('.seg-panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById(panelId).classList.add('active');
+}
+document.addEventListener('click', (e)=>{
+  if(!e.target.closest('.ctrl-wrap')) document.querySelectorAll('.popover.open').forEach(p=>p.classList.remove('open'));
+});
+</script>
+</body>
+</html>

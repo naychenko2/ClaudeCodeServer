@@ -250,14 +250,20 @@ public class PersonaBindingsService
     // остальным 24 browser_*-инструмента лишь занимают место в контексте.
     // Секции chats тут намеренно нет: в ней живёт chats_report_up — канал отчёта исполнителя
     // вверх по делегированию, выключать его по умолчанию у исполнителей нельзя.
-    public static IReadOnlySet<string> SpecialtySections(PersonaSpecialty specialty) => specialty switch
+    public static IReadOnlySet<string> SpecialtySections(PersonaSpecialty specialty)
     {
-        PersonaSpecialty.Tester => TesterSections,
-        PersonaSpecialty.Executor or PersonaSpecialty.Reviewer => GitSections,
-        PersonaSpecialty.Librarian => LibrarianSections,
-        PersonaSpecialty.Coordinator or PersonaSpecialty.Secretary => CoordinatorSections,
-        _ => CoreSections,
-    };
+        // Семейство исполнителя (универсальный/бэкенд/фронтенд) работает с кодом — git-секция,
+        // как у универсального исполнителя и ревьюера
+        if (SpecialtyCatalog.IsExecutorKind(specialty)) return GitSections;
+        return specialty switch
+        {
+            PersonaSpecialty.Tester => TesterSections,
+            PersonaSpecialty.Reviewer => GitSections,
+            PersonaSpecialty.Librarian => LibrarianSections,
+            PersonaSpecialty.Coordinator or PersonaSpecialty.Secretary => CoordinatorSections,
+            _ => CoreSections,
+        };
+    }
 
     private static readonly IReadOnlySet<string> CoreSections =
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);

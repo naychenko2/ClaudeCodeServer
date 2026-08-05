@@ -210,7 +210,7 @@ public class TeamPlanningServiceTests : IDisposable
         card.PersonaId.Should().Be(dev.Id);
         card.Name.Should().Be("Денис");
         card.Role.Should().Be("Backend-разработчик");
-        card.Specialty.Should().Be("Исполнитель");
+        card.Specialty.Should().Be("Исполнитель (универсальный)");
         card.Description.Should().Contain("ASP.NET");
         card.Bindings.Should().ContainSingle()
             .Which.Should().Be("папка backend — Любые задачи по серверной части на C#");

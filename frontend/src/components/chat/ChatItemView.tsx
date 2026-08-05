@@ -1,7 +1,7 @@
 import { memo, useState, useContext, useEffect } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
-import { splitFallbackOptions, formatSubscriptionMeta } from '../../lib/providerLimit';
+import { splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel } from '../../lib/providerLimit';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
@@ -745,6 +745,32 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
+// Разделитель «Ответила X — Y была недоступна»: автоматическая подмена МОДЕЛИ рантайм-
+// фолбэком (см. chatReducer — отдельно от provider_switched, который остаётся тихим или
+// на пилюле «Продолжено на подписке» при ротации внутри провайдера). title — одна из трёх
+// канонических формулировок причины (providerSwitchReasonLabel), либо сырой label маркера
+// (rawLabel), когда reason не пришёл или не распознан
+function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_switched' }> }) {
+  const newLabel = useModelLabel(item.model);
+  const oldLabel = useModelLabel(item.previousModel);
+  return (
+    <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}
+      title={providerSwitchReasonLabel(item.reason, item.rawLabel)}>
+      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        fontSize: 12, color: C.warningText, whiteSpace: 'nowrap', overflow: 'hidden',
+        textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+        background: C.warningBg, border: `1px solid ${C.warning}`,
+      }}>
+        <Zap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+        Ответила {newLabel} — {oldLabel} была недоступна
+      </span>
+      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+    </div>
+  );
+}
+
 export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
@@ -1336,6 +1362,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
         </div>
       );
+
+    case 'model_switched':
+      return <ModelSwitchedPill item={item} />;
 
     case 'provider_limit':
       return <ProviderLimitCard item={item} online={online} onMigrate={onMigrateProvider} />;

@@ -148,6 +148,10 @@ builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Специальности и пресеты правил: стор настроек специальностей и пресетов правил
+// выбора модели (глобальные + per-owner) + применение шаблонов прав
+builder.Services.AddSingleton<SpecialtySettingsStore>();
+builder.Services.AddSingleton<SpecialtyTemplatesService>();
 // Планирование режима «Командная реализация» (Э2): подбор координатора/планировщика,
 // карточки кандидатов и структурный план
 builder.Services.AddSingleton<TeamPlanningService>();
@@ -232,6 +236,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionRouter>()
 // Резолвер моделей агентных мест (новый чат, чат персоны, исполнитель задач…):
 // явная модель → назначение админа → слот тира (сильная/средняя/слабая)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ModelAssignmentResolver>();
+// Стор настроек фолбэк-оркестрации модели (ADR §4): глобальный потолок подмен плюс
+// per-owner override, значение клампится в 1..HardMaxSubstitutions, дефолт 3.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.FallbackSettingsStore>();
 // Пресеты автоподбора исполнителя фоновых действий (рекомендованное/бесплатные/локальные)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionPresetService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,

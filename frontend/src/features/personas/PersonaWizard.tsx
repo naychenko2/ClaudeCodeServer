@@ -21,6 +21,7 @@ import type {
   PersonaSpecialty, PantheonTemplate, Project,
 } from '../../types';
 import { api } from '../../lib/api';
+import { useSpecialtyCatalog } from '../../lib/specialties';
 import { bumpPersonas, usePersonas } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
 import { Toolbar, PillSwitch } from '../../components/Toolbar';
@@ -38,6 +39,12 @@ import { Stepper } from './stepperUi';
 import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
 
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
+// Возможности персоны — тот же список и подписи, что в PersonaForm.tsx
+const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
+  { key: 'tasks', title: 'Задачи', hint: 'Ведёт ваши задачи через инструменты задач' },
+  { key: 'notes', title: 'Заметки', hint: 'Читает и пишет в базу знаний' },
+  { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
+];
 
 const TONE_PRESETS: { label: string; text: string }[] = [
   { label: 'Дружелюбный', text: 'Общайся тепло и дружелюбно, на равных.' },
@@ -121,6 +128,14 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [color, setColor] = useState('orange');
 
+  // Специальности: каталог с бэка, null — ещё грузится. При выборе специальности
+  // подставляются права и инструменты из шаблона; если пользователь уже правил их
+  // руками — спрашиваем подтверждение.
+  const specialtyCatalog = useSpecialtyCatalog();
+  const [rightsTouched, setRightsTouched] = useState(false);
+  const [pendingSpecialty, setPendingSpecialty] = useState<PersonaSpecialty | null>(null);
+  const [templateNote, setTemplateNote] = useState<string | null>(null);
+
   // AI-характер: генерация/улучшение — не требует существующей персоны
   const [aiCharAction, setAiCharAction] = useState<null | 'generate' | 'improve'>(null);
   const [aiCharError, setAiCharError] = useState<string | null>(null);
@@ -165,6 +180,12 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);
   const parseDisallowed = (s: string) => Array.from(new Set(s.split(',').map(t => t.trim()).filter(Boolean)));
+  // Ручная правка инструментов после подстановки шаблона специальности (D2) — как
+  // access/disallowedText, помечает rightsTouched, чтобы смена специальности спрашивала подтверждение
+  const toggleTool = (key: string) => {
+    setRightsTouched(true);
+    setTools(prev => prev.includes(key) ? prev.filter(t => t !== key) : [...prev, key]);
+  };
 
   function buildContract(): PersonaContract {
     return {
@@ -242,6 +263,40 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     setModel(t.model ?? '');
     setEffort(t.effort ?? '');
     setSpecialty(t.specialty ?? 'none');
+    setRightsTouched(false);
+    setTemplateNote(null);
+  }
+
+  // Подстановка шаблона специальности в права и инструменты: поля формы заполняются
+  // значениями шаблона, дальше правятся вручную. Источник правды — персона: при
+  // сохранении уходят именно эти (возможно отредактированные) значения.
+  function applySpecialtyTemplate(next: PersonaSpecialty) {
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (template) {
+      setAccess(template.access);
+      setTools(template.tools ?? ALL_TOOL_KEYS);
+      setDisallowedText((template.disallowedTools ?? []).join(', '));
+      setTemplateNote('Права и инструменты подставлены из шаблона специальности — можно поправить');
+      setRightsTouched(false);
+    } else {
+      setTemplateNote(null);
+    }
+    setSpecialty(next);
+  }
+
+  function changeSpecialty(next: PersonaSpecialty) {
+    if (next === specialty) return;
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (!template) {
+      setSpecialty(next);
+      setTemplateNote(null);
+      return;
+    }
+    if (rightsTouched) {
+      setPendingSpecialty(next);
+      return;
+    }
+    applySpecialtyTemplate(next);
   }
 
   const templates: PersonaTemplate[] = [
@@ -627,20 +682,41 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                   <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
                 </Field>
                 <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер, брифинг, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
-                  <select value={specialty} onChange={e => setSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
+                  <select value={specialty} onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
                     <option value="none">Не задана</option>
-                    <option value="analyst">Аналитик</option>
-                    <option value="planner">Планировщик</option>
-                    <option value="reviewer">Ревьюер</option>
-                    <option value="executor">Исполнитель</option>
-                    <option value="secretary">Секретарь</option>
-                    <option value="coordinator">Координатор</option>
-                    <option value="mentor">Ментор</option>
-                    <option value="designer">Дизайнер</option>
-                    <option value="consultant">Консультант</option>
-                    <option value="librarian">Библиотекарь</option>
+                    {specialtyCatalog
+                      ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
+                        <option key={e.key} value={e.key}>{e.label}</option>
+                      ))
+                      : (<>
+                        <option value="analyst">Аналитик</option>
+                        <option value="planner">Планировщик</option>
+                        <option value="reviewer">Ревьюер</option>
+                        <option value="executor">Исполнитель</option>
+                        <option value="secretary">Секретарь</option>
+                        <option value="coordinator">Координатор</option>
+                        <option value="mentor">Ментор</option>
+                        <option value="designer">Дизайнер</option>
+                        <option value="consultant">Консультант</option>
+                        <option value="librarian">Библиотекарь</option>
+                      </>)}
                   </select>
+                  {templateNote && (
+                    <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+                      {templateNote}
+                    </span>
+                  )}
                 </Field>
+                {pendingSpecialty && (
+                  <ConfirmDialog
+                    title="Заменить права и инструменты?"
+                    subtitle="Вы уже настроили профиль доступа и инструменты вручную. Заменить их шаблоном новой специальности?"
+                    confirmLabel="Заменить"
+                    cancelLabel="Оставить как есть"
+                    onConfirm={() => { applySpecialtyTemplate(pendingSpecialty); setPendingSpecialty(null); }}
+                    onCancel={() => setPendingSpecialty(null)}
+                  />
+                )}
               </div>
             </>
           )}
@@ -672,7 +748,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <FieldLabel>Профиль доступа</FieldLabel>
                 <SegmentedControl<PersonaAccess>
-                  value={access} onChange={setAccess} columns={3}
+                  value={access} onChange={v => { setAccess(v); setRightsTouched(true); }} columns={3}
                   options={[{ value: 'full', label: 'Полный' }, { value: 'readOnly', label: 'Только чтение' }, { value: 'custom', label: 'Свой' }]}
                 />
                 {access === 'readOnly' && (
@@ -682,10 +758,29 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 )}
                 {access === 'custom' && (
                   <Field hint="Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete">
-                    <TextArea value={disallowedText} onChange={setDisallowedText} autoGrow minHeight={56} placeholder="Bash, Edit, Write" />
+                    <TextArea value={disallowedText} onChange={v => { setDisallowedText(v); setRightsTouched(true); }} autoGrow minHeight={56} placeholder="Bash, Edit, Write" />
                   </Field>
                 )}
               </div>
+
+              {/* Возможности (D2): без этого блока подстановка шаблона специальности —
+                  ловушка, поправить инструменты руками негде, только через API */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>
+                <div>
+                  <FieldLabel>Возможности</FieldLabel>
+                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Какими инструментами персона может пользоваться в чате</div>
+                </div>
+                {TOOL_OPTIONS.map(t => (
+                  <div key={t.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{t.title}</div>
+                      <div style={{ fontSize: 12, color: C.textMuted, marginTop: 1 }}>{t.hint}</div>
+                    </div>
+                    <Toggle checked={tools.includes(t.key)} onChange={() => toggleTool(t.key)} />
+                  </div>
+                ))}
+              </div>
+
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>
                 <div>
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>Долгая память</div>

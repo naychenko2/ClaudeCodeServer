@@ -20,6 +20,7 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
 [JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
+[JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -240,4 +241,19 @@ public class StoredTeamEscalationMessage : StoredMessage
 {
     public string EscalationId { get; init; } = "";
     public Models.TeamEscalation Escalation { get; set; } = new();
+}
+
+// Пометка «Ответила …» при автоподмене модели в фолбэке (тот же логический смысл, что
+// живая пилюля model_switched в ленте: провалившаяся попытка перед подменой уже прислала
+// session_started с PreviousModel, фактически ответила новая модель). Без записи в
+// историю после F5 / рестарта человек не увидит, что отвечала не та модель. PreviousModel
+// — модель последнего session_started этого чата на момент подмены; Model — новая
+// фактическая. Reason — канонический класс ошибки (rate_limit | usage_limit |
+// provider_error | unreachable) для подсказки; null — на проводе отсутствует (старая запись
+// либо подмена без Reason).
+public class StoredModelSwitchedMessage : StoredMessage
+{
+    public string Model { get; init; } = "";
+    public string PreviousModel { get; init; } = "";
+    public string? Reason { get; init; }
 }

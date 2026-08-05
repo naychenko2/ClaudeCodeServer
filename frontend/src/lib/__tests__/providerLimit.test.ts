@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatSubscriptionMeta, splitFallbackOptions } from '../providerLimit';
+import { formatSubscriptionMeta, providerSwitchReasonLabel, splitFallbackOptions } from '../providerLimit';
 import type { ProviderFallbackOption } from '../../types';
 
 const sub = (key: string, extra?: Partial<ProviderFallbackOption>): ProviderFallbackOption => ({
@@ -58,5 +58,27 @@ describe('formatSubscriptionMeta', () => {
 
   it('пусто, если не задано ничего', () => {
     expect(formatSubscriptionMeta(sub('a'))).toBe('');
+  });
+});
+
+describe('providerSwitchReasonLabel', () => {
+  it('rate_limit и usage_limit сводятся к «Исчерпан лимит»', () => {
+    expect(providerSwitchReasonLabel('rate_limit', 'сырой label')).toBe('Исчерпан лимит');
+    expect(providerSwitchReasonLabel('usage_limit', 'сырой label')).toBe('Исчерпан лимит');
+  });
+
+  it('provider_error → «Провайдер выключен», unreachable → «Эндпоинт недоступен»', () => {
+    expect(providerSwitchReasonLabel('provider_error', 'сырой label')).toBe('Провайдер выключен');
+    expect(providerSwitchReasonLabel('unreachable', 'сырой label')).toBe('Эндпоинт недоступен');
+  });
+
+  it('нет reason или значение не опознано — фолбэк на сырой label маркера', () => {
+    expect(providerSwitchReasonLabel(undefined, 'Автофолбэк: смена провайдера → «DeepSeek»'))
+      .toBe('Автофолбэк: смена провайдера → «DeepSeek»');
+    expect(providerSwitchReasonLabel('none', 'сырой label')).toBe('сырой label');
+  });
+
+  it('reason есть, но label тоже нет — undefined (подсказка не рисуется)', () => {
+    expect(providerSwitchReasonLabel(undefined, undefined)).toBeUndefined();
   });
 });

@@ -28,3 +28,20 @@ export function formatSubscriptionMeta(option: ProviderFallbackOption): string {
   if (option.utilization != null) parts.push(`${Math.round(option.utilization * 100)}%`);
   return parts.join(' · ');
 }
+
+// Три канонические формулировки причины автофолбэка для подсказки «Ответила X — Y
+// была недоступна» (ModelSwitchedPill). Значения — wire-имена backend TurnErrorClassifier
+// (rate_limit/usage_limit/provider_error/unreachable); rate_limit и usage_limit сведены
+// к одной формулировке «Исчерпан лимит» — обе означают исчерпанную квоту, различие
+// не для пользователя.
+const REASON_LABEL: Record<string, string> = {
+  rate_limit: 'Исчерпан лимит',
+  usage_limit: 'Исчерпан лимит',
+  provider_error: 'Провайдер выключен',
+  unreachable: 'Эндпоинт недоступен',
+};
+
+export function providerSwitchReasonLabel(reason: string | undefined, fallback: string | undefined): string | undefined {
+  if (reason && REASON_LABEL[reason]) return REASON_LABEL[reason];
+  return fallback;
+}

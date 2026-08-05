@@ -5524,6 +5524,14 @@ public class SessionManager : IDisposable
                     if (entry is not null) entry.LoopTurnFailed = m.Subtype == "error";
                     RecordTurnSpend(entry, m);
                     break;
+                case ProviderSwitchedMessage m:
+                    // Пометка автоподмены модели в историю — после F5/рестарта человек видит,
+                    // что отвечала не та модель, что был выбран. Уровень 1 (ротация подписок)
+                    // модель не трогает — пилюля там не нужна; адаптер шлёт Auto=true без
+                    // Model, OnModelSwitched в таком случае no-op
+                    if (m.Auto && !string.IsNullOrEmpty(m.Model))
+                        acc.OnModelSwitched(m.Model, acc.LastStartedModel(), m.Reason);
+                    break;
                 case RateLimitMessage m:
                     _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
                     _activity?.Touch(entry?.Info.Provider);
@@ -5537,6 +5545,15 @@ public class SessionManager : IDisposable
                         // без overage — окно выбрано (с overage ходы ещё проходят).
                         if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
                         {
+                            // M1: под фолбэк-оркестрацией ротацией владеет адаптер —
+                            // помечать провайдер исчерпанным и переключать пул тут
+                            // нельзя. Не только потому, что будет дубль provider_switched:
+                            // поздний rate_limit от УЖЕ прерванной попытки придёт после
+                            // ApplyTarget и Info.Provider уже сменён на здоровый — пометив
+                            // его, мы загубим только что выбранную подписку. Провайдер
+                            // этой попытки адаптер сам отметит в ResolveNextTarget.
+                            if (entry.Process is FallbackLlmSessionAdapter fb && fb.FallbackTurnActive)
+                                return;
                             var resetsAt = m.ResetsAt is not null && DateTime.TryParse(m.ResetsAt, out var dt)
                                 ? (DateTime?)dt.ToUniversalTime() : null;
                             _subscriptionPool.MarkExhausted(entry.Info.Provider, resetsAt);

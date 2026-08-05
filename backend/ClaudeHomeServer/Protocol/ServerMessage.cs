@@ -336,7 +336,13 @@ public record TeamImplementMessage(
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
 // подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
 // на стороннего провайдера, Label — подпись разделителя «Продолжено на …».
-public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null, bool Auto = false)
+// Reason — структурированная причина автоподмены (wire-значения FallbackErrorClass:
+// rate_limit | usage_limit | provider_error | unreachable). Label остаётся текстом
+// разделителя, а по Reason фронт показывает каноническую формулировку подсказки
+// («Исчерпан лимит», «Провайдер выключен», «Эндпоинт недоступен») вместо сырого
+// текста маркера. null — подмена не автоматическая либо причина неизвестна.
+public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null,
+    bool Auto = false, string? Reason = null)
     : ServerMessage("provider_switched");
 
 // Лимит подписки исчерпан: предложение продолжить чат карточкой с кнопками в ленте —

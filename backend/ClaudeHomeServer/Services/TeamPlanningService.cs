@@ -99,21 +99,10 @@ public class TeamPlanningService(
         return hints;
     }
 
-    private static string SpecialtyLabel(PersonaSpecialty s) => s switch
-    {
-        PersonaSpecialty.Analyst => "Аналитик",
-        PersonaSpecialty.Planner => "Планировщик",
-        PersonaSpecialty.Reviewer => "Ревьюер",
-        PersonaSpecialty.Executor => "Исполнитель",
-        PersonaSpecialty.Secretary => "Секретарь",
-        PersonaSpecialty.Coordinator => "Координатор",
-        PersonaSpecialty.Mentor => "Наставник",
-        PersonaSpecialty.Designer => "Дизайнер",
-        PersonaSpecialty.Consultant => "Консультант",
-        PersonaSpecialty.Librarian => "Библиотекарь",
-        PersonaSpecialty.Tester => "Тестировщик",
-        _ => "",
-    };
+    // Подписи — из единого источника (SpecialtyCatalog): исполнительские специальности
+    // с профильными вариантами и актуальными подписями
+    private static string SpecialtyLabel(PersonaSpecialty s) =>
+        s == PersonaSpecialty.None ? "" : SpecialtyCatalog.Label(s);
 
     // Промпт планировщика. Главное требование Э2: у КАЖДОЙ под-задачи есть исполнитель
     // из списка кандидатов и одна строка обоснования — бэкендовая часть уходит бэкендеру,

@@ -3,7 +3,8 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
-import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
+import { useSpecialtyCatalog } from '../../lib/specialties';
+import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
@@ -123,6 +124,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
   const [specialty, setSpecialty] = useState<PersonaSpecialty>(
     persona?.specialty ?? initial?.specialty ?? 'none');
+  // Каталог специальностей: null — ещё грузится или сервер недоступен
+  const specialtyCatalog = useSpecialtyCatalog();
+  // Отложенная смена специальности: ждёт подтверждения перезаписи прав шаблоном
+  const [pendingSpecialty, setPendingSpecialty] = useState<PersonaSpecialty | null>(null);
+  // Плашка «права подставлены из шаблона» после подстановки
+  const [templateNote, setTemplateNote] = useState<string | null>(null);
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
   const [projectId, setProjectId] = useState(persona?.projectId ?? defaultProjectId ?? '');
   const [greeting, setGreeting] = useState(persona?.greeting ?? initial?.greeting ?? '');
@@ -138,6 +145,44 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Смена специальности: подставляет права и инструменты из эффективного шаблона,
+  // дальше они правятся вручную. Если текущие поля уже отличаются от нового шаблона —
+  // спрашивает подтверждение (защита ручных правок). Без каталога (ещё не загружен) —
+  // обычный setSpecialty.
+  const applySpecialtyTemplate = (next: PersonaSpecialty) => {
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (template) {
+      setAccess(template.access);
+      setTools(template.tools ?? ALL_TOOL_KEYS);
+      setDisallowedText((template.disallowedTools ?? []).join(', '));
+      setTemplateNote('Права и инструменты подставлены из шаблона специальности — можно поправить');
+    } else {
+      setTemplateNote(null);
+    }
+    setSpecialty(next);
+  };
+
+  const changeSpecialty = (next: PersonaSpecialty) => {
+    if (next === specialty) return;
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (!template) {
+      setSpecialty(next);
+      setTemplateNote(null);
+      return;
+    }
+    const templateTools = [...(template.tools ?? ALL_TOOL_KEYS)].sort().join(',');
+    const templateDis = template.access === 'custom' ? [...(template.disallowedTools ?? [])].sort() : [];
+    const currentDis = access === 'custom' ? [...parseDisallowed(disallowedText)].sort() : [];
+    const differs = access !== template.access
+      || [...tools].sort().join(',') !== templateTools
+      || JSON.stringify(currentDis) !== JSON.stringify(templateDis);
+    if (differs) {
+      setPendingSpecialty(next);
+      return;
+    }
+    applySpecialtyTemplate(next);
+  };
 
   // Аватар: текущее состояние (обновляется после выбора кандидата), возможность
   // генерации (настроен ли fal), поле промпта. Статус/результат генерации — в
@@ -936,25 +981,47 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
           <select
             value={specialty}
-            onChange={e => setSpecialty(e.target.value as PersonaSpecialty)}
+            onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)}
             style={selectStyle}
             aria-label="Специальность"
           >
             <option value="none">Не задана</option>
-            <option value="analyst">Аналитик</option>
-            <option value="planner">Планировщик</option>
-            <option value="reviewer">Ревьюер</option>
-            <option value="executor">Исполнитель</option>
-            <option value="secretary">Секретарь</option>
-            <option value="coordinator">Координатор</option>
-            <option value="mentor">Ментор</option>
-            <option value="designer">Дизайнер</option>
-            <option value="consultant">Консультант</option>
-            <option value="librarian">Библиотекарь</option>
-            <option value="tester">Тестировщик</option>
+            {specialtyCatalog
+              ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
+                <option key={e.key} value={e.key}>{e.label}</option>
+              ))
+              : (<>
+                <option value="analyst">Аналитик</option>
+                <option value="planner">Планировщик</option>
+                <option value="reviewer">Ревьюер</option>
+                <option value="executor">Исполнитель</option>
+                <option value="secretary">Секретарь</option>
+                <option value="coordinator">Координатор</option>
+                <option value="mentor">Ментор</option>
+                <option value="designer">Дизайнер</option>
+                <option value="consultant">Консультант</option>
+                <option value="librarian">Библиотекарь</option>
+                <option value="tester">Тестировщик</option>
+              </>)}
           </select>
+          {templateNote && (
+            <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+              {templateNote}
+            </span>
+          )}
         </Field>
       </div>
+
+      {pendingSpecialty && (
+        <ConfirmDialog
+          title="Заменить права и инструменты?"
+          subtitle="Текущие профиль доступа и инструменты отличаются от шаблона новой специальности. Заменить их шаблоном? Ручные правки будут перезаписаны."
+          confirmLabel="Заменить"
+          cancelLabel="Оставить как есть"
+          onConfirm={() => { applySpecialtyTemplate(pendingSpecialty); setPendingSpecialty(null); }}
+          onCancel={() => setPendingSpecialty(null)}
+        />
+      )}
     </div>
   );
 

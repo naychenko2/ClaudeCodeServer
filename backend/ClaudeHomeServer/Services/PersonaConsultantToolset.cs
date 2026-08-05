@@ -8,8 +8,8 @@ namespace ClaudeHomeServer.Services;
 // персоны-собеседника, чьи действия одобряет живой пользователь; у сабагента-консультанта
 // permission-канала нет вовсе (фоновый контекст), поэтому базовый набор жёстко read-only.
 // Write-исключения два: собственная память персоны (pmem-сервер) и режим ИСПОЛНИТЕЛЯ —
-// Access=Full вместе со Specialty=Executor или Tester добавляет файлы+Bash (радиус
-// поражения ограничен песочницей контейнера и папками, проброшенными в сессию).
+// Access=Full вместе со специальностью исполнителя (любой из трёх) или Tester добавляет
+// файлы+Bash (радиус поражения ограничен песочницей контейнера и папками, проброшенными в сессию).
 public static class PersonaConsultantToolset
 {
     // Встроенные read-инструменты CLI: чтение и поиск по файлам зоны сессии
@@ -77,12 +77,12 @@ public static class PersonaConsultantToolset
         return tools;
     }
 
-    // Персона-исполнитель: write-набор в сабагенте разрешён специальностям «исполнитель»
-    // и «тестировщик» при полном профиле доступа (не-Full профиль не даёт write независимо
-    // от специальности)
+    // Персона-исполнитель: write-набор в сабагенте разрешён семейству исполнителя
+    // (универсальный/бэкенд/фронтенд — SpecialtyCatalog.IsExecutorKind) и «тестировщику»
+    // при полном профиле доступа (не-Full профиль не даёт write независимо от специальности)
     public static bool IsExecutor(Persona persona) =>
         persona.Access == PersonaAccess.Full &&
-        persona.Specialty is PersonaSpecialty.Executor or PersonaSpecialty.Tester;
+        (SpecialtyCatalog.IsExecutorKind(persona.Specialty) || persona.Specialty == PersonaSpecialty.Tester);
 
     // Полный allow-list консультанта. Custom.DisallowedTools персоны только СУЖАЕТ набор
     // (точное совпадение имени); Access расширить его не может — безопасность сабагента

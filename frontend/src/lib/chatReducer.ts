@@ -185,7 +185,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
-  'work_loop_stopped',
+  'work_loop_stopped', 'model_switched',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -210,6 +210,16 @@ export function serverHistoryNewer(serverItems: ChatItem[], prevItems: ChatItem[
   if (s === null) return false;
   const p = lastText(prev);
   return p === null ? s.length > 0 : s.length > p.length;
+}
+
+// Модель последнего session_started этого чата — точка сравнения для пометки «Ответила …»
+// (провалившаяся попытка перед фолбэк-подменой всегда успевает прислать свой session_started)
+function lastKnownModel(items: ChatItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === 'session_started' && it.model) return it.model;
+  }
+  return null;
 }
 
 // Последний блок сабагента данного вида у данного родителя — для дедупа эха
@@ -585,6 +595,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // или чат тихо переехал внутри пула); явная миграция добавляет разделитель
       const items = prev.items.map(it =>
         it.kind === 'provider_limit' && !it.resolved ? { ...it, resolved: true } : it);
+
+      // Автофолбэк сменил МОДЕЛЬ (уровень 2 цепочки — другой провайдер с моделью-эквивалентом):
+      // отдельная пометка «Ответила …», а не пилюля provider_switched. Ротация подписок того
+      // же провайдера (уровень 1) модель не трогает и msg.model не несёт — своей пометки не
+      // получает, остаётся на существующей логике ниже (блок G model-providers-rework.md).
+      // Сверяем с моделью последнего session_started этого чата — она гарантированно есть
+      // к этому моменту (провалившаяся попытка перед подменой уже её прислала)
+      if (msg.auto && msg.model) {
+        const prevModel = lastKnownModel(prev.items);
+        if (prevModel && prevModel !== msg.model)
+          return withItems([...items,
+            { kind: 'model_switched', model: msg.model, previousModel: prevModel, reason: msg.reason, rawLabel: msg.label }]);
+      }
+
       return withItems(msg.auto || !msg.label
         ? items
         : [...items, { kind: 'provider_switched', label: msg.label }]);

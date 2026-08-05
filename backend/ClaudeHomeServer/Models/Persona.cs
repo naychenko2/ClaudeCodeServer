@@ -60,10 +60,16 @@ public enum PersonaAccess { Full, ReadOnly, Custom }
 // брифинга (Secretary), группировкой/статусом команды и роутингом памяти команды.
 // None — не задана: оркестрация берёт явные слоты либо дефолт каталога; работает
 // с любыми персонами, не только OmO.
+// BackendExecutor/FrontendExecutor — профильные исполнители рядом с универсальным
+// (Executor): ведут себя как исполнитель во всех механизмах (write-набор сабагента,
+// роутинг oh-my-claudecode, git-секция), но различаются подписью и шаблоном прав
+// (SpecialtyCatalog). Подписи и шаблоны — в SpecialtyCatalog, значения добавлены
+// в конец без миграции данных.
 public enum PersonaSpecialty
 {
     None, Analyst, Planner, Reviewer, Executor, Secretary,
-    Coordinator, Mentor, Designer, Consultant, Librarian, Tester
+    Coordinator, Mentor, Designer, Consultant, Librarian, Tester,
+    BackendExecutor, FrontendExecutor
 }
 
 // Состояние кропа загруженного аватара: масштаб и смещение центра окна

@@ -24,6 +24,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // со следующего хода, чат её не «замораживает». Итоговый null = слот пуст, решает CLI.
     private string? EffectiveModel => _assignments?.Resolve(UsageKey, Info.Model, Info.OwnerId) ?? Info.Model;
 
+    // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
+    // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
+    internal string? EffectiveTurnModel => EffectiveModel;
+
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>
         Info.TaskExecution || Info.TaskId is not null ? LocalActionCatalog.TasksExecutor

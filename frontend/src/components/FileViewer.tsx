@@ -22,7 +22,7 @@ import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry } from '../types';
 import { api } from '../lib/api';
 import { basename } from '../lib/paths';
-import { resolveDocImage, resolveDocLink, slugify } from '../lib/docsLinks';
+import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
 import { OfflineError } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
@@ -30,7 +30,7 @@ import { relTime } from './GitPanel';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { useHeadings } from '../hooks/useHeadings';
+import { useHeadings, resolveHeadingEl, type DocToc, type Heading } from '../hooks/useHeadings';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -110,6 +110,11 @@ interface Props {
   onFileForward?: () => void;
   canFileBack?: boolean;
   canFileForward?: boolean;
+  // Оглавление открытого md — наружу, панели «Оглавление» (см. DocToc). null означает
+  // «оглавления сейчас нет»: файл не markdown, просмотрщик закрылся или документ
+  // показывает не эта зона (заметка vault рисуется своим NoteView). Панель по этому
+  // null исчезает вместе со своей кнопкой, сохраняя место в раскладке.
+  onTocChange?: (toc: DocToc | null) => void;
 }
 
 interface FileContent {
@@ -318,7 +323,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange }: Props) {
   const online = useOnline();
   // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
   // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
@@ -887,6 +892,43 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Текстовый файл, содержимое которого можно скопировать целиком
   const isCopyableText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
     && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
+
+  // === ОГЛАВЛЕНИЕ НАРУЖУ (панель «Оглавление») ===
+  // Заголовки уже собраны выше (useHeadings) ради якорей — отдаём тот же список панели
+  // вместе с действиями над ним: прокруткой владеет просмотрщик (свой скроллер, своя
+  // поправка на шапку), нарезкой раздела — тоже он, потому что резать надо ИСХОДНЫЙ
+  // markdown, а не текст из DOM.
+  const sectionOf = useCallback(
+    (h: Heading) => sliceSection(content, slugify(h.text)),
+    [content]);
+
+  // Переход к разделу из панели. Узел берём НЕ из самого заголовка, а ищем заново
+  // (resolveHeadingEl): панель живёт рядом с документом сколько угодно, а markdown за
+  // это время перерисовывается — комментарии к документу приезжают асинхронно и меняют
+  // разметку целиком. Собранные узлы после такой перерисовки оторваны от документа, и
+  // прокрутка по ним молча уезжала в начало вместо нужного раздела.
+  // Стабильная (scrollDocTo стабилен) — иначе объект оглавления пересобирался бы на
+  // каждый рендер и эффект ниже гонял бы setState по кругу.
+  const jumpToHeading = useCallback((h: Heading) => {
+    const el = resolveHeadingEl(contentAreaRef.current, h);
+    if (el) scrollDocTo(el);
+  }, [scrollDocTo]);
+
+  // Заметка vault рисуется отдельным NoteView (ранний return ниже) — её markdown в
+  // contentAreaRef не попадает, и оглавление там всегда пустое. Честнее не показывать
+  // панель вовсе, чем держать кнопку, которая открывает пустоту.
+  const tocAvailable = isMarkdown && !(isNotesFile && (noteIdOverride || noteDetail));
+
+  useEffect(() => {
+    if (!onTocChange) return;
+    onTocChange(tocAvailable
+      ? { path: filePath, headings, jump: jumpToHeading, sectionOf }
+      : null);
+  }, [onTocChange, tocAvailable, filePath, headings, jumpToHeading, sectionOf]);
+
+  // Просмотрщик ушёл с экрана — панель обязана исчезнуть вместе с ним: иначе она
+  // осталась бы висеть с оглавлением закрытого документа
+  useEffect(() => () => onTocChange?.(null), [onTocChange]);
 
   // Ctrl+C без выделения: отдаём исходник открытого текстового файла (см. selectionScope)
   const copySourceRef = useRef<() => string | null>(() => null);

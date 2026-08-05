@@ -16,6 +16,7 @@
 import {
   BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, Puzzle,
+  TableOfContents,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -30,6 +31,7 @@ export type Zone = 'left' | 'right';
 export const PANEL_KEYS = [
   'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
+  'toc',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
@@ -61,6 +63,10 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   agents:   { title: 'Агенты',    Icon: Bot },
   // 'context' — досье персоны-собеседника (память/привязки/recall)
   context:  { title: 'Персона',   Icon: User },
+  // Оглавление документа, открытого в ЦЕНТРЕ. Панель существует, только пока там md,
+  // — отсюда своя группа рельсы (CENTER_KEYS), а не соседство с содержимым проекта:
+  // «Файлы» и «Документация» показывают репозиторий, эта — то, что сейчас читают.
+  toc:      { title: 'Оглавление', Icon: TableOfContents },
 
   // Разделы хаба. Ключи намеренно длиннее воркспейсных: рядом живут похожие по
   // смыслу панели проекта, и путать их нельзя. personasList — все персоны
@@ -90,6 +96,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   plan: 'right',
   agents: 'right',
   context: 'right',
+  toc: 'right',
   // Разделы хаба выросли из левого сайдбара — там их дом
   notesList: 'left',
   notesGraph: 'left',
@@ -101,7 +108,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
   'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
-  'plan', 'agents', 'context',
+  'plan', 'agents', 'context', 'toc',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)
 export const CHAT_KEYS: readonly PanelKey[] = ['chats', 'plan', 'agents', 'context'];
@@ -116,16 +123,26 @@ export const PROJECTS_KEYS: readonly PanelKey[] = ['projectGroups'];
 // инструментов проекта.
 export const SESSION_KEYS: readonly PanelKey[] = ['plan', 'agents', 'context'];
 
+// Панели ЦЕНТРАЛЬНОЙ ОБЛАСТИ: показывают не проект и не сессию, а то, что открыто
+// в центре прямо сейчас. Живут ровно столько, сколько живёт их источник: закрыли
+// документ — панель исчезла вместе с кнопкой (контент стал null, см. keyAvailable),
+// открыли другой — вернулась на своё место в раскладке.
+//
+// Категория отдельная от сессионных (у тех видимость считается по артефактам хода,
+// здесь — по тому, что открыто в центре), но в РЕЛЬСЕ они идут одной группой, без
+// черты между собой: и те и другие отвечают на вопрос «что сейчас перед глазами».
+export const CENTER_KEYS: readonly PanelKey[] = ['toc'];
+
 // Панели, доступные только при включённых инструментах проекта. В рельсе они идут
 // СВОЕЙ группой: остальные панели показывают содержимое проекта, эти запускают в нём
 // процессы — и выключаются вместе с инструментами, унося и свой разделитель.
 export const TOOLS_KEYS: readonly PanelKey[] = ['terminal', 'preview'];
 
 // Содержимое проекта и панели разделов: всё, что не относится ни к текущей сессии,
-// ни к запуску процессов. Первая группа рельсы, дальше инструменты и сессионные —
-// разделители между ними рисует сама рельса.
+// ни к запуску процессов, ни к центральной области. Первая группа рельсы, дальше
+// инструменты, сессионные и центральные — разделители рисует сама рельса.
 export const PROJECT_KEYS: readonly PanelKey[] = PANEL_KEYS.filter(
-  k => !SESSION_KEYS.includes(k) && !TOOLS_KEYS.includes(k),
+  k => !SESSION_KEYS.includes(k) && !TOOLS_KEYS.includes(k) && !CENTER_KEYS.includes(k),
 );
 
 // Панели ПОЛНОЙ ВЫСОТЫ: тянутся до нижней кромки ВСЕГДА, включая одиночную панель

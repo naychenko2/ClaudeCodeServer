@@ -33,7 +33,7 @@ import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../componen
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
+  PANEL_META, PANEL_KEYS, CENTER_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
   isFullHeight, type PanelKey, type Zone,
 } from './panelCatalog';
 import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, type PanelZonesStore } from './panelStackState';
@@ -582,9 +582,13 @@ export function PanelZone({
       } : undefined}
       footer={railFooter}
       // Три группы: содержимое ПРОЕКТА, инструменты запуска (Терминал, Сервисы) и
-      // панели ТЕКУЩЕЙ СЕССИИ. Разделители между ними PanelRail рисует сам и убирает
-      // вместе с пустой группой — выключенные инструменты уносят и свою черту.
-      groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup(SESSION_KEYS)]}
+      // всё, что относится к ТЕКУЩЕМУ КОНТЕКСТУ — панели сессии (План, Агенты, Персона)
+      // и панели центральной области (Оглавление). Последние две категории разделены в
+      // реестре (у них разные источники видимости), но в рельсе идут ОДНОЙ группой:
+      // это соседи по смыслу — «что сейчас перед глазами», и черта между ними делила бы
+      // рельсу там, где деления нет. Разделители PanelRail рисует сам и убирает вместе
+      // с пустой группой — выключенные инструменты уносят и свою черту.
+      groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup([...SESSION_KEYS, ...CENTER_KEYS])]}
       // Свой зазор до центра нужен только при закрытых панелях: иначе его даёт
       // прокладка перед зоной
       // Зазор до центра обычно даёт сама зона (её сплиттер/крайняя направляющая), но

@@ -114,10 +114,10 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     <div style={{
       display: 'flex', alignItems: 'center', gap: 12, margin: '10px 0 8px',
       height: 51, padding: '0 8px 0 12px',
-      // Ни рамки, ни тени: плашку держит один полупрозрачный утопленный тон
-      // (bgInsetSoft) — сквозь неё виден дудл-паттерн холста. Скругление общее
-      // с карточкой поля ввода под ней
-      background: C.bgInsetSoft, borderRadius: R.xxl,
+      // Фон и рамка — как у баннера прерванной сессии («Чат приостановлен»):
+      // плотная подложка панели с тонкой рамкой. Скругление общее с карточкой
+      // поля ввода под ней
+      background: C.bgPanel, border: `1px solid ${C.border}`, borderRadius: R.xxl,
     }}>
       {/* Ветка / имя worktree; папка-иконка — чат в отдельном дереве */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
@@ -195,9 +195,9 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
             title="Зафиксировать изменения (git commit)"
             style={{
               display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 10px 0 12px',
-              // Фон светлее плашки (bgPanel, как у соседней diff-пилюли): подложка
-              // панели утоплена, и кнопка на её же тоне держалась бы только рамкой
-              border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgPanel,
+              // Фон светлее плашки, но не белый: bgCard — приподнятая поверхность
+              // над тоном панели, иначе кнопка сливалась бы с ней и держалась рамкой
+              border: `1px solid ${C.border}`, borderRadius: R.md, background: C.bgCard,
               cursor: 'pointer', fontFamily: FONT.sans, fontSize: 12.5, color: C.textHeading,
             }}
           >

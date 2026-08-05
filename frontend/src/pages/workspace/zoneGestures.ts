@@ -34,7 +34,7 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // Дроп ОДНОЙ панели на другую: они меняются местами (в т.ч. через границу зон)
   onSwap: (from: PanelKey, to: PanelKey) => void;
 }) {
-  const { from, fromZone, over, moved } = usePanelDragState();
+  const { from, fromZone, over, fromTucked, moved } = usePanelDragState();
   // Панель тащат И эта зона её принимает. Дальше по коду ориентируемся на неё:
   // непринимаемый дроп ведёт себя как «перетаскивания нет» — ни направляющих, ни
   // подсветки, ни dropEffect (курсор сам покажет запрет).
@@ -63,12 +63,26 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
     },
   });
 
-  // Что делает элемент «ручкой» панели: шапка карточки и иконка в рельсе. Из
-  // рельсы тащат ЗАКРЫТУЮ панель — так её можно сразу поставить в нужное место,
-  // а не открывать кликом туда, куда решит раскладка.
-  const dragSourceProps = (k: PanelKey): HTMLAttributes<HTMLElement> & { draggable?: boolean } => ({
+  // Что делает элемент «ручкой» панели: шапка карточки, иконка в рельсе и строка
+  // ящика («…»). Из рельсы тащат ЗАКРЫТУЮ панель — так её можно сразу поставить в
+  // нужное место, а не открывать кликом туда, куда решит раскладка.
+  // tucked — ручка живёт в ящике: дроп в раскладку тогда ещё и вернёт кнопку на
+  // рельсу (см. fromTucked в panelDrag).
+  const dragSourceProps = (k: PanelKey, opts?: { tucked?: boolean }): HTMLAttributes<HTMLElement> & { draggable?: boolean } => ({
     draggable: true,
-    onDragStart: e => { startPanelDrag(k, zone); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
+    onDragStart: e => {
+      // dataTransfer живёт только внутри обработчика — заполняем сразу
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', k);
+      // А состояние перетаскивания поднимаем СЛЕДУЮЩИМ кадром. Оно перестраивает
+      // обе зоны прямо под захваченным элементом (у рельсы появляется мишень с
+      // оверлеем поверх столбца иконок), и браузер на такую перестройку жест
+      // отменяет: dragstart приходит, следом сразу dragend, без единого события
+      // drag. Заметно это было только на иконках рельсы — карточку панели тащат
+      // за шапку, а её DOM оверлей рельсы не трогает. Кадр задержки не виден:
+      // человек в этот момент ещё только сдвигает курсор.
+      requestAnimationFrame(() => startPanelDrag(k, zone, opts?.tucked));
+    },
     onDragEnd: endPanelDrag,
   });
 
@@ -105,7 +119,7 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // подменить хендлы ресайза направляющими). accepting — тащат панель, которую
   // ЭТА зона готова принять: по ней решается, показывать ли места вставки.
   return {
-    from, fromZone, active: from !== null, accepting: incoming !== null,
+    from, fromZone, fromTucked, active: from !== null, accepting: incoming !== null,
     // Панель, которую только что перенесли: анимацию появления в перестроенной
     // раскладке получает ТОЛЬКО она (см. markPanelMoved)
     moved,

@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, History, SlidersHorizontal } from 'lucide-react';
+import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -31,13 +31,12 @@ import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'rtf', 'html', 'htm', 'msg']);
 const isMdConvertible = (name: string) => MD_CONVERTIBLE.has((name.split('.').pop() ?? '').toLowerCase());
 import { copyMarkdown } from '../lib/selectionScope';
-import { useGitState, ensureGit, gitInit, loadGitRemote } from '../lib/git';
-import { GitChangesPanel, GitHistoryPanel } from './GitPanel';
+import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FONT, MODAL_W, TB, SHADOW } from '../lib/design';
+import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
-import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
@@ -53,15 +52,7 @@ interface Props {
   indexingFolders?: Set<string>;
   onAttachToChat?: (path: string) => void;
   onRemoveFromKnowledge?: (relativePath: string) => void;
-  onOpenKnowledge?: () => void;
-  // Открыть diff файла из панели «Изменения» (staged — дифф индекса);
-  // не передан — фолбэк на onOpenFile
-  onOpenGitDiff?: (path: string, staged: boolean) => void;
-  onOpenCommit?: (sha: string) => void;
 }
-
-// Режим сайдбара «Файлы»: дерево / git-изменения / git-история
-export type GitView = 'files' | 'changes' | 'history';
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
 // при переключении вкладок «Чаты»/«Файлы». Ключ — projectId.
@@ -73,7 +64,6 @@ interface ExplorerState {
   searchResults: FileEntry[] | null;
   createInDir: string;
   scrollTop: number;
-  gitView?: GitView;         // активный сегмент пилюли (файлы/изменения/история)
   onlyChanged?: boolean;     // фильтр «Только изменённые» в дереве
 }
 const _explorerStore = new Map<string, ExplorerState>();
@@ -81,16 +71,6 @@ const _explorerStore = new Map<string, ExplorerState>();
 /** Возвращает текущую папку для создания файлов в проводнике (используется из ChatPanel). */
 export function getExplorerCreateInDir(projectId: string): string {
   return _explorerStore.get(projectId)?.createInDir ?? '';
-}
-
-/** Переключает git-сегмент пилюли извне (пилюля в «Знаниях»): применится при монтировании проводника. */
-export function setExplorerGitView(projectId: string, view: GitView): void {
-  const st = _explorerStore.get(projectId);
-  if (st) { st.gitView = view; return; }
-  _explorerStore.set(projectId, {
-    dirCache: new Map(), expanded: new Set(), mobileDir: '', search: '',
-    searchResults: null, createInDir: '', scrollTop: 0, gitView: view,
-  });
 }
 
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
@@ -216,13 +196,15 @@ export function getExtMeta(name: string) {
   return m;
 }
 
+// Папка — нейтральной иконкой, как в «Документации»: акцент в дереве оставлен
+// смысловым отметкам (активный файл, заметки, база знаний), а не каждой папке
 function FolderIcon() {
-  return <Folder size={ICON_SIZE.md} strokeWidth={ICON_STROKE} color={C.accent} />;
+  return <Folder size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} />;
 }
 
 // Иконка папки «Заметки» (vault проекта) — единая IconNotes в accent-цвете
 function NotesFolderIcon() {
-  return <span style={{ color: C.accent, display: 'flex' }}><IconNotes size={17} /></span>;
+  return <span style={{ color: C.accent, display: 'flex' }}><IconNotes size={14} /></span>;
 }
 
 function CloudIcon({ variant }: { variant: 'direct' | 'inherited' | 'idle' }) {
@@ -340,27 +322,6 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
   );
 }
 
-// Иконка карандаша для переименования
-function RenameIcon() {
-  return <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
-}
-
-// Иконка корзины для удаления
-function TrashIcon() {
-  return <Trash2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />;
-}
-
-// Иконка книги с минусом — «удалить из знаний» (в строке файла, 15×15)
-function BookMinusIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
-      <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>
-      <line x1="14" y1="10" x2="22" y2="10"/>
-    </svg>
-  );
-}
-
 // Иконки для контекстного меню — 16×16, currentColor, Lucide-style
 function MI_Attach() {
   return <Paperclip size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
@@ -425,8 +386,294 @@ interface ContextMenuState {
   entry: FileEntry;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge, onOpenGitDiff, onOpenCommit }: Props) {
+// Плотность дерева — общая с «Документацией» (DocsPanel.ROW_H): панели стоят рядом
+// в одной рельсе, и разная высота строки читалась бы как разный масштаб интерфейса.
+// На тач-раскладке строка выше: 22px пальцем не попасть.
+const ROW_H = 22;
+const ROW_H_TOUCH = 40;
+const INDENT = 12;   // отступ на уровень вложенности
+
+// Строка дерева — отдельный компонент ради СОБСТВЕННОГО состояния наведения.
+// Пока hover жил в панели, каждое движение мыши перерисовывало весь список: в
+// раскрытом дереве это сотни строк с инлайновыми стилями на каждый mousemove.
+// Тот же приём, что у DocRow/FolderRow в «Документации».
+interface FileRowProps {
+  entry: FileEntry;
+  depth: number;
+  showPath: boolean;      // результаты поиска — второй строкой путь до файла
+  mobileNav: boolean;     // мобильная навигация по папкам (вместо дерева)
+  isMobile: boolean;
+  alwaysShowIcons: boolean;
+  online: boolean;
+  active: boolean;
+  expanded: boolean;
+  loading: boolean;
+  renaming: boolean;
+  isDropTarget: boolean;
+  dragging: boolean;
+  pressing: boolean;
+  flash: boolean;         // подсветка только что созданного файла
+  syncState: 'direct' | 'inherited' | null;
+  pendingDownload: boolean;
+  folderSyncing: boolean;
+  indexed: boolean;       // файл в базе знаний проекта
+  indexing: boolean;
+  canAttach: boolean;
+  renameValue: string;
+  onRenameChange: (v: string) => void;
+  onRenameCommit: () => void;
+  onRenameCancel: () => void;
+  onRenameBlur: () => void;
+  onOpen: (entry: FileEntry) => void;
+  onRename: (entry: FileEntry) => void;
+  onContextMenu: (e: React.MouseEvent, entry: FileEntry) => void;
+  onDragStart: (e: React.DragEvent, entry: FileEntry) => void;
+  onDragOver: (e: React.DragEvent, entry: FileEntry) => void;
+  onDragLeave: (e: React.DragEvent, entry: FileEntry) => void;
+  onDrop: (e: React.DragEvent, entry: FileEntry) => void;
+  onDragEnd: () => void;
+  onTouchStart: (entry: FileEntry) => void;
+  onTouchCancel: () => void;
+  onTouchEndPreventDefault: () => boolean;
+  onAttach: ((path: string) => void) | undefined;
+  onToggleSync: (entry: FileEntry, e: React.MouseEvent) => void;
+}
+
+const FileRow = memo(function FileRow(p: FileRowProps) {
+  const { entry, depth, isMobile, alwaysShowIcons, online } = p;
+  const [hover, setHover] = useState(false);
+  const touch = isMobile || alwaysShowIcons;
+  // Ref инпута переименования держит сама строка: пока он приезжал пропом из
+  // панели, react-hooks/refs считал доступом к рефу ЛЮБОЕ чтение пропсов строки
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inlineRename = p.renaming && !touch;
+  // Фокус и выделение имени БЕЗ расширения: правят обычно его, а не «.tsx»
+  useEffect(() => {
+    if (!inlineRename) return;
+    const raf = requestAnimationFrame(() => {
+      const input = inputRef.current;
+      if (!input) return;
+      input.focus();
+      const dot = input.value.lastIndexOf('.');
+      input.setSelectionRange(0, dot > 0 ? dot : input.value.length);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [inlineRename]);
+  const notesRoot = isNotesRoot(entry);
+  const em = entry.isDirectory ? null : getExtMeta(entry.name);
+  const parentDir = p.showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
+
+  const rowBg = p.isDropTarget || p.active ? C.accentMuted
+    : hover ? C.bgSelected
+    : p.flash ? C.accentLight
+    : notesRoot ? C.accentLight
+    : 'transparent';
+  // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
+  const stickyIcons = !isMobile;
+
+  // Тоггл офлайн-синхронизации: состояние важнее наведения — залитое облачко
+  // видно всегда, пустое проявляется под курсором (на тач-раскладке — постоянно)
+  const syncControl = (() => {
+    const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
+    if (p.pendingDownload || p.folderSyncing) {
+      if (online && p.syncState === 'direct') {
+        return <button onClick={e => p.onToggleSync(entry, e)} title="Отменить синхронизацию" style={btnStyle}><SyncSpinner /></button>;
+      }
+      return <span style={{ ...btnStyle, cursor: 'default' }} title="Загружается…"><SyncSpinner /></span>;
+    }
+    if (p.syncState === 'inherited') {
+      return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку/проект)"><CloudIcon variant="inherited" /></span>;
+    }
+    if (online) {
+      if (p.syncState === 'direct') {
+        return <button onClick={e => p.onToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
+      }
+      if (touch || hover) {
+        return <button onClick={e => p.onToggleSync(entry, e)} title="Синхронизировать для офлайна" style={btnStyle}><CloudIcon variant="idle" /></button>;
+      }
+      return null;
+    }
+    if (p.syncState === 'direct') {
+      return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизирован"><CloudIcon variant="direct" /></span>;
+    }
+    return null;
+  })();
+
+  return (
+    <div
+      draggable={!touch && !p.renaming && !notesRoot}
+      onClick={() => { if (!p.renaming) p.onOpen(entry); }}
+      onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); p.onRename(entry); } : undefined}
+      onContextMenu={e => p.onContextMenu(e, entry)}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onDragStart={!touch ? e => p.onDragStart(e, entry) : undefined}
+      onDragOver={!touch && entry.isDirectory ? e => p.onDragOver(e, entry) : undefined}
+      onDragLeave={!touch && entry.isDirectory ? e => p.onDragLeave(e, entry) : undefined}
+      onDrop={!touch && entry.isDirectory ? e => p.onDrop(e, entry) : undefined}
+      onDragEnd={!touch ? p.onDragEnd : undefined}
+      onTouchStart={touch ? () => p.onTouchStart(entry) : undefined}
+      onTouchEnd={touch ? e => { if (p.onTouchEndPreventDefault()) e.preventDefault(); p.onTouchCancel(); } : undefined}
+      onTouchMove={touch ? p.onTouchCancel : undefined}
+      onTouchCancel={touch ? p.onTouchCancel : undefined}
+      style={{
+        display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 5,
+        paddingLeft: 8 + depth * INDENT, paddingRight: stickyIcons ? 0 : 8,
+        paddingTop: touch ? 9 : 1,
+        paddingBottom: touch ? 9 : 1,
+        // Высота ЖЁСТКАЯ, а не минимальная: кнопки наведения (24) выше строки (22),
+        // и на minHeight строка раздвигалась под курсором — список дёргался целиком.
+        // Теперь кнопка выступает за кромку на пиксель, а строка стоит на месте.
+        // Исключение — результаты поиска: там под именем идёт вторая строка с путём,
+        // и в 22px они наезжали друг на друга.
+        ...(touch || p.showPath ? { minHeight: p.showPath && !touch ? 34 : ROW_H_TOUCH } : { height: ROW_H }),
+        borderRadius: R.md, cursor: p.dragging ? 'grabbing' : 'pointer',
+        width: '100%', boxSizing: 'border-box',
+        opacity: p.dragging ? 0.4 : p.pressing ? 0.6 : 1,
+        transform: p.pressing ? 'scale(0.98)' : 'none',
+        background: rowBg,
+        boxShadow: p.isDropTarget
+          ? `inset 0 0 0 2px ${C.accent}`
+          : p.active ? `inset 2px 0 0 ${C.accent}`
+          : 'none',
+        transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s, transform 0.1s',
+      }}
+    >
+      {/* toggle-стрелка дерева — только десктоп/планшет. Chevron с поворотом вместо
+          текстовых ▸/▾: шрифтовые глифы разной ширины дёргали строку при раскрытии */}
+      {!p.mobileNav && (
+        <span style={{ width: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted }}>
+          {entry.isDirectory && (p.loading
+            ? <span style={{ fontSize: 9, lineHeight: 1 }}>·</span>
+            : <ChevronRight size={11} strokeWidth={ICON_STROKE}
+                style={{ transform: p.expanded ? 'rotate(90deg)' : 'none', transition: 'transform .15s ease' }} />)}
+        </span>
+      )}
+      {entry.isDirectory ? (
+        <span style={{ flexShrink: 0, display: 'flex' }}>
+          {notesRoot ? <NotesFolderIcon /> : <FolderIcon />}
+        </span>
+      ) : (
+        <span style={{
+          width: 16, height: 16, borderRadius: 4,
+          background: em!.bg, color: em!.fg,
+          fontFamily: "'JetBrains Mono', monospace",
+          fontSize: 7.5, fontWeight: 700,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          flexShrink: 0, letterSpacing: '-0.02em',
+        }}>{em!.label}</span>
+      )}
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
+        {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
+        {inlineRename ? (
+          <input
+            ref={inputRef}
+            value={p.renameValue}
+            onChange={e => p.onRenameChange(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === 'Enter') { e.stopPropagation(); p.onRenameCommit(); }
+              if (e.key === 'Escape') { e.stopPropagation(); p.onRenameCancel(); }
+            }}
+            onBlur={p.onRenameBlur}
+            onClick={e => e.stopPropagation()}
+            style={{
+              fontFamily: "'JetBrains Mono', monospace",
+              fontSize: FS.sm,
+              fontWeight: entry.isDirectory ? 700 : 500,
+              color: C.textHeading,
+              background: C.bgWhite,
+              border: `1.5px solid ${C.accent}`,
+              borderRadius: 4,
+              padding: '1px 4px',
+              outline: 'none',
+              width: '100%',
+              boxSizing: 'border-box',
+            }}
+          />
+        ) : (
+          // Гарнитура, размер и цвет — как в строке «Документации»: панели стоят рядом
+          // в одной рельсе, и разный шрифт читался бы как разный раздел. Выделяется
+          // только выбранное (тёмный + 600), остальное — вторичным
+          <span title={notesRoot ? 'Заметки (папка notes)' : entry.name} style={{
+            fontFamily: FONT.sans,
+            fontSize: FS.sm,
+            lineHeight: 1.35,
+            fontWeight: p.active || entry.isDirectory ? 600 : 400,
+            color: notesRoot ? C.accent
+              : (!entry.isDirectory && p.indexed) ? C.successText
+              : p.active ? C.textHeading
+              : C.textSecondary,
+            ...(isMobile
+              ? { whiteSpace: 'normal', wordBreak: 'break-all' }
+              : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+          }}>{notesRoot ? 'Заметки' : entry.name}</span>
+        )}
+        {parentDir && (
+          <span title={normPath(entry.path)} style={{
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10, color: C.textMuted,
+            ...(isMobile ? { whiteSpace: 'normal', wordBreak: 'break-all' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
+          }}>{parentDir}</span>
+        )}
+      </span>
+      {/* Кластер правых иконок: на десктопе — sticky, не уезжает при горизонтальном скролле.
+          Быстрых действий здесь ровно два — «прикрепить к чату» и офлайн-облачко: у них
+          нет другого дешёвого пути. Переименование, удаление и знания живут в контекстном
+          меню, где и были; шесть иконок в строке читались как приборная панель. */}
+      <span style={{
+        display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+        ...(stickyIcons ? {
+          position: 'sticky' as const, right: 0,
+          alignSelf: 'stretch',
+          paddingLeft: 4, paddingRight: 8,
+          // Прозрачный на невыделенной строке: собственный фон-заглушка выдавал бы
+          // «хвост» справа, когда он не совпадает с фоном панели (та бывает и белой)
+          background: rowBg,
+          borderRadius: '0 8px 8px 0',
+        } : {}),
+      }}>
+        {entry.isModified && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: C.accent, background: C.accentLight, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
+        )}
+        {entry.isNew && (
+          <span style={{ fontSize: 9, fontWeight: 700, color: C.successText, background: C.successBg, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
+        )}
+        {/* Индикатор базы знаний: спиннер во время индексации, книга — когда файл в ней.
+            Управление (добавить/убрать) — в контекстном меню */}
+        {!entry.isDirectory && p.indexing && (
+          <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <style>{`@keyframes kb-spin{to{transform:rotate(360deg)}} .kb-spin{transform-origin:center;animation:kb-spin 0.8s linear infinite}`}</style>
+              <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
+            </svg>
+          </span>
+        )}
+        {!entry.isDirectory && !p.indexing && p.indexed && (
+          <span title="В базе знаний" style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
+            <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </span>
+        )}
+        {/* Прикрепить к чату — десктоп при наведении; на тач-раскладке через long-press */}
+        {!entry.isDirectory && p.canAttach && p.onAttach && !touch && hover && (
+          <IconButton
+            size="xs"
+            tone="accent"
+            onClick={e => { e.stopPropagation(); p.onAttach!(entry.path); }}
+            title="Добавить в чат"
+          >
+            <Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
+        {syncControl}
+        {/* Намёк «войти в папку» — только мобильная навигация */}
+        {p.mobileNav && entry.isDirectory && <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+      </span>
+    </div>
+  );
+});
+
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat }: Props) {
   const online = useOnline();
+  const hasPanelHeader = useHasPanelHeader();
   useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -439,42 +686,29 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   dirCacheRef.current = dirCache;
 
   const [sortMode, setSortMode] = useState<FileSortMode>(loadSortMode);
-  const [showSortMenu, setShowSortMenu] = useState(false);
-  // Активированный поиск занимает весь сайдбар (сортировка и пилюля схлопываются);
-  // остаётся развёрнутым, пока в поле есть текст (searchExpanded считается ниже по search)
-  const [searchFocused, setSearchFocused] = useState(false);
+  // Меню шапки открываются по якорю кнопки: слот шапки лежит в карточке с transform,
+  // и absolute-позиционирование уехало бы вместе с ней
+  const [sortMenu, setSortMenu] = useState<DOMRect | null>(null);
+  const [createMenu, setCreateMenu] = useState<DOMRect | null>(null);
+  // Поиск разворачивается кнопкой-лупой: в узкой колонке поле не должно стоять
+  // постоянной полосой ради действия, которое нужно изредка
+  const [searchOpen, setSearchOpen] = useState(false);
+  // Пока открыт любой попап панели, контролы шапки не гаснут: курсор ушёл на меню
+  // (оно в портале), но кнопка, которой его открыли, обязана остаться на месте
+  usePanelHeaderHold(!!sortMenu || !!createMenu || searchOpen);
   const changeSortMode = (m: FileSortMode) => {
     setSortMode(m);
     localStorage.setItem(SORT_MODE_KEY, m);
-    setShowSortMenu(false);
+    setSortMenu(null);
   };
 
-  // === Git: режим сайдбара + статус репозитория + фильтр «Только изменённые» ===
-  const [gitView, setGitView] = useState<GitView>(() => initial?.gitView ?? 'files');
+  // === Git: только фильтр «Только изменённые» в дереве. Сам Source Control —
+  // отдельная панель «Изменения» (GitChangesRail): здесь дерево файлов и ничего
+  // кроме него. ===
   const [onlyChanged, setOnlyChanged] = useState<boolean>(() => initial?.onlyChanged ?? false);
   const gitState = useGitState(project.id);
   useEffect(() => { ensureGit(project.id); }, [project.id]);
   const isRepo = gitState.status?.isRepo ?? false;
-  // Документный режим (авто-ведение истории): работа с индексом скрыта — сегмент
-  // «Изменения» недоступен, вся жизнь в «Истории» (плашка + «Сохранить сейчас»)
-  useEffect(() => { if (isRepo) void loadGitRemote(project.id); }, [project.id, isRepo]);
-  const docMode = isRepo && gitState.remote?.autoCommit === true;
-  // Не репо — git-сегменты недоступны; в документном режиме «Изменения» → «История»
-  const view: GitView = !isRepo ? 'files' : (docMode && gitView === 'changes' ? 'history' : gitView);
-
-  // Подключение git к проекту без репозитория (git init + remote на Forgejo)
-  const [gitInitOpen, setGitInitOpen] = useState(false);
-  const [gitInitBusy, setGitInitBusy] = useState(false);
-  const [gitInitError, setGitInitError] = useState<string | null>(null);
-  const handleGitInit = async () => {
-    if (gitInitBusy) return;
-    setGitInitBusy(true);
-    setGitInitError(null);
-    const r = await gitInit(project.id);
-    setGitInitBusy(false);
-    if (r.ok) setGitInitOpen(false);   // статус в сторе уже свежий → появятся сегменты пилюли
-    else setGitInitError(r.error ?? 'Не удалось создать git-репозиторий');
-  };
 
   // Наборы изменённых путей из git-статуса: файлы + папки на пути к ним (для фильтра дерева)
   const changedSets = useMemo(() => {
@@ -499,24 +733,22 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   }, [gitState.status]);
 
   // Фильтр активен только в git-репо: изменённый файл / папка на пути к изменению.
-  // Пути untracked-папок git отдаёт как «dir/» — такие покрывает префикс-проверка.
+  // Обе проверки — по готовым множествам: dirs собраны из родителей изменённых
+  // путей, а files покрывает untracked-папки, которые git отдаёт как «dir/» (хвостовой
+  // слеш снят выше). Раньше для папок шёл линейный перебор всех изменённых файлов на
+  // КАЖДУЮ строку дерева — O(строки × изменения) на каждый рендер.
   const passesChangedFilter = useCallback((entry: FileEntry): boolean => {
     if (entry.isModified || entry.isNew) return true;
     if (!changedSets) return false;
     const p = normPath(entry.path);
-    if (entry.isDirectory) {
-      if (changedSets.dirs.has(p)) return true;
-      for (const f of changedSets.files) if (f.startsWith(p + '/')) return true;
-      return false;
-    }
-    return changedSets.files.has(p);
+    return entry.isDirectory
+      ? changedSets.dirs.has(p) || changedSets.files.has(p)
+      : changedSets.files.has(p);
   }, [changedSets]);
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
-  const searchExpanded = searchFocused || search.trim().length > 0;
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
   const [searchError, setSearchError] = useState<string | null>(null);
-  const [hoveredPath, setHoveredPath] = useState<string | null>(null);
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
   const [createInDir, setCreateInDir] = useState(() => initial?.createInDir ?? '');
@@ -530,7 +762,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameCancelledRef = useRef(false);
-  const renameInputRef = useRef<HTMLInputElement>(null);
   // Модальный диалог переименования — для мобилы/планшета (клавиатура не сбивает blur)
   const [showRenameModal, setShowRenameModal] = useState(false);
   const renameModalInputRef = useRef<HTMLInputElement>(null);
@@ -623,7 +854,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir(st.createInDir);
       setSearch(st.search);
       setSearchResults(st.searchResults);
-      setGitView(st.gitView ?? 'files');
       setOnlyChanged(st.onlyChanged ?? false);
       loadDir('');
       if (st.mobileDir) loadDir(st.mobileDir);
@@ -634,7 +864,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir('');
       setSearch('');
       setSearchResults(null);
-      setGitView('files');
       setOnlyChanged(false);
       loadDir('');
     }
@@ -642,10 +871,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   useEffect(() => {
     _explorerStore.set(project.id, {
-      dirCache, expanded, mobileDir, search, searchResults, createInDir, gitView, onlyChanged,
+      dirCache, expanded, mobileDir, search, searchResults, createInDir, onlyChanged,
       scrollTop: scrollRef.current?.scrollTop ?? _explorerStore.get(project.id)?.scrollTop ?? 0,
     });
-  }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir, gitView, onlyChanged]);
+  }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir, onlyChanged]);
 
   useLayoutEffect(() => {
     const st = _explorerStore.get(project.id);
@@ -663,13 +892,19 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     await loadDir(path);
   }, [loadDir]);
 
+  // Читаем раскрытые папки через ref: клик по строке приходит из стабильного
+  // колбэка (строка мемоизирована), и обычное замыкание отдало бы ему состояние
+  // первого рендера — папка тогда только раскрывается и никогда не сворачивается
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+
   const handleToggleDir = async (entry: FileEntry) => {
     const { path } = entry;
     setCreateInDir(path);
-    if (expanded.has(path)) {
+    if (expandedRef.current.has(path)) {
       setExpanded(prev => { const n = new Set(prev); n.delete(path); return n; });
     } else {
-      if (!dirCache.has(path)) await loadDir(path);
+      if (!dirCacheRef.current.has(path)) await loadDir(path);
       setExpanded(prev => new Set(prev).add(path));
     }
   };
@@ -677,7 +912,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const enterMobileDir = async (path: string) => {
     setMobileDir(path);
     setCreateInDir(path);
-    if (!dirCache.has(path)) await loadDir(path);
+    if (!dirCacheRef.current.has(path)) await loadDir(path);
   };
 
   const handleSearch = async (q: string) => {
@@ -751,20 +986,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   };
 
   // === Rename handlers ===
-
-  // Фокус и выделение имени без расширения для inline-редактирования (десктоп)
-  useEffect(() => {
-    if (!renamingPath || showRenameModal) return;
-    const raf = requestAnimationFrame(() => {
-      const input = renameInputRef.current;
-      if (!input) return;
-      input.focus();
-      const dotIdx = renameValue.lastIndexOf('.');
-      const end = dotIdx > 0 ? dotIdx : renameValue.length;
-      input.setSelectionRange(0, end);
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [renamingPath]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Фокусом inline-инпута заведует сама строка (FileRow): ref живёт там же, где поле.
 
   // Фокус и выделение имени без расширения для модального диалога (мобила/планшет).
   // Задержка 280мс на тач-устройствах — клавиатура выезжает ПОСЛЕ того, как модал
@@ -857,13 +1079,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   }, [commitRename]);
 
   // === Context menu handlers ===
-  useEffect(() => {
-    if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    // небольшая задержка — иначе правый клик, открывающий меню, сразу его закроет
-    const timer = setTimeout(() => document.addEventListener('mousedown', close), 0);
-    return () => { clearTimeout(timer); document.removeEventListener('mousedown', close); };
-  }, [contextMenu]);
+  // Закрытие по клику вне обеспечивает сама оболочка меню: у ui/Menu своя подложка,
+  // у Modal (мобильная шторка) — тоже. Свой document-listener на mousedown здесь
+  // жил со времён самодельного попапа, где пункты срабатывали на onPointerDown.
+  // С обычными MenuItem (onClick) он успевал закрыть меню ДО клика, и пункты
+  // «Переименовать», «Переместить», «Удалить» просто не отрабатывали.
 
   const handleContextMenu = useCallback((e: React.MouseEvent, entry: FileEntry) => {
     e.preventDefault();
@@ -1052,518 +1272,308 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const mobileDirLoading = !dirCache.has(mobileDir) && loadingDirs.has(mobileDir);
 
+  // Клик по строке: папка раскрывается (или открывается в мобильной навигации),
+  // файл открывается в центре. Стабильная ссылка — иначе memo строки бесполезен
+  const handleRowOpen = useCallback((entry: FileEntry) => {
+    if (entry.isDirectory) {
+      if (isMobile) void enterMobileDir(entry.path);
+      else void handleToggleDir(entry);
+    } else {
+      onOpenFile(entry.path);
+    }
+    // handleToggleDir/enterMobileDir пересоздаются каждый рендер, но берут состояние
+    // из ref-ов (expandedRef, dirCacheRef) — поэтому замороженный колбэк видит
+    // актуальные данные, а строка остаётся мемоизированной
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile, onOpenFile]);
+
+  // Глубина пути: «src» → 1, «src/lib» → 2. Уровень сворачивания считаем по ней
+  const depthOf = (p: string) => normPath(p).split('/').length;
+
+  // Свернуть самый глубокий раскрытый уровень (каждое нажатие — на слой внутрь).
+  // Приём и жест те же, что в панели «Изменения»
+  const collapseOne = () => {
+    let maxD = 0;
+    for (const p of expanded) maxD = Math.max(maxD, depthOf(p));
+    if (!maxD) return;
+    setExpanded(prev => {
+      const n = new Set(prev);
+      for (const p of prev) if (depthOf(p) === maxD) n.delete(p);
+      return n;
+    });
+  };
+
+  // Развернуть следующий уровень: все ВИДИМЫЕ сейчас нераскрытые папки минимальной
+  // глубины. Содержимое подгружаем заранее — иначе строки появятся пустыми
+  const expandOne = async () => {
+    const candidates: string[] = [];
+    for (const [dir, entries] of dirCache) {
+      // Содержимое папки видно, только если она сама раскрыта (или это корень)
+      if (dir !== '' && !expanded.has(dir)) continue;
+      for (const e of entries) if (e.isDirectory && !expanded.has(e.path)) candidates.push(e.path);
+    }
+    if (!candidates.length) return;
+    const minD = Math.min(...candidates.map(depthOf));
+    const toOpen = candidates.filter(p => depthOf(p) === minD);
+    await Promise.all(toOpen.filter(p => !dirCache.has(p)).map(loadDir));
+    setExpanded(prev => { const n = new Set(prev); for (const p of toOpen) n.add(p); return n; });
+  };
+
+  const handleRenameBlur = useCallback(() => {
+    if (renameCancelledRef.current) { renameCancelledRef.current = false; return; }
+    void commitRename();
+  }, [commitRename]);
+
+  // Долгое нажатие уже отработало → тап по строке не должен открывать файл
+  const touchEndPreventDefault = useCallback(() => !longPressTimer.current, []);
+
   const renderFileRow = (entry: FileEntry, depth: number, showPath = false, mobileNav = false) => {
-    const parentDir = showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
-    const isExpanded = expanded.has(entry.path);
-    const isLoading = loadingDirs.has(entry.path);
-    const em = entry.isDirectory ? null : getExtMeta(entry.name);
-    // «Заметки» (vault проекта) — выделенная строка с русским именем и своей иконкой
-    const notesRoot = isNotesRoot(entry);
-    const isActive = !entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm;
     const sstate = computeSyncState(marks, entry.path);
-    const pending = !entry.isDirectory && !!sstate && !isDownloaded(project.id, entry.path);
-    const folderSyncing = entry.isDirectory && isSyncing(project.id, entry.path);
-    const isDropTgt = dropTarget === entry.path;
-    const isDragging = dragPath === entry.path;
-    const isRenaming = renamingPath === entry.path;
-
-    const rowBg = isDropTgt
-      ? C.accentMuted
-      : isActive ? C.accentMuted
-      : hoveredPath === entry.path ? C.bgSelected
-      : normPath(entry.path) === newlyCreatedPath ? C.accentLight
-      : notesRoot ? C.accentLight
-      : 'transparent';
-    // Десктоп: кластер иконок липнет к правому краю видимой области при горизонтальном скролле
-    const stickyIcons = !isMobile;
-
-    const handleRowClick = () => {
-      if (isRenaming) return;
-      entry.isDirectory
-        ? (mobileNav ? enterMobileDir(entry.path) : handleToggleDir(entry))
-        : onOpenFile(entry.path);
-    };
-
     return (
-      <div
+      <FileRow
         key={entry.path}
-        draggable={!isMobile && !alwaysShowIcons && !isRenaming && !notesRoot}
-        onClick={handleRowClick}
-        onDoubleClick={!isMobile && !entry.isDirectory ? e => { e.stopPropagation(); startRename(entry); } : undefined}
-        onContextMenu={e => handleContextMenu(e, entry)}
-        onMouseEnter={() => setHoveredPath(entry.path)}
-        onMouseLeave={() => setHoveredPath(null)}
-        onDragStart={!isMobile && !alwaysShowIcons ? e => handleDragStart(e, entry) : undefined}
-        onDragOver={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDragOver(e, entry) : undefined}
-        onDragLeave={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDragLeave(e, entry) : undefined}
-        onDrop={!isMobile && !alwaysShowIcons && entry.isDirectory ? e => handleDrop(e, entry) : undefined}
-        onDragEnd={!isMobile && !alwaysShowIcons ? handleDragEnd : undefined}
-        onTouchStart={isMobile || alwaysShowIcons ? () => handleTouchStart(entry) : undefined}
-        onTouchEnd={isMobile || alwaysShowIcons ? (e) => {
-          if (!longPressTimer.current) e.preventDefault();
-          handleTouchCancel();
-        } : undefined}
-        onTouchMove={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
-        onTouchCancel={isMobile || alwaysShowIcons ? handleTouchCancel : undefined}
-        style={{
-          display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', gap: 6,
-          paddingLeft: 8 + depth * 16, paddingRight: stickyIcons ? 0 : 8,
-          paddingTop: isMobile || alwaysShowIcons ? 10 : 6,
-          paddingBottom: isMobile || alwaysShowIcons ? 10 : 6,
-          // фикс высоты: hover-иконки (24) чуть выше контента строки — держим 36, чтобы строка не «прыгала»
-          minHeight: isMobile || alwaysShowIcons ? 44 : 36,
-          borderRadius: 8, cursor: isDragging ? 'grabbing' : 'pointer',
-          width: '100%', boxSizing: 'border-box',
-          opacity: isDragging ? 0.4 : pressingPath === entry.path ? 0.6 : 1,
-          transform: pressingPath === entry.path ? 'scale(0.98)' : 'none',
-          background: rowBg,
-          boxShadow: isDropTgt
-            ? `inset 0 0 0 2px ${C.accent}`
-            : isActive ? `inset 2px 0 0 ${C.accent}`
-            : 'none',
-          transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s, transform 0.1s',
-        }}
-      >
-        {/* toggle-стрелка дерева — только десктоп/планшет */}
-        {!mobileNav && (
-          <span style={{ width: 12, flexShrink: 0, textAlign: 'center', userSelect: 'none', color: C.textMuted, fontSize: 9, lineHeight: 1 }}>
-            {entry.isDirectory ? (isLoading ? '·' : (isExpanded ? '▾' : '▸')) : ''}
-          </span>
-        )}
-        {entry.isDirectory ? (
-          <span style={{ flexShrink: 0, display: 'flex', color: C.accent }}>
-            {notesRoot ? <NotesFolderIcon /> : <FolderIcon />}
-          </span>
-        ) : (
-          <span style={{
-            width: 23, height: 23, borderRadius: 6,
-            background: em!.bg, color: em!.fg,
-            fontFamily: "'JetBrains Mono', monospace",
-            fontSize: 8.5, fontWeight: 700,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0, letterSpacing: '-0.02em',
-          }}>{em!.label}</span>
-        )}
-        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
-          {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
-          {isRenaming && !isMobile && !alwaysShowIcons ? (
-            <input
-              ref={renameInputRef}
-              value={renameValue}
-              onChange={e => setRenameValue(e.target.value)}
-              onKeyDown={e => {
-                if (e.key === 'Enter') { e.stopPropagation(); commitRename(); }
-                if (e.key === 'Escape') { e.stopPropagation(); cancelRename(); }
-              }}
-              onBlur={() => {
-                if (renameCancelledRef.current) { renameCancelledRef.current = false; return; }
-                commitRename();
-              }}
-              onClick={e => e.stopPropagation()}
-              style={{
-                fontFamily: "'JetBrains Mono', monospace",
-                fontSize: 13,
-                fontWeight: entry.isDirectory ? 700 : 500,
-                color: C.textHeading,
-                background: C.bgWhite,
-                border: `1.5px solid ${C.accent}`,
-                borderRadius: 4,
-                padding: '1px 4px',
-                outline: 'none',
-                width: '100%',
-                boxSizing: 'border-box',
-              }}
-            />
-          ) : (
-            <span title={notesRoot ? 'Заметки (папка notes)' : entry.name} style={{
-              fontFamily: notesRoot ? undefined : "'JetBrains Mono', monospace",
-              fontSize: 13,
-              fontWeight: entry.isDirectory ? 700 : 500,
-              color: notesRoot ? C.accent
-                : (!entry.isDirectory && indexedFileNames?.has(entry.path))
-                ? C.successText
-                : C.textHeading,
-              ...(isMobile
-                ? { whiteSpace: 'normal', wordBreak: 'break-all', lineHeight: 1.35 }
-                : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
-            }}>{notesRoot ? 'Заметки' : entry.name}</span>
-          )}
-          {parentDir && (
-            <span title={normPath(entry.path)} style={{
-              fontFamily: "'JetBrains Mono', monospace", fontSize: 10.5, color: C.textMuted,
-              ...(isMobile ? { whiteSpace: 'normal', wordBreak: 'break-all' } : { whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }),
-            }}>{parentDir}</span>
-          )}
-        </span>
-        {/* Кластер правых иконок: на десктопе — sticky, не уезжает при горизонтальном скролле */}
-        <span style={{
-          display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-          ...(stickyIcons ? {
-            position: 'sticky' as const, right: 0,
-            alignSelf: 'stretch',
-            paddingLeft: 4, paddingRight: 8,
-            // Прозрачный на невыделенной строке: собственный фон-заглушка выдавал бы
-            // «хвост» справа, когда он не совпадает с фоном панели (та бывает и белой)
-            background: rowBg,
-            borderRadius: '0 8px 8px 0',
-          } : {}),
-        }}>
-        {entry.isModified && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: C.accent, background: C.accentLight, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
-        )}
-        {entry.isNew && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: C.successText, background: C.successBg, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
-        )}
-        {/* Hover-иконки: переименовать + удалить — только десктоп при hover.
-            Корень «Заметки» (vault) не переименовываем/не удаляем. */}
-        {online && !isRenaming && !isMobile && hoveredPath === entry.path && !isNotesRoot(entry) && (
-          <>
-            <IconButton
-              size="xs"
-              onClick={e => { e.stopPropagation(); startRename(entry); }}
-              title="Переименовать (F2)"
-            >
-              <RenameIcon />
-            </IconButton>
-            <IconButton
-              size="xs"
-              tone="danger"
-              color={C.danger}
-              onClick={e => { e.stopPropagation(); setDeleteConfirm(entry); }}
-              title="Удалить"
-            >
-              <TrashIcon />
-            </IconButton>
-          </>
-        )}
-        {/* Кнопка «добавить в чат» — десктоп hover; мобила/планшет — через long-press меню */}
-        {!entry.isDirectory && onAttachToChat && !isMobile && !alwaysShowIcons && (
-          hoveredPath === entry.path ? (
-            <IconButton
-              size="xs"
-              tone="accent"
-              onClick={e => { e.stopPropagation(); onAttachToChat(entry.path); }}
-              title="Добавить в чат"
-            >
-              <Paperclip size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-          ) : null
-        )}
-        {/* Иконка знаний: спиннер при индексации; при hover — добавить или удалить.
-            Заметки (notes/*.md) в файловые «Знания» не индексируем — свой семантический индекс. */}
-        {!entry.isDirectory && !inNotesVault(entry.path) && (
-          indexingFiles?.has(entry.path) ? (
-            <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <style>{`@keyframes kb-spin{to{transform:rotate(360deg)}} .kb-spin{transform-origin:center;animation:kb-spin 0.8s linear infinite}`}</style>
-                <circle className="kb-spin" cx="12" cy="12" r="9" strokeDasharray="40 20" />
-              </svg>
-            </span>
-          ) : indexedFileNames?.has(entry.path) ? (
-            !isMobile && !alwaysShowIcons && hoveredPath === entry.path && onRemoveFromKnowledge ? (
-              <IconButton
-                size="xs"
-                tone="danger"
-                color={C.danger}
-                onClick={e => { e.stopPropagation(); onRemoveFromKnowledge(entry.path); }}
-                title="Удалить из знаний"
-              >
-                <BookMinusIcon />
-              </IconButton>
-            ) : (
-              <span style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.successText }}>
-                <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </span>
-            )
-          ) : (
-            // Не в знаниях — показать «добавить» при hover (только десктоп)
-            onAddToKnowledge && isKnowledgeIndexable(entry.name) && !isMobile && !alwaysShowIcons && hoveredPath === entry.path ? (
-              <IconButton
-                size="xs"
-                color={C.successText}
-                onClick={e => { e.stopPropagation(); onAddToKnowledge(entry.path); }}
-                title="Добавить в базу знаний"
-              >
-                <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              </IconButton>
-            ) : null
-          )
-        )}
-        {/* Маркер/тоггл синхронизации */}
-        {(() => {
-          const btnStyle: React.CSSProperties = { background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex', alignItems: 'center', flexShrink: 0 };
-          if (pending || folderSyncing) {
-            if (online && sstate === 'direct') {
-              return <button onClick={e => handleToggleSync(entry, e)} title="Отменить синхронизацию" style={btnStyle}><SyncSpinner /></button>;
-            }
-            return <span style={{ ...btnStyle, cursor: 'default' }} title="Загружается…"><SyncSpinner /></span>;
-          }
-          if (sstate === 'inherited') {
-            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизируется (через папку/проект)"><CloudIcon variant="inherited" /></span>;
-          }
-          if (online) {
-            if (sstate === 'direct') {
-              return <button onClick={e => handleToggleSync(entry, e)} title="Отключить синхронизацию" style={btnStyle}><CloudIcon variant="direct" /></button>;
-            }
-            if (isMobile || alwaysShowIcons || hoveredPath === entry.path) {
-              return <button onClick={e => handleToggleSync(entry, e)} title="Синхронизировать для офлайна" style={btnStyle}><CloudIcon variant="idle" /></button>;
-            }
-            return null;
-          }
-          if (sstate === 'direct') {
-            return <span style={{ ...btnStyle, cursor: 'default' }} title="Синхронизирован"><CloudIcon variant="direct" /></span>;
-          }
-          return null;
-        })()}
-        {/* Намёк «войти в папку» — только мобильная навигация */}
-        {mobileNav && entry.isDirectory && <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
-        </span>
-      </div>
+        entry={entry}
+        depth={depth}
+        showPath={showPath}
+        mobileNav={mobileNav}
+        isMobile={isMobile}
+        alwaysShowIcons={alwaysShowIcons}
+        online={online}
+        active={!entry.isDirectory && activeNorm !== '' && normPath(entry.path) === activeNorm}
+        expanded={expanded.has(entry.path)}
+        loading={loadingDirs.has(entry.path)}
+        renaming={renamingPath === entry.path}
+        isDropTarget={dropTarget === entry.path}
+        dragging={dragPath === entry.path}
+        pressing={pressingPath === entry.path}
+        flash={normPath(entry.path) === newlyCreatedPath}
+        syncState={sstate}
+        pendingDownload={!entry.isDirectory && !!sstate && !isDownloaded(project.id, entry.path)}
+        folderSyncing={entry.isDirectory && isSyncing(project.id, entry.path)}
+        indexed={!!indexedFileNames?.has(entry.path)}
+        indexing={!!indexingFiles?.has(entry.path)}
+        canAttach={!!onAttachToChat}
+        renameValue={renameValue}
+        onRenameChange={setRenameValue}
+        onRenameCommit={commitRename}
+        onRenameCancel={cancelRename}
+        onRenameBlur={handleRenameBlur}
+        onOpen={handleRowOpen}
+        onRename={startRename}
+        onContextMenu={handleContextMenu}
+        onDragStart={handleDragStart}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        onDragEnd={handleDragEnd}
+        onTouchStart={handleTouchStart}
+        onTouchCancel={handleTouchCancel}
+        onTouchEndPreventDefault={touchEndPreventDefault}
+        onAttach={onAttachToChat}
+        onToggleSync={handleToggleSync}
+      />
     );
   };
 
-  // Пункт контекстного меню — единый стиль.
-  // onPointerDown + stopPropagation: предотвращает всплытие mousedown до document-listener
-  // (который закрыл бы меню до срабатывания click).
-  const menuItem = (icon: ReactNode, label: string, action: () => void, danger = false) => (
-    <button
-      key={label}
-      onPointerDown={e => { e.stopPropagation(); action(); }}
-      style={{
-        display: 'flex', alignItems: 'center', width: '100%',
-        padding: isMobile || alwaysShowIcons ? '14px 20px' : '8px 12px',
-        background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
-        fontFamily: FONT.sans, fontSize: isMobile || alwaysShowIcons ? 15 : 13,
-        color: danger ? C.danger : C.textPrimary,
-        borderRadius: isMobile || alwaysShowIcons ? 0 : 6,
-        gap: 10,
-      }}
-      onMouseEnter={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
-      onMouseLeave={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
-    >
-      <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, opacity: 0.8 }}>{icon}</span>
-      {label}
-    </button>
+  // === Контролы панели — в шапке карточки (PanelHeaderSlot) ===
+  // Раньше они занимали четыре полосы над деревом: поле поиска, кнопка вида, ряд
+  // «Новый файл / папка / загрузить» и строка-хинт целевой папки. В колонке 280px
+  // это съедало треть высоты ради контролов, которые нужны изредка.
+  const targetDir = isMobile ? mobileDir : createInDir;
+  const inNotes = inNotesVault(targetDir);
+  const sortTitle = (sortMode === 'name' ? 'Сортировка: по имени'
+    : sortMode === 'date-desc' ? 'Сортировка: сначала новые'
+    : 'Сортировка: сначала старые')
+    + (onlyChanged && isRepo ? ' · Только изменённые' : '');
+
+  const controls = (
+    <>
+      <IconButton
+        size="xs"
+        title={searchOpen ? 'Закрыть поиск' : 'Поиск по файлам'}
+        active={searchOpen || search.length > 0}
+        onClick={() => { if (searchOpen) { setSearchOpen(false); handleSearch(''); } else setSearchOpen(true); }}
+      >
+        <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      {/* Свернуть/развернуть на уровень — только в дереве (в мобильной навигации
+          по папкам уровней нет) */}
+      {!isMobile && (
+        <>
+          <IconButton size="xs" title="Свернуть на уровень" disabled={expanded.size === 0} onClick={collapseOne}>
+            <FoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          <IconButton size="xs" title="Развернуть на уровень" onClick={() => void expandOne()}>
+            <UnfoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        </>
+      )}
+      {/* Вид дерева: сортировка + фильтр «Только изменённые». Точка-индикатор
+          показывает активный фильтр, когда меню закрыто */}
+      <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
+        <IconButton
+          size="xs"
+          active={!!sortMenu}
+          color={onlyChanged && isRepo ? C.accent : undefined}
+          title={sortTitle}
+          onClick={e => setSortMenu(sortMenu ? null : e.currentTarget.getBoundingClientRect())}
+        >
+          <ArrowDownWideNarrow size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        {onlyChanged && isRepo && !sortMenu && (
+          <span style={{ position: 'absolute', top: 1, right: 1, width: 5, height: 5, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
+        )}
+      </span>
+    </>
   );
 
-  // Пилюля режимов сайдбара: Файлы / [Изменения / История — только git-репо] / Знания
-  const pillBtn = (key: string, title: string, active: boolean, onClick: (() => void) | undefined, icon: ReactNode) => (
-    <button
-      key={key}
-      onClick={onClick}
-      title={title}
-      style={{
-        width: 28, height: 28, border: 'none', borderRadius: 6,
-        cursor: active ? 'default' : 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: active ? C.bgMain : 'transparent',
-        color: active ? C.accent : C.textMuted,
-        boxShadow: active ? TB.pillThumbShadow : 'none',
-      }}
+  // Главное действие панели — в ЗАКРЕПЛЁННОМ слоте: оно видно всегда, а не только
+  // под курсором (как «+ Чат» и «+ Задача» у соседей). На пустом дереве иначе
+  // непонятно, чем его наполнить
+  const createControl = online ? (
+    <Button
+      size="xs"
+      variant="primary"
+      leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      onClick={e => setCreateMenu(createMenu ? null : e.currentTarget.getBoundingClientRect())}
     >
-      {icon}
-    </button>
-  );
-  const showPill = !!onOpenKnowledge || isRepo;
-  const pill = showPill ? (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
-      {pillBtn('files', 'Файлы', view === 'files', () => setGitView('files'), <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-      {isRepo && !docMode && pillBtn('changes', 'Изменения', view === 'changes', () => setGitView('changes'), <GitBranch size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-      {isRepo && pillBtn('history', 'История', view === 'history', () => setGitView('history'), <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-      {onOpenKnowledge && pillBtn('knowledge', 'Знания', false, onOpenKnowledge, <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-    </div>
+      Новый
+    </Button>
   ) : null;
 
-  // === Git-режимы: содержимое сайдбара вместо дерева ===
-  if (view !== 'files') {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ padding: '4px 12px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>
-            {view === 'changes' ? 'Изменения' : 'История'}
-          </div>
-          {pill}
-        </div>
-        {view === 'changes' ? (
-          <GitChangesPanel
-            project={project}
-            onOpenDiff={(p, staged) => onOpenGitDiff ? onOpenGitDiff(p, staged) : onOpenFile(p)}
-            onOpenFile={onOpenFile}
+  // Меню «вида» и «создать» — порталом по якорю кнопки
+  const sortMenuEl = sortMenu && (
+    <Menu anchor={sortMenu} minWidth={210} maxHeight={220} onClose={() => setSortMenu(null)}>
+      <MenuItem icon={sortMode === 'name' ? <Check size={15} strokeWidth={2} /> : <></>} label="По имени" onClick={() => changeSortMode('name')} />
+      <MenuItem icon={sortMode === 'date-desc' ? <Check size={15} strokeWidth={2} /> : <></>} label="Сначала новые" onClick={() => changeSortMode('date-desc')} />
+      <MenuItem icon={sortMode === 'date-asc' ? <Check size={15} strokeWidth={2} /> : <></>} label="Сначала старые" onClick={() => changeSortMode('date-asc')} />
+      {/* Подключение git живёт в панели «Изменения» — там, где им и пользуются;
+          здесь остаётся только фильтр по дереву */}
+      {isRepo && (
+        <>
+          <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
+          <MenuItem
+            icon={onlyChanged ? <Check size={15} strokeWidth={2} /> : <GitBranch size={15} strokeWidth={ICON_STROKE} />}
+            label="Только изменённые"
+            onClick={() => { setOnlyChanged(v => !v); setSortMenu(null); }}
           />
-        ) : (
-          <GitHistoryPanel project={project} onOpenCommit={onOpenCommit} docMode={docMode} />
-        )}
+        </>
+      )}
+    </Menu>
+  );
+
+  const createMenuEl = createMenu && (
+    <Menu anchor={createMenu} minWidth={230} maxHeight={240} onClose={() => setCreateMenu(null)}>
+      {/* В vault заметок первым пунктом идёт заметка: обычный файл там тоже можно
+          создать, но .md через notes-API получает бэклинки и попадает в граф */}
+      {inNotes && (
+        <MenuItem
+          icon={<IconNotes size={15} />}
+          label="Заметка"
+          onClick={() => { setCreateMenu(null); setNoteDialog({ folder: noteFolderOf(targetDir) }); }}
+        />
+      )}
+      <MenuItem
+        icon={<Plus size={15} strokeWidth={ICON_STROKE} />}
+        label="Файл"
+        onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateFile(true); }}
+      />
+      <MenuItem
+        icon={<FolderPlusIcon />}
+        label="Папка"
+        onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateDir(true); }}
+      />
+      <MenuItem
+        icon={uploading ? <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} /> : <Upload size={15} strokeWidth={ICON_STROKE} />}
+        label={uploading ? 'Загружаю…' : 'Загрузить файлы'}
+        disabled={uploading}
+        onClick={() => { setCreateMenu(null); uploadInputRef.current?.click(); }}
+      />
+      {/* Куда попадёт созданное — подписью в подвале меню, а не отдельной строкой
+          под тулбаром: вопрос возникает ровно в момент создания. Целевая папка —
+          последняя, которую открыли в дереве, и вернуться в корень иначе было
+          нечем: приходилось искать корневую строку и щёлкать по ней */}
+      <div style={{ borderTop: `1px solid ${C.border}`, margin: '4px 0 0', padding: '6px 10px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1, fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
+          <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          <span title={targetDir} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {targetDir ? notesDisplayPath(targetDir) : 'корень проекта'}
+          </span>
+        </span>
+        {/* Кнопка остаётся в потоке и в корне — просто прячется. Убирать её совсем
+            значит менять ширину подвала, и меню дёргалось в размере под курсором */}
+        <button
+          onClick={() => { setCreateInDir(''); if (isMobile) setMobileDir(''); }}
+          title="Создавать в корне проекта"
+          style={{
+            flexShrink: 0, border: 'none', background: 'none',
+            cursor: targetDir ? 'pointer' : 'default',
+            visibility: targetDir ? 'visible' : 'hidden',
+            pointerEvents: targetDir ? 'auto' : 'none',
+            padding: '2px 4px', fontSize: 11, color: C.accent, fontFamily: FONT.sans,
+          }}
+        >
+          в корень
+        </button>
       </div>
-    );
-  }
+    </Menu>
+  );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Search */}
-      <div style={{ padding: '4px 12px 10px' }}>
-        {/* position:relative на всей строке: меню сортировки позиционируется от её левого
-            края (200px гарантированно внутри сайдбара), а не от кнопки 28px */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
-            <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
-              <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </span>
-            <input
-              placeholder="Поиск…"
-              value={search}
-              onChange={e => handleSearch(e.target.value)}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
-            />
-            {search && (
-              <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
-            )}
+      {/* Шапки может не быть (мобильная вкладка сайдбара) — тогда те же контролы
+          рисуются своей строкой в теле панели */}
+      {hasPanelHeader
+        ? <>
+            <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+            {createControl && <PanelHeaderSlot pinned>{createControl}</PanelHeaderSlot>}
+          </>
+        : (
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: '6px 12px 8px' }}>
+            {controls}
+            {createControl}
           </div>
-          {/* Активный поиск разворачивается на весь сайдбар: сортировка и пилюля схлопываются */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-            maxWidth: searchExpanded ? 0 : 220,
-            opacity: searchExpanded ? 0 : 1,
-            overflow: 'hidden',
-            transition: 'max-width 0.18s ease, opacity 0.15s ease',
-            pointerEvents: searchExpanded ? 'none' : 'auto',
-          }}>
-          {/* Сортировка дерева + фильтр «Только изменённые» */}
-          <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
-            <IconButton
-              size="md"
-              active={showSortMenu}
-              color={onlyChanged && isRepo ? C.accent : undefined}
-              style={onlyChanged && isRepo && !showSortMenu ? { background: C.accentLight } : undefined}
-              onClick={() => setShowSortMenu(v => !v)}
-              title={
-                (sortMode === 'name' ? 'Сортировка: по имени'
-                : sortMode === 'date-desc' ? 'Сортировка: сначала новые'
-                : 'Сортировка: сначала старые')
-                + (onlyChanged && isRepo ? ' · Только изменённые' : '')
-              }
-            >
-              <SlidersHorizontal size={15} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            {/* Точка-индикатор активного фильтра */}
-            {onlyChanged && isRepo && (
-              <span style={{ position: 'absolute', top: 3, right: 3, width: 6, height: 6, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
-            )}
-          </span>
-          {pill}
-          </div>
-          {showSortMenu && (
-              // align="left": кнопка у левого края сайдбара — правое выравнивание уводило меню за экран
-              <Menu onClose={() => setShowSortMenu(false)} align="left" top={34} minWidth={200}>
-                <MenuItem
-                  icon={sortMode === 'name' ? <Check size={15} strokeWidth={2} /> : <></>}
-                  label="По имени"
-                  onClick={() => changeSortMode('name')}
-                />
-                <MenuItem
-                  icon={sortMode === 'date-desc' ? <Check size={15} strokeWidth={2} /> : <></>}
-                  label="Сначала новые"
-                  onClick={() => changeSortMode('date-desc')}
-                />
-                <MenuItem
-                  icon={sortMode === 'date-asc' ? <Check size={15} strokeWidth={2} /> : <></>}
-                  label="Сначала старые"
-                  onClick={() => changeSortMode('date-asc')}
-                />
-                {isRepo ? (
-                  <>
-                    <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
-                    <MenuItem
-                      icon={onlyChanged ? <Check size={15} strokeWidth={2} /> : <GitBranch size={15} strokeWidth={ICON_STROKE} />}
-                      label="Только изменённые"
-                      onClick={() => { setOnlyChanged(v => !v); setShowSortMenu(false); }}
-                    />
-                  </>
-                ) : gitState.statusLoaded && online && (
-                  <>
-                    <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
-                    <MenuItem
-                      icon={<GitBranch size={15} strokeWidth={ICON_STROKE} />}
-                      label="Подключить git…"
-                      onClick={() => { setShowSortMenu(false); setGitInitOpen(true); }}
-                    />
-                  </>
-                )}
-              </Menu>
-            )}
-        </div>
+        )}
+      {sortMenuEl}
+      {createMenuEl}
 
-        {online && (
-          <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-            {/* Новый файл — в контексте vault заметок превращается в «Новая заметка» */}
-            {inNotesVault(isMobile ? mobileDir : createInDir) ? (
-              <Button
-                variant="dashed"
-                size="md"
-                leftIcon={<IconNotes size={15} />}
-                onClick={() => setNoteDialog({ folder: noteFolderOf(isMobile ? mobileDir : createInDir) })}
-                style={{ flex: 1 }}
-              >
-                Новая заметка
-              </Button>
-            ) : (
-              <Button
-                variant="dashed"
-                size="md"
-                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                onClick={() => {
-                  if (isMobile) setCreateInDir(mobileDir);
-                  setShowCreateFile(true);
-                }}
-                style={{ flex: 1 }}
-              >
-                Новый файл
-              </Button>
-            )}
-            {/* Новая папка */}
-            <div
-              onClick={() => {
-                if (isMobile) setCreateInDir(mobileDir);
-                setShowCreateDir(true);
-              }}
-              title="Новая папка"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, cursor: 'pointer', flexShrink: 0 }}
-            >
-              <FolderPlusIcon />
-            </div>
-            {/* Загрузить */}
-            <label
-              title="Загрузить файлы"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
-            >
-              <input
-                ref={uploadInputRef}
-                type="file"
-                multiple
-                disabled={uploading}
-                style={{ display: 'none' }}
-                onChange={e => handleUploadFiles(e.target.files)}
-              />
-              {uploading ? (
-                <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
-              ) : (
-                <Upload size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              )}
-            </label>
+      {/* Скрытый input загрузки — его открывает пункт меню «Загрузить файлы» */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        disabled={uploading}
+        style={{ display: 'none' }}
+        onChange={e => handleUploadFiles(e.target.files)}
+      />
+
+      {/* Строка поиска — разворачивается кнопкой-лупой из шапки. Поле, отступы и
+          кнопка закрытия — те же, что в «Документации»: одинаковый жест должен и
+          выглядеть одинаково */}
+      {searchOpen && (
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs,
+          padding: `${SP.xs}px ${SP.md}px ${SP.sm}px`, borderBottom: `1px solid ${C.border}`,
+        }}>
+          <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+            <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+              style={{ position: 'absolute', left: SP.sm, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
+            <TextField
+              value={search}
+              onChange={handleSearch}
+              placeholder="Поиск по файлам"
+              autoFocus
+              style={{ height: 30, fontSize: FS.sm, paddingLeft: 28 }}
+            />
           </div>
-        )}
-        {uploadError && (
-          <div style={{ marginTop: 6, fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, paddingLeft: 2 }}>{uploadError}</div>
-        )}
-        {/* Хинт целевой папки — только десктоп */}
-        {online && !isMobile && (
-          <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.mono, paddingLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            {createInDir ? <span title={createInDir}>{notesDisplayPath(createInDir)}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
-          </div>
-        )}
-      </div>
+          <IconButton size="sm" title="Закрыть поиск (Esc)" onClick={() => { handleSearch(''); setSearchOpen(false); }}>
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        </div>
+      )}
+      {uploadError && (
+        <div style={{ padding: '0 12px 6px', fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, flexShrink: 0 }}>{uploadError}</div>
+      )}
 
       {/* Хлебные крошки — только мобила, когда поиск неактивен */}
       {isMobile && searchResults === null && (
@@ -1600,7 +1610,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* Tree / список папки / результаты поиска */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: '0 4px 12px' }}>
+      {/* Дерево: сверху воздух, чтобы первая строка не липла к кромке шапки */}
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: `${SP.sm}px 4px 12px` }}>
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState
@@ -1697,33 +1708,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       })()}
 
       {/* === Диалог создания файла === */}
-      {/* Подключение git к проекту (git init + при настроенном Forgejo удалённый репозиторий) */}
-      {gitInitOpen && (
-        <Modal
-          width={MODAL_W.confirm}
-          onClose={() => { if (!gitInitBusy) { setGitInitOpen(false); setGitInitError(null); } }}
-          title="Подключить git"
-          footer={
-            <ModalActions
-              confirmLabel={gitInitBusy ? 'Подключаю…' : 'Подключить'}
-              confirmDisabled={gitInitBusy}
-              onConfirm={handleGitInit}
-              onCancel={() => { setGitInitOpen(false); setGitInitError(null); }}
-            />
-          }
-        >
-          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            В папке проекта будет создан git-репозиторий — появятся панели «Изменения» и «История».
-            Если настроен сервер Forgejo, также будет создан удалённый репозиторий.
-          </div>
-          {gitInitError && (
-            <div style={{ marginTop: 10, fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.45 }}>
-              {gitInitError}
-            </div>
-          )}
-        </Modal>
-      )}
-
       {showCreateFile && (
         <Modal
           width={MODAL_W.form}
@@ -1904,93 +1888,70 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       })()}
 
       {/* === Контекстное меню === */}
+      {/* Состав пунктов один и тот же для мыши и пальца — различается только оболочка:
+          на десктопе ui/Menu по якорю-точке курсора, на мобиле Modal (он сам
+          показывает себя шторкой снизу). Раньше здесь были две самодельные
+          конструкции: div position:fixed и рукописный bottom-sheet. */}
       {contextMenu && (() => {
         const { entry } = contextMenu;
         const sstate = computeSyncState(marks, entry.path);
-        const offlineLabel = sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн';
+        const close = () => setContextMenu(null);
         const canToggleOffline = online && sstate !== 'inherited';
-        const doToggleOffline = () => { setContextMenu(null); toggleSyncMark(project.id, entry); };
+        const isKb = indexedFileNames?.has(entry.path);
 
-        // Мобила — bottom sheet
+        const items: ReactNode[] = [];
+        const add = (cond: unknown, node: ReactNode) => { if (cond) items.push(node); };
+        const sep = (key: string) => items.push(<div key={key} style={{ height: 1, background: C.border, margin: '4px 6px' }} />);
+
+        add(entry.isDirectory && inNotesVault(entry.path),
+          <MenuItem key="note" icon={<MI_NotePlus />} label="Новая заметка" onClick={() => { close(); setNoteDialog({ folder: noteFolderOf(entry.path) }); }} />);
+        add(!entry.isDirectory && onAttachToChat,
+          <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
+        add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
+          <MenuItem key="copy-md" icon={<MI_Copy />} label="Копировать Markdown" onClick={() => { close(); void copyMdFromTree(entry.path); }} />);
+        add(!entry.isDirectory && online && isMdConvertible(entry.name),
+          <MenuItem key="to-md" icon={<MI_Copy />} label="Трансформировать в Markdown…" onClick={() => { close(); setMdEntry(entry); }} />);
+        add(!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !isKb && isKnowledgeIndexable(entry.name),
+          <MenuItem key="kb-add" icon={<MI_BookPlus />} label="Добавить в знания" onClick={() => { close(); onAddToKnowledge!(entry.path); }} />);
+        add(!entry.isDirectory && onRemoveFromKnowledge && isKb,
+          <MenuItem key="kb-del" icon={<MI_BookMinus />} label="Удалить из знаний" onClick={() => { close(); onRemoveFromKnowledge!(entry.path); }} />);
+        add(entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path),
+          <MenuItem key="kb-folder" icon={<MI_BookPlus />} label="Добавить папку в знания" onClick={() => { close(); onAddFolderToKnowledge!(entry.path); }} />);
+        add(entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path),
+          <MenuItem key="kb-busy" icon={<MI_BookPlus />} label="Индексирование…" disabled />);
+        add(canToggleOffline,
+          <MenuItem key="offline" icon={<MI_Cloud />} label={sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн'}
+            onClick={() => { close(); toggleSyncMark(project.id, entry); }} />);
+
+        // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
+        if (!isNotesRoot(entry) && online) {
+          sep('sep-1');
+          items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
+          items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
+          sep('sep-2');
+          items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
+        }
+
+        // Мобила и планшет — шторка Modal с именем файла в заголовке
         if (isMobile || alwaysShowIcons) {
           return (
-            <>
-              <div
-                onPointerDown={e => { e.stopPropagation(); setContextMenu(null); }}
-                style={{ position: 'fixed', inset: 0, background: C.overlay, zIndex: 1000 }}
-              />
-              <div style={{
-                position: 'fixed', bottom: 0, left: 0, right: 0,
-                background: C.bgPanel,
-                borderRadius: '16px 16px 0 0',
-                paddingBottom: 24,
-                zIndex: 1001,
-                boxShadow: SHADOW.sheet,
-              }}>
-                {/* Ручка */}
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
-                  <div style={{ width: 36, height: 4, borderRadius: 2, background: C.border }} />
-                </div>
-                <div style={{ padding: '4px 20px 12px', fontFamily: FONT.mono, fontSize: 13, fontWeight: 700, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
-                  {entry.name}
-                </div>
-                {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
-                {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-                {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
-                {!entry.isDirectory && online && isMdConvertible(entry.name) && menuItem(<MI_Copy />, 'Трансформировать в Markdown…', () => { setContextMenu(null); setMdEntry(entry); })}
-                {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-                {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
-                {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
-                {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
-                {canToggleOffline && menuItem(<MI_Cloud />, offlineLabel, doToggleOffline)}
-                {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
-                {!isNotesRoot(entry) && <>
-                  <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />
-                  {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
-                  {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-                  {online && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
-                  {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
-                </>}
-              </div>
-            </>
+            <Modal
+              width={MODAL_W.form}
+              onClose={close}
+              title={entry.isDirectory ? 'Папка' : 'Файл'}
+              subtitle={<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{isNotesRoot(entry) ? 'Заметки' : entry.name}</span>}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', margin: '0 -6px' }}>{items}</div>
+            </Modal>
           );
         }
 
-        // Десктоп — popup
-        return (
-          <div
-            style={{
-              position: 'fixed',
-              top: contextMenu.y,
-              left: contextMenu.x,
-              zIndex: 1000,
-              background: C.bgWhite,
-              border: `1px solid ${C.border}`,
-              borderRadius: R.lg,
-              boxShadow: SHADOW.dropdown,
-              padding: 4,
-              minWidth: 190,
-            }}
-          >
-            {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
-            {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-            {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
-                {!entry.isDirectory && online && isMdConvertible(entry.name) && menuItem(<MI_Copy />, 'Трансформировать в Markdown…', () => { setContextMenu(null); setMdEntry(entry); })}
-            {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-            {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
-            {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
-            {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
-            {canToggleOffline && menuItem(<MI_Cloud />, sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн', doToggleOffline)}
-            {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
-            {!isNotesRoot(entry) && <>
-              <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-              {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
-              {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-              <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-              {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
-            </>}
-          </div>
-        );
+        // Десктоп — меню по якорю в точке курсора. Menu выравнивает карточку по
+        // ПРАВОМУ краю якоря, поэтому ширина синтетического rect равна minWidth:
+        // так левый край меню встаёт ровно под курсор
+        const W = 210;
+        const anchor = new DOMRect(contextMenu.x, contextMenu.y, W, 0);
+        return <Menu anchor={anchor} minWidth={W} maxHeight={320} gap={2} onClose={close}>{items}</Menu>;
       })()}
 
       {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект) */}

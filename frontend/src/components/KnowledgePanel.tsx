@@ -1,20 +1,17 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { BookOpen, Database, Folder, GitBranch, History, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
-import { ensureGit, useGitState } from '../lib/git';
-import { setExplorerGitView } from './FileExplorer';
+import { BookOpen, Database, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
 import type { Project } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
 import { onMessage } from '../lib/signalr';
-import { C, R, SHADOW, FONT, TB } from '../lib/design';
+import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 
 interface Props {
   project: Project;
   isMobile?: boolean;
   alwaysShowIcons?: boolean;
-  onDocumentsChanged?: (fileNames: Set<string>) => void;
-  onBack?: () => void;
 }
 
 interface KnowledgeStatus {
@@ -406,7 +403,7 @@ function KnowledgeTip({ icon, title, text }: { icon: ReactNode; title: string; t
 
 // --- Главный компонент ---
 
-export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = false, onDocumentsChanged, onBack }: Props) {
+export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = false }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -414,14 +411,12 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   const [retryingId, setRetryingId] = useState<string | null>(null);
   const [tagEditDoc, setTagEditDoc] = useState<DifyDocument | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchOpen, setSearchOpen] = useState(false);
+  const hasPanelHeader = useHasPanelHeader();
+  // Открытый поиск держит контролы шапки: иначе лупа гаснет, пока печатаешь в поле
+  usePanelHeaderHold(searchOpen);
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
-  // Активированный поиск занимает весь сайдбар (пилюля схлопывается) — как в «Файлах»
-  const [searchFocused, setSearchFocused] = useState(false);
-  const searchExpanded = searchFocused || searchQuery.trim().length > 0;
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // git-статус проекта — чтобы пилюля показывала сегменты «Изменения»/«История» как в проводнике
-  useEffect(() => { ensureGit(project.id); }, [project.id]);
-  const isRepo = useGitState(project.id).status?.isRepo === true;
 
   const loadStatus = useCallback(async (silent = false) => {
     if (!silent) setLoading(true);
@@ -437,12 +432,6 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   }, [project.id]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
-
-  useEffect(() => {
-    if (!onDocumentsChanged || !status) return;
-    // Полные пути (doc.name = относительный путь): basename давал коллизии одноимённых файлов
-    onDocumentsChanged(new Set(status.documents.map(d => d.name)));
-  }, [status, onDocumentsChanged]);
 
   const hasIndexing = status?.documents.some(d => !TERMINAL_STATUSES.includes(d.indexingStatus)) ?? false;
   useEffect(() => {
@@ -512,76 +501,79 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
     }
   };
 
+  // Контролы панели — в шапке карточки. Поиск кнопкой, а не полем: колонка узкая,
+  // а поле занимало её целиком ради действия, которое нужно изредка (приём DocsPanel).
+  // Объявлены ДО ранних возвратов: иначе на каждую загрузку контролы шапки моргали бы.
+  const controls = (
+    <IconButton
+      size="xs"
+      title={searchOpen ? 'Закрыть поиск' : 'Поиск по знаниям'}
+      active={searchOpen || searchQuery.length > 0}
+      onClick={() => { if (searchOpen) { setSearchOpen(false); setSearchQuery(''); } else setSearchOpen(true); }}
+    >
+      <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+    </IconButton>
+  );
+
+  // Строка поиска: разворачивается кнопкой из шапки, Esc и крестик закрывают
+  const searchRow = searchOpen && (
+    <div style={{
+      flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6,
+      padding: '4px 12px 10px',
+    }}>
+      <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 32 }}>
+        <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
+          <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </span>
+        <input
+          value={searchQuery}
+          autoFocus
+          onChange={e => setSearchQuery(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Escape') { setSearchOpen(false); setSearchQuery(''); } }}
+          placeholder="Поиск по знаниям…"
+          style={{
+            flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
+            fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans,
+          }}
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery('')}
+            title="Очистить"
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', marginLeft: 4 }}
+          >
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  // Шапки может не быть (мобильная вкладка сайдбара) — там контролы идут своей строкой
+  const header = hasPanelHeader
+    ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+    : (
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end',
+        gap: 4, padding: '6px 12px', borderBottom: `1px solid ${C.border}`,
+      }}>{controls}</div>
+    );
+
   if (loading) {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-        <div style={{ fontSize: 13, color: C.textMuted }}>Загрузка…</div>
+      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+        {header}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ fontSize: 13, color: C.textMuted }}>Загрузка…</div>
+        </div>
       </div>
     );
   }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Шапка — icon-toggle (зеркало строки поиска FileExplorer) */}
-      <div style={{ padding: '4px 12px 10px', flexShrink: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* Поиск по знаниям. minWidth:0 обязателен: без него инпут не даёт строке
-              ужаться и выдавливает пилюлю за край сайдбара */}
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
-            <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
-              <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </span>
-            <input
-              value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              placeholder="Поиск по знаниям…"
-              style={{
-                flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
-                fontSize: 13, color: C.textPrimary, fontFamily: FONT.sans,
-              }}
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', marginLeft: 4 }}
-              >
-                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-              </button>
-            )}
-          </div>
-          {/* icon-toggle: Знания активна; git-сегменты возвращают в проводник с нужным видом.
-              Активный поиск занимает весь сайдбар — пилюля схлопывается (как в «Файлах») */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0,
-            maxWidth: searchExpanded ? 0 : 220,
-            opacity: searchExpanded ? 0 : 1,
-            overflow: 'hidden',
-            transition: 'max-width 0.18s ease, opacity 0.15s ease',
-            pointerEvents: searchExpanded ? 'none' : 'auto',
-          }}>
-            {/* Файлы — неактивна, возврат */}
-            <button onClick={onBack} title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
-              <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </button>
-            {isRepo && (
-              <>
-                <button onClick={() => { setExplorerGitView(project.id, 'changes'); onBack?.(); }} title="Изменения" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
-                  <GitBranch size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                </button>
-                <button onClick={() => { setExplorerGitView(project.id, 'history'); onBack?.(); }} title="История" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
-                  <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                </button>
-              </>
-            )}
-            {/* Знания — активна */}
-            <button title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.successText, boxShadow: TB.pillThumbShadow }}>
-              <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </button>
-          </div>
-        </div>
-      </div>
+      {header}
+      {searchRow}
 
       {/* Ошибка */}
       {error && (

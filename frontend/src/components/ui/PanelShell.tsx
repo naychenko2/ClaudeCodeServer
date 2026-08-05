@@ -148,7 +148,11 @@ export function PanelShell({
   // наводить», и контролы схлопывались прямо под пальцем — см. lib/pointer
   const hoverCapable = useCanHover();
   const [panelHover, setPanelHover] = useState(false);
-  const controlsVisible = !hoverCapable || panelHover;
+  // Счётчик, а не флаг: попапов у панели может быть несколько (меню вида и меню
+  // создания), и закрытие одного не должно гасить контролы, пока открыт второй
+  const [holdCount, setHoldCount] = useState(0);
+  const hold = useCallback((held: boolean) => setHoldCount(n => Math.max(0, n + (held ? 1 : -1))), []);
+  const controlsVisible = !hoverCapable || panelHover || holdCount > 0;
   // Общий стиль для всех трёх обёрток контролов шапки. Скрытые контролы не только
   // гаснут, но и СХЛОПЫВАЮТСЯ по ширине (maxWidth: 0): прозрачность сама по себе
   // оставляет элемент в потоке, и невидимые кнопки продолжали занимать место —
@@ -200,8 +204,8 @@ export function PanelShell({
   const [slotLeftEl, setSlotLeftEl] = useState<HTMLDivElement | null>(null);
   const [slotPinnedEl, setSlotPinnedEl] = useState<HTMLDivElement | null>(null);
   const slotValue = useMemo(
-    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl, elPinned: slotPinnedEl }),
-    [slotEl, slotLeftEl, slotPinnedEl]);
+    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl, elPinned: slotPinnedEl, hold }),
+    [slotEl, slotLeftEl, slotPinnedEl, hold]);
 
   // Наведение на СЛОТ ловим нативно, а не пропсами React. Контролы приезжают в него
   // порталом, и react-события идут по React-дереву — то есть в саму панель, мимо

@@ -1,9 +1,12 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Controllers;
 
@@ -15,10 +18,18 @@ public class KnowledgeController(
     KnowledgeService knowledge,
     FileService files,
     WorkspaceKnowledgeStore workspaceStore,
-    ProjectKnowledgeSyncService sync) : ControllerBase
+    ProjectKnowledgeSyncService sync,
+    IHubContext<SessionHub> hub) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
     private string Username => User.FindFirstValue(System.Security.Claims.ClaimTypes.Name) ?? UserId;
+
+    // Состав базы знаний проекта изменился — сообщаем всем вкладкам владельца.
+    // Раньше этого не было, и панель «Знания» доносила свежий список наверх пропом,
+    // из-за чего пометки в дереве файлов зависели от того, открыта ли панель рядом.
+    // Тот же канал, что у KnowledgeBasesController: событие knowledge_changed.
+    private Task Broadcast(string? datasetId) =>
+        hub.Clients.Group("user_" + UserId).SendAsync("message", new KnowledgeChangedMessage("doc_changed", datasetId));
 
     private Project? GetOwnedProject(string projectId)
     {
@@ -102,6 +113,7 @@ public class KnowledgeController(
             var wk = workspaceStore.GetByPath(p.RootPath);
             var docName = req.RelativePath.Replace('\\', '/');
             var docTags = wk?.DocumentTags?.TryGetValue(docName, out var dt) == true ? dt : new List<string>();
+            await Broadcast(datasetId);
             return Ok(new { datasetId, document = new { id = doc.Id, name = doc.Name, indexingStatus = doc.IndexingStatus, tags = docTags } });
         }
         catch (FileNotFoundException) { return NotFound(new { error = "Файл не найден" }); }
@@ -151,6 +163,7 @@ public class KnowledgeController(
             workspace.DocumentTags[req.DocumentName] = tags;
         workspaceStore.Save(workspace);
 
+        await Broadcast(wk?.DifyDatasetId);
         return NoContent();
     }
 
@@ -206,6 +219,7 @@ public class KnowledgeController(
             }
         }
 
+        if (indexed.Count > 0) await Broadcast(workspaceStore.GetByPath(p.RootPath)?.DifyDatasetId);
         return Ok(new { indexed = indexed.Count, skipped, documents = indexed });
     }
 
@@ -224,6 +238,7 @@ public class KnowledgeController(
             await knowledge.DeleteDocumentAsync(wk.DifyDatasetId, documentId);
             // Снять файл с отслеживания — иначе синк пересоздаст документ по живому файлу
             sync.ForgetDocument(p.RootPath, documentId);
+            await Broadcast(wk.DifyDatasetId);
             return NoContent();
         }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = ex.Message }); }
@@ -243,6 +258,7 @@ public class KnowledgeController(
         catch (HttpRequestException) { /* датасет мог быть удалён в Dify — сбрасываем ссылку */ }
 
         workspaceStore.Delete(p.RootPath);
+        await Broadcast(null);
         return NoContent();
     }
 

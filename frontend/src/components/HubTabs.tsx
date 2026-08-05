@@ -43,10 +43,9 @@ const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'perso
 // не в таббаре, а в шапке — логотип «Домой», колокольчик «Уведомления», меню
 // аватара «Знания» и «Аналитика токенов». Всплывающая только внутри раздела
 // вкладка-призрак сбивает с толку: набор таббара скачет от того, где ты находишься.
-// «Стена» вкладки не имеет ВООБЩЕ: вход — из воркспейса (док стены под доком
-// проектов), членство в TABLESS запрещает дописывать вкладку даже когда стена
-// активна (экран открыт по доку/диплинку #/wall — PillSwitch умеет «нет выбранного»).
-const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend', 'telemetry', 'wall'];
+// «Стена» здесь не нужна: своей вкладки у неё нет, но как рабочий режим раздела
+// проектов она подсвечивает пилюлю «Проекты» (displayValue ниже).
+const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend', 'telemetry'];
 
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
@@ -65,6 +64,10 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
     .filter(m => m.tab)
     .map(m => ({ value: `module:${m.id}` as HubTabValue, label: m.tab!.label, icon: <Puzzle size={18} strokeWidth={2} /> }));
 
+  // «Стена» — рабочий режим раздела проектов: своей вкладки нет, подсвечиваем
+  // пилюлю «Проекты» (клик по ней со стены — выход к списку, App.switchHubTab).
+  const displayValue: HubTabValue = value === 'wall' ? 'projects' : value;
+
   // Переключение проектов живёт в доке воркспейса (ProjectRail), поэтому вкладка
   // «Проекты» в таббаре — обычная пилюля, отдельной зоны переключения нет.
   // Активный раздел вне набора табов: из TABLESS — не получает вкладку вовсе
@@ -72,8 +75,8 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
   // вкладкой в конец. На мобиле так всплывают «Заметки» и «Персоны» из «⋯ Разделы»,
   // чтобы было видно, где находишься. Модульный таб в набор фиксированных не входит —
   // он живёт в moduleOptions ниже, поэтому из проверки исключаем.
-  const isKnownFixed = !isModuleTab(value) && (tabs.includes(value) || TABLESS.includes(value));
-  const shown = isKnownFixed || isModuleTab(value) ? tabs : [...tabs, value as HubTab];
+  const isKnownFixed = !isModuleTab(displayValue) && (tabs.includes(displayValue) || TABLESS.includes(displayValue));
+  const shown = isKnownFixed || isModuleTab(displayValue) ? tabs : [...tabs, displayValue as HubTab];
   const fixedOptions = shown.map(v => mobile
     ? { value: v as HubTabValue, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
     : { value: v as HubTabValue, label: TAB_LABELS[v] });
@@ -81,7 +84,7 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
     : [...fixedOptions, ...moduleOptions.map(o => ({ value: o.value, label: o.label }))];
   return (
     <PillSwitch<HubTabValue>
-      value={value}
+      value={displayValue}
       onChange={onChange}
       draggable
       compact={mobile}

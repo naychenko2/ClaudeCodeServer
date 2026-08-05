@@ -8,6 +8,7 @@ import {
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
+  isTucked, tuckPanel, untuckPanel, parseTucked,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -412,6 +413,28 @@ describe('homeOf / trackHome — иконка закрытой панели', ()
     expect(z.right.layout).toEqual([['tasks']]);
   });
 
+  it('дроп кнопки на чужую рельсу вынимает панель из свёрнутого набора', () => {
+    // Левая зона свёрнута кнопкой «Свернуть все», «Оглавление» осталось в её stash.
+    // Кнопку бросили на ПРАВУЮ рельсу: без вычистки stash завершающий trackHome
+    // перечитывал бы его и возвращал дом обратно налево — снаружи это выглядело
+    // как «кнопка не переезжает вовсе».
+    const base = sanitizeZones({ left: { layout: [], stash: [['chats', 'toc']] }, right: { layout: [] } });
+    const z = trackHome(closePanelTo(base, 'right', 'toc'));
+    expect(homeOf(z, 'toc')).toBe('right');
+    // разворачивание левой зоны вернёт только то, что в ней осталось
+    expect(z.left.stash).toEqual([['chats']]);
+  });
+
+  it('возврат кнопки из ящика тоже вынимает панель из свёрнутого набора', () => {
+    const base = sanitizeZones({
+      left: { layout: [], stash: [['toc']] }, right: { layout: [] }, tucked: ['toc'],
+    });
+    const z = trackHome(untuckPanel(base, 'right', 'toc'));
+    expect(isTucked(z, 'toc')).toBe(false);
+    expect(homeOf(z, 'toc')).toBe('right');
+    expect(z.left.stash).toEqual([]);
+  });
+
   it('parseHome отбрасывает мусор и переводит упразднённые ключи', () => {
     expect(parseHome({ tasks: 'left', personas: 'right', files: 'up', junk: 'left' }))
       .toEqual({ tasks: 'left', team: 'right' });
@@ -423,6 +446,46 @@ describe('homeOf / trackHome — иконка закрытой панели', ()
     const saved = trackHome(moveAcrossAt(zones([['chats']], [['tasks']]), 'tasks', 'left', 0, 1));
     const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
     expect(homeOf(restored, 'tasks')).toBe('left');
+  });
+});
+
+describe('tuckPanel / untuckPanel — ящик рельсы («…»)', () => {
+  it('прячет кнопку и ЗАКРЫВАЕТ панель, приписывая её к зоне ящика', () => {
+    // «Задачи» открыты справа, их кнопку бросили в ящик ЛЕВОЙ рельсы
+    const z = tuckPanel(zones([['chats']], [['tasks']]), 'left', 'tasks');
+    expect(isTucked(z, 'tasks')).toBe(true);
+    expect(zoneOf(z, 'tasks')).toBeNull();
+    expect(homeOf(z, 'tasks')).toBe('left');
+    expect(z.right.layout).toEqual([]);
+  });
+
+  it('повторное прятанье не плодит дубль в списке', () => {
+    const once = tuckPanel(zones([], [['tasks']]), 'right', 'tasks');
+    const twice = tuckPanel(once, 'right', 'tasks');
+    expect(twice.tucked).toEqual(['tasks']);
+  });
+
+  it('возврат убирает кнопку из ящика и кладёт её в ту рельсу, куда бросили', () => {
+    const tucked = tuckPanel(zones([['chats']], []), 'right', 'changes');
+    const back = untuckPanel(tucked, 'left', 'changes');
+    expect(isTucked(back, 'changes')).toBe(false);
+    expect(homeOf(back, 'changes')).toBe('left');
+    // возвращают КНОПКУ, а не панель — раскладка не трогается
+    expect(zoneOf(back, 'changes')).toBeNull();
+    expect(back.left.layout).toEqual([['chats']]);
+  });
+
+  it('parseTucked отбрасывает мусор, дубли и переводит упразднённые ключи', () => {
+    expect(parseTucked(['tasks', 'personas', 'мусор', 'tasks', 7])).toEqual(['tasks', 'team']);
+    expect(parseTucked(null)).toEqual([]);
+    expect(parseTucked({ tasks: true })).toEqual([]);
+  });
+
+  it('переживает сериализацию состояния', () => {
+    const saved = tuckPanel(zones([['chats']], [['tasks']]), 'right', 'tasks');
+    const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
+    expect(isTucked(restored, 'tasks')).toBe(true);
+    expect(homeOf(restored, 'tasks')).toBe('right');
   });
 });
 

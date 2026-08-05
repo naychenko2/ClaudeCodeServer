@@ -78,6 +78,12 @@ public sealed partial class DocsIndexService
     // Сколько символов текста показываем вокруг совпадения в поиске
     private const int SnippetRadius = 60;
 
+    // Файл порядка страниц — из Azure DevOps code wiki: по одному на папку, построчный список
+    // имён без расширения. Читаем его, чтобы панель показывала документацию в том же порядке,
+    // в каком её увидит читатель опубликованной wiki: алфавит по заголовку разрушает
+    // выстроенный автором маршрут чтения.
+    private const string OrderFileName = ".order";
+
     private readonly ConcurrentDictionary<string, CachedIndex> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     // Разобранный корпус + отпечаток файлов, по которому решаем, не устарел ли он
@@ -94,6 +100,9 @@ public sealed partial class DocsIndexService
         public required Dictionary<string, string> Texts { get; init; }
         public required Dictionary<string, List<DocLink>> OutLinks { get; init; }
         public required Dictionary<string, List<DocBacklink>> Backlinks { get; init; }
+        // Строки .order по папкам («» — корень проекта). Нужны и после сортировки:
+        // «Начало» по умолчанию берётся из первой строки файла.
+        public required Dictionary<string, IReadOnlyList<string>> Orders { get; init; }
     }
 
     // ---------- публичное API ----------
@@ -203,7 +212,27 @@ public sealed partial class DocsIndexService
         var corpus = GetCorpus(rootPath, scope);
         if (scope.Home is not null && corpus.ByPath.TryGetValue(scope.Home, out var chosen))
             return chosen.Path;
+        // Первая строка .order первой папки области: автор выстроил порядок сам, и первая
+        // страница списка — вход в документацию (так же её трактует code wiki)
+        if (scope.Folders.Count > 0 && FirstOfOrder(corpus, scope.Folders[0]) is { } first)
+            return first;
+        // README корня. Дальше не спускаемся: null здесь означает «начального документа нет»,
+        // и панель по нему предлагает вернуть README в область — подмена первым попавшимся
+        // документом эту подсказку бы отняла
         return corpus.Docs.FirstOrDefault(d => IsReadme(d.Path))?.Path;
+    }
+
+    // Документ, названный первой строкой .order указанной папки
+    private static string? FirstOfOrder(DocsCorpus corpus, string folder)
+    {
+        if (!corpus.Orders.TryGetValue(folder, out var names) || names.Count == 0) return null;
+        foreach (var doc in corpus.Docs)
+        {
+            if (!string.Equals(Folder(doc.Path), folder, StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(Path.GetFileNameWithoutExtension(doc.Path), names[0], StringComparison.OrdinalIgnoreCase))
+                return doc.Path;
+        }
+        return null;
     }
 
     // Собрать область из полей проекта: у каждой оси свой null со своим дефолтом
@@ -285,12 +314,15 @@ public sealed partial class DocsIndexService
         // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга
         var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}";
         var files = CollectFiles(root, scope);
-        var fingerprint = Fingerprint(root, files);
+        // Файлы порядка обязаны попасть в отпечаток: правка .order не меняет ни один документ,
+        // и без них кеш не инвалидируется — панель показывала бы прежний порядок до перезапуска
+        var orderFiles = CollectOrderFiles(root, files);
+        var fingerprint = Fingerprint(root, [.. files, .. orderFiles]);
 
         if (_cache.TryGetValue(key, out var cached) && cached.Fingerprint == fingerprint)
             return cached.Corpus;
 
-        var corpus = BuildCorpus(root, files);
+        var corpus = BuildCorpus(root, files, ReadOrders(root, orderFiles));
         _cache[key] = new CachedIndex(fingerprint, corpus);
         return corpus;
     }
@@ -326,6 +358,56 @@ public sealed partial class DocsIndexService
         catch (DirectoryNotFoundException) { /* папку удалили между проверкой и обходом */ }
         catch (UnauthorizedAccessException) { /* нет прав на часть дерева — отдаём что смогли */ }
         return files;
+    }
+
+    // Файлы .order по всем папкам дерева документов, включая промежуточные: порядок папки
+    // нужен, даже когда её собственные документы лежат уровнем ниже (docs/ и docs/adr/).
+    // Корень проекта тоже участвует — в области бывают файлы корня (README.md).
+    private static List<string> CollectOrderFiles(string root, List<string> files)
+    {
+        var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "" };
+        foreach (var file in files)
+        {
+            var folder = Folder(Relative(root, file));
+            // Поднимаемся до корня; встретили уже добавленную папку — выше тоже добавляли
+            while (folder.Length > 0 && folders.Add(folder))
+                folder = Folder(folder);
+        }
+
+        var result = new List<string>();
+        foreach (var folder in folders)
+        {
+            var dir = folder.Length == 0
+                ? root
+                : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+            var path = Path.Combine(dir, OrderFileName);
+            if (File.Exists(path)) result.Add(path);
+        }
+        return result;
+    }
+
+    // Строки .order по папкам («» — корень проекта). Пустые строки и края-пробелы
+    // отброшены, BOM срезан: файл правят руками, в том числе редакторами Windows.
+    private static Dictionary<string, IReadOnlyList<string>> ReadOrders(string root, List<string> orderFiles)
+    {
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in orderFiles)
+        {
+            string[] lines;
+            try { lines = File.ReadAllLines(file); }
+            catch (IOException) { continue; }             // файл переписывают прямо сейчас
+            catch (UnauthorizedAccessException) { continue; }
+
+            var names = new List<string>();
+            foreach (var raw in lines)
+            {   // ﻿ — BOM: ReadAllLines снимает его сам, но не когда файл записан
+                // как UTF-8 с BOM внутри уже открытого потока
+                var name = raw.Trim('﻿', ' ', '\t', '\r');
+                if (name.Length > 0) names.Add(name);
+            }
+            result[Folder(Relative(root, file))] = names;
+        }
+        return result;
     }
 
     private static bool HasExtension(string path, IReadOnlyList<string> extensions)
@@ -478,7 +560,8 @@ public sealed partial class DocsIndexService
         return sb.ToString();
     }
 
-    private static DocsCorpus BuildCorpus(string root, List<string> files)
+    private static DocsCorpus BuildCorpus(string root, List<string> files,
+        Dictionary<string, IReadOnlyList<string>> orders)
     {
         var docs = new List<DocEntry>();
         var byPath = new Dictionary<string, DocEntry>(StringComparer.OrdinalIgnoreCase);
@@ -569,28 +652,163 @@ public sealed partial class DocsIndexService
             outLinks[from] = resolved;
         }
 
-        // README первым, дальше по папке и ЗАГОЛОВКУ: панель показывает дерево в этом же
-        // порядке и подписывает строки заголовками — сортировка по имени файла выглядела бы
-        // в ней произвольной (observability-audit.md с заголовком «Аудит…» вставал не туда).
-        // Папка старше заголовка, иначе документы разных групп перемешались бы между собой.
-        docs.Sort((a, b) =>
-        {
-            // README — первый среди корневых: он вход в документацию, а по алфавиту
-            // заголовков мог оказаться где угодно среди прочих файлов корня
-            if (IsReadme(a.Path) != IsReadme(b.Path)) return IsReadme(a.Path) ? -1 : 1;
-            var byFolder = string.Compare(Folder(a.Path), Folder(b.Path), StringComparison.OrdinalIgnoreCase);
-            if (byFolder != 0) return byFolder;
-            // Сравнение с учётом языка: заголовки русские, и ordinal ставил бы кириллицу
-            // после латиницы, а внутри кириллицы — по кодам, а не по алфавиту
-            var byTitle = string.Compare(a.Title, b.Title, StringComparison.CurrentCultureIgnoreCase);
-            return byTitle != 0 ? byTitle : string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
-        });
+        // Пары «страница + папка» проставляем до сортировки: порядок опирается на эту связь —
+        // страница раздела и его дочерние документы идут в дереве одной строкой .order
+        MarkSections(docs, byPath);
 
         return new DocsCorpus
         {
-            Docs = docs, ByPath = byPath, Texts = texts,
-            OutLinks = outLinks, Backlinks = backlinks,
+            Docs = OrderDocs(docs, orders), ByPath = byPath, Texts = texts,
+            OutLinks = outLinks, Backlinks = backlinks, Orders = orders,
         };
+    }
+
+    // ---------- порядок документов ----------
+
+    // Документ, рядом с которым лежит одноимённая папка, — страница её раздела
+    // («docs/decisions.md» + «docs/decisions/»). Записи в списке и в словаре подменяются
+    // вместе: DocEntry неизменяем, а расходиться этим двум представлениям нельзя.
+    private static void MarkSections(List<DocEntry> docs, Dictionary<string, DocEntry> byPath)
+    {
+        // Канонический путь папки (в том регистре, в каком он пришёл из ФС) — фронту нужно
+        // ровно то же значение, что стоит у дочерних документов в Folder(Path)
+        var folders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var doc in docs)
+        {
+            var folder = Folder(doc.Path);
+            while (folder.Length > 0 && folders.TryAdd(folder, folder))
+                folder = Folder(folder);
+        }
+
+        for (var i = 0; i < docs.Count; i++)
+        {
+            var doc = docs[i];
+            var parent = Folder(doc.Path);
+            var name = Path.GetFileNameWithoutExtension(doc.Path);
+            var candidate = parent.Length == 0 ? name : $"{parent}/{name}";
+            if (!folders.TryGetValue(candidate, out var canonical)) continue;
+            var updated = doc with { SectionFolder = canonical };
+            docs[i] = updated;
+            byPath[doc.Path] = updated;
+        }
+    }
+
+    // Узел уровня: имя без расширения, документы с этим именем и одноимённая папка.
+    // Документ и папка объединены в один узел намеренно — в .order это ОДНА строка
+    // («decisions» задаёт место и страницы раздела, и его содержимого).
+    private sealed class OrderNode(string key)
+    {
+        public string Key { get; } = key;
+        public List<DocEntry> Docs { get; } = [];
+        public string? Folder { get; set; }
+    }
+
+    // Порядок документов = дерево папок, на каждом уровне упорядоченное своим .order.
+    // Уплощается обходом в глубину, поэтому страница раздела идёт непосредственно перед
+    // дочерними документами — как в дереве wiki. Неперечисленное встаёт после перечисленного
+    // по прежнему правилу (README первым, затем заголовок): .order сортирует, а не фильтрует.
+    private static List<DocEntry> OrderDocs(List<DocEntry> docs,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> orders)
+    {
+        var byFolder = new Dictionary<string, List<DocEntry>>(StringComparer.OrdinalIgnoreCase);
+        var subFolders = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var doc in docs)
+        {
+            var folder = Folder(doc.Path);
+            if (!byFolder.TryGetValue(folder, out var list)) byFolder[folder] = list = [];
+            list.Add(doc);
+
+            // Регистрируем цепочку папок до корня: промежуточная папка без собственных
+            // документов всё равно должна попасть в дерево
+            var current = folder;
+            while (current.Length > 0)
+            {
+                var parent = Folder(current);
+                if (!subFolders.TryGetValue(parent, out var set))
+                    subFolders[parent] = set = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!set.Add(current)) break;   // выше по цепочке уже регистрировали
+                current = parent;
+            }
+        }
+
+        var result = new List<DocEntry>(docs.Count);
+        Walk("");
+        return result;
+
+        void Walk(string folder)
+        {
+            var nodes = new Dictionary<string, OrderNode>(StringComparer.OrdinalIgnoreCase);
+            var level = new List<OrderNode>();
+
+            OrderNode NodeFor(string key)
+            {
+                if (nodes.TryGetValue(key, out var existing)) return existing;
+                var created = new OrderNode(key);
+                nodes[key] = created;
+                level.Add(created);
+                return created;
+            }
+
+            if (byFolder.TryGetValue(folder, out var here))
+                foreach (var doc in here)
+                    NodeFor(Path.GetFileNameWithoutExtension(doc.Path)).Docs.Add(doc);
+
+            if (subFolders.TryGetValue(folder, out var subs))
+                foreach (var sub in subs)
+                    NodeFor(NameOf(sub)).Folder = sub;
+
+            var index = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (orders.TryGetValue(folder, out var lines))
+                for (var i = 0; i < lines.Count; i++) index.TryAdd(lines[i], i);
+
+            level.Sort((a, b) => CompareNodes(a, b, index));
+
+            foreach (var node in level)
+            {
+                // Один ключ — обычно один документ; несколько бывает при api.md рядом с api.pdf
+                if (node.Docs.Count > 1)
+                    node.Docs.Sort((x, y) => string.Compare(x.Path, y.Path, StringComparison.OrdinalIgnoreCase));
+                result.AddRange(node.Docs);
+                if (node.Folder is not null) Walk(node.Folder);
+            }
+        }
+    }
+
+    private static int CompareNodes(OrderNode a, OrderNode b, Dictionary<string, int> index)
+    {
+        var ia = index.TryGetValue(a.Key, out var x) ? x : int.MaxValue;
+        var ib = index.TryGetValue(b.Key, out var y) ? y : int.MaxValue;
+        if (ia != ib) return ia.CompareTo(ib);
+
+        // README — первый среди корневых: он вход в документацию, а по алфавиту заголовков
+        // мог оказаться где угодно среди прочих файлов корня
+        var readmeA = a.Docs.Count > 0 && IsReadme(a.Docs[0].Path);
+        var readmeB = b.Docs.Count > 0 && IsReadme(b.Docs[0].Path);
+        if (readmeA != readmeB) return readmeA ? -1 : 1;
+
+        // Узел с подпапкой — ниже обычных документов уровня: без .order сохраняется прежнее
+        // правило «папка старше заголовка», иначе вложенная группа вклинивалась бы между
+        // документами своей же папки по алфавиту заголовков
+        var nestedA = a.Folder is not null;
+        var nestedB = b.Folder is not null;
+        if (nestedA != nestedB) return nestedA ? 1 : -1;
+
+        // Сравнение с учётом языка: заголовки русские, и ordinal ставил бы кириллицу после
+        // латиницы, а внутри кириллицы — по кодам, а не по алфавиту
+        var byTitle = string.Compare(TitleOf(a), TitleOf(b), StringComparison.CurrentCultureIgnoreCase);
+        // Ключ добивает сравнение до детерминированного: List.Sort нестабилен
+        return byTitle != 0 ? byTitle : string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase);
+
+        // У узла без документов (папка без страницы раздела) заголовка нет — сортируем по имени
+        static string TitleOf(OrderNode node) => node.Docs.Count > 0 ? node.Docs[0].Title : node.Key;
+    }
+
+    // Последний сегмент пути папки: «docs/decisions» → «decisions»
+    private static string NameOf(string folder)
+    {
+        var i = folder.LastIndexOf('/');
+        return i < 0 ? folder : folder[(i + 1)..];
     }
 
     // README любого поддерживаемого расширения: в корне лежит и README.md, и README.txt

@@ -26,7 +26,12 @@ export const PANEL_MIN_H = 120;  // минимальная высота пане
 export const COL_MIN = 280;      // клампы ширины ОДНОЙ колонки панелей
 export const COL_MAX = 560;
 export const COL_DEFAULT = 340;
-export const COL_CAP = 2;        // дефолтная вместимость колонки при открытии новой панели
+// Вместимость колонки при открытии новой панели — СКОЛЬКО ПАНЕЛЕЙ ТУДА ВЛЕЗАЕТ.
+// Настоящее число считает зона по живой высоте колонки (сколько панелей получат
+// хотя бы PANEL_MIN_H) и передаёт сюда; COL_CAP — только фолбэк, когда высоты
+// ещё нет (первый рендер, вызов не из раскладки). Раньше это была ЗАШИТАЯ «пара
+// на колонку», и третья панель уезжала колонкой вбок при свободном экране.
+export const COL_CAP = 2;
 
 // Режим зоны: раскладка колонками (дефолт) или одна выбранная панель.
 // Состояние ЕДИНОЕ (без отдельной памяти на режим): вход в solo схлопывает
@@ -82,17 +87,18 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
   return [];
 }
 
-// Открытие панели: в колонку У РЕЛЬСЫ, пока в ней меньше COL_CAP, иначе новая
-// колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают к центру. Рельса у правой
-// зоны справа (её колонка — последняя в массиве, новая пушится в конец), у левой
-// слева (её колонка — первая, новая встаёт в начало). Раньше сторону не учитывали
-// и новая колонка всегда лезла в конец — у левой зоны это центр, а не край.
-export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'): PanelKey[][] {
+// Открытие панели: в колонку У РЕЛЬСЫ, пока в неё влезает (cap — вместимость,
+// см. COL_CAP), иначе новая колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают
+// к центру. Рельса у правой зоны справа (её колонка — последняя в массиве, новая
+// пушится в конец), у левой слева (её колонка — первая, новая встаёт в начало).
+// Раньше сторону не учитывали и новая колонка всегда лезла в конец — у левой зоны
+// это центр, а не край.
+export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right', cap = COL_CAP): PanelKey[][] {
   if (layout.flat().includes(k)) return layout;
   const out = layout.map(c => [...c]);
   const railIdx = side === 'left' ? 0 : out.length - 1;
   const railCol = out[railIdx];
-  if (railCol && railCol.length < COL_CAP) railCol.push(k);
+  if (railCol && railCol.length < cap) railCol.push(k);
   else if (side === 'left') out.unshift([k]);
   else out.push([k]);
   return out;
@@ -102,10 +108,10 @@ export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'
 // самой вставки: нужно рельсе, чтобы под курсором показать место будущей панели
 // (призрак в раскладке). Возвращает индекс колонки, либо newColumn — панель
 // заведёт свою колонку у рельсы.
-export function nextPlacement(layout: PanelKey[][], side: Zone = 'right'): { ci: number } | { newColumn: true } {
+export function nextPlacement(layout: PanelKey[][], side: Zone = 'right', cap = COL_CAP): { ci: number } | { newColumn: true } {
   const railIdx = side === 'left' ? 0 : layout.length - 1;
   const railCol = layout[railIdx];
-  return railCol && railCol.length < COL_CAP ? { ci: railIdx } : { newColumn: true };
+  return railCol && railCol.length < cap ? { ci: railIdx } : { newColumn: true };
 }
 
 // Закрытие панели: удалить, пустые колонки схлопнуть
@@ -232,6 +238,11 @@ export interface PanelZones {
   // человек ждёт кнопку слева — там, где панель была, а не там, где родилась.
   // Пусто (панель ещё нигде не открывали) — берётся PANEL_HOME.
   home: Partial<Record<PanelKey, Zone>>;
+  // Кнопки, убранные с рельсы в её ящик (меню «…»): редко используемые панели,
+  // чтобы столбец иконок не рос бесконечно. Список ОБЩИЙ на обе зоны, а не свой у
+  // каждой: в какой рельсе показывать строку, и так решает home — второй список
+  // пришлось бы синхронизировать при каждом переезде кнопки между сторонами.
+  tucked: PanelKey[];
 }
 
 export function emptyZone(): ZoneState {
@@ -239,12 +250,17 @@ export function emptyZone(): ZoneState {
 }
 
 export function emptyZones(): PanelZones {
-  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {} };
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [] };
 }
 
 // Зона, в которой панель показывает свою иконку, когда закрыта
 export function homeOf(zones: PanelZones, k: PanelKey): Zone {
   return zones.home[k] ?? PANEL_HOME[k];
+}
+
+// Кнопка панели убрана в ящик рельсы (меню «…»)
+export function isTucked(zones: PanelZones, k: PanelKey): boolean {
+  return zones.tucked.includes(k);
 }
 
 // Запомнить, где сейчас лежит каждая панель — включая спрятанные «свернуть все»:
@@ -319,7 +335,21 @@ export function sanitizeZones(raw: unknown): PanelZones {
     right: readZone(src.right),
     weights: parseWeights(JSON.stringify(src.weights ?? {})),
     home: parseHome((src as { home?: unknown }).home),
+    tucked: parseTucked((src as { tucked?: unknown }).tucked),
   });
+}
+
+// Спрятанные в ящик кнопки из сохранённого состояния: чужие ключи отбрасываем,
+// упразднённые имена переводим (как у весов и привязок к зонам), дубли снимаем —
+// список рисуется как есть, и повтор дал бы две одинаковые строки в меню.
+export function parseTucked(raw: unknown): PanelKey[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PanelKey[] = [];
+  for (const v of raw) {
+    const key = typeof v === 'string' ? migrateLegacyKey(v) : null;
+    if (key && !out.includes(key)) out.push(key);
+  }
+  return out;
 }
 
 // Сохранённая привязка «панель → зона»: чужие ключи и значения отбрасываем,
@@ -345,28 +375,70 @@ export function closePanel(zones: PanelZones, k: PanelKey): PanelZones {
   return withZone(zones, zone, z => ({ ...z, layout: removePanel(z.layout, k) }));
 }
 
+// Вынуть панель из свёрнутых наборов ОБЕИХ зон (кнопка «Свернуть все»).
+//
+// Нужно везде, где дом кнопки назначается ЯВНО: запись состояния заканчивается
+// trackHome, а тот перечитывает layout и stash — и панель, забытая в свёрнутом
+// наборе, утаскивает свой home обратно в прежнюю зону. Снаружи это выглядело так,
+// будто брошенная на чужую рельсу кнопка не переезжает вовсе: дроп срабатывал, но
+// его результат тут же откатывался. Заметно было только на панели, которую после
+// сворачивания ни разу не открывали, — открытие вычищает её из stash само
+// (enforceZoneInvariant: layout сильнее спрятанного набора).
+//
+// По смыслу это и правильно: кнопку унесли на другую сторону осознанно, и
+// разворачивание зоны должно вернуть только то, что в ней осталось.
+function dropFromStash(zones: PanelZones, k: PanelKey): PanelZones {
+  const strip = (z: ZoneState): ZoneState => {
+    if (!z.stash.some(col => col.includes(k))) return z;
+    return { ...z, stash: z.stash.map(col => col.filter(x => x !== k)).filter(col => col.length > 0) };
+  };
+  return { ...zones, left: strip(zones.left), right: strip(zones.right) };
+}
+
 // Закрыть панель, бросив её на рельсу зоны: она не просто закрывается, а
 // оставляет иконку ИМЕННО ТАМ, куда её бросили (даже если лежала в соседней
 // зоне) — это и есть «убрать панель с глаз, но положить кнопку под руку».
 export function closePanelTo(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
-  const closed = closePanel(zones, k);
+  const closed = dropFromStash(closePanel(zones, k), k);
   return { ...closed, home: { ...closed.home, [k]: zone } };
+}
+
+// Убрать кнопку панели в ящик рельсы (её меню «…»). Панель при этом ЗАКРЫВАЕТСЯ:
+// у открытой панели кнопка остаётся в рельсе (иначе её нечем было бы закрыть
+// привычным кликом), и «спрятать», не убрав панель с глаз, ничего бы не изменило.
+export function tuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  const closed = closePanelTo(zones, zone, k);
+  return isTucked(closed, k) ? closed : { ...closed, tucked: [...closed.tucked, k] };
+}
+
+// Вернуть кнопку из ящика на рельсу — именно той зоны, куда её бросили. Панель не
+// открывается: возвращают кнопку, а не панель (открытие — отдельный жест, дроп в
+// раскладку).
+export function untuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  const base = dropFromStash(zones, k);
+  return {
+    ...base,
+    tucked: base.tucked.filter(x => x !== k),
+    home: { ...base.home, [k]: zone },
+  };
 }
 
 // Открыть панель В ЗОНЕ. Если она открыта в другой — это перенос: из прежней
 // зоны панель уходит. В solo-режиме целевой зоны раскладка схлопывается до неё.
-export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+// cap — вместимость колонки у рельсы (сколько панелей влезает по высоте), её
+// считает зона: см. COL_CAP.
+export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP): PanelZones {
   const base = closePanel(zones, k);
   return withZone(base, zone, z => ({
     ...z,
-    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone),
+    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone, cap),
   }));
 }
 
 // Клик по иконке рельсы: панель открыта В ЭТОЙ зоне — закрыть, иначе открыть
 // здесь (в том числе забрав из соседней зоны).
-export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
-  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k);
+export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP): PanelZones {
+  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k, cap);
 }
 
 // Дроп панели НА панель — они меняются местами, в том числе через границу зон:
@@ -520,6 +592,8 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     // Привязки к зонам старое состояние не знало — их проставит trackHome по
     // фактическому расположению панелей при первой же записи
     home: {},
+    // Ящик рельсы появился позже раздельных ключей — переносить нечего
+    tucked: [],
   });
 }
 
@@ -554,8 +628,9 @@ export function migrateSidebarSection(
 
 export interface PanelZonesApi {
   zones: PanelZones;
-  // Клик по иконке рельсы зоны
-  toggle: (zone: Zone, k: PanelKey) => void;
+  // Клик по иконке рельсы зоны. cap — вместимость колонки у рельсы по живой
+  // высоте (см. COL_CAP): её знает только зона, состояние пикселей не хранит.
+  toggle: (zone: Zone, k: PanelKey, cap?: number) => void;
   // Закрыть панель, где бы она ни лежала (её иконка остаётся в прежней зоне)
   close: (k: PanelKey) => void;
   // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
@@ -566,6 +641,11 @@ export interface PanelZonesApi {
   // Ремонт сохранённой раскладки: выгнать из зоны панели, которых на этом экране
   // в ней быть не может (см. evictForeign)
   evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
+  // Дроп кнопки в ящик рельсы (её меню «…») / возврат кнопки из ящика на рельсу.
+  // Зона в обоих случаях та, к чьей рельсе относится жест: кнопка ложится и
+  // возвращается туда, куда её бросили.
+  tuck: (zone: Zone, k: PanelKey) => void;
+  untuck: (zone: Zone, k: PanelKey) => void;
   // Дроп панели на панель (в том числе через границу зон)
   swapWith: (a: PanelKey, b: PanelKey) => void;
   // Дроп панели из рельсы на открытую панель: гость встаёт в её слот, хозяин
@@ -667,14 +747,18 @@ function createPanelZones(ns: string, opts?: {
   function usePanelZones(): PanelZonesApi {
     const zones = useSyncExternalStore(subscribe, () => _zones);
 
-    const toggle = useCallback((zone: Zone, k: PanelKey) => {
+    const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number) => {
       ensureWeight(k);
-      commit(togglePanelIn(_zones, zone, k));
+      commit(togglePanelIn(_zones, zone, k, cap));
     }, []);
 
     const close = useCallback((k: PanelKey) => { commit(closePanel(_zones, k)); }, []);
 
     const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closePanelTo(_zones, zone, k)); }, []);
+
+    const tuck = useCallback((zone: Zone, k: PanelKey) => { commit(tuckPanel(_zones, zone, k)); }, []);
+
+    const untuck = useCallback((zone: Zone, k: PanelKey) => { commit(untuckPanel(_zones, zone, k)); }, []);
 
     const evict = useCallback((zone: Zone, allowed: readonly PanelKey[]) => {
       // null — выселять нечего: молчим, чтобы не будить подписчиков на каждый рендер
@@ -762,7 +846,7 @@ function createPanelZones(ns: string, opts?: {
       return wasOpen;
     }, []);
 
-    return { zones, toggle, close, closeTo, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
+    return { zones, toggle, close, closeTo, tuck, untuck, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
   }
 
   return { use: usePanelZones };

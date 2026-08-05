@@ -66,8 +66,6 @@ export function buildWallProjectPanels(
         activeFilePath={null}
         isMobile={false}
         onOpenFile={path => openOverlay({ kind: 'file', path })}
-        onOpenGitDiff={(path, staged) => openOverlay({ kind: 'file', path, diffMode: true, gitStagePath: staged ? undefined : path })}
-        onOpenCommit={sha => openOverlay({ kind: 'commit', sha })}
       />
     ),
     docs: (

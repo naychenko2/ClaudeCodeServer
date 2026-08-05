@@ -23,7 +23,9 @@ import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
 import { ProjectRail } from '../../features/projects/ProjectRail';
 import { PanelZone } from './PanelZone';
+import { TocPanel } from './TocPanel';
 import { useSessionPanels } from './useSessionPanels';
+import type { DocToc } from '../../hooks/useHeadings';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import type { PanelKey } from './panelCatalog';
 import { ReaderHeaderBar } from './reader/ReaderHeaderBar';
@@ -136,6 +138,13 @@ export function DesktopWorkspace(p: Props) {
   // и они переносятся между рельсами наравне с остальными.
   const sessionPanels = useSessionPanels(p.activeSession, p.project.id, p.project.rootPath);
 
+  // Оглавление документа, открытого в центре: его отдаёт сам FileViewer (см. DocToc),
+  // а панель «Оглавление» только показывает. null — оглавления сейчас нет: панель
+  // исчезает вместе со своей кнопкой, но МЕСТО В РАСКЛАДКЕ за собой сохраняет — этим
+  // и держится нужное поведение: открытая панель возвращается сама на следующем md,
+  // а закрытая пользователем остаётся закрытой (см. keyAvailable в PanelZone).
+  const [toc, setToc] = useState<DocToc | null>(null);
+
   // Пропорция чат/файл в split-режиме (как chatFlex в старой ветке; не персистится)
   const [chatFlex, setChatFlex] = useState(1);
   const splitContainerRef = useRef<HTMLDivElement>(null);
@@ -195,6 +204,9 @@ export function DesktopWorkspace(p: Props) {
   const zonePanels: Partial<Record<PanelKey, ReactNode>> = {
     chats: chatsPanel,
     ...p.panels,
+    // Оглавление живёт ровно столько, сколько открытый в центре md: контент null —
+    // и панель с кнопкой уходят с экрана сами
+    toc: toc ? <TocPanel toc={toc} /> : undefined,
   };
 
   // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
@@ -357,7 +369,7 @@ export function DesktopWorkspace(p: Props) {
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} />
             </div>
           </Island>
         </div>
@@ -366,7 +378,7 @@ export function DesktopWorkspace(p: Props) {
       {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {/* На планшете сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} />
         </div>
       )}
 

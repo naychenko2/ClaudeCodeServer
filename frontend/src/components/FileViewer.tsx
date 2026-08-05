@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -22,15 +22,15 @@ import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry } from '../types';
 import { api } from '../lib/api';
 import { basename } from '../lib/paths';
-import { resolveDocImage, resolveDocLink, slugify } from '../lib/docsLinks';
+import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
 import { OfflineError } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
-import { relTime } from './GitPanel';
+import { relTime } from '../lib/gitFormat';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { useHeadings } from '../hooks/useHeadings';
+import { useHeadings, useHeadingSpy, resolveHeadingEl, type DocToc, type Heading } from '../hooks/useHeadings';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -53,6 +53,9 @@ import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
 import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
+// Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
+// кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
+import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -110,6 +113,11 @@ interface Props {
   onFileForward?: () => void;
   canFileBack?: boolean;
   canFileForward?: boolean;
+  // Оглавление открытого md — наружу, панели «Оглавление» (см. DocToc). null означает
+  // «оглавления сейчас нет»: файл не markdown, просмотрщик закрылся или документ
+  // показывает не эта зона (заметка vault рисуется своим NoteView). Панель по этому
+  // null исчезает вместе со своей кнопкой, сохраняя место в раскладке.
+  onTocChange?: (toc: DocToc | null) => void;
 }
 
 interface FileContent {
@@ -318,7 +326,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange }: Props) {
   const online = useOnline();
   // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
   // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
@@ -888,6 +896,69 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isCopyableText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
     && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
 
+  // === ОГЛАВЛЕНИЕ НАРУЖУ (панель «Оглавление») ===
+  // Заголовки уже собраны выше (useHeadings) ради якорей — отдаём тот же список панели
+  // вместе с действиями над ним: прокруткой владеет просмотрщик (свой скроллер, своя
+  // поправка на шапку), нарезкой раздела — тоже он, потому что резать надо ИСХОДНЫЙ
+  // markdown, а не текст из DOM.
+  const sectionOf = useCallback(
+    (h: Heading) => sliceSection(content, slugify(h.text)),
+    [content]);
+
+  // Переход к разделу из панели. Узел берём НЕ из самого заголовка, а ищем заново
+  // (resolveHeadingEl): панель живёт рядом с документом сколько угодно, а markdown за
+  // это время перерисовывается — комментарии к документу приезжают асинхронно и меняют
+  // разметку целиком. Собранные узлы после такой перерисовки оторваны от документа, и
+  // прокрутка по ним молча уезжала в начало вместо нужного раздела.
+  // Стабильная (scrollDocTo стабилен) — иначе объект оглавления пересобирался бы на
+  // каждый рендер и эффект ниже гонял бы setState по кругу.
+  // Какой раздел читают сейчас — панель узнаёт подпиской (см. DocToc.subscribeActive)
+  const { subscribe: subscribeActiveHeading, pin: pinHeading } = useHeadingSpy(contentAreaRef, headings);
+
+  // Зависимости — на сами функции, а не на объект хука: объект в зависимостях
+  // пересобирал бы оглавление на каждом рендере (см. useHeadingSpy)
+  const jumpToHeading = useCallback((h: Heading) => {
+    const el = resolveHeadingEl(contentAreaRef.current, h);
+    if (!el) return;
+    // Сначала подсветка цели, потом прокрутка: клик по строке обязан отзываться
+    // мгновенно, а не после того, как документ доедет
+    pinHeading(h);
+    scrollDocTo(el);
+  }, [scrollDocTo, pinHeading]);
+
+  // Заметка vault рисуется отдельным NoteView (ранний return ниже) — её markdown в
+  // contentAreaRef не попадает, и оглавление там всегда пустое. Честнее не показывать
+  // панель вовсе, чем держать кнопку, которая открывает пустоту.
+  const tocAvailable = isMarkdown && !(isNotesFile && (noteIdOverride || noteDetail));
+
+  useEffect(() => {
+    if (!onTocChange) return;
+    onTocChange(tocAvailable
+      ? { path: filePath, headings, jump: jumpToHeading, sectionOf, subscribeActive: subscribeActiveHeading }
+      : null);
+  }, [onTocChange, tocAvailable, filePath, headings, jumpToHeading, sectionOf, subscribeActiveHeading]);
+
+  // Просмотрщик ушёл с экрана — панель обязана исчезнуть вместе с ним: иначе она
+  // осталась бы висеть с оглавлением закрытого документа
+  useEffect(() => () => onTocChange?.(null), [onTocChange]);
+
+  // Тумблер панели «Оглавление» в тулбаре. Кнопка рельсы стоит у самого края окна и
+  // при чтении оказывается далеко от глаз, поэтому оглавление зовётся и отсюда —
+  // от документа, к которому относится.
+  //
+  // Раскладку правим напрямую через стор зон (как «Открыть изменения» в git-баре):
+  // панель может лежать в любой из рельс, и знать это просмотрщику незачем — reveal
+  // открывает закрытую в её домашней зоне, close убирает открытую где бы то ни было.
+  const { zones: panelZones, reveal: revealPanelKey, close: closePanelKey } = wsPanels.use();
+  const tocPanelOpen = zoneOf(panelZones, 'toc') !== null;
+  // Тумблер нужен, только когда панели есть куда открыться: без onTocChange контент
+  // панели никто не собирает (мобильная вёрстка), и кнопка вела бы в пустоту
+  const tocToggleVisible = tocAvailable && !isMobile && !!onTocChange;
+  const toggleTocPanel = () => {
+    if (tocPanelOpen) closePanelKey('toc');
+    else revealPanelKey('toc');
+  };
+
   // Ctrl+C без выделения: отдаём исходник открытого текстового файла (см. selectionScope)
   const copySourceRef = useRef<() => string | null>(() => null);
   copySourceRef.current = () => (isCopyableText ? (fileContent?.content ?? null) : null);
@@ -1090,6 +1161,26 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // --- Вторичные действия: одинаковые кнопки, лишние уезжают в «···» справа налево ---
   const secondary: { key: string; node: ReactNode; item: OverflowItem }[] = [];
   if (!loading) {
+    // Оглавление — первым: при чтении документа к нему обращаются чаще прочих
+    // вторичных действий, а в «···» уезжают последние в этом списке
+    if (tocToggleVisible) {
+      const tocTitle = tocPanelOpen ? 'Скрыть оглавление' : 'Оглавление документа';
+      secondary.push({
+        key: 'toc',
+        node: (
+          <ToolbarIconButton
+            isMobile={isMobile} onClick={toggleTocPanel} title={tocTitle}
+            color={tocPanelOpen ? C.accent : undefined}
+          >
+            <TableOfContents size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'toc', icon: <TableOfContents size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: tocTitle, onClick: toggleTocPanel,
+        },
+      });
+    }
     if (!loadError && tab === 'file' && isCopyableText && !isDrawio && !(isHtml && htmlTab === 'preview')) {
       const copyTitle = copied ? 'Скопировано'
         : isMarkdown ? 'Скопировать Markdown (Shift — с форматированием)' : 'Скопировать содержимое';

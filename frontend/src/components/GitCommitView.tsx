@@ -8,7 +8,7 @@ import { DiffView } from './DiffView';
 import { IconButton, Menu, MenuItem, Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
-// Цвета статус-бейджей — как в GitPanel/дереве файлов
+// Цвета статус-бейджей — как в панели «Изменения» и дереве файлов
 const BADGE: Record<string, { color: string; bg: string; label: string }> = {
   M: { color: C.accent, bg: C.accentLight, label: 'M' },
   A: { color: C.successText, bg: C.successBg, label: '+' },

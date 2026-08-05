@@ -1,8 +1,9 @@
-import { Fragment, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
-import { ChevronsLeft, ChevronsRight, Columns2, Pin, Square, X, type LucideIcon } from 'lucide-react';
-import { C, FONT, ISLAND, Z } from '../../lib/design';
+import { Fragment, useRef, useState, type DragEvent, type HTMLAttributes, type ReactNode } from 'react';
+import { ChevronsLeft, ChevronsRight, Columns2, Ellipsis, Pin, Square, X, type LucideIcon } from 'lucide-react';
+import { C, FONT, FS, ISLAND, R, Z } from '../../lib/design';
 import { ICON_STROKE } from './icons';
-import { RailCapsule, RAIL_W, RAIL_GAP } from './RailCapsule';
+import { Menu, MenuItem } from './Menu';
+import { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
 import { RailIconButton } from './RailIconButton';
 import { RailSep } from './RailSep';
 
@@ -55,14 +56,35 @@ interface Props {
   // false — рельса плавно схлопывается (width→0, opacity→0), оставаясь в DOM.
   // Анимация синхронна с появлением/скрытием панелей рядом.
   visible?: boolean;
+  // Ящик рельсы — кнопка «…» ПОСЛЕДНЕЙ в столбце и меню за ней. Держит редкие
+  // кнопки, которые человек сам утащил сюда с рельсы, и управление режимом зоны
+  // (своей кнопки в столбце у него больше нет — 40px-полоса дорога).
+  overflow?: {
+    // Спрятанные кнопки — те же RailItem, что в группах: клик, бейдж и ручка
+    // перетаскивания уже собраны вызывающим
+    items: RailItem[];
+    // Тумблер раскладки зоны: колонки или одна панель
+    modeToggle?: { soloMode: boolean; onToggle: () => void };
+    // Сумма бейджей спрятанных панелей: их кружки не видны, а число сообщений
+    // терять нельзя
+    badge?: number | null;
+    // Панель тащат по экрану: подложка меню на это время перестаёт ловить события,
+    // иначе места дропа под ней не получат ни одного dragover
+    dragActive?: boolean;
+    // Кнопка «…» как приёмник: дроп сюда убирает кнопку панели в ящик
+    drop?: {
+      active: boolean;
+      over: boolean;
+      onDragOver: (e: DragEvent) => void;
+      onDragLeave: () => void;
+      onDrop: (e: DragEvent) => void;
+    };
+  };
   // Зазор со стороны центра. Обычно его даёт зона панелей (её сплиттер или
   // крайний разделитель колонок), но при закрытых панелях задаётся здесь —
   // иначе рельса липнет к контенту.
   gapToCenter?: number;
-  // Тумблер режима зоны (сверху). Не передан — не рендерится: так компактный
-  // режим правой зоны и одно-панельная левая обходятся без него.
-  modeToggle?: { soloMode: boolean; onToggle: () => void };
-  // Кнопка «свернуть все» (снизу). Не передана — не рендерится.
+  // Кнопка «свернуть все» (ПЕРВОЙ в столбце). Не передана — не рендерится.
   collapse?: { collapsed: boolean; disabled: boolean; onToggle: () => void };
   // Попап-превью панели, которую сейчас держат под курсором в рельсе. Рисуется
   // рядом с рельсой поверх её открытых панелей; full — тянуть во всю высоту зоны
@@ -89,41 +111,203 @@ interface Props {
 }
 
 
+// Кружок с числом над иконкой рельсы. Общий для кнопок панелей и кнопки ящика:
+// у спрятанных панелей свои кружки не видны, и «…» показывает их сумму.
+// inline — кружок в строке меню ящика: там он не наездник на иконке, а обычный
+// элемент строки справа от названия.
+function RailBadge({ value, inline }: { value: number; inline?: boolean }) {
+  return (
+    <span style={{
+      ...(inline ? null : { position: 'absolute', top: -6, right: -7 }),
+      minWidth: 14, height: 14, padding: '0 3px', flexShrink: 0,
+      borderRadius: 7, background: C.accent, color: C.onAccent,
+      fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
+    }}>
+      {value}
+    </span>
+  );
+}
+
+// Ящик рельсы: кнопка «…» и меню за ней. Держит кнопки, которые человек утащил с
+// рельсы (перетаскиванием на эту кнопку), и тумблер режима зоны — своей кнопки в
+// столбце у режима больше нет.
+//
+// Кнопка САМА принимает дроп: пока панель тащат, вокруг неё стоит пунктирная
+// мишень, под курсором — акцентная. Мишень капсулы («убрать панель с глаз») её не
+// накрывает — оверлей дропа рисуется только над столбцом иконок.
+function RailOverflow({ side, overflow }: { side: 'left' | 'right'; overflow: NonNullable<Props['overflow']> }) {
+  const { items, modeToggle, badge, dragActive, drop } = overflow;
+  const hostRef = useRef<HTMLDivElement>(null);
+  // rect кнопки — якорь меню. Держим сам rect, а не флаг: меню живёт порталом и
+  // считает своё место от координат окна.
+  const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const close = () => setAnchor(null);
+  const dropping = !!drop?.active;
+
+  return (
+    <div
+      ref={hostRef}
+      // Событие ОБЯЗАНО остановиться здесь: те же обработчики висят на капсуле
+      // (вся рельса — приёмник), и всплывший дроп отработал бы вторым, отменив
+      // только что случившееся — кнопка вместо ящика оказывалась бы в столбце.
+      // Когда своей мишени у ящика нет (дроп сюда ничего не изменит), событие,
+      // наоборот, пропускаем наверх — пусть его примет рельса.
+      onDragOver={drop ? e => { e.stopPropagation(); drop.onDragOver(e); } : undefined}
+      onDragLeave={drop ? () => drop.onDragLeave() : undefined}
+      onDrop={drop ? e => { e.stopPropagation(); drop.onDrop(e); close(); } : undefined}
+      style={{
+        display: 'flex', borderRadius: R.md, boxSizing: 'border-box',
+        border: dropping
+          ? (drop?.over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`)
+          : '1px solid transparent',
+        background: dropping && drop?.over ? C.accentMuted : undefined,
+        color: dropping && drop?.over ? C.accent : undefined,
+      }}
+    >
+      <RailIconButton
+        side={side}
+        label="Ещё"
+        active={anchor != null}
+        onClick={() => setAnchor(anchor ? null : hostRef.current?.getBoundingClientRect() ?? null)}
+      >
+        <div style={{ position: 'relative', display: 'flex' }}>
+          <Ellipsis size={17} strokeWidth={ICON_STROKE} />
+          {badge ? <RailBadge value={badge} /> : null}
+        </div>
+      </RailIconButton>
+
+      {anchor && (
+        <Menu
+          anchor={anchor}
+          anchorSide={side}
+          onClose={close}
+          minWidth={230}
+          maxHeight={360}
+          // Строку из меню можно ВЫТАЩИТЬ обратно на рельсу или сразу в раскладку:
+          // на это время подложка перестаёт ловить события, иначе места дропа под
+          // ней не получат ни одного dragover
+          inertBackdrop={dragActive}
+        >
+          {/* Содержимое ящика — сами спрятанные кнопки. Скроллится ИМЕННО этот
+              список, а не карточка целиком: иначе футер с режимом уезжал бы за
+              нижнюю кромку вместе с длинным списком. */}
+          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+            {items.length === 0 ? (
+              <div style={{
+                padding: '8px 10px', maxWidth: 220,
+                fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted, lineHeight: 1.4,
+              }}>
+                Перетащите сюда кнопки панелей, которыми пользуетесь редко
+              </div>
+            ) : items.map(it => {
+              const { onDragEnd, ...dragRest } = it.dragProps ?? {};
+              return (
+                <MenuItem
+                  key={it.key}
+                  icon={<it.Icon size={15} strokeWidth={ICON_STROKE} />}
+                  label={
+                    <>
+                      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {it.title}
+                      </span>
+                      {it.badge ? <RailBadge value={it.badge} inline /> : null}
+                    </>
+                  }
+                  onClick={() => { it.onClick(); close(); }}
+                  // Строка — ручка перетаскивания. Меню закрываем в КОНЦЕ жеста, а не
+                  // на старте: исчезнувший источник не дождался бы dragend, и
+                  // состояние перетаскивания залипло бы на весь экран.
+                  wrapper={it.dragProps && {
+                    ...dragRest,
+                    onDragEnd: (e: DragEvent<HTMLElement>) => { onDragEnd?.(e); close(); },
+                  }}
+                />
+              );
+            })}
+          </div>
+
+          {/* Режим зоны — ФУТЕР попапа: это настройка раскладки, а не одна из
+              спрятанных кнопок, поэтому стоит отдельно внизу и на своём фоне —
+              тоне оправы интерфейса (шапки островов, рельсы), а не утопленном:
+              полоса должна отделяться от карточки, а не проваливаться под неё.
+              Отрицательные поля вытягивают
+              полосу до кромок карточки — иначе фон висел бы островком в её паддинге.
+              Пункт называет ДЕЙСТВИЕ, а не текущее состояние: тумблером, как в
+              рельсе, строка меню быть не умеет. */}
+          {modeToggle && (
+            <div style={{
+              margin: '5px -5px -5px', padding: 4,
+              background: C.bgMain, borderTop: `1px solid ${C.borderLight}`,
+              borderBottomLeftRadius: R.lg, borderBottomRightRadius: R.lg,
+              flexShrink: 0,
+            }}>
+              <MenuItem
+                icon={modeToggle.soloMode
+                  ? <Columns2 size={15} strokeWidth={ICON_STROKE} />
+                  : <Square size={15} strokeWidth={ICON_STROKE} />}
+                label={modeToggle.soloMode ? 'Колонки' : 'Одна панель'}
+                onClick={() => { modeToggle.onToggle(); close(); }}
+              />
+            </div>
+          )}
+        </Menu>
+      )}
+    </div>
+  );
+}
+
 // Иконка панели. У ОТКРЫТОЙ панели под курсором иконка подменяется на закрывающую:
 // это и есть кнопка «закрыть». Своего крестика в шапке у панели больше нет —
 // клик по активной иконке и раньше закрывал панель, теперь он ещё и выглядит
 // как закрытие, а шапка не тратит место на дубль.
 // hover держим здесь, а не в IconButton: тому он нужен только для собственных
 // цветов и наружу не отдаётся.
-// soleIcon — рельса из ОДНОЙ иконки: тогда открытая панель показывает не себя, а
-// сворачивание, и постоянно, а не по наведению. Выбирать в такой зоне не из чего,
-// поэтому иконка панели там ничего не сообщает, а активная подсветка врала бы про
-// выбор; кнопки «свернуть все» внизу при одной панели тоже нет — её роль забирает
-// эта же кнопка.
-function RailButton({ item, side, soleIcon: SoleIcon }: { item: RailItem; side: 'left' | 'right'; soleIcon?: LucideIcon }) {
+//
+// Иконка ВСЕГДА своя, сколько бы кнопок ни осталось в столбце. Раньше единственная
+// иконка зоны подменялась стрелками сворачивания насовсем — и панель выглядела
+// пропавшей: на её месте стояла стрелка, в которой человек свою панель не узнавал.
+function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) {
   // Во время HTML5-drag браузер не шлёт mouse-события, поэтому hover, поднятый при
   // захвате иконки, залипает: после дропа панель могла стать активной, и залипший
-  // hover рисовал бы на её иконке крестик закрытия. Гасим наведение на старте и
-  // конце перетаскивания, не теряя авторский обработчик из dragProps. Кнопка держит
-  // hover у себя, поэтому «погасить» здесь — это сообщить ей, что курсор ушёл.
+  // hover рисовал бы на её иконке крестик закрытия. Поэтому наведение гасится в
+  // КОНЦЕ жеста; кнопка держит hover у себя, и «погасить» здесь — это сообщить ей,
+  // что курсор ушёл.
+  //
+  // На СТАРТЕ гасить нельзя: у открытой панели под курсором стоит крестик, и сброс
+  // наведения тут же менял бы <svg> внутри самого источника перетаскивания — Chrome
+  // на такую подмену жест обрывал, и открытую панель нельзя было утащить за её
+  // кнопку вовсе (закрытая тащилась: там подменять нечего). Подпись на время жеста
+  // убирает hoverSuppressed — она мешала бы, показывая «Скрыть…» поверх места
+  // вставки, но hover при этом остаётся, и иконка не дёргается.
   const { onDragStart: dragStart, onDragEnd: dragEnd, ...dragRest } = item.dragProps ?? {};
-  const leave = (e: DragEvent<HTMLElement>) => {
-    (e.currentTarget as HTMLElement).dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
-  };
+  const [dragging, setDragging] = useState(false);
   const dragProps = item.dragProps && {
     ...dragRest,
-    onDragStart: (e: DragEvent<HTMLElement>) => { leave(e); dragStart?.(e); },
-    onDragEnd: (e: DragEvent<HTMLElement>) => { leave(e); dragEnd?.(e); },
+    // Своё состояние поднимаем СЛЕДУЮЩИМ кадром: перерисовка кнопки в самом
+    // обработчике dragstart меняет DOM под захваченным элементом, и браузер жест
+    // отменяет — dragstart приходит, а следом сразу dragend, без единого события
+    // drag. Отсюда же порядок: сперва авторский обработчик (он ставит dataTransfer
+    // и общее состояние перетаскивания), и только потом наше.
+    onDragStart: (e: DragEvent<HTMLElement>) => {
+      dragStart?.(e);
+      requestAnimationFrame(() => setDragging(true));
+    },
+    onDragEnd: (e: DragEvent<HTMLElement>) => {
+      setDragging(false);
+      (e.currentTarget as HTMLElement).dispatchEvent(new MouseEvent('mouseleave', { bubbles: false }));
+      dragEnd?.(e);
+    },
   };
-  const sole = !!SoleIcon && item.active;
   return (
     <RailIconButton
       side={side}
       // Подпись меняется по наведению вместе с иконкой: у открытой панели клик
       // закрывает, у закрытой с попапом — закрепляет
       label={item.active ? `Скрыть «${item.title}»` : item.title}
-      active={item.active && !sole}
+      active={item.active}
       onClick={item.onClick}
+      // Пока кнопку тащат, подпись не нужна: она вылезала бы поверх места вставки
+      hoverSuppressed={dragging}
       onHoverChange={h => (h ? item.onHoverStart?.() : item.onHoverEnd?.())}
       wrapper={{
         ...dragProps,
@@ -134,25 +318,17 @@ function RailButton({ item, side, soleIcon: SoleIcon }: { item: RailItem; side: 
       } as HTMLAttributes<HTMLElement>}
     >
       {hover => {
-        const closing = !sole && item.active && hover;
+        const closing = item.active && hover;
         // Закрытая панель под курсором показывается попапом, а иконка предлагает её
         // закрепить: клик оставит панель в раскладке, уход курсора — уберёт попап.
         const pinning = !item.active && hover && !!item.pinnable;
-        const Icon = sole ? SoleIcon : closing ? X : pinning ? Pin : item.Icon;
+        const Icon = closing ? X : pinning ? Pin : item.Icon;
         return (
           <div style={{ position: 'relative', display: 'flex' }}>
             <Icon size={17} strokeWidth={ICON_STROKE} />
             {/* Кружок с числом при закрывающей иконке прячем: рядом с «закрыть» счётчик
                 читается как часть действия, а не как содержимое панели */}
-            {item.badge && !closing && !sole && !pinning ? (
-              <span style={{
-                position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-                borderRadius: 7, background: C.accent, color: C.onAccent,
-                fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-              }}>
-                {item.badge}
-              </span>
-            ) : null}
+            {item.badge && !closing && !pinning ? <RailBadge value={item.badge} /> : null}
           </div>
         );
       }}
@@ -160,7 +336,7 @@ function RailButton({ item, side, soleIcon: SoleIcon }: { item: RailItem; side: 
   );
 }
 
-export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeToggle, collapse, peek, drop, footer }: Props) {
+export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer }: Props) {
   const isLeft = side === 'left';
   const dropping = !!drop?.active;
 
@@ -169,11 +345,21 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
   // группой и соседней остался бы висячий разделитель.
   const shownGroups = groups.filter(g => g.length > 0);
 
-  // Вся рельса — одна иконка: её открытая панель показывает сворачивание (стрелки
-  // к краю окна, как у кнопки «свернуть все»). Иначе иконки обычные, а крестик
-  // подставляется по наведению.
-  const soleItem = shownGroups.reduce((n, g) => n + g.length, 0) === 1;
-  const soleIcon: LucideIcon | undefined = soleItem ? (isLeft ? ChevronsLeft : ChevronsRight) : undefined;
+  const columnCount = shownGroups.reduce((n, g) => n + g.length, 0);
+
+  // При единственной иконке отдельной кнопки «свернуть все» быть не должно: её
+  // роль забирает сама иконка панели (клик по ней закрывает), а две кнопки рядом
+  // делали бы одно и то же. Пустой столбец (все кнопки уехали в ящик) её тоже не
+  // показывает: сворачивать там нечего — открытая панель всегда держит свою кнопку
+  // в столбце. Решается здесь, а не у вызывающего: сколько иконок реально осталось
+  // в столбце, знает только рельса.
+  const showCollapse = collapse && columnCount > 1;
+
+  // Ящик показываем, только когда ему есть что предложить: при ЕДИНСТВЕННОЙ кнопке
+  // в столбце и пустом ящике прятать нечего (спрятав её, человек остался бы с
+  // пустой рельсой), а режим зоны из одной панели ничего не решает. Как только в
+  // ящике что-то лежит, кнопка обязана быть — иначе спрятанное не достать.
+  const showOverflow = overflow && (columnCount > 1 || overflow.items.length > 0);
 
   // Обработчики дропа висят и на капсуле, и на мишени под ней: целиться удобнее в
   // мишень, но и вся рельса принимает панель — промахнуться мимо 40px-полосы
@@ -195,6 +381,49 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       ? (drop?.over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`)
       : `1px solid ${C.border}`;
 
+  // Секции столбца сверху вниз: служебная кнопка сворачивания и группы кнопок
+  // панелей. Разделители расставляются МЕЖДУ фактическими секциями — так две черты
+  // не встают рядом, когда соседняя секция схлопнулась (все кнопки уехали в ящик,
+  // группа скрыта целиком, «свернуть все» уступила место единственной иконке).
+  // inner — граница ПОДГРУППЫ (пунктир между группами кнопок панелей); остальные
+  // границы служебные, сплошные.
+  const columnSections: { key: string; inner?: boolean; node: ReactNode }[] = [];
+
+  if (showCollapse) {
+    // Свернуть все панели / вернуть спрятанный набор как был — ПЕРВАЯ кнопка
+    // столбца. Стрелки всегда указывают К краю окна при сворачивании и от него —
+    // при разворачивании.
+    const CollapseIcon = collapse.collapsed
+      ? (isLeft ? ChevronsRight : ChevronsLeft)
+      : (isLeft ? ChevronsLeft : ChevronsRight);
+    columnSections.push({
+      key: 'collapse',
+      node: (
+        <div style={{ opacity: collapse.disabled ? 0.3 : 1 }}>
+          <RailIconButton
+            side={side}
+            label={collapse.collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели'}
+            onClick={collapse.onToggle}
+            disabled={collapse.disabled}
+          >
+            <div style={{ display: 'flex', color: collapse.disabled ? C.textMuted : undefined }}>
+              <CollapseIcon size={16} strokeWidth={ICON_STROKE} />
+            </div>
+          </RailIconButton>
+        </div>
+      ),
+    });
+  }
+
+  shownGroups.forEach((group, gi) => columnSections.push({
+    key: `group-${gi}`,
+    // Инструменты проекта и панели сессии — подгруппы ОДНОГО набора кнопок панелей,
+    // а не разные наборы: между ними пунктир. Сплошная черта остаётся там, где
+    // граница настоящая: у служебных кнопок рельсы.
+    inner: gi > 0,
+    node: group.map(it => <RailButton key={it.key} item={it} side={side} />),
+  }));
+
   const rail = (
     <RailCapsule
       {...dropProps}
@@ -206,79 +435,52 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, modeT
       border={railBorder}
       background={dropping && drop?.over ? C.accentMuted : undefined}
     >
-      {/* Переключатель режима зоны. multi — раскладка КОЛОНКАМИ; обе зоны её
-          умеют, поэтому иконка и подсказка у них одни и те же. */}
-      {modeToggle && (() => {
-        // Коротко: плашка стоит в 40px-рельсе и длинную фразу разворачивает на
-        // полэкрана. Что будет по клику, и так понятно — тумблер показывает текущий
-        // режим, а иконка рядом меняется.
-        const label = modeToggle.soloMode ? 'Одна панель' : 'Колонки';
-        return (
-          <>
-            <RailIconButton side={side} label={label} onClick={modeToggle.onToggle}>
-              {modeToggle.soloMode
-                ? <Square size={15} strokeWidth={ICON_STROKE} />
-                : <Columns2 size={15} strokeWidth={ICON_STROKE} />}
-            </RailIconButton>
-            <RailSep margin="1px 0 2px" />
-          </>
-        );
-      })()}
+      {/* Столбец кнопок панелей вместе со «свернуть все». Отдельным блоком он стоит
+          ради мишени дропа: слой «убрать панель» накрывает ИМЕННО его, оставляя
+          кнопку ящика внизу собственной мишенью («спрятать кнопку»). */}
+      {columnSections.length > 0 && (
+      <div style={{
+        position: 'relative', display: 'flex', flexDirection: 'column', alignItems: 'center',
+        gap: RAIL_ITEM_GAP,
+      }}>
+        {columnSections.map((s, i) => (
+          <Fragment key={s.key}>
+            {i > 0 && (s.inner ? <RailSep variant="inner" /> : <RailSep margin="1px 0 2px" />)}
+            {s.node}
+          </Fragment>
+        ))}
 
-      {/* Между группами — «внутренняя» граница: инструменты проекта и панели сессии
-          это подгруппы ОДНОГО набора кнопок панелей, а не разные наборы. Сплошная
-          черта осталась там, где граница настоящая: у служебных кнопок рельсы. */}
-      {shownGroups.map((group, gi) => (
-        <Fragment key={gi}>
-          {gi > 0 && <RailSep variant="inner" />}
-          {group.map(it => <RailButton key={it.key} item={it} side={side} soleIcon={soleIcon} />)}
-        </Fragment>
-      ))}
-
-      {/* Свернуть все панели / вернуть спрятанный набор как был. Стрелки всегда
-          указывают К краю окна при сворачивании и от него — при разворачивании. */}
-      {collapse && (() => {
-        const CollapseIcon = collapse.collapsed
-          ? (isLeft ? ChevronsRight : ChevronsLeft)
-          : (isLeft ? ChevronsLeft : ChevronsRight);
-        return (
-          <>
-            <RailSep margin="2px 0 1px" />
-            <div style={{ opacity: collapse.disabled ? 0.3 : 1 }}>
-              <RailIconButton
-                side={side}
-                label={collapse.collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели'}
-                onClick={collapse.onToggle}
-                disabled={collapse.disabled}
-              >
-                <div style={{ display: 'flex', color: collapse.disabled ? C.textMuted : undefined }}>
-                  <CollapseIcon size={16} strokeWidth={ICON_STROKE} />
-                </div>
-              </RailIconButton>
+        {/* Пока панель тащат, столбец СТАНОВИТСЯ мишенью: иконки закрываются
+            непрозрачным слоем со знаком дропа — крестик «панель уберётся» либо
+            иконка панели «её кнопка переедет сюда».
+            Именно слоем поверх, а не отдельным блоком: так мишень наследует место и
+            высоту столбца, ничего не двигая на экране в момент, когда в неё целятся. */}
+        {dropping && (() => {
+          const DropIcon = drop?.icon ?? X;
+          return (
+            <div style={{
+              position: 'absolute', inset: 0, zIndex: 2,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: drop?.over ? C.accentMuted : C.bgMain,
+              color: drop?.over ? C.accent : C.textMuted,
+              transition: 'background 0.12s, color 0.12s',
+            }}>
+              <DropIcon size={18} strokeWidth={ICON_STROKE} />
             </div>
-          </>
-        );
-      })()}
+          );
+        })()}
+      </div>
+      )}
 
-      {/* Пока панель тащат, рельса СТАНОВИТСЯ мишенью: иконки закрываются
-          непрозрачным слоем со знаком дропа — крестик «панель уберётся» либо
-          иконка панели «её кнопка переедет сюда».
-          Именно слоем поверх, а не отдельным блоком: так мишень наследует место и
-          высоту рельсы, ничего не двигая на экране в момент, когда в неё целятся. */}
-      {dropping && (() => {
-        const DropIcon = drop?.icon ?? X;
-        return (
-          <div style={{
-            position: 'absolute', inset: 0, zIndex: 2,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: drop?.over ? C.accentMuted : C.bgMain,
-            color: drop?.over ? C.accent : C.textMuted,
-            transition: 'background 0.12s, color 0.12s',
-          }}>
-            <DropIcon size={18} strokeWidth={ICON_STROKE} />
-          </div>
-        );
-      })()}
+      {/* Ящик — ПОСЛЕДНЯЯ кнопка рельсы: редкие кнопки панелей и режим зоны.
+          Разделитель перед ним — только когда выше есть что отделять: пустой столбец
+          (все кнопки в ящике) иначе оставил бы черту у самой кромки капсулы. */}
+      {showOverflow && (
+        <>
+          {columnSections.length > 0 && <RailSep margin="2px 0 1px" />}
+          <RailOverflow side={side} overflow={overflow} />
+        </>
+      )}
     </RailCapsule>
   );
 

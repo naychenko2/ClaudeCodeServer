@@ -121,6 +121,10 @@ export interface DocEntry {
   size: number;
   headings: DocHeading[];
   binary?: boolean;         // файл без текста — открывается только в центре
+  // Папка, страницей которой служит документ («docs/decisions.md» при наличии
+  // «docs/decisions/»). Пара «страница + папка» пришла из code wiki: раздел там
+  // существует только так — файл несёт содержание, одноимённая папка даёт детей
+  sectionFolder?: string | null;
 }
 
 export interface DocBacklink {

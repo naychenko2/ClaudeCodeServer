@@ -28,7 +28,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
-import { isWallActive } from './lib/wallMode'
+import { isWallActive, setWallActive } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -556,6 +556,17 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
+  // Выход со стены её собственной кнопкой (рельса стены, заглушка на узком экране):
+  // возвращает В ПРОЕКТ, из которого на стену вошли, — он всё это время «спал» в
+  // state и восстанавливается как при возврате из любого другого раздела. К СПИСКУ
+  // проектов уводит другой жест — клик по подсвеченной пилюле «Проекты» (switchHubTab).
+  // Проекта нет (пришли по диплинку #/wall) — остаётся список.
+  const exitWall = () => {
+    setWallActive(false)
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
+    navPush(project ? { screen: 'project', project, view: 'sidebar', file: null } : { screen: 'projects' })
+  }
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
@@ -575,8 +586,21 @@ export default function App() {
         navReplace(rest)
       }
     }
+    // Клик по «Проектам» с самой стены (там эта пилюля подсвечена как активная) —
+    // явный выход из режима стены к списку проектов: тот же жест, что повторный
+    // клик по активному разделу с открытым проектом ниже
+    if (t === 'projects' && hubTab === 'wall') {
+      setWallActive(false)
+      localStorage.removeItem(OPEN_PROJECT_KEY)
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setProject(null)
+      setHubTab('projects')
+      navPush({ screen: 'projects' })
+      return
+    }
     // Возврат в рабочий режим: пока стена «активна», вкладка «Проекты» ведёт на неё,
-    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене)
+    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене или
+    // кликом по подсвеченным «Проектам» прямо со стены)
     if (t === 'projects' && hubTab !== 'wall' && isWallActive()) {
       localStorage.setItem(HUB_TAB_KEY, 'wall')
       setHubTab('wall')
@@ -837,7 +861,7 @@ export default function App() {
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
           : effectiveHubTab === 'wall'
-            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onExitWall={exitWall} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'

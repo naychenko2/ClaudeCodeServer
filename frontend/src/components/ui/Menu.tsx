@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
-import type { CSSProperties, MouseEvent, ReactNode } from 'react';
+import type { CSSProperties, HTMLAttributes, MouseEvent, ReactNode } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 
 // Единое выпадающее меню: карточка + подложка для закрытия по клику вне.
@@ -15,7 +15,7 @@ import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 //    PanelShell держит transform ради анимации появления, и меню внутри панели
 //    уезжало на её смещение и обрезалось overflow острова.
 // Закрытие по Esc/скроллу в anchor-режиме — на вызывающей стороне (поведение, не контрол).
-export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, anchor, maxHeight = 300, gap = 6, children }: {
+export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 200, anchor, maxHeight = 300, gap = 6, anchorSide, inertBackdrop, children }: {
   onClose: () => void;
   align?: 'left' | 'right';
   top?: number;
@@ -27,10 +27,33 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   maxHeight?: number;
   // зазор между якорем и карточкой в anchor-режиме; меньше — попап липнет к триггеру
   gap?: number;
+  // Карточка встаёт СБОКУ от якоря, а не под ним: сторона — та, с которой у якоря
+  // есть место (для кнопки в левой рельсе это 'left' — попап уезжает вправо).
+  // Нужно кнопкам, прижатым к кромке окна: под ними места нет, а обычный расчёт
+  // прижал бы карточку к тому же краю поверх самой рельсы. Низ карточки
+  // выравнивается по низу якоря.
+  anchorSide?: 'left' | 'right';
+  // Подложка перестаёт ловить события. Нужно, когда из меню ЧТО-ТО ПЕРЕТАСКИВАЮТ:
+  // подложка накрывает весь экран и первой перехватывает dragover, так что до
+  // мест дропа под ней события не доходят вовсе. Закрыть меню на старте
+  // перетаскивания нельзя — исчезнувший источник не дождётся dragend.
+  inertBackdrop?: boolean;
   children: ReactNode;
 }) {
   let pos: CSSProperties;
-  if (anchor) {
+  if (anchor && anchorSide) {
+    // Сбоку от якоря: по горизонтали — от его кромки. По вертикали карточка растёт
+    // ВВЕРХ от низа якоря (кнопки у нижнего края рельсы), а если сверху не хватает
+    // места — вниз от его верха, прижимаясь к нижней кромке окна.
+    const room = anchor.bottom >= maxHeight + 8;
+    pos = {
+      position: 'fixed',
+      ...(anchorSide === 'left' ? { left: anchor.right + gap } : { right: window.innerWidth - anchor.left + gap }),
+      ...(room
+        ? { bottom: window.innerHeight - anchor.bottom }
+        : { top: Math.max(8, Math.min(anchor.top, window.innerHeight - maxHeight - 8)) }),
+    };
+  } else if (anchor) {
     const openUp = anchor.bottom + gap + maxHeight > window.innerHeight && anchor.top > maxHeight;
     const left = Math.max(8, Math.min(anchor.right - minWidth, window.innerWidth - minWidth - 8));
     pos = {
@@ -42,11 +65,18 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   }
   const card = (
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: Z.dropdown }} onClick={onClose} />
+      <div
+        style={{ position: 'fixed', inset: 0, zIndex: Z.dropdown, pointerEvents: inertBackdrop ? 'none' : undefined }}
+        onClick={onClose}
+      />
       <div style={{
         ...pos, zIndex: Z.dropdown + 1,
         background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
         boxShadow: SHADOW.dropdown, padding: 5, minWidth, display: 'flex', flexDirection: 'column',
+        // В боковом режиме карточка встаёт от кромки окна и расти ей некуда: высоту
+        // ограничиваем, а прокрутку содержимое организует само (так у него остаётся
+        // возможность держать прилипший футер вне скролла)
+        ...(anchorSide ? { maxHeight, overflow: 'hidden' } : null),
       }}>
         {children}
       </div>
@@ -57,13 +87,22 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   return anchor ? createPortal(card, document.body) : card;
 }
 
+// Разделитель между смысловыми группами пунктов меню.
+export function MenuSep() {
+  return <div style={{ height: 1, background: C.borderLight, margin: '4px 6px' }} />;
+}
+
 // Единый пункт выпадающего меню.
-export function MenuItem({ icon, label, onClick, danger, disabled }: {
+export function MenuItem({ icon, label, onClick, danger, disabled, wrapper }: {
   icon?: ReactNode;
   label: ReactNode;
   onClick?: (e: MouseEvent) => void;
   danger?: boolean;
   disabled?: boolean;
+  // Атрибуты обёртки пункта: ручка перетаскивания (draggable + обработчики drag'а)
+  // у строк, которые можно вытащить из меню. Как у RailIconButton — дырявить API
+  // самой кнопки ради этого не стоит.
+  wrapper?: HTMLAttributes<HTMLElement>;
 }) {
   const [hover, setHover] = useState(false);
   const color = disabled ? C.textMuted : (danger ? C.danger : C.textPrimary);
@@ -72,7 +111,7 @@ export function MenuItem({ icon, label, onClick, danger, disabled }: {
     background: hover && !disabled ? C.bgSelected : 'none', border: 'none', borderRadius: R.md,
     padding: '9px 10px', cursor: disabled ? 'default' : 'pointer', color, fontSize: 13.5, fontFamily: FONT.sans,
   };
-  return (
+  const item = (
     <button
       onClick={onClick}
       disabled={disabled}
@@ -88,4 +127,6 @@ export function MenuItem({ icon, label, onClick, danger, disabled }: {
       {label}
     </button>
   );
+  // Обёртка только когда её просят: лишний span в разметке меню ни к чему
+  return wrapper ? <span {...wrapper} style={{ display: 'flex', ...wrapper.style }}>{item}</span> : item;
 }

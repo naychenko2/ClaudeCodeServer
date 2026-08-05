@@ -4121,8 +4121,11 @@ public class SessionManagerTests : IDisposable
         history.OfType<Protocol.StoredUserMessage>().Should()
             .Contain(m => m.Text.Contains("нет доступа к тестовой БД") && m.Text.Contains("Блокер"),
                 "доклад помечен как блокер, а не теряется среди обычных отчётов");
-        // Человек видит карточку немедленно, а не в конце волны
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Single();
+        // Человек видит карточку немедленно, а не в конце волны. Ветка блокера идёт с
+        // withTurn:true — ход штаба стартует fire-and-forget и пишет broadcast'ы в
+        // _sentMessages параллельно, поэтому карточку берём через ожидающий снимок под
+        // lock, иначе .Single() ловит Add в момент перечисления («Collection was modified»).
+        var card = (await WaitForEscalationCardsAsync(stab.Id, minCount: 1)).Single();
         card.Kind.Should().Be("blocker");
         card.Details.Should().Contain("нет доступа");
         _sut.GetById(stab.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);

@@ -99,7 +99,7 @@ const PINNED_GROUP = '\u0000pinned';
 // Корень репозитория как цель создания. Тем же приёмом, что группа закреплённых: сам
 // корень — пустая строка, а она в выборе означала бы «не выбрано», и отличить одно
 // от другого было бы нечем
-const ROOT_TARGET = ' root';
+const ROOT_TARGET = '\u0000root';
 
 // Подстраховка на случай, если браузер не знает scrollend (он есть не везде): дольше
 // этого плавная прокрутка списка всё равно не длится
@@ -116,7 +116,24 @@ const DEFAULT_DOC_EXTS = ['.md'];
 
 // Начальный документ панели («Начало»): назначенный в настройке либо README корня.
 // Кто именно — решает бэкенд; панель только помечает его домиком и открывает на всю высоту
-const HOME_KEY = 'cc_docs_home';
+//
+// Вид панели — решение пользователя, поэтому переживает перезагрузку. Ключ прежний:
+// раньше вид был тумблером «домашний да/нет», и старые значения '1'/'0' читаются как
+// 'home'/'list' — иначе у всех, кто уже пользовался панелью, вид сбросился бы на дефолт
+const VIEW_KEY = 'cc_docs_home';
+
+// Что показывает панель: начальный документ целиком, только разделы корпуса или полное
+// дерево документов. Порядок в переключателе тот же — от общего к частному
+type DocsView = 'home' | 'sections' | 'list';
+
+function readView(): DocsView {
+  try {
+    const raw = localStorage.getItem(VIEW_KEY);
+    if (raw === 'list' || raw === '0') return 'list';
+    if (raw === 'sections') return 'sections';
+    return 'home';
+  } catch { return 'home'; }
+}
 
 // Блок списка: подряд идущие документы одной папки. Не «папка целиком» — одна папка даёт
 // столько блоков, сколько раз её документы прерываются разделом. Так порядок из .order
@@ -223,7 +240,7 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, onTogglePin, onContextMenu }: {
+function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, onTogglePin, onContextMenu }: {
   folder: string;
   // Действия раздела правым кликом — те же, что у строки документа (переименование)
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -232,7 +249,6 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
   title?: string;
   // Родительский раздел приглушённо после подписи — заменяет собой путь целиком
   subtitle?: string;
-  flash: boolean;
   collapsed: boolean;
   // Сколько документов скрыто — показываем только у свёрнутой: у развёрнутой они и так видны
   hidden: number;
@@ -262,7 +278,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
       style={{
         // Постоянно акцентом когда раздел свёрнут (как двойной у свёрнутого поддерева);
         // плюс под курсором на линии или шевронах
-        color: (flash || collapsed || foldHover) ? C.accent : C.textMuted,
+        color: (collapsed || foldHover) ? C.accent : C.textMuted,
         transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease',
       }}
     />
@@ -325,7 +341,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
       <div style={{ flex: 1, minWidth: 0 }}>
         <ListDateDivider
           title={title} subtitle={subtitle}
-          align="left" dense flash={flash}
+          align="left" dense
           onClick={onOpenPage}
           highlightOnHover
           // md-бейдж/булавка раздела — после левой линии, в одну колонку с бейджами документов
@@ -386,7 +402,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
     }}>
       <ListDateDivider
         title={title} subtitle={subtitle}
-        align="left" dense flash={flash}
+        align="left" dense
         onClick={onToggle}
         titleAttr={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы`}
         leading={
@@ -399,7 +415,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
             <ChevronRight
               size={12} strokeWidth={2.4}
               style={{
-                color: flash ? C.accent : C.textMuted,
+                color: C.textMuted,
                 // Поворотом, а не второй иконкой: состояние читается как продолжение
                 // движения, и подпись не дёргается на кадр при смене
                 transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease',
@@ -465,11 +481,20 @@ function FolderRow({ label, parent, count, current, onJump }: {
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
 // в строке нет места, а место иконки всё равно занято состоянием документа
-function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin, onContextMenu }: {
+function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, onExpand, onTogglePin, onContextMenu }: {
   doc: DocEntry;
   selected: boolean;
   home: boolean;
   pinned: boolean;
+  // Сдвиг строки вправо — вложенность раздела в виде «Разделы». В дереве его нет:
+  // там вложенность обозначена подписью группы, а сдвиг ломал бы левую линию списка
+  indent?: number;
+  // Число документов внутри раздела — тем же приглушённым хвостом, что у строк списка
+  // папок. У обычного документа считать нечего
+  count?: number;
+  // Переход к документам раздела в дереве. Есть только в виде «Разделы»: в самом дереве
+  // прыгать некуда — группа уже на экране
+  onJump?: () => void;
   onOpen: () => void;
   onExpand: () => void;
   onTogglePin: () => void;
@@ -479,7 +504,14 @@ function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin, on
 }) {
   const [hover, setHover] = useState(false);
   const [pinHover, setPinHover] = useState(false);
+  const [jumpHover, setJumpHover] = useState(false);
+  const [openHover, setOpenHover] = useState(false);
   const showPin = hover || pinned;
+  // Строка с переходом (раздел в виде «Разделы») — это ДВЕ мишени: название открывает
+  // страницу раздела, хвост уводит к его документам в дереве. Поэтому подсветка едет
+  // не на строку целиком, а на каждую половину своим овалом — иначе одна общая заливка
+  // обещала бы одно действие на всю ширину
+  const split = !!onJump;
   return (
     <div
       onContextMenu={onContextMenu}
@@ -488,9 +520,12 @@ function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin, on
       style={{
         display: 'flex', alignItems: 'center', borderRadius: R.md,
         // Наведение подсвечивает открываемую строку: документ откроется по клику,
-        // и подложка под курсором это обещает. Выбранное сильнее — своя заливка
+        // и подложка под курсором это обещает. Выбранное сильнее — своя заливка.
+        // Овал общий и у строки на две мишени: половины делит не отдельная подложка,
+        // а тонкий просвет цвета полотна (ниже) — так строка остаётся одной строкой
         background: selected ? C.bgSelected : hover ? C.bgInset : 'transparent',
-        minHeight: ROW_H, paddingLeft: SP.sm,
+        overflow: 'hidden',
+        minHeight: ROW_H, paddingLeft: SP.sm + (indent ?? 0),
       }}
     >
       <button
@@ -516,6 +551,8 @@ function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin, on
       <button
         onClick={onOpen}
         onDoubleClick={onExpand}
+        onMouseEnter={() => setOpenHover(true)}
+        onMouseLeave={() => setOpenHover(false)}
         // Только путь: подсказка про двойной клик висела над каждой строкой и мешала
         // читать сам путь, ради которого её и открывают
         title={doc.path}
@@ -525,11 +562,55 @@ function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin, on
           // Без отступа под вложенность: группу уже обозначает разделитель сверху,
           // а сдвиг ломал общую левую линию списка
           paddingLeft: SP.xs,
+          // Под курсором именно на названии половина темнеет — видно, какая из двух
+          // мишеней сработает. Радиуса у неё нет: овал общий, её край режет просвет
+          ...(split ? {
+            background: openHover && !selected ? C.bgSelected : 'transparent',
+            borderRadius: 0, height: ROW_H, paddingRight: SP.sm,
+          } : null),
           color: selected ? C.textHeading : C.textSecondary,
           fontWeight: selected ? 600 : 400,
         }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</span>
       </button>
+      {/* Хвост строки раздела: сколько документов внутри. С onJump — кнопка перехода
+          в дерево (вид «Документы» с прокруткой к этой группе): список разделов
+          отвечает «куда идти», дерево — «что там лежит». Отдельной кнопкой, а не
+          вторым жестом по строке: клик по названию открывает саму страницу раздела,
+          и два разных перехода не должны делить одну мишень */}
+      {count !== undefined && (onJump ? (
+        <button
+          onClick={onJump}
+          onMouseEnter={() => setJumpHover(true)}
+          onMouseLeave={() => setJumpHover(false)}
+          title={`Показать документы раздела в дереве (${count})`}
+          style={{
+            flexShrink: 0, display: 'flex', alignItems: 'center', gap: 3,
+            border: 'none', cursor: 'pointer',
+            // Подложка своя только под курсором: общий фон строка уже дала, а вторая
+            // мишень должна отзываться отдельно от названия
+            background: jumpHover ? C.bgSelected : 'transparent',
+            // Разделитель внутри общего овала — цветом приглушённого текста: рамочный
+            // C.border на подсвеченной подложке всё ещё сливался, а здесь линия должна
+            // читаться как граница двух мишеней. Только под курсором (в покое прозрачный,
+            // но на месте — иначе от него дёргалась бы ширина)
+            borderLeft: `1px solid ${hover ? C.textMuted : 'transparent'}`,
+            padding: `0 ${SP.sm}px 0 ${SP.xs}px`, height: ROW_H,
+            color: jumpHover ? C.accent : C.textMuted, fontFamily: FONT.sans, fontSize: FS.xs,
+          }}
+        >
+          {/* Шеврон и подпись — на наведение всей СТРОКИ: увидеть, что у раздела есть
+              второй переход, надо до того, как попал курсором именно в хвост.
+              В покое остаётся тихая цифра */}
+          {hover && <ChevronsRight size={12} strokeWidth={2.4} />}
+          {hover && <span>документы</span>}
+          {count}
+        </button>
+      ) : (
+        <span style={{
+          flexShrink: 0, padding: `0 ${SP.sm}px`, color: C.textMuted, fontSize: FS.xs,
+        }}>{count}</span>
+      ))}
     </div>
   );
 }
@@ -588,11 +669,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // const [foldersH, setFoldersH] = useState(…);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocAnchor, setTocAnchor] = useState<DOMRect | null>(null);
-  // Домашний режим: README на всю панель. Он же стартовый — панель чаще открывают
-  // «почитать про проект», чем искать конкретный документ в списке
-  const [homeOpen, setHomeOpen] = useState<boolean>(() => {
-    try { return localStorage.getItem(HOME_KEY) !== '0'; } catch { return true; }
-  });
+  // Вид панели. Стартовый — «Начало»: панель чаще открывают «почитать про проект»,
+  // чем искать конкретный документ в списке
+  const [view, setViewState] = useState<DocsView>(readView);
   const [homeDoc, setHomeDoc] = useState<DocDetail | null>(null);
   // Область документации (папки, файлы корня, типы). null — панель её не спрашивала:
   // диалог грузит настройку сам, а до его открытия хватает эвристики по индексу
@@ -619,27 +698,20 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Меню создания показывает список папок вместо видов — второй «страницей» того же
   // меню, а не вторым поповером: у него один якорь и одно закрытие кликом вне
   const [pickingFolder, setPickingFolder] = useState(false);
-  // Список папок — то же, что оглавление для документа, только для самого списка:
-  // групп до десятка, а документов десятки, и мотать до нужной надоедает
-  // Прямоугольник кнопки-якоря: поповер рисуется fixed по нему (Menu), иначе
-  // absolute внутри панели обрезался её краем, когда места мало
-  const [foldersAnchor, setFoldersAnchor] = useState<DOMRect | null>(null);
   // Меню настроек панели (шестерёнка в шапке): режим превью + область документации
   const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
   // Пока открыт попап или поиск — контролы шапки не гаснут (общее решение,
   // как у FileExplorer/GitChangesRail): меню живёт порталом в body, курсор
   // уходит с карточки, и без удержания кнопка-триггер пропадала под попапом
-  usePanelHeaderHold(!!foldersAnchor || !!settingsAnchor || !!createMenu || searchOpen);
+  usePanelHeaderHold(!!settingsAnchor || !!createMenu || searchOpen);
 
   const folderRefs = useRef(new Map<string, HTMLDivElement>());
   // Папка, к которой только что прокрутили: подсвечиваем на секунду, иначе после
   // прыжка непонятно, куда смотреть. Тот же язык, что у подсветки панелей рельсы —
   // акцентная рамка (PanelShell flash)
   const [flashFolder, setFlashFolder] = useState<string | null>(null);
-  // Отметка в списке папок: где пользователь сейчас. Одно состояние на два способа туда
-  // попасть — прыжок по папке и открытие документа. Вычислять её из выбранного документа
-  // было неверно: после прыжка в другую папку отметка оставалась на старой, потому что
-  // выбор документа никуда не делся
+  // Где пользователь сейчас находится: папка последнего открытого документа или
+  // раздела. Отсюда берётся цель создания — обычно создают рядом с тем, что читают
   const [activeFolder, setActiveFolder] = useState<string | null>(null);
   // Свёрнутые папки: в корпусе с десятком разделов половина обычно не нужна, а список
   // длинный. Храним по проекту — папки у репозиториев разные
@@ -795,18 +867,22 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     settleTimer.current = window.setTimeout(onEnd, SCROLL_SETTLE_MS);
   };
 
+  // Переход к разделу в дереве — жест вида «Разделы»: список разделов отвечает
+  // «куда идти», дерево — «что там лежит», и одно должно уметь передать другому.
+  // Вид переключаем здесь же: прокручивать невидимый список бессмысленно
   const jumpToFolder = (folder: string) => {
     setActiveFolder(folder);
-    setFoldersAnchor(null);
-    // Прыжок в свёрнутую папку показывал бы одну подпись — разворачиваем её, но
-    // прокручиваем следующим кадром: до перерисовки геометрия ещё от свёрнутого списка
-    if (collapsed.has(folder)) {
-      toggleFolder(folder);
-      if (settleTimer.current) window.clearTimeout(settleTimer.current);
-      settleTimer.current = window.setTimeout(() => scrollToFolder(folder), EXPAND_MS + 20);
-      return;
-    }
-    scrollToFolder(folder);
+    // Прыжок в свёрнутую папку показывал бы одну подпись — разворачиваем её
+    const wasCollapsed = collapsed.has(folder);
+    if (wasCollapsed) toggleFolder(folder);
+    // Прокрутка — только после перерисовки: из «Разделов» дерева на экране ещё нет
+    // (folderRefs пусты), а у только что развёрнутой папки геометрия едет анимацией.
+    // Оба случая ждут одного — чтобы список принял свой окончательный вид
+    const wasHidden = shownView !== 'list';
+    if (wasHidden) setView('list');
+    if (!wasCollapsed && !wasHidden) { scrollToFolder(folder); return; }
+    if (settleTimer.current) window.clearTimeout(settleTimer.current);
+    settleTimer.current = window.setTimeout(() => scrollToFolder(folder), EXPAND_MS + 20);
   };
   // Якорь, к которому нужно проскроллить после перехода по ссылке или из поиска.
   // Хранится ВМЕСТЕ с путём документа: между сменой документа и пересбором оглавления
@@ -835,6 +911,27 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     const m = new Map<string, DocEntry>();
     for (const d of index ?? []) if (d.sectionFolder) m.set(d.sectionFolder, d);
     return m;
+  }, [index]);
+
+  // Вид «Разделы»: только страницы разделов, в порядке индекса (то есть в порядке .order
+  // своих папок). Вложенность показываем отступом, а не деревом с раскрытием: раздел
+  // здесь — точка перехода, и сворачивать в нём нечего.
+  //
+  // Счётчик — все документы внутри папки раздела, включая подразделы: в этом виде
+  // раздел отвечает за всё своё поддерево, а не за один свой уровень
+  const sections = useMemo(() => {
+    const all = (index ?? []).filter(d => d.sectionFolder);
+    const folders = all.map(d => d.sectionFolder!);
+    return all.map(doc => {
+      const folder = doc.sectionFolder!;
+      const prefix = `${folder.toLowerCase()}/`;
+      return {
+        doc,
+        folder,
+        depth: folders.filter(f => folder.toLowerCase().startsWith(`${f.toLowerCase()}/`)).length,
+        count: (index ?? []).filter(d => d.path.toLowerCase().startsWith(prefix)).length,
+      };
+    });
   }, [index]);
 
   // Блоки списка: одна папка — один блок. Сначала документы, лежащие прямо в папке, следом
@@ -924,13 +1021,18 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     return { title: page.title, subtitle: parentPage ? stripLeadingEmoji(parentPage.title) : parent || undefined };
   }, [sectionPages]);
 
-  // Список папок для поповера переходов. Блоки одной папки складываются в одну строку:
-  // в списке переходов ждут папку, а не её куски
-  const folderCounts = useMemo<[string, number][]>(() => {
+  // Документы папки. Блоки одной папки складываются в одну строку: в выборе папки ждут
+  // папку, а не её куски. Нужны и списку целей создания, и его счётчикам
+  const folderCountMap = useMemo(() => {
     const m = new Map<string, number>();
     for (const b of blocks) if (b.folder) m.set(b.folder, (m.get(b.folder) ?? 0) + b.docs.length);
-    return [...m.entries()];
+    return m;
   }, [blocks]);
+  const folderCounts = useMemo(() => [...folderCountMap.entries()], [folderCountMap]);
+  // Файлы корня области (README.md и соседи) — счётчик для строки «Корень репозитория»
+  const rootFileCount = useMemo(
+    () => (index ?? []).filter(d => !d.path.includes('/')).length,
+    [index]);
 
   // Закреплённые дублируются ОТДЕЛЬНЫМ блоком у нижнего края списка: их закрепляют,
   // чтобы держать под рукой, а до нужного места длинного списка ещё надо домотать.
@@ -1110,21 +1212,21 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // незачем знать это правило — она лишь показывает то, что ей назвали
   const homePath = scopeInfo?.home ?? null;
 
-  const setHome = (next: boolean) => {
-    setHomeOpen(next);
-    try { localStorage.setItem(HOME_KEY, next ? '1' : '0'); } catch { /* квота */ }
+  const setView = (next: DocsView) => {
+    setViewState(next);
+    try { localStorage.setItem(VIEW_KEY, next); } catch { /* квота */ }
   };
 
   // Содержимое README грузится отдельно от выбранного документа: домашний режим не
   // должен сбивать то, что читали в превью, — закрыл домик и вернулся ровно туда же
   useEffect(() => {
-    if (!homeOpen || !homePath) return;
+    if (view !== 'home' || !homePath) return;
     let alive = true;
     api.docs.doc(project.id, homePath)
       .then(d => { if (alive) setHomeDoc(d); })
       .catch(() => { if (alive) setHomeDoc(null); });
     return () => { alive = false; };
-  }, [project.id, homeOpen, homePath, index]);
+  }, [project.id, view, homePath, index]);
 
   // Первый документ проекта: создаём README с заголовком-именем проекта и сразу
   // открываем его домашним видом. Заодно чиним область — README мог быть снят из
@@ -1153,7 +1255,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         });
       }
       loadIndex();
-      setHome(true);
+      setView('home');
       onOpenFile('README.md');   // и сразу в центре — его пойдут наполнять
     } catch { setError('Не удалось создать README.md'); }
     finally { setCreating(false); }
@@ -1216,31 +1318,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     document.addEventListener('pointerup', onUp);
   };
 
-  // Строка папки — одна на поповер и на закреплённый блок: это один и тот же список,
-  // и расходиться в поведении они не должны
-  const folderRow = (folder: string, count: number, current: boolean) => {
-    // Подпись — заголовок файла раздела (если есть пара), иначе путь папки; родитель
-    // приглушённо после названия, через точку — как в подписи группы дерева
-    const gt = folder ? groupTitle(folder) : null;
-    const label = gt ? gt.title : 'корень проекта';
-    return (
-      <FolderRow
-        key={folder || '__root'}
-        label={label}
-        parent={gt?.subtitle}
-        count={count}
-        current={current}
-        onJump={() => jumpToFolder(folder)}
-      />
-    );
-  };
-
-
-  // Кнопка и блок нужны, только когда есть что выбирать: с единственной папкой
-  // список папок вёл бы сам в себя
-  // Считаем по всем папкам дерева, а не по группам верхнего уровня: вложенные разделы
-  // тоже точки перехода, и без них список выглядел бы обрезанным
-  const hasFolderNav = folderCounts.length > 1;
+  // Поповер «Список папок» убран: переходами по корпусу теперь занимается вид
+  // «Разделы» — тот же список, только на всю панель, с постоянной подписью и
+  // числом документов. Держать рядом два способа попасть в раздел незачем.
 
   // Уровни папок. Кнопки «свернуть/развернуть уровень» в шапку не переехали, поэтому
   // и обработчики лежат закомментированными — вернуть можно вместе с кнопками (см.
@@ -1274,7 +1354,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Домашний вид показывается, только когда README реально есть. Без этой проверки
   // сохранённый флаг прятал кнопки в проекте без README — панель оставалась с пустой
   // полосой сверху и списком, которым нечем управлять
-  const homeView = homeOpen && homePath != null;
+  const homeView = view === 'home' && homePath != null;
+  // Вид переключателя: без начального документа «Начало» из него выпадает, и сохранённый
+  // выбор надо отобразить на то, что панель показывает НА САМОМ ДЕЛЕ, — иначе сегмент
+  // подсвечивал бы вид, которого на экране нет
+  const shownView: DocsView = view === 'home' && !homeView ? 'list' : view;
+  const sectionsView = shownView === 'sections';
   // Поиск, папки и превью управляют списком: без документов им нечего делать
   const hasDocs = (index?.length ?? 0) > 0;
   // README лежит в проекте, но выпал из области (сняли в настройке). Кандидаты корня
@@ -1349,8 +1434,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         setCreateKind(null);
         loadIndex();
         // Созданный документ идут наполнять — открываем его в центре, как README
-        // из пустого состояния; домашний вид при этом уступает место списку
-        setHome(false);
+        // из пустого состояния. Вид при этом уступает место списку — но только
+        // домашний: созданный раздел виден и в «Разделах», уводить оттуда незачем
+        if (view === 'home') setView('list');
         onOpenFile(path);
       }}
     />
@@ -1359,69 +1445,46 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Контролы панели: штатное место для них — шапка карточки (PanelHeaderSlot),
   // а не собственный ряд под ней. Раньше ряд занимал целую полосу высоты в узкой
   // колонке ради иконок, которые прекрасно живут рядом с заголовком.
-  // Что показывает панель: README или корпус. IconSegmented — тот же примитив
-  // и размер, что у видов в «Задачах»
-  const viewSwitch = homePath ? (
-    <IconSegmented<'home' | 'list'>
-      value={homeOpen ? 'home' : 'list'}
+  // Что показывает панель: начальный документ, разделы корпуса или всё дерево.
+  // IconSegmented — тот же примитив и размер, что у видов в «Задачах».
+  // Порядок от общего к частному: «Начало» → «Разделы» → «Документы».
+  // Без начального документа его сегмент выпадает — переключать было бы не на что,
+  // а сам переключатель остаётся: разделы и документы есть и без README
+  const viewSwitch = (
+    <IconSegmented<DocsView>
+      value={shownView}
       options={[
-        { value: 'home', label: 'Начало', icon: <Home size={14} strokeWidth={ICON_STROKE} /> },
+        ...(homePath
+          ? [{ value: 'home' as const, label: 'Начало', icon: <Home size={14} strokeWidth={ICON_STROKE} /> }]
+          : []),
+        { value: 'sections', label: 'Разделы', icon: <FolderTree size={14} strokeWidth={ICON_STROKE} /> },
         { value: 'list', label: 'Документы', icon: <BookText size={14} strokeWidth={ICON_STROKE} /> },
       ]}
-      onChange={v => setHome(v === 'home')}
+      onChange={setView}
     />
-  ) : null;
+  );
 
   const controls = (
     <>
       {/* Без шапки переключатель идёт первым в общем ряду — своего места слева там нет */}
       {!hasPanelHeader && viewSwitch}
-      {/* В режиме «Начало» — единственный контрол: развернуть начальный документ
-          в центральной области. Та же кнопка (иконка, тултип, жест), что у превью
-          снизу, — «развернуть» читается одинаково в обоих режимах чтения */}
-      {homeView && homePath && (
-        <IconButton title="Развернуть в центре" onClick={() => onOpenFile(homePath)} size="sm">
-          <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      {/* «Развернуть в центре» в ряду контролов больше нет: кнопка относится к тексту
+          под ней, а не к панели, и живёт теперь в правом верхнем углу самой области
+          чтения — там же, где её ищут в превью */}
+      {/* Поиск переехал в меню настроек: ряд в шапке узкий, а поиск по документам
+          нужен изредка — держать под него постоянную кнопку дороже, чем один лишний
+          клик. Открытая строка поиска закрывается крестиком и Esc.
+          Кнопки «Список папок» здесь больше нет — её работу делает вид «Разделы» */}
+      {/* Настройки — во ВСЕХ видах, но не одинаковые: меню собирается из того, чем
+          в этом виде реально есть что настраивать. В «Начале» из трёх пунктов остаётся
+          один (область документации: превью и поиск управляют списком, которого тут
+          нет) — поэтому там кнопка сразу открывает диалог области и носит его иконку,
+          а не прячет единственное действие за лишним кликом по попапу */}
+      {homeView ? (
+        <IconButton title="Папки документации" onClick={() => setScopeOpen(true)} size="sm">
+          <FolderCog size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
-      )}
-      {/* Остальные — только в режиме «Документы»: в «Начале» ими нечем управлять */}
-      {!homeView && <>
-        {/* Поиск переехал в меню настроек: ряд в шапке узкий, а поиск по документам
-            нужен изредка — держать под него постоянную кнопку дороже, чем один
-            лишний клик. Открытая строка поиска закрывается крестиком и Esc */}
-        {/* Папки списка — оглавление для самого списка. Появляется, только когда групп
-            больше одной: с единственной папкой кнопка вела бы в никуда */}
-        {hasFolderNav && (
-          <IconButton
-            title={foldersAnchor ? 'Скрыть список папок' : 'Список папок'}
-            // Прямоугольник снимаем СРАЗУ: внутри функционального апдейта React уже
-            // обнулил currentTarget, и обращение к нему роняло панель
-            onClick={e => {
-              const rect = e.currentTarget.getBoundingClientRect();
-              setFoldersAnchor(a => (a ? null : rect));
-            }}
-            active={!!foldersAnchor}
-            size="sm"
-          >
-            <List size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-        )}
-        {/* Свернуть/развернуть уровень папок — в шапку не переехали: ряд там и так
-            плотный, а сворачивание доступно кликом по подписи самой группы.
-            Оставлено закомментированным до решения, нужны ли кнопки вообще.
-        {foldableFolders.length > 0 && <>
-          <IconButton title="Свернуть уровень папок" onClick={collapseLevel}
-            disabled={!foldableFolders.some(f => !collapsed.has(f))} size="sm">
-            <ChevronsDownUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          <IconButton title="Развернуть уровень папок" onClick={expandLevel}
-            disabled={!foldableFolders.some(f => collapsed.has(f))} size="sm">
-            <ChevronsUpDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-        </>}
-        */}
-        {/* Настройки панели одним меню: режим превью и область документации.
-            Раньше оба жили отдельными кнопками — ряд в шапке и так плотный */}
+      ) : (
         <IconButton
           title="Настройки панели"
           active={!!settingsAnchor}
@@ -1433,14 +1496,16 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         >
           <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
-      </>}
+      )}
     </>
   );
 
   // Главное действие панели — в ЗАКРЕПЛЁННОМ слоте шапки, как «Новый» в «Файлах»:
   // оно видно всегда, а не только под курсором. Жест тот же самый (кнопка → меню
-  // видов → модалка с именем), и расходиться этим двум панелям нельзя
-  const createControl = !homeView ? (
+  // видов → модалка с именем), и расходиться этим двум панелям нельзя.
+  // Вид на кнопку не влияет: «создать документ или раздел» — действие над корпусом,
+  // а не над тем, что панель сейчас показывает
+  const createControl = (
     <Button
       size="xs"
       variant="primary"
@@ -1454,7 +1519,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     >
       Новый
     </Button>
-  ) : null;
+  );
 
   // Меню видов создания. Куда попадёт созданное — подписью в подвале, как в «Файлах»:
   // вопрос возникает ровно в момент создания. Целевая папка — та, в которой пользователь
@@ -1523,35 +1588,38 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   const closeCreateMenu = () => { setCreateMenu(null); setPickingFolder(false); };
 
   const createMenuEl = createMenu && (
-    <Menu anchor={createMenu} minWidth={240} maxHeight={320} onClose={closeCreateMenu}>
+    <Menu anchor={createMenu} minWidth={pickingFolder ? 200 : 240} maxHeight={pickingFolder ? 260 : 320} onClose={closeCreateMenu}>
       {pickingFolder ? (
-        <>
+        // Выбор папки — плотным списком (строка папки, как в прежнем списке папок), а не
+        // рядами меню: папок бывает под десяток, и пункты в полный рост меню превращали
+        // выбор в длинную простыню. Выбранная отмечена той же заливкой, что текущая
+        // строка списка, — галочки в узкой строке не нужно
+        <div style={{ padding: '2px 4px' }}>
           {/* Корень репозитория — первым: там живут файлы корня области (README.md и
               соседи), и создавать рядом с ними законно. Имя нового файла продукт сам
               допишет в «файлы корня» — папкой корень не выбирают */}
-          <MenuItem
-            icon={createFolder === '' && createInFolder === ROOT_TARGET
-              ? <Check size={15} strokeWidth={2.4} style={{ color: C.accent }} />
-              : <Home size={15} strokeWidth={ICON_STROKE} />}
+          <FolderRow
             label="Корень репозитория"
-            onClick={() => { setCreateInFolder(ROOT_TARGET); setPickingFolder(false); }}
+            count={rootFileCount}
+            current={createFolder === '' && createInFolder === ROOT_TARGET}
+            onJump={() => { setCreateInFolder(ROOT_TARGET); setPickingFolder(false); }}
           />
           {/* Дальше — папки области и все папки дерева, включая только что созданные
               разделы. Названы своими заголовками, а не путями, — как в списке папок */}
           {createTargets.map(folder => {
             const { title, subtitle } = groupTitle(folder);
             return (
-              <MenuItem
+              <FolderRow
                 key={folder}
-                icon={folder === createFolder
-                  ? <Check size={15} strokeWidth={2.4} style={{ color: C.accent }} />
-                  : <Folder size={15} strokeWidth={ICON_STROKE} />}
-                label={subtitle ? `${title} · ${subtitle}` : title}
-                onClick={() => { setCreateInFolder(folder); setPickingFolder(false); }}
+                label={title}
+                parent={subtitle}
+                count={folderCountMap.get(folder) ?? 0}
+                current={folder === createFolder}
+                onJump={() => { setCreateInFolder(folder); setPickingFolder(false); }}
               />
             );
           })}
-        </>
+        </div>
       ) : (
         <>
           <MenuItem
@@ -1620,11 +1688,11 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           нечем, а всё нужное предлагает само пустое состояние */}
       {/* Переключатель вида — у самого названия панели: он отвечает на вопрос
           «что показываем», а не «что сделать», и в правой группе кнопок терялся */}
-      {hasDocs && hasPanelHeader && homePath && (
+      {hasDocs && hasPanelHeader && (
         <PanelHeaderSlot side="left">{viewSwitch}</PanelHeaderSlot>
       )}
       {/* Главное действие — в закреплённой зоне: видно всегда, как «Новый» в «Файлах» */}
-      {hasDocs && hasPanelHeader && createControl && (
+      {hasDocs && hasPanelHeader && (
         <PanelHeaderSlot pinned>{createControl}</PanelHeaderSlot>
       )}
       {hasDocs && (hasPanelHeader
@@ -1661,7 +1729,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           <MenuItem
             icon={<Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
             label={searchOpen ? 'Закрыть поиск' : 'Поиск по документам'}
-            onClick={() => { searchOpen ? closeSearch() : setSearchOpen(true); setSettingsAnchor(null); }}
+            onClick={() => {
+              // Из «Начала» поиску показывать результаты негде — README занимает панель
+              // целиком; поэтому вместе с полем открываем и список
+              if (searchOpen) closeSearch();
+              else { if (homeView) setView('list'); setSearchOpen(true); }
+              setSettingsAnchor(null);
+            }}
           />
           {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное */}
           <MenuItem
@@ -1694,12 +1768,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         </Menu>
       )}
 
-      {foldersAnchor && (
-        <Menu anchor={foldersAnchor} minWidth={260} maxHeight={320} onClose={() => setFoldersAnchor(null)}>
-          {folderCounts.map(([folder, count]) => folderRow(folder, count, folder === activeFolder))}
-        </Menu>
-      )}
-
       {/* Строка поиска — отдельным рядом СВЕРХУ, сразу под кнопками: результаты
           появляются ниже, и поле стоит над тем, что оно фильтрует */}
       {searchOpen && (
@@ -1724,7 +1792,20 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       {homeView ? (
         // Без своей шапки: заголовок и так первой строкой документа, а переключиться
         // и настроить область можно в ряду выше — вторая полоса кнопок была бы лишней
-        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {/* Развернуть в центре — поверх текста, в правом верхнем углу области чтения.
+              Кнопка относится к документу под ней, а не к панели, поэтому и стоит на нём;
+              подложка непрозрачная — под кнопкой едет прокручиваемый текст */}
+          {homePath && (
+            <div style={{
+              position: 'absolute', top: SP.xs, right: SP.sm, zIndex: 1,
+              background: C.bgWhite, borderRadius: R.md,
+            }}>
+              <IconButton title="Развернуть в центре" onClick={() => onOpenFile(homePath)} size="sm">
+                <Maximize2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+              </IconButton>
+            </div>
+          )}
           <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
             {!homeDoc && <div style={emptyStyle}>Загружаем…</div>}
             {homeDoc && (
@@ -1732,7 +1813,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                 content={homeDoc.content}
                 // Переходы по ссылкам ведут из README в остальную документацию, поэтому
                 // клик закрывает домашний режим и открывает документ обычным путём
-                onDocLink={href => { setHome(false); handleHomeLink(href); }}
+                onDocLink={href => { setView('list'); handleHomeLink(href); }}
                 resolveImageSrc={src => {
                   const target = resolveDocImage(homePath, src);
                   return target ? api.files.fileUrl(project.id, target) : undefined;
@@ -1767,37 +1848,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
             }
           >
-            {/* Закреплённый блок папок над списком убран: теперь список папок живёт
-                только поповером по кнопке. Постоянный блок съедал высоту документов,
-                а своя прокрутка и хендл высоты делали панель из двух списков.
-                Вернуть можно вместе с pinFolders (см. закомментированное выше):
-
-            {foldersPinned && hasFolderNav && (
-              <>
-                <div style={{
-                  flexShrink: 0, height: foldersH, overflowY: 'auto',
-                  padding: `${SP.xs}px ${SP.xs}px`,
-                }}>
-                  {folderCounts.map(([folder, count]) => folderRow(folder, count, folder === activeFolder))}
-                </div>
-                <div
-                  onPointerDown={e => startResize(e, {
-                    from: foldersH, set: setFoldersH, key: FOLDERS_H_KEY,
-                    min: FOLDERS_H_MIN, max: FOLDERS_H_MAX,
-                  })}
-                  title="Потяните, чтобы изменить высоту списка папок"
-                  style={{
-                    flexShrink: 0, height: 7, cursor: 'row-resize', background: C.bgMain,
-                    borderTop: `1px solid ${C.border}`, borderBottom: `1px solid ${C.border}`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  }}
-                >
-                  <div style={{ width: 28, height: 2, borderRadius: R.max, background: C.border }} />
-                </div>
-              </>
-            )}
-            */}
-
             {/* Итог переименования: сколько ссылок починено и сколько осталось битыми.
                 Строкой над списком, а не тостом, — цифру про битые ссылки надо успеть
                 прочитать, и закрывает её сам пользователь */}
@@ -1839,7 +1889,50 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     }
                   />
                 )}
-                {blocks.map(({ key, folder, docs }) => {
+                {/* Вид «Разделы»: плоский список страниц разделов. Строка та же, что
+                    у документа (клик, двойной клик, булавка, действия правым кликом), —
+                    раздел здесь и есть документ, просто с папкой за спиной. Своей
+                    перестановки нет: порядок разделов задаётся .order их папок, а тащить
+                    строку тут значило бы менять его вслепую через дерево */}
+                {sectionsView && sections.length === 0 && index?.length !== 0 && (
+                  <EmptyState
+                    compact
+                    icon={<FolderTree size={20} strokeWidth={ICON_STROKE} />}
+                    title="Разделов пока нет"
+                    subtitle="Раздел — это страница с папкой: она открывает подкорпус документов"
+                    action={
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        disabled={!createFolder}
+                        onClick={() => setCreateKind('section')}
+                      >
+                        Создать раздел
+                      </Button>
+                    }
+                  />
+                )}
+                {sectionsView && sections.map(({ doc: d, folder, depth, count }) => (
+                  <DocRow
+                    key={d.path}
+                    doc={d}
+                    selected={isShown(d.path)}
+                    home={d.path === homePath}
+                    pinned={pinned.has(d.path)}
+                    // Вложенность — отступом: подраздел читается как подраздел, а строк
+                    // тут по числу разделов, не по числу документов
+                    indent={depth * SP.md}
+                    count={count}
+                    // Открыть раздел — значит войти в него: создавать дальше надо внутри,
+                    // как при клике по подписи раздела в дереве
+                    onOpen={() => { handleRowClick(d.path); setActiveFolder(folder); }}
+                    onJump={() => jumpToFolder(folder)}
+                    onExpand={() => handleRowDoubleClick(d.path)}
+                    onTogglePin={() => togglePin(d.path)}
+                    onContextMenu={e => openRowMenu(d, e)}
+                  />
+                ))}
+                {!sectionsView && blocks.map(({ key, folder, docs }) => {
                   // Блок под глубоко свёрнутым предком не рисуем вовсе — так поддерево
                   // исчезает целиком, а не просто пустеет
                   if (folder && isUnderDeepCollapsed(folder)) return null;
@@ -1852,7 +1945,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                   <div
                     key={key}
                     // Мигает вся секция целиком — подпись и её документы, чтобы после
-                    // прыжка было видно границы группы, а не только её заголовок
+                    // прыжка было видно границы группы, а не только её заголовок.
+                    // Своего акцента у подписи при этом НЕТ: он держался ровной заливкой
+                    // всё время подсветки и гас позже, чем отмигивали строки, — на глаз
+                    // это читалось как рассинхрон. Одна анимация на секцию его снимает
                     className={flashFolder === folder ? LIST_FLASH_CLASS : undefined}
                     ref={el => {
                       if (el) folderRefs.current.set(folder, el);
@@ -1867,7 +1963,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         folder={folder}
                         title={title}
                         subtitle={subtitle}
-                        flash={flashFolder === folder}
                         collapsed={isCollapsed}
                         hidden={docs.length}
                         onToggle={() => toggleFolder(folder)}
@@ -1947,7 +2042,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               }}>
                 <FolderSticky
                   folder={PINNED_GROUP}
-                  flash={false}
                   collapsed={collapsed.has(PINNED_GROUP)}
                   hidden={pinnedDocs.length}
                   onToggle={() => toggleFolder(PINNED_GROUP)}

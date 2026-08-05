@@ -13,7 +13,7 @@ import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSens
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
-import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, FolderCog, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
@@ -126,6 +126,34 @@ function folderOf(path: string): string {
   return i < 0 ? '' : path.slice(0, i);
 }
 
+// Имя строки .order: файл без папки и без расширения («docs/vision.md» → «vision»)
+function orderName(path: string): string {
+  return path.slice(path.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '');
+}
+
+// Порядком в .order управляют только markdown-документы: строка «cover» без «cover.md»
+// в wiki просто мусор, поэтому pdf и картинки идут в хвост по правилу индекса
+function isMarkdown(path: string): boolean {
+  return /\.md$/i.test(path);
+}
+
+// Переставить в плоском индексе ТЕ ЖЕ документы по занятым ими позициям. Строки одной
+// группы не идут в индексе подряд (между ними стоят документы вложенных разделов),
+// поэтому arrayMove по всему списку сдвинул бы чужие. Тот же приём, что на бэкенде
+// со строками .order, — иначе оптимистичный порядок разошёлся бы с сохранённым
+function reorderInPlace(list: DocEntry[], group: string[], next: string[]): DocEntry[] {
+  const inGroup = new Set(group);
+  const byPath = new Map(list.map(d => [d.path, d]));
+  const result = [...list];
+  let k = 0;
+  for (let i = 0; i < result.length; i++) {
+    if (!inGroup.has(result[i].path)) continue;
+    const doc = byPath.get(next[k++]);
+    if (doc) result[i] = doc;
+  }
+  return result;
+}
+
 
 // Папка как подпись группы: слеш читается как «путь к файлу», а здесь это ветка
 // оглавления — точка-разделитель ведёт взгляд по уровням и не спорит с путями документов
@@ -179,7 +207,7 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false }: {
+function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, onTogglePin }: {
   folder: string;
   // Подпись группы: у раздела это заголовок его страницы («Расширения»), у обычной папки —
   // её путь (значение по умолчанию). Считает панель: она знает, есть ли у папки пара
@@ -199,6 +227,12 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
   // только у раздела с вложенными подпапками — иначе прятать сверх своих документов нечего
   onCollapseSubtree?: () => void;
   subtreeCollapsed?: boolean;
+  // Путь файла-страницы раздела: рисуем md-бейдж после левой линии, чтобы раздел в списке
+  // читался как документ — как у остальных строк
+  pagePath?: string;
+  // Закрепление страницы раздела — как у документа: бейдж под курсором становится булавкой
+  pinned?: boolean;
+  onTogglePin?: () => void;
 }) {
   const title = titleProp ?? groupLabel(folder);
   // Наведение на любую часть зоны сворачивания (линия, левый или двойной шеврон)
@@ -220,12 +254,43 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
     onMouseEnter: () => setFoldHover(true),
     onMouseLeave: () => setFoldHover(false),
   };
+  // Наведение на весь заголовок (для показа булавки) и на саму булавку — как у документа
+  const [rowHover, setRowHover] = useState(false);
+  const [pinHover, setPinHover] = useState(false);
+  // Бейдж/булавка после левой линии: span, а не button — divider с onClick сам кнопка,
+  // а button в button html не разрешает; клик не всплывает к открытию страницы
+  // Отступ до заголовка — как у документов (SP.xs), а не общий gap divider'а (8): гасим
+  // разницу отрицательным полем, иначе бейдж папки стоит дальше от подписи, чем у файлов
+  const badgeGapFix = { marginRight: SP.xs - 8 };
+  const pinBadge = pagePath && (
+    onTogglePin ? (
+      <span
+        onClick={e => { e.stopPropagation(); onTogglePin(); }}
+        onMouseEnter={() => setPinHover(true)}
+        onMouseLeave={() => setPinHover(false)}
+        title={pinned ? 'Открепить — вернуть в свою папку' : 'Закрепить внизу списка'}
+        style={{
+          width: 16, height: 16, flexShrink: 0, cursor: 'pointer', ...badgeGapFix,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}
+      >
+        {rowHover || pinned
+          ? (pinned && pinHover
+            ? <PinOff size={12} strokeWidth={2.2} style={{ color: C.textSecondary }} />
+            : <Pin size={12} strokeWidth={2.2} style={{ color: pinned ? C.accent : C.textMuted }} />)
+          : <DocBadge path={pagePath} />}
+      </span>
+    ) : <span style={{ flexShrink: 0, display: 'flex', ...badgeGapFix }}><DocBadge path={pagePath} /></span>
+  );
   if (onOpenPage) return (
-    <div style={{
-      position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
-      background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
-      display: 'flex', alignItems: 'center',
-    }}>
+    <div
+      onMouseEnter={() => setRowHover(true)}
+      onMouseLeave={() => setRowHover(false)}
+      style={{
+        position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
+        background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
+        display: 'flex', alignItems: 'center',
+      }}>
       <button
         onClick={onToggle}
         {...foldHoverProps}
@@ -244,6 +309,8 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
           align="left" dense flash={flash}
           onClick={onOpenPage}
           highlightOnHover
+          // md-бейдж/булавка раздела — после левой линии, в одну колонку с бейджами документов
+          beforeTitle={pinBadge}
           // Правая линия делает то же, что двойной шеврон: у раздела с поддеревом —
           // глубокое сворачивание, у листового — обычное (прятать нечего сверх документов)
           onLineClick={onCollapseSubtree ?? onToggle}
@@ -332,13 +399,12 @@ function FolderSticky({ folder, title: titleProp, subtitle, flash, collapsed, hi
 // Строка папки в списке переходов (поповер и закреплённый блок — один и тот же список).
 // Отдельным компонентом ради собственного состояния наведения: в списке из десятка папок
 // без подсветки не видно, куда попадёт клик.
-function FolderRow({ label, iconPath, count, current, onJump }: {
+function FolderRow({ label, parent, count, current, onJump }: {
   // Готовая подпись: у раздела — заголовок его файла, у чистой папки — путь. Считает
   // владелец списка (ему доступны sectionPages), чтобы правило совпадало с деревом
   label: string;
-  // Путь файла-страницы раздела: под него рисуем бейдж расширения (md), как у документов.
-  // Нет — обычная папка, ей иконка папки
-  iconPath?: string;
+  // Родитель приглушённо после названия, через ту же центральную точку, что в дереве
+  parent?: string;
   count: number;
   current: boolean;
   onJump: () => void;
@@ -349,7 +415,7 @@ function FolderRow({ label, iconPath, count, current, onJump }: {
       onClick={onJump}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
-      title={label}
+      title={parent ? `${label} · ${parent}` : label}
       style={{
         ...rowStyle, minHeight: ROW_H,
         // Текущая папка — тем же выделением, что выбранный документ (список постоянно
@@ -360,11 +426,18 @@ function FolderRow({ label, iconPath, count, current, onJump }: {
         fontWeight: current ? 600 : 400,
       }}
     >
-      {iconPath
-        ? <DocBadge path={iconPath} />
-        : <Folder size={13} strokeWidth={2.2} style={{ flexShrink: 0, color: C.textMuted }} />}
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-      <span style={{ marginLeft: 'auto', color: C.textMuted, fontSize: FS.xs }}>{count}</span>
+      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>{label}</span>
+      {parent && (
+        <>
+          {/* Центральная точка перед родителем — как в подписи группы дерева */}
+          <span aria-hidden style={{ fontSize: 10, color: C.textMuted, flexShrink: 0, margin: '0 -2px' }}>·</span>
+          <span style={{
+            fontSize: FS.xs, fontWeight: 400, color: C.textMuted,
+            minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>{parent}</span>
+        </>
+      )}
+      <span style={{ marginLeft: 'auto', paddingLeft: SP.xs, color: C.textMuted, fontSize: FS.xs }}>{count}</span>
     </button>
   );
 }
@@ -438,12 +511,13 @@ function DocRow({ doc, selected, home, pinned, onOpen, onExpand, onTogglePin }: 
   );
 }
 
-// Закреплённая строка: та же строка документа, но перетаскиваемая — порядок в блоке
-// задаёт пользователь. Жест и пороги общие с доской задач и деревом чатов (lib/dnd),
-// поэтому клик по строке от перетаскивания отличается сдвигом, а не отдельной ручкой
-function SortablePinnedRow({ doc, children }: { doc: DocEntry; children: ReactNode }) {
+// Перетаскиваемая строка документа: у закреплённых так задаётся их собственный порядок
+// (живёт в localStorage), в группе — порядок страниц в .order репозитория. Жест и пороги
+// общие с доской задач и деревом чатов (lib/dnd), поэтому клик по строке от
+// перетаскивания отличается сдвигом, а не отдельной ручкой
+function SortableRow({ doc, disabled, children }: { doc: DocEntry; disabled?: boolean; children: ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: doc.path });
+    useSortable({ id: doc.path, disabled });
   return (
     <div
       ref={setNodeRef}
@@ -552,7 +626,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   const pinned = useMemo(() => new Set(pinnedOrder), [pinnedOrder]);
   // Пороги старта перетаскивания — общие для всех списков продукта (см. lib/dnd):
   // мышь по сдвигу, палец по долгому нажатию, иначе жест забрал бы прокрутку списка
-  const pinSensors = useSensors(
+  const dragSensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: DRAG_MOUSE_ACTIVATION }),
     useSensor(TouchSensor, { activationConstraint: DRAG_TOUCH_ACTIVATION }),
   );
@@ -626,6 +700,27 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     const b = pinnedOrder.indexOf(to);
     if (a < 0 || b < 0 || a === b) return;
     savePinned(arrayMove(pinnedOrder, a, b));
+  };
+
+  // Перестановка строк внутри группы — правка .order в репозитории. В отличие от
+  // закреплённых (те живут в localStorage), это изменение рабочего дерева, и оно
+  // попадёт в чей-то коммит — поэтому только по явному жесту, никогда фоном.
+  //
+  // Порядок применяется оптимистично: ответ сервера всё равно придёт свежим индексом,
+  // но без локальной перестановки строка на кадр отскакивала бы назад
+  const moveInFolder = (folder: string, docs: DocEntry[], from: string, to: string) => {
+    const a = docs.findIndex(d => d.path === from);
+    const b = docs.findIndex(d => d.path === to);
+    if (a < 0 || b < 0 || a === b) return;
+    const next = arrayMove(docs, a, b);
+    setIndex(prev => prev
+      ? reorderInPlace(prev, docs.map(d => d.path), next.map(d => d.path))
+      : prev);
+    // Не-markdown в .order не пишется: его место задаёт индекс, а не файл
+    api.docs.setOrder(project.id, folder, next.filter(d => isMarkdown(d.path)).map(d => orderName(d.path)))
+      .then(setIndex)
+      // Порядок мог разойтись с диском (папку правили в git) — возвращаем то, что на нём
+      .catch(() => { setError('Не удалось сохранить порядок страниц'); loadIndex(); });
   };
 
   const flashNow = (folder: string) => {
@@ -1083,15 +1178,15 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Строка папки — одна на поповер и на закреплённый блок: это один и тот же список,
   // и расходиться в поведении они не должны
   const folderRow = (folder: string, count: number, current: boolean) => {
-    // Подпись — заголовок файла раздела (если есть пара), иначе путь папки; под страницу
-    // раздела рисуем md-бейдж, как у документов
-    const page = folder ? sectionPages.get(folder) : undefined;
-    const label = folder ? groupTitle(folder).title : 'корень проекта';
+    // Подпись — заголовок файла раздела (если есть пара), иначе путь папки; родитель
+    // приглушённо после названия, через точку — как в подписи группы дерева
+    const gt = folder ? groupTitle(folder) : null;
+    const label = gt ? gt.title : 'корень проекта';
     return (
       <FolderRow
         key={folder || '__root'}
         label={label}
-        iconPath={page?.path}
+        parent={gt?.subtitle}
         count={count}
         current={current}
         onJump={() => jumpToFolder(folder)}
@@ -1482,6 +1577,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         // У папки с парной страницей подпись открывает её — как узел
                         // дерева в wiki; сворачивание переезжает на шеврон
                         onOpenPage={page ? () => handleRowClick(page.path) : undefined}
+                        pagePath={page?.path}
+                        pinned={!!page && pinned.has(page.path)}
+                        onTogglePin={page ? () => togglePin(page.path) : undefined}
                         subtreeCollapsed={deepCollapsed.has(folder)}
                         // Двойной шеврон — только у раздела с вложенными подпапками
                         onCollapseSubtree={foldersWithSubtree.has(folder) ? () => collapseSubtree(folder) : undefined}
@@ -1499,18 +1597,34 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                       visibility: isCollapsed ? 'hidden' : 'visible',
                     }}>
                     <div style={{ overflow: 'hidden', minHeight: 0 }}>
-                    {docs.map(d => (
-                      <DocRow
-                        key={d.path}
-                        doc={d}
-                        selected={isShown(d.path)}
-                        home={d.path === homePath}
-                        pinned={pinned.has(d.path)}
-                        onOpen={() => handleRowClick(d.path)}
-                        onExpand={() => handleRowDoubleClick(d.path)}
-                        onTogglePin={() => togglePin(d.path)}
-                      />
-                    ))}
+                    {/* Свой DndContext на каждую группу: перетаскивание между папками —
+                        это перемещение файла на диске со всеми его каскадами, а не
+                        перестановка строки. Общий контекст такой жест бы разрешил */}
+                    <DndContext
+                      sensors={dragSensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={e => {
+                        if (e.over) moveInFolder(folder, docs, String(e.active.id), String(e.over.id));
+                      }}
+                    >
+                      <SortableContext items={docs.map(d => d.path)} strategy={verticalListSortingStrategy}>
+                        {docs.map(d => (
+                          // В свёрнутой группе тащить нечего — её строки не видны; у
+                          // не-markdown порядок задаёт индекс, и .order его не описывает
+                          <SortableRow key={d.path} doc={d} disabled={isCollapsed || !isMarkdown(d.path)}>
+                            <DocRow
+                              doc={d}
+                              selected={isShown(d.path)}
+                              home={d.path === homePath}
+                              pinned={pinned.has(d.path)}
+                              onOpen={() => handleRowClick(d.path)}
+                              onExpand={() => handleRowDoubleClick(d.path)}
+                              onTogglePin={() => togglePin(d.path)}
+                            />
+                          </SortableRow>
+                        ))}
+                      </SortableContext>
+                    </DndContext>
                     </div>
                     </div>
                   </div>
@@ -1544,7 +1658,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                 }}>
                   <div style={{ overflow: 'hidden', minHeight: 0 }}>
                     <DndContext
-                      sensors={pinSensors}
+                      sensors={dragSensors}
                       collisionDetection={closestCenter}
                       onDragEnd={e => {
                         if (e.over) movePinned(String(e.active.id), String(e.over.id));
@@ -1552,7 +1666,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     >
                       <SortableContext items={pinnedDocs.map(d => d.path)} strategy={verticalListSortingStrategy}>
                         {pinnedDocs.map(d => (
-                          <SortablePinnedRow key={d.path} doc={d}>
+                          <SortableRow key={d.path} doc={d}>
                             <DocRow
                               doc={d}
                               selected={isShown(d.path)}
@@ -1562,7 +1676,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               onExpand={() => handleRowDoubleClick(d.path)}
                               onTogglePin={() => togglePin(d.path)}
                             />
-                          </SortablePinnedRow>
+                          </SortableRow>
                         ))}
                       </SortableContext>
                     </DndContext>

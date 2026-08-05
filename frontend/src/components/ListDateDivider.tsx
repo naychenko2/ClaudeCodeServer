@@ -31,7 +31,7 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  */
 export function ListDateDivider({
   title, subtitle, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
-  highlightOnHover = false, onLineClick, lineTitleAttr, onLineHover,
+  highlightOnHover = false, onLineClick, lineTitleAttr, onLineHover, beforeTitle,
 }: {
   title: string;
   // Приписка сразу после подписи, приглушённо: у групп документации это родительский
@@ -57,6 +57,8 @@ export function ListDateDivider({
   // Наведение на правую линию: сообщаем наружу, чтобы подсветить тот шеврон, чьё действие
   // линия дублирует (одиночный у листового раздела, двойной у раздела с поддеревом)
   onLineHover?: (hovering: boolean) => void;
+  // Слот между левой линией и заголовком — под бейдж/булавку строки-раздела
+  beforeTitle?: ReactNode;
 }) {
   const [hover, setHover] = useState(false);
   const lineColor = flash ? C.accent : C.divider;
@@ -66,6 +68,7 @@ export function ListDateDivider({
     <>
       {leading}
       <div style={align === 'left' ? stub : line} />
+      {beforeTitle}
       <span style={{
         fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
         color: flash ? C.accent : C.textSecondary,

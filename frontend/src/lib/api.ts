@@ -1070,6 +1070,15 @@ export const api = {
     // одинакова у всех, кто открыл репозиторий, а setScope правит уже файл
     saveScopeFile: (projectId: string) =>
       request<DocsScopeInfo>(`/projects/${projectId}/docs/scope-file`, { method: 'POST' }),
+    // Порядок страниц папки — правка .order в рабочем дереве, поэтому только по жесту
+    // пользователя. items — имена БЕЗ расширения в новом порядке (как строки в файле);
+    // это подмножество папки, остальные её строки сервер оставляет на своих местах.
+    // Ответ — свежий индекс: порядок приезжает вместе с подтверждением
+    setOrder: (projectId: string, folder: string, items: string[]) =>
+      request<DocEntry[]>(`/projects/${projectId}/docs/order`, {
+        method: 'PUT',
+        body: JSON.stringify({ folder, items }),
+      }),
   },
 
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку

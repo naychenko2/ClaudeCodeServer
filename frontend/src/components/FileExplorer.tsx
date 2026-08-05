@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, SlidersHorizontal } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -196,8 +196,10 @@ export function getExtMeta(name: string) {
   return m;
 }
 
+// Папка — нейтральной иконкой, как в «Документации»: акцент в дереве оставлен
+// смысловым отметкам (активный файл, заметки, база знаний), а не каждой папке
 function FolderIcon() {
-  return <Folder size={14} strokeWidth={ICON_STROKE} color={C.accent} />;
+  return <Folder size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} />;
 }
 
 // Иконка папки «Заметки» (vault проекта) — единая IconNotes в accent-цвете
@@ -522,7 +524,9 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         // Высота ЖЁСТКАЯ, а не минимальная: кнопки наведения (24) выше строки (22),
         // и на minHeight строка раздвигалась под курсором — список дёргался целиком.
         // Теперь кнопка выступает за кромку на пиксель, а строка стоит на месте.
-        ...(touch ? { minHeight: ROW_H_TOUCH } : { height: ROW_H }),
+        // Исключение — результаты поиска: там под именем идёт вторая строка с путём,
+        // и в 22px они наезжали друг на друга.
+        ...(touch || p.showPath ? { minHeight: p.showPath && !touch ? 34 : ROW_H_TOUCH } : { height: ROW_H }),
         borderRadius: R.md, cursor: p.dragging ? 'grabbing' : 'pointer',
         width: '100%', boxSizing: 'border-box',
         opacity: p.dragging ? 0.4 : p.pressing ? 0.6 : 1,
@@ -546,7 +550,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
         </span>
       )}
       {entry.isDirectory ? (
-        <span style={{ flexShrink: 0, display: 'flex', color: C.accent }}>
+        <span style={{ flexShrink: 0, display: 'flex' }}>
           {notesRoot ? <NotesFolderIcon /> : <FolderIcon />}
         </span>
       ) : (
@@ -888,13 +892,19 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     await loadDir(path);
   }, [loadDir]);
 
+  // Читаем раскрытые папки через ref: клик по строке приходит из стабильного
+  // колбэка (строка мемоизирована), и обычное замыкание отдало бы ему состояние
+  // первого рендера — папка тогда только раскрывается и никогда не сворачивается
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+
   const handleToggleDir = async (entry: FileEntry) => {
     const { path } = entry;
     setCreateInDir(path);
-    if (expanded.has(path)) {
+    if (expandedRef.current.has(path)) {
       setExpanded(prev => { const n = new Set(prev); n.delete(path); return n; });
     } else {
-      if (!dirCache.has(path)) await loadDir(path);
+      if (!dirCacheRef.current.has(path)) await loadDir(path);
       setExpanded(prev => new Set(prev).add(path));
     }
   };
@@ -902,7 +912,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const enterMobileDir = async (path: string) => {
     setMobileDir(path);
     setCreateInDir(path);
-    if (!dirCache.has(path)) await loadDir(path);
+    if (!dirCacheRef.current.has(path)) await loadDir(path);
   };
 
   const handleSearch = async (q: string) => {
@@ -1273,10 +1283,43 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     } else {
       onOpenFile(entry.path);
     }
-    // enterMobileDir/handleToggleDir пересоздаются каждый рендер (замыкают dirCache),
-    // но их поведение зависит только от актуального состояния на момент клика
+    // handleToggleDir/enterMobileDir пересоздаются каждый рендер, но берут состояние
+    // из ref-ов (expandedRef, dirCacheRef) — поэтому замороженный колбэк видит
+    // актуальные данные, а строка остаётся мемоизированной
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMobile, onOpenFile]);
+
+  // Глубина пути: «src» → 1, «src/lib» → 2. Уровень сворачивания считаем по ней
+  const depthOf = (p: string) => normPath(p).split('/').length;
+
+  // Свернуть самый глубокий раскрытый уровень (каждое нажатие — на слой внутрь).
+  // Приём и жест те же, что в панели «Изменения»
+  const collapseOne = () => {
+    let maxD = 0;
+    for (const p of expanded) maxD = Math.max(maxD, depthOf(p));
+    if (!maxD) return;
+    setExpanded(prev => {
+      const n = new Set(prev);
+      for (const p of prev) if (depthOf(p) === maxD) n.delete(p);
+      return n;
+    });
+  };
+
+  // Развернуть следующий уровень: все ВИДИМЫЕ сейчас нераскрытые папки минимальной
+  // глубины. Содержимое подгружаем заранее — иначе строки появятся пустыми
+  const expandOne = async () => {
+    const candidates: string[] = [];
+    for (const [dir, entries] of dirCache) {
+      // Содержимое папки видно, только если она сама раскрыта (или это корень)
+      if (dir !== '' && !expanded.has(dir)) continue;
+      for (const e of entries) if (e.isDirectory && !expanded.has(e.path)) candidates.push(e.path);
+    }
+    if (!candidates.length) return;
+    const minD = Math.min(...candidates.map(depthOf));
+    const toOpen = candidates.filter(p => depthOf(p) === minD);
+    await Promise.all(toOpen.filter(p => !dirCache.has(p)).map(loadDir));
+    setExpanded(prev => { const n = new Set(prev); for (const p of toOpen) n.add(p); return n; });
+  };
 
   const handleRenameBlur = useCallback(() => {
     if (renameCancelledRef.current) { renameCancelledRef.current = false; return; }
@@ -1355,6 +1398,18 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       >
         <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
       </IconButton>
+      {/* Свернуть/развернуть на уровень — только в дереве (в мобильной навигации
+          по папкам уровней нет) */}
+      {!isMobile && (
+        <>
+          <IconButton size="xs" title="Свернуть на уровень" disabled={expanded.size === 0} onClick={collapseOne}>
+            <FoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+          <IconButton size="xs" title="Развернуть на уровень" onClick={() => void expandOne()}>
+            <UnfoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        </>
+      )}
       {/* Вид дерева: сортировка + фильтр «Только изменённые». Точка-индикатор
           показывает активный фильтр, когда меню закрыто */}
       <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
@@ -1365,7 +1420,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           title={sortTitle}
           onClick={e => setSortMenu(sortMenu ? null : e.currentTarget.getBoundingClientRect())}
         >
-          <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          <ArrowDownWideNarrow size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
         {onlyChanged && isRepo && !sortMenu && (
           <span style={{ position: 'absolute', top: 1, right: 1, width: 5, height: 5, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
@@ -1437,10 +1492,28 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         onClick={() => { setCreateMenu(null); uploadInputRef.current?.click(); }}
       />
       {/* Куда попадёт созданное — подписью в подвале меню, а не отдельной строкой
-          под тулбаром: вопрос возникает ровно в момент создания */}
-      <div style={{ borderTop: `1px solid ${C.border}`, margin: '4px 0 0', padding: '6px 10px 2px', fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', alignItems: 'center', gap: 4 }}>
-        <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        <span title={targetDir}>{targetDir ? notesDisplayPath(targetDir) : 'корень проекта'}</span>
+          под тулбаром: вопрос возникает ровно в момент создания. Целевая папка —
+          последняя, которую открыли в дереве, и вернуться в корень иначе было
+          нечем: приходилось искать корневую строку и щёлкать по ней */}
+      <div style={{ borderTop: `1px solid ${C.border}`, margin: '4px 0 0', padding: '6px 10px 2px', display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0, flex: 1, fontSize: 11, color: C.textMuted, fontFamily: FONT.mono }}>
+          <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          <span title={targetDir} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {targetDir ? notesDisplayPath(targetDir) : 'корень проекта'}
+          </span>
+        </span>
+        {targetDir && (
+          <button
+            onClick={() => { setCreateInDir(''); if (isMobile) setMobileDir(''); }}
+            title="Создавать в корне проекта"
+            style={{
+              flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer',
+              padding: '2px 4px', fontSize: 11, color: C.accent, fontFamily: FONT.sans,
+            }}
+          >
+            в корень
+          </button>
+        )}
       </div>
     </Menu>
   );

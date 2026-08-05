@@ -36,7 +36,7 @@ import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
-import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, useHasPanelHeader } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
@@ -407,6 +407,7 @@ interface ContextMenuState {
 
 export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat }: Props) {
   const online = useOnline();
+  const hasPanelHeader = useHasPanelHeader();
   useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
@@ -419,14 +420,17 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   dirCacheRef.current = dirCache;
 
   const [sortMode, setSortMode] = useState<FileSortMode>(loadSortMode);
-  const [showSortMenu, setShowSortMenu] = useState(false);
-  // Активированный поиск занимает весь сайдбар (сортировка схлопывается);
-  // остаётся развёрнутым, пока в поле есть текст (searchExpanded считается ниже по search)
-  const [searchFocused, setSearchFocused] = useState(false);
+  // Меню шапки открываются по якорю кнопки: слот шапки лежит в карточке с transform,
+  // и absolute-позиционирование уехало бы вместе с ней
+  const [sortMenu, setSortMenu] = useState<DOMRect | null>(null);
+  const [createMenu, setCreateMenu] = useState<DOMRect | null>(null);
+  // Поиск разворачивается кнопкой-лупой: в узкой колонке поле не должно стоять
+  // постоянной полосой ради действия, которое нужно изредка
+  const [searchOpen, setSearchOpen] = useState(false);
   const changeSortMode = (m: FileSortMode) => {
     setSortMode(m);
     localStorage.setItem(SORT_MODE_KEY, m);
-    setShowSortMenu(false);
+    setSortMenu(null);
   };
 
   // === Git: только фильтр «Только изменённые» в дереве. Сам Source Control —
@@ -474,7 +478,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   }, [changedSets]);
 
   const [search, setSearch] = useState(() => initial?.search ?? '');
-  const searchExpanded = searchFocused || search.trim().length > 0;
   const [searchResults, setSearchResults] = useState<FileEntry[] | null>(() => initial?.searchResults ?? null);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [hoveredPath, setHoveredPath] = useState<string | null>(null);
@@ -1305,165 +1308,164 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     </button>
   );
 
+  // === Контролы панели — в шапке карточки (PanelHeaderSlot) ===
+  // Раньше они занимали четыре полосы над деревом: поле поиска, кнопка вида, ряд
+  // «Новый файл / папка / загрузить» и строка-хинт целевой папки. В колонке 280px
+  // это съедало треть высоты ради контролов, которые нужны изредка.
+  const targetDir = isMobile ? mobileDir : createInDir;
+  const inNotes = inNotesVault(targetDir);
+  const sortTitle = (sortMode === 'name' ? 'Сортировка: по имени'
+    : sortMode === 'date-desc' ? 'Сортировка: сначала новые'
+    : 'Сортировка: сначала старые')
+    + (onlyChanged && isRepo ? ' · Только изменённые' : '');
+
+  const controls = (
+    <>
+      <IconButton
+        size="xs"
+        title={searchOpen ? 'Закрыть поиск' : 'Поиск по файлам'}
+        active={searchOpen || search.length > 0}
+        onClick={() => { if (searchOpen) { setSearchOpen(false); handleSearch(''); } else setSearchOpen(true); }}
+      >
+        <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+      </IconButton>
+      {/* Вид дерева: сортировка + фильтр «Только изменённые». Точка-индикатор
+          показывает активный фильтр, когда меню закрыто */}
+      <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
+        <IconButton
+          size="xs"
+          active={!!sortMenu}
+          color={onlyChanged && isRepo ? C.accent : undefined}
+          title={sortTitle}
+          onClick={e => setSortMenu(sortMenu ? null : e.currentTarget.getBoundingClientRect())}
+        >
+          <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
+        {onlyChanged && isRepo && !sortMenu && (
+          <span style={{ position: 'absolute', top: 1, right: 1, width: 5, height: 5, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
+        )}
+      </span>
+      {/* Главное действие панели — последним в ряду (конвенция шапки) */}
+      {online && (
+        <Button
+          size="xs"
+          variant="primary"
+          leftIcon={<Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          onClick={e => setCreateMenu(createMenu ? null : e.currentTarget.getBoundingClientRect())}
+        >
+          Новый
+        </Button>
+      )}
+    </>
+  );
+
+  // Меню «вида» и «создать» — порталом по якорю кнопки
+  const sortMenuEl = sortMenu && (
+    <Menu anchor={sortMenu} minWidth={210} maxHeight={220} onClose={() => setSortMenu(null)}>
+      <MenuItem icon={sortMode === 'name' ? <Check size={15} strokeWidth={2} /> : <></>} label="По имени" onClick={() => changeSortMode('name')} />
+      <MenuItem icon={sortMode === 'date-desc' ? <Check size={15} strokeWidth={2} /> : <></>} label="Сначала новые" onClick={() => changeSortMode('date-desc')} />
+      <MenuItem icon={sortMode === 'date-asc' ? <Check size={15} strokeWidth={2} /> : <></>} label="Сначала старые" onClick={() => changeSortMode('date-asc')} />
+      {/* Подключение git живёт в панели «Изменения» — там, где им и пользуются;
+          здесь остаётся только фильтр по дереву */}
+      {isRepo && (
+        <>
+          <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
+          <MenuItem
+            icon={onlyChanged ? <Check size={15} strokeWidth={2} /> : <GitBranch size={15} strokeWidth={ICON_STROKE} />}
+            label="Только изменённые"
+            onClick={() => { setOnlyChanged(v => !v); setSortMenu(null); }}
+          />
+        </>
+      )}
+    </Menu>
+  );
+
+  const createMenuEl = createMenu && (
+    <Menu anchor={createMenu} minWidth={230} maxHeight={240} onClose={() => setCreateMenu(null)}>
+      {/* В vault заметок первым пунктом идёт заметка: обычный файл там тоже можно
+          создать, но .md через notes-API получает бэклинки и попадает в граф */}
+      {inNotes && (
+        <MenuItem
+          icon={<IconNotes size={15} />}
+          label="Заметка"
+          onClick={() => { setCreateMenu(null); setNoteDialog({ folder: noteFolderOf(targetDir) }); }}
+        />
+      )}
+      <MenuItem
+        icon={<Plus size={15} strokeWidth={ICON_STROKE} />}
+        label="Файл"
+        onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateFile(true); }}
+      />
+      <MenuItem
+        icon={<FolderPlusIcon />}
+        label="Папка"
+        onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateDir(true); }}
+      />
+      <MenuItem
+        icon={uploading ? <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} /> : <Upload size={15} strokeWidth={ICON_STROKE} />}
+        label={uploading ? 'Загружаю…' : 'Загрузить файлы'}
+        disabled={uploading}
+        onClick={() => { setCreateMenu(null); uploadInputRef.current?.click(); }}
+      />
+      {/* Куда попадёт созданное — подписью в подвале меню, а не отдельной строкой
+          под тулбаром: вопрос возникает ровно в момент создания */}
+      <div style={{ borderTop: `1px solid ${C.border}`, margin: '4px 0 0', padding: '6px 10px 2px', fontSize: 11, color: C.textMuted, fontFamily: FONT.mono, display: 'flex', alignItems: 'center', gap: 4 }}>
+        <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        <span title={targetDir}>{targetDir ? notesDisplayPath(targetDir) : 'корень проекта'}</span>
+      </div>
+    </Menu>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      {/* Search */}
-      <div style={{ padding: '4px 12px 10px' }}>
-        {/* position:relative на всей строке: меню сортировки позиционируется от её левого
-            края (200px гарантированно внутри сайдбара), а не от кнопки 28px */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, position: 'relative' }}>
-          <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
+      {/* Шапки может не быть (мобильная вкладка сайдбара) — тогда те же контролы
+          рисуются своей строкой в теле панели */}
+      {hasPanelHeader
+        ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+        : (
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, padding: '6px 12px 8px' }}>
+            {controls}
+          </div>
+        )}
+      {sortMenuEl}
+      {createMenuEl}
+
+      {/* Скрытый input загрузки — его открывает пункт меню «Загрузить файлы» */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        disabled={uploading}
+        style={{ display: 'none' }}
+        onChange={e => handleUploadFiles(e.target.files)}
+      />
+
+      {/* Строка поиска — разворачивается кнопкой-лупой из шапки */}
+      {searchOpen && (
+        <div style={{ padding: '0 12px 8px', flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 32 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
               <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </span>
             <input
               placeholder="Поиск…"
               value={search}
+              autoFocus
               onChange={e => handleSearch(e.target.value)}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              style={{ flex: 1, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
+              onKeyDown={e => { if (e.key === 'Escape') { handleSearch(''); setSearchOpen(false); } }}
+              style={{ flex: 1, minWidth: 0, border: 'none', background: 'none', fontSize: 13, fontFamily: FONT.mono, color: C.textHeading, outline: 'none' }}
             />
             {search && (
-              <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
+              <button onClick={() => handleSearch('')} title="Очистить" style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}>
+                <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+              </button>
             )}
           </div>
-          {/* Активный поиск разворачивается на весь сайдбар: сортировка схлопывается */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
-            maxWidth: searchExpanded ? 0 : 220,
-            opacity: searchExpanded ? 0 : 1,
-            overflow: 'hidden',
-            transition: 'max-width 0.18s ease, opacity 0.15s ease',
-            pointerEvents: searchExpanded ? 'none' : 'auto',
-          }}>
-          {/* Сортировка дерева + фильтр «Только изменённые» */}
-          <span style={{ position: 'relative', flexShrink: 0, display: 'inline-flex' }}>
-            <IconButton
-              size="md"
-              active={showSortMenu}
-              color={onlyChanged && isRepo ? C.accent : undefined}
-              style={onlyChanged && isRepo && !showSortMenu ? { background: C.accentLight } : undefined}
-              onClick={() => setShowSortMenu(v => !v)}
-              title={
-                (sortMode === 'name' ? 'Сортировка: по имени'
-                : sortMode === 'date-desc' ? 'Сортировка: сначала новые'
-                : 'Сортировка: сначала старые')
-                + (onlyChanged && isRepo ? ' · Только изменённые' : '')
-              }
-            >
-              <SlidersHorizontal size={15} strokeWidth={ICON_STROKE} />
-            </IconButton>
-            {/* Точка-индикатор активного фильтра */}
-            {onlyChanged && isRepo && (
-              <span style={{ position: 'absolute', top: 3, right: 3, width: 6, height: 6, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
-            )}
-          </span>
-          </div>
-          {showSortMenu && (
-              // align="left": кнопка у левого края сайдбара — правое выравнивание уводило меню за экран
-              <Menu onClose={() => setShowSortMenu(false)} align="left" top={34} minWidth={200}>
-                <MenuItem
-                  icon={sortMode === 'name' ? <Check size={15} strokeWidth={2} /> : <></>}
-                  label="По имени"
-                  onClick={() => changeSortMode('name')}
-                />
-                <MenuItem
-                  icon={sortMode === 'date-desc' ? <Check size={15} strokeWidth={2} /> : <></>}
-                  label="Сначала новые"
-                  onClick={() => changeSortMode('date-desc')}
-                />
-                <MenuItem
-                  icon={sortMode === 'date-asc' ? <Check size={15} strokeWidth={2} /> : <></>}
-                  label="Сначала старые"
-                  onClick={() => changeSortMode('date-asc')}
-                />
-                {/* Подключение git живёт в панели «Изменения» — там, где им и
-                    пользуются; здесь остаётся только фильтр по дереву */}
-                {isRepo && (
-                  <>
-                    <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
-                    <MenuItem
-                      icon={onlyChanged ? <Check size={15} strokeWidth={2} /> : <GitBranch size={15} strokeWidth={ICON_STROKE} />}
-                      label="Только изменённые"
-                      onClick={() => { setOnlyChanged(v => !v); setShowSortMenu(false); }}
-                    />
-                  </>
-                )}
-              </Menu>
-            )}
         </div>
-
-        {online && (
-          <div style={{ marginTop: 8, display: 'flex', gap: 6 }}>
-            {/* Новый файл — в контексте vault заметок превращается в «Новая заметка» */}
-            {inNotesVault(isMobile ? mobileDir : createInDir) ? (
-              <Button
-                variant="dashed"
-                size="md"
-                leftIcon={<IconNotes size={15} />}
-                onClick={() => setNoteDialog({ folder: noteFolderOf(isMobile ? mobileDir : createInDir) })}
-                style={{ flex: 1 }}
-              >
-                Новая заметка
-              </Button>
-            ) : (
-              <Button
-                variant="dashed"
-                size="md"
-                leftIcon={<Plus size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                onClick={() => {
-                  if (isMobile) setCreateInDir(mobileDir);
-                  setShowCreateFile(true);
-                }}
-                style={{ flex: 1 }}
-              >
-                Новый файл
-              </Button>
-            )}
-            {/* Новая папка */}
-            <div
-              onClick={() => {
-                if (isMobile) setCreateInDir(mobileDir);
-                setShowCreateDir(true);
-              }}
-              title="Новая папка"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: C.accent, cursor: 'pointer', flexShrink: 0 }}
-            >
-              <FolderPlusIcon />
-            </div>
-            {/* Загрузить */}
-            <label
-              title="Загрузить файлы"
-              style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 40, height: 40, border: `1.5px dashed ${C.dashed}`, borderRadius: R.lg, color: uploading ? C.textMuted : C.accent, cursor: uploading ? 'default' : 'pointer', opacity: uploading ? 0.6 : 1, flexShrink: 0 }}
-            >
-              <input
-                ref={uploadInputRef}
-                type="file"
-                multiple
-                disabled={uploading}
-                style={{ display: 'none' }}
-                onChange={e => handleUploadFiles(e.target.files)}
-              />
-              {uploading ? (
-                <span style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'spin 0.6s linear infinite', display: 'inline-block' }} />
-              ) : (
-                <Upload size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-              )}
-            </label>
-          </div>
-        )}
-        {uploadError && (
-          <div style={{ marginTop: 6, fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, paddingLeft: 2 }}>{uploadError}</div>
-        )}
-        {/* Хинт целевой папки — только десктоп */}
-        {online && !isMobile && (
-          <div style={{ marginTop: 5, fontSize: 11.5, color: C.textMuted, fontFamily: FONT.mono, paddingLeft: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
-            <Folder size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            {createInDir ? <span title={createInDir}>{notesDisplayPath(createInDir)}</span> : <span style={{ fontStyle: 'italic' }}>корень проекта</span>}
-          </div>
-        )}
-      </div>
+      )}
+      {uploadError && (
+        <div style={{ padding: '0 12px 6px', fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, flexShrink: 0 }}>{uploadError}</div>
+      )}
 
       {/* Хлебные крошки — только мобила, когда поиск неактивен */}
       {isMobile && searchResults === null && (

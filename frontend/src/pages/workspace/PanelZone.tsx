@@ -37,7 +37,7 @@ import {
   isPanelKey, type PanelKey, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
-import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
+import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
@@ -219,13 +219,17 @@ export function PanelZone({
       if (h == null || h <= 0) return null; // панели ещё нет в DOM
       heights.push(h);
     }
-    // Свободный низ колонки: зазор перед новой панелью тоже отсюда
+    // Свободный низ колонки: зазор перед новой панелью тоже отсюда. Здесь порог
+    // низкий (PANEL_MIN_H): панель занимает ПУСТОЕ место, никого не ужимая, и
+    // отказать значило бы отправить её в новый столбец при свободной колонке.
     const free = colH - heights.reduce((a, b) => a + b, 0) - GAP * keys.length;
     if (free >= PANEL_MIN_H) return { keys, own: heights, mine: free };
-    // Пустоты нет — половину отдаёт сосед по месту вставки (новый зазор тоже с него)
+    // Пустоты нет — половину отдаёт сосед по месту вставки (новый зазор тоже с него).
+    // Порог здесь ВЫШЕ (PANEL_SPLIT_MIN_H): режем живую панель, и обеим половинам
+    // должно остаться что показывать, иначе колонка вырождается в стопку шапок.
     const di = Math.min(keys.length - 1, Math.max(0, (at ?? keys.length) - 1));
     const shared = heights[di] - GAP;
-    if (shared < PANEL_MIN_H * 2) return null; // делить нечего
+    if (shared < PANEL_SPLIT_MIN_H * 2) return null; // делить нечего — панель уйдёт столбцом
     const own = [...heights];
     own[di] = shared / 2;
     return { keys, own, mine: shared / 2 };
@@ -245,9 +249,11 @@ export function PanelZone({
     setWeights(next);
   };
 
-  // Вместимость колонки у рельсы для правила размещения (см. addPanel): панель идёт
-  // ВНИЗ, пока туда есть куда встать не двигая соседей — то есть пока insertPlan
-  // что-то возвращает. Не влезла — заводит колонку сбоку. Раньше вместимость была
+  // Вместимость колонки у рельсы для правила размещения (см. placeByRail): панель
+  // идёт ВНИЗ, пока для неё есть высота — то есть пока insertPlan что-то возвращает
+  // (свободный низ либо сосед, которому есть чем поделиться). Не влезла — заводит
+  // колонку у рельсы. Отсюда и отсутствие числового лимита: сколько панелей держит
+  // столбец, решает высота зоны и порог PANEL_SPLIT_MIN_H. Раньше вместимость была
   // зашита числом («по две на колонку»), и третья панель уезжала вбок при пустом
   // экране, а на тесной колонке новая, наоборот, ужимала всех соседей.
   const colCapNow = (): number => {

@@ -360,6 +360,163 @@ public class DocsIndexTests : IDisposable
         _svc.GetIndex(_root).Should().OnlyContain(d => d.SectionFolder == null);
     }
 
+    // ─── Запись порядка (.order) ────────────────────────────────────────────
+
+    // Файл порядка как он лёг на диск — сырым текстом: тесты про концы строк и BOM
+    // смотрят именно байты, а не разобранный список
+    private string ReadOrderFile(params string[] segments) =>
+        File.ReadAllText(Path.Combine([_root, .. segments, ".order"]));
+
+    [Fact]
+    public void ЗаписьПорядка_МеняетФайлИИндекс()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+
+        var result = _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        result.Status.Should().Be(DocsIndexService.OrderWriteStatus.Ok);
+        ReadOrderFile("docs").Should().Be("b\na\n");
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/b.md");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ФайлаНеБыло_СоздаётсяСоВсемСоставомПапки()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("# C", "docs", "c.md");
+
+        // Переставлены две строки, а записаны три: иначе «c» стал бы неперечисленным и
+        // уехал в хвост — жест сломал бы порядок вместо того, чтобы его задать
+        _svc.WriteOrder(_root, "docs", ["b", "a"]).Status.Should().Be(DocsIndexService.OrderWriteStatus.Ok);
+
+        ReadOrderFile("docs").Should().Be("b\na\nc\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ПоявившийсяМимоПанели_ДописанВХвост()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("# Новый", "docs", "new.md");      // приехал git pull'ом, панель его не видела
+        Write("a\nb\n", "docs", ".order");
+
+        _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        ReadOrderFile("docs").Should().Be("b\na\nnew\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_СтрокаБезФайла_ОстаётсяНаСвоёмМесте()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        // Документ мог быть удалён в другой ветке — молча выбрасывать чужую строку нельзя
+        Write("призрак\na\nb\n", "docs", ".order");
+
+        _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        ReadOrderFile("docs").Should().Be("призрак\nb\na\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_РазделМеждуДокументами_НеСдвигается()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Расширения", "docs", "extensions.md");
+        Write("# Плагин", "docs", "extensions", "plugin.md");
+        Write("# Бриф", "docs", "business-brief.md");
+        Write("vision\nextensions\nbusiness-brief\n", "docs", ".order");
+
+        // Панель показывает раздел отдельной группой и в items его не присылает: строки
+        // переставляются по занятым позициям, и «extensions» остаётся между документами
+        _svc.WriteOrder(_root, "docs", ["business-brief", "vision"]);
+
+        ReadOrderFile("docs").Should().Be("business-brief\nextensions\nvision\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_КорневойУровень_ЭтоТожеПапка()
+    {
+        Write("# Проект", "README.md");
+        Write("# Док", "docs", "a.md");
+
+        _svc.WriteOrder(_root, null, ["docs", "README"]).Status.Should().Be(DocsIndexService.OrderWriteStatus.Ok);
+
+        ReadOrderFile().Should().Be("docs\nREADME\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_КонцыСтрокСохраняются_BomНеПоявляется()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("a\r\nb\r\n", "docs", ".order");
+
+        _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        // Первым байтом сразу имя, а не BOM: лишние байты дали бы в git шум на весь файл
+        var bytes = File.ReadAllBytes(Path.Combine(_root, "docs", ".order"));
+        bytes.Take(3).Should().NotEqual([(byte)0xEF, (byte)0xBB, (byte)0xBF]);
+        ReadOrderFile("docs").Should().Be("b\r\na\r\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ПапкаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+        Write("# Чужой", "backend", "NOTES.md");
+
+        _svc.WriteOrder(_root, "backend", ["NOTES"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.FolderNotInScope);
+        File.Exists(Path.Combine(_root, "backend", ".order")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ВыходЗаКорень_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        _svc.WriteOrder(_root, "../secret", ["a"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.FolderNotInScope);
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ИмениНетВПапке_ЭтоОтказ()
+    {
+        Write("# A", "docs", "a.md");
+        Write("a\n", "docs", ".order");
+
+        // .order — не место для произвольных строк от клиента: чужую строку туда
+        // дописывает только сам пользователь в git
+        _svc.WriteOrder(_root, "docs", ["a", "выдумка"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.BadItems);
+        ReadOrderFile("docs").Should().Be("a\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ПовторИмени_ЭтоОтказ()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+
+        _svc.WriteOrder(_root, "docs", ["a", "a"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.BadItems);
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_НеMarkdown_ВСоставУровняНеВходит()
+    {
+        Write("# A", "docs", "a.md");
+        Write("%PDF-1.4", "docs", "cover.pdf");
+
+        // «cover» без «cover.md» в wiki-порядке просто мусор — переставлять его нечем
+        _svc.WriteOrder(_root, "docs", ["cover"], new DocsScope(["docs"], [], ["markdown", "pdf"]))
+            .Status.Should().Be(DocsIndexService.OrderWriteStatus.BadItems);
+    }
+
     // ─── Область из файла .docs ─────────────────────────────────────────────
 
     // Проект с настройкой области в хранилище продукта — она должна уступать файлу

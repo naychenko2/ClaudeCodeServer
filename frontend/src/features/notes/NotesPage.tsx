@@ -513,6 +513,11 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       left={<PanelZone side="left" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
       right={<PanelZone side="right" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
       centerBare
+      // Компенсация перекоса зон — только для приветствия: у него колонка
+      // фиксированной ширины, и без компенсации оно уезжает вслед за центром, стоит
+      // открыть панель с одной стороны. Заметка и граф резиновые (тянутся на всю
+      // колонку) — им компенсировать нечего, ширина не передаётся
+      centerContentWidth={mode === 'notes' && !selectedId ? CHAT_MAX_W : undefined}
       center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C } from '../../lib/design';
+import { C, CONTENT_MAX_W } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
@@ -250,6 +250,11 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       left={<PanelZone side="left" panelStack={personasPanels} allowedKeys={PERSONAS_KEYS} panels={zonePanels} />}
       right={<PanelZone side="right" panelStack={personasPanels} allowedKeys={PERSONAS_KEYS} panels={zonePanels} />}
       centerBare
+      // Компенсация перекоса зон — только для хаба: его сетка ограничена
+      // CONTENT_MAX_W и без компенсации съезжает вслед за центром, стоит открыть
+      // панель с одной стороны. Студия и создание персоны резиновые — им нечего
+      // компенсировать, ширина не передаётся
+      centerContentWidth={hasContent ? undefined : CONTENT_MAX_W}
       center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );

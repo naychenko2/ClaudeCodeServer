@@ -21,6 +21,7 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, EmptyState, IconButton, IconSegmented, Menu, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
+import { useRequestPanelFill } from './panelFill';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
 import { getExtMeta as extMeta } from '../../components/FileExplorer';
@@ -342,6 +343,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   const [previewEnabled, setPreviewEnabled] = useState<boolean>(() => {
     try { return localStorage.getItem(PREVIEW_KEY) === '1'; } catch { return false; }
   });
+  // Всю высоту колонки просим ТОЛЬКО с нижней зоной: с ней панель — дерево плюс
+  // чтение (превью в ладонь бессмысленно), без неё это список, и растягивать его до
+  // нижней кромки не за чем — под ним лучше свободное место для соседней панели
+  useRequestPanelFill(previewEnabled);
   const [treeH, setTreeH] = useState<number>(() => {
     try {
       const n = Number(localStorage.getItem(TREE_H_KEY));

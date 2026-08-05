@@ -34,9 +34,10 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, CENTER_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  isFullHeight, type PanelKey, type Zone,
+  type PanelKey, type Zone,
 } from './panelCatalog';
-import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, type PanelZonesStore } from './panelStackState';
+import { PanelFillContext, usePanelFillRequests } from './panelFill';
+import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, COL_CAP, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
@@ -114,7 +115,10 @@ export function PanelZone({
   const { colRefs, colDragging, handleColDrag } = usePanelColResize(colFlex, next => setColFlex(side, next));
   // Высоты панелей, стоящих по контенту: по их сумме укорачивается сплиттер ширины,
   // иначе его grip висит в пустоте под короткой колонкой.
-  const [panelHeightRef, panelH] = usePanelHeights<PanelKey>();
+  const [panelHeightRef, panelH, panelHeightNow] = usePanelHeights<PanelKey>();
+  // Панели, которые САМИ просят всю высоту колонки (нижняя зона превью у «Документации»).
+  // Требование приходит из панели через контекст — см. panelFill.ts
+  const [fillWanted, fillSinkFor] = usePanelFillRequests<PanelKey>();
 
   // Компактный режим: до ДВУХ панелей стеком; выбор локальный эфемерный —
   // раскладка зоны не трогается. Третья открытая вытесняет самую старую (FIFO).
@@ -154,18 +158,88 @@ export function PanelZone({
   // терпим ТОЛЬКО у ОДИНОЧНОЙ панели в колонке у центра: короткий список чатов не
   // должен растягиваться на весь экран. Как только в колонке у центра 2+ панели —
   // они тянутся до низа и делят высоту по весам (обычный ресайз), иначе колонка
-  // рваная. Во втором и дальних рядах панели тянутся всегда; панели полной высоты
-  // (FULL_HEIGHT_KEYS, напр. Документация) — тянутся всегда, даже одиночкой у
-  // центра. colLen — число панелей в колонке.
+  // рваная. Во втором и дальних рядах панели тянутся всегда; панель, попросившая
+  // высоту сама (fillWanted — напр. «Документация» с включённым превью снизу),
+  // тянется даже одиночкой у центра. colLen — число панелей в колонке.
   // floating: панели всплывают поверх контента, и «высота по содержимому» там
   // означала бы попап, который прыгает в размере от панели к панели. Слой всегда
   // одной высоты — открытие следующей панели не дёргает картинку.
   const panelStretched = (k: PanelKey, vi: number, colLen: number): boolean =>
-    !!floating || isFullHeight(k) || vi !== centerVi || colLen > 1;
+    !!floating || !!fillWanted[k] || vi !== centerVi || colLen > 1;
   // Колонка стоит по контенту целиком — под ней свободный низ (место для новой
   // панели, растяжимая направляющая, укороченный сплиттер ширины).
   const colByContent = (keys: PanelKey[], vi: number): boolean =>
     !keys.some(k => panelStretched(k, vi, keys.length));
+
+  // Панель встаёт в колонку так, чтобы УЖЕ ОТКРЫТЫЕ не меняли размер:
+  //  • есть свободный низ (колонка стоит по контенту) — новая занимает ровно его;
+  //  • низа нет — половину отдаёт ОДИН сосед по месту вставки, прочие не шевелятся.
+  // Без этого все панели колонки становились равновесными (вес 1 у каждой) и делили
+  // высоту поровну: открытие одной панели дёргало всю колонку, хотя человек нажал
+  // одну кнопку.
+  //
+  // Веса считаются ПО ПИКСЕЛЯМ (живой DOM), поэтому дальше всё работает как обычно:
+  // ресайз границы, перестановки, закрытие. null — по месту не вышло (замеров нет
+  // или соседу нечем делиться): такую панель зона уводит в новую колонку, а если
+  // выбора нет (дроп в конкретное место) — колонка делится по весам, как раньше.
+  // Живая высота панели колонки: у растянутой её знает слот (ресайз высот держит
+  // на него ссылку), у стоящей по контенту — замер panelHeights. Именно ЖИВАЯ, а не
+  // из состояния panelH: то обновляется наблюдателем и на момент клика отстаёт от
+  // экрана — раскладка поехала бы по протухшим числам.
+  const panelHeightIn = (k: PanelKey): number | null =>
+    panelRefs.current[k]?.offsetHeight ?? panelHeightNow(k);
+
+  const insertPlan = (ci: number, skip: PanelKey | null, at?: number): { keys: PanelKey[]; own: number[]; mine: number } | null => {
+    const vi = columns.findIndex(c => c.ci === ci);
+    if (vi < 0) return null;
+    // Панель может ехать из этой же колонки — её саму в расчёт не берём
+    const keys = columns[vi].keys.filter(x => x !== skip);
+    if (keys.length === 0) return null;
+    const colH = colRefs.current[ci]?.getBoundingClientRect().height ?? 0;
+    if (colH <= 0) return null;
+    const heights: number[] = [];
+    for (const key of keys) {
+      const h = panelHeightIn(key);
+      if (h == null || h <= 0) return null; // панели ещё нет в DOM
+      heights.push(h);
+    }
+    // Свободный низ колонки: зазор перед новой панелью тоже отсюда
+    const free = colH - heights.reduce((a, b) => a + b, 0) - GAP * keys.length;
+    if (free >= PANEL_MIN_H) return { keys, own: heights, mine: free };
+    // Пустоты нет — половину отдаёт сосед по месту вставки (новый зазор тоже с него)
+    const di = Math.min(keys.length - 1, Math.max(0, (at ?? keys.length) - 1));
+    const shared = heights[di] - GAP;
+    if (shared < PANEL_MIN_H * 2) return null; // делить нечего
+    const own = [...heights];
+    own[di] = shared / 2;
+    return { keys, own, mine: shared / 2 };
+  };
+
+  // Записать план весами. Пиксели переводим в ОБЫЧНЫЙ масштаб (среднее 1 на панель):
+  // словарь весов общий на обе зоны, и сырые пиксели придавили бы панели соседней
+  // зоны до нуля — там веса единичные.
+  const keepHeightsOnInsert = (k: PanelKey, ci: number, at?: number) => {
+    const plan = insertPlan(ci, k, at);
+    if (!plan) return;
+    const total = plan.mine + plan.own.reduce((a, b) => a + b, 0);
+    const scale = (plan.keys.length + 1) / total;
+    const next: Partial<Record<PanelKey, number>> = {};
+    next[k] = plan.mine * scale;
+    plan.keys.forEach((key, i) => { next[key] = plan.own[i] * scale; });
+    setWeights(next);
+  };
+
+  // Вместимость колонки у рельсы для правила размещения (см. addPanel): панель идёт
+  // ВНИЗ, пока туда есть куда встать не двигая соседей — то есть пока insertPlan
+  // что-то возвращает. Не влезла — заводит колонку сбоку. Раньше вместимость была
+  // зашита числом («по две на колонку»), и третья панель уезжала вбок при пустом
+  // экране, а на тесной колонке новая, наоборот, ужимала всех соседей.
+  const colCapNow = (): number => {
+    const railCi = isLeft ? 0 : layout.length - 1;
+    const len = layout[railCi]?.length ?? 0;
+    if (len === 0) return COL_CAP;
+    return insertPlan(railCi, null) ? len + 1 : len;
+  };
 
   // Иконка панели живёт в ТОЙ зоне, где панель лежит; закрытая — в домашней.
   // Отсюда «иконка едет вместе с панелью», а закрытие возвращает её домой.
@@ -268,7 +342,7 @@ export function PanelZone({
   const ghostKey = !compact && !soloMode && !dnd.active
     && hoverKey && !openKeys.includes(hoverKey) && keyAvailable(hoverKey)
     ? hoverKey : null;
-  const ghostAt = ghostKey ? nextPlacement(layout, side) : null;
+  const ghostAt = ghostKey ? nextPlacement(layout, side, colCapNow()) : null;
   // Колонка призрака в ВИДИМЫХ координатах: раскладка может держать колонки из
   // недоступных на этом экране панелей, и их индексы со списком columns не совпадают
   const ghostCol = ghostAt && 'ci' in ghostAt ? columns.findIndex(c => c.ci === ghostAt.ci) : -1;
@@ -410,7 +484,12 @@ export function PanelZone({
       // размером в полколонки без опознавательных знаков читается как «что-то
       // сломалось», а не как «панель встанет сюда»
       icon={dnd.from ? PANEL_META[dnd.from].Icon : undefined}
-      {...dnd.guideProps(`row:${vi}:${ri}`, from => moveAt(from, side, col.ci, layoutRowFor(col, ri)))}
+      {...dnd.guideProps(`row:${vi}:${ri}`, from => {
+        // Колонка стоит по контенту — гость встаёт в её свободный низ, а не делит
+        // высоту с соседями пополам (см. keepHeightsOnInsert)
+        keepHeightsOnInsert(from, col.ci, ri);
+        moveAt(from, side, col.ci, layoutRowFor(col, ri));
+      })}
     />
   );
 
@@ -474,7 +553,18 @@ export function PanelZone({
       if (compact) {
         // До двух панелей: третья вытесняет самую старую (FIFO)
         setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
-      } else toggle(side, k);
+      } else {
+        // Вместимость колонки считаем ОДИН раз на клик: и место панели, и веса
+        // должны исходить из одной и той же высоты
+        const cap = colCapNow();
+        // Панель открывается в колонку, стоящую по контенту — соседи сохраняют
+        // свою высоту, новая забирает свободный низ (см. keepHeightsOnInsert)
+        if (!isOpen && !soloMode) {
+          const at = nextPlacement(layout, side, cap);
+          if ('ci' in at) keepHeightsOnInsert(k, at.ci);
+        }
+        toggle(side, k, cap);
+      }
       // Панель в результате клика ОТКРЫЛАСЬ — сообщаем подписчику (граф и т.п.)
       if (!isOpen) onPanelOpen?.(k);
     },
@@ -487,7 +577,7 @@ export function PanelZone({
   const renderPanel = (k: PanelKey, multiInCol: boolean, vi?: number): ReactNode => {
     const { title, Icon } = PANEL_META[k];
     const stretched = vi === undefined
-      ? multiInCol || isFullHeight(k)
+      ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
     const onCloseThis = compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k);
     const shell = (
@@ -515,7 +605,11 @@ export function PanelZone({
         rootRef={stretched ? undefined : panelHeightRef(k)}
         {...dnd.panelProps(k)}
       >
-        {content(k)}
+        {/* Панель может попросить всю высоту сама (см. panelFill) — приёмник её
+            запроса привязан к ключу и живёт ровно вокруг её содержимого */}
+        <PanelFillContext.Provider value={fillSinkFor(k)}>
+          {content(k)}
+        </PanelFillContext.Provider>
       </PanelShell>
     );
     // Слот ставится ВСЕГДА — иначе при появлении соседа в колонке менялся бы тип
@@ -530,8 +624,11 @@ export function PanelZone({
       <PanelSlot
         fill={stretched}
         weight={shares ? zones.weights[k] : undefined}
-        // Ссылка на слот нужна ресайзу высот по весам — а он бывает только у делящих
-        slotRef={shares ? el => { panelRefs.current[k] = el; } : undefined}
+        // Ссылка на слот нужна ресайзу высот (он бывает только у делящих) и расчёту
+        // места для новой панели (insertPlan) — а тому нужна высота ЛЮБОЙ панели
+        // колонки, включая одиночную растянутую: у неё нет ни веса, ни замера
+        // panelHeights, и без слота её высота была бы неизвестна.
+        slotRef={el => { panelRefs.current[k] = el; }}
       >
         {shell}
       </PanelSlot>
@@ -557,7 +654,7 @@ export function PanelZone({
       iconAction={{
         Icon: Pin,
         title: 'Закрепить панель',
-        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek); onPanelOpen?.(peek); },
+        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek, colCapNow()); onPanelOpen?.(peek); },
       }}
       fill={peekFull}
       // Временный слой обозначаем ТЕНЬЮ, а не цветной рамкой: акцентная обводка
@@ -622,8 +719,12 @@ export function PanelZone({
             ...dnd.guideProps('rail', from => {
               // Открытую панель на чужой рельсе ОТКРЫВАЕМ в этой зоне (перенос);
               // остальное (закрытие своей / переезд кнопки) делает closeTo
-              if (!railWillClose && zoneOf(zones, from) !== null) toggle(side, from);
-              else closeTo(side, from);
+              if (!railWillClose && zoneOf(zones, from) !== null) {
+                const cap = colCapNow();
+                const at = nextPlacement(layout, side, cap);
+                if ('ci' in at) keepHeightsOnInsert(from, at.ci);
+                toggle(side, from, cap);
+              } else closeTo(side, from);
             }),
           }
         : undefined}
@@ -649,7 +750,7 @@ export function PanelZone({
   };
   const splitterLen = compact
     // Компактный стек: две панели делят высоту между собой, одна стоит по контенту
-    ? contentLen(tabletKeys, k => tabletKeys.length > 1 || isFullHeight(k))
+    ? contentLen(tabletKeys, k => tabletKeys.length > 1 || !!fillWanted[k])
     : (columns[centerVi]
         ? contentLen(columns[centerVi].keys, k => panelStretched(k, centerVi, columns[centerVi].keys.length))
         : null);

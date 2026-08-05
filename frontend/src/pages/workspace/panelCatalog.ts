@@ -145,16 +145,9 @@ export const PROJECT_KEYS: readonly PanelKey[] = PANEL_KEYS.filter(
   k => !SESSION_KEYS.includes(k) && !TOOLS_KEYS.includes(k) && !CENTER_KEYS.includes(k),
 );
 
-// Панели ПОЛНОЙ ВЫСОТЫ: тянутся до нижней кромки ВСЕГДА, включая одиночную панель
-// в колонке у центра, где прочие стоят по контенту (см. panelStretched). Для таких
-// панелей контент — связный корпус на весь экран (документация: дерево + оглавление
-// + просмотр), и обрезок по высоте с пустым низом под ним читается как полупустая
-// карточка.
-export const FULL_HEIGHT_KEYS: readonly PanelKey[] = ['docs'];
-
-export function isFullHeight(k: PanelKey): boolean {
-  return FULL_HEIGHT_KEYS.includes(k);
-}
+// Реестра панелей «полной высоты» здесь нет намеренно. Потребность в высоте зависит
+// не от ключа, а от состояния самой панели («Документация» тянется до низа только с
+// включённой нижней зоной превью), поэтому её объявляет панель — см. panelFill.ts.
 
 export function isPanelKey(v: unknown): v is PanelKey {
   return typeof v === 'string' && (PANEL_KEYS as readonly string[]).includes(v);

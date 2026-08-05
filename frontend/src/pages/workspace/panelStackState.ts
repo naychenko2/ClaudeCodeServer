@@ -26,7 +26,12 @@ export const PANEL_MIN_H = 120;  // минимальная высота пане
 export const COL_MIN = 280;      // клампы ширины ОДНОЙ колонки панелей
 export const COL_MAX = 560;
 export const COL_DEFAULT = 340;
-export const COL_CAP = 2;        // дефолтная вместимость колонки при открытии новой панели
+// Вместимость колонки при открытии новой панели — СКОЛЬКО ПАНЕЛЕЙ ТУДА ВЛЕЗАЕТ.
+// Настоящее число считает зона по живой высоте колонки (сколько панелей получат
+// хотя бы PANEL_MIN_H) и передаёт сюда; COL_CAP — только фолбэк, когда высоты
+// ещё нет (первый рендер, вызов не из раскладки). Раньше это была ЗАШИТАЯ «пара
+// на колонку», и третья панель уезжала колонкой вбок при свободном экране.
+export const COL_CAP = 2;
 
 // Режим зоны: раскладка колонками (дефолт) или одна выбранная панель.
 // Состояние ЕДИНОЕ (без отдельной памяти на режим): вход в solo схлопывает
@@ -82,17 +87,18 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
   return [];
 }
 
-// Открытие панели: в колонку У РЕЛЬСЫ, пока в ней меньше COL_CAP, иначе новая
-// колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают к центру. Рельса у правой
-// зоны справа (её колонка — последняя в массиве, новая пушится в конец), у левой
-// слева (её колонка — первая, новая встаёт в начало). Раньше сторону не учитывали
-// и новая колонка всегда лезла в конец — у левой зоны это центр, а не край.
-export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'): PanelKey[][] {
+// Открытие панели: в колонку У РЕЛЬСЫ, пока в неё влезает (cap — вместимость,
+// см. COL_CAP), иначе новая колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают
+// к центру. Рельса у правой зоны справа (её колонка — последняя в массиве, новая
+// пушится в конец), у левой слева (её колонка — первая, новая встаёт в начало).
+// Раньше сторону не учитывали и новая колонка всегда лезла в конец — у левой зоны
+// это центр, а не край.
+export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right', cap = COL_CAP): PanelKey[][] {
   if (layout.flat().includes(k)) return layout;
   const out = layout.map(c => [...c]);
   const railIdx = side === 'left' ? 0 : out.length - 1;
   const railCol = out[railIdx];
-  if (railCol && railCol.length < COL_CAP) railCol.push(k);
+  if (railCol && railCol.length < cap) railCol.push(k);
   else if (side === 'left') out.unshift([k]);
   else out.push([k]);
   return out;
@@ -102,10 +108,10 @@ export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'
 // самой вставки: нужно рельсе, чтобы под курсором показать место будущей панели
 // (призрак в раскладке). Возвращает индекс колонки, либо newColumn — панель
 // заведёт свою колонку у рельсы.
-export function nextPlacement(layout: PanelKey[][], side: Zone = 'right'): { ci: number } | { newColumn: true } {
+export function nextPlacement(layout: PanelKey[][], side: Zone = 'right', cap = COL_CAP): { ci: number } | { newColumn: true } {
   const railIdx = side === 'left' ? 0 : layout.length - 1;
   const railCol = layout[railIdx];
-  return railCol && railCol.length < COL_CAP ? { ci: railIdx } : { newColumn: true };
+  return railCol && railCol.length < cap ? { ci: railIdx } : { newColumn: true };
 }
 
 // Закрытие панели: удалить, пустые колонки схлопнуть
@@ -355,18 +361,20 @@ export function closePanelTo(zones: PanelZones, zone: Zone, k: PanelKey): PanelZ
 
 // Открыть панель В ЗОНЕ. Если она открыта в другой — это перенос: из прежней
 // зоны панель уходит. В solo-режиме целевой зоны раскладка схлопывается до неё.
-export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+// cap — вместимость колонки у рельсы (сколько панелей влезает по высоте), её
+// считает зона: см. COL_CAP.
+export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP): PanelZones {
   const base = closePanel(zones, k);
   return withZone(base, zone, z => ({
     ...z,
-    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone),
+    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone, cap),
   }));
 }
 
 // Клик по иконке рельсы: панель открыта В ЭТОЙ зоне — закрыть, иначе открыть
 // здесь (в том числе забрав из соседней зоны).
-export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
-  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k);
+export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP): PanelZones {
+  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k, cap);
 }
 
 // Дроп панели НА панель — они меняются местами, в том числе через границу зон:
@@ -554,8 +562,9 @@ export function migrateSidebarSection(
 
 export interface PanelZonesApi {
   zones: PanelZones;
-  // Клик по иконке рельсы зоны
-  toggle: (zone: Zone, k: PanelKey) => void;
+  // Клик по иконке рельсы зоны. cap — вместимость колонки у рельсы по живой
+  // высоте (см. COL_CAP): её знает только зона, состояние пикселей не хранит.
+  toggle: (zone: Zone, k: PanelKey, cap?: number) => void;
   // Закрыть панель, где бы она ни лежала (её иконка остаётся в прежней зоне)
   close: (k: PanelKey) => void;
   // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
@@ -667,9 +676,9 @@ function createPanelZones(ns: string, opts?: {
   function usePanelZones(): PanelZonesApi {
     const zones = useSyncExternalStore(subscribe, () => _zones);
 
-    const toggle = useCallback((zone: Zone, k: PanelKey) => {
+    const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number) => {
       ensureWeight(k);
-      commit(togglePanelIn(_zones, zone, k));
+      commit(togglePanelIn(_zones, zone, k, cap));
     }, []);
 
     const close = useCallback((k: PanelKey) => { commit(closePanel(_zones, k)); }, []);

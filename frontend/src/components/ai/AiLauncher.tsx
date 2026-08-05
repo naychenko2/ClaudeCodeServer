@@ -512,10 +512,15 @@ const fabStyle: React.CSSProperties = {
   // Всегда в правом нижнем углу экрана. Боковой отступ — var --cc-fab-inset: обычно
   // 20px (уютный угол), но когда справа открыт остров-панель во всю высоту, PanelZone ставит
   // 6px и кнопка прижимается плотнее к краю (меньше налезает на остров). Нижний отступ
-  // отдельный (--cc-fab-bottom): в компактном режиме он равен отступу холста островов,
-  // чтобы кнопка стояла на одной линии с их нижней кромкой. Снизу ещё safe-area.
+  // отдельный и складывается из двух каналов, из которых берётся БОЛЬШИЙ:
+  //   --cc-fab-bottom   — базовый край (PanelZone): 16px в компактном режиме, чтобы кнопка
+  //                       стояла на одной линии с нижней кромкой островов, иначе 20px;
+  //   --cc-fab-composer — подъём над композером чата / футером мастера персон (0, когда
+  //                       поднимать не над чем), иначе круг накрывает поле ввода.
+  // Через max, а не «кто последний записал»: каналы ставят разные компоненты, и без
+  // него открытая панель гасила бы подъём над композером (и наоборот). Снизу ещё safe-area.
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + max(var(--cc-fab-bottom, 20px), var(--cc-fab-composer, 0px)))',
   // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
   // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
   // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
@@ -581,7 +586,7 @@ const toggleThumb: React.CSSProperties = {
 const balloonStyle: React.CSSProperties = {
   // Над кнопкой в покое — её нижний отступ (var) + текущая высота кнопки (var, −8 нахлёст)
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-size, 54px) - 8px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + max(var(--cc-fab-bottom, 20px), var(--cc-fab-composer, 0px)) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -602,7 +607,7 @@ const balloonGhost: React.CSSProperties = {
 const hoverBalloonStyle: React.CSSProperties = {
   // Показывается на наведении, когда кнопка выросла до 54 — её нижний отступ (var) + высота
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 46px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + max(var(--cc-fab-bottom, 20px), var(--cc-fab-composer, 0px)) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

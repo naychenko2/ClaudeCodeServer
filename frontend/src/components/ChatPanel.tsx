@@ -473,8 +473,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     // embedded: переменная глобальная, несколько колонок стены перебивали бы друг друга
     if (embedded) return;
     const root = document.documentElement;
-    root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
-    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
+    root.style.setProperty('--cc-fab-composer', `${composerH + 12}px`);
+    return () => { root.style.setProperty('--cc-fab-composer', '0px'); };
   }, [composerH, embedded]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);

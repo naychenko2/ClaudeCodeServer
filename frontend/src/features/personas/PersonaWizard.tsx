@@ -157,10 +157,10 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const footerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const root = document.documentElement;
-    if (step === 9) { root.style.setProperty('--cc-fab-bottom', '20px'); return; }
+    if (step === 9) { root.style.setProperty('--cc-fab-composer', '0px'); return; }
     const h = footerRef.current?.offsetHeight ?? 64;
-    root.style.setProperty('--cc-fab-bottom', `${h + 12}px`);
-    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
+    root.style.setProperty('--cc-fab-composer', `${h + 12}px`);
+    return () => { root.style.setProperty('--cc-fab-composer', '0px'); };
   }, [step]);
 
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);

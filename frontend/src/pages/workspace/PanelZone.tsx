@@ -115,12 +115,15 @@ interface Props {
   // всплывают поверх контента у своей рельсы и закрываются кликом мимо них. Кнопки,
   // раскладка и перенос между зонами — те же, что в обычном режиме (общий стор).
   floating?: boolean;
+  // Открыт ли файл в центральной области — тоже ужимает FAB AI-хаба (как распахнутая
+  // панель): места в центре мало, крупный круг мешает. Знает только правая зона.
+  centerFileOpen?: boolean;
 }
 
 export function PanelZone({
   side, panels, railCounts, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
-  railFooter, floating,
+  railFooter, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
   const { zones, toggle, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
@@ -138,6 +141,19 @@ export function PanelZone({
   // Панели, которые САМИ просят всю высоту колонки (нижняя зона превью у «Документации»).
   // Требование приходит из панели через контекст — см. panelFill.ts
   const [fillWanted, fillSinkFor] = usePanelFillRequests<PanelKey>();
+
+  // Высота зоны — чтобы понять, дотянулась ли одиночная панель «по контенту» до низа
+  // (упёрлась в maxHeight:100% и фактически заполнила зону, хотя panelStretched=false).
+  // Меряем невидимым full-height щупом в теле зоны (см. return). Нужна только правой зоне (FAB).
+  const [zoneEl, setZoneEl] = useState<HTMLDivElement | null>(null);
+  const [zoneH, setZoneH] = useState(0);
+  useEffect(() => {
+    if (!zoneEl || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setZoneH(zoneEl.clientHeight));
+    ro.observe(zoneEl);
+    setZoneH(zoneEl.clientHeight);
+    return () => ro.disconnect();
+  }, [zoneEl]);
 
   // Компактный режим: до ДВУХ панелей стеком; выбор локальный эфемерный —
   // раскладка зоны не трогается. Третья открытая вытесняет самую старую (FIFO).
@@ -444,22 +460,43 @@ export function PanelZone({
   const { dragging: widthDragging, onPointerDown: handleWidthDrag } =
     usePanelWidthDrag(width, n => setWidth(side, n), side, columns.length);
 
-  // Сдвиг FAB AI-хаба: кромку занимают рельса и панели — пробрасываем их суммарную
-  // ширину в глобальную переменную (её читает AiLauncher). Слагаемые считаются ПО
-  // РАЗМЕТКЕ: рельса + зазор до панелей + сама зона + её ресайз-сплиттер.
-  // Drawer компактного режима не считаем — он overlay и живёт поверх контента сам.
-  // Кромку занимает и док под рельсой: даже при схлопнутой рельсе панелей он стоит
-  // на своём месте, и FAB, посчитанный по нулю, уехал бы под него.
-  // В плавающем режиме панели лежат ПОВЕРХ контента и кромки не занимают — иначе
-  // FAB отпрыгивал бы от каждого открытия панели вместе с центром
-  const zoneEdgeW = !showRail ? (railFooter ? RAIL_W + RAIL_GAP : 0) : RAIL_W + RAIL_GAP + (compact
-    ? (tabletKeys.length > 0 && tabletInline ? width + GAP * 2 : 0)
-    : (columns.length > 0 && !floating ? zoneW + RAIL_GAP : 0));
+  // Отступ FAB AI-хаба от края экрана: прижимаем кнопку плотнее к краю (6px) ТОЛЬКО когда
+  // справа стоит панель, растянутая на всю высоту (дотягивается до низа у правого края и
+  // реально мешает FAB) — критерий тот же panelStretched, что и в раскладке. Короткий
+  // одиночный список у центра высоту не занимает, под ним пусто → остаётся обычный угол
+  // (дефолт 20px в AiLauncher). Переменную ставит только ПРАВАЯ зона: FAB живёт справа.
+  // Колонка занимает всю высоту зоны, если она растянута ЛИБО её панели «по контенту»
+  // дотянулись до низа (сумма измеренных высот ≈ высота зоны — панель упёрлась в maxHeight).
+  const columnFull = (c: { keys: PanelKey[] }, vi: number): boolean => {
+    if (c.keys.some(k => panelStretched(k, vi, c.keys.length))) return true;
+    if (zoneH <= 0) return false;
+    let sum = GAP * (c.keys.length - 1);
+    for (const k of c.keys) { const h = panelH[k]; if (h == null) return false; sum += h; }
+    return sum >= zoneH - 4;
+  };
+  const rightPanelOpen = !isLeft && (compact
+    ? (tabletKeys.length > 0 && tabletInline)
+    : (!floating && columns.some((c, vi) => columnFull(c, vi))));
+  // FAB ужимаем и при распахнутой панели, и при открытом в центре файле — в обоих случаях
+  // места мало и крупный круг мешает.
+  const fabCompact = rightPanelOpen || (!isLeft && !!centerFileOpen);
   useEffect(() => {
-    const prop = isLeft ? '--cc-fab-left' : '--cc-fab-right';
-    document.documentElement.style.setProperty(prop, `${zoneEdgeW + 20}px`);
-    return () => { document.documentElement.style.removeProperty(prop); };
-  }, [zoneEdgeW, isLeft]);
+    if (isLeft) return;
+    // Компактный режим FAB: прижат к краю (6px) и малый (36px). Иначе — уютный угол (20px)
+    // и исходный размер (54px). Значения ставим явно в обе стороны (не removeProperty) —
+    // тогда смена проигрывается плавно через transition на :root (см. @property --cc-fab-*).
+    const root = document.documentElement;
+    root.style.setProperty('--cc-fab-inset', fabCompact ? '6px' : '20px');
+    root.style.setProperty('--cc-fab-size', fabCompact ? '36px' : '54px');
+    // Подъём при наведении: в большом состоянии кнопка не растёт — вместо этого чуть
+    // приподнимается (-2px). В малом (компактном) подъёма нет (растёт до 54).
+    root.style.setProperty('--cc-fab-lift', fabCompact ? '0px' : '-2px');
+    return () => {
+      root.style.removeProperty('--cc-fab-inset');
+      root.style.removeProperty('--cc-fab-size');
+      root.style.removeProperty('--cc-fab-lift');
+    };
+  }, [isLeft, fabCompact]);
 
   // Флеш «панель уже открыта»: внешние кнопки (git-бар над композером) шлют
   // cc-panel-flash, карточка на мгновение обводится акцентом. Счётчик n нужен,
@@ -1156,5 +1193,10 @@ export function PanelZone({
     );
   }
 
-  return isLeft ? <>{rail}{body}</> : <>{body}{rail}</>;
+  // Щуп высоты зоны (только правая — для компактности FAB): невидимый full-height столбик,
+  // ResizeObserver на нём даёт высоту зоны для columnFull (см. выше).
+  const zoneProbe = !isLeft
+    ? <div ref={setZoneEl} aria-hidden style={{ width: 0, height: '100%', alignSelf: 'stretch', flexShrink: 0, pointerEvents: 'none' }} />
+    : null;
+  return isLeft ? <>{rail}{body}</> : <>{body}{rail}{zoneProbe}</>;
 }

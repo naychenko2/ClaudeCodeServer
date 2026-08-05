@@ -418,6 +418,7 @@ export function DesktopWorkspace(p: Props) {
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
         onPanelOpen={p.onPanelOpen}
+        centerFileOpen={!!p.openFile}
       />
     </div>
   );

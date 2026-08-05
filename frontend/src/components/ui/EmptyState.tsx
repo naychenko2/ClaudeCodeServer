@@ -9,12 +9,16 @@ interface EmptyStateProps {
   // Компактный вид (узкие сайдбары, secondary-панели): кружок 44 в нейтральной гамме,
   // заголовок мельче. Иначе — крупный дефолтный empty (центр экрана).
   compact?: boolean
+  // По контенту, а не на всю высоту: нужно, когда empty-state стоит в потоке НАД
+  // другим содержимым (напр. обучающие подсказки под пустой базой знаний), а не
+  // один занимает всю панель. По умолчанию тянется на height:100% и центрируется.
+  inline?: boolean
 }
 
-export function EmptyState({ icon, title, subtitle, action, compact }: EmptyStateProps) {
+export function EmptyState({ icon, title, subtitle, action, compact, inline }: EmptyStateProps) {
   return (
     <div style={{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
-      textAlign:'center', padding: compact ? 24 : 40, gap:8, height:'100%' }}>
+      textAlign:'center', padding: compact ? 24 : 40, gap:8, height: inline ? undefined : '100%' }}>
       <div style={{
         width: compact ? 44 : 56, height: compact ? 44 : 56, borderRadius:16,
         background: compact ? C.bgSelected : C.bgPanel, color: compact ? C.textMuted : C.accent,

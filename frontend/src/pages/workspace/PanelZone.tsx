@@ -462,10 +462,10 @@ export function PanelZone({
   const ghostRow = ghostAt && ghostCol >= 0
     ? (layout[ghostAt.ci] ?? []).slice(0, ghostAt.ri).filter(k => columns[ghostCol].keys.includes(k)).length
     : 0;
-  // У какой кромки зоны родится новая колонка. Обычно это центр: панель встаёт в
-  // колонку у рельсы, а вытесненный ею «хвост» уезжает от рельсы (см. placeByRail).
-  // Пустая зона — исключение: там первая колонка и есть колонка у рельсы.
-  const ghostAtStart = ghostAt?.newColumn && layout.length > 0 ? ghostAt.ci === 0 : isLeft;
+  // У какой кромки зоны родится новая колонка — ВСЕГДА у своей рельсы (см.
+  // placeByRail): у левой зоны это кромка начала, у правой — конца. Отсюда и
+  // равенство стороне зоны; отдельного случая у пустой зоны больше нет.
+  const ghostAtStart = isLeft;
 
   // Ширина зоны: колонки по width плюс зазоры МЕЖДУ ними (крайние направляющие
   // в покое нулевые: зазор к рельсе даёт отдельная прокладка, к центру — сплиттер).
@@ -1004,8 +1004,7 @@ export function PanelZone({
   // (ghostAtStart, edge 'start') линия отодвигается влево (−sepShift), у правой
   // (edge 'end') — вправо (+sepShift). Одним знаком на обе стороны линия у левой
   // рельсы уезжала вправо от настоящего места вставки. Считать «на глаз» уже
-  // пробовали. Кромка не равна стороне зоны: переполненная колонка у рельсы
-  // выталкивает «хвост» к ЦЕНТРУ, и новая колонка рождается там (см. placeByRail).
+  // пробовали.
   const newColShift = ghostAtStart ? -sepShift(0) : sepShift(0);
   const newColGhost = (
     <div style={{ width: 0, flexShrink: 0, position: 'relative', alignSelf: 'stretch' }}>
@@ -1031,9 +1030,8 @@ export function PanelZone({
       overflow: 'visible',
       transition: widthDragging ? 'none' : `width ${PANEL_ANIM}`,
     }}>
-      {/* Новая колонка родится у ЛЕВОЙ кромки зоны — линию рисуем перед колонками
-          (какая это кромка, решает ghostAtStart: у пустой зоны — та, что у рельсы,
-          иначе та, куда уедет вытесненный «хвост») */}
+      {/* Новая колонка родится у ЛЕВОЙ кромки зоны — линию рисуем перед колонками.
+          Кромку решает ghostAtStart: колонка всегда рождается у своей рельсы */}
       {ghostKey && ghostNewCol && ghostAtStart && newColGhost}
       {columns.map((col, vi) => (
         <Fragment key={col.ci}>

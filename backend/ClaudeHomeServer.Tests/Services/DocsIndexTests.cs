@@ -245,6 +245,121 @@ public class DocsIndexTests : IDisposable
         _svc.GetIndex(_root).Single().Path.Should().Be("docs/b.md");
     }
 
+    // ─── Порядок из .order и разделы ────────────────────────────────────────
+
+    [Fact]
+    public void Order_ЗадаётПорядок_ПеребиваяАлфавит()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+
+        // По заголовку было бы «Абрикос, Яблоко» — файл переставляет их местами
+        _svc.GetIndex(_root).Select(d => d.Path).Should().ContainInOrder("docs/a.md", "docs/b.md");
+    }
+
+    [Fact]
+    public void Order_НеперечисленноеВХвост_ПоПрежнемуПравилу()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Банан", "docs", "b.md");
+        Write("# Абрикос", "docs", "c.md");
+        Write("a\n", "docs", ".order");
+
+        // .order сортирует, а не фильтрует: остальные идут следом по заголовку
+        _svc.GetIndex(_root).Select(d => d.Path).Should()
+            .ContainInOrder("docs/a.md", "docs/c.md", "docs/b.md");
+    }
+
+    [Fact]
+    public void Order_ПорядокПапок_ТожеИзФайлаРодителя()
+    {
+        Write("# Zzz", "docs", "z.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+        Write("adr\nz\n", "docs", ".order");
+
+        // Без файла документ уровня шёл бы перед вложенной папкой — строка это переопределяет
+        _svc.GetIndex(_root).Select(d => d.Path).Should()
+            .ContainInOrder("docs/adr/0001.md", "docs/z.md");
+    }
+
+    [Fact]
+    public void Order_СтраницаРаздела_ИдётПередСвоимиДочерними()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Запись", "docs", "decisions", "0001.md");
+        Write("# Vision", "docs", "vision.md");
+        Write("vision\ndecisions\n", "docs", ".order");
+
+        // Одна строка «decisions» задаёт место и страницы раздела, и его содержимого
+        _svc.GetIndex(_root).Select(d => d.Path).Should()
+            .ContainInOrder("docs/vision.md", "docs/decisions.md", "docs/decisions/0001.md");
+    }
+
+    [Fact]
+    public void Order_РегистрСтроки_НеВажен()
+    {
+        // На Linux регистрозависимая ФС, и строгое сравнение молча роняло бы строку в хвост
+        Write("# Zzz", "docs", "Api.md");
+        Write("# Aaa", "docs", "b.md");
+        Write("api\n", "docs", ".order");
+
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/Api.md");
+    }
+
+    [Fact]
+    public void Order_СтрокаБезФайла_НеЛомаетПорядок()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        // Строка может указывать на документ, удалённый в другой ветке
+        Write("удалённый-документ\na\nb\n", "docs", ".order");
+
+        _svc.GetIndex(_root).Select(d => d.Path).Should().ContainInOrder("docs/a.md", "docs/b.md");
+    }
+
+    [Fact]
+    public void Order_ПравкаФайла_ВидитсяСразу()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/a.md");
+
+        // Ни один документ не менялся: без .order в отпечатке кеш отдал бы прежний порядок
+        Write("b\na\n", "docs", ".order");
+
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/b.md");
+    }
+
+    [Fact]
+    public void Раздел_ДокументРядомСОдноимённойПапкой_ЭтоЕёСтраница()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Запись", "docs", "decisions", "0001.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/decisions.md");
+
+        entry.SectionFolder.Should().Be("docs/decisions");
+    }
+
+    [Fact]
+    public void Раздел_ДокументБезОдноимённойПапки_БезПризнака()
+    {
+        Write("# Обычный", "docs", "a.md");
+
+        _svc.GetIndex(_root).Single().SectionFolder.Should().BeNull();
+    }
+
+    [Fact]
+    public void Раздел_ВложеннаяПапкаБезПары_ПризнакаНиУКого()
+    {
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        // Папка без файла-напарника — в wiki это пустая страница; продукт её не выдумывает
+        _svc.GetIndex(_root).Should().OnlyContain(d => d.SectionFolder == null);
+    }
+
     // ─── Поиск ──────────────────────────────────────────────────────────────
 
     [Fact]

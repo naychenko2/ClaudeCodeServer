@@ -34,10 +34,10 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, CENTER_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  type PanelKey, type Zone,
+  isPanelKey, type PanelKey, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
-import { wsPanels, homeOf, isTucked, isZoneCollapsed, nextPlacement, zoneOf, COL_CAP, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
+import { wsPanels, homeOf, isTucked, isZoneCollapsed, nextPlacement, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
@@ -55,6 +55,25 @@ const TABLET_INLINE_MIN = 1000;
 // которой можно было бы встать невидимым оверлеем, а целиться в невидимую кромку
 // окна — мучение. Полоса живёт только пока панель тащат.
 const EMPTY_DROP_W = 28;
+
+// Группы кнопок рельсы сверху вниз: содержимое ПРОЕКТА, инструменты запуска
+// (Терминал, Сервисы) и всё, что относится к текущему контексту — панели сессии
+// (План, Агенты, Персона) и центральной области (Оглавление). Последние две
+// категории разделены в реестре (у них разные источники видимости), но в рельсе
+// идут ОДНОЙ группой: это соседи по смыслу — «что сейчас перед глазами», и черта
+// между ними делила бы рельсу там, где деления нет.
+//
+// Группа — ещё и предел перестановки кнопок: порядок внутри неё пользовательский,
+// а между группами — нет (разделители отделяют разные по смыслу наборы). Отсюда
+// общий список: и рельса, и запись порядка обязаны видеть одни и те же границы.
+const RAIL_GROUPS: readonly (readonly PanelKey[])[] = [
+  PROJECT_KEYS,
+  TOOLS_KEYS,
+  [...SESSION_KEYS, ...CENTER_KEYS],
+];
+
+// Группа, внутри которой кнопку разрешено переставлять (null — ключ не из рельсы)
+const railGroupOf = (k: PanelKey): readonly PanelKey[] | null => RAIL_GROUPS.find(g => g.includes(k)) ?? null;
 
 // Попап-превью панели по наведению на иконку рельсы временно выключен: механика
 // готова (panelPeek + peek в PanelRail), но пока живём без неё. Флаг — чтобы
@@ -104,7 +123,7 @@ export function PanelZone({
   railFooter, floating,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, closeTo, tuck, untuck, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
+  const { zones, toggle, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width, colFlex } = zoneState;
   const windowWidth = useWindowWidth();
@@ -322,6 +341,12 @@ export function PanelZone({
   // панель ровно в тот момент, когда её открывает).
   const floatRef = useRef<HTMLDivElement | null>(null);
   const railBoxRef = useRef<HTMLDivElement | null>(null);
+  // Место в столбце, выбранное курсором прямо сейчас: кнопка встанет ПЕРЕД before
+  // (null — в конец группы), сам объект null — места нет и порядок не трогаем.
+  // Считает его рельса (только она знает геометрию столбца), а зоне оно нужно
+  // единственный раз — в момент дропа: отсюда ref, а не состояние. Иначе зона
+  // перерисовывалась бы на каждое дрожание курсора над рельсой.
+  const railInsert = useRef<{ before: string | null } | null>(null);
   useEffect(() => {
     if (!floating || openKeys.length === 0 || isZoneCollapsed(zoneState)) return;
     const onDown = (e: MouseEvent) => {
@@ -450,14 +475,12 @@ export function PanelZone({
   // Панель, которую примет РЕЛЬСА этой зоны (null — мишени нет), и что дроп сделает:
   //  • открытая на СВОЕЙ рельсе (fromZone === side) — закрыть, оставив кнопку здесь;
   //  • открытая на ЧУЖОЙ рельсе — перенести панель в эту зону (открыть тут);
-  //  • кнопка закрытой панели — только на рельсе ДРУГОЙ стороны (переезд кнопки);
-  //    на своей дроп ничего бы не изменил.
-  // Закрытая на своей стороне мишени не даёт; открытую принимают ОБЕ рельсы.
-  // Кнопку тащат из ящика — её принимает и СВОЯ рельса: это возврат кнопки в
-  // столбец, ради него дроп сюда и делают.
-  const railDrop = dnd.accepting && dnd.from !== null
-    && (dragClosed && !dnd.fromTucked ? homeOf(zones, dnd.from) !== side : true)
-    ? dnd.from : null;
+  //  • кнопка закрытой панели на ЧУЖОЙ рельсе — переезд самой кнопки;
+  //  • кнопка из ящика — возврат в столбец.
+  // И к любому из исходов добавляется МЕСТО: куда именно в столбце встанет кнопка
+  // (см. railInsert). Поэтому мишень даёт и своя рельса закрытой кнопке — раньше
+  // такой дроп ничего бы не изменил, а теперь это и есть перестановка.
+  const railDrop = dnd.accepting ? dnd.from : null;
   // Дроп на СВОЮ рельсу открытой панели = закрыть; иначе (чужая рельса) = перенос.
   const railWillClose = railDrop != null && !dragClosed && dnd.fromZone === side;
 
@@ -550,7 +573,15 @@ export function PanelZone({
   // рисуется вовсе, вместе со своим разделителем (это делает PanelRail).
   // tucked — набор строится для ЯЩИКА («…»): фильтр там свой (кнопки как раз убраны
   // со столбца), а перетаскивание строки помечается как жест возврата.
-  const railGroup = (keys: readonly PanelKey[], tucked = false): RailItem[] => keys.filter(k => tucked || (stashRevealed ? railKeyVisible(k, false) : railKeyVisible(k))).map(k => ({
+  //
+  // Порядок внутри группы — пользовательский (railOrder), заданный перетаскиванием
+  // кнопок; нетронутые группы идут каталожным порядком. Сортируем ПОСЛЕ фильтра:
+  // спрятанные и уехавшие в соседнюю зону кнопки в столбце не участвуют, но своё
+  // место в сохранённом порядке держат — оно вернётся вместе с ними.
+  const railGroup = (keys: readonly PanelKey[], tucked = false): RailItem[] => sortRail(
+    zones.railOrder,
+    keys.filter(k => tucked || (stashRevealed ? railKeyVisible(k, false) : railKeyVisible(k))),
+  ).map(k => ({
     key: k,
     title: PANEL_META[k].title,
     Icon: PANEL_META[k].Icon,
@@ -567,7 +598,9 @@ export function PanelZone({
     // перетаскивания (см. dragSourceProps): перерисовка в обработчике dragstart
     // отменяет жест.
     dragProps: compact ? undefined : (() => {
-      const src = dnd.dragSourceProps(k, { tucked });
+      // rail — кнопка стоит в СТОЛБЦЕ (а не строкой в меню ящика): её превью браузер
+      // уводит вбок, чтобы не накрывать рельсу с местами вставки
+      const src = dnd.dragSourceProps(k, { tucked, rail: !tucked });
       return {
         ...src,
         onDragStart: (e: DragEvent<HTMLElement>) => {
@@ -738,14 +771,10 @@ export function PanelZone({
         onMouseLeave: () => peeked.hide(),
       } : undefined}
       footer={railFooter}
-      // Три группы: содержимое ПРОЕКТА, инструменты запуска (Терминал, Сервисы) и
-      // всё, что относится к ТЕКУЩЕМУ КОНТЕКСТУ — панели сессии (План, Агенты, Персона)
-      // и панели центральной области (Оглавление). Последние две категории разделены в
-      // реестре (у них разные источники видимости), но в рельсе идут ОДНОЙ группой:
-      // это соседи по смыслу — «что сейчас перед глазами», и черта между ними делила бы
-      // рельсу там, где деления нет. Разделители PanelRail рисует сам и убирает вместе
-      // с пустой группой — выключенные инструменты уносят и свою черту.
-      groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup([...SESSION_KEYS, ...CENTER_KEYS])]}
+      // Состав групп — RAIL_GROUPS: тот же список задаёт и пределы перестановки
+      // кнопок, поэтому он один на оба применения. Разделители PanelRail рисует сам и
+      // убирает вместе с пустой группой — выключенные инструменты уносят и свою черту.
+      groups={RAIL_GROUPS.map(g => railGroup(g))}
       // Свой зазор до центра нужен только при закрытых панелях: иначе его даёт
       // прокладка перед зоной
       // Зазор до центра обычно даёт сама зона (её сплиттер/крайняя направляющая), но
@@ -783,19 +812,31 @@ export function PanelZone({
         disabled: openKeys.length === 0 && !isZoneCollapsed(zoneState),
         onToggle: () => toggleCollapsed(side),
       }}
-      // Дроп на рельсу — три исхода на одном пути (см. railDrop / railWillClose):
+      // Дроп на рельсу — четыре исхода на одном пути (см. railDrop / railWillClose):
       //  • СВОЯ рельса открытой панели → закрыть, оставив кнопку здесь;
       //  • ЧУЖАЯ рельса открытой панели → перенести панель в эту зону (открыть тут);
-      //  • ЧУЖАЯ рельса закрытой кнопки → переезд самой кнопки, не открывая панель.
-      // Раньше для переноса на другую сторону приходилось целиться в направляющие
-      // колонок; теперь хватает броска на рельсу.
+      //  • ЧУЖАЯ рельса закрытой кнопки → переезд самой кнопки, не открывая панель;
+      //  • СВОЯ рельса закрытой кнопки → одна перестановка, без прочих последствий.
+      // К каждому из них добавляется МЕСТО в столбце: куда встанет кнопка. Раньше для
+      // переноса на другую сторону приходилось целиться в направляющие колонок;
+      // теперь хватает броска на рельсу, и он же выбирает позицию.
       drop={railDrop
         ? {
             active: true,
-            // Знак мишени: крестик — только когда дроп ЗАКРОЕТ панель (своя рельса);
-            // иначе иконка панели — «встанет/переедет сюда»
+            key: railDrop,
+            // Знак на месте вставки: крестик — только когда дроп ЗАКРОЕТ панель
+            // (своя рельса); иначе иконка панели — «встанет сюда»
             icon: railWillClose ? undefined : PANEL_META[railDrop].Icon,
+            onInsert: pos => { railInsert.current = pos; },
             ...dnd.guideProps('rail', from => {
+              // Порядок кнопки в столбце — ПЕРВЫМ: он про место, всё остальное ниже
+              // про принадлежность (открыта ли панель и чья кнопка). Место рельса
+              // отдаёт соседом; своей группы у ключа может и не быть на экране —
+              // тогда переставлять нечего.
+              const pos = railInsert.current;
+              const group = railGroupOf(from);
+              railInsert.current = null;
+              if (pos && group) reorder(group, from, isPanelKey(pos.before) ? pos.before : null);
               // Кнопку вернули из ящика на рельсу: панель не открываем — возвращают
               // именно кнопку (открытие — это дроп в раскладку)
               if (dnd.fromTucked) untuck(side, from);
@@ -852,13 +893,15 @@ export function PanelZone({
   // Нулевая высота в потоке + absolute-линия у кромки: панели не сдвигаются,
   // знак совпадает с местом вставки при перетаскивании (base 0, edge 'end').
   // pointerEvents: none — призрак висит в раскладке, но курсору не мешает.
+  // over: наведение на кнопку — не «одно из возможных мест», а точное «кликнешь —
+  // встанет сюда», поэтому линия контрастная сплошная акцентная, а не штриховая.
   const ghostBox = ghostKey && (
     <div style={{ height: 0, position: 'relative', pointerEvents: 'none' }}>
       <div style={{
         position: 'absolute', left: 0, right: 0, top: -SEP_HIT / 2, height: SEP_HIT,
         display: 'flex', alignItems: 'center',
       }}>
-        <PanelDropLine axis="y" shift={sepShift(0)} />
+        <PanelDropLine axis="y" over shift={sepShift(0)} />
       </div>
     </div>
   );
@@ -877,7 +920,7 @@ export function PanelZone({
         position: 'absolute', top: 0, bottom: 0, left: -SEP_HIT / 2, width: SEP_HIT,
         display: 'flex', alignItems: 'stretch', justifyContent: 'center', pointerEvents: 'none',
       }}>
-        <PanelDropLine axis="x" shift={newColShift} />
+        <PanelDropLine axis="x" over shift={newColShift} />
       </div>
     </div>
   );

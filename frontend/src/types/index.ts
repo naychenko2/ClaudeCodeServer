@@ -1846,11 +1846,17 @@ export interface BindingTarget {
   id: string;
   label: string;
   hint?: string | null;
+  // Происхождение цели; для типа tool с ключом «mcp:<…>» (сервер личного реестра) — 'mcp'
   meta?: string | null;
   // Дефолт инструмента у конкретной персоны (только type=tool с personaId):
   // включён ли без привязки и чем задан дефолт (настройки / пресет роли / системный)
   defaultEnabled?: boolean | null;
   defaultOrigin?: 'settings' | 'role' | null;
+  // Последний известный статус сервера личного реестра (только type=tool, ключ «mcp:<…>»,
+  // см. McpServerStatuses на бэке: connected/failed/needs-auth/unknown). Строка, а не литерал —
+  // набор значений живёт на бэке. Нет данных (старый бэк / не mcp-ключ) — точка статуса
+  // в пикере не показывается.
+  status?: string | null;
 }
 
 // Тело создания персоны (POST /api/personas). Большинство полей опциональны.

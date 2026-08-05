@@ -15,21 +15,43 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/mcp/servers")]
 public class McpServersController(McpRegistry registry, McpSecretStore secrets,
-    PersonaBindingsService bindings) : ControllerBase
+    PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     [HttpGet]
-    public IActionResult List() =>
-        Ok(registry.GetByOwner(UserId)
+    public IActionResult List()
+    {
+        var observed = statuses.GetByOwner(UserId);
+        return Ok(registry.GetByOwner(UserId)
             .OrderBy(r => r.Key, StringComparer.Ordinal)
-            .Select(McpServerMapper.ToDto));
+            .Select(r => McpServerMapper.ToDto(r, observed.GetValueOrDefault(r.Key))));
+    }
 
     [HttpGet("{id}")]
     public IActionResult Get(string id) =>
         registry.Get(UserId, id) is { } record
-            ? Ok(McpServerMapper.ToDto(record))
+            ? Ok(McpServerMapper.ToDto(record, statuses.Get(UserId, record.Key)))
             : NotFound(new { error = "Сервер не найден" });
+
+    // Разовая проверка «по кнопке»: поднимаем сервер как это сделал бы ход и спрашиваем
+    // список инструментов. Результат кладётся в стор наблюдений и возвращается человеку.
+    [HttpPost("{id}/probe")]
+    public async Task<IActionResult> Probe(string id, CancellationToken ct)
+    {
+        var record = registry.Get(UserId, id);
+        if (record is null) return NotFound(new { error = "Сервер не найден" });
+        var result = await probe.ProbeAsync(UserId, record, ct);
+        return Ok(new
+        {
+            ok = result.Ok,
+            status = result.Status,
+            serverName = result.ServerName,
+            toolCount = result.ToolCount,
+            toolNames = result.ToolNames,
+            error = result.Error,
+        });
+    }
 
     [HttpPost]
     public IActionResult Create([FromBody] McpServerUpsertRequest req)
@@ -70,7 +92,11 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             // Смена ключа осиротила привязки персон на прежний «mcp:<ключ>» — тот же
             // случай, что и удаление записи: протухший ключ валит следующий bindings_set
             if (!string.Equals(oldKey, updated.Key, StringComparison.OrdinalIgnoreCase))
+            {
                 bindings.PurgeMcpBindings(UserId, oldKey);
+                // Наблюдение висело на прежнем ключе — под новым именем оно бы врало
+                statuses.Remove(UserId, oldKey);
+            }
             return Ok(McpServerMapper.ToDto(updated));
         }
         catch (InvalidOperationException ex)
@@ -96,6 +122,7 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
         // Привязки персон на этот сервер осиротели: чистим их сразу, иначе следующая
         // полная замена привязок (bindings_set) упала бы на несуществующем ключе
         bindings.PurgeMcpBindings(UserId, removed.Key);
+        statuses.Remove(UserId, removed.Key);
         return NoContent();
     }
 

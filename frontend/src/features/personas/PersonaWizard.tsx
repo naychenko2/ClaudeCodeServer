@@ -35,16 +35,11 @@ import { PersonaAvatar } from './PersonaAvatar';
 import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
+import { fetchBindingTargets } from './bindingMeta';
 import { Stepper } from './stepperUi';
 import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
 
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
-// Возможности персоны — тот же список и подписи, что в PersonaForm.tsx
-const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
-  { key: 'tasks', title: 'Задачи', hint: 'Ведёт ваши задачи через инструменты задач' },
-  { key: 'notes', title: 'Заметки', hint: 'Читает и пишет в базу знаний' },
-  { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
-];
 
 const TONE_PRESETS: { label: string; text: string }[] = [
   { label: 'Дружелюбный', text: 'Общайся тепло и дружелюбно, на равных.' },
@@ -160,6 +155,27 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     api.personas.automation(persona.id).then(l => setAutomationCount(l.length)).catch(() => {});
   }, [step, persona]);
 
+  // Шаг «Доступ»: сводка «Инструменты и MCP» вместо легаси-чекбоксов TOOL_OPTIONS —
+  // сколько ключей каталога (включая серверы личного MCP-реестра) сейчас включено
+  const [toolSummary, setToolSummary] = useState<{ enabled: number; total: number } | null>(null);
+  useEffect(() => {
+    if (step !== 7 || !persona) return;
+    let alive = true;
+    Promise.all([fetchBindingTargets('tool', undefined, persona.id), api.personas.bindings(persona.id)])
+      .then(([catalog, personaBindings]) => {
+        if (!alive) return;
+        const lastMode = new Map<string, string>();
+        for (const b of personaBindings) if (b.type === 'tool') lastMode.set(b.target.toLowerCase(), b.mode);
+        const enabled = catalog.filter(t => {
+          const mode = lastMode.get(t.id.toLowerCase());
+          return mode ? mode !== 'off' : t.defaultEnabled !== false;
+        }).length;
+        setToolSummary({ enabled, total: catalog.length });
+      })
+      .catch(() => { if (alive) setToolSummary(null); });
+    return () => { alive = false; };
+  }, [step, persona]);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -180,12 +196,6 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);
   const parseDisallowed = (s: string) => Array.from(new Set(s.split(',').map(t => t.trim()).filter(Boolean)));
-  // Ручная правка инструментов после подстановки шаблона специальности (D2) — как
-  // access/disallowedText, помечает rightsTouched, чтобы смена специальности спрашивала подтверждение
-  const toggleTool = (key: string) => {
-    setRightsTouched(true);
-    setTools(prev => prev.includes(key) ? prev.filter(t => t !== key) : [...prev, key]);
-  };
 
   function buildContract(): PersonaContract {
     return {
@@ -763,22 +773,14 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 )}
               </div>
 
-              {/* Возможности (D2): без этого блока подстановка шаблона специальности —
-                  ловушка, поправить инструменты руками негде, только через API */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>
-                <div>
-                  <FieldLabel>Возможности</FieldLabel>
-                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>Какими инструментами персона может пользоваться в чате</div>
-                </div>
-                {TOOL_OPTIONS.map(t => (
-                  <div key={t.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>{t.title}</div>
-                      <div style={{ fontSize: 12, color: C.textMuted, marginTop: 1 }}>{t.hint}</div>
-                    </div>
-                    <Toggle checked={tools.includes(t.key)} onChange={() => toggleTool(t.key)} />
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>Инструменты и MCP</div>
+                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>
+                    {toolSummary ? `${toolSummary.enabled} из ${toolSummary.total} включено` : 'Загрузка…'}
                   </div>
-                ))}
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => setStep(5)}>Настроить</Button>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>

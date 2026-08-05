@@ -277,6 +277,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
 // и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpRegistry>();
+// Последний известный статус серверов (data/mcp-status.json — в архив не едет) и разовая
+// проба по кнопке: фонового поллинга нет, наблюдение приходит из system/init каждого хода
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
@@ -364,6 +368,14 @@ builder.Services.AddQuietHttpClient(
         Consequence: "Принудительное сохранение документа ждёт таймаут."))
     .WithoutEgressProxy();
 builder.Services.AddHttpClient("glif");
+// Проба MCP-сервера из личного реестра: чужой сервер лежит штатно (не поднят, сменил адрес),
+// и человек видит причину в ответе — консоли не нужны стектрейсы на каждый клик
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.McpProbeService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Probe",
+        Subject: "внешним MCP-сервером",
+        Consequence: "Проверка сервера показала отказ — сам ход это не ломает."));
 // Сторонний провайдер — опциональная зависимость: баланс уходит в протухший кэш, каталог
 // моделей — в дефолтный список, фоновое действие — к другой модели. Мёртвый провайдер
 // не должен засыпать консоль стектрейсами (см. QuietHttpLogger)

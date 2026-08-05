@@ -286,6 +286,8 @@ public class SessionManager : IDisposable
     // ход идёт только со встроенными серверами и наследством .mcp.json)
     private readonly Mcp.McpRegistry? _mcpRegistry;
     private readonly Mcp.McpSecretStore? _mcpSecrets;
+    // Последний известный статус серверов: пишется из system/init каждого хода; null — в тестах
+    private readonly Mcp.McpStatusStore? _mcpStatus;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -335,10 +337,14 @@ public class SessionManager : IDisposable
         // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца
         // и значения их секретов — состав серверов хода поверх встроенных
         Mcp.McpRegistry? mcpRegistry = null,
-        Mcp.McpSecretStore? mcpSecrets = null)
+        Mcp.McpSecretStore? mcpSecrets = null,
+        // Опционально (в тестах не передаётся): последний известный статус MCP-серверов —
+        // наблюдение из system/init каждого хода, фонового поллинга нет
+        Mcp.McpStatusStore? mcpStatus = null)
     {
         _mcpRegistry = mcpRegistry;
         _mcpSecrets = mcpSecrets;
+        _mcpStatus = mcpStatus;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
@@ -854,11 +860,23 @@ public class SessionManager : IDisposable
     private Func<PromptSnapshotDraft, string?>? PromptSinkFor(string sessionId) =>
         _promptSnapshots is null ? null : draft => _promptSnapshots.Save(sessionId, draft);
 
-    // Дозапись состава инструментов в снимок: приходит из system/init, уже после его записи
+    // Дозапись состава инструментов в снимок: приходит из system/init, уже после его записи.
+    // Тем же приёмником — единственная точка записи статуса MCP-серверов: CLI перечисляет в
+    // init все поднятые серверы (и встроенные продуктовые, и записи личного реестра), так что
+    // наблюдение достаётся бесплатно, без фонового поллинга и правок в ClaudeSession.
     private Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptToolsSinkFor(string sessionId) =>
-        _promptSnapshots is null
+        _promptSnapshots is null && _mcpStatus is null
             ? null
-            : (snapshotId, tools, servers) => _promptSnapshots.AttachCliLayer(sessionId, snapshotId, tools, servers);
+            : (snapshotId, tools, servers) =>
+            {
+                _promptSnapshots?.AttachCliLayer(sessionId, snapshotId, tools, servers);
+                if (_mcpStatus is null || servers.Count == 0) return;
+                // Владелец — по сессии (у проектной это владелец проекта): статусы per-user,
+                // как и сам реестр. Сессии уже нет / владелец не резолвится — наблюдение некуда класть
+                if (_sessions.TryGetValue(sessionId, out var entry)
+                    && ResolveOwnerId(entry.Info) is { } ownerId)
+                    _mcpStatus.RecordFromInit(ownerId, sessionId, servers);
+            };
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
@@ -1769,6 +1787,12 @@ public class SessionManager : IDisposable
     {
         if (ownerId is null || _mcpRegistry is null || _mcpSecrets is null) return null;
         if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.McpRegistry)) return null;
+        // Профиль «Только чтение»: имён инструментов чужого сервера мы не знаем, а гасить их
+        // deny-правилами нельзя — список живёт на стороне сервера и меняется, а неизвестное имя
+        // в правиле роняет запуск CLI (см. историю MultiEdit в PersonaAccessPolicy). Поэтому
+        // решение принимается ЦЕЛИКОМ по серверу: такая персона получает только записи с явным
+        // разрешением AllowReadOnlyPersonas. Свойство персоны, не хода — состав не мерцает.
+        var readOnly = persona?.Access == PersonaAccess.ReadOnly;
         var registry = _mcpRegistry;
         var secretStore = _mcpSecrets;
         return () =>
@@ -1783,6 +1807,7 @@ public class SessionManager : IDisposable
                 foreach (var record in registry.GetByOwner(ownerId))
                 {
                     if (!record.Enabled) continue;
+                    if (readOnly && !record.AllowReadOnlyPersonas) continue;
                     // Выключен в этом проекте — второй шаг каскада реестр → проект → персона
                     if (offInProject is { Count: > 0 }
                         && offInProject.Contains(record.Key, StringComparer.OrdinalIgnoreCase)) continue;
@@ -1823,27 +1848,15 @@ public class SessionManager : IDisposable
             return result;
         }
 
-        // Заголовок авторизации http/sse-сервера. Потерянный секрет (запись ссылается
-        // в пустоту) — не повод отдавать серверу заведомо анонимный запрос: пропускаем
-        // сервер с предупреждением, иначе инструменты молча отвечали бы 401.
+        // Заголовок авторизации http/sse-сервера (общая точка с пробой — Mcp.McpAuthHeaders).
+        // Потерянный секрет (запись ссылается в пустоту) — не повод отдавать серверу заведомо
+        // анонимный запрос: пропускаем сервер с предупреждением, иначе инструменты молча
+        // отвечали бы 401.
         bool ApplyAuthHeaders(McpServerRecord record, Dictionary<string, string> headers)
         {
-            var auth = record.Auth;
-            if (auth.Kind == McpAuthKind.None) return true;
-            var secretRef = auth.Kind == McpAuthKind.OAuth2 ? auth.OAuth?.AccessTokenRef : auth.SecretRef;
-            var value = _mcpSecrets!.Resolve(ownerId, secretRef);
-            if (string.IsNullOrEmpty(value))
-            {
-                _log.LogWarning("MCP-сервер «{Key}» снят с хода: не найдено значение авторизации", record.Key);
-                return false;
-            }
-            if (auth.Kind == McpAuthKind.ApiKey)
-            {
-                if (string.IsNullOrWhiteSpace(auth.HeaderName)) return false;
-                headers[auth.HeaderName] = value;
-            }
-            else headers["Authorization"] = "Bearer " + value;
-            return true;
+            if (Mcp.McpAuthHeaders.TryApply(record, headers, r => _mcpSecrets!.Resolve(ownerId, r))) return true;
+            _log.LogWarning("MCP-сервер «{Key}» снят с хода: не найдено значение авторизации", record.Key);
+            return false;
         }
     }
 

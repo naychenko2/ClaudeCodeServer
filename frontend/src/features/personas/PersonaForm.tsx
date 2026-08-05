@@ -87,9 +87,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const isEdit = !!persona;
   const isMobile = useIsMobile();
   const models = useModels();
-  // Возможности переехали во вкладку «Знания» — вместо тумблеров показываем
-  // плашку-переадресацию. Прежний блок тумблеров оставлен как ветка-легаси.
-  const bindingsEnabled = true;
 
   const [name, setName] = useState(persona?.name ?? initial?.name ?? '');
   // Ручной @handle. При создании авто-подставляется из имени, пока пользователь не тронул поле.
@@ -1025,59 +1022,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     </div>
   );
 
-  // === Секция 3.5 — Возможности (инструменты per-persona) ===
-  const toggleTool = (key: string) =>
-    setTools(prev => prev.includes(key) ? prev.filter(t => t !== key) : [...prev, key]);
-
-  // При включённой фиче persona-bindings источники/инструменты настраиваются во
-  // вкладке «Знания» — здесь блок «Возможности» не показываем.
-  const toolsSection = bindingsEnabled ? null : (
-    <div style={section}>
-      <SectionLabel style={{ marginBottom: 4 }}>Возможности</SectionLabel>
-      <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, marginBottom: 14 }}>
-        Какими инструментами персона может пользоваться в чате
-      </div>
-
-      {/* Профиль доступа (P6): full / readOnly / custom */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
-        <FieldLabel>Профиль доступа</FieldLabel>
-        <SegmentedControl<PersonaAccess>
-          value={access}
-          onChange={setAccess}
-          columns={3}
-          options={[
-            { value: 'full', label: 'Полный' },
-            { value: 'readOnly', label: 'Только чтение' },
-            { value: 'custom', label: 'Свой' },
-          ]}
-        />
-        {access === 'readOnly' && (
-          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            Смотрит и советует, но ничего не меняет: без правок файлов, Bash и мутаций задач/заметок
-          </span>
-        )}
-        {access === 'custom' && (
-          <Field hint="Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete">
-            <TextArea value={disallowedText} onChange={setDisallowedText} autoGrow minHeight={56}
-              placeholder="Bash, Edit, Write" />
-          </Field>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {TOOL_OPTIONS.map(t => (
-          <div key={t.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{t.title}</div>
-              <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, marginTop: 1 }}>{t.hint}</div>
-            </div>
-            <Toggle checked={tools.includes(t.key)} onChange={() => toggleTool(t.key)} />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-
   // === Секция 4 — Долгая память (summary) ===
   const memorySection = (
     <div style={section}>
@@ -1180,7 +1124,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         {heroSection}
         {characterSection}
         {behaviorSection}
-        {toolsSection}
         {memorySection}
         {dangerSection}
         {error && (
@@ -1207,13 +1150,8 @@ function parseDisallowed(s: string): string[] {
   return Array.from(new Set(s.split(',').map(t => t.trim()).filter(Boolean)));
 }
 
-// Возможности персоны: ключи и подписи тумблеров. Полный набор = «без ограничений».
+// Возможности персоны (Persona.Tools): полный набор = «без ограничений»
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
-const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
-  { key: 'tasks', title: 'Задачи', hint: 'Ведёт ваши задачи через инструменты задач' },
-  { key: 'notes', title: 'Заметки', hint: 'Читает и пишет в базу знаний' },
-  { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
-];
 
 // Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»
 const TONE_PRESETS: { label: string; text: string }[] = [

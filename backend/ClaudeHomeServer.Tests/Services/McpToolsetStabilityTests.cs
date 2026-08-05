@@ -137,6 +137,53 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Статус MCP-серверов пишется из ОДНОЙ точки — приёмника состава инструментов, который
+    /// уже получает system/init хода. Заводить ради статуса второй канал (правку ClaudeSession,
+    /// новое поле протокола, фоновый поллинг) не нужно: init перечисляет все поднятые серверы.
+    /// </summary>
+    [SkippableFact]
+    public void СтатусСерверов_ПишетсяИзПриёмникаSystemInit()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptToolsSinkFor");
+
+        body.Should().Contain("RecordFromInit(",
+            "наблюдение из system/init обязано попадать в McpStatusStore");
+        body.Should().Contain("ResolveOwnerId(",
+            "статусы per-owner: владельца сессии резолвит единая точка SessionManager.ResolveOwnerId");
+    }
+
+    /// <summary>
+    /// Профиль «Только чтение» режет серверы реестра ЦЕЛИКОМ (кроме записей с явным
+    /// AllowReadOnlyPersonas), а не запретами на отдельные инструменты: имена инструментов
+    /// чужого сервера мы не знаем, они меняются на его стороне, а неизвестное имя в
+    /// deny-правиле роняет запуск CLI (история MultiEdit в PersonaAccessPolicy).
+    /// </summary>
+    [SkippableFact]
+    public void ПрофильReadOnly_РежетСерверЦеликом_АНеЕгоИнструменты()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+
+        body.Should().Contain("PersonaAccess.ReadOnly",
+            "персона «только чтение» не получает серверы реестра по умолчанию");
+        body.Should().Contain("AllowReadOnlyPersonas",
+            "исключение — только явное разрешение в самой записи реестра");
+
+        // Список запретов профиля не смеет обрастать именами чужих инструментов
+        var policy = FindSource("Services", "PersonaAccessPolicy.cs");
+        Skip.If(policy is null, "PersonaAccessPolicy.cs не найден");
+        File.ReadAllText(policy!).Should().NotContain("mcp__mcp_",
+            "инструменты серверов реестра гасятся отключением сервера, а не deny-правилами");
+    }
+
+    /// <summary>
     /// Секции-надстройки с пресетом по роли (git/kb в workspace, manage/automation в сервере
     /// персон): решаются ТОЛЬКО по персоне через единую точку SectionEnabled. Свой набор
     /// инструментов у каждой, поэтому зависимость от хода тут так же смертельна.

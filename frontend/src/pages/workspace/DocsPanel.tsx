@@ -13,13 +13,13 @@ import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSens
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
-import { BookOpenText, BookText, ChevronDown, ChevronRight, FileQuestion, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
+import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, FileQuestion, FolderCog, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, Pin, PinOff, Search, SlidersHorizontal, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, EmptyState, IconButton, IconSegmented, Menu, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader } from '../../components/ui';
+import { Button, EmptyState, IconButton, IconSegmented, Menu, MenuItem, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { useRequestPanelFill } from './panelFill';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
@@ -453,6 +453,12 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // Прямоугольник кнопки-якоря: поповер рисуется fixed по нему (Menu), иначе
   // absolute внутри панели обрезался её краем, когда места мало
   const [foldersAnchor, setFoldersAnchor] = useState<DOMRect | null>(null);
+  // Меню настроек панели (шестерёнка в шапке): режим превью + область документации
+  const [settingsAnchor, setSettingsAnchor] = useState<DOMRect | null>(null);
+  // Пока открыт попап или поиск — контролы шапки не гаснут (общее решение,
+  // как у FileExplorer/GitChangesRail): меню живёт порталом в body, курсор
+  // уходит с карточки, и без удержания кнопка-триггер пропадала под попапом
+  usePanelHeaderHold(!!foldersAnchor || !!settingsAnchor || searchOpen);
 
   const folderRefs = useRef(new Map<string, HTMLDivElement>());
   // Папка, к которой только что прокрутили: подсвечиваем на секунду, иначе после
@@ -1121,18 +1127,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           </IconButton>
         </>}
         */}
-        {/* Режим работы панели: со встроенным превью или только список (тогда документ
-            открывается сразу в центральной области) */}
+        {/* Настройки панели одним меню: режим превью и область документации.
+            Раньше оба жили отдельными кнопками — ряд в шапке и так плотный */}
         <IconButton
-          title={previewEnabled ? 'Превью снизу включено — выключить' : 'Превью снизу выключено — включить'}
-          active={previewEnabled}
-          onClick={() => setPreview(!previewEnabled)}
+          title="Настройки панели"
+          active={!!settingsAnchor}
+          onClick={e => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            setSettingsAnchor(a => (a ? null : rect));
+          }}
           size="sm"
         >
-          <PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-        </IconButton>
-        {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное */}
-        <IconButton title="Папки документации" onClick={() => setScopeOpen(true)} size="sm">
           <SlidersHorizontal size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
         </IconButton>
       </>}
@@ -1166,6 +1171,32 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       {/* Список папок — общим Menu в anchor-режиме: fixed по кнопке, с выбором
           направления и клампом в окно. Свой absolute обрезался краем панели,
           стоило ей стать пониже */}
+      {/* Меню настроек панели: тумблер превью (галка справа — как у группировки
+          в списке чатов) и вход в диалог области документации */}
+      {settingsAnchor && (
+        <Menu anchor={settingsAnchor} minWidth={230} maxHeight={140} onClose={() => setSettingsAnchor(null)}>
+          <MenuItem
+            icon={<PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            onClick={() => { setPreview(!previewEnabled); setSettingsAnchor(null); }}
+            label={
+              <span style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                flex: 1, gap: SP.sm,
+              }}>
+                Превью снизу
+                {previewEnabled && <Check size={ICON_SIZE.xs} strokeWidth={2.4} style={{ color: C.accent, flexShrink: 0 }} />}
+              </span>
+            }
+          />
+          {/* Область документации: дефолт docs/, но соглашение о папке в проектах разное */}
+          <MenuItem
+            icon={<FolderCog size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            label="Папки документации"
+            onClick={() => { setScopeOpen(true); setSettingsAnchor(null); }}
+          />
+        </Menu>
+      )}
+
       {foldersAnchor && (
         <Menu anchor={foldersAnchor} minWidth={260} maxHeight={320} onClose={() => setFoldersAnchor(null)}>
           {folderCounts.map(([folder, count]) => folderRow(folder, count, folder === activeFolder))}

@@ -155,7 +155,7 @@ export function DocsScopeDialog({ projectId, onClose, onSaved }: Props) {
   return (
     <Modal
       width={460}
-      title="Что считать документацией"
+      title="Папки документации"
       subtitle="Область панели «Документы»: папка берётся со всем, что внутри"
       onClose={onClose}
       footer={

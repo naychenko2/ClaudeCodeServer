@@ -34,7 +34,7 @@ import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FONT, MODAL_W, SHADOW } from '../lib/design';
+import { C, R, FONT, MODAL_W } from '../lib/design';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, useHasPanelHeader } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -1284,30 +1284,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     );
   };
 
-  // Пункт контекстного меню — единый стиль.
-  // onPointerDown + stopPropagation: предотвращает всплытие mousedown до document-listener
-  // (который закрыл бы меню до срабатывания click).
-  const menuItem = (icon: ReactNode, label: string, action: () => void, danger = false) => (
-    <button
-      key={label}
-      onPointerDown={e => { e.stopPropagation(); action(); }}
-      style={{
-        display: 'flex', alignItems: 'center', width: '100%',
-        padding: isMobile || alwaysShowIcons ? '14px 20px' : '8px 12px',
-        background: 'none', border: 'none', cursor: 'pointer', textAlign: 'left',
-        fontFamily: FONT.sans, fontSize: isMobile || alwaysShowIcons ? 15 : 13,
-        color: danger ? C.danger : C.textPrimary,
-        borderRadius: isMobile || alwaysShowIcons ? 0 : 6,
-        gap: 10,
-      }}
-      onMouseEnter={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
-      onMouseLeave={e => { if (!isMobile && !alwaysShowIcons) (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
-    >
-      <span style={{ display: 'flex', alignItems: 'center', flexShrink: 0, opacity: 0.8 }}>{icon}</span>
-      {label}
-    </button>
-  );
-
   // === Контролы панели — в шапке карточки (PanelHeaderSlot) ===
   // Раньше они занимали четыре полосы над деревом: поле поиска, кнопка вида, ряд
   // «Новый файл / папка / загрузить» и строка-хинт целевой папки. В колонке 280px
@@ -1779,93 +1755,70 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       })()}
 
       {/* === Контекстное меню === */}
+      {/* Состав пунктов один и тот же для мыши и пальца — различается только оболочка:
+          на десктопе ui/Menu по якорю-точке курсора, на мобиле Modal (он сам
+          показывает себя шторкой снизу). Раньше здесь были две самодельные
+          конструкции: div position:fixed и рукописный bottom-sheet. */}
       {contextMenu && (() => {
         const { entry } = contextMenu;
         const sstate = computeSyncState(marks, entry.path);
-        const offlineLabel = sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн';
+        const close = () => setContextMenu(null);
         const canToggleOffline = online && sstate !== 'inherited';
-        const doToggleOffline = () => { setContextMenu(null); toggleSyncMark(project.id, entry); };
+        const isKb = indexedFileNames?.has(entry.path);
 
-        // Мобила — bottom sheet
+        const items: ReactNode[] = [];
+        const add = (cond: unknown, node: ReactNode) => { if (cond) items.push(node); };
+        const sep = (key: string) => items.push(<div key={key} style={{ height: 1, background: C.border, margin: '4px 6px' }} />);
+
+        add(entry.isDirectory && inNotesVault(entry.path),
+          <MenuItem key="note" icon={<MI_NotePlus />} label="Новая заметка" onClick={() => { close(); setNoteDialog({ folder: noteFolderOf(entry.path) }); }} />);
+        add(!entry.isDirectory && onAttachToChat,
+          <MenuItem key="attach" icon={<MI_Attach />} label="Прикрепить к чату" onClick={() => { close(); onAttachToChat!(entry.path); }} />);
+        add(!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name),
+          <MenuItem key="copy-md" icon={<MI_Copy />} label="Копировать Markdown" onClick={() => { close(); void copyMdFromTree(entry.path); }} />);
+        add(!entry.isDirectory && online && isMdConvertible(entry.name),
+          <MenuItem key="to-md" icon={<MI_Copy />} label="Трансформировать в Markdown…" onClick={() => { close(); setMdEntry(entry); }} />);
+        add(!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !isKb && isKnowledgeIndexable(entry.name),
+          <MenuItem key="kb-add" icon={<MI_BookPlus />} label="Добавить в знания" onClick={() => { close(); onAddToKnowledge!(entry.path); }} />);
+        add(!entry.isDirectory && onRemoveFromKnowledge && isKb,
+          <MenuItem key="kb-del" icon={<MI_BookMinus />} label="Удалить из знаний" onClick={() => { close(); onRemoveFromKnowledge!(entry.path); }} />);
+        add(entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path),
+          <MenuItem key="kb-folder" icon={<MI_BookPlus />} label="Добавить папку в знания" onClick={() => { close(); onAddFolderToKnowledge!(entry.path); }} />);
+        add(entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path),
+          <MenuItem key="kb-busy" icon={<MI_BookPlus />} label="Индексирование…" disabled />);
+        add(canToggleOffline,
+          <MenuItem key="offline" icon={<MI_Cloud />} label={sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн'}
+            onClick={() => { close(); toggleSyncMark(project.id, entry); }} />);
+
+        // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
+        if (!isNotesRoot(entry) && online) {
+          sep('sep-1');
+          items.push(<MenuItem key="rename" icon={<MI_Rename />} label="Переименовать" onClick={() => startRename(entry)} />);
+          items.push(<MenuItem key="move" icon={<MI_Move />} label="Переместить в…" onClick={() => { close(); setMovingEntry(entry); setShowMoveModal(true); }} />);
+          sep('sep-2');
+          items.push(<MenuItem key="delete" icon={<MI_Trash />} label="Удалить" danger onClick={() => { close(); setDeleteConfirm(entry); }} />);
+        }
+
+        // Мобила и планшет — шторка Modal с именем файла в заголовке
         if (isMobile || alwaysShowIcons) {
           return (
-            <>
-              <div
-                onPointerDown={e => { e.stopPropagation(); setContextMenu(null); }}
-                style={{ position: 'fixed', inset: 0, background: C.overlay, zIndex: 1000 }}
-              />
-              <div style={{
-                position: 'fixed', bottom: 0, left: 0, right: 0,
-                background: C.bgPanel,
-                borderRadius: '16px 16px 0 0',
-                paddingBottom: 24,
-                zIndex: 1001,
-                boxShadow: SHADOW.sheet,
-              }}>
-                {/* Ручка */}
-                <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px' }}>
-                  <div style={{ width: 36, height: 4, borderRadius: 2, background: C.border }} />
-                </div>
-                <div style={{ padding: '4px 20px 12px', fontFamily: FONT.mono, fontSize: 13, fontWeight: 700, color: C.textPrimary, borderBottom: `1px solid ${C.border}` }}>
-                  {entry.name}
-                </div>
-                {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
-                {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-                {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
-                {!entry.isDirectory && online && isMdConvertible(entry.name) && menuItem(<MI_Copy />, 'Трансформировать в Markdown…', () => { setContextMenu(null); setMdEntry(entry); })}
-                {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-                {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
-                {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
-                {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
-                {canToggleOffline && menuItem(<MI_Cloud />, offlineLabel, doToggleOffline)}
-                {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
-                {!isNotesRoot(entry) && <>
-                  <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />
-                  {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
-                  {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-                  {online && <div style={{ height: 1, background: C.border, margin: '4px 20px' }} />}
-                  {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
-                </>}
-              </div>
-            </>
+            <Modal
+              width={MODAL_W.form}
+              onClose={close}
+              title={entry.isDirectory ? 'Папка' : 'Файл'}
+              subtitle={<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{isNotesRoot(entry) ? 'Заметки' : entry.name}</span>}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', margin: '0 -6px' }}>{items}</div>
+            </Modal>
           );
         }
 
-        // Десктоп — popup
-        return (
-          <div
-            style={{
-              position: 'fixed',
-              top: contextMenu.y,
-              left: contextMenu.x,
-              zIndex: 1000,
-              background: C.bgWhite,
-              border: `1px solid ${C.border}`,
-              borderRadius: R.lg,
-              boxShadow: SHADOW.dropdown,
-              padding: 4,
-              minWidth: 190,
-            }}
-          >
-            {entry.isDirectory && inNotesVault(entry.path) && menuItem(<MI_NotePlus />, 'Новая заметка', () => { setContextMenu(null); setNoteDialog({ folder: noteFolderOf(entry.path) }); })}
-            {!entry.isDirectory && onAttachToChat && menuItem(<MI_Attach />, 'Прикрепить к чату', () => { setContextMenu(null); onAttachToChat(entry.path); })}
-            {!entry.isDirectory && /\.(md|mdx)$/i.test(entry.name) && menuItem(<MI_Copy />, 'Копировать Markdown', () => { setContextMenu(null); void copyMdFromTree(entry.path); })}
-                {!entry.isDirectory && online && isMdConvertible(entry.name) && menuItem(<MI_Copy />, 'Трансформировать в Markdown…', () => { setContextMenu(null); setMdEntry(entry); })}
-            {!entry.isDirectory && !inNotesVault(entry.path) && onAddToKnowledge && !indexedFileNames?.has(entry.path) && isKnowledgeIndexable(entry.name) && menuItem(<MI_BookPlus />, 'Добавить в знания', () => { setContextMenu(null); onAddToKnowledge(entry.path); })}
-            {!entry.isDirectory && onRemoveFromKnowledge && indexedFileNames?.has(entry.path) && menuItem(<MI_BookMinus />, 'Удалить из знаний', () => { setContextMenu(null); onRemoveFromKnowledge(entry.path); })}
-            {entry.isDirectory && !inNotesVault(entry.path) && onAddFolderToKnowledge && !indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Добавить папку в знания', () => { setContextMenu(null); onAddFolderToKnowledge(entry.path); })}
-            {entry.isDirectory && !inNotesVault(entry.path) && indexingFolders?.has(entry.path) && menuItem(<MI_BookPlus />, 'Индексирование…', () => {})}
-            {canToggleOffline && menuItem(<MI_Cloud />, sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн', doToggleOffline)}
-            {/* «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний */}
-            {!isNotesRoot(entry) && <>
-              <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-              {online && menuItem(<MI_Rename />, 'Переименовать', () => startRename(entry))}
-              {online && menuItem(<MI_Move />, 'Переместить в...', () => { setContextMenu(null); setMovingEntry(entry); setShowMoveModal(true); })}
-              <div style={{ height: 1, background: C.border, margin: '4px 0' }} />
-              {online && menuItem(<MI_Trash />, 'Удалить', () => { setContextMenu(null); setDeleteConfirm(entry); }, true)}
-            </>}
-          </div>
-        );
+        // Десктоп — меню по якорю в точке курсора. Menu выравнивает карточку по
+        // ПРАВОМУ краю якоря, поэтому ширина синтетического rect равна minWidth:
+        // так левый край меню встаёт ровно под курсор
+        const W = 210;
+        const anchor = new DOMRect(contextMenu.x, contextMenu.y, W, 0);
+        return <Menu anchor={anchor} minWidth={W} maxHeight={320} gap={2} onClose={close}>{items}</Menu>;
       })()}
 
       {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект) */}

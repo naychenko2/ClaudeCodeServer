@@ -262,7 +262,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
   // только у раздела с вложенными подпапками — иначе прятать сверх своих документов нечего
   onCollapseSubtree?: () => void;
   subtreeCollapsed?: boolean;
-  // Путь файла-страницы раздела: рисуем md-бейдж после левой линии, чтобы раздел в списке
+  // Путь файла-страницы раздела: рисуем md-бейдж перед подписью, чтобы раздел в списке
   // читался как документ — как у остальных строк
   pagePath?: string;
   // Закрепление страницы раздела — как у документа: бейдж под курсором становится булавкой
@@ -332,7 +332,10 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
         {...foldHoverProps}
         title={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
         style={{
+          // Своё поле у шеврона: без левой черты подпись с бейджем подтянулись влево,
+          // и шеврон вплотную к краю плашки смотрелся выпавшим из колонки
           width: 16, flexShrink: 0, height: 20, padding: 0, border: 'none',
+          marginLeft: SP.xs,
           background: 'transparent', cursor: 'pointer',
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
@@ -345,7 +348,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
           align="left" dense
           onClick={onOpenPage}
           highlightOnHover
-          // md-бейдж/булавка раздела — после левой линии, в одну колонку с бейджами документов
+          // md-бейдж/булавка раздела — сразу перед подписью, следом за шевроном
           beforeTitle={pinBadge}
           // Правая линия делает то же, что двойной шеврон: у раздела с поддеревом —
           // глубокое сворачивание, у листового — обычное (прятать нечего сверх документов)

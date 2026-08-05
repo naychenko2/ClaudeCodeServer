@@ -23,7 +23,8 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  * относятся к одному дню, и карточка не тратит на это место.
  *
  * align='left' + dense — вариант для плотных списков (панель «Документация»): подпись прижата
- * влево, слева от неё остаётся короткий отрезок черты, отступы вдвое меньше.
+ * влево, левой черты нет вовсе (её огрызок только отодвигал подпись от колонки иконок,
+ * а границу группы держит черта справа), отступы вдвое меньше.
  *
  * С onClick разделитель становится переключателем группы (свернуть/развернуть) — корень
  * тогда кнопка, а не div: у сворачивания есть клавиатура и фокус, самодельный кликабельный
@@ -63,11 +64,13 @@ export function ListDateDivider({
   const [hover, setHover] = useState(false);
   const lineColor = flash ? C.accent : C.divider;
   const line = { flex: 1, height: 1, background: lineColor };
-  const stub = { width: 10, height: 1, background: lineColor, flexShrink: 0 };
   const body = (
     <>
       {leading}
-      <div style={align === 'left' ? stub : line} />
+      {/* Слева черты нет только в плотном варианте: там подпись стоит в колонке строк
+          списка, и огрызок линии перед ней сбивал бы иконку раздела с колонки иконок
+          документов */}
+      {align === 'left' ? null : <div style={line} />}
       {beforeTitle}
       <span style={{
         fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
@@ -76,7 +79,20 @@ export function ListDateDivider({
         {title}
       </span>
       {subtitle && (
-        <>
+        // Родитель — та же мишень, что черта справа: приписка не самостоятельная строка,
+        // а контекст группы, и клик по ней сворачивает раздел, а не открывает его страницу.
+        // span, а не button: подпись сама кнопка, а button в button html не разрешает —
+        // поэтому клик гасим stopPropagation'ом, как у линии
+        <span
+          onClick={onLineClick ? e => { e.stopPropagation(); onLineClick(); } : undefined}
+          onMouseEnter={onLineHover ? () => onLineHover(true) : undefined}
+          onMouseLeave={onLineHover ? () => onLineHover(false) : undefined}
+          title={onLineClick ? lineTitleAttr : undefined}
+          style={{
+            display: 'flex', alignItems: 'center', gap: 8, minWidth: 0,
+            cursor: onLineClick ? 'pointer' : undefined,
+          }}
+        >
           {/* Центральная точка между папкой и родителем: разделяет их отчётливее пробела,
               вертикально по центру строки. Декоративная — скринридеру не нужна */}
           <span aria-hidden style={{ fontSize: 10, color: C.textMuted, flexShrink: 0, margin: '0 -4px' }}>·</span>
@@ -86,7 +102,7 @@ export function ListDateDivider({
           }}>
             {subtitle}
           </span>
-        </>
+        </span>
       )}
       {onLineClick ? (
         // Зона клика во всю высоту строки, черта в 1px — по центру: попасть по линии

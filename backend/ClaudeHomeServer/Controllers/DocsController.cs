@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/docs")]
-public class DocsController(DocsIndexService docs, ProjectManager projects) : ControllerBase
+public class DocsController(DocsIndexService docs, ProjectManager projects,
+    NotesService notes, ILogger<DocsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub читаем напрямую (как в FilesController)
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -184,6 +185,66 @@ public class DocsController(DocsIndexService docs, ProjectManager projects) : Co
         catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к папке: {e.Message}" }); }
     }
 
+    // Переименовать документ или раздел. Раздел переезжает парой «страница + папка», и
+    // вместе с ним — весь его подкорпус: пути вложенных документов, ссылки на них,
+    // строка в .order, привязки комментариев и выбранное «Начало».
+    //
+    // updateLinks: false — файлы чужих документов не трогаем, но в ответе говорим, сколько
+    // ссылок осталось битыми: молчание тут хуже, чем неудобная цифра
+    [HttpPost("rename")]
+    public IActionResult Rename(string projectId, [FromBody] RenameDocRequest req)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var scope = docs.ResolveScope(p);
+            var result = docs.RenameDoc(p.RootPath, req.Path ?? "", req.NewName, req.UpdateLinks, scope);
+            switch (result.Status)
+            {
+                case DocsIndexService.DocRenameStatus.NotFound: return NotFound(new { error = result.Error });
+                case DocsIndexService.DocRenameStatus.BadName: return BadRequest(new { error = result.Error });
+                case DocsIndexService.DocRenameStatus.Conflict: return Conflict(new { error = result.Error });
+                case DocsIndexService.DocRenameStatus.Failed:
+                    return StatusCode(500, new { error = result.Error });
+            }
+
+            var moved = result.Moved ?? new Dictionary<string, string>();
+            if (moved.Count > 0)
+            {
+                // Комментарии заметок к документу (и ко всему поддереву раздела) следуют
+                // за новым путём — привязка не сиротеет. Как в FilesController.Rename
+                foreach (var (from, to) in moved)
+                {
+                    try { notes.RewriteAnnotationTargets(UserId!, projectId, from, projectId, to, prefix: true); }
+                    catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при переименовании {Old}", from); }
+                }
+
+                // «Начало» указывает на конкретный путь: без переезда выбранный документ
+                // молча исчез бы из настройки, и панель открылась бы на README
+                if (scope.Home is { } home && moved.TryGetValue(home, out var newHome))
+                {
+                    if (docs.ReadScopeFile(p.RootPath).Scope is not null)
+                        docs.WriteScopeFile(p.RootPath, scope with { Home = newHome });
+                    else
+                        projects.SetDocsScope(projectId, scope.Folders, scope.RootFiles, scope.Types, newHome);
+                    scope = docs.ResolveScope(GetProject(projectId));
+                }
+            }
+
+            return Ok(new
+            {
+                path = result.Path,
+                updatedDocs = result.UpdatedDocs,
+                brokenLinks = result.BrokenLinks,
+                moved,
+                index = docs.GetIndex(p.RootPath, scope),
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось переименовать: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа: {e.Message}" }); }
+    }
+
     // Вынести текущую область в файл репозитория: с этого момента она версионируется и
     // одинакова у всех, кто открыл репозиторий. Отдельным действием, а не автоматически —
     // продукт не создаёт файлы в чужом рабочем дереве без спроса.
@@ -210,3 +271,7 @@ public record SetDocsOrderRequest(string? Folder, List<string>? Items);
 // Name — НАЗВАНИЕ страницы: имя файла из него делает сервис (пробелы → дефисы), а само
 // название уходит в первую строку документа заголовком. Kind: «doc» либо «section»
 public record CreateDocRequest(string? Folder, string? Name, string? Kind);
+
+// NewName — новое НАЗВАНИЕ (не имя файла): правила те же, что при создании. UpdateLinks —
+// чинить ли ссылки в остальных документах; false — оставить как есть и сообщить их число
+public record RenameDocRequest(string? Path, string? NewName, bool UpdateLinks = true);

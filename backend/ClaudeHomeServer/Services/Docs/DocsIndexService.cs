@@ -1116,9 +1116,14 @@ public sealed partial class DocsIndexService(FileService? files = null)
             error = "Название не может начинаться или заканчиваться точкой";
             return null;
         }
+        // Набор запрещённых — явный и платформонезависимый: Path.GetInvalidFileNameChars()
+        // на Linux (среда CI) НЕ содержит ':' '*' '?' '"' '<' '>' '|', и «a:b» там молча
+        // создалось бы, а при первом клоне на Windows сломалось. Перечисляем весь Windows-набор
+        // сами, а Linux-набор добавляем сверху надмножеством (control-символы 0–31 уже в нём).
         // '#' формально допустим в имени файла, но в markdown-ссылке он открывает якорь,
-        // и ссылка на такой документ не соберётся ни в панели, ни в wiki
-        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars()) { '#', '/', '\\' };
+        // и ссылка на такой документ не соберётся ни в панели, ни в wiki.
+        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars())
+            { '<', '>', ':', '"', '/', '\\', '|', '?', '*', '#' };
         foreach (var ch in name)
             if (invalid.Contains(ch))
             {
@@ -1192,6 +1197,219 @@ public sealed partial class DocsIndexService(FileService? files = null)
         // «decisions» задаёт место и страницы раздела, и всего его содержимого
         AppendToOrder(root, target, name);
         return new DocCreateResult(DocCreateStatus.Ok, docPath);
+    }
+
+    // ---------- переименование ----------
+
+    public enum DocRenameStatus { Ok, NotFound, BadName, Conflict, Failed }
+
+    // Moved — старый путь → новый по КАЖДОМУ переехавшему документу: контроллеру он нужен
+    // для побочных привязок (комментарии заметок, «Начало»), а панели — чтобы поправить
+    // закреплённые и открытый документ
+    public sealed record DocRenameResult(
+        DocRenameStatus Status, string? Path = null, int UpdatedDocs = 0, int BrokenLinks = 0,
+        string? Error = null, IReadOnlyDictionary<string, string>? Moved = null);
+
+    // Переименовать документ или раздел.
+    //
+    // Раздел переименовывается ПАРОЙ: файл и одноимённая папка. Расщеплённая пара хуже
+    // отказа — в wiki она даёт сразу и пустой раздел, и осиротевшую страницу, — поэтому
+    // сбой второго шага откатывает первый.
+    //
+    // Ссылки чинятся по РАЗОБРАННЫМ целям, а не текстовым поиском старого имени: для
+    // каждой ссылки пересчитывается относительный путь от источника к новому расположению.
+    // Подписи ссылок («Журнал решений») не трогаем — это авторский текст, а не путь.
+    // Предел механизма: видно только то, что входит в корпус. Ссылка из кода или из .md
+    // вне области останется битой при любом updateLinks — их число возвращается наружу.
+    public DocRenameResult RenameDoc(string rootPath, string path, string? newTitle,
+        bool updateLinks, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocRenameResult(DocRenameStatus.Failed, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(root, scope);
+        var key = NormalizePath(path);
+        if (key is null || !corpus.ByPath.TryGetValue(key, out var entry))
+            return new DocRenameResult(DocRenameStatus.NotFound, Error: $"Документ вне области документации: {path}");
+        if (!IsMarkdown(entry.Path))
+            return new DocRenameResult(DocRenameStatus.BadName,
+                Error: "Переименование поддержано только для markdown-документов");
+
+        var name = DocFileName(newTitle, out var nameError);
+        if (name is null) return new DocRenameResult(DocRenameStatus.BadName, Error: nameError);
+
+        var parent = Folder(entry.Path);
+        var oldName = Path.GetFileNameWithoutExtension(entry.Path);
+        var newDocPath = parent.Length == 0 ? $"{name}.md" : $"{parent}/{name}.md";
+        if (newDocPath.Length > MaxDocPathLength)
+            return new DocRenameResult(DocRenameStatus.BadName,
+                Error: $"Путь длиннее {MaxDocPathLength} символов — wiki такую страницу не откроет");
+        if (string.Equals(name, oldName, StringComparison.Ordinal))
+            return new DocRenameResult(DocRenameStatus.Ok, entry.Path);
+
+        // Смена ТОЛЬКО регистра — не коллизия: это переименование того же файла
+        var sameFile = string.Equals(name, oldName, StringComparison.OrdinalIgnoreCase);
+        var dir = parent.Length == 0 ? root : Path.Combine(root, parent.Replace('/', Path.DirectorySeparatorChar));
+        if (!sameFile && (EntryExists(dir, $"{name}.md", directory: false)
+            || (entry.SectionFolder is not null && EntryExists(dir, name, directory: true))))
+            return new DocRenameResult(DocRenameStatus.Conflict, Error: $"«{name}» в этой папке уже есть");
+
+        // Куда что переезжает: сама страница плюс всё поддерево раздела. Ключи — старые
+        // пути, значения — новые; по этой карте потом чинятся ссылки
+        var moved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [entry.Path] = newDocPath };
+        var oldFolder = entry.SectionFolder;
+        var newFolder = oldFolder is null ? null : (parent.Length == 0 ? name : $"{parent}/{name}");
+        if (oldFolder is not null)
+            foreach (var doc in corpus.Docs)
+                if (doc.Path.StartsWith($"{oldFolder}/", StringComparison.OrdinalIgnoreCase))
+                    moved[doc.Path] = $"{newFolder}{doc.Path[oldFolder.Length..]}";
+
+        // Ссылки на переезжающее ИЗ документов, которые сами никуда не едут: только их и
+        // придётся чинить. Считаем до переименования — после карта путей уже другая
+        var broken = 0;
+        foreach (var (target, _) in moved)
+            if (corpus.Backlinks.TryGetValue(target, out var backs))
+                broken += backs.Count(b => !moved.ContainsKey(b.Path));
+
+        try
+        {
+            RenameEntry(root, entry.Path, newDocPath, sameFile);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new DocRenameResult(DocRenameStatus.Failed, Error: $"Не удалось переименовать файл: {e.Message}");
+        }
+
+        if (oldFolder is not null)
+        {
+            try
+            {
+                RenameEntry(root, oldFolder, newFolder!, sameFile);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Откат: половина пары хуже отказа — в wiki это сразу и пустой раздел,
+                // и осиротевшая страница
+                try { RenameEntry(root, newDocPath, entry.Path, sameFile); }
+                catch (Exception rollback) when (rollback is IOException or UnauthorizedAccessException)
+                {
+                    return new DocRenameResult(DocRenameStatus.Failed,
+                        Error: $"Папка не переименована ({e.Message}), и вернуть файл не удалось: {rollback.Message}");
+                }
+                return new DocRenameResult(DocRenameStatus.Failed,
+                    Error: $"Не удалось переименовать папку раздела: {e.Message}");
+            }
+        }
+
+        // Строка .order меняется НА МЕСТЕ: позиция страницы в порядке чтения к имени
+        // отношения не имеет. Не было строки — не добавляем: документ и раньше был
+        // неперечисленным, и переименование не повод менять это
+        ReplaceInOrder(root, parent, oldName, name);
+
+        var updated = updateLinks ? UpdateLinks(root, corpus, moved) : 0;
+        return new DocRenameResult(DocRenameStatus.Ok, newDocPath, updated,
+            updateLinks ? 0 : broken, Moved: moved);
+    }
+
+    // Переименование через файловый сервис (там SafeJoin и уведомление OnMutated, на
+    // котором висит синк базы знаний). sameFile — смена только регистра: на Windows это
+    // один и тот же файл, git с core.ignorecase его не замечает, поэтому идём в два шага
+    // через временное имя — иначе правка не попала бы ни в панель, ни в коммит
+    private void RenameEntry(string root, string oldRel, string newRel, bool sameFile)
+    {
+        if (!sameFile) { files!.Rename(root, oldRel, newRel); return; }
+        var temp = $"{oldRel}~ccs-rename";
+        files!.Rename(root, oldRel, temp);
+        files.Rename(root, temp, newRel);
+    }
+
+    // Строка порядка на прежней позиции. Файла нет — ничего не создаём: порядок этой
+    // папки задан правилом индекса, и переименование не повод фиксировать его в git
+    private static void ReplaceInOrder(string root, string folder, string oldName, string newName)
+    {
+        var dir = folder.Length == 0 ? root : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        if (!File.Exists(file)) return;
+
+        var existing = File.ReadAllText(file);
+        var lines = SplitOrderLines(existing);
+        var hit = false;
+        for (var i = 0; i < lines.Count; i++)
+            if (string.Equals(lines[i], oldName, StringComparison.OrdinalIgnoreCase)) { lines[i] = newName; hit = true; }
+        if (!hit) return;
+
+        var eol = existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, string.Join(eol, lines) + eol, new UTF8Encoding(false));
+    }
+
+    // Починка ссылок на переехавшее. Возвращает число изменённых документов.
+    //
+    // Каждый документ разбирается заново по своему НОВОМУ расположению: цель ссылки
+    // резолвится от СТАРОГО пути источника (в файле она записана относительно него),
+    // а записывается уже относительно нового. Поэтому ссылки внутри переехавшего
+    // поддерева на такие же переехавшие цели остаются нетронутыми — их относительный
+    // путь не изменился.
+    private int UpdateLinks(string root, DocsCorpus corpus, Dictionary<string, string> moved)
+    {
+        var changed = 0;
+        foreach (var doc in corpus.Docs)
+        {
+            if (!IsMarkdown(doc.Path)) continue;
+            var from = doc.Path;
+            var fromNew = moved.GetValueOrDefault(from, from);
+
+            string text;
+            var file = Path.Combine(root, fromNew.Replace('/', Path.DirectorySeparatorChar));
+            try { text = File.ReadAllText(file); }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+
+            var updated = LinkRegex().Replace(text, m =>
+            {
+                var raw = m.Groups[2].Value.Trim();
+                if (raw.Length == 0 || IsExternal(raw)) return m.Value;
+                var (targetPart, _) = SplitRawAnchor(raw);
+                if (targetPart.Length == 0) return m.Value;      // якорь внутри документа
+                var target = ResolveRelative(from, targetPart);
+                if (target is null || !moved.TryGetValue(target, out var newTarget)) return m.Value;
+                var anchor = raw[targetPart.Length..];           // «#…» как был, вместе с регистром
+                return $"[{m.Groups[1].Value}]({RelativeLink(fromNew, newTarget)}{anchor})";
+            });
+
+            if (updated == text) continue;
+            try { File.WriteAllText(file, updated); changed++; }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return changed;
+    }
+
+    // Путь ссылки БЕЗ разбора якоря: для замены нужен исходный хвост «#…» как он записан,
+    // а SplitAnchor нормализует его в слаг
+    private static (string Target, string Anchor) SplitRawAnchor(string raw)
+    {
+        var i = raw.IndexOf('#');
+        return i < 0 ? (raw, "") : (raw[..i], raw[i..]);
+    }
+
+    // Относительная ссылка от одного документа к другому — в том же виде, в каком её
+    // пишут руками: соседний файл именем, глубже — через папки, выше — через «../».
+    // Пробел кодируем: markdown обрывает цель ссылки на первом же пробеле
+    internal static string RelativeLink(string fromDoc, string toDoc)
+    {
+        var fromParts = Folder(fromDoc).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var toParts = toDoc.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var common = 0;
+        while (common < fromParts.Length && common < toParts.Length - 1 &&
+               string.Equals(fromParts[common], toParts[common], StringComparison.OrdinalIgnoreCase))
+            common++;
+
+        var up = string.Concat(Enumerable.Repeat("../", fromParts.Length - common));
+        var down = string.Join('/', toParts.Skip(common));
+        var link = up + down;
+        return link.Replace(" ", "%20");
     }
 
     // Папка входит в область: сама выбрана в настройке либо лежит внутри выбранной.

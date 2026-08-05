@@ -28,7 +28,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
-import { isWallActive } from './lib/wallMode'
+import { isWallActive, setWallActive } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -557,8 +557,21 @@ export default function App() {
         navReplace(rest)
       }
     }
+    // Клик по «Проектам» с самой стены (там эта пилюля подсвечена как активная) —
+    // явный выход из режима стены к списку проектов: тот же жест, что повторный
+    // клик по активному разделу с открытым проектом ниже
+    if (t === 'projects' && hubTab === 'wall') {
+      setWallActive(false)
+      localStorage.removeItem(OPEN_PROJECT_KEY)
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setProject(null)
+      setHubTab('projects')
+      navPush({ screen: 'projects' })
+      return
+    }
     // Возврат в рабочий режим: пока стена «активна», вкладка «Проекты» ведёт на неё,
-    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене)
+    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене или
+    // кликом по подсвеченным «Проектам» прямо со стены)
     if (t === 'projects' && hubTab !== 'wall' && isWallActive()) {
       localStorage.setItem(HUB_TAB_KEY, 'wall')
       setHubTab('wall')

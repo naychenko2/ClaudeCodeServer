@@ -108,8 +108,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // живут в меню аватара, поэтому здесь их нет.
   // «Стена» вкладки в таббаре НЕ имеет вовсе: вход — из воркспейса
   // проекта (док стены под доком проектов, DnD чата туда / пункт меню чата).
-  // 'wall' сидит в TABLESS (HubTabs), поэтому и активная стена вкладку не
-  // дописывает — PillSwitch умеет «нет выбранного». Диплинк #/wall работает.
+  // Активная стена подсвечивает пилюлю «Проекты» (displayValue в HubTabs) —
+  // это рабочий режим раздела проектов. Диплинк #/wall работает.
 
   const PRIMARY_MOBILE: HubTab[] = ['chats', 'projects', 'calendar'];
   const HIDDEN_MOBILE: HubTab[] = ['notes', 'personas'];

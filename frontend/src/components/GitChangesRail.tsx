@@ -19,11 +19,12 @@ import { C, R, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
-  gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow,
+  gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow, gitInit,
 } from '../lib/git';
 import { splitPath, relTime } from '../lib/gitFormat';
 import { PublishDialog } from './PublishDialog';
 import { ListDateDivider } from './ListDateDivider';
+import { EmptyState } from './EmptyState';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
 import { getExtMeta } from './FileExplorer';
@@ -175,6 +176,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const [pendingCheckout, setPendingCheckout] = useState<string | null>(null); // ветка, ждущая подтверждения (грязное дерево)
   const [stashDropConfirm, setStashDropConfirm] = useState<GitStashEntry | null>(null); // стэш, ждущий подтверждения удаления
   const [repoMenu, setRepoMenu] = useState<DOMRect | null>(null);              // меню настроек репозитория (шапка)
+  const [gitInitBusy, setGitInitBusy] = useState(false);                       // подключение git к проекту без репозитория
+  const [gitInitError, setGitInitError] = useState<string | null>(null);
   const [forgejoCreds, setForgejoCreds] = useState<{ login: string; password: string | null } | null>(null);
   const [credsBusy, setCredsBusy] = useState(false);
   const [savingNow, setSavingNow] = useState(false);                           // «Сохранить сейчас» (документный режим)
@@ -259,6 +262,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     if (scope !== activeScope) onScopeChange?.();  // смена скоупа — сбросить центр к чату
     setActiveScope(scope);
     setMode('list');
+  };
+
+  // Проект без git: панель предлагает подключить его (раньше это жило в меню
+  // сортировки «Файлов» — там, где искать такое некому)
+  const handleGitInit = async () => {
+    if (gitInitBusy) return;
+    setGitInitBusy(true);
+    setGitInitError(null);
+    const r = await gitInit(project.id);
+    setGitInitBusy(false);
+    if (!r.ok) setGitInitError(r.error ?? 'Не удалось создать git-репозиторий');
   };
 
   // === Настройки репозитория (меню в шапке панели) ===
@@ -660,6 +674,30 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
       )}
     </Menu>
   );
+
+  // Проект вне git: показывать нечего — вместо пустых зон предлагаем подключить
+  // репозиторий. Ждём загрузки статуса, иначе экран моргнёт этим состоянием
+  if (st.statusLoaded && !status?.isRepo) {
+    return (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <EmptyState
+          icon={<GitBranch size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+          title="Проект без git"
+          subtitle="В папке проекта будет создан репозиторий — появится история правок и фиксация изменений. Если настроен сервер Forgejo, также будет создан удалённый репозиторий."
+          action={
+            <Button size="md" variant="primary" disabled={gitInitBusy} onClick={() => void handleGitInit()}>
+              {gitInitBusy ? 'Подключаю…' : 'Подключить git'}
+            </Button>
+          }
+        />
+        {gitInitError && (
+          <div style={{ padding: '0 16px', fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.45, textAlign: 'center' }}>
+            {gitInitError}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>

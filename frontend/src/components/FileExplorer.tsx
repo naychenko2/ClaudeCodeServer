@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, History, SlidersHorizontal } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, SlidersHorizontal } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -31,8 +31,7 @@ import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 const MD_CONVERTIBLE = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'epub', 'csv', 'rtf', 'html', 'htm', 'msg']);
 const isMdConvertible = (name: string) => MD_CONVERTIBLE.has((name.split('.').pop() ?? '').toLowerCase());
 import { copyMarkdown } from '../lib/selectionScope';
-import { useGitState, ensureGit, gitInit, loadGitRemote } from '../lib/git';
-import { GitChangesPanel, GitHistoryPanel } from './GitPanel';
+import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FONT, MODAL_W, TB, SHADOW } from '../lib/design';
@@ -54,14 +53,7 @@ interface Props {
   onAttachToChat?: (path: string) => void;
   onRemoveFromKnowledge?: (relativePath: string) => void;
   onOpenKnowledge?: () => void;
-  // Открыть diff файла из панели «Изменения» (staged — дифф индекса);
-  // не передан — фолбэк на onOpenFile
-  onOpenGitDiff?: (path: string, staged: boolean) => void;
-  onOpenCommit?: (sha: string) => void;
 }
-
-// Режим сайдбара «Файлы»: дерево / git-изменения / git-история
-export type GitView = 'files' | 'changes' | 'history';
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
 // при переключении вкладок «Чаты»/«Файлы». Ключ — projectId.
@@ -73,7 +65,6 @@ interface ExplorerState {
   searchResults: FileEntry[] | null;
   createInDir: string;
   scrollTop: number;
-  gitView?: GitView;         // активный сегмент пилюли (файлы/изменения/история)
   onlyChanged?: boolean;     // фильтр «Только изменённые» в дереве
 }
 const _explorerStore = new Map<string, ExplorerState>();
@@ -81,16 +72,6 @@ const _explorerStore = new Map<string, ExplorerState>();
 /** Возвращает текущую папку для создания файлов в проводнике (используется из ChatPanel). */
 export function getExplorerCreateInDir(projectId: string): string {
   return _explorerStore.get(projectId)?.createInDir ?? '';
-}
-
-/** Переключает git-сегмент пилюли извне (пилюля в «Знаниях»): применится при монтировании проводника. */
-export function setExplorerGitView(projectId: string, view: GitView): void {
-  const st = _explorerStore.get(projectId);
-  if (st) { st.gitView = view; return; }
-  _explorerStore.set(projectId, {
-    dirCache: new Map(), expanded: new Set(), mobileDir: '', search: '',
-    searchResults: null, createInDir: '', scrollTop: 0, gitView: view,
-  });
 }
 
 const normPath = (p?: string | null) => (p ?? '').replace(/\\/g, '/');
@@ -425,7 +406,7 @@ interface ContextMenuState {
   entry: FileEntry;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge, onOpenGitDiff, onOpenCommit }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge }: Props) {
   const online = useOnline();
   useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
   const marks = useSyncMarks(project.id);
@@ -440,7 +421,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   const [sortMode, setSortMode] = useState<FileSortMode>(loadSortMode);
   const [showSortMenu, setShowSortMenu] = useState(false);
-  // Активированный поиск занимает весь сайдбар (сортировка и пилюля схлопываются);
+  // Активированный поиск занимает весь сайдбар (сортировка схлопывается);
   // остаётся развёрнутым, пока в поле есть текст (searchExpanded считается ниже по search)
   const [searchFocused, setSearchFocused] = useState(false);
   const changeSortMode = (m: FileSortMode) => {
@@ -449,32 +430,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     setShowSortMenu(false);
   };
 
-  // === Git: режим сайдбара + статус репозитория + фильтр «Только изменённые» ===
-  const [gitView, setGitView] = useState<GitView>(() => initial?.gitView ?? 'files');
+  // === Git: только фильтр «Только изменённые» в дереве. Сам Source Control —
+  // отдельная панель «Изменения» (GitChangesRail): здесь дерево файлов и ничего
+  // кроме него. ===
   const [onlyChanged, setOnlyChanged] = useState<boolean>(() => initial?.onlyChanged ?? false);
   const gitState = useGitState(project.id);
   useEffect(() => { ensureGit(project.id); }, [project.id]);
   const isRepo = gitState.status?.isRepo ?? false;
-  // Документный режим (авто-ведение истории): работа с индексом скрыта — сегмент
-  // «Изменения» недоступен, вся жизнь в «Истории» (плашка + «Сохранить сейчас»)
-  useEffect(() => { if (isRepo) void loadGitRemote(project.id); }, [project.id, isRepo]);
-  const docMode = isRepo && gitState.remote?.autoCommit === true;
-  // Не репо — git-сегменты недоступны; в документном режиме «Изменения» → «История»
-  const view: GitView = !isRepo ? 'files' : (docMode && gitView === 'changes' ? 'history' : gitView);
-
-  // Подключение git к проекту без репозитория (git init + remote на Forgejo)
-  const [gitInitOpen, setGitInitOpen] = useState(false);
-  const [gitInitBusy, setGitInitBusy] = useState(false);
-  const [gitInitError, setGitInitError] = useState<string | null>(null);
-  const handleGitInit = async () => {
-    if (gitInitBusy) return;
-    setGitInitBusy(true);
-    setGitInitError(null);
-    const r = await gitInit(project.id);
-    setGitInitBusy(false);
-    if (r.ok) setGitInitOpen(false);   // статус в сторе уже свежий → появятся сегменты пилюли
-    else setGitInitError(r.error ?? 'Не удалось создать git-репозиторий');
-  };
 
   // Наборы изменённых путей из git-статуса: файлы + папки на пути к ним (для фильтра дерева)
   const changedSets = useMemo(() => {
@@ -623,7 +585,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir(st.createInDir);
       setSearch(st.search);
       setSearchResults(st.searchResults);
-      setGitView(st.gitView ?? 'files');
       setOnlyChanged(st.onlyChanged ?? false);
       loadDir('');
       if (st.mobileDir) loadDir(st.mobileDir);
@@ -634,7 +595,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       setCreateInDir('');
       setSearch('');
       setSearchResults(null);
-      setGitView('files');
       setOnlyChanged(false);
       loadDir('');
     }
@@ -642,10 +602,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
 
   useEffect(() => {
     _explorerStore.set(project.id, {
-      dirCache, expanded, mobileDir, search, searchResults, createInDir, gitView, onlyChanged,
+      dirCache, expanded, mobileDir, search, searchResults, createInDir, onlyChanged,
       scrollTop: scrollRef.current?.scrollTop ?? _explorerStore.get(project.id)?.scrollTop ?? 0,
     });
-  }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir, gitView, onlyChanged]);
+  }, [project.id, dirCache, expanded, mobileDir, search, searchResults, createInDir, onlyChanged]);
 
   useLayoutEffect(() => {
     const st = _explorerStore.get(project.id);
@@ -1346,56 +1306,32 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     </button>
   );
 
-  // Пилюля режимов сайдбара: Файлы / [Изменения / История — только git-репо] / Знания
-  const pillBtn = (key: string, title: string, active: boolean, onClick: (() => void) | undefined, icon: ReactNode) => (
-    <button
-      key={key}
-      onClick={onClick}
-      title={title}
-      style={{
-        width: 28, height: 28, border: 'none', borderRadius: 6,
-        cursor: active ? 'default' : 'pointer',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        background: active ? C.bgMain : 'transparent',
-        color: active ? C.accent : C.textMuted,
-        boxShadow: active ? TB.pillThumbShadow : 'none',
-      }}
-    >
-      {icon}
-    </button>
-  );
-  const showPill = !!onOpenKnowledge || isRepo;
-  const pill = showPill ? (
+  // Пилюля перехода в «Знания» (сама панель — соседняя вкладка сайдбара)
+  const pill = onOpenKnowledge ? (
     <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
-      {pillBtn('files', 'Файлы', view === 'files', () => setGitView('files'), <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-      {isRepo && !docMode && pillBtn('changes', 'Изменения', view === 'changes', () => setGitView('changes'), <GitBranch size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-      {isRepo && pillBtn('history', 'История', view === 'history', () => setGitView('history'), <History size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
-      {onOpenKnowledge && pillBtn('knowledge', 'Знания', false, onOpenKnowledge, <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />)}
+      <button
+        title="Файлы"
+        style={{
+          width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: C.bgMain, color: C.accent, boxShadow: TB.pillThumbShadow,
+        }}
+      >
+        <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+      </button>
+      <button
+        onClick={onOpenKnowledge}
+        title="Знания"
+        style={{
+          width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'transparent', color: C.textMuted,
+        }}
+      >
+        <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+      </button>
     </div>
   ) : null;
-
-  // === Git-режимы: содержимое сайдбара вместо дерева ===
-  if (view !== 'files') {
-    return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-        <div style={{ padding: '4px 12px 10px', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: 700, color: C.textHeading, fontFamily: FONT.sans }}>
-            {view === 'changes' ? 'Изменения' : 'История'}
-          </div>
-          {pill}
-        </div>
-        {view === 'changes' ? (
-          <GitChangesPanel
-            project={project}
-            onOpenDiff={(p, staged) => onOpenGitDiff ? onOpenGitDiff(p, staged) : onOpenFile(p)}
-            onOpenFile={onOpenFile}
-          />
-        ) : (
-          <GitHistoryPanel project={project} onOpenCommit={onOpenCommit} docMode={docMode} />
-        )}
-      </div>
-    );
-  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
@@ -1471,22 +1407,15 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
                   label="Сначала старые"
                   onClick={() => changeSortMode('date-asc')}
                 />
-                {isRepo ? (
+                {/* Подключение git живёт в панели «Изменения» — там, где им и
+                    пользуются; здесь остаётся только фильтр по дереву */}
+                {isRepo && (
                   <>
                     <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
                     <MenuItem
                       icon={onlyChanged ? <Check size={15} strokeWidth={2} /> : <GitBranch size={15} strokeWidth={ICON_STROKE} />}
                       label="Только изменённые"
                       onClick={() => { setOnlyChanged(v => !v); setShowSortMenu(false); }}
-                    />
-                  </>
-                ) : gitState.statusLoaded && online && (
-                  <>
-                    <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
-                    <MenuItem
-                      icon={<GitBranch size={15} strokeWidth={ICON_STROKE} />}
-                      label="Подключить git…"
-                      onClick={() => { setShowSortMenu(false); setGitInitOpen(true); }}
                     />
                   </>
                 )}
@@ -1697,33 +1626,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       })()}
 
       {/* === Диалог создания файла === */}
-      {/* Подключение git к проекту (git init + при настроенном Forgejo удалённый репозиторий) */}
-      {gitInitOpen && (
-        <Modal
-          width={MODAL_W.confirm}
-          onClose={() => { if (!gitInitBusy) { setGitInitOpen(false); setGitInitError(null); } }}
-          title="Подключить git"
-          footer={
-            <ModalActions
-              confirmLabel={gitInitBusy ? 'Подключаю…' : 'Подключить'}
-              confirmDisabled={gitInitBusy}
-              onConfirm={handleGitInit}
-              onCancel={() => { setGitInitOpen(false); setGitInitError(null); }}
-            />
-          }
-        >
-          <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            В папке проекта будет создан git-репозиторий — появятся панели «Изменения» и «История».
-            Если настроен сервер Forgejo, также будет создан удалённый репозиторий.
-          </div>
-          {gitInitError && (
-            <div style={{ marginTop: 10, fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.45 }}>
-              {gitInitError}
-            </div>
-          )}
-        </Modal>
-      )}
-
       {showCreateFile && (
         <Modal
           width={MODAL_W.form}

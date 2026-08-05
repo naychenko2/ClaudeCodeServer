@@ -47,7 +47,6 @@ import * as terminalApi from '../lib/terminalSignalr';
 import { DesktopWorkspace } from './workspace/DesktopWorkspace';
 import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
-import type { PanelKey } from './workspace/panelStackState';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
@@ -834,15 +833,6 @@ const windowWidth = useWindowWidth();
     void buildCodeGraph(project.id);
   }, [project.id]);
 
-  // Явная активация панели из рельсы (клик открыл её). У графа, в отличие от
-  // «Файлов»/«Задач», нет списка элементов — панель инспектирует единственный
-  // документ, поэтому открываем его в центре вместе с панелью. Вешать на mount
-  // панели нельзя: она монтируется и при восстановлении раскладки из localStorage,
-  // и граф выпрыгивал бы поверх чата при каждом входе в проект.
-  const handlePanelOpen = useCallback((k: PanelKey) => {
-    if (k === 'graph') ensureGraphOpen();
-  }, [ensureGraphOpen]);
-
   // Панели сессии для МОБИЛЬНОЙ ветки (десктоп собирает их в DesktopWorkspace).
   // Раньше их строила правая зона внутри себя — теперь контент приходит снаружи.
   const mobileSessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
@@ -1482,7 +1472,6 @@ const windowWidth = useWindowWidth();
           onClosePreview={() => setActivePreviewId(null)}
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
-          onPanelOpen={handlePanelOpen}
           onOpenReader={readerFlag ? handleOpenReader : undefined}
           // Из projectForEdit, а не из project: настройки правят именно его, и по
           // старому объекту Терминал с Preview появлялись в рельсе только после

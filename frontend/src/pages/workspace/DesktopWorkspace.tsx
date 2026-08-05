@@ -123,8 +123,6 @@ interface Props {
   chatCount: number | null;
   // Точное число от списка чатов, пока панель на экране
   onSessionsChanged: (n: number) => void;
-  // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
-  onPanelOpen?: (k: PanelKey) => void;
   // Открыть режим «Стена» (док стены под доком проектов; вкладки в таббаре у стены нет)
   onOpenWall?: () => void;
 }
@@ -286,7 +284,6 @@ export function DesktopWorkspace(p: Props) {
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
-        onPanelOpen={p.onPanelOpen}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
@@ -417,7 +414,6 @@ export function DesktopWorkspace(p: Props) {
         railCounts={p.railCounts}
         toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
-        onPanelOpen={p.onPanelOpen}
         centerFileOpen={!!p.openFile}
       />
     </div>

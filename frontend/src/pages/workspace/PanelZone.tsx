@@ -104,9 +104,6 @@ interface Props {
   compact?: boolean;
   // Панели текущей сессии (План/Агенты/Персона) — контент, видимость, бейджи
   sessionPanels?: SessionPanels;
-  // Хук на ЯВНУЮ активацию панели кликом по иконке рельсы (панель открылась).
-  // Только клик: восстановление раскладки из localStorage его не дёргает.
-  onPanelOpen?: (k: PanelKey) => void;
   // Второй остров ПОД рельсой зоны — сейчас это док проектов воркспейса. К раскладке
   // панелей он отношения не имеет, но живёт в той же вертикали у края окна, поэтому
   // держит зону на экране даже когда открывать в ней нечего.
@@ -122,7 +119,7 @@ interface Props {
 
 export function PanelZone({
   side, panels, railCounts, panelStack,
-  allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels, onPanelOpen,
+  allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels,
   railFooter, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
@@ -723,8 +720,6 @@ export function PanelZone({
         }
         toggle(side, k, cap, railSeq);
       }
-      // Панель в результате клика ОТКРЫЛАСЬ — сообщаем подписчику (граф и т.п.)
-      if (!isOpen) onPanelOpen?.(k);
     },
   }));
 
@@ -813,7 +808,7 @@ export function PanelZone({
       iconAction={{
         Icon: Pin,
         title: 'Закрепить панель',
-        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek, colCapNow(), railSeq); onPanelOpen?.(peek); },
+        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek, colCapNow(), railSeq); },
       }}
       fill={peekFull}
       // Временный слой обозначаем ТЕНЬЮ, а не цветной рамкой: акцентная обводка

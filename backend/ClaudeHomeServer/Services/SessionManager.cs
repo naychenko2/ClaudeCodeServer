@@ -282,6 +282,10 @@ public class SessionManager : IDisposable
     private readonly CodeGraph.CodeGraphService? _codeGraphs;
     // Watcher'ы файлов: снятие watcher'а отдельного дерева чата при его удалении; null — в тестах
     private readonly FileWatcherService? _fileWatchers;
+    // Личный реестр MCP-серверов владельца + значения их секретов (null — в тестах:
+    // ход идёт только со встроенными серверами и наследством .mcp.json)
+    private readonly Mcp.McpRegistry? _mcpRegistry;
+    private readonly Mcp.McpSecretStore? _mcpSecrets;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -327,8 +331,14 @@ public class SessionManager : IDisposable
         GlifAccountService? glif = null,
         // Опционально (в тестах не передаётся): снимки промпта ходов — кнопка «какой промпт
         // ушёл» под постом. Без него ходы идут как раньше, просто без снимков.
-        PromptSnapshotStore? promptSnapshots = null)
+        PromptSnapshotStore? promptSnapshots = null,
+        // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца
+        // и значения их секретов — состав серверов хода поверх встроенных
+        Mcp.McpRegistry? mcpRegistry = null,
+        Mcp.McpSecretStore? mcpSecrets = null)
     {
+        _mcpRegistry = mcpRegistry;
+        _mcpSecrets = mcpSecrets;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
@@ -1747,6 +1757,87 @@ public class SessionManager : IDisposable
         return servers.Count > 0 ? new ModulesMcpContext(servers) : null;
     }
 
+    // Серверы личного реестра владельца в ход. Решение принимается ТОЛЬКО по
+    // owner/project/persona — состав tools/list не смеет зависеть от свойств хода
+    // (иначе сигнатура запуска мерцает и процесс CLI перезапускается со всеми MCP).
+    // Провайдер, а не готовое значение: правка реестра применяется со следующего хода
+    // без пересоздания адаптера. Секреты разворачиваются здесь и живут только во
+    // временном конфиге хода. Фич-флаг гейтит саму доставку — снятие флага честно
+    // убирает серверы, а не оставляет их работать втихую.
+    // projectId — ось каскада «выключено в проекте» (deny-list Project.McpServersOff, волна 2).
+    private Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona)
+    {
+        if (ownerId is null || _mcpRegistry is null || _mcpSecrets is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.McpRegistry)) return null;
+        var registry = _mcpRegistry;
+        var secretStore = _mcpSecrets;
+        return () =>
+        {
+            try
+            {
+                var servers = new List<ExternalMcpServer>();
+                foreach (var record in registry.GetByOwner(ownerId))
+                {
+                    if (!record.Enabled) continue;
+                    // Персона выключает сервер Off-привязкой на ключ каталога "mcp:<ключ>";
+                    // дефолт — включён (ServerToolEnabled), обычный чат получает всё
+                    if (!_bindings.ServerToolEnabled(ownerId, persona, "mcp:" + record.Key)) continue;
+                    var stdio = record.Transport == McpTransport.Stdio;
+                    var env = ResolveValues(record.Env);
+                    var headers = ResolveValues(record.Headers);
+                    if (!stdio && !ApplyAuthHeaders(record, headers)) continue;
+                    servers.Add(new ExternalMcpServer(
+                        record.Key,
+                        record.Transport.ToString().ToLowerInvariant(),
+                        stdio ? record.Command : null,
+                        record.Args ?? [],
+                        env,
+                        stdio ? null : record.Url,
+                        headers,
+                        record.AlwaysLoad,
+                        record.AuthVersion));
+                }
+                return servers.Count > 0 ? new ExternalMcpContext(servers) : null;
+            }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Реестр MCP-серверов не собрался — ход без своих серверов");
+                return null;
+            }
+        };
+
+        Dictionary<string, string> ResolveValues(Dictionary<string, string>? map)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var (name, value) in map ?? [])
+                result[name] = _mcpSecrets!.Resolve(ownerId, value) ?? "";
+            return result;
+        }
+
+        // Заголовок авторизации http/sse-сервера. Потерянный секрет (запись ссылается
+        // в пустоту) — не повод отдавать серверу заведомо анонимный запрос: пропускаем
+        // сервер с предупреждением, иначе инструменты молча отвечали бы 401.
+        bool ApplyAuthHeaders(McpServerRecord record, Dictionary<string, string> headers)
+        {
+            var auth = record.Auth;
+            if (auth.Kind == McpAuthKind.None) return true;
+            var secretRef = auth.Kind == McpAuthKind.OAuth2 ? auth.OAuth?.AccessTokenRef : auth.SecretRef;
+            var value = _mcpSecrets!.Resolve(ownerId, secretRef);
+            if (string.IsNullOrEmpty(value))
+            {
+                _log.LogWarning("MCP-сервер «{Key}» снят с хода: не найдено значение авторизации", record.Key);
+                return false;
+            }
+            if (auth.Kind == McpAuthKind.ApiKey)
+            {
+                if (string.IsNullOrWhiteSpace(auth.HeaderName)) return false;
+                headers[auth.HeaderName] = value;
+            }
+            else headers["Authorization"] = "Bearer " + value;
+            return true;
+        }
+    }
+
     // Контекст MCP-сервера уведомлений: обычному чату — всегда, персоне — по роли
     // (модуль автоматизации) либо по явной привязке tool:notifications; Off-привязка
     // выключает в любом случае. Единая точка решения — PersonaBindingsService.NotificationsEnabled
@@ -1950,7 +2041,8 @@ public class SessionManager : IDisposable
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             PromptSnapshotSink: PromptSinkFor(session.Id),
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
-            CliConfigRoot: ConfigRootFor(ownerId, session.Provider)));
+            CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
+            ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -2764,7 +2856,8 @@ public class SessionManager : IDisposable
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
-                CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider));
+                CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
+                ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona));
         }
         else
         {
@@ -2797,7 +2890,8 @@ public class SessionManager : IDisposable
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
-                CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider));
+                CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
+                ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

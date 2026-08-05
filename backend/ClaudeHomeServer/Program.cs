@@ -273,6 +273,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFa
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 // Наблюдаемость вызовов продуктовых MCP-серверов (счётчики + последние сбои, только в памяти)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
+// Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
+// и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpRegistry>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();

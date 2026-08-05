@@ -18,7 +18,7 @@ public static class BackupPaths
 
     // Секреты: в основной архив не попадают никогда, уезжают отдельным локальным архивом
     public static readonly string[] SecretFileNames =
-        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json"];
+        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json", "mcp-secrets.json"];
 
     /// <summary>
     /// Брать ли файл в основной архив. <paramref name="relativePath"/> — путь относительно

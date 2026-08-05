@@ -94,6 +94,9 @@ public class McpToolsetStabilityTests
     [InlineData("private Func<string?, Task<string?>>? BuildCodeGraphProvider", "codegraph")]
     [InlineData("private bool PersonasEnabled", "personas")]
     [InlineData("private bool ConsultantsEnabled", "consultants")]
+    // Серверы личного реестра владельца: ключ каталога — «mcp:<ключ сервера>»,
+    // выключает только Off-привязка персоны. Состав от хода не зависит.
+    [InlineData("private Func<ExternalMcpContext?>? BuildExternalMcpProvider", "mcp:")]
     public void РубильникиСерверов_ГейтятсяТолькоПоПерсоне(string signature, string key)
     {
         var path = FindSource("Services", "SessionManager.cs");

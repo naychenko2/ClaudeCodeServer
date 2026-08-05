@@ -50,9 +50,12 @@ interface Props {
   auth: AuthState;
   onLogout: () => void;
   onHubTab: (t: HubTabValue) => void;
+  // Выход со стены её собственной кнопкой — возврат в проект, из которого вошли
+  // (гасит режим и восстанавливает «спящий» воркспейс; App.exitWall)
+  onExitWall: () => void;
 }
 
-export function WallPage({ auth, onLogout, onHubTab }: Props) {
+export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
   const w = useWindowWidth();
   const { loaded, chats, projects, focusId } = useWallState();
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -102,8 +105,6 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- снимок раскладки нужен только на входе/выходе
   }, [active]);
 
-  // Явный выход из режима: гасим флаг и уходим к проектам
-  const exitWall = () => { setWallActive(false); onHubTab('projects'); };
 
   const slots = slotCount(w);
   const visible = chats.slice(0, slots);
@@ -233,7 +234,7 @@ export function WallPage({ auth, onLogout, onHubTab }: Props) {
                 project={focusedProject}
                 onOpenSettings={() => { if (focusedProject) setEditProject(focusedProject); }}
               />
-              <WallDock onExit={exitWall} slots={slots} />
+              <WallDock onExit={onExitWall} slots={slots} />
             </div>
           }
         />

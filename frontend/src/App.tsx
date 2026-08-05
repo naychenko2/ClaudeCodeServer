@@ -538,6 +538,17 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
+  // Выход со стены её собственной кнопкой (рельса стены, заглушка на узком экране):
+  // возвращает В ПРОЕКТ, из которого на стену вошли, — он всё это время «спал» в
+  // state и восстанавливается как при возврате из любого другого раздела. К СПИСКУ
+  // проектов уводит другой жест — клик по подсвеченной пилюле «Проекты» (switchHubTab).
+  // Проекта нет (пришли по диплинку #/wall) — остаётся список.
+  const exitWall = () => {
+    setWallActive(false)
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
+    navPush(project ? { screen: 'project', project, view: 'sidebar', file: null } : { screen: 'projects' })
+  }
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
@@ -823,7 +834,7 @@ export default function App() {
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
           : effectiveHubTab === 'wall'
-            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onExitWall={exitWall} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'

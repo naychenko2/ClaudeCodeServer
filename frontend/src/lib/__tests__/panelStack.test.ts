@@ -8,7 +8,7 @@ import {
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
-  isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail,
+  isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail, mergeTuckDefaults,
   COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
@@ -550,6 +550,51 @@ describe('tuckPanel / untuckPanel — ящик рельсы («…»)', () => {
     const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
     expect(isTucked(restored, 'tasks')).toBe(true);
     expect(homeOf(restored, 'tasks')).toBe('right');
+  });
+});
+
+describe('mergeTuckDefaults — разовая укладка редких кнопок в ящик', () => {
+  const WANT = ['graph', 'knowledge', 'skills', 'terminal', 'preview'] as const;
+
+  it('первый запуск: все кнопки уезжают в ящик и отмечаются в applied', () => {
+    const r = mergeTuckDefaults([], WANT, []);
+    expect(r.changed).toBe(true);
+    expect(r.tucked).toEqual([...WANT]);
+    expect(r.applied).toEqual([...WANT]);
+  });
+
+  it('существующий пользователь: ящик пополняется, свои спрятанные кнопки целы', () => {
+    const r = mergeTuckDefaults(['tasks'], WANT, []);
+    expect(r.tucked).toEqual(['tasks', ...WANT]);
+  });
+
+  it('повторный запуск ничего не трогает', () => {
+    const r = mergeTuckDefaults([...WANT], WANT, [...WANT]);
+    expect(r.changed).toBe(false);
+    expect(r.tucked).toEqual([...WANT]);
+  });
+
+  // Главная защита: человек достал кнопку из ящика — она обязана там и остаться.
+  // Без applied миграция утаскивала бы её обратно на каждом запуске.
+  it('кнопку, возвращённую в столбец, обратно в ящик не уводит', () => {
+    const afterUntuck = ['graph', 'knowledge', 'skills', 'preview'] as const; // terminal достали
+    const r = mergeTuckDefaults(afterUntuck, WANT, [...WANT]);
+    expect(r.changed).toBe(false);
+    expect(r.tucked).not.toContain('terminal');
+  });
+
+  // Набор defaultTucked со временем пополняется — новая кнопка обязана доехать до
+  // тех, кто прошлую волну уже прошёл, не тронув разобранные ими старые
+  it('новая кнопка в наборе доезжает до старожилов один раз', () => {
+    const r = mergeTuckDefaults(['graph'], [...WANT, 'toc'], [...WANT]);
+    expect(r.changed).toBe(true);
+    expect(r.tucked).toEqual(['graph', 'toc']);
+    expect(r.applied).toEqual([...WANT, 'toc']);
+  });
+
+  it('дубль в ящике не плодится', () => {
+    const r = mergeTuckDefaults(['graph'], ['graph'], []);
+    expect(r.tucked).toEqual(['graph']);
   });
 });
 

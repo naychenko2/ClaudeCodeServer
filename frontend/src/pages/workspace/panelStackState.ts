@@ -524,6 +524,32 @@ export function untuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZo
   };
 }
 
+// Разовая укладка кнопок в ящик рельсы при появлении фичи (см. defaultTucked).
+//
+// Дефолт в чистом состоянии решает задачу только для НОВОГО пользователя, а у всех
+// остальных раскладка уже сохранена — и новые «редкие» кнопки встали бы им в столбец.
+// Догоняем их здесь, но ровно ОДИН раз на кнопку: applied — список ключей, которым
+// ящик уже предлагали. Без него миграция срабатывала бы каждый запуск и утаскивала
+// обратно кнопку, которую человек осознанно вернул в столбец.
+//
+// Список, а не флаг «миграция пройдена»: набор defaultTucked со временем пополняется,
+// и новая кнопка обязана доехать до тех, кто прошлую волну уже видел.
+//
+// Открытую панель не трогаем и не закрываем (в отличие от tuckPanel): пока панель на
+// экране, её кнопка и так стоит в столбце (см. railKeyVisible), а в ящик уедет, когда
+// человек эту панель закроет.
+export function mergeTuckDefaults(
+  tucked: readonly PanelKey[],
+  want: readonly PanelKey[],
+  applied: readonly PanelKey[],
+): { tucked: PanelKey[]; applied: PanelKey[]; changed: boolean } {
+  const fresh = want.filter(k => !applied.includes(k));
+  if (fresh.length === 0) return { tucked: [...tucked], applied: [...applied], changed: false };
+  const nextTucked = [...tucked];
+  for (const k of fresh) if (!nextTucked.includes(k)) nextTucked.push(k);
+  return { tucked: nextTucked, applied: [...applied, ...fresh], changed: true };
+}
+
 // Порядок кнопок ОДНОЙ группы рельсы: сначала те, что человек расставил сам (по
 // индексам railOrder), затем незнакомые — хвостом, в исходном каталожном порядке.
 //
@@ -823,11 +849,22 @@ export type PanelZonesStore = { use: () => PanelZonesApi };
 function createPanelZones(ns: string, opts?: {
   legacyOpenKey?: string;
   defaultZones?: Partial<Record<Zone, PanelKey[][]>>;
+  // Кнопки, которые уезжают в ящик рельсы («…»), а не встают в столбец: редко
+  // используемые панели, чтобы столбец иконок не был длинным. Применяется и к
+  // чистому состоянию (новый пользователь), и РАЗОВО к уже сохранённому — иначе
+  // новая «редкая» кнопка встала бы в столбец всем, кроме новичков. Подробности
+  // и защита от повтора — mergeTuckDefaults.
+  defaultTucked?: PanelKey[];
   // Раздел переезжает со старого сайдбара: его ключ режима и панель, в которую
   // превращается прежний сайдбар
   legacySidebar?: { modeKey: string; panelKey: PanelKey };
 }): PanelZonesStore {
   const KEY = `cc_${ns}_zones`;
+  // Ключи, которым ящик рельсы уже предлагали (см. mergeTuckDefaults). Отдельным
+  // ключом, а не полем состояния: список переживает и сброс раскладки, и её порчу —
+  // иначе «почини мусор в cc_ws_zones» означало бы заново утащить в ящик кнопки,
+  // которые человек оттуда достал.
+  const TUCKED_KEY = `cc_${ns}_tucked_applied`;
 
   // Приоритет: новое состояние → миграция со старых раздельных ключей → дефолт.
   // defaultZones нужен там, где базовая панель должна быть открыта при первом
@@ -838,19 +875,37 @@ function createPanelZones(ns: string, opts?: {
   // trackHome на входе: у сохранённого состояния привязок может не быть (старый
   // формат, миграция, дефолт) — тогда они выводятся из того, где панели лежат
   let _zones: PanelZones = trackHome((() => {
-    const raw = lsGet(KEY);
-    if (raw) {
-      try { return sanitizeZones(JSON.parse(raw)); } catch { /* мусор → миграция/дефолт */ }
-    }
-    const fromLegacy = migrateZones(lsGet, ns, opts?.legacyOpenKey);
-    if (fromLegacy) { migrated = true; return fromLegacy; }
-    const fromSidebar = opts?.legacySidebar
-      && migrateSidebarSection(lsGet, opts.legacySidebar.modeKey, opts.legacySidebar.panelKey);
-    if (fromSidebar) { migrated = true; return fromSidebar; }
-    return sanitizeZones({
-      left: { layout: opts?.defaultZones?.left ?? [] },
-      right: { layout: opts?.defaultZones?.right ?? [] },
-    });
+    const base = (() => {
+      const raw = lsGet(KEY);
+      if (raw) {
+        try { return sanitizeZones(JSON.parse(raw)); } catch { /* мусор → миграция/дефолт */ }
+      }
+      const fromLegacy = migrateZones(lsGet, ns, opts?.legacyOpenKey);
+      if (fromLegacy) { migrated = true; return fromLegacy; }
+      const fromSidebar = opts?.legacySidebar
+        && migrateSidebarSection(lsGet, opts.legacySidebar.modeKey, opts.legacySidebar.panelKey);
+      if (fromSidebar) { migrated = true; return fromSidebar; }
+      return sanitizeZones({
+        left: { layout: opts?.defaultZones?.left ?? [] },
+        right: { layout: opts?.defaultZones?.right ?? [] },
+      });
+    })();
+
+    // Укладка новых «редких» кнопок в ящик — одинаково для всех веток выше: и
+    // новичок, и старожил проходят через одну проверку applied.
+    const want = opts?.defaultTucked ?? [];
+    if (want.length === 0) return base;
+    const applied = parseKeyList((() => {
+      try { return JSON.parse(lsGet(TUCKED_KEY) ?? '[]'); } catch { return []; }
+    })());
+    const merged = mergeTuckDefaults(base.tucked, want, applied);
+    if (!merged.changed) return base;
+    lsSet(TUCKED_KEY, JSON.stringify(merged.applied));
+    // Состояние поехало — его надо записать, иначе отметка applied уже стоит, а
+    // сам ящик пуст: следующий запуск сочтёт волну пройденной и кнопки останутся
+    // в столбце.
+    migrated = true;
+    return { ...base, tucked: merged.tucked };
   })());
 
   const listeners = new Set<() => void>();
@@ -1014,6 +1069,10 @@ function createPanelZones(ns: string, opts?: {
 export const wsPanels = createPanelZones('ws', {
   legacyOpenKey: 'cc_ws_panels_open',
   defaultZones: { left: [['chats']] },
+  // Редкие кнопки прячем в ящик рельсы из коробки: столбец остаётся коротким
+  // (Файлы/Изменения/Задачи/Документация/Команда), а Граф, Знания, Навыки,
+  // Терминал и Сервисы достаются из «…» по мере надобности.
+  defaultTucked: ['graph', 'knowledge', 'skills', 'terminal', 'preview'],
 });
 
 // Инстанс раздела «Чаты» — независимая раскладка (cc_chat_zones).

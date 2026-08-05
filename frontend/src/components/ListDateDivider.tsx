@@ -6,14 +6,14 @@ import { C, R } from '../lib/design';
 // на всю секцию целиком (разделитель + её строки), а не только на подпись.
 // Инжектим один раз, как focus-ring у IconButton.
 export const LIST_FLASH_CLASS = 'cc-list-flash';
-export const LIST_FLASH_MS = 320;   // один цикл 300 мс + запас на снятие класса
+export const LIST_FLASH_MS = 520;   // один цикл 500 мс + запас на снятие класса
 
 if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-style')) {
   const el = document.createElement('style');
   el.id = 'cc-list-flash-style';
   el.textContent =
     `@keyframes ccListFlash{0%,100%{opacity:1}50%{opacity:.2}}` +
-    `.${LIST_FLASH_CLASS}{animation:ccListFlash .3s ease-in-out 1}`;
+    `.${LIST_FLASH_CLASS}{animation:ccListFlash .5s ease-in-out 1}`;
   document.head.appendChild(el);
 }
 

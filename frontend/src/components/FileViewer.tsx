@@ -30,7 +30,7 @@ import { relTime } from './GitPanel';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { useHeadings, resolveHeadingEl, type DocToc, type Heading } from '../hooks/useHeadings';
+import { useHeadings, useHeadingSpy, resolveHeadingEl, type DocToc, type Heading } from '../hooks/useHeadings';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -912,10 +912,19 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // прокрутка по ним молча уезжала в начало вместо нужного раздела.
   // Стабильная (scrollDocTo стабилен) — иначе объект оглавления пересобирался бы на
   // каждый рендер и эффект ниже гонял бы setState по кругу.
+  // Какой раздел читают сейчас — панель узнаёт подпиской (см. DocToc.subscribeActive)
+  const { subscribe: subscribeActiveHeading, pin: pinHeading } = useHeadingSpy(contentAreaRef, headings);
+
+  // Зависимости — на сами функции, а не на объект хука: объект в зависимостях
+  // пересобирал бы оглавление на каждом рендере (см. useHeadingSpy)
   const jumpToHeading = useCallback((h: Heading) => {
     const el = resolveHeadingEl(contentAreaRef.current, h);
-    if (el) scrollDocTo(el);
-  }, [scrollDocTo]);
+    if (!el) return;
+    // Сначала подсветка цели, потом прокрутка: клик по строке обязан отзываться
+    // мгновенно, а не после того, как документ доедет
+    pinHeading(h);
+    scrollDocTo(el);
+  }, [scrollDocTo, pinHeading]);
 
   // Заметка vault рисуется отдельным NoteView (ранний return ниже) — её markdown в
   // contentAreaRef не попадает, и оглавление там всегда пустое. Честнее не показывать
@@ -925,9 +934,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   useEffect(() => {
     if (!onTocChange) return;
     onTocChange(tocAvailable
-      ? { path: filePath, headings, jump: jumpToHeading, sectionOf }
+      ? { path: filePath, headings, jump: jumpToHeading, sectionOf, subscribeActive: subscribeActiveHeading }
       : null);
-  }, [onTocChange, tocAvailable, filePath, headings, jumpToHeading, sectionOf]);
+  }, [onTocChange, tocAvailable, filePath, headings, jumpToHeading, sectionOf, subscribeActiveHeading]);
 
   // Просмотрщик ушёл с экрана — панель обязана исчезнуть вместе с ним: иначе она
   // осталась бы висеть с оглавлением закрытого документа

@@ -8,6 +8,7 @@
 // Данных панель не грузит вовсе: заголовки и действия над ними приходят готовыми от
 // самого просмотрщика (DocToc) — он один знает свой скроллер и свой исходный markdown.
 // Отсюда и жизненный цикл: закрыли документ — просмотрщик отдал null, панель исчезла.
+import { useEffect, useRef, useState } from 'react';
 import { TableOfContents } from 'lucide-react';
 import { C, FONT, FS, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -20,6 +21,24 @@ interface Props {
 }
 
 export function TocPanel({ toc }: Props) {
+  // Раздел, который читают сейчас. Приходит подпиской, а не пропом: он меняется на
+  // каждом кадре прокрутки документа, и через раскладку это перерисовывало бы весь
+  // экран (см. DocToc.subscribeActive). Так рябь остаётся внутри панели.
+  const [active, setActive] = useState(0);
+  const subscribe = toc.subscribeActive;
+  useEffect(() => subscribe(setActive), [subscribe]);
+
+  // Подсветка за краем списка бесполезна: в длинном оглавлении читаемый раздел
+  // уезжает из видимой части панели, и «где я» опять непонятно. Держим строку в
+  // поле зрения — 'nearest' не трогает список, пока она и так видна.
+  const listRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const row = listRef.current?.children[active];
+    // Мгновенно, а не плавно: список узкий, ехать тут нечему, а плавная прокрутка
+    // при быстром чтении не поспевает за сменой разделов
+    row?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
+
   // Раздел в чат цитатой — правым кликом по строке, как в оглавлении «Документации».
   // Текст ложится в ПУСТОЕ поле композера: набранный черновик важнее
   const quote = (text: string, section: string | null) => {
@@ -54,12 +73,13 @@ export function TocPanel({ toc }: Props) {
       >
         {toc.path}
       </div>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `0 ${SP.xs}px ${SP.xs}px` }}>
+      <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `0 ${SP.xs}px ${SP.xs}px` }}>
         {toc.headings.map((h, i) => (
           <TocRow
             key={i}
             text={h.text}
             level={h.level}
+            active={i === active}
             onJump={() => toc.jump(h)}
             onQuote={() => quote(h.text, toc.sectionOf(h))}
           />

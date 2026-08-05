@@ -13,15 +13,21 @@ public class WorkflowWatcherTests
     [Fact]
     public async Task NoteOwnerProcessGone_БезАктивности_ЗавершаетWorkflowПослеОкна()
     {
-        var messages = new List<ServerMessage>();
+        // Детерминированный сигнал вместо слепой паузы: окно проверки истекает в коллбэке
+        // Timer, а тот идёт через ThreadPool. На загруженном CI (параллельные тесты с
+        // WebApplicationFactory) пул голодает, и коллбэк опаздывает сильнее любой
+        // фиксированной задержки — отсюда flaky-провал «collection is empty».
+        var sent = new TaskCompletionSource<ServerMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
         var watcher = new WorkflowWatcher("несуществующий-путь-xyz", "tool-1",
-            m => { messages.Add(m); return Task.CompletedTask; },
+            m => { sent.TrySetResult(m); return Task.CompletedTask; },
             ownerGoneGrace: TimeSpan.FromMilliseconds(30));
 
         watcher.NoteOwnerProcessGone();
-        await Task.Delay(TimeSpan.FromMilliseconds(500));
 
-        var progress = messages.OfType<WorkflowProgressMessage>().Should().ContainSingle().Subject;
+        var finished = await Task.WhenAny(sent.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        finished.Should().BeSameAs(sent.Task, "после окна без активности ватчер обязан прислать финальный workflow_progress");
+
+        var progress = (await sent.Task).Should().BeOfType<WorkflowProgressMessage>().Subject;
         progress.ToolUseId.Should().Be("tool-1");
         progress.IsDone.Should().BeTrue();
     }

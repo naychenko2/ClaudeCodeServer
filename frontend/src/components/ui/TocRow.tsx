@@ -24,9 +24,13 @@ export interface TocRowProps {
   onJump: () => void;
   // Раздел в чат цитатой. Не задан — правый клик оставляем браузеру
   onQuote?: () => void;
+  // Раздел, который читают сейчас (или к которому только что перешли). Выделяется тем
+  // же языком, что выбранный документ и текущая папка в «Документации»: подложка плюс
+  // насыщенность — одной жирности мало на списке, который постоянно на виду
+  active?: boolean;
 }
 
-export function TocRow({ text, level, onJump, onQuote }: TocRowProps) {
+export function TocRow({ text, level, onJump, onQuote, active }: TocRowProps) {
   const [hover, setHover] = useState(false);
   return (
     <button
@@ -44,8 +48,11 @@ export function TocRow({ text, level, onJump, onQuote }: TocRowProps) {
         fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35,
         minHeight: ROW_H,
         paddingLeft: SP.sm + (level - 1) * TOC_INDENT,
-        background: hover ? C.bgInset : 'transparent',
-        color: hover ? C.textHeading : C.textSecondary,
+        // Текущий раздел держит выделение и под курсором: наведение мягче, чтобы эти
+        // два состояния не спорили между собой
+        background: active ? C.bgSelected : hover ? C.bgInset : 'transparent',
+        color: active || hover ? C.textHeading : C.textSecondary,
+        fontWeight: active ? 600 : 400,
       }}
     >
       <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{text}</span>

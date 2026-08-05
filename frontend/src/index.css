@@ -300,11 +300,31 @@ body {
 .cc-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .cc-no-scrollbar::-webkit-scrollbar { display: none; }
 
+/* === Экран загрузки приложения === */
+/* Дыхание логотипа, пока приложение поднимается. Медленное и неглубокое:
+   заставка не должна мигать — она показывает, что процесс жив, а не тянет
+   внимание. Появляется сама с задержкой (см. .cc-boot-veil): при быстром
+   старте вспышка заставки раздражала бы сильнее пустого экрана. */
+@keyframes cc-logo-breath {
+  0%, 100% { opacity: 0.5; transform: scale(0.975); }
+  50%      { opacity: 1;   transform: scale(1); }
+}
+.cc-boot-logo { animation: cc-logo-breath 1.9s ease-in-out infinite; }
+.cc-boot-veil { animation: cc-fade-in 260ms ease 260ms both; }
+/* Строка состояния появляется намного позже знака: она нужна, только если
+   ожидание затянулось. При обычном старте так и не успевает проявиться —
+   и правильно, объяснять там нечего. */
+.cc-boot-hint { animation: cc-fade-in 300ms ease 1400ms both; }
+
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }
   .cc-smoke i { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
   .cc-overlay, .cc-modal-card, .cc-sheet-card { animation: none; }
+  /* Заставка остаётся видимой, просто перестаёт дышать и проявляться */
+  .cc-boot-logo { animation: none; }
+  .cc-boot-veil { animation: none; }
+  .cc-boot-hint { animation: none; }
 }
 
 /* === Аудиоплеер: кастомный слайдер прогресса === */

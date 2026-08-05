@@ -1,0 +1,668 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Плашка «Продолжить на» + шапка «Чтение» с режимом — v1</title>
+<style>
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+    --canvas-ink: 42, 37, 31;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+    --canvas-ink: 237, 230, 219;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 28px; max-width: 760px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading);
+    margin: 40px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  h3.sub { font-size: 15px; font-weight: 600; color: var(--c-text-heading); margin: 22px 0 8px; }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 780px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+
+  .themebar { position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); border-radius: 10px; padding: 6px 12px;
+  }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  .frame {
+    background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px;
+    padding: 14px; box-shadow: var(--shadow-card); overflow: hidden; position: relative;
+  }
+  .frame::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .05;
+    background-image:
+      repeating-linear-gradient(45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px),
+      repeating-linear-gradient(-45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px);
+  }
+  .frame > * { position: relative; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; line-height: 1.5; }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 18px; }
+
+  /* Лента-контекст вокруг плашки */
+  .msg { background: rgba(120,110,95,.10); border-radius: 12px; padding: 10px 13px; margin-bottom: 8px; font-size: 12.5px; line-height: 1.6; }
+  .who { font-size: 11px; color: var(--c-text-muted); margin-bottom: 3px; }
+
+  /* ===== Плашка «Продолжить на» ===== */
+  .plate {
+    max-width: 100%; background: var(--c-warning-bg); border: 1px solid var(--c-warning);
+    border-radius: 10px; padding: 10px 14px; font-size: 12.5px; color: var(--c-warning-text);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .plate-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .plate-btn {
+    padding: 5px 12px; border-radius: 8px; border: 1px solid var(--c-warning);
+    background: var(--c-bg-white); color: var(--c-text-heading); font-size: 12.5px; font-weight: 600;
+    cursor: pointer; font-family: inherit; display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  }
+  .plate-btn .meta { font-size: 11px; font-weight: 400; opacity: .7; }
+  .plate-hint { font-size: 11.5px; color: var(--c-text-muted); }
+  /* Сноска: доступные провайдеры есть, но не все — серая строка без кнопок */
+  .plate-note {
+    display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--c-text-muted);
+    padding-top: 6px; border-top: 1px dashed var(--c-border);
+  }
+  /* Состояние 3: доступных не осталось — нейтральный тон (не warning), кнопок нет.
+     Та же логика, что у нейтральной ошибки ридера: это не поломка продукта,
+     действия для человека просто сейчас нет — алармировать нечем. */
+  .plate.empty {
+    background: var(--c-bg-card); border-color: var(--c-border); color: var(--c-text-primary);
+  }
+  .plate.empty .plate-row { align-items: flex-start; }
+  .plate.empty .ico { font-size: 15px; line-height: 1.4; color: var(--c-text-muted); }
+  .plate.empty .body { display: flex; flex-direction: column; gap: 2px; }
+  .plate.empty .t { font-weight: 600; color: var(--c-text-heading); }
+  .plate.empty .s { color: var(--c-text-secondary); }
+  .plate.empty .s b { color: var(--c-text-heading); font-weight: 600; }
+
+  /* ===== Шапка «Чтение» ===== */
+  .island {
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px;
+    box-shadow: var(--shadow-island); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .reader-h {
+    height: 52px; flex: 0 0 52px; background: var(--c-bg-inset);
+    border-bottom: 1px solid var(--c-border-light);
+    display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px;
+  }
+  .reader-h .txt { min-width: 0; flex: 1; }
+  .reader-h .title {
+    font-size: 13px; font-weight: 600; color: var(--c-text-heading); line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .reader-h .host {
+    font-size: 11px; color: var(--c-text-muted); line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .favicon { width: 12px; height: 12px; border-radius: 3px; background: var(--c-accent-muted); flex: 0 0 12px; }
+  .hbtns { display: flex; gap: 2px; flex: 0 0 auto; }
+  .ib {
+    width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent;
+    color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer;
+  }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .ib44 { width: 44px; height: 44px; border-radius: 10px; border: none; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; }
+
+  /* Бейдж режима: нейтральный чип рядом с доменом — виден без наведения,
+     а не спрятан в title/tooltip, потому что режим важно понимать сразу */
+  .modechip {
+    display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    font-size: 10.5px; font-weight: 600; line-height: 1; white-space: nowrap;
+    padding: 3px 7px 3px 6px; border-radius: 999px; background: var(--c-bg-selected); color: var(--c-text-secondary);
+  }
+  .modechip .dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; }
+  .modechip.full .dot { background: var(--c-info); }
+  .modechip.md .dot { background: var(--c-text-muted); }
+  .modechip.narrow { padding: 4px; }
+  .modechip.narrow .lbl { display: none; }
+
+  .reader-body { flex: 1; overflow: auto; padding: 16px; background: var(--c-bg-panel); }
+  .reader-col { max-width: 640px; margin: 0 auto; }
+  .art { color: var(--c-text-primary); font-size: 13.5px; line-height: 1.7; }
+  .art h1 { font-family: 'PT Serif', Georgia, serif; font-size: 20px; line-height: 1.3; color: var(--c-text-heading); margin: 0 0 4px; }
+  .art .meta { font-size: 11px; color: var(--c-text-muted); margin: 0 0 14px; }
+  .art p { margin: 0 0 10px; }
+  .srcbar {
+    display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--c-text-muted);
+    background: var(--c-bg-inset); border: 1px solid var(--c-border-light); border-radius: 8px;
+    padding: 6px 10px; margin: 0 auto 14px; max-width: 640px;
+  }
+  .iframeph {
+    max-width: 640px; margin: 0 auto; height: 220px; border-radius: 8px; border: 1px solid var(--c-border);
+    background:
+      linear-gradient(135deg, var(--c-bg-selected) 25%, transparent 25%) -10px 0/20px 20px,
+      var(--c-bg-white);
+    display: grid; place-items: center; color: var(--c-text-muted); font-size: 11.5px; text-align: center; padding: 20px;
+  }
+
+  .phone {
+    width: 340px; height: 560px; border-radius: 26px; border: 1px solid var(--c-border);
+    background: var(--c-bg-main); position: relative; overflow: hidden; box-shadow: var(--shadow-card);
+  }
+  .phone .content { padding: 12px; }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 82%;
+    background: var(--c-bg-panel); border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--c-divider); margin: 8px auto 4px; }
+  .scrim { position: absolute; inset: 0; background: rgba(23,19,15,.42); }
+  .mob-h { display: flex; align-items: center; gap: 6px; padding: 4px 6px 8px 14px; border-bottom: 1px solid var(--c-border-light); }
+
+  .spec { max-width: 960px; }
+  .spec table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-bottom: 16px; }
+  .spec th, .spec td { border: 1px solid var(--c-border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  .spec th { background: var(--c-bg-inset); color: var(--c-text-heading); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="themebar">
+    <button class="tbtn" id="t-light" aria-pressed="true" onclick="setTheme('light')">Светлая</button>
+    <button class="tbtn" id="t-dark" aria-pressed="false" onclick="setTheme('dark')">Тёмная</button>
+    <span style="font-size:11px;color:var(--c-text-muted)">оба узла макета проверяются в обеих темах</span>
+  </div>
+
+  <h1 class="doc">Плашка «Продолжить на» + режим шапки «Чтение»</h1>
+  <p class="lead">
+    Две доработки одной волны. Первая: плашка «Продолжить на» после фильтрации провайдеров по
+    доступности — три состояния вместо одного. Вторая: шапка панели «Чтение» получает видимый
+    индикатор режима («страница целиком» через iframe / «режим чтения» — MD-фолбэк) и переименованную
+    кнопку «Открыть оригинал в браузере» (было «Открыть в браузере» — уточнение важно именно
+    рядом с режимом «страница целиком», где путаница «а это разве не оригинал?» вероятнее всего).
+  </p>
+
+  <!-- ============ 1. ПЛАШКА — СОСТОЯНИЕ 1: МИКС ============ -->
+  <h2 class="sec">1. Плашка «Продолжить на» — три состояния</h2>
+  <p class="note">
+    Backend фильтрует список опций до живых (кулдаун не истёк — провайдер не предлагается вовсе).
+    Кнопки показывают ТОЛЬКО доступные — предлагать провайдера, который тут же откажет, хуже, чем
+    не предлагать его совсем. Состояние карточки зависит от того, что осталось после фильтра.
+  </p>
+
+  <h3 class="sub">1.1 — доступные есть, недоступные тоже есть → серая сноска без кнопок</h3>
+  <div class="grid2">
+    <div>
+      <div class="frame">
+        <div class="msg"><div class="who">Ты</div>Продолжи анализ лога, пожалуйста.</div>
+        <div class="plate">
+          <div class="plate-row">
+            <span>⏳</span>
+            <span>Лимит подписки исчерпан · сбросится в 18:00. Можно продолжить этот чат на другом
+              аккаунте пула или стороннем провайдере — контекст сохранится.</span>
+          </div>
+          <div class="plate-row">
+            <button class="plate-btn">Продолжить на «Личный»<span class="meta">Max 5× · 41%</span></button>
+            <span class="plate-hint">Та же модель — расходуется выбранный аккаунт</span>
+          </div>
+          <div class="plate-row">
+            <button class="plate-btn">Продолжить на GLM</button>
+            <span class="plate-hint">Оплата — с баланса провайдера, модель сменится</span>
+          </div>
+          <div class="plate-note">
+            <span>⏸</span>
+            <span>Ещё 2 провайдера на паузе · ChatGPT вернётся в 14:30</span>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        Сноска — не кнопка и не приглашение: <code class="tok">C.textMuted</code>, отделена тонкой
+        пунктирной линией (<code class="tok">C.border</code>). Задача строки — не удивить человека,
+        когда он позже откроет диалог провайдеров и увидит там больше вариантов, чем было в плашке.
+        Время возврата показываем только у БЛИЖАЙШЕГО провайдера из паузы — списком по каждому было
+        бы шумно, а один ориентир достаточен.
+      </p>
+    </div>
+
+    <div>
+      <div class="frame">
+        <div class="msg"><div class="who">Ты</div>Продолжи анализ лога, пожалуйста.</div>
+        <div class="plate">
+          <div class="plate-row">
+            <span>⏳</span>
+            <span>Лимит подписки исчерпан · сбросится в 18:00. Можно продолжить этот чат на другом
+              аккаунте пула или стороннем провайдере — контекст сохранится.</span>
+          </div>
+          <div class="plate-row">
+            <button class="plate-btn">Продолжить на «Личный»<span class="meta">Max 5× · 41%</span></button>
+            <span class="plate-hint">Та же модель — расходуется выбранный аккаунт</span>
+          </div>
+          <div class="plate-row">
+            <button class="plate-btn">Продолжить на GLM</button>
+            <button class="plate-btn">Продолжить на Kimi</button>
+            <span class="plate-hint">Оплата — с баланса провайдера, модель сменится</span>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        1.2 — доступные есть, недоступных нет: сноска не рендерится вовсе (не пустая строка, а
+        отсутствующий узел) — иначе лишний воздух внизу карточки без причины.
+      </p>
+    </div>
+  </div>
+
+  <!-- ============ 1.3 ПУСТОЕ ============ -->
+  <h3 class="sub">1.3 — доступных не осталось → пустое состояние без кнопок</h3>
+  <div class="grid2">
+    <div>
+      <div class="frame">
+        <div class="msg"><div class="who">Ты</div>Продолжи анализ лога, пожалуйста.</div>
+        <div class="plate empty">
+          <div class="plate-row">
+            <span class="ico">⏸</span>
+            <div class="body">
+              <span class="t">Продолжить пока не на чем</span>
+              <span class="s">Лимит подписки исчерпан, а все остальные провайдеры сейчас тоже на
+                паузе. Ближайший — <b>GLM</b> — освободится в <b>14:30</b>.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        Тон нейтральный (<code class="tok">C.bgCard</code>/<code class="tok">C.border</code>), НЕ
+        <code class="tok">C.warningBg</code>: та же логика, что у ошибки ридера — «человеку сейчас
+        просто нечего нажать», это не авария продукта, алармировать нечем. Часы возврата — у
+        ближайшего провайдера (не общий и не по каждому), тем же принципом, что в 1.1.
+      </p>
+    </div>
+    <div>
+      <div class="frame">
+        <div class="msg"><div class="who">Ты</div>Продолжи анализ лога, пожалуйста.</div>
+        <div class="plate empty">
+          <div class="plate-row">
+            <span class="ico">⏸</span>
+            <div class="body">
+              <span class="t">Продолжить пока не на чем</span>
+              <span class="s">Лимит подписки исчерпан, а время возврата остальных провайдеров пока
+                неизвестно. Попробуй открыть диалог «Поставщики моделей» чуть позже.</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        Вариант без известного времени возврата (не у всех провайдеров backend отдаёт
+        <code class="tok">resetsAt</code>) — подсказка вместо часов, действие всё равно не кнопка
+        внутри плашки: диалог провайдеров, а не миграция чата вслепую.
+      </p>
+    </div>
+  </div>
+
+  <!-- ============ 1.4 МОБИЛЬНАЯ ============ -->
+  <h3 class="sub">1.4 — мобильная раскладка</h3>
+  <p class="note">
+    Плашка живёт в ленте чата — ширина уже подчинена мобильной колонке, отдельной раскладки не
+    заводим. На узкой ширине кнопки переносятся по <code class="tok">flex-wrap</code>, сноска и
+    пустое состояние ведут себя как на десктопе, только уже.
+  </p>
+  <div class="grid2" style="grid-template-columns: repeat(auto-fit, minmax(300px, 340px))">
+    <div>
+      <div class="phone">
+        <div class="content">
+          <div class="msg" style="font-size:12px">Продолжи анализ лога, пожалуйста.</div>
+          <div class="plate" style="font-size:12px">
+            <div class="plate-row">
+              <span>⏳</span>
+              <span>Лимит исчерпан · сбросится в 18:00.</span>
+            </div>
+            <div class="plate-row">
+              <button class="plate-btn" style="font-size:12px">Продолжить на «Личный»<span class="meta">Max 5× · 41%</span></button>
+            </div>
+            <div class="plate-row">
+              <button class="plate-btn" style="font-size:12px">Продолжить на GLM</button>
+            </div>
+            <div class="plate-note">
+              <span>⏸</span><span>Ещё 2 на паузе · вернутся в 14:30</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Микс на мобиле — кнопки в столбик естественно за счёт переноса, сноска не растёт.</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="content">
+          <div class="msg" style="font-size:12px">Продолжи анализ лога, пожалуйста.</div>
+          <div class="plate empty" style="font-size:12px">
+            <div class="plate-row">
+              <span class="ico" style="font-size:14px">⏸</span>
+              <div class="body">
+                <span class="t" style="font-size:12.5px">Продолжить пока не на чем</span>
+                <span class="s">Всё на паузе. Ближайший — <b>GLM</b> — в <b>14:30</b>.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Пустое состояние на мобиле — текст короче (уже сжат на десктопе), верстается в один блок без переполнения.</p>
+    </div>
+  </div>
+
+  <!-- ============ 2. ШАПКА «ЧТЕНИЕ» — РЕЖИМ ============ -->
+  <h2 class="sec">2. Шапка «Чтение» — индикатор режима</h2>
+  <p class="note">
+    Панель сперва пробует показать страницу как есть — <code class="tok">sandbox-iframe</code> без
+    кук и кредов. Если сайт запрещает встраивание (<code class="tok">X-Frame-Options</code> /
+    <code class="tok">frame-ancestors</code>) или запрос не удался — молча уходит в существующий
+    MD-режим (<code class="tok">POST /api/reader/read</code>). Переключение фолбэка бесшовно для
+    человека, но РЕЖИМ должен быть виден: то, что можно скопировать/выделить/куда ведут ссылки,
+    отличается между iframe и извлечённым текстом.
+  </p>
+
+  <h3 class="sub">2.1 — «Страница целиком» (iframe успешно встроился)</h3>
+  <div class="frame">
+    <div class="island" style="height: 300px">
+      <div class="reader-h">
+        <div class="txt">
+          <div class="title">CSP: frame-ancestors — HTTP | MDN</div>
+          <div class="host">
+            <span class="favicon"></span>developer.mozilla.org
+            <span class="modechip full"><span class="dot"></span><span class="lbl">Страница целиком</span></span>
+          </div>
+        </div>
+        <div class="hbtns">
+          <button class="ib" title="Открыть оригинал в браузере">↗</button>
+          <button class="ib" title="Закрыть">✕</button>
+        </div>
+      </div>
+      <div class="reader-body">
+        <div class="iframeph">живая страница сайта во фрейме — своя типографика, свои стили, скролл и клики работают как на сайте</div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">
+    Чип рядом с доменом, не спрятан за наведение — режим важно понимать сразу, не только при клике.
+    Синяя точка (<code class="tok">C.info</code>) — «показываем оригинал 1:1».
+  </p>
+
+  <h3 class="sub">2.2 — «Режим чтения» (MD-фолбэк после отказа iframe)</h3>
+  <div class="frame">
+    <div class="island" style="height: 300px">
+      <div class="reader-h">
+        <div class="txt">
+          <div class="title">CSP: frame-ancestors — HTTP | MDN</div>
+          <div class="host">
+            <span class="favicon"></span>developer.mozilla.org
+            <span class="modechip md"><span class="dot"></span><span class="lbl">Режим чтения</span></span>
+          </div>
+        </div>
+        <div class="hbtns">
+          <button class="ib" title="Открыть оригинал в браузере">↗</button>
+          <button class="ib" title="Закрыть">✕</button>
+        </div>
+      </div>
+      <div class="reader-body">
+        <div class="reader-col">
+          <div class="srcbar">Сайт не разрешил показать себя целиком — текст извлечён и свёрстан в дизайн-системе продукта</div>
+          <div class="art">
+            <h1>CSP: frame-ancestors</h1>
+            <p class="meta">developer.mozilla.org · обновлено 12 марта 2026</p>
+            <p>Директива <code>frame-ancestors</code> задаёт родителей, которым разрешено встраивать
+              страницу через <code>&lt;iframe&gt;</code>.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">
+    Серая точка (<code class="tok">C.textMuted</code>) — «это не оригинал, это извлечение». Плашка
+    <code class="tok">.srcbar</code> под шапкой (уже существует в ридере) объясняет ПОЧЕМУ включился
+    именно этот режим — не дублирует чип, а раскрывает его причину для тех, кому интересно.
+  </p>
+
+  <h3 class="sub">2.3 — узкая ширина панели: чип сжимается до точки</h3>
+  <div class="grid2" style="grid-template-columns: repeat(auto-fit, minmax(320px, 380px))">
+    <div>
+      <div class="frame">
+        <div class="island" style="height: 90px">
+          <div class="reader-h">
+            <div class="txt">
+              <div class="title">Разбираем Content Security Policy на практике</div>
+              <div class="host">
+                <span class="favicon"></span>developer.mozilla.org
+                <span class="modechip full narrow"><span class="dot"></span><span class="lbl">Страница целиком</span></span>
+              </div>
+            </div>
+            <div class="hbtns"><button class="ib" title="Открыть оригинал в браузере">↗</button><button class="ib" title="Закрыть">✕</button></div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        &lt; 480px панели — под <code class="tok">tier 'narrow'/'tight'</code> из
+        <code class="tok">ReaderHeaderBar.tsx</code>: подпись прячется, остаётся только цветная точка.
+        Полный текст режима — в <code class="tok">title</code> точки (доступно по наведению/долгому тапу).
+      </p>
+    </div>
+    <div>
+      <div class="frame">
+        <div class="island" style="height: 90px">
+          <div class="reader-h">
+            <div class="txt">
+              <div class="title">Не удалось показать</div>
+              <div class="host"><span class="favicon"></span>github.com</div>
+            </div>
+            <div class="hbtns"><button class="ib" title="Закрыть">✕</button></div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        Состояния «загрузка» и «ошибка» — без чипа режима: пробовать ещё нечего показывать, режим
+        не определён. Поведение не меняется относительно текущей шапки (см. <code class="tok">link-reader-v1.html</code>).
+      </p>
+    </div>
+  </div>
+
+  <!-- ============ 2.4 МОБИЛЬНАЯ ШАПКА ============ -->
+  <h3 class="sub">2.4 — мобильная шторка</h3>
+  <div class="grid2" style="grid-template-columns: repeat(auto-fit, minmax(340px, 380px))">
+    <div>
+      <div class="phone">
+        <div class="content">
+          <div class="msg" style="font-size:12.5px">Подробности — <a href="#" style="color:var(--c-accent)">MDN: CSP frame-ancestors</a>.</div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="mob-h">
+            <div class="txt" style="min-width:0;flex:1">
+              <div class="title" style="font-size:13px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">CSP: frame-ancestors — HTTP | MDN</div>
+              <div class="host" style="font-size:11px;color:var(--c-text-muted)">
+                <span class="favicon"></span>developer.mozilla.org
+                <span class="modechip full"><span class="dot"></span><span class="lbl">Целиком</span></span>
+              </div>
+            </div>
+            <button class="ib44" title="Открыть оригинал в браузере">↗</button>
+            <button class="ib44" title="Закрыть">✕</button>
+          </div>
+          <div class="reader-body" style="padding:14px 16px">
+            <div class="iframeph" style="height:160px">живая страница во фрейме</div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Шторка: чип на мобиле короче («Целиком» вместо «Страница целиком») — экономит строку, смысл не теряется рядом с доменом.</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="content">
+          <div class="msg" style="font-size:12.5px">Подробности — <a href="#" style="color:var(--c-accent)">MDN: CSP frame-ancestors</a>.</div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="mob-h">
+            <div class="txt" style="min-width:0;flex:1">
+              <div class="title" style="font-size:13px;font-weight:600;color:var(--c-text-heading)">CSP: frame-ancestors — HTTP | MDN</div>
+              <div class="host" style="font-size:11px;color:var(--c-text-muted)">
+                <span class="favicon"></span>developer.mozilla.org
+                <span class="modechip md"><span class="dot"></span><span class="lbl">Чтение</span></span>
+              </div>
+            </div>
+            <button class="ib44" title="Открыть оригинал в браузере">↗</button>
+            <button class="ib44" title="Закрыть">✕</button>
+          </div>
+          <div class="reader-body" style="padding:14px 16px">
+            <div class="reader-col">
+              <div class="srcbar">Показан извлечённый текст — сайт запретил встраивание</div>
+              <div class="art" style="font-size:14px">
+                <h1 style="font-size:19px">CSP: frame-ancestors</h1>
+                <p class="meta">developer.mozilla.org</p>
+                <p>Директива задаёт родителей, которым разрешено встраивать страницу.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">MD-режим на мобиле — «Чтение» короче «Режим чтения», тот же принцип сокращения.</p>
+    </div>
+  </div>
+
+  <!-- ============ 3. СПЕЦИФИКАЦИЯ ============ -->
+  <h2 class="sec">3. Спецификация — токены и поведение</h2>
+  <div class="spec">
+    <table>
+      <tr><th>Элемент</th><th>Токены</th><th>Поведение</th></tr>
+      <tr>
+        <td>Плашка — базовый тон (есть кнопки)</td>
+        <td><code class="tok">C.warningBg</code> / <code class="tok">C.warning</code> / <code class="tok">C.warningText</code>, <code class="tok">R.lg</code></td>
+        <td>Без изменений относительно текущей карточки <code class="tok">ProviderLimitCard</code> — только источник опций фильтруется backend'ом до доступных.</td>
+      </tr>
+      <tr>
+        <td>Сноска «Ещё N на паузе»</td>
+        <td><code class="tok">C.textMuted</code>, <code class="tok">FS.sm</code> (11.5), верх — <code class="tok">1px dashed C.border</code></td>
+        <td>Рендерится ТОЛЬКО когда <code class="tok">unavailableCount &gt; 0</code> (узел отсутствует в DOM, а не пустая строка). Текст: «Ещё N провайдер(а/ов) на паузе»
+          + опционально « · {ближайшее имя} вернётся в {время}», если backend отдал время хотя бы у одного. Кнопок и hover-состояний нет — сноска не кликабельна.</td>
+      </tr>
+      <tr>
+        <td>Плашка — пустое состояние (нет доступных)</td>
+        <td><code class="tok">C.bgCard</code> / <code class="tok">C.border</code> / <code class="tok">C.textPrimary</code>, заголовок <code class="tok">C.textHeading</code> 600</td>
+        <td>Отдельный визуальный тон от warning — намеренно нейтральнее: действия нет, алармировать
+          нечем (тот же принцип, что у нейтральной ошибки ридера). Заголовок «Продолжить пока не на
+          чем» + пояснение с именем и временем ближайшего провайдера; если backend не знает время —
+          общая подсказка вместо часов (см. 1.3, второй вариант). Кнопок нет вовсе.</td>
+      </tr>
+      <tr>
+        <td>Индикатор режима шапки «Чтение»</td>
+        <td>чип <code class="tok">R.max</code> (pill), фон <code class="tok">C.bgSelected</code>, текст <code class="tok">C.textSecondary</code>, точка 6px</td>
+        <td>Два значения: «Страница целиком» (точка <code class="tok">C.info</code>) — успешный iframe;
+          «Режим чтения» (точка <code class="tok">C.textMuted</code>) — MD-фолбэк. Стоит в строке
+          домена сразу после фавикона, разделитель — обычный inline-gap, без «·» (чип уже визуально
+          обособлен фоном). Отсутствует в состояниях загрузки/ошибки — там режим ещё не определён.</td>
+      </tr>
+      <tr>
+        <td>Сжатие чипа на узкой панели</td>
+        <td>тот же брейкпоинт-набор, что у <code class="tok">PillSwitch</code> в <code class="tok">ReaderHeaderBar.tsx</code> (840/600/400)</td>
+        <td>&lt; 400px — подпись <code class="tok">.lbl</code> скрывается, остаётся только точка;
+          полный текст переезжает в <code class="tok">title</code> (тултип/долгий тап). На телефоне —
+          короткие варианты подписи («Целиком» / «Чтение») вместо усечения серединой строки: обрезка
+          многоточием читалась бы как «Страница цели…», что менее понятно.</td>
+      </tr>
+      <tr>
+        <td>Кнопка «Открыть оригинал в браузере»</td>
+        <td>иконка <code class="tok">ExternalLink</code>, <code class="tok">TB.iconHitDesktop</code>/<code class="tok">iconHitMobile</code></td>
+        <td>Переименование из «Открыть в браузере» — тот же <code class="tok">actions.openInBrowser</code>,
+          то же поведение (<code class="tok">window.open</code>). Слово «оригинал» снимает вопрос
+          «а разве я уже не смотрю оригинал?» именно в режиме «Страница целиком», где сходство с
+          настоящим сайтом наибольшее.</td>
+      </tr>
+      <tr>
+        <td>Тёмная тема</td>
+        <td>только токены — новых цветов не заводим</td>
+        <td>Чип на <code class="tok">C.bgSelected</code> тёмной темы (#38332D) держит контраст текста
+          ≥ 4.5:1; пустое состояние плашки на <code class="tok">C.bgCard</code> (#2E2A25) читается как
+          спокойная карточка, а не предупреждение.</td>
+      </tr>
+    </table>
+  </div>
+
+  <p class="note" style="margin-top:24px">
+    Готово для Киры: фильтрацию (available/unavailable + ближайшее время) отдаёт backend в
+    <code class="tok">ProviderFallbackOption</code> (новые поля вне этого макета — контракт согласует
+    Денис), фронту остаётся веткование по трём состояниям плашки и рендер чипа режима по значению,
+    которое вернёт бэкенд-попытка iframe.
+  </p>
+</div>
+
+<script>
+  function setTheme(m) {
+    document.documentElement.setAttribute('data-theme', m);
+    document.getElementById('t-light').setAttribute('aria-pressed', String(m === 'light'));
+    document.getElementById('t-dark').setAttribute('aria-pressed', String(m === 'dark'));
+  }
+  setTheme('light');
+</script>
+</body>
+</html>

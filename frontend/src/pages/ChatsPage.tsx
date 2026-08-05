@@ -5,7 +5,7 @@ import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
-import { C, FONT, CHAT_COLUMN_W } from '../lib/design';
+import { C, FONT, CHAT_COLUMN_W, SPLASH_W } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { Button, IslandScaffold } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
@@ -266,8 +266,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // Лента и композер держатся середины окна, даже когда список чатов
           // открыт слева, а сессионная рельса справа — узкая. Ширина — полная
           // потребность ленты (CHAT_COLUMN_W: колонка + жёлоб + полоса), иначе
-          // компенсация съест место, которое ленте ещё нужно
-          centerContentWidth={CHAT_COLUMN_W}
+          // компенсация съест место, которое ленте ещё нужно. Пока чат не выбран,
+          // в центре стоит заставка вдвое уже — её потребность SPLASH_W, и завышать
+          // её до ленты нельзя: на узком окне запаса не останется и заставку перекосит
+          centerContentWidth={activeChat ? CHAT_COLUMN_W : SPLASH_W}
           center={activeChat ? (
             <ChatPanel
               key={activeChat.id}

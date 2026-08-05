@@ -2,7 +2,7 @@
 // Подвкладки «Список» (группировка по статусу) и «По дате» (готовые скрыты).
 
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronRight, Plus, SearchX } from 'lucide-react';
+import { ChevronRight, ListTodo, Plus, SearchX } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { Project, Task, TaskStatus } from '../../types';
 import { C, FONT, R } from '../../lib/design';
@@ -261,11 +261,15 @@ export function TasksPanel({ project, selectedTaskId, onSelect, isMobile, boardM
             Загрузка…
           </div>
         ) : tasks.length === 0 ? (
-          <div style={{ padding: '28px 8px 8px', textAlign: 'center' }}>
-            <div style={{ fontFamily: FONT.sans, fontSize: 13.5, color: C.textMuted, lineHeight: 1.5 }}>
-              В проекте пока нет задач
-            </div>
-          </div>
+          // Задач в проекте нет вовсе — тот же примитив пустого состояния, что у
+          // остальных панелей (чаты, документы). Кнопки создания тут нет — «Новая
+          // задача» живёт в шапке панели, дублировать её в empty незачем
+          <EmptyState
+            compact
+            icon={<ListTodo size={20} strokeWidth={ICON_STROKE} />}
+            title="Задач пока нет"
+            subtitle="Поставьте первую задачу по проекту."
+          />
         ) : filteredTasks.length === 0 ? (
           // Фильтры отсеяли всё — предлагаем сбросить (стандартный EmptyState)
           <EmptyState

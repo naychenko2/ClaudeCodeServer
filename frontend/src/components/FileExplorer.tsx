@@ -1502,18 +1502,21 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             {targetDir ? notesDisplayPath(targetDir) : 'корень проекта'}
           </span>
         </span>
-        {targetDir && (
-          <button
-            onClick={() => { setCreateInDir(''); if (isMobile) setMobileDir(''); }}
-            title="Создавать в корне проекта"
-            style={{
-              flexShrink: 0, border: 'none', background: 'none', cursor: 'pointer',
-              padding: '2px 4px', fontSize: 11, color: C.accent, fontFamily: FONT.sans,
-            }}
-          >
-            в корень
-          </button>
-        )}
+        {/* Кнопка остаётся в потоке и в корне — просто прячется. Убирать её совсем
+            значит менять ширину подвала, и меню дёргалось в размере под курсором */}
+        <button
+          onClick={() => { setCreateInDir(''); if (isMobile) setMobileDir(''); }}
+          title="Создавать в корне проекта"
+          style={{
+            flexShrink: 0, border: 'none', background: 'none',
+            cursor: targetDir ? 'pointer' : 'default',
+            visibility: targetDir ? 'visible' : 'hidden',
+            pointerEvents: targetDir ? 'auto' : 'none',
+            padding: '2px 4px', fontSize: 11, color: C.accent, fontFamily: FONT.sans,
+          }}
+        >
+          в корень
+        </button>
       </div>
     </Menu>
   );

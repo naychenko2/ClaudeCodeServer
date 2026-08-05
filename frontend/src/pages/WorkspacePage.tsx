@@ -22,7 +22,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, Button, IconButton } from '../components/ui';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
@@ -1250,9 +1250,9 @@ const windowWidth = useWindowWidth();
 
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: viewportH, background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-        {/* Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях */}
-        <CanvasBackdrop />
+      // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях.
+      // Высота — измеренная viewportH, а не 100dvh: см. комментарий при viewportH
+      <PageCanvas style={{ height: viewportH }}>
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
@@ -1370,14 +1370,12 @@ const windowWidth = useWindowWidth();
             onClose={() => setEditProjectOpen(false)}
           />
         )}
-      </div>
+      </PageCanvas>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — начинается от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
       <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={() => setEditProjectOpen(true)} />
 
@@ -1483,6 +1481,6 @@ const windowWidth = useWindowWidth();
           onClose={() => setEditProjectOpen(false)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }

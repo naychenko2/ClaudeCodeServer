@@ -1,18 +1,16 @@
 import { useState, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { BookOpen, Database, Folder, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
+import { BookOpen, Database, Info, RotateCcw, Search, Tag, Trash2, X } from 'lucide-react';
 import type { Project } from '../types';
 import type { DifyDocument } from '../lib/api';
 import { api } from '../lib/api';
 import { onMessage } from '../lib/signalr';
-import { C, R, SHADOW, FONT, TB } from '../lib/design';
+import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
   project: Project;
   isMobile?: boolean;
   alwaysShowIcons?: boolean;
-  onDocumentsChanged?: (fileNames: Set<string>) => void;
-  onBack?: () => void;
 }
 
 interface KnowledgeStatus {
@@ -404,7 +402,7 @@ function KnowledgeTip({ icon, title, text }: { icon: ReactNode; title: string; t
 
 // --- Главный компонент ---
 
-export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = false, onDocumentsChanged, onBack }: Props) {
+export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = false }: Props) {
   const [status, setStatus] = useState<KnowledgeStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -413,9 +411,6 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   const [tagEditDoc, setTagEditDoc] = useState<DifyDocument | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [notification, setNotification] = useState<{ message: string; type: 'error' | 'success' } | null>(null);
-  // Активированный поиск занимает весь сайдбар (пилюля схлопывается) — как в «Файлах»
-  const [searchFocused, setSearchFocused] = useState(false);
-  const searchExpanded = searchFocused || searchQuery.trim().length > 0;
   const notifTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const loadStatus = useCallback(async (silent = false) => {
@@ -432,12 +427,6 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
   }, [project.id]);
 
   useEffect(() => { loadStatus(); }, [loadStatus]);
-
-  useEffect(() => {
-    if (!onDocumentsChanged || !status) return;
-    // Полные пути (doc.name = относительный путь): basename давал коллизии одноимённых файлов
-    onDocumentsChanged(new Set(status.documents.map(d => d.name)));
-  }, [status, onDocumentsChanged]);
 
   const hasIndexing = status?.documents.some(d => !TERMINAL_STATUSES.includes(d.indexingStatus)) ?? false;
   useEffect(() => {
@@ -517,11 +506,9 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Шапка — icon-toggle (зеркало строки поиска FileExplorer) */}
+      {/* Поиск по знаниям */}
       <div style={{ padding: '4px 12px 10px', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {/* Поиск по знаниям. minWidth:0 обязателен: без него инпут не даёт строке
-              ужаться и выдавливает пилюлю за край сайдбара */}
           <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, padding: '0 11px', height: 36 }}>
             <span style={{ color: C.textMuted, marginRight: 8, display: 'flex', flexShrink: 0 }}>
               <Search size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -529,8 +516,6 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
             <input
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
               placeholder="Поиск по знаниям…"
               style={{
                 flex: 1, minWidth: 0, border: 'none', outline: 'none', background: 'transparent',
@@ -545,26 +530,6 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
                 <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
               </button>
             )}
-          </div>
-          {/* icon-toggle: Знания активна, «Файлы» возвращают в проводник. Git-сегментов
-              здесь больше нет — Source Control живёт своей панелью «Изменения».
-              Активный поиск занимает весь сайдбар — пилюля схлопывается (как в «Файлах») */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0,
-            maxWidth: searchExpanded ? 0 : 220,
-            opacity: searchExpanded ? 0 : 1,
-            overflow: 'hidden',
-            transition: 'max-width 0.18s ease, opacity 0.15s ease',
-            pointerEvents: searchExpanded ? 'none' : 'auto',
-          }}>
-            {/* Файлы — неактивна, возврат */}
-            <button onClick={onBack} title="Файлы" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: onBack ? 'pointer' : 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', color: C.textMuted }}>
-              <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </button>
-            {/* Знания — активна */}
-            <button title="Знания" style={{ width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', background: C.bgMain, color: C.successText, boxShadow: TB.pillThumbShadow }}>
-              <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </button>
           </div>
         </div>
       </div>

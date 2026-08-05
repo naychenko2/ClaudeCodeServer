@@ -14,7 +14,7 @@
 // panelBadge. Значения частично пересекаются намеренно (plan/agents/context), но
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
-  BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
+  BookOpen, BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, Puzzle,
   TableOfContents,
   type LucideIcon,
@@ -29,7 +29,7 @@ export type Zone = 'left' | 'right';
 // решает сам экран (проп allowedKeys у PanelZone): в воркспейсе — инструменты
 // проекта и сессии, в разделах хаба — их собственные панели.
 export const PANEL_KEYS = [
-  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'docs', 'knowledge', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
   // Панели разделов хаба
@@ -44,9 +44,14 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // «Документы» рядом с «Файлами»: обе про содержимое репозитория, но Файлы — дерево
   // для работы с кодом, а Документы — документация как связный корпус (README + docs/**).
   // Раскрытая книга с текстом: читаемая документация. Родственный BookOpen занят
-  // «Знаниями» (lib/ai/actions, KnowledgePanel, FileExplorer) — здесь строки текста
-  // внутри разводят их между собой; FileText отдан заметкам.
+  // «Знаниями» (панель ниже, lib/ai/actions) — здесь строки текста внутри разводят их
+  // между собой; FileText отдан заметкам.
   docs:     { title: 'Документация', Icon: BookOpenText },
+  // База знаний ЭТОГО проекта: что проиндексировано в Dify и доступно ассистенту
+  // семантическим поиском. Не путать с knowledgeList («Базы») — тот раздел хаба
+  // показывает ВСЕ датасеты пользователя. Пара ровно того же рода, что team
+  // (персоны проекта) и personasList (все персоны), поэтому и ключи разной длины.
+  knowledge: { title: 'Знания',   Icon: BookOpen },
   changes:  { title: 'Изменения', Icon: GitCompare },
   tasks:    { title: 'Задачи',    Icon: ListTodo },
   graph:    { title: 'Граф',      Icon: Network },
@@ -86,6 +91,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   chats: 'left',
   files: 'right',
   docs: 'right',
+  knowledge: 'right',
   changes: 'right',
   tasks: 'right',
   graph: 'right',
@@ -107,7 +113,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'docs', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'docs', 'knowledge', 'changes', 'tasks', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)

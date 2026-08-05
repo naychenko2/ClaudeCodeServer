@@ -34,7 +34,7 @@ import { copyMarkdown } from '../lib/selectionScope';
 import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
-import { C, R, FONT, MODAL_W, TB, SHADOW } from '../lib/design';
+import { C, R, FONT, MODAL_W, SHADOW } from '../lib/design';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -52,7 +52,6 @@ interface Props {
   indexingFolders?: Set<string>;
   onAttachToChat?: (path: string) => void;
   onRemoveFromKnowledge?: (relativePath: string) => void;
-  onOpenKnowledge?: () => void;
 }
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
@@ -406,7 +405,7 @@ interface ContextMenuState {
   entry: FileEntry;
 }
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenKnowledge }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat }: Props) {
   const online = useOnline();
   useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
   const marks = useSyncMarks(project.id);
@@ -1306,33 +1305,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     </button>
   );
 
-  // Пилюля перехода в «Знания» (сама панель — соседняя вкладка сайдбара)
-  const pill = onOpenKnowledge ? (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2, background: TB.pillTrack, borderRadius: 8, padding: 2, flexShrink: 0 }}>
-      <button
-        title="Файлы"
-        style={{
-          width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'default',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: C.bgMain, color: C.accent, boxShadow: TB.pillThumbShadow,
-        }}
-      >
-        <Folder size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-      </button>
-      <button
-        onClick={onOpenKnowledge}
-        title="Знания"
-        style={{
-          width: 28, height: 28, border: 'none', borderRadius: 6, cursor: 'pointer',
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'transparent', color: C.textMuted,
-        }}
-      >
-        <BookOpen size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-      </button>
-    </div>
-  ) : null;
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* Search */}
@@ -1356,7 +1328,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               <button onClick={() => handleSearch('')} style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.textMuted, padding: 0, display: 'flex', alignItems: 'center' }}><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
             )}
           </div>
-          {/* Активный поиск разворачивается на весь сайдбар: сортировка и пилюля схлопываются */}
+          {/* Активный поиск разворачивается на весь сайдбар: сортировка схлопывается */}
           <div style={{
             display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             maxWidth: searchExpanded ? 0 : 220,
@@ -1387,7 +1359,6 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
               <span style={{ position: 'absolute', top: 3, right: 3, width: 6, height: 6, borderRadius: '50%', background: C.accent, pointerEvents: 'none' }} />
             )}
           </span>
-          {pill}
           </div>
           {showSortMenu && (
               // align="left": кнопка у левого края сайдбара — правое выравнивание уводило меню за экран

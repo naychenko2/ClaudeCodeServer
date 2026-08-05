@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network, Puzzle, GitCompare } from 'lucide-react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -68,7 +68,6 @@ interface Props {
 
 // LeftTab живёт в lib/workspaceState — там же, где список для восстановления из
 // localStorage: держать union в двух местах уже приводило к потерянным вкладкам
-type FileSubTab = 'files' | 'knowledge';
 
 // Иконки вкладок проекта для мобильного компакт-режима (Feather-стиль, как HubTabs)
 const leftTabSvg = (children: React.ReactNode) => (
@@ -81,6 +80,8 @@ const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   // Та же иконка, что у панели «Изменения» в рельсе (PANEL_META.changes): на мобиле
   // рельсы нет, и вкладка — единственный путь к git
   changes: <GitCompare size={18} strokeWidth={2} />,
+  // База знаний проекта — иконка панели knowledge из того же реестра
+  knowledge: <BookOpen size={18} strokeWidth={2} />,
   tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
   personas: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
   // Пазл — та же метафора, что у панели «Навыки» в рельсе (PANEL_META.skills)
@@ -281,7 +282,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     // «Инструменты» существуют только при включённых инструментах проекта
     return saved !== 'tools' || project.toolsEnabled ? saved : 'sessions';
   });
-  const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => {
     // Стартовая сессия от «Поговорить» проектной персоны (раздел «Персоны»): проект уже
     // открыт App-ом, сессию выбираем здесь — SessionList не перебьёт её авто-выбором list[0].
@@ -624,9 +624,10 @@ const windowWidth = useWindowWidth();
   const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
     { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
     { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
-    // Git — рядом с файлами: обе вкладки про содержимое репозитория. На десктопе
-    // это панель рельсы, здесь рельсы нет — иначе git с телефона недоступен
+    // Git и знания — рядом с файлами: все три про содержимое проекта. На десктопе
+    // это панели рельсы, здесь рельсы нет — иначе с телефона они недоступны совсем
     { value: 'changes' as LeftTab, label: 'Изменения', icon: LEFT_TAB_ICONS.changes },
+    { value: 'knowledge' as LeftTab, label: 'Знания', icon: LEFT_TAB_ICONS.knowledge },
     { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
     { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
     // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
@@ -921,8 +922,8 @@ const windowWidth = useWindowWidth();
 
   // Запоминаем состояние окна (активный чат/файл, панели) для проекта
   useEffect(() => {
-    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab, fileSubTab });
-  }, [project.id, activeSession, openFile, fileFullscreen, leftTab, fileSubTab]);
+    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab });
+  }, [project.id, activeSession, openFile, fileFullscreen, leftTab]);
 
   // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
@@ -1335,12 +1336,11 @@ const windowWidth = useWindowWidth();
                   onRefreshServices={refreshServices} onStartService={startService}
                   onStopService={stopService} onSelectPreview={handleSelectPreview}
                   terminalBusy={terminalBusy} />
+              : leftTab === 'knowledge'
+              ? <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
-                  {fileSubTab === 'files'
-                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
-                    : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
-                  }
+                  <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} />
                 </div>
               )
             }
@@ -1488,9 +1488,8 @@ const windowWidth = useWindowWidth();
           // перезагрузки страницы
           toolsEnabled={!!projectForEdit.toolsEnabled}
           panels={{
-            files: fileSubTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
-              : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
+            files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} />,
+            knowledge: <KnowledgePanel project={project} isMobile={false} />,
             // Документация проекта: превью и навигация — в панели, крупное чтение —
             // «развернуть» тем же путём, что открываются остальные файлы
             docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} activeFilePath={openFile} onCloseFile={backFromFile} />,

@@ -278,8 +278,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     // Сохранённое 'agents' — ключ до переименования вкладки персон
     const saved = (savedRaw as string) === 'agents' ? 'personas' : savedRaw;
     if (!isLeftTab(saved)) return 'sessions';
-    // «Инструменты» существуют только при включённых инструментах проекта
-    return saved !== 'tools' || project.toolsEnabled ? saved : 'sessions';
+    return saved;
   });
   const [activeSession, setActiveSession] = useState<Session | null>(() => {
     // Стартовая сессия от «Поговорить» проектной персоны (раздел «Персоны»): проект уже
@@ -379,13 +378,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Нужно для резолва контекста «в рамках какой задачи» в ArtifactsPanel/бэйджах чата
   // (плашка в ChatOriginBadge полагается на getTaskById из уже загруженного стора)
   useEffect(() => { void ensureTasksLoaded(); }, []);
-
-  // Инструменты выключили в настройках (projectForEdit) — уводим с вкладки «Инструменты»,
-  // иначе останется висеть недоступный режим. При включении вкладка появится сама
-  // (leftTabOptions пересчитывается из projectForEdit) — перезагрузка не нужна.
-  useEffect(() => {
-    if (leftTab === 'tools' && !projectForEdit.toolsEnabled) setLeftTab('sessions');
-  }, [projectForEdit.toolsEnabled, leftTab]);
 
   // Вкладка «Команда»: список персон — в сайдбаре, форма — в центральной зоне.
   // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
@@ -633,7 +625,9 @@ const windowWidth = useWindowWidth();
     // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
     // поэтому им нужна своя вкладка — иначе доступ к ним с телефона пропадает совсем
     { value: 'skills' as LeftTab, label: 'Навыки', icon: LEFT_TAB_ICONS.skills },
-    ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
+    // На мобиле рельсы панелей проекта нет, и ящик рельсы не работает — поэтому
+    // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями)
+    { value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools },
   ];
 
   // Мобильный таббар проекта: показываем столько вкладок, сколько влезает по ширине
@@ -1447,10 +1441,6 @@ const windowWidth = useWindowWidth();
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
           onOpenReader={readerFlag ? handleOpenReader : undefined}
-          // Из projectForEdit, а не из project: настройки правят именно его, и по
-          // старому объекту Терминал с Preview появлялись в рельсе только после
-          // перезагрузки страницы
-          toolsEnabled={!!projectForEdit.toolsEnabled}
           panels={{
             files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} />,
             knowledge: <KnowledgePanel project={project} isMobile={false} />,

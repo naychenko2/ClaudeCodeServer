@@ -219,7 +219,6 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
           side="left"
           floating
           panels={zonePanels}
-          toolsEnabled={!!focusedProject?.toolsEnabled}
           sessionPanels={sessionPanels}
           railFooter={
             // flex: 1 — обёртка обязана забрать всю высоту под рельсой: по ней док
@@ -282,7 +281,6 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
           side="right"
           floating
           panels={zonePanels}
-          toolsEnabled={!!focusedProject?.toolsEnabled}
           sessionPanels={sessionPanels}
         />
 
@@ -358,7 +356,7 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
       {pickerOpen && <WallPicker onClose={() => setPickerOpen(false)} />}
 
       {/* Настройки проекта из крошки. Обновлённый проект кладём в стор стены —
-          иконка, имя и toolsEnabled фокусной колонки должны обновиться на месте */}
+          иконка и имя фокусной колонки должны обновиться на месте */}
       {editProject && (
         <EditDialog
           project={editProject}

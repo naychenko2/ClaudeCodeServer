@@ -110,9 +110,8 @@ interface Props {
   // Документ «Граф зависимостей»: открывается из панельки «Граф», живёт в центре
   graphOpen: boolean;
   graphArea: ReactNode;
-  // Панели проекта: доступность инструментов + готовый контент панелек.
-  // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
-  toolsEnabled: boolean;
+  // Панели проекта: готовый контент панелек. Контент общий для обеих зон — панель
+  // рисует та зона, в которой она лежит.
   panels: Partial<Record<PanelKey, ReactNode>>;
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
   onOpenReader?: (url: string) => void;
@@ -281,7 +280,6 @@ export function DesktopWorkspace(p: Props) {
         side="left"
         panels={zonePanels}
         railCounts={p.railCounts}
-        toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
@@ -411,7 +409,6 @@ export function DesktopWorkspace(p: Props) {
         compact={p.isTablet}
         panels={zonePanels}
         railCounts={p.railCounts}
-        toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
         centerFileOpen={!!p.openFile}
       />

@@ -98,8 +98,6 @@ interface Props {
   // Рельсу целиком прячем, когда показывать нечего (у чата без артефактов иначе
   // торчала бы пустая полоса)
   hideWhenEmpty?: boolean;
-  // Терминал и Сервисы доступны только при включённых инструментах проекта
-  toolsEnabled?: boolean;
   // Планшет/телефон: одна-две панели, drawer поверх на узком экране, без DnD и колонок
   compact?: boolean;
   // Панели текущей сессии (План/Агенты/Персона) — контент, видимость, бейджи
@@ -119,7 +117,7 @@ interface Props {
 
 export function PanelZone({
   side, panels, railCounts, panelStack,
-  allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, toolsEnabled, compact, sessionPanels,
+  allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, compact, sessionPanels,
   railFooter, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
@@ -157,11 +155,10 @@ export function PanelZone({
   const [tabletPanels, setTabletPanels] = useState<PanelKey[]>([]);
   const tabletInline = windowWidth >= TABLET_INLINE_MIN;
 
-  // Панель доступна на этом экране: есть контент (у сессионных он всегда есть),
-  // экран не sessionOnly либо ключ из разрешённых там, инструменты включены.
+  // Панель доступна на этом экране: ключ разрешён экраном (allowedKeys) и у панели
+  // есть контент (у сессионных он всегда есть).
   const keyAvailable = (k: PanelKey): boolean => {
     if (!allowedKeys.includes(k)) return false;
-    if (TOOLS_KEYS.includes(k) && !toolsEnabled) return false;
     return content(k) != null;
   };
 

@@ -309,13 +309,9 @@ export const MarkdownContent = memo(function MarkdownContent({ text }: { text: s
           // Текст ссылки — как написал автор markdown, label из resolveFileMention сюда не идёт.
           const mention = resolveFileMention(href);
           if (mention) return <FileLink path={mention.path} onOpen={onOpenFile!}>{children}</FileLink>;
-          return (
-            <ReaderLinkWrap href={href}>
-              <a href={href} style={{ color: C.accent, textDecoration: 'underline' }} target="_blank" rel="noopener noreferrer">
-                {children}
-              </a>
-            </ReaderLinkWrap>
-          );
+          // Внешняя ссылка: сам <a>, перехват клика в панель «Чтение» и кнопка-компаньон
+          // живут в ReaderLinkWrap (ADR-006 §2/§5)
+          return <ReaderLinkWrap href={href}>{children}</ReaderLinkWrap>;
         },
         // Картинки из markdown: внешние URL — напрямую, локальные пути файлов проекта — через API
         img: ({ src, alt }) => {

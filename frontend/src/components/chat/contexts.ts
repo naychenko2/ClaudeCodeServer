@@ -16,8 +16,9 @@ export const ChatTreePathContext = createContext<string | null>(null);
 export const ChatOpenFileContext = createContext<((path: string) => void) | null>(null);
 
 // Открыть URL в панели «Чтение» — та же логика: MarkdownContent сидит глубоко в ленте,
-// а кнопка-компаньон у внешней ссылки нужна в каждом её отпрыске. null — фича выключена
-// (флаг link-reader) или чат не поддерживает ридер: кнопка-компаньон просто не рисуется.
+// а перехват клика по внешней ссылке и кнопка-компаньон нужны в каждом её отпрыске.
+// null — фича выключена (флаг link-reader) или чат не поддерживает ридер: ссылки
+// ведут себя как раньше (новая вкладка), кнопка-компаньон не рисуется.
 export const ChatOpenReaderContext = createContext<((url: string) => void) | null>(null);
 
 // Id текущей сессии — шторке «какой промпт ушёл» под постом: она грузит снимок по REST,

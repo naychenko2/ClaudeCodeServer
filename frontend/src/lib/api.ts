@@ -1101,6 +1101,15 @@ export const api = {
           method: 'POST',
           body: JSON.stringify({ path }),
         }),
+    // Перенести документ или раздел в другую папку области. Раздел переезжает со всем
+    // поддеревом; updateLinks чинит и чужие ссылки на переехавшее, и его собственные —
+    // при смене папки меняется глубина, и относительные пути ломаются в обе стороны
+    move: (projectId: string, path: string, targetFolder: string, updateLinks: boolean) =>
+      request<{ path: string; updatedDocs: number; brokenLinks: number; moved: Record<string, string>; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/move`, {
+          method: 'POST',
+          body: JSON.stringify({ path, targetFolder, updateLinks }),
+        }),
     setOrder: (projectId: string, folder: string, items: string[]) =>
       request<DocEntry[]>(`/projects/${projectId}/docs/order`, {
         method: 'PUT',

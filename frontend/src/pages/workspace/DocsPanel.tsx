@@ -23,6 +23,7 @@ import { Button, ConfirmDialog, EmptyState, IconButton, IconSegmented, Menu, Men
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { DocsCreateDialog } from './DocsCreateDialog';
 import { DocsRenameDialog } from './DocsRenameDialog';
+import { DocsMoveDialog } from './DocsMoveDialog';
 import { useRequestPanelFill } from './panelFill';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
@@ -481,7 +482,7 @@ function FolderRow({ label, parent, count, current, onJump }: {
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
 // в строке нет места, а место иконки всё равно занято состоянием документа
-function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, onExpand, onTogglePin, onContextMenu }: {
+function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, onExpand, onTogglePin, onContextMenu, dropInto }: {
   doc: DocEntry;
   selected: boolean;
   home: boolean;
@@ -501,6 +502,10 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
   // Действия строки (переименование) — правым кликом, как в «Файлах»: в узкой колонке
   // постоянной кнопке «…» места нет, а жест у панелей должен быть один
   onContextMenu?: (e: React.MouseEvent) => void;
+  // Строка — цель ВЛОЖЕНИЯ при перетаскивании: перетаскиваемый раздел уедет внутрь неё.
+  // Рамкой, а не заливкой: заливка тут уже занята выделением и наведением, и третий
+  // фон на том же месте читался бы как «выбрано», а не «сюда упадёт»
+  dropInto?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const [pinHover, setPinHover] = useState(false);
@@ -525,6 +530,9 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
         // а тонкий просвет цвета полотна (ниже) — так строка остаётся одной строкой
         background: selected ? C.bgSelected : hover ? C.bgInset : 'transparent',
         overflow: 'hidden',
+        // Рамка цели вложения рисуется ВНУТРЬ (inset), иначе строка подпрыгивает
+        // на пиксель и весь список дёргается под курсором
+        boxShadow: dropInto ? `inset 0 0 0 1.5px ${C.accent}` : undefined,
         minHeight: ROW_H, paddingLeft: SP.sm + (indent ?? 0),
       }}
     >
@@ -685,6 +693,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   const [rowMenu, setRowMenu] = useState<{ doc: DocEntry; rect: DOMRect } | null>(null);
   const [renaming, setRenaming] = useState<DocEntry | null>(null);
   const [deleting, setDeleting] = useState<DocEntry | null>(null);
+  // Перенос, ждущий подтверждения: жест перетаскивания двигает файлы на диске, и промах
+  // мышью не должен уносить ветку молча
+  const [moving, setMoving] = useState<{ doc: DocEntry; target: string } | null>(null);
   // Итог переименования строкой над списком: сколько ссылок починено и сколько осталось
   // битыми. Без него о пределе механизма («видно только область») никто бы не узнал
   const [renameNote, setRenameNote] = useState<string | null>(null);
@@ -1537,7 +1548,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   const applyRename = (res: {
     path: string; moved: Record<string, string>;
     updatedDocs: number; brokenLinks: number; index: DocEntry[];
-  }) => {
+  }, verb = 'Переименовано') => {
     const moved = res.moved ?? {};
     setRenaming(null);
     setIndex(res.index ?? null);
@@ -1554,10 +1565,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     // Что вышло по ссылкам — единственный способ узнать про оставшиеся битые: чинится
     // только область документации, а ссылки из кода механизму не видны
     setRenameNote(res.brokenLinks > 0
-      ? `Переименовано. Ссылок обновлено в ${res.updatedDocs} документах, осталось битых: ${res.brokenLinks}`
+      ? `${verb}. Ссылок обновлено в ${res.updatedDocs} документах, осталось битых: ${res.brokenLinks}`
       : res.updatedDocs > 0
-        ? `Переименовано. Ссылки обновлены в ${res.updatedDocs} документах`
-        : 'Переименовано');
+        ? `${verb}. Ссылки обновлены в ${res.updatedDocs} документах`
+        : verb);
   };
 
   // Удаление: раздел уходит парой со всем содержимым, поэтому после ответа чистим всё,
@@ -1584,6 +1595,20 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       setError('Не удалось удалить документ');
     }
   };
+
+  // Куда упадёт строка в виде «Разделы»: тянешь ровно вверх-вниз — меняется порядок
+  // среди соседей, уводишь ВПРАВО — раздел вкладывается в тот, над которым курсор.
+  //
+  // По горизонтали, а не по «середине строки»: при сортировке dnd-kit сам сдвигает
+  // соседей по вертикали, и расчёт «центр цели» плавал вместе с ними — жест угадывался
+  // через раз. Горизонталь сортировкой не занята, а сдвиг вправо и так читается как
+  // «сделать дочерним» — тем же движением задают вложенность в аутлайнерах
+  const NEST_SHIFT = 24;
+  const dropIntent = (e: { over: unknown; delta: { x: number } }) =>
+    !e.over ? null : e.delta.x > NEST_SHIFT ? 'nest' : 'order';
+
+  // Раздел, внутрь которого сейчас упадёт перетаскиваемая строка (подсветка рамкой)
+  const [nestTarget, setNestTarget] = useState<string | null>(null);
 
   const closeCreateMenu = () => { setCreateMenu(null); setPickingFolder(false); };
 
@@ -1912,10 +1937,54 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     }
                   />
                 )}
-                {sectionsView && sections.map(({ doc: d, folder, depth, count }) => (
+                {/* Перетаскивание разделов: у краёв строки — порядок среди соседей
+                    (.order их общей папки), в середине — вложение раздела внутрь цели,
+                    то есть перенос папки со всем содержимым. Второе спрашивает
+                    подтверждение, первое применяется сразу */}
+                {sectionsView && sections.length > 0 && (
+                <DndContext
+                  sensors={dragSensors}
+                  collisionDetection={closestCenter}
+                  // onDragMove, а не onDragOver: тот срабатывает лишь на СМЕНУ цели, а
+                  // смысл жеста здесь меняется по ходу движения — вправо уехали уже над
+                  // той же строкой. С onDragOver подсветка не появлялась вовсе
+                  onDragMove={e => {
+                    const overId = e.over ? String(e.over.id) : null;
+                    const nest = overId && overId !== String(e.active.id) && dropIntent(e) === 'nest';
+                    setNestTarget(nest ? overId : null);
+                  }}
+                  onDragCancel={() => setNestTarget(null)}
+                  onDragEnd={e => {
+                    const intent = dropIntent(e);
+                    setNestTarget(null);
+                    const activeId = String(e.active.id);
+                    const overId = e.over ? String(e.over.id) : null;
+                    if (!overId || overId === activeId || !intent) return;
+                    const from = sections.find(s => s.doc.path === activeId);
+                    const to = sections.find(s => s.doc.path === overId);
+                    if (!from || !to) return;
+
+                    if (intent === 'nest') {
+                      // Уже лежит в этом разделе — переносить некуда
+                      if (folderOf(from.doc.path) === to.folder) return;
+                      setMoving({ doc: from.doc, target: to.folder });
+                      return;
+                    }
+                    // Порядок — только среди соседей: у разных родителей общего .order нет,
+                    // и перестановка между ними означала бы перенос, о котором не спросили
+                    const parent = folderOf(from.doc.path);
+                    if (folderOf(to.doc.path) !== parent) return;
+                    moveInFolder(parent,
+                      sections.filter(s => folderOf(s.doc.path) === parent).map(s => s.doc),
+                      activeId, overId);
+                  }}
+                >
+                <SortableContext items={sections.map(s => s.doc.path)} strategy={verticalListSortingStrategy}>
+                {sections.map(({ doc: d, folder, depth, count }) => (
+                  <SortableRow key={d.path} doc={d}>
                   <DocRow
-                    key={d.path}
                     doc={d}
+                    dropInto={nestTarget === d.path}
                     selected={isShown(d.path)}
                     home={d.path === homePath}
                     pinned={pinned.has(d.path)}
@@ -1931,8 +2000,34 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     onTogglePin={() => togglePin(d.path)}
                     onContextMenu={e => openRowMenu(d, e)}
                   />
+                  </SortableRow>
                 ))}
-                {!sectionsView && blocks.map(({ key, folder, docs }) => {
+                </SortableContext>
+                </DndContext>
+                )}
+                {/* Один DndContext на всё дерево: бросок В СВОЮ группу переставляет
+                    порядок (.order папки), в ЧУЖУЮ — переносит файл на диске. Разные
+                    последствия у одного жеста, поэтому перенос спрашивает подтверждение */}
+                {!sectionsView && (
+                <DndContext
+                  sensors={dragSensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={e => {
+                    const activeId = String(e.active.id);
+                    const overId = e.over ? String(e.over.id) : null;
+                    if (!overId || overId === activeId) return;
+                    const from = folderOf(activeId);
+                    const to = folderOf(overId);
+                    if (from === to) {
+                      const block = blocks.find(b => b.folder === from);
+                      if (block) moveInFolder(from, block.docs, activeId, overId);
+                      return;
+                    }
+                    const doc = (index ?? []).find(d => d.path === activeId);
+                    if (doc) setMoving({ doc, target: to });
+                  }}
+                >
+                {blocks.map(({ key, folder, docs }) => {
                   // Блок под глубоко свёрнутым предком не рисуем вовсе — так поддерево
                   // исчезает целиком, а не просто пустеет
                   if (folder && isUnderDeepCollapsed(folder)) return null;
@@ -1995,16 +2090,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                       visibility: isCollapsed ? 'hidden' : 'visible',
                     }}>
                     <div style={{ overflow: 'hidden', minHeight: 0 }}>
-                    {/* Свой DndContext на каждую группу: перетаскивание между папками —
-                        это перемещение файла на диске со всеми его каскадами, а не
-                        перестановка строки. Общий контекст такой жест бы разрешил */}
-                    <DndContext
-                      sensors={dragSensors}
-                      collisionDetection={closestCenter}
-                      onDragEnd={e => {
-                        if (e.over) moveInFolder(folder, docs, String(e.active.id), String(e.over.id));
-                      }}
-                    >
+                    {/* SortableContext на группу, а контекст перетаскивания — общий на
+                        дерево: так строка может уехать и в соседнюю группу, а какой это
+                        жест — перестановка или перенос файла — решает onDragEnd выше */}
                       <SortableContext items={docs.map(d => d.path)} strategy={verticalListSortingStrategy}>
                         {docs.map(d => (
                           // В свёрнутой группе тащить нечего — её строки не видны; у
@@ -2023,12 +2111,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                           </SortableRow>
                         ))}
                       </SortableContext>
-                    </DndContext>
                     </div>
                     </div>
                   </div>
                   );
                 })}
+                </DndContext>
+                )}
             </div>
 
             {/* Закреплённые — всегда на виду, у нижнего края списка. Своя прокрутка:
@@ -2244,6 +2333,22 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           confirmVariant="danger"
           onConfirm={() => applyDelete(deleting)}
           onCancel={() => setDeleting(null)}
+        />
+      )}
+      {moving && (
+        <DocsMoveDialog
+          projectId={project.id}
+          doc={moving.doc}
+          targetFolder={moving.target}
+          targetLabel={groupTitle(moving.target).title}
+          subtreeLabel={(() => {
+            if (!moving.doc.sectionFolder) return undefined;
+            const n = (index ?? []).filter(d =>
+              d.path.toLowerCase().startsWith(`${moving.doc.sectionFolder!.toLowerCase()}/`)).length;
+            return n > 0 ? `${n} ${docCountWord(n)}` : undefined;
+          })()}
+          onClose={() => setMoving(null)}
+          onMoved={res => { setMoving(null); applyRename(res, 'Перенесено'); }}
         />
       )}
       {renaming && (

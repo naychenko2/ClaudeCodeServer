@@ -12,9 +12,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Эндпоинт POST /api/reader/read: авторизация, гейт фич-флага link-reader, счастливый путь.
-// Сетевую часть подменяем StubHandler на именованном клиенте "link-reader" — редиректы,
-// SSRF-рубежи и content-type routing уже покрыты ReaderServiceTests без реального HTTP.
+// Эндпоинты POST /api/reader/read и POST /api/reader/embed-check (ADR-006 §1): авторизация,
+// гейт фич-флага link-reader, счастливый путь. Сетевую часть подменяем StubHandler на
+// именованном клиенте "link-reader" — редиректы, SSRF-рубежи и вердикты встраиваемости уже
+// покрыты ReaderServiceTests/ReaderEmbedCheckTests без реального HTTP.
 public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
@@ -134,5 +135,104 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
         resp.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
         body.GetProperty("error").GetProperty("code").GetString().Should().Be("local-address");
+    }
+
+    // ---------- embed-check (ADR-006 §1) ----------
+
+    [Fact]
+    public async Task EmbedCheck_БезАвторизации_401()
+    {
+        using var f = WithStubReader(_ => throw new InvalidOperationException("не должно дойти"));
+        using var client = f.CreateClient();
+
+        var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task EmbedCheck_ФлагВыключен_403()
+    {
+        // Чек-лист ADR-006: флаг link-reader гейтит сам эндпоинт, а не только кнопку.
+        using var f = WithStubReader(_ => throw new InvalidOperationException("не должно дойти"));
+        using var client = await AuthenticatedClientAsync(f);
+
+        var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task EmbedCheck_ФлагВключён_ВстраиваемБезReason()
+    {
+        using var f = WithStubReader(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(ReadableArticleHtml, Encoding.UTF8, "text/html") });
+        using var client = await AuthenticatedClientAsync(f);
+        await EnableFlagAsync(client);
+
+        var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/article" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("embeddable").GetBoolean().Should().BeTrue();
+        body.TryGetProperty("reason", out _).Should().BeFalse("у embeddable: true причины нет");
+    }
+
+    [Fact]
+    public async Task EmbedCheck_XfoDeny_ИдётОбщимХендлеромСRead()
+    {
+        // Вердикт приходит из стаба, подменяющего primary-handler именно именованного клиента
+        // "link-reader": второй клиент с дефолтным хендлером до стаба бы не дошёл.
+        using var f = WithStubReader(_ =>
+        {
+            var resp = new HttpResponseMessage(HttpStatusCode.OK)
+            { Content = new StringContent(ReadableArticleHtml, Encoding.UTF8, "text/html") };
+            resp.Headers.Add("X-Frame-Options", "DENY");
+            return resp;
+        });
+        using var client = await AuthenticatedClientAsync(f);
+        await EnableFlagAsync(client);
+
+        var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/article" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("embeddable").GetBoolean().Should().BeFalse();
+        body.GetProperty("reason").GetString().Should().Be("frame-denied");
+    }
+
+    [Fact]
+    public async Task EmbedCheck_ПустойUrl_InvalidUrl()
+    {
+        using var f = WithStubReader(_ => throw new InvalidOperationException("не должно дойти"));
+        using var client = await AuthenticatedClientAsync(f);
+        await EnableFlagAsync(client);
+
+        var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "" });
+
+        resp.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await resp.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("embeddable").GetBoolean().Should().BeFalse();
+        body.GetProperty("reason").GetString().Should().Be("invalid-url");
+    }
+
+    [Fact]
+    public async Task EmbedCheck_RateКвотаОбщаяСRead()
+    {
+        // Квота существует ради IP-репутации сервера, и embed-check — исходящий запрос:
+        // счётчик один на /read и /embed-check (ADR-006 §1).
+        using var f = WithStubReader(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        { Content = new StringContent(ReadableArticleHtml, Encoding.UTF8, "text/html") });
+        using var client = await AuthenticatedClientAsync(f);
+        await EnableFlagAsync(client);
+
+        for (var i = 0; i < ReaderQuotaService.MaxPerMinutePerOwner; i++)
+        {
+            var ok = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/article" });
+            ok.StatusCode.Should().Be(HttpStatusCode.OK);
+        }
+
+        var overLimit = await client.PostAsJsonAsync("/api/reader/read", new { url = "http://example.com/article" });
+        overLimit.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
     }
 }

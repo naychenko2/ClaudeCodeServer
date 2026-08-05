@@ -81,3 +81,14 @@ public sealed class ReaderConnectBlockedException(bool dnsFailed) : Exception
 {
     public bool DnsFailed { get; } = dnsFailed;
 }
+
+/// <summary>
+/// Исход пробы встраиваемости (docs/adr/ADR-006-reader-embed-check.md, §1):
+/// <c>embeddable</c> + машинный <c>reason</c> для телеметрии и отладки. Фронт на reason
+/// не ветвится — любой <c>embeddable: false</c> молча уходит в MD-фолбэк через /read.
+/// </summary>
+public sealed record EmbedCheckResult(bool Embeddable, string? Reason)
+{
+    public static EmbedCheckResult Yes() => new(true, null);
+    public static EmbedCheckResult No(string reason) => new(false, reason);
+}

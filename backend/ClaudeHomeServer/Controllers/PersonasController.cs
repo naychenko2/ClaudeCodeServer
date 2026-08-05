@@ -1382,7 +1382,8 @@ public class PersonasController : ControllerBase
                         if (persona is null) return NotFound();
                     }
 
-                    return Ok(PersonaBindingsService.ToolCatalog
+                    // Каталог владельца: статические ключи плюс серверы его личного MCP-реестра
+                    return Ok(_bindings.ToolCatalogFor(UserId)
                         .Select(kv =>
                         {
                             if (persona is null)
@@ -1674,7 +1675,7 @@ public class PersonasController : ControllerBase
             }
         }
         sb.AppendLine("Инструменты (type \"tool\", target = ключ):");
-        foreach (var kv in PersonaBindingsService.ToolCatalog)
+        foreach (var kv in _bindings.ToolCatalogFor(UserId))
             sb.AppendLine($"- {kv.Key} — {kv.Value.Label}: {kv.Value.Hint}");
 
         sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) из НЕ БОЛЕЕ 5 объектов:");

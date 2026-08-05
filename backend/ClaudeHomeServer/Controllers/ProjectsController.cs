@@ -223,7 +223,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var oldRoot = p.RootPath;
         try
         {
-            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.ToolsEnabled, req.Color);
+            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.ToolsEnabled, req.Color, req.McpServersOff);
 
             // Смена папки проекта: перенести запись знаний под новый ключ — иначе запись сиротеет,
             // для нового пути создаётся дубль-датасет, а mcp dify молча теряет dataset_id
@@ -596,6 +596,8 @@ public record SetIconModeRequest(string? Kind);
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,
     bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false, string? Color = null);
-public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, bool? ToolsEnabled = null, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null);
+// McpServersOff — ключи серверов личного реестра, выключенных в этом проекте
+// (deny-list; null = не менять, пустой список = «никто не выключен»)
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, bool? ToolsEnabled = null, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOff = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
 public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

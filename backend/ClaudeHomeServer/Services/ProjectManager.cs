@@ -139,7 +139,7 @@ public class ProjectManager
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
-        bool? toolsEnabled = null, string? color = null)
+        bool? toolsEnabled = null, string? color = null, List<string>? mcpServersOff = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -167,6 +167,13 @@ public class ProjectManager
         // color: null = не менять; "" = сброс цвета (дефолтный фолбэк на фронте); иначе — ключ палитры.
         // Смена цвета картинку НЕ сбрасывает — она приоритетнее инициалов при Kind==Image.
         if (color is not null) project.Icon.Color = color.Length == 0 ? null : color;
+        // mcpServersOff: null = не менять; пустой список = «в проекте не выключен никто».
+        // Ключи нормализуем как в реестре (нижний регистр) — сравнение при доставке идёт по ним
+        if (mcpServersOff is not null)
+            project.McpServersOff = mcpServersOff.Count == 0
+                ? null
+                : [.. mcpServersOff.Select(k => k.Trim().ToLowerInvariant())
+                    .Where(k => k.Length > 0).Distinct(StringComparer.Ordinal)];
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Mcp;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,7 +14,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/mcp/servers")]
-public class McpServersController(McpRegistry registry, McpSecretStore secrets) : ControllerBase
+public class McpServersController(McpRegistry registry, McpSecretStore secrets,
+    PersonaBindingsService bindings) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -55,6 +57,7 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets) 
         // Черновик собираем от копии: старые ссылки на секреты нужны и для «оставить как было»,
         // и для уборки тех, что после правки стали никому не нужны
         var oldRefs = McpRegistry.SecretRefsOf(existing).ToList();
+        var oldKey = existing.Key;
         var draft = new McpServerRecord { Key = req.Key ?? existing.Key };
         if (Apply(draft, req, existing) is { } error) return BadRequest(new { error });
 
@@ -64,6 +67,10 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets) 
             if (updated is null) return NotFound(new { error = "Сервер не найден" });
             var keptRefs = McpRegistry.SecretRefsOf(updated).ToHashSet(StringComparer.Ordinal);
             secrets.Remove(UserId, oldRefs.Where(r => !keptRefs.Contains(r)));
+            // Смена ключа осиротила привязки персон на прежний «mcp:<ключ>» — тот же
+            // случай, что и удаление записи: протухший ключ валит следующий bindings_set
+            if (!string.Equals(oldKey, updated.Key, StringComparison.OrdinalIgnoreCase))
+                bindings.PurgeMcpBindings(UserId, oldKey);
             return Ok(McpServerMapper.ToDto(updated));
         }
         catch (InvalidOperationException ex)
@@ -86,6 +93,9 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets) 
         var removed = registry.Delete(UserId, id);
         if (removed is null) return NotFound(new { error = "Сервер не найден" });
         secrets.Remove(UserId, McpRegistry.SecretRefsOf(removed));
+        // Привязки персон на этот сервер осиротели: чистим их сразу, иначе следующая
+        // полная замена привязок (bindings_set) упала бы на несуществующем ключе
+        bindings.PurgeMcpBindings(UserId, removed.Key);
         return NoContent();
     }
 

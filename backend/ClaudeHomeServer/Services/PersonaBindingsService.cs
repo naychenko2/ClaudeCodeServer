@@ -47,6 +47,39 @@ public class PersonaBindingsService
             ["browser"] = ("Браузер", "Управление браузером (плагин playwright): открыть страницу, кликнуть, заполнить форму, снять скриншот — ручная проверка интерфейса"),
         };
 
+    // Ключ Tool-привязки на сервер личного реестра владельца: «mcp:<ключ сервера>».
+    // Префикс отделяет их от статического ToolCatalog — иначе чужой сервер с ключом
+    // «git» или «tasks» столкнулся бы с ключом каталога.
+    public static bool IsMcpKey(string? key) =>
+        key is not null && key.StartsWith(Mcp.McpRegistry.ToolKeyPrefix, StringComparison.OrdinalIgnoreCase);
+
+    // Ключ сервера из ключа привязки («mcp:context7» → «context7»)
+    public static string McpServerKeyOf(string key) =>
+        key[Mcp.McpRegistry.ToolKeyPrefix.Length..].Trim().ToLowerInvariant();
+
+    // Каталог Tool-ключей для пикера и промпта подбора: статический ToolCatalog плюс
+    // серверы личного реестра владельца. Сам ToolCatalog остаётся неизменным — он
+    // статический и общий, а реестр у каждого владельца свой.
+    public IReadOnlyDictionary<string, (string Label, string Hint)> ToolCatalogFor(string? ownerId)
+    {
+        if (ownerId is null || _mcpRegistry is null) return ToolCatalog;
+        var records = _mcpRegistry.GetByOwner(ownerId);
+        if (records.Count == 0) return ToolCatalog;
+
+        var catalog = new Dictionary<string, (string, string)>(ToolCatalog, StringComparer.OrdinalIgnoreCase);
+        foreach (var record in records.OrderBy(r => r.Key, StringComparer.Ordinal))
+        {
+            var description = string.IsNullOrWhiteSpace(record.Description) ? "" : record.Description!.Trim() + ". ";
+            catalog[Mcp.McpRegistry.ToolKeyPrefix + record.Key] = (
+                string.IsNullOrWhiteSpace(record.Label) ? record.Key : record.Label,
+                $"Свой MCP-сервер «{record.Key}» из личного реестра. {description}" +
+                "По умолчанию включён; привязка нужна только чтобы ВЫКЛЮЧИТЬ его этой персоне " +
+                "(режим «выключено»). Условие применения у такой привязки не учитывается: " +
+                "состав инструментов хода не смеет зависеть от текста запроса");
+        }
+        return catalog;
+    }
+
     // Ключи-рубильники MCP-серверов: гейтятся ТОЛЬКО Tool-привязкой (ServerToolEnabled).
     // Фолбэка на Persona.Tools у них нет — см. там же почему. Исключение — notifications:
     // у него сверх Off-привязки есть дефолт по роли (NotificationsEnabled), и решение
@@ -75,6 +108,7 @@ public class PersonaBindingsService
     private readonly KnowledgeService _knowledge;
     private readonly SkillsService _skills;
     private readonly UserStore _users;
+    private readonly Mcp.McpRegistry? _mcpRegistry;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaBindingsService> _log;
 
@@ -86,7 +120,11 @@ public class PersonaBindingsService
     public PersonaBindingsService(PersonaManager personas, ProjectManager projects,
         WorkspaceKnowledgeStore wkStore, NotesService notes, NotesKnowledgeService notesKb,
         KnowledgeService knowledge, SkillsService skills,
-        UserStore users, IConfiguration config, ILogger<PersonaBindingsService> log)
+        UserStore users, IConfiguration config, ILogger<PersonaBindingsService> log,
+        // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца —
+        // его записи попадают в каталог Tool-ключей как «mcp:<ключ>». Без него каталог
+        // остаётся статическим, а mcp-привязки не проходят валидацию
+        Mcp.McpRegistry? mcpRegistry = null)
     {
         _personas = personas;
         _projects = projects;
@@ -96,6 +134,7 @@ public class PersonaBindingsService
         _knowledge = knowledge;
         _skills = skills;
         _users = users;
+        _mcpRegistry = mcpRegistry;
         _config = config;
         _log = log;
     }
@@ -194,6 +233,11 @@ public class PersonaBindingsService
                 : (false, null);
         }
 
+        // Серверы личного реестра: та же семантика, что у ServerKeys — дефолт «включён»,
+        // выключает только Off-привязка (см. ServerToolEnabled в резолвере доставки)
+        if (IsMcpKey(key))
+            return (true, null);
+
         // MCP-серверы-рубильники: дефолт всегда включён (выключить можно только Off-привязкой)
         if (ServerKeys.Contains(key))
             return (true, null);
@@ -280,6 +324,29 @@ public class PersonaBindingsService
     private static PersonaBinding? FindToolBinding(Persona persona, string key) =>
         persona.Bindings?.LastOrDefault(b => b.Type == PersonaBindingType.Tool
             && string.Equals(b.Target, key, StringComparison.OrdinalIgnoreCase));
+
+    // Подмести привязки «mcp:<ключ>» у всех персон владельца — вызывается при удалении
+    // сервера из реестра. Без этого протухший ключ оставался бы в персоне и валил
+    // СЛЕДУЮЩУЮ полную замену привязок (bindings_set) целиком, а не одной строкой.
+    // UpdateBindings поднимает OnPersonaChanged → SessionManager инвалидирует сессии персоны.
+    // Возвращает число тронутых персон.
+    public int PurgeMcpBindings(string ownerId, string serverKey)
+    {
+        var key = Mcp.McpRegistry.ToolKeyPrefix + serverKey.Trim().ToLowerInvariant();
+        var touched = 0;
+        foreach (var persona in _personas.GetByOwner(ownerId))
+        {
+            if (persona.Bindings is not { Count: > 0 } bindings) continue;
+            var kept = bindings.Where(b => b.Type != PersonaBindingType.Tool
+                || !string.Equals(b.Target, key, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (kept.Count == bindings.Count) continue;
+            _personas.UpdateBindings(persona.Id, ownerId, kept);
+            touched++;
+        }
+        if (touched > 0)
+            _log.LogInformation("Привязки на удалённый MCP-сервер «{Key}» убраны у {Count} персон", serverKey, touched);
+        return touched;
+    }
 
     // --- Сужение зоны workspace ---
 
@@ -650,7 +717,10 @@ public class PersonaBindingsService
                 }
             case PersonaBindingType.Tool:
                 {
-                    var label = ToolCatalog.TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
+                    // Каталог владельца: у серверов личного реестра ключ «mcp:<ключ>»
+                    // живёт не в статическом ToolCatalog, а в записях реестра
+                    var label = ToolCatalogFor(ownerId).TryGetValue(binding.Target, out var t)
+                        ? t.Label : binding.Target;
                     return $"применяй инструменты «{label}» ({binding.Target})";
                 }
             case PersonaBindingType.ProjectPersonas:
@@ -818,7 +888,7 @@ public class PersonaBindingsService
                     return string.IsNullOrWhiteSpace(binding.Path) ? label : $"{label}/{binding.Path}";
                 }
             case PersonaBindingType.Tool:
-                return ToolCatalog.TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
+                return ToolCatalogFor(ownerId).TryGetValue(binding.Target, out var t) ? t.Label : binding.Target;
             case PersonaBindingType.ProjectPersonas:
                 {
                     var name = _projects.GetById(binding.Target)?.Name ?? binding.Target;
@@ -916,6 +986,18 @@ public class PersonaBindingsService
                     return "Скилл не найден среди глобальных";
                 break;
             case PersonaBindingType.Tool:
+                // Сервер личного реестра: ключ живёт не в статическом каталоге, а в записях
+                // владельца — сверяемся с ними (протухший ключ роняет весь bindings_set,
+                // поэтому удаление сервера подметает свои привязки — PurgeMcpBindings)
+                if (IsMcpKey(binding.Target))
+                {
+                    var serverKey = McpServerKeyOf(binding.Target);
+                    if (_mcpRegistry is null
+                        || !_mcpRegistry.GetByOwner(ownerId).Any(r =>
+                            string.Equals(r.Key, serverKey, StringComparison.OrdinalIgnoreCase)))
+                        return $"MCP-сервер «{serverKey}» не найден в вашем реестре";
+                    break;
+                }
                 if (!ToolCatalog.ContainsKey(binding.Target))
                     return $"Неизвестный ключ инструмента: {binding.Target} " +
                            $"(допустимы: {string.Join(", ", ToolCatalog.Keys)})";

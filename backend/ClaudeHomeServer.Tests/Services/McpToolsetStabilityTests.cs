@@ -116,6 +116,27 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
+    /// Каскад доступности серверов личного реестра: реестр (Enabled) → проект
+    /// (deny-list Project.McpServersOff) → персона (Off-привязка «mcp:&lt;ключ&gt;»).
+    /// Все три оси — свойства owner/project/persona, ни одна не смотрит на ход;
+    /// выпадение любой означало бы, что настройка молча перестала действовать.
+    /// </summary>
+    [SkippableFact]
+    public void КаскадРеестра_ТриОсиНаМесте()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+
+        body.Should().Contain("record.Enabled", "первая ось каскада — рубильник самой записи реестра");
+        body.Should().Contain("McpServersOff",
+            "вторая ось — deny-list проекта: сервер, выключенный в проекте, в ход не едет");
+        body.Should().Contain("ServerToolEnabled(", "третья ось — Off-привязка персоны");
+    }
+
+    /// <summary>
     /// Секции-надстройки с пресетом по роли (git/kb в workspace, manage/automation в сервере
     /// персон): решаются ТОЛЬКО по персоне через единую точку SectionEnabled. Свой набор
     /// инструментов у каждой, поэтому зависимость от хода тут так же смертельна.

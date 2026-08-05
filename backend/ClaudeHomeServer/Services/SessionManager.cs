@@ -1776,11 +1776,20 @@ public class SessionManager : IDisposable
             try
             {
                 var servers = new List<ExternalMcpServer>();
+                // Deny-list проекта читаем на каждый ход — правка настроек проекта
+                // применяется со следующего хода, без пересоздания адаптера.
+                // Чат вне проекта этот шаг каскада пропускает
+                var offInProject = projectId is null ? null : _projects.GetById(projectId)?.McpServersOff;
                 foreach (var record in registry.GetByOwner(ownerId))
                 {
                     if (!record.Enabled) continue;
+                    // Выключен в этом проекте — второй шаг каскада реестр → проект → персона
+                    if (offInProject is { Count: > 0 }
+                        && offInProject.Contains(record.Key, StringComparer.OrdinalIgnoreCase)) continue;
                     // Персона выключает сервер Off-привязкой на ключ каталога "mcp:<ключ>";
                     // дефолт — включён (ServerToolEnabled), обычный чат получает всё
+                    // (префикс тот же, что McpRegistry.ToolKeyPrefix; литералом — его видит
+                    // сторож состава McpToolsetStabilityTests)
                     if (!_bindings.ServerToolEnabled(ownerId, persona, "mcp:" + record.Key)) continue;
                     var stdio = record.Transport == McpTransport.Stdio;
                     var env = ResolveValues(record.Env);

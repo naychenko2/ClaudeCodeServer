@@ -209,27 +209,7 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
             }
 
             var moved = result.Moved ?? new Dictionary<string, string>();
-            if (moved.Count > 0)
-            {
-                // Комментарии заметок к документу (и ко всему поддереву раздела) следуют
-                // за новым путём — привязка не сиротеет. Как в FilesController.Rename
-                foreach (var (from, to) in moved)
-                {
-                    try { notes.RewriteAnnotationTargets(UserId!, projectId, from, projectId, to, prefix: true); }
-                    catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при переименовании {Old}", from); }
-                }
-
-                // «Начало» указывает на конкретный путь: без переезда выбранный документ
-                // молча исчез бы из настройки, и панель открылась бы на README
-                if (scope.Home is { } home && moved.TryGetValue(home, out var newHome))
-                {
-                    if (docs.ReadScopeFile(p.RootPath).Scope is not null)
-                        docs.WriteScopeFile(p.RootPath, scope with { Home = newHome });
-                    else
-                        projects.SetDocsScope(projectId, scope.Folders, scope.RootFiles, scope.Types, newHome);
-                    scope = docs.ResolveScope(GetProject(projectId));
-                }
-            }
+            scope = ApplyMoveCascade(projectId, p, scope, moved, "переименовании");
 
             return Ok(new
             {
@@ -243,6 +223,71 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
         catch (KeyNotFoundException) { return NotFound(); }
         catch (IOException e) { return StatusCode(500, new { error = $"Не удалось переименовать: {e.Message}" }); }
         catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа: {e.Message}" }); }
+    }
+
+    // Перенести документ или раздел в другую папку области. Раздел переезжает со всем
+    // поддеревом; ссылки внутри переехавшего чинятся тоже — при смене глубины
+    // «../vision.md» указывает уже не туда
+    [HttpPost("move")]
+    public IActionResult Move(string projectId, [FromBody] MoveDocRequest req)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var scope = docs.ResolveScope(p);
+            var result = docs.MoveDoc(p.RootPath, req.Path ?? "", req.TargetFolder, req.UpdateLinks, scope);
+            switch (result.Status)
+            {
+                case DocsIndexService.DocMoveStatus.NotFound: return NotFound(new { error = result.Error });
+                case DocsIndexService.DocMoveStatus.BadTarget: return BadRequest(new { error = result.Error });
+                case DocsIndexService.DocMoveStatus.Conflict: return Conflict(new { error = result.Error });
+                case DocsIndexService.DocMoveStatus.Failed: return StatusCode(500, new { error = result.Error });
+            }
+
+            var moved = result.Moved ?? new Dictionary<string, string>();
+            scope = ApplyMoveCascade(projectId, p, scope, moved, "переносе");
+
+            return Ok(new
+            {
+                path = result.Path,
+                updatedDocs = result.UpdatedDocs,
+                brokenLinks = result.BrokenLinks,
+                moved,
+                index = docs.GetIndex(p.RootPath, scope),
+            });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось перенести: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа: {e.Message}" }); }
+    }
+
+    // Побочные привязки переезда — общие для переименования и переноса: и там, и там
+    // документы меняют путь, а помнящее старый путь остаётся снаружи сервиса.
+    // Возвращает область (она могла поменяться вместе с «Началом»)
+    private DocsScope ApplyMoveCascade(string projectId, Project project, DocsScope scope,
+        IReadOnlyDictionary<string, string> moved, string action)
+    {
+        if (moved.Count == 0) return scope;
+
+        // Комментарии заметок к документу (и ко всему поддереву раздела) следуют за новым
+        // путём — привязка не сиротеет. Как в FilesController.Rename
+        foreach (var (from, to) in moved)
+        {
+            try { notes.RewriteAnnotationTargets(UserId!, projectId, from, projectId, to, prefix: true); }
+            catch (Exception ex) { logger.LogWarning(ex, "Перепись привязок комментариев при {Action} {Old}", action, from); }
+        }
+
+        // «Начало» указывает на конкретный путь: без переезда выбранный документ молча
+        // исчез бы из настройки, и панель открылась бы на README
+        if (scope.Home is { } home && moved.TryGetValue(home, out var newHome))
+        {
+            if (docs.ReadScopeFile(project.RootPath).Scope is not null)
+                docs.WriteScopeFile(project.RootPath, scope with { Home = newHome });
+            else
+                projects.SetDocsScope(projectId, scope.Folders, scope.RootFiles, scope.Types, newHome);
+            return docs.ResolveScope(GetProject(projectId));
+        }
+        return scope;
     }
 
     // Удалить документ или раздел. Раздел уходит парой «страница + папка» со всем
@@ -323,3 +368,8 @@ public record RenameDocRequest(string? Path, string? NewName, bool UpdateLinks =
 // Раздел удаляется парой со всем содержимым — отдельного флага «с папкой» нет: половина
 // пары в wiki это либо пустой узел, либо осиротевшая страница
 public record DeleteDocRequest(string? Path);
+
+// TargetFolder — папка области, куда переезжает документ (раздел — вместе с папкой и всем
+// поддеревом). UpdateLinks — чинить ли ссылки: при переносе меняется глубина, и ломаются
+// не только чужие ссылки на переехавшее, но и его собственные на всё остальное
+public record MoveDocRequest(string? Path, string? TargetFolder, bool UpdateLinks = true);

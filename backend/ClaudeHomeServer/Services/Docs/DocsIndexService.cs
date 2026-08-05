@@ -1344,13 +1344,16 @@ public sealed partial class DocsIndexService(FileService? files = null)
         File.WriteAllText(file, string.Join(eol, lines) + eol, new UTF8Encoding(false));
     }
 
-    // Починка ссылок на переехавшее. Возвращает число изменённых документов.
+    // Починка ссылок вокруг переезда. Возвращает число изменённых документов.
     //
-    // Каждый документ разбирается заново по своему НОВОМУ расположению: цель ссылки
-    // резолвится от СТАРОГО пути источника (в файле она записана относительно него),
-    // а записывается уже относительно нового. Поэтому ссылки внутри переехавшего
-    // поддерева на такие же переехавшие цели остаются нетронутыми — их относительный
-    // путь не изменился.
+    // Каждая ссылка резолвится от СТАРОГО пути источника (в файле она записана
+    // относительно него) и записывается заново — относительно нового. Ломаются два
+    // разных класса ссылок, и оба закрываются одним правилом:
+    //   • чужие ссылки НА переехавшее — цель сменила путь;
+    //   • ссылки ВНУТРИ переехавшего на всё остальное — при переносе в другую папку
+    //     сменилась глубина, и «../vision.md» указывает уже не туда.
+    // При переименовании второй класс не страдает (глубина та же), и пересчёт даёт ту
+    // же строку — файл не переписывается.
     private int UpdateLinks(string root, DocsCorpus corpus, Dictionary<string, string> moved)
     {
         var changed = 0;
@@ -1373,9 +1376,18 @@ public sealed partial class DocsIndexService(FileService? files = null)
                 var (targetPart, _) = SplitRawAnchor(raw);
                 if (targetPart.Length == 0) return m.Value;      // якорь внутри документа
                 var target = ResolveRelative(from, targetPart);
-                if (target is null || !moved.TryGetValue(target, out var newTarget)) return m.Value;
+                if (target is null) return m.Value;
+                var newTarget = moved.GetValueOrDefault(target, target);
+                // Ни источник, ни цель никуда не делись — ссылка как была
+                if (fromNew == from && newTarget == target) return m.Value;
+                // Ссылка от корня («/docs/x.md») на неподвижную цель менять смысла не
+                // имеет: она не зависит от расположения источника, а переписывание
+                // сменило бы авторский стиль записи
+                if (targetPart.StartsWith('/') && newTarget == target) return m.Value;
+
                 var anchor = raw[targetPart.Length..];           // «#…» как был, вместе с регистром
-                return $"[{m.Groups[1].Value}]({RelativeLink(fromNew, newTarget)}{anchor})";
+                var rewritten = RelativeLink(fromNew, newTarget) + anchor;
+                return rewritten == raw ? m.Value : $"[{m.Groups[1].Value}]({rewritten})";
             });
 
             if (updated == text) continue;
@@ -1410,6 +1422,112 @@ public sealed partial class DocsIndexService(FileService? files = null)
         var down = string.Join('/', toParts.Skip(common));
         var link = up + down;
         return link.Replace(" ", "%20");
+    }
+
+    // ---------- перенос между папками ----------
+
+    public enum DocMoveStatus { Ok, NotFound, BadTarget, Conflict, Failed }
+
+    public sealed record DocMoveResult(
+        DocMoveStatus Status, string? Path = null, int UpdatedDocs = 0, int BrokenLinks = 0,
+        string? Error = null, IReadOnlyDictionary<string, string>? Moved = null);
+
+    // Перенести документ или раздел в другую папку области.
+    //
+    // От переименования отличается тем, что меняется ГЛУБИНА: относительные ссылки внутри
+    // переехавших документов на всё остальное («../vision.md») начинают указывать не туда,
+    // и их тоже приходится пересчитывать — этим занимается UpdateLinks.
+    //
+    // Раздел переезжает парой со всем поддеревом. Перенос раздела внутрь самого себя
+    // запрещён: папка не может стать собственным потомком, а ФС на такой Move отвечает
+    // невнятной ошибкой уже после того, как файл переименован.
+    public DocMoveResult MoveDoc(string rootPath, string path, string? targetFolder,
+        bool updateLinks, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocMoveResult(DocMoveStatus.Failed, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(root, scope);
+        var key = NormalizePath(path);
+        if (key is null || !corpus.ByPath.TryGetValue(key, out var entry))
+            return new DocMoveResult(DocMoveStatus.NotFound, Error: $"Документ вне области документации: {path}");
+
+        // Корень репозитория целью не бывает: документ там попадёт в область только
+        // поимённо, и перенесённый файл просто исчез бы из панели
+        var target = NormalizeFolder(targetFolder);
+        if (target is null || !InScope(scope, target))
+            return new DocMoveResult(DocMoveStatus.BadTarget, Error: $"Папка вне области документации: {targetFolder}");
+
+        var parent = Folder(entry.Path);
+        if (string.Equals(parent, target, StringComparison.OrdinalIgnoreCase))
+            return new DocMoveResult(DocMoveStatus.Ok, entry.Path, Moved: new Dictionary<string, string>());
+
+        var name = Path.GetFileNameWithoutExtension(entry.Path);
+        var ext = Path.GetExtension(entry.Path);
+        var newPath = $"{target}/{name}{ext}";
+        if (newPath.Length > MaxDocPathLength)
+            return new DocMoveResult(DocMoveStatus.BadTarget,
+                Error: $"Путь длиннее {MaxDocPathLength} символов — wiki такую страницу не откроет");
+
+        var oldFolder = entry.SectionFolder;
+        var newFolder = oldFolder is null ? null : $"{target}/{name}";
+        // Раздел внутрь себя: и сама папка целью, и любая её внутренность
+        if (oldFolder is not null &&
+            (string.Equals(target, oldFolder, StringComparison.OrdinalIgnoreCase) ||
+             target.StartsWith($"{oldFolder}/", StringComparison.OrdinalIgnoreCase)))
+            return new DocMoveResult(DocMoveStatus.BadTarget,
+                Error: "Раздел нельзя перенести внутрь самого себя");
+
+        var dir = Path.Combine(root, target.Replace('/', Path.DirectorySeparatorChar));
+        if (EntryExists(dir, $"{name}{ext}", directory: false) ||
+            (oldFolder is not null && EntryExists(dir, name, directory: true)))
+            return new DocMoveResult(DocMoveStatus.Conflict, Error: $"«{name}» в этой папке уже есть");
+
+        var moved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [entry.Path] = newPath };
+        if (oldFolder is not null)
+            foreach (var doc in corpus.Docs)
+                if (doc.Path.StartsWith($"{oldFolder}/", StringComparison.OrdinalIgnoreCase))
+                    moved[doc.Path] = $"{newFolder}{doc.Path[oldFolder.Length..]}";
+
+        // Ссылки на переезжающее из документов, которые остаются на месте: их и
+        // придётся чинить. Считаем до переноса — после карта путей уже другая
+        var broken = 0;
+        foreach (var (from, _) in moved)
+            if (corpus.Backlinks.TryGetValue(from, out var backs))
+                broken += backs.Count(b => !moved.ContainsKey(b.Path));
+
+        try { files.Rename(root, entry.Path, newPath); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new DocMoveResult(DocMoveStatus.Failed, Error: $"Не удалось перенести файл: {e.Message}");
+        }
+
+        if (oldFolder is not null)
+        {
+            try { files.Rename(root, oldFolder, newFolder!); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Откат страницы: расщеплённая пара хуже отказа
+                try { files.Rename(root, newPath, entry.Path); }
+                catch (Exception rollback) when (rollback is IOException or UnauthorizedAccessException)
+                {
+                    return new DocMoveResult(DocMoveStatus.Failed,
+                        Error: $"Папка не перенесена ({e.Message}), и вернуть файл не удалось: {rollback.Message}");
+                }
+                return new DocMoveResult(DocMoveStatus.Failed,
+                    Error: $"Не удалось перенести папку раздела: {e.Message}");
+            }
+        }
+
+        // Порядок: из старой папки имя уходит, в новую дописывается в хвост — но только
+        // если .order там уже есть (правило то же, что при создании)
+        RemoveFromOrder(root, parent, name);
+        if (IsMarkdown(newPath)) AppendToOrder(root, target, name);
+
+        var updated = updateLinks ? UpdateLinks(root, corpus, moved) : 0;
+        return new DocMoveResult(DocMoveStatus.Ok, newPath, updated, updateLinks ? 0 : broken, Moved: moved);
     }
 
     // ---------- удаление ----------

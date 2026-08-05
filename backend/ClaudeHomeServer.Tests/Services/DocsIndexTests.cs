@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
 using FluentAssertions;
 
@@ -352,6 +353,30 @@ public class DocsIndexTests : IDisposable
     }
 
     [Fact]
+    public void Раздел_ПустаяПапкаСПарнойСтраницей_ЭтоТожеРаздел()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Directory.CreateDirectory(Path.Combine(_root, "docs", "decisions"));
+
+        // Только что созданный раздел ещё пуст, и по документам его не найти. Без него
+        // войти в раздел, чтобы наполнить, было бы нечем — он выглядел бы строкой
+        _svc.GetIndex(_root).Single(d => d.Path == "docs/decisions.md")
+            .SectionFolder.Should().Be("docs/decisions");
+    }
+
+    [Fact]
+    public void Раздел_ПоявлениеПапки_ВидитсяСразу()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        _svc.GetIndex(_root).Single().SectionFolder.Should().BeNull();
+
+        // Ни один файл не менялся: без папки в отпечатке кеш отдал бы прежний корпус
+        Directory.CreateDirectory(Path.Combine(_root, "docs", "decisions"));
+
+        _svc.GetIndex(_root).Single().SectionFolder.Should().Be("docs/decisions");
+    }
+
+    [Fact]
     public void Раздел_ВложеннаяПапкаБезПары_ПризнакаНиУКого()
     {
         Write("# Запись", "docs", "adr", "0001.md");
@@ -515,6 +540,175 @@ public class DocsIndexTests : IDisposable
         // «cover» без «cover.md» в wiki-порядке просто мусор — переставлять его нечем
         _svc.WriteOrder(_root, "docs", ["cover"], new DocsScope(["docs"], [], ["markdown", "pdf"]))
             .Status.Should().Be(DocsIndexService.OrderWriteStatus.BadItems);
+    }
+
+    // ─── Создание документов и разделов ─────────────────────────────────────
+
+    // Создание пишет в рабочее дерево, поэтому идёт через FileService (SafeJoin + OnMutated).
+    // Отдельный экземпляр сервиса: у остальных тестов файлового сервиса нет, он им не нужен
+    private DocsIndexService Creating() => new(new FileService());
+
+    [Fact]
+    public void Создание_Документа_ФайлСЗаголовкомИПутьВОтвете()
+    {
+        Write("# Док", "docs", "a.md");
+
+        var result = Creating().CreateDoc(_root, "docs", "Бизнес описание", section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.Ok);
+        // Пробелы в имени файла становятся дефисами, а само название — заголовком страницы
+        result.Path.Should().Be("docs/Бизнес-описание.md");
+        File.ReadAllText(Path.Combine(_root, "docs", "Бизнес-описание.md")).Should().Be("# Бизнес описание\n");
+    }
+
+    [Fact]
+    public void Создание_Раздела_ЭтоПараСтраницаИПапка()
+    {
+        Write("# Док", "docs", "a.md");
+
+        var result = Creating().CreateDoc(_root, "docs", "Журнал решений", section: true);
+
+        result.Path.Should().Be("docs/Журнал-решений.md");
+        Directory.Exists(Path.Combine(_root, "docs", "Журнал-решений")).Should().BeTrue();
+
+        // Разделом пара становится с первым документом внутри: индекс строится по документам,
+        // и пустая папка ему не видна. Без парного ФАЙЛА раздел открывался бы пустой
+        // страницей — ровно тот дефект, ради которого пары и поддерживаются
+        Write("# Запись", "docs", "Журнал-решений", "0001.md");
+        _svc.GetIndex(_root).Single(d => d.Path == "docs/Журнал-решений.md")
+            .SectionFolder.Should().Be("docs/Журнал-решений");
+    }
+
+    [Fact]
+    public void Создание_ПапкаБезСтраницы_ДостраиваетсяДоПары()
+    {
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        // Половина пары уже на диске — создаём недостающую, а не отказываем
+        Creating().CreateDoc(_root, "docs", "adr", section: true).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.Ok);
+
+        File.Exists(Path.Combine(_root, "docs", "adr.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Создание_ИмяВписываетсяВСуществующийOrder()
+    {
+        Write("# A", "docs", "a.md");
+        Write("a\n", "docs", ".order");
+
+        Creating().CreateDoc(_root, "docs", "Новый", section: false);
+
+        ReadOrderFile("docs").Should().Be("a\nНовый\n");
+    }
+
+    [Fact]
+    public void Создание_БезOrder_ФайлНеПоявляется()
+    {
+        Write("# A", "docs", "a.md");
+
+        Creating().CreateDoc(_root, "docs", "Новый", section: false);
+
+        // Порядок в такой папке задан правилом индекса; рождать файл на весь её состав
+        // из-за одного нажатия «Создать» продукт не должен
+        File.Exists(Path.Combine(_root, "docs", ".order")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Создание_ЗанятоеИмя_ЭтоКонфликт()
+    {
+        Write("# Док", "docs", "api.md");
+
+        // Регистр не спасает: на Windows «API.md» и «api.md» — один файл
+        var result = Creating().CreateDoc(_root, "docs", "API", section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.Conflict);
+        File.ReadAllText(Path.Combine(_root, "docs", "api.md")).Should().Be("# Док");
+    }
+
+    [Fact]
+    public void Создание_ПапкаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        Creating().CreateDoc(_root, "backend", "Заметка", section: false).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.FolderNotInScope);
+        File.Exists(Path.Combine(_root, "backend", "Заметка.md")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Создание_ДокументаВКорне_РазрешеноСоседямФайловКорня()
+    {
+        Write("# Проект", "README.md");
+
+        // Рядом с README живут и другие файлы корня области (docs.md и соседи). В область
+        // такой документ попадёт поимённо — имя в «файлы корня» дописывает контроллер
+        var result = Creating().CreateDoc(_root, "", "Карта документации", section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.Ok);
+        result.Path.Should().Be("Карта-документации.md");
+        File.Exists(Path.Combine(_root, "Карта-документации.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Создание_РазделаВКорне_ЭтоОтказ()
+    {
+        Write("# Проект", "README.md");
+
+        // Раздел в корне — это новая папка документации, то есть правка области: молча
+        // расширять её за спиной у остальных владельцев репозитория продукт не должен
+        Creating().CreateDoc(_root, "", "Спайки", section: true).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.BadName);
+        Directory.Exists(Path.Combine(_root, "Спайки")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Создание_ПустаяПапкаОбласти_ЭтоНеПрепятствие()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "docs"));
+
+        // Гейт создания судит по НАСТРОЙКЕ, а не по индексу: первый документ в пустой
+        // папке области — законное действие
+        Creating().CreateDoc(_root, "docs", "Первый", section: false).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.Ok);
+    }
+
+    [Theory]
+    [InlineData("", "пустое")]
+    [InlineData("   ", "одни пробелы")]
+    [InlineData(".order", "точка в начале")]
+    [InlineData("имя.", "точка в конце")]
+    [InlineData("a/b", "разделитель пути")]
+    [InlineData("a:b", "двоеточие")]
+    [InlineData("раздел#якорь", "решётка ломает markdown-ссылку")]
+    [InlineData("CON", "зарезервировано в Windows")]
+    [InlineData("lpt9", "зарезервировано в Windows")]
+    public void Создание_НепригодноеНазвание_ЭтоОтказ(string title, string _)
+    {
+        Write("# Док", "docs", "a.md");
+
+        Creating().CreateDoc(_root, "docs", title, section: false).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.BadName);
+    }
+
+    [Fact]
+    public void Создание_СлишкомДлинныйПуть_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        // 235 символов — предел Azure DevOps wiki: узнать о нём при публикации, когда
+        // документов уже сотня, дороже, чем отказать сейчас
+        var result = Creating().CreateDoc(_root, "docs", new string('я', 240), section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.BadName);
+        result.Error.Should().Contain("235");
+    }
+
+    [Fact]
+    public void ИмяФайла_ПробелыСтановятсяДефисами()
+    {
+        DocsIndexService.DocFileName(" Журнал решений ", out var error).Should().Be("Журнал-решений");
+        error.Should().BeNull();
     }
 
     // ─── Область из файла .docs ─────────────────────────────────────────────

@@ -25,6 +25,8 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
 }) {
   const { servers, builtin } = data;
   const hasLegacy = servers?.some(s => s.source !== 'manual') ?? false;
+  const builtinTiles = builtin.filter(t => t.builtin);
+  const fromConfigTiles = builtin.filter(t => !t.builtin);
 
   if (servers === null) {
     return <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>;
@@ -68,8 +70,8 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
         </div>
       )}
 
-      <div style={groupHeaderStyle}>Встроенные в продукт</div>
-      {builtin.length === 0 ? (
+      <div style={groupHeaderStyle}>Встроенные в AI Home</div>
+      {builtinTiles.length === 0 ? (
         <div style={hintStyle}>
           Пока ничего не наблюдалось: статус встроенных серверов приезжает из первого же хода в чате.
         </div>
@@ -78,10 +80,25 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
           <div style={{
             display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: SP.sm,
           }}>
-            {builtin.map(tile => <BuiltinTile key={tile.key} tile={tile} />)}
+            {builtinTiles.map(tile => <BuiltinTile key={tile.key} tile={tile} />)}
           </div>
           <div style={hintStyle}>
-            Встроенные серверы — часть продукта: у них только статус, выключить или удалить их отсюда нельзя.
+            Встроенные серверы — часть AI Home: у них только статус, удалить или выключить их отсюда нельзя.
+          </div>
+        </>
+      )}
+
+      {fromConfigTiles.length > 0 && (
+        <>
+          <div style={groupHeaderStyle}>Из общего конфига</div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: SP.sm,
+          }}>
+            {fromConfigTiles.map(tile => <BuiltinTile key={tile.key} tile={tile} />)}
+          </div>
+          <div style={hintStyle}>
+            Эти серверы подключены файлом конфигурации на этом сервере. Здесь виден только их
+            статус — чтобы управлять ими из AI Home, добавьте их как свои на вкладке «Добавить».
           </div>
         </>
       )}

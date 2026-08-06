@@ -2252,9 +2252,12 @@ export interface McpServer {
   status?: McpServerStatus | null;
 }
 
-// Встроенный сервер продукта: записи в реестре нет, есть только наблюдение статуса
+// Наблюдаемый сервер вне личного реестра: записи в реестре нет, есть только наблюдение
+// статуса. builtin=true — настоящая часть AI Home (tasks, notes, wsp…); false — подключён
+// помимо реестра (dify/fal-ai/glif, глобальный .mcp.json/~/.claude.json)
 export interface McpBuiltinServer {
   key: string;
+  builtin: boolean;
   status: McpServerStatus | null;
 }
 

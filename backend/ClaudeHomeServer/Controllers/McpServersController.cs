@@ -28,9 +28,13 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             .Select(r => McpServerMapper.ToDto(r, observed.GetValueOrDefault(r.Key))));
     }
 
-    // Встроенные серверы продукта (tasks, notes, wsp…): в реестре их нет, но наблюдения
-    // из system/init по ним копятся в том же сторе. Экран показывает их плитками —
-    // только статус, без правки и удаления. Ключи записей реестра отсюда убраны: их отдаёт List.
+    // Встроенные серверы продукта (tasks, notes, wsp…) и всё, что подключено помимо
+    // реестра (dify/fal-ai/glif, серверы из глобального .mcp.json/~/.claude.json): в
+    // реестре их нет, но наблюдения из system/init по ним копятся в том же сторе. Экран
+    // показывает их плитками — только статус, без правки и удаления. Флаг builtin отличает
+    // настоящую часть AI Home (ReservedKeys + pmem_*) от стороннего — фронт разносит их
+    // по разным группам, второй группе нельзя врать «это продукт». Ключи записей реестра
+    // отсюда убраны: их отдаёт List.
     [HttpGet("builtin")]
     public IActionResult Builtin()
     {
@@ -42,6 +46,8 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             .Select(kv => new
             {
                 key = kv.Key,
+                builtin = McpRegistry.ReservedKeys.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)
+                    || kv.Key.StartsWith(McpRegistry.ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase),
                 status = new McpServerStatusDto(kv.Value.Status, kv.Value.ObservedAt,
                     kv.Value.Source.ToString().ToLowerInvariant(), kv.Value.SessionId, kv.Value.Error),
             }));

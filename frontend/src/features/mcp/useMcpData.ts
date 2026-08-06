@@ -41,6 +41,9 @@ export function plural(n: number, one: string, few: string, many: string): strin
 // свежая проба (в сторе наблюдений его нет) — поэтому она передаётся отдельно.
 export function mcpStatusLine(status: McpServer['status'], probe?: McpProbeResult): string {
   if (!status || status.status === 'unknown') return 'Не проверялся · нажмите «Проверить»';
+  // Вход по OAuth приедет в волне 7 — до тех пор нельзя обещать кнопку «Войти»,
+  // которой ещё нет: фиксированный текст ведёт к реальному действию (правка ключа)
+  if (status.status === 'needs-auth') return 'Нужен вход · сервер не принял авторизацию';
   const tone = mcpStatusTone(status.status);
   const parts = [tone.label];
   const tools = probe?.toolCount;

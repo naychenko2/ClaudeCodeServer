@@ -25,6 +25,16 @@ const hintStyle: CSSProperties = {
   fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px',
 };
 
+// Имя сервера из полного имени инструмента (mcp__<сервер>__<инструмент>) — бэк отдаёт
+// только имя инструмента (McpToolStat), но сервер уже закодирован в его формате;
+// тот же разбор используют components/artifacts/shared.ts и ToolUseView.tsx
+function toolServer(tool: string): string | null {
+  if (!tool.startsWith('mcp__')) return null;
+  const rest = tool.slice(5);
+  const i = rest.indexOf('__');
+  return i === -1 ? rest : rest.slice(0, i);
+}
+
 export function McpDiagnosticsTab() {
   const [data, setData] = useState<McpCallsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -67,10 +77,11 @@ export function McpDiagnosticsTab() {
         <div style={{
           overflowX: 'auto', border: `1px solid ${C.border}`, borderRadius: R.lg, background: C.bgWhite,
         }}>
-          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 520 }}>
+          <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 600 }}>
             <thead>
               <tr>
                 <th style={thStyle}>Инструмент</th>
+                <th style={thStyle}>Сервер</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Вызовы</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Отказы</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Ср. время</th>
@@ -80,12 +91,16 @@ export function McpDiagnosticsTab() {
             <tbody>
               {data.tools.map(tool => {
                 const failure = lastFailure.get(tool.tool);
+                const server = toolServer(tool.tool);
                 return (
                   <tr key={tool.tool}>
                     <td style={{
                       ...tdStyle, fontFamily: FONT.mono, fontSize: 11.5,
                       color: C.textHeading, whiteSpace: 'nowrap',
                     }}>{tool.tool}</td>
+                    <td style={{ ...tdStyle, fontSize: FS.xs, color: C.textSecondary, whiteSpace: 'nowrap' }}>
+                      {server ?? <span style={{ color: C.textMuted }}>—</span>}
+                    </td>
                     <td style={{ ...tdStyle, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
                       {tool.calls.toLocaleString('ru-RU')}
                     </td>
@@ -99,7 +114,9 @@ export function McpDiagnosticsTab() {
                     <td style={tdStyle}>
                       {failure ? (
                         <>
-                          <span style={{ color: C.dangerText, fontSize: FS.xs }}>HTTP {failure.statusCode}</span>
+                          <span style={{ color: C.dangerText, fontSize: FS.xs }}>
+                            {failure.statusCode === 0 ? 'Сеть / таймаут' : `HTTP ${failure.statusCode}`}
+                          </span>
                           <span style={{ color: C.textMuted, fontSize: FS.xs }}> · {relTime(failure.at)}</span>
                         </>
                       ) : <span style={{ color: C.textMuted }}>—</span>}

@@ -24,6 +24,7 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
   onDelete: (server: McpServer) => void;
 }) {
   const { servers, builtin } = data;
+  const hasLegacy = servers?.some(s => s.source !== 'manual') ?? false;
 
   if (servers === null) {
     return <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>;
@@ -56,12 +57,14 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
               onDelete={() => onDelete(server)}
             />
           ))}
-          <div style={hintStyle}>
-            «Наследство» — записи, пришедшие из готового конфига (вставка JSON или старый
-            .mcp.json): они работают как раньше, здесь их можно проверить и доправить.
-            Крестика удаления у них нет — сам сервер остался бы в исходном конфиге,
-            который AI&nbsp;Home не редактирует.
-          </div>
+          {hasLegacy && (
+            <div style={hintStyle}>
+              «Наследство» — записи, пришедшие из готового конфига (вставка JSON или старый
+              .mcp.json): они работают как раньше, здесь их можно проверить и доправить.
+              Крестика удаления у них нет — сам сервер остался бы в исходном конфиге,
+              который AI&nbsp;Home не редактирует.
+            </div>
+          )}
         </div>
       )}
 
@@ -94,7 +97,8 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
   onDelete: () => void;
 }) {
   const checking = !!data.checking[server.id];
-  const tone = mcpStatusTone(checking ? null : server.status?.status);
+  const tone = mcpStatusTone(server.status?.status);
+  const needsAuth = !checking && server.status?.status === 'needs-auth';
   const legacy = server.source !== 'manual';
   const personasOff = data.personasOffCount(server.key);
   const projectsOff = data.projectsOffCount(server.key);
@@ -110,7 +114,8 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
         <span style={{
-          width: 8, height: 8, borderRadius: R.full, flexShrink: 0, background: tone.dot,
+          width: 8, height: 8, borderRadius: R.full, flexShrink: 0,
+          background: checking ? C.warning : tone.dot,
           animation: checking ? 'pulsedot 1s ease-in-out infinite' : undefined,
         }} />
         <div style={{
@@ -156,23 +161,38 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
 
       <div style={{
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        gap: SP.sm, flexWrap: 'wrap', minHeight: 32,
+        gap: SP.sm, flexWrap: 'wrap', minHeight: 40,
       }}>
-        <div style={{ fontSize: FS.sm, color: checking ? C.textMuted : tone.text, minWidth: 0 }}>
-          {checking ? 'Проверяем… обычно 2–3 секунды' : mcpStatusLine(server.status, data.probes[server.id])}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+          <div style={{ fontSize: FS.sm, color: checking ? C.textMuted : tone.text }}>
+            {checking ? 'Проверяем… обычно 2–3 секунды' : mcpStatusLine(server.status, data.probes[server.id])}
+          </div>
+          {needsAuth && (
+            <div style={{ fontSize: FS.xs, color: C.textMuted }}>
+              Проверьте ключ в{' '}
+              <button
+                type="button"
+                onClick={onEdit}
+                style={{
+                  font: 'inherit', fontSize: FS.xs, color: C.accent, background: 'transparent',
+                  border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline',
+                }}
+              >настройках сервера</button>
+            </div>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          <Button variant="ghost" size="sm" disabled={checking} onClick={() => void data.probe(server)}>
+          <Button variant="ghost" size="md" disabled={checking} onClick={() => void data.probe(server)}>
             Проверить
           </Button>
-          <IconButton size="sm" title="Изменить" onClick={onEdit} disabled={checking}>
-            <Pencil size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          <IconButton size="lg" title="Изменить" onClick={onEdit} disabled={checking}>
+            <Pencil size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
           </IconButton>
           {/* У наследства крестика нет: запись пришла из общего конфига, и её удаление
               здесь не убрало бы сам сервер — кнопка обещала бы то, чего продукт не делает */}
           {!legacy && (
-            <IconButton size="sm" tone="danger" title="Удалить" onClick={onDelete} disabled={checking}>
-              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            <IconButton size="lg" tone="danger" title="Удалить" onClick={onDelete} disabled={checking}>
+              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
             </IconButton>
           )}
         </div>

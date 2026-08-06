@@ -33,6 +33,9 @@ export interface Project {
   builtInSystemPrompt?: string;
   icon?: ProjectIcon;             // иконка проекта: инициалы+цвет или картинка
   tagRegistry?: ProjectTag[];     // реестр общих тегов проекта (имя, порядок, цвет)
+  // Ключи серверов личного MCP-реестра, ВЫКЛЮЧЕННЫХ в этом проекте (deny-list):
+  // сервер едет в ход везде, пока его не выключили здесь. Пусто/нет — выключенных нет
+  mcpServersOff?: string[] | null;
 }
 
 // Иконка проекта (по образцу PersonaAvatar): инициалы на цветном фоне или картинка
@@ -2193,4 +2196,118 @@ export interface ReaderError {
   code: ReaderErrorCode;
   // Для диагностики — человеку не показывается (ADR §6)
   httpStatus?: number | null;
+}
+
+// --- MCP-серверы: личный реестр владельца (фича mcp-registry) ---
+
+// Пара «имя — значение» из env/headers. Секретное значение наружу не выходит:
+// value = null при hasValue = true (в форме вместо него отметка «задано»).
+export interface McpValue {
+  name: string;
+  value?: string | null;
+  hasValue: boolean;
+  secret: boolean;
+}
+
+export interface McpAuth {
+  kind: string;                 // none | apikey | bearer | oauth2
+  headerName?: string | null;
+  hasSecret: boolean;
+  authorizationServer?: string | null;
+  clientId?: string | null;
+  expiresAt?: string | null;
+  hasTokens: boolean;
+}
+
+// Последнее известное состояние сервера: из system/init хода или из пробы по кнопке.
+// status — строка, набор значений живёт на бэке (connected/failed/needs-auth/unknown).
+export interface McpServerStatus {
+  status: string;
+  observedAt: string;
+  source: string;               // init | probe
+  sessionId?: string | null;
+  error?: string | null;
+}
+
+export interface McpServer {
+  id: string;
+  key: string;
+  toolKey: string;              // «mcp:<ключ>» — ключ привязки инструмента у персоны
+  label: string;
+  description?: string | null;
+  transport: string;            // stdio | http | sse
+  command?: string | null;
+  args: string[];
+  env: McpValue[];
+  url?: string | null;
+  headers: McpValue[];
+  auth: McpAuth;
+  enabled: boolean;
+  alwaysLoad: boolean;
+  allowReadOnlyPersonas: boolean;
+  source: string;               // manual | legacymcpconfig | legacyuserscope
+  authVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  status?: McpServerStatus | null;
+}
+
+// Встроенный сервер продукта: записи в реестре нет, есть только наблюдение статуса
+export interface McpBuiltinServer {
+  key: string;
+  status: McpServerStatus | null;
+}
+
+// Пара формы: пустое value у секрета = «оставить как было»
+export interface McpValueInput {
+  name: string;
+  value?: string | null;
+  secret?: boolean;
+}
+
+export interface McpServerUpsert {
+  key?: string;
+  label?: string;
+  description?: string | null;
+  transport?: string;
+  command?: string | null;
+  args?: string[];
+  env?: McpValueInput[];
+  url?: string | null;
+  headers?: McpValueInput[];
+  auth?: { kind?: string; headerName?: string | null; secret?: string | null };
+  enabled?: boolean;
+  alwaysLoad?: boolean;
+  allowReadOnlyPersonas?: boolean;
+}
+
+export interface McpProbeResult {
+  ok: boolean;
+  status: string;
+  serverName?: string | null;
+  toolCount?: number | null;
+  toolNames?: string[] | null;
+  error?: string | null;
+}
+
+// Диагностика вызовов MCP-инструментов (GET /api/mcp/calls, только админ)
+export interface McpToolStat {
+  tool: string;
+  calls: number;
+  failures: number;
+  avgMs: number;
+}
+
+export interface McpCallFailure {
+  at: string;
+  tool: string;
+  sessionId?: string | null;
+  path: string;
+  statusCode: number;
+  elapsedMs: number;
+}
+
+export interface McpCallsResponse {
+  tools: McpToolStat[];
+  recentFailures: McpCallFailure[];
 }

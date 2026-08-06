@@ -11,6 +11,7 @@ import { GroupSelect } from '../GroupSelect';
 import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
+import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 
 // === История файлов (Git) в настройках проекта ===
@@ -434,6 +435,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
           </Button>
         </SettingsRow>
       </div>
+      <McpProjectSection project={project} />
       <GitHistorySection project={project} />
       <ProjectSyncToggle projectId={project.id} online={online} />
     </Modal>

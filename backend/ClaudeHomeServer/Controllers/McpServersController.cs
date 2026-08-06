@@ -28,6 +28,25 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             .Select(r => McpServerMapper.ToDto(r, observed.GetValueOrDefault(r.Key))));
     }
 
+    // Встроенные серверы продукта (tasks, notes, wsp…): в реестре их нет, но наблюдения
+    // из system/init по ним копятся в том же сторе. Экран показывает их плитками —
+    // только статус, без правки и удаления. Ключи записей реестра отсюда убраны: их отдаёт List.
+    [HttpGet("builtin")]
+    public IActionResult Builtin()
+    {
+        var own = registry.GetByOwner(UserId)
+            .Select(r => r.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return Ok(statuses.GetByOwner(UserId)
+            .Where(kv => !own.Contains(kv.Key))
+            .OrderBy(kv => kv.Key, StringComparer.Ordinal)
+            .Select(kv => new
+            {
+                key = kv.Key,
+                status = new McpServerStatusDto(kv.Value.Status, kv.Value.ObservedAt,
+                    kv.Value.Source.ToString().ToLowerInvariant(), kv.Value.SessionId, kv.Value.Error),
+            }));
+    }
+
     [HttpGet("{id}")]
     public IActionResult Get(string id) =>
         registry.Get(UserId, id) is { } record

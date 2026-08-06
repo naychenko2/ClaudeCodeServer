@@ -27,7 +27,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
         var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.ToolsEnabled, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.Icon, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.ToolsEnabled, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.Icon, p.McpServersOff, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
 
     [HttpGet("builtin-prompt")]

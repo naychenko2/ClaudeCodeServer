@@ -43,16 +43,19 @@ public class UsageServiceTests : IDisposable
     public void Load_СтарыйФайлБезПоляSource_ЧитаетсяSourceNull_НеПадает()
     {
         // Формат до появления Source (camelCase, как пишет сам UsageService).
+        // Timestamp — свежий (в пределах окна retention 8 дней), чтобы снимок не
+        // отфильтровывался на чтении; иначе тест хрупко зависел бы от календаря.
+        var ts = DateTime.UtcNow.AddDays(-1);
         var storePath = Path.Combine(_tempDir, "usage.json");
-        File.WriteAllText(storePath, """
+        File.WriteAllText(storePath, $$"""
         [
             {
-                "timestamp": "2026-07-29T10:00:00Z",
+                "timestamp": "{{ts.ToString("o")}}",
                 "limitType": "five_hour",
                 "utilization": 0.42,
                 "status": "allowed",
                 "isUsingOverage": false,
-                "resetsAt": "2026-07-29T15:00:00Z",
+                "resetsAt": "{{ts.AddHours(5).ToString("o")}}",
                 "overageStatus": null,
                 "overageResetsAt": null,
                 "subscriptionKey": "claude"

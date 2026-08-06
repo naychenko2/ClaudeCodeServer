@@ -238,6 +238,13 @@ export function AiLauncher() {
     let firedForSig = '';
     const DWELL = 4000;          // обзорные экраны — полное «дожитие»
     const ENTITY_DWELL = 900;    // открыта конкретная сущность — быстрый пересчёт (триггер «смена сущности»)
+    // Экраны, где повод живёт своей жизнью: на стене чаты стартуют и завершают ходы
+    // без участия человека и без смены навигации, поэтому однажды посчитанный уровень
+    // застывал бы до ухода с экрана (кнопка оставалась серой при живом ходе).
+    // Статусы чужих чатов сюда не приходят событиями — стена держит группы только
+    // своего набора, поэтому периодический перерасчёт, а не подписка.
+    const LIVE_RECHECK_MS = 30_000;
+    let lastComputed = 0;
     const sigOf = (n: ReturnType<typeof getNav>) => n ? `${n.screen}|${n.note ?? ''}|${n.task ?? ''}|${n.persona ?? ''}|${n.knowledge ?? ''}|${n.file ?? ''}|${n.project?.id ?? ''}` : '';
     const hasEntity = (n: ReturnType<typeof getNav>) => !!(n && (n.note || n.task || n.file || n.persona || n.knowledge));
     // Форс-пересчёт (завершение хода Claude) — сбрасываем отметку, чтобы tick пересчитал
@@ -249,8 +256,13 @@ export function AiLauncher() {
       const sig = sigOf(ctx.nav);
       if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); firedForSig = ''; setSuggestion(null); setFabLevel('none'); setRecs([]); return; }
       const dwell = hasEntity(ctx.nav) ? ENTITY_DWELL : DWELL;
-      if (firedForSig === sig || Date.now() - stableSince < dwell) return;
+      if (Date.now() - stableSince < dwell) return;
+      // Уже считали для этого места — повторяем только там, где повод меняется сам,
+      // и не чаще LIVE_RECHECK_MS
+      const live = ctx.nav?.screen === 'wall';
+      if (firedForSig === sig && !(live && Date.now() - lastComputed >= LIVE_RECHECK_MS)) return;
       firedForSig = sig; // помечаем сразу, чтобы не дёргать данные каждый тик
+      lastComputed = Date.now();
       void computeContextState(ctx).then(({ suggestion: sug, level, recommendations }) => {
         // За время запроса контекст мог смениться — игнорируем устаревший результат
         if (sigOf(getNav()) !== sig || open) return;
@@ -557,6 +569,7 @@ function sectionLabelForScreen(screen?: string): string | null {
     case 'project': return 'Проект';
     case 'personas': return 'Персоны';
     case 'knowledge': return 'Знания';
+    case 'wall': return 'Стена';
     default: return null;
   }
 }

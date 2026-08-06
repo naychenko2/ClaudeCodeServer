@@ -278,6 +278,13 @@ export function PanelZone({
     return insertPlan(railCi, null) ? len + 1 : len;
   };
 
+  // Где панель лежит СЕЙЧАС (null — закрыта). Единственный ответ на этот вопрос:
+  // в компактном режиме раскладка зоны не участвует — там свой эфемерный стек, и
+  // открытость решает он. Спрашивать напрямую zoneOf нельзя: в компакте она
+  // отвечает «закрыта» про панель, которая стоит на экране.
+  const openZoneOf = (k: PanelKey): Zone | null =>
+    compact ? (tabletKeys.includes(k) ? side : null) : zoneOf(zones, k);
+
   // Иконка панели живёт в ТОЙ зоне, где панель лежит; закрытая — в домашней.
   // Отсюда «иконка едет вместе с панелью», а закрытие возвращает её домой.
   //
@@ -286,14 +293,14 @@ export function PanelZone({
   // и «Свернуть все», и сам ящик).
   const railKeyVisible = (k: PanelKey, withTucked = true): boolean => {
     if (!keyAvailable(k)) return false;
+    // Где панель сейчас лежит (null — закрыта)
+    const at = openZoneOf(k);
     // Кнопка убрана в ящик — в столбце её нет. ОТКРЫТАЯ панель исключение: её
     // кнопка возвращается в рельсу, пока панель на экране, иначе закрыть панель
-    // привычным кликом было бы нечем. В компактном режиме ящика нет вовсе, и
-    // спрятанная кнопка иначе стала бы недоступной.
-    if (withTucked && !compact && isTucked(zones, k) && zoneOf(zones, k) === null) return false;
-    // Где панель сейчас лежит (null — закрыта). В компактном режиме раскладка
-    // зоны не участвует: там свой эфемерный стек.
-    const at = compact ? (tabletKeys.includes(k) ? side : null) : zoneOf(zones, k);
+    // привычным кликом было бы нечем. Открытость берём у openZoneOf, а не у
+    // раскладки зоны: в компактном режиме та не участвует, и спрятанная кнопка
+    // открытой панели осталась бы в ящике — закрывать панель было бы нечем.
+    if (withTucked && isTucked(zones, k) && at === null) return false;
     // Открыта в соседней зоне — её иконка сейчас там
     if (at !== null && at !== side) return false;
     // Закрыта — иконка ждёт там, где панель лежала в последний раз (а до первого
@@ -313,14 +320,14 @@ export function PanelZone({
   const availableAll = PANEL_KEYS.filter(k => railKeyVisible(k, false));
   // Кнопки, лежащие в ящике ЭТОЙ рельсы: спрятанные, закрытые и приписанные к этой
   // стороне (открытая панель показывает кнопку в столбце, а не строкой в меню).
-  const tuckedKeys = compact ? [] : availableAll.filter(k => isTucked(zones, k) && zoneOf(zones, k) === null);
+  const tuckedKeys = availableAll.filter(k => isTucked(zones, k) && openZoneOf(k) === null);
   // Ящик разворачивается обратно в столбец, когда прятать больше нечего: спрятаны
   // ВСЕ кнопки зоны, и рельса состояла бы из одной «…». Такая рельса ничего не
   // экономит и не говорит, что за ней, — вместо привычной кнопки (закрыл чаты и
   // открываешь их обратно тем же местом) человек видит безымянное многоточие.
   // Само состояние ящика при этом не трогаем: вернулась хоть одна кнопка в столбец —
   // спрятанные снова уезжают в меню.
-  const stashRevealed = !compact && tuckedKeys.length > 0 && tuckedKeys.length === availableAll.length;
+  const stashRevealed = tuckedKeys.length > 0 && tuckedKeys.length === availableAll.length;
   // Кнопки, стоящие в столбце прямо сейчас: по ним решается, есть ли что убирать
   // в ящик (последнюю кнопку рельсы туда не отдаём).
   const columnKeys = stashRevealed ? availableAll : availableAll.filter(k => railKeyVisible(k));
@@ -733,7 +740,9 @@ export function PanelZone({
     // от tuck не изменится, а последняя кнопка столбца оставила бы рельсу из
     // одного многоточия — его тут же развернуло бы обратно. Наведение и попап
     // гасим сами: кнопка исчезает из-под курсора, и mouseleave не придёт.
-    ...(compact || tucked || stashRevealed || !columnKeys.some(x => x !== k) ? null : {
+    // В компактном режиме это ЕДИНСТВЕННЫЙ способ убрать кнопку: перетаскивания
+    // там нет, и без этой кнопки ящик мог бы только пустеть.
+    ...(tucked || stashRevealed || !columnKeys.some(x => x !== k) ? null : {
       onTuck: () => { hovered.leave(); peeked.clear(); tuck(side, k); },
     }),
     onClick: () => {
@@ -892,12 +901,13 @@ export function PanelZone({
       // каждом открытии панели
       gapToCenter={openKeys.length === 0 || floating ? RAIL_GAP : 0}
       // Ящик рельсы: редкие кнопки, которые сюда перетащили, и тумблер режима зоны
-      // (своей кнопки в столбце у режима больше нет). В компактном режиме ящика нет
-      // вовсе — там ни колонок, ни перетаскивания; при единственной панели он нужен,
-      // только если в нём что-то лежит.
-      overflow={compact || (singlePanelMode && tuckedItems.length === 0) ? undefined : {
+      // (своей кнопки в столбце у режима больше нет). Пустой ящик показываем, только
+      // пока в нём есть смысл помимо содержимого — то есть пока при нём живёт тумблер
+      // режима. Его нет ни при единственной панели, ни в компактном режиме (там нет
+      // ни колонок, ни solo/multi), и тогда пустое многоточие ничего не предлагает.
+      overflow={tuckedItems.length === 0 && (compact || singlePanelMode) ? undefined : {
         items: tuckedItems,
-        modeToggle: singlePanelMode ? undefined : {
+        modeToggle: compact || singlePanelMode ? undefined : {
           soloMode,
           onToggle: () => setMode(side, soloMode ? 'multi' : 'solo'),
         },

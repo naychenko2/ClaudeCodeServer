@@ -92,6 +92,11 @@ interface Props {
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
+// Прогрессивный рендер ленты (см. visibleTail): сколько узлов монтируем сразу при
+// открытии чата и какими порциями дорисовываем остальное в простое браузера.
+const TAIL_FIRST = 40;
+const TAIL_STEP = 120;
+
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const TOO_BIG_MSG = 'Файл больше 100 МБ — такой пока не загрузим';
 const UPLOAD_FAIL_MSG = 'Не удалось загрузить файл. Попробуйте ещё раз';
@@ -1318,6 +1323,30 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     // карточки консультаций пересобираются с активностью внутри
   }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries]);
 
+  // Прогрессивный рендер ленты: при открытии чата монтируем только её хвост, остальное
+  // дорисовываем в простое браузера. В тяжёлых чатах (больше тысячи элементов) разовый
+  // маунт всей ленты держал главный поток секунду с лишним — это и ощущалось залипанием
+  // при переключении между чатами. Пользователь смотрит конец ленты, поэтому хвоста
+  // хватает на первый кадр, а начало доезжает за доли секунды.
+  const [visibleTail, setVisibleTail] = useState(TAIL_FIRST);
+  useEffect(() => { setVisibleTail(TAIL_FIRST); }, [session.id]);
+  useEffect(() => {
+    if (visibleTail >= renderedItems.length) return;
+    const grow = () => setVisibleTail(v => v + TAIL_STEP);
+    // requestIdleCallback: доращиваем, когда поток свободен, чтобы не воевать за кадры
+    // с прокруткой и стримом. Где его нет (Safari) — обычный таймер.
+    const ric = window.requestIdleCallback;
+    if (ric) {
+      const id = ric(grow, { timeout: 300 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(grow, 32);
+    return () => window.clearTimeout(id);
+  }, [visibleTail, renderedItems.length]);
+  const visibleNodes = visibleTail >= renderedItems.length
+    ? renderedItems
+    : renderedItems.slice(-visibleTail);
+
   // Подпал цветом проекта под верхом чата (см. слой в разметке ниже)
   const projectWash = projectTopWash(project);
 
@@ -1433,7 +1462,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{visibleNodes}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).

@@ -127,6 +127,12 @@ function updateItems(sid: string, fn: (items: ChatItem[]) => ChatItem[]) {
 // joinSession: хаб идемпотентен и на КАЖДЫЙ вызов шлёт вызвавшему авторитетный
 // status_changed, который редьюсер применяет к isWaiting. Бэкенд менять не нужно.
 
+// Потолок ожидания входа в группу перед снятием истории (см. joinAndLoadHistory).
+// На живом соединении join укладывается в десятки миллисекунд, поэтому окно короткое:
+// когда хаб висит в Reconnecting, история должна читаться практически сразу, а дыру
+// в этом случае закрывает повторный снимок после входа.
+const JOIN_WAIT_MS = 400;
+
 const RECONCILE_POLL_MS = 25_000;   // как часто переспрашиваем статус занятого открытого чата
 const RECONCILE_WINDOW_MS = 10_000; // сколько ждём replay, чтобы засчитать его как ответ на запрос
 
@@ -313,8 +319,22 @@ function ensureJoined(sid: string, projectId?: string) {
 async function joinAndLoadHistory(sid: string, projectId?: string) {
   setState(sid, prev => ({ ...prev, projectId }));
 
+  // Вход в группу СНАЧАЛА, но с коротким потолком ожидания: снятая после входа история
+  // уже покрывает всё до него, поэтому повторный снимок (у активных чатов это мегабайты
+  // JSON на каждое открытие) не нужен вовсе. На живом соединении join занимает десятки
+  // миллисекунд и первый показ ленты не задерживает.
+  let joinDone = false;
+  const joined = joinTracked(sid).then(() => { joinDone = true; });
   // История — приоритет и грузится НЕЗАВИСИМО от SignalR. Офлайн соединение
   // может «зависнуть» в Reconnecting, поэтому join не должен блокировать историю.
+  await Promise.race([
+    joined.catch(() => { /* не вошли — читаем историю и лечимся снимком после join */ }),
+    new Promise(r => setTimeout(r, JOIN_WAIT_MS)),
+  ]);
+  // Снимок на момент старта запроса истории: позже join мог доехать сам, но история
+  // к тому времени уже снята — и дыру закрывать всё равно придётся снимком.
+  const joinedBeforeHistory = joinDone;
+
   try {
     const raw = await loadHistory(sid, projectId);
     const items = normalizeFor(sid, raw);
@@ -333,13 +353,13 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
     setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
   }
 
-  // Присоединение к группе — фоном, не блокирует чтение истории.
-  // Офлайн промис не зарезолвится — это нормально, при reconnect перезайдём.
-  joinTracked(sid)
+  // Офлайн промис join не зарезолвится — это нормально, при reconnect перезайдём.
+  joined
     .then(() => {
-      // Снапшот ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют»:
-      // всё, что появится позже этого снимка, гарантированно доедет живьём.
-      return reloadHistory(sid, projectId);
+      // Снимок ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют».
+      // Нужен только когда в группу мы вошли уже ПОСЛЕ снятия истории (join не уложился
+      // в JOIN_WAIT_MS): иначе история и так снята из-под живой подписки.
+      if (!joinedBeforeHistory) return reloadHistory(sid, projectId);
     })
     .then(() => refreshTeamImplement(sid))
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });

@@ -84,6 +84,9 @@ export function NotesGraph({
       .filter(g => g.terms.length > 0),
     [settings.groups],
   );
+  // Токен инвалидации раскраски: новый объект при смене фильтра/правил/темы заставляет
+  // эффект перекраски отработать (зависимости внутри не используются — это и есть суть)
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- cache-bust token: тело намеренно пустое
   const paintKey = useMemo(() => ({}), [filtered, groupRules, colors, settings.display.nodeSize]);
   useEffect(() => {
     for (const n of simApi.nodes()) {

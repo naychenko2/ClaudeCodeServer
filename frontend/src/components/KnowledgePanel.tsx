@@ -431,6 +431,7 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
     }
   }, [project.id]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка статуса индексирования
   useEffect(() => { loadStatus(); }, [loadStatus]);
 
   const hasIndexing = status?.documents.some(d => !TERMINAL_STATUSES.includes(d.indexingStatus)) ?? false;

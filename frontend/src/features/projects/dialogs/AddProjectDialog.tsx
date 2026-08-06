@@ -56,8 +56,8 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
       if (sync) api.sync.add(p.id, '', true).catch(() => {});
       invalidateProjectsCache(); // полка/палитра проектов видят новый проект сразу
       onSuccess(created);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Не удалось добавить проект');
     }
   };
 

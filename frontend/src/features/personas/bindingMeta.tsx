@@ -1,4 +1,3 @@
-import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { CheckSquare, File, Layers, Pencil, Users, Wrench, Zap } from 'lucide-react';
 import type { BindingTarget, PersonaBinding, PersonaBindingMode, PersonaBindingType } from '../../types';
@@ -139,7 +138,7 @@ export function fetchBindingTargets(type: string, source?: string, personaId?: s
 
 // Какой каталог нужен типу привязки для подписи цели — projectPersonas/projectTasks
 // адресуют чужой ПРОЕКТ как первый уровень, как и projectPath
-function catalogTypeFor(t: PersonaBindingType): string {
+export function catalogTypeFor(t: PersonaBindingType): string {
   return t === 'projectPath' || t === 'projectPersonas' || t === 'projectTasks' ? 'project' : t;
 }
 
@@ -162,35 +161,4 @@ export function bindingLabel(b: PersonaBinding, targets: Map<string, BindingTarg
       ? `Задачи «${label}» · только чтение`
       : `Задачи «${label}» · полный доступ`;
   }
-}
-
-// Хук: подгружает каталоги целей под типы имеющихся привязок и отдаёт
-// резолвер подписи. Пока каталог не загружен — подпись деградирует до raw id.
-export function useBindingLabels(bindings: PersonaBinding[] | null): (b: PersonaBinding) => string {
-  const [targets, setTargets] = useState<Map<string, BindingTarget>>(() => new Map());
-
-  // Набор нужных каталогов — стабильный ключ, чтобы не перезапрашивать на каждый рендер
-  const typesKey = useMemo(
-    () => [...new Set((bindings ?? []).map(b => catalogTypeFor(b.type)))].sort().join(','),
-    [bindings],
-  );
-
-  useEffect(() => {
-    if (!typesKey) return;
-    let alive = true;
-    void Promise.all(typesKey.split(',').map(async type => {
-      try {
-        const list = await fetchBindingTargets(type);
-        return list.map(t => [`${type}:${t.id}`, t] as const);
-      } catch {
-        return [];
-      }
-    })).then(chunks => {
-      if (!alive) return;
-      setTargets(new Map(chunks.flat()));
-    });
-    return () => { alive = false; };
-  }, [typesKey]);
-
-  return useMemo(() => (b: PersonaBinding) => bindingLabel(b, targets), [targets]);
 }

@@ -65,6 +65,9 @@ function setOnline(value: boolean) {
 
 // Подозрение на нестабильность. Переход только из online: из offline в degraded
 // не выходим — возврат требует явного успеха (ответ сервера / пинг).
+// Параметр намеренно сохранён: вызывающие стороны передают причину деградации,
+// она пригодится при добавлении логирования/телеметрии переходов состояния.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- задел на будущее, см. комментарий
 export function setDegraded(_reason: string) {
   if (_connectionState !== 'online') return;
   setConnectionState('degraded');

@@ -40,7 +40,7 @@ export function GraphCanvas({ api, display, selectedId, focusId, colors, onSelec
 
   // Пропсы в ref: draw loop живёт в mount-эффекте и читает всегда свежие значения
   const propsRef = useRef({ display, selectedId, focusId, onSelectNode });
-  propsRef.current = { display, selectedId, focusId, onSelectNode };
+  useEffect(() => { propsRef.current = { display, selectedId, focusId, onSelectNode }; });
 
   // Резолвленные цвета темы для canvas (var(--…) он не понимает)
   const themeRef = useRef({ border: '#ccc', accent: '#D97757', text: '#666', muted: '#999', ghostFill: '#eee' });

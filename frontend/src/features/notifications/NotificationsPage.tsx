@@ -206,7 +206,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
     ensureNotificationsSubscribed();
     loadNotifications().then(rerender);
     return subscribeToNotifications(rerender);
-  }, []);
+  }, [rerender]);
 
   const notifs = getNotifications();
   const totalUnread = getUnreadCount();

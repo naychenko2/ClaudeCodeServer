@@ -118,7 +118,11 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
   found: number;   // найдено после фильтров
   isMobile?: boolean;
 }) {
-  const mobile = isMobile ?? useIsMobile();
+  // Хук вызывается безусловно (rules-of-hooks): prop лишь переопределяет его
+  // значение, но не отменяет сам вызов — иначе порядок хуков плавал бы между
+  // рендерами в зависимости от того, передали isMobile или нет.
+  const hookMobile = useIsMobile();
+  const mobile = isMobile ?? hookMobile;
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const popRef = useRef<HTMLDivElement>(null);

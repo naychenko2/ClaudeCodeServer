@@ -121,6 +121,7 @@ export function ProductHistory({ isMobile, onClose, auth, onLogout, onHubTab }: 
   // ===== Загрузка списка дней =====
   useEffect(() => {
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс старого списка перед загрузкой нового диапазона дней
     setDays(null);
     setDaysError(null);
     requestedRef.current = new Set();
@@ -752,6 +753,7 @@ function DayCalendar({ days, selected, onSelect, onNeedOlder, isMobile }: {
   // Показываемый месяц (yyyy-MM) — по выбранному дню или первому доступному
   const [ym, setYm] = useState<string>(() => (selected || days[0]?.date || todayIso).slice(0, 7));
   // Когда выбирают день из другого месяца (напр. смена окна) — подстроить показ
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- месяц календаря следует за выбранным днём
   useEffect(() => { if (selected) setYm(selected.slice(0, 7)); }, [selected]);
 
   const [year, month] = ym.split('-').map(Number); // month 1..12

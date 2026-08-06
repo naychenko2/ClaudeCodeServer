@@ -24,6 +24,7 @@ export function useIsMobile(): boolean {
   useEffect(() => {
     const mq = window.matchMedia(MOBILE_QUERY);
     const h = (e: MediaQueryListEvent) => setM(e.matches);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: синхронизация начального значения
     setM(mq.matches);
     mq.addEventListener('change', h);
     return () => mq.removeEventListener('change', h);

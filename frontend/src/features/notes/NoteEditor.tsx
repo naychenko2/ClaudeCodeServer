@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { EditorView, keymap, drawSelection, dropCursor, placeholder as cmPlaceholder,
   Decoration, ViewPlugin, WidgetType, type DecorationSet, type ViewUpdate } from '@codemirror/view';
 import { EditorState, RangeSetBuilder } from '@codemirror/state';
@@ -286,15 +286,15 @@ export function NoteEditor({ value, onChange, minHeight = 280, placeholder, onWi
   // Свежие данные автокомплита без пересоздания редактора
   const titlesRef = useRef<string[]>([]);
   const tagsRef = useRef<string[]>([]);
-  useMemo(() => {
+  useEffect(() => {
     titlesRef.current = notes.map(n => n.title);
     tagsRef.current = [...new Set(notes.flatMap(n => n.tags))].sort();
   }, [notes]);
 
   const onChangeRef = useRef(onChange);
-  onChangeRef.current = onChange;
+  useEffect(() => { onChangeRef.current = onChange; });
   const onWikilinkRef = useRef(onWikilink);
-  onWikilinkRef.current = onWikilink;
+  useEffect(() => { onWikilinkRef.current = onWikilink; });
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -323,7 +323,7 @@ export function NoteEditor({ value, onChange, minHeight = 280, placeholder, onWi
         }),
         // Ctrl/Cmd+клик по вики-ссылке — переход к заметке
         EditorView.domEventHandlers({
-          mousedown: (e, _view) => {
+          mousedown: (e) => {
             if (!(e.ctrlKey || e.metaKey)) return false;
             const el = (e.target as HTMLElement).closest?.('.cm-wikilink') as HTMLElement | null;
             if (!el?.dataset.target) return false;

@@ -128,8 +128,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
       // «Редактировать» может увидеть снимок до сохранения (гонка с realtime personas_changed)
       await bumpPersonas();
       closeEdit();
-    } catch (e: any) {
-      showToast('Проактивность', e?.message ?? 'Не удалось сохранить правило');
+    } catch (e: unknown) {
+      showToast('Проактивность', e instanceof Error ? e.message : 'Не удалось сохранить правило');
     } finally { setSaving(false); }
   }
 
@@ -168,8 +168,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
       await api.personas.addAutomation(persona.id, buildDto(adding.draft));
       await bumpPersonas();
       setAdding(null);
-    } catch (e: any) {
-      showToast('Проактивность', e?.message ?? 'Не удалось создать правило');
+    } catch (e: unknown) {
+      showToast('Проактивность', e instanceof Error ? e.message : 'Не удалось создать правило');
     } finally { setAddSaving(false); }
   }
 
@@ -183,8 +183,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
     try {
       const { candidates } = await api.personas.suggestAutomation(persona.id);
       setSuggest({ loading: false, candidates: candidates.map(c => ({ ...c, on: true })) });
-    } catch (e: any) {
-      setSuggest({ loading: false, error: e?.message ?? 'Не удалось подобрать правила. Попробуйте ещё раз.' });
+    } catch (e: unknown) {
+      setSuggest({ loading: false, error: e instanceof Error ? e.message : 'Не удалось подобрать правила. Попробуйте ещё раз.' });
     }
   }
 
@@ -206,8 +206,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
       const { candidates } = await api.personas.generateAutomation(persona.id, prompt);
       setGenPrompt(null);
       setSuggest({ loading: false, fromPrompt: true, candidates: candidates.map(c => ({ ...c, on: true })) });
-    } catch (e: any) {
-      setSuggest({ loading: false, fromPrompt: true, error: e?.message ?? 'Не удалось создать правило. Попробуйте ещё раз.' });
+    } catch (e: unknown) {
+      setSuggest({ loading: false, fromPrompt: true, error: e instanceof Error ? e.message : 'Не удалось создать правило. Попробуйте ещё раз.' });
       setGenPrompt(null);
     } finally { setGenBusy(false); }
   }
@@ -226,8 +226,8 @@ export function PersonaAutomationPanel({ persona, projects, accent, isMobile }: 
       for (const c of picked) await api.personas.addAutomation(persona.id, candidateToDto(c));
       await bumpPersonas();
       setSuggest(null);
-    } catch (e: any) {
-      showToast('Проактивность', e?.message ?? 'Не удалось добавить правила.');
+    } catch (e: unknown) {
+      showToast('Проактивность', e instanceof Error ? e.message : 'Не удалось добавить правила.');
       setSuggest(null);
     }
   }

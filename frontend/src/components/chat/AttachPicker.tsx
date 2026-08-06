@@ -30,6 +30,7 @@ export function AttachPicker({ projectId, selected, onToggle, onClose, onUpload 
   const [uploaded, setUploaded] = useState(0);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка списка файлов по фильтру
     setLoading(true);
     const t = setTimeout(() => {
       api.files.search(projectId, query)

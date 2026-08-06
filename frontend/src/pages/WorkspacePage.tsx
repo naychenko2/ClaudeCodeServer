@@ -341,16 +341,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     return () => window.removeEventListener('cc-open-project-session', open);
   }, [project.id]);
 
-  // Плашка «Изменения сохранены» в чате (док-режим) → открыть просмотр коммита хода
-  useEffect(() => {
-    const openCommit = (e: Event) => {
-      const d = (e as CustomEvent<{ projectId?: string; sha?: string }>).detail;
-      if (d?.sha && d.projectId === project.id) handleOpenCommit(d.sha);
-    };
-    window.addEventListener('cc-open-commit', openCommit);
-    return () => window.removeEventListener('cc-open-commit', openCommit);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  // Плашка «Изменения сохранены» в чате (док-режим) → открыть просмотр коммита хода.
+  // Сам обработчик — ниже (после объявления isMobile), эффект-подписка тоже там.
+
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
   type ToolsTab = 'terminal' | 'preview';
@@ -371,8 +364,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     refresh: refreshServices, start: startService, stop: stopService,
   } = useProjectServices(project.id, { onStarted: onServiceStarted });
 
+  // Зеркало активной сессии для колбэков эффектов (реконнект SignalR читает свежее значение)
   const activeSessionRef = useRef<Session | null>(null);
-  activeSessionRef.current = activeSession;
+  useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
 
   // Стор персон — чтобы SessionList показал аватар/имя персоны у её сессий,
   // а вкладка «Команда» знала, есть ли персоны у проекта (для пустого стейта)
@@ -385,6 +379,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // иначе останется висеть недоступный режим. При включении вкладка появится сама
   // (leftTabOptions пересчитывается из projectForEdit) — перезагрузка не нужна.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- увод с вкладки «Инструменты» при её отключении в настройках
     if (leftTab === 'tools' && !projectForEdit.toolsEnabled) setLeftTab('sessions');
   }, [projectForEdit.toolsEnabled, leftTab]);
 
@@ -481,6 +476,29 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
+
+  // из git-панели «История»/«Изменения» → просмотр коммита в контентной области;
+  // filePath — открыть diff сразу на этом файле (клик по файлу коммита), иначе первый
+  const handleOpenCommit = useCallback((sha: string, filePath?: string) => {
+    setOpenFile(null);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setFileFullscreen(false);
+    setOpenCommitFile(filePath ?? null);
+    setOpenCommitSha(sha);
+    setGraphOpen(false);
+    if (isMobile) setMobileView('chat');
+  }, [isMobile]);
+
+  // Плашка «Изменения сохранены» в чате (док-режим) → открыть просмотр коммита хода
+  useEffect(() => {
+    const openCommit = (e: Event) => {
+      const d = (e as CustomEvent<{ projectId?: string; sha?: string }>).detail;
+      if (d?.sha && d.projectId === project.id) handleOpenCommit(d.sha);
+    };
+    window.addEventListener('cc-open-commit', openCommit);
+    return () => window.removeEventListener('cc-open-commit', openCommit);
+  }, [project.id, handleOpenCommit]);
   // Выбранный в панельке «Сервисы» сервис — его окно живёт в центре нового режима
   const ccActivePreview = previewServices.find(s => s.id === activePreviewId) ?? null;
 
@@ -544,6 +562,7 @@ const windowWidth = useWindowWidth();
   const [boardColumns, setBoardColumns] = useState<BoardColumn[] | undefined>(project.boardColumns);
   const [columnsDialog, setColumnsDialog] = useState(false);
   // Проект мог освежиться серверными данными (App refetch) — подхватываем колонки из пропа
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация колонок доски с данными проекта
   useEffect(() => { setBoardColumns(project.boardColumns); }, [project]);
   const projectColumns = useMemo(() => resolveColumns(boardColumns), [boardColumns]);
   // Число задач в каждой колонке — для предупреждения при удалении непустой колонки
@@ -567,6 +586,20 @@ const windowWidth = useWindowWidth();
       onClose={() => setColumnsDialog(false)}
     />
   );
+  const handleSelectTask = (task: Task, autoEdit?: boolean) => {
+    setSelectedTaskId(task.id);
+    setAutoEditTaskId(autoEdit ? task.id : null);
+    // Открытый файл и граф уступают место карточке задачи
+    setOpenFile(null);
+    setGraphOpen(false);
+    if (isMobile) {
+      setMobileView('chat');
+      navPush({ screen: 'project', project, view: 'chat', file: null, task: task.id });
+    } else {
+      navPush({ screen: 'project', project, view: mobileView, file: null, task: task.id });
+    }
+  };
+
   const ProjectBoardArea = (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {isMobile && (
@@ -595,31 +628,7 @@ const windowWidth = useWindowWidth();
     </div>
   );
 
-  const handleSelectTask = (task: Task, autoEdit?: boolean) => {
-    setSelectedTaskId(task.id);
-    setAutoEditTaskId(autoEdit ? task.id : null);
-    // Открытый файл и граф уступают место карточке задачи
-    setOpenFile(null);
-    setGraphOpen(false);
-    if (isMobile) {
-      setMobileView('chat');
-      navPush({ screen: 'project', project, view: 'chat', file: null, task: task.id });
-    } else {
-      navPush({ screen: 'project', project, view: mobileView, file: null, task: task.id });
-    }
-  };
-
-  // Переход из карточки задачи в связанный диалог
-  const handleOpenTaskSession = async (sessionId: string) => {
-    try {
-      const sessions = await api.sessions.list(project.id);
-      const s = sessions.find(x => x.id === sessionId);
-      if (!s) return;
-      if (!isMobile) navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null });
-      setLeftTab('sessions');
-      handleSelectSession(s);
-    } catch { /* офлайн — остаёмся на задаче */ }
-  };
+  // Переход из карточки задачи в связанный диалог — объявлен ниже, после handleSelectSession
 
   const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
     { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
@@ -698,10 +707,7 @@ const windowWidth = useWindowWidth();
 
   // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
   // проекте — открываем её на месте (переключаемся на «Чаты» и выбираем).
-  const handleOpenPersonaChat = (session: Session) => {
-    setLeftTab('sessions');
-    handleSelectSession(session);
-  };
+  // Обработчик объявлен ниже, после handleSelectSession.
 
   // Диплинк файла: App положил «projectId|путь» в sessionStorage.
   // Значение чужого проекта не трогаем — его заберёт WorkspacePage нужного проекта.
@@ -712,6 +718,7 @@ const windowWidth = useWindowWidth();
     const [pid, path] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
     if (pid !== project.id) return;
     sessionStorage.removeItem('cc_pending_file');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое потребление диплинка из sessionStorage
     setOpenFile(path);
     setFileFullscreen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -781,28 +788,7 @@ const windowWidth = useWindowWidth();
   }, [project.id]);
 
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
-  useEffect(() => {
-    const consumePendingProjectChat = async () => {
-      const raw = sessionStorage.getItem('cc_pending_project_chat');
-      if (!raw) return;
-      const sep = raw.indexOf('|');
-      const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
-      if (pid !== project.id) return;
-      sessionStorage.removeItem('cc_pending_project_chat');
-      try {
-        const sessions = await api.sessions.list(project.id);
-        const s = sessions.find(x => x.id === chatId);
-        if (s) {
-          setLeftTab('sessions');
-          handleSelectSession(s);
-        }
-      } catch { /* офлайн — остаёмся как есть */ }
-    };
-    consumePendingProjectChat();
-    window.addEventListener('cc-pending-project-chat', consumePendingProjectChat);
-    return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  // Эффект-подписка объявлена ниже, после handleSelectSession.
   // Сайдбар, его ширина и сплиттеры жили здесь, пока десктоп рисовался этим
   // компонентом. Теперь десктоп и планшет — DesktopWorkspace с рельсами панелей
   // (ширина и сворачивание в состоянии зон), а мобильная ветка сайдбара не имеет.
@@ -826,7 +812,7 @@ const windowWidth = useWindowWidth();
     setSelectedTaskId(null);
     setActivePreviewId(null);
     if (isMobile) setMobileView('chat');
-  }, [isMobile]);
+  }, [isMobile, setActivePreviewId]);
 
   // «Построить граф» (empty-state документа и панели): явный POST-build на бэке,
   // стор сам переходит в 'building' и дожидается готовности polling'ом.
@@ -872,6 +858,55 @@ const windowWidth = useWindowWidth();
   const handleSessionUpdated = (updated: Session) => {
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
+
+  // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
+  useEffect(() => {
+    const consumePendingProjectChat = async () => {
+      const raw = sessionStorage.getItem('cc_pending_project_chat');
+      if (!raw) return;
+      const sep = raw.indexOf('|');
+      const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+      if (pid !== project.id) return;
+      sessionStorage.removeItem('cc_pending_project_chat');
+      try {
+        const sessions = await api.sessions.list(project.id);
+        const s = sessions.find(x => x.id === chatId);
+        if (s) {
+          setLeftTab('sessions');
+          handleSelectSession(s);
+        }
+      } catch { /* офлайн — остаёмся как есть */ }
+    };
+    consumePendingProjectChat();
+    window.addEventListener('cc-pending-project-chat', consumePendingProjectChat);
+    return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSelectSession немемоизирован: включение переустанавливало бы подписку каждый рендер; функция свежая на момент события (эффект после её объявления)
+  }, [project.id]);
+
+  // Переход из карточки задачи в связанный диалог
+  const handleOpenTaskSession = async (sessionId: string) => {
+    try {
+      const sessions = await api.sessions.list(project.id);
+      const s = sessions.find(x => x.id === sessionId);
+      if (!s) return;
+      if (!isMobile) navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+      setLeftTab('sessions');
+      handleSelectSession(s);
+    } catch { /* офлайн — остаёмся на задаче */ }
+  };
+
+  // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
+  // проекте — открываем её на месте (переключаемся на «Чаты» и выбираем).
+  const handleOpenPersonaChat = (session: Session) => {
+    setLeftTab('sessions');
+    handleSelectSession(session);
+  };
+
+  // Сколько чатов у проекта. Нужно ЗДЕСЬ, а не внутри панели: пустая панель «Чаты»
+  // не показывается совсем (как сайдбар в разделе «Чаты»), и пока её нет — считать
+  // некому. Точное значение приходит от SessionList, пока панель на экране;
+  // первичная загрузка и удаление чата обрабатываются тут.
+  const [chatCount, setChatCount] = useState<number | null>(null);
 
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;
@@ -949,11 +984,8 @@ const windowWidth = useWindowWidth();
     return () => { leaveProject(project.id).catch(() => {}); unsub(); };
   }, [project.id]);
 
-  // Сколько чатов у проекта. Нужно ЗДЕСЬ, а не внутри панели: пустая панель «Чаты»
-  // не показывается совсем (как сайдбар в разделе «Чаты»), и пока её нет — считать
-  // некому. Точное значение приходит от SessionList, пока панель на экране;
-  // первичная загрузка и удаление чата обрабатываются тут.
-  const [chatCount, setChatCount] = useState<number | null>(null);
+  // Первичная загрузка числа чатов и слежение за удалениями (само состояние — выше,
+  // рядом с обработчиками сессий: handleCreateSession инкрементирует его синхронно)
   useEffect(() => {
     let alive = true;
     const refresh = () => {
@@ -1010,6 +1042,7 @@ const windowWidth = useWindowWidth();
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- WorkspacePage перемонтируется на смену проекта (key={project.id} в App), подписка на весь жизненный цикл инстанса
   }, []);
 
   // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
@@ -1018,6 +1051,7 @@ const windowWidth = useWindowWidth();
     if (leftTab === 'personas' && !selectedPersonaId && !personaCreating) {
       navReplace({ screen: 'project', project, view: isMobile ? mobileView : 'sidebar', file: null, task: null, persona: null });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывание только на ВХОД в командный центр; зависимости от project/mobileView плодили бы лишние записи истории при каждом переключении вида
   }, [leftTab, selectedPersonaId, personaCreating]);
 
   // из дерева файлов → всегда полноэкранный режим; опциональная строка для скролла
@@ -1112,18 +1146,8 @@ const windowWidth = useWindowWidth();
     reader.actions.openUrl(url);
   };
 
-  // из git-панели «История»/«Изменения» → просмотр коммита в контентной области;
-  // filePath — открыть diff сразу на этом файле (клик по файлу коммита), иначе первый
-  const handleOpenCommit = (sha: string, filePath?: string) => {
-    setOpenFile(null);
-    setOpenFileDiffMode(false);
-    setGitStagePath(null);
-    setFileFullscreen(false);
-    setOpenCommitFile(filePath ?? null);
-    setOpenCommitSha(sha);
-    setGraphOpen(false);
-    if (isMobile) setMobileView('chat');
-  };
+  // из git-панели «История»/«Изменения» → просмотр коммита в контентной области —
+  // сам обработчик объявлен выше (useCallback handleOpenCommit), здесь только закрытие
   const closeCommitView = () => {
     setOpenCommitSha(null);
     if (isMobile) setMobileView('sidebar');

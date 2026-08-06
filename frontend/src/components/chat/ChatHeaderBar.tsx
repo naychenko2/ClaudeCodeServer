@@ -792,6 +792,7 @@ interface ChatHeaderBarProps {
 // cc-ai-run; при успехе открывает созданную заметку.
 function SessionSummaryButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
   const [busy, setBusy] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
   const run = () => {
     if (busy) return;
@@ -816,6 +817,7 @@ function SessionSummaryButton({ session, hasMessages, online }: { session: Sessi
 // Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
 function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
   const [busy, setBusy] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
   const run = () => {
     if (busy) return;
@@ -844,6 +846,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс модалки и busy при смене чата
   useEffect(() => { setDialog(null); setBusy(false); }, [session.id]);
 
   const run = () => {
@@ -950,6 +953,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   useEffect(() => {
     // Сброс всегда: при смене провайдера (deepseek → glm) 404 не перезаписал бы
     // стейт в catch — и в плашке остался бы чужой баланс
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс устаревшего баланса провайдера перед загрузкой
     setProvBalance(null);
     if (!isCliProvider) return;
     let alive = true;

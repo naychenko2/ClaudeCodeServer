@@ -126,7 +126,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
   const n = item.name.toLowerCase();
-  const inp = (item.input ?? {}) as Record<string, any>;
+  // input инструмента — неизвестный JSON (unknown в контракте ChatItem): читаем
+  // точечно по ключам, значения сужаем проверками в местах использования
+  const inp = (item.input ?? {}) as Record<string, unknown>;
   // Во время стриминга показываем накопленный partial_json («печатает команду»), затем — разобранный аргумент.
   // Пути показываем относительно корня проекта: file_path/path — целиком, в командах и
   // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
@@ -148,9 +150,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
   const editHunks: Array<{ old?: string; new?: string }> =
     n === 'edit' && (typeof inp.old_string === 'string' || typeof inp.new_string === 'string')
-      ? [{ old: inp.old_string, new: inp.new_string }]
+      ? [{ old: typeof inp.old_string === 'string' ? inp.old_string : undefined, new: typeof inp.new_string === 'string' ? inp.new_string : undefined }]
     : n === 'multiedit' && Array.isArray(inp.edits)
-      ? inp.edits.map((e: any) => ({ old: e.old_string, new: e.new_string }))
+      ? (inp.edits as Array<{ old_string?: string; new_string?: string }>).map(e => ({ old: e.old_string, new: e.new_string }))
     : n === 'write' && typeof inp.content === 'string'
       ? [{ new: inp.content }]
     : [];
@@ -201,6 +203,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // изображение под другим аккаунтом fal.ai — его нет в текущем billing), убираем метку через 30с.
   const [pendingExpired, setPendingExpired] = useState(false);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- автоснятие метки pending по таймеру 30с
     if (!costPending) { setPendingExpired(false); return; }
     const t = setTimeout(() => setPendingExpired(true), 30000);
     return () => clearTimeout(t);

@@ -44,8 +44,10 @@ function Chip({ color, bg, icon, label }: { color: string; bg: string; icon: Rea
   );
 }
 
-// Загрузка комментариев документа + перезагрузка на realtime notes_changed
-export function useDocAnnotations(scope: string, path: string, enabled: boolean) {
+// Загрузка комментариев документа + перезагрузка на realtime notes_changed.
+// Хук не экспортируется: живёт только в этом компонентном файле — экспорт хука
+// рядом с компонентом ломал бы fast refresh (см. eslint.config.js).
+function useDocAnnotations(scope: string, path: string, enabled: boolean) {
   const [items, setItems] = useState<DocAnnotation[]>([]);
   const notesVersion = useNotesVersion();
   const reload = useCallback(() => {
@@ -387,7 +389,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       });
     });
     return () => cleanups.forEach(f => f());
-  }, [shown, enabled, content]);
+  }, [shown, enabled, content, fmOffset]);
 
   const panel = enabled && items.length > 0 && (
     <div ref={panelRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

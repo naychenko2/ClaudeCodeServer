@@ -51,6 +51,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   // Реестр тегов — optimistic state поверх project.tagRegistry (тот же паттерн, что в
   // SessionList): создание тега здесь видно сразу, не дожидаясь обновления project сверху.
   const [registryOverride, setRegistryOverride] = useState<ProjectTag[] | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс оверрайда реестра тегов при смене проекта
   useEffect(() => { setRegistryOverride(null); }, [project?.id, project?.tagRegistry]);
   const registry = registryOverride ?? project?.tagRegistry ?? [];
 

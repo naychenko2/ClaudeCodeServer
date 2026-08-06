@@ -23,7 +23,7 @@ export function TerminalView({ terminalId, onActivity, visible = true }: Props) 
   // onActivity — через ref: смена колбэка не должна пересоздавать xterm (иначе экран
   // чернеет и теряется ввод/вывод). xterm живёт ровно на один terminalId.
   const onActivityRef = useRef(onActivity)
-  onActivityRef.current = onActivity
+  useEffect(() => { onActivityRef.current = onActivity })
 
   const handleResize = useCallback(() => {
     const fit = fitAddonRef.current

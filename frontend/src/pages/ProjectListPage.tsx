@@ -54,6 +54,7 @@ function useWide(bp = MOBILE_MAX + 1) {
   useEffect(() => {
     const mq = window.matchMedia(`(min-width: ${bp}px)`);
     const h = (e: MediaQueryListEvent) => setWide(e.matches);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: синхронизация при смене порога
     setWide(mq.matches);
     if (mq.addEventListener) mq.addEventListener('change', h); else mq.addListener(h);
     return () => { if (mq.removeEventListener) mq.removeEventListener('change', h); else mq.removeListener(h); };
@@ -98,11 +99,13 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   useEffect(() => {
     if (sessionStorage.getItem('cc_pending_new_project')) {
       sessionStorage.removeItem('cc_pending_new_project');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое открытие диалога по флагу из sessionStorage
       setActiveDialog({ type: 'add' });
     }
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния загрузки перед запросом
     setLoadState('loading');
     Promise.all([api.projects.list(), api.projectGroups.list().catch(() => [] as ProjectGroup[])])
       .then(async ([list, grps]) => {
@@ -152,7 +155,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // Секции для десктопа в зависимости от выбранного пункта сайдбара
   type Section = { key: string; name: string; color?: string; items: Project[] };
   const UNGROUPED_COLOR = C.textMuted;
-  let sections: Section[] = [];
+  // Инициализатор не нужен: все ветки ниже (all/sleeping/группа) гарантированно присваивают
+  let sections: Section[];
   let title = 'Проекты';
   if (view === 'all') {
     sections = byGroup.map(({ group, items }) => ({ key: group.id, name: group.name, color: group.color, items }));

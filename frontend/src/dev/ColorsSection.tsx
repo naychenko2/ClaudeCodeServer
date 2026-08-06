@@ -113,6 +113,7 @@ export function ColorsSection() {
         next[key] = value;
       }
     }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- резолв CSS-переменных при смене темы
     setResolved(next);
   }, [mode]);
 

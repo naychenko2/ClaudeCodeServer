@@ -215,7 +215,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
   const setView = (v: 'list' | 'tree') => { setViewMode(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* квота */ } };
   const toggleDir = (p: string) =>
-    setCollapsedDirs(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
+    setCollapsedDirs(prev => { const n = new Set(prev); if (n.has(p)) n.delete(p); else n.add(p); return n; });
 
   const workingFiles = useMemo(
     () => status ? mergeWorking(status.staged, status.unstaged, status.untracked) : [],
@@ -249,6 +249,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
   // Файлы выбранного скоупа (read-only) — коммит или стэш; грузим при активации
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- быстрый сброс commitFiles в scope, где файлы уже видны
     if (activeScope === 'working' || activeScope === 'branch') { setCommitFiles([]); return; }
     let alive = true;
     const stashIdx = activeScope.startsWith('stash:') ? Number(activeScope.slice(6)) : null;
@@ -424,7 +425,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   };
 
   const toggleCheck = (path: string) =>
-    setUnchecked(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
+    setUnchecked(prev => { const n = new Set(prev); if (n.has(path)) n.delete(path); else n.add(path); return n; });
 
   const ahead = status?.ahead ?? 0;
   // Кнопку «Опубликовать» показываем при незапушенных коммитах ИЛИ непустом стеке

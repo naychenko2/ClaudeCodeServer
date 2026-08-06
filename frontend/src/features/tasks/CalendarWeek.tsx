@@ -7,7 +7,7 @@ import { C, FONT } from '../../lib/design';
 import { NO_PROJECT_LABEL, addDaysIso, projectColor, todayIso } from '../../lib/tasks';
 import { NavArrow } from './CalendarMonth';
 import { RepeatIcon } from './bits';
-import { useTaskHover } from './TaskHoverCard';
+import { useTaskHover } from './useTaskHover';
 
 interface Props {
   tasks: Task[];

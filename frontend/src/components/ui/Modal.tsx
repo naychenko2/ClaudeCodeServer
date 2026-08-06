@@ -28,6 +28,7 @@ function useIsMobile() {
   useEffect(() => {
     const mq = window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`);
     const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: мобильный брейкпоинт
     setMobile(mq.matches);
     // addEventListener поддерживается современными браузерами; для совместимости — фолбэк
     if (mq.addEventListener) mq.addEventListener('change', handler);

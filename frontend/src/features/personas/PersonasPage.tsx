@@ -59,6 +59,11 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
 
+  // Зеркало списка персон для обработчика диплинка: подписка одна на монтирование,
+  // а персоны могли ещё не догрузиться к моменту события
+  const allPersonasRef = useRef(allPersonas);
+  useEffect(() => { allPersonasRef.current = allPersonas; }, [allPersonas]);
+
   // Диплинк #/personas/{id} (старый #/agents/{id} парсится как алиас) — прямой заход/обновление
   // страницы. Плюс pending-канал cc_pending_persona_id + событие cc-open-persona — навигация
   // изнутри приложения (бэйдж автоматизации в чате глобальной персоны, см. lib/chatOrigin.ts),
@@ -79,7 +84,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         setSelectedId(pending); setMobileView('card');
         setPendingView(view === 'automation' ? 'automation' : null);
         // Диплинк на проектную персону — в дефолтном «Глобальные» её нет в списке, переключаем
-        const target = allPersonas.find(p => p.id === pending);
+        const target = allPersonasRef.current.find(p => p.id === pending);
         if (target && target.scope !== 'global') setListMode('all');
         navPush({ screen: 'personas', persona: pending });
         return;
@@ -88,7 +93,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       if (t?.screen === 'personas' && t.personaId) {
         setSelectedId(t.personaId); setMobileView('card');
         setPendingView(t.personaView === 'automation' ? 'automation' : null);
-        const target = allPersonas.find(p => p.id === t.personaId);
+        const target = allPersonasRef.current.find(p => p.id === t.personaId);
         if (target && target.scope !== 'global') setListMode('all');
       }
     };
@@ -115,6 +120,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // Диплинк/выбор указывает на проектную персону — в глобальном разделе её нет, сбрасываем выбор
   useEffect(() => {
     if (selectedId && allPersonas.some(p => p.id === selectedId) && !personas.some(p => p.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс выбора, если персоны диплинка нет в проекте
       setSelectedId(null); setMobileView('list');
       if (getNav()?.persona) navReplace({ screen: 'personas' });
     }

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, type ReactNode } from 'react';
 import { ChevronDown, Check, ArrowRightLeft } from 'lucide-react';
 import { C, R, FONT, SHADOW, SP, Z } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -64,6 +64,16 @@ export function ComposerMenu({
     return () => document.removeEventListener('mousedown', onDown);
   }, [open]);
 
+  // Низ мобильной шторки — по позиции кнопки. Меряем в layout-эффекте (ref в рендере
+  // читать нельзя); setState с тем же числом ререндера не даёт.
+  const [menuBottom, setMenuBottom] = useState(80);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- меряем каждый рендер, пока меню открыто: позиция кнопки плавает от высоты композера
+  useLayoutEffect(() => {
+    if (!open || !isMobile) return;
+    const r = rootRef.current?.getBoundingClientRect();
+    setMenuBottom(r ? window.innerHeight - r.top + 6 : 80);
+  });
+
   return (
     <div ref={rootRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
@@ -108,7 +118,7 @@ export function ComposerMenu({
           // Прижимаем к правому краю кнопки — пикеры стоят справа полосы, иначе список
           // уезжает за границу окна.
           ...(isMobile
-            ? (() => { const r = rootRef.current?.getBoundingClientRect(); return { position: 'fixed' as const, left: 16, right: 16, bottom: r ? window.innerHeight - r.top + 6 : 80 }; })()
+            ? { position: 'fixed' as const, left: 16, right: 16, bottom: menuBottom }
             : { position: 'absolute' as const, bottom: 'calc(100% + 6px)', right: 0, minWidth }),
           maxWidth: 'calc(100vw - 32px)', maxHeight: 420, overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,

@@ -164,8 +164,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // до первого события — из Session.teamImplement; null — режим выключен
   const teamImplementState = useMemo<SessionTeamImplement | null>(() => {
     if (liveTeamImplement !== undefined) {
-      if (!liveTeamImplement.active) return null;
-      const { active: _active, ...rest } = liveTeamImplement;
+      // Деструктуризация снимает поле active (TeamImplementState → SessionTeamImplement);
+      // проверка active сразу использует её, не оставляя неиспользуемую переменную
+      const { active, ...rest } = liveTeamImplement;
+      if (!active) return null;
       return rest;
     }
     return session.teamImplement ?? null;
@@ -287,6 +289,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   const personasVersion = usePersonasVersion();
   const persona = useMemo(
     () => session.personaId ? getPersonaById(session.personaId) ?? null : null,
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — версия внешнего стора: бамп заставляет перечитать getPersonaById (стор нереактивен сам по себе)
     [session.personaId, personasVersion]
   );
   useEffect(() => { void ensurePersonasLoaded(); }, []);
@@ -335,7 +338,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     } catch (e) {
       showToast('Собеседник', e instanceof Error ? e.message : 'Не удалось сменить собеседника', 'info');
     }
-  }, [project, session.id, onSessionUpdated, items.length, noteCompanionSwitch]);
+  }, [project, session.id, session.personaId, onSessionUpdated, items.length, noteCompanionSwitch]);
 
   // Обратная совместимость для пилюль «Поговорить с…» пустого состояния (выбор только персоны)
   const handlePersonaChange = useCallback(
@@ -388,8 +391,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
     // Для чата вне проекта файлов нет — баннер CLAUDE.md не показываем
-    if (!project) { setHasCLAUDEmd(false); return; }
-    api.files.list(project.id)
+    const projectId = project?.id;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- guard: без проекта баннер CLAUDE.md не нужен
+    if (!projectId) { setHasCLAUDEmd(false); return; }
+    api.files.list(projectId)
       .then(files => setHasCLAUDEmd(files.some(f => !f.isDirectory && f.name === 'CLAUDE.md')))
       .catch(() => setHasCLAUDEmd(true)); // при ошибке не показываем баннер
   }, [project?.id]);
@@ -454,7 +459,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // Локальный setMode делаем сразу — переключатель не должен ждать сеть; ход всё равно
   // передаёт режим ещё раз, так что неудачный запрос не оставит расхождения. Бэкенд в
   // SetMode перенастраивает и живой ход на лету (control-протокол set_permission_mode).
-  const changeMode = (m: Mode) => {
+  const changeMode = useCallback((m: Mode) => {
     const prev = mode;
     setMode(m);
     api.chats.setMode(session.id, m)
@@ -468,7 +473,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
         setMode(prev);
         showToast('Режим чата', err instanceof Error ? err.message : 'Не удалось сменить режим');
       });
-  };
+  }, [mode, session.id, onSessionUpdated]);
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
   const {
@@ -625,7 +630,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       atBottomRef.current = true;
       await send(buildBody(style), [], mode);
     })();
-  }, [project, send, mode]);
+  }, [project, send, mode, atBottomRef]);
 
   // «Только этот чат»: список затронутых в диалоге файлов (из ленты file_changed)
   // даём явно, чтобы Claude не захватил чужие изменения рабочего дерева.
@@ -681,7 +686,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   const handleRetry = useCallback(() => {
     const lastUser = [...itemsRef.current].reverse().find(it => it.kind === 'user_message');
     if (lastUser && lastUser.kind === 'user_message') { atBottomRef.current = true; send(lastUser.text, lastUser.attachedPaths ?? [], modeRef.current); }
-  }, [send]);
+  }, [send, atBottomRef]);
 
   // Миграция чата на другого провайдера (кнопка карточки provider_limit при исчерпании
   // лимита): сервер перевозит транскрипт, событие provider_switched гасит карточку и
@@ -1321,7 +1326,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     return result;
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
+  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility]);
 
   // Прогрессивный рендер ленты: при открытии чата монтируем только её хвост, остальное
   // дорисовываем в простое браузера. В тяжёлых чатах (больше тысячи элементов) разовый

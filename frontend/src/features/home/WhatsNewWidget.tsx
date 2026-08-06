@@ -51,6 +51,7 @@ export function WhatsNewWidget({ userId }: { userId?: string | null }) {
   useEffect(() => {
     let seen: string | null = null;
     try { seen = localStorage.getItem(productHistorySeenKey(userId)); } catch { /* ignore */ }
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- проверка индикатора «новое» при монтировании
     if (!seen) setHasNew(true);
     else api.history.newCount(seen).then(({ count }) => setHasNew(count > 0)).catch(() => {});
     // Открыли историю (из любого места) → App пишет метку, гасим точку

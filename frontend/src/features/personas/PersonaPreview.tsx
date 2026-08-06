@@ -10,7 +10,8 @@ import { ensureTasksLoaded, useTasks } from '../../lib/tasks';
 import { relativeTime } from '../projects/projectUtil';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
-import { BindingModeBadge, BindingTypeIcon, bindingPlural, bindingsCounter, useBindingLabels } from './bindingMeta';
+import { BindingModeBadge, BindingTypeIcon, bindingPlural, bindingsCounter } from './bindingMeta';
+import { useBindingLabels } from './useBindingLabels';
 import { TRIGGER_META, ACTION_META, triggerDetails } from './automationMeta';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
@@ -88,6 +89,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   const [bindings, setBindings] = useState<PersonaBinding[] | null>(null);
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка привязок персоны
     setBindings(null);
     api.personas.bindings(persona.id)
       .then(list => { if (alive) setBindings(list); })
@@ -100,6 +102,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   const [chats, setChats] = useState<Session[] | null>(null);
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка недавних чатов персоны
     setChats(null);
     api.personas.chats(persona.id)
       .then(list => { if (alive) setChats([...list].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); })
@@ -111,6 +114,7 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
   const [memory, setMemory] = useState<PersonaMemoryEntry[] | null>(null);
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка сводки памяти персоны
     setMemory(null);
     if (!persona.memoryEnabled) return;
     api.personas.memory(persona.id)
@@ -121,9 +125,11 @@ export function PersonaPreview({ persona, accent, onOpenSession, onTalk, talking
 
   // Раскрытие длинного характера
   const [expanded, setExpanded] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс раскрытия характера при смене персоны
   useEffect(() => { setExpanded(false); }, [persona.id]);
   // Раскрытие длинной инструкции роли (в секции «Правила»)
   const [instrOpen, setInstrOpen] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс раскрытия инструкции роли при смене персоны
   useEffect(() => { setInstrOpen(false); }, [persona.id]);
 
   // Характер: слот контракта (P1), для legacy-персон — старый единый systemPrompt

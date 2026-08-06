@@ -6,7 +6,7 @@ import type { Project, Task } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { NO_PROJECT_LABEL, daysFromToday, projectColor } from '../../lib/tasks';
 import { AssigneeBadge, RepeatIcon } from './bits';
-import { useTaskHover } from './TaskHoverCard';
+import { useTaskHover } from './useTaskHover';
 
 interface Props {
   tasks: Task[];

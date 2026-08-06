@@ -208,8 +208,9 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
   const hiddenCount = Math.max(0, projects.length - shown.length);
   const hiddenWaiting = projects.some(p => !shownIds.has(p.id) && activity.get(p.id)?.status === 'waiting');
 
+  // Зеркало показанного списка для pointer-обработчиков драга (они живут вне рендера)
   const shownRef = useRef<Project[]>(shown);
-  shownRef.current = shown;
+  useEffect(() => { shownRef.current = shown; });
 
   const openCandidate = useCallback((p: Project) => {
     const a = activity.get(p.id);
@@ -285,9 +286,10 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
     setDragView({ id: g.id, x: e.clientX, y: e.clientY, lineTop, insertIdx, zone });
   }, [computeInsert]);
 
+  // pointerup вешается с { once: true } — снимается сам после срабатывания,
+  // поэтому onDragUp не ссылается на себя для removeEventListener
   const onDragUp = useCallback(() => {
     window.removeEventListener('pointermove', onDragMove);
-    window.removeEventListener('pointerup', onDragUp);
     const g = dragRef.current;
     dragRef.current = null;
     setDragView(null);
@@ -298,7 +300,7 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
     if (e.button !== 0) return;
     dragRef.current = { id: p.id, sx: e.clientX, sy: e.clientY, started: false, insertIdx: 0, zone: 'recent' };
     window.addEventListener('pointermove', onDragMove);
-    window.addEventListener('pointerup', onDragUp);
+    window.addEventListener('pointerup', onDragUp, { once: true });
   }, [onDragMove, onDragUp]);
 
   useEffect(() => () => {

@@ -58,6 +58,7 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
   const [top, setTop] = useState(0);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- таймер задержки скрытия плашки после закрытия
     if (open) { setLingering(true); return; }
     if (!hasAction) { setLingering(false); return; }
     const id = setTimeout(() => setLingering(false), HIDE_DELAY);

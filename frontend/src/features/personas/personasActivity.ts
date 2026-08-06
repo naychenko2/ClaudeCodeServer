@@ -42,6 +42,7 @@ export function usePersonasActivity(personas: Persona[]): { items: ActivityItem[
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс сырых данных перед перезагрузкой набора персон
     setRaw(null);
     if (personas.length === 0) { setRaw({ chats: [], memory: [] }); return; }
 
@@ -69,6 +70,7 @@ export function usePersonasActivity(personas: Persona[]): { items: ActivityItem[
     });
 
     return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- снапшот на вход в хаб: рефетч только при смене НАБОРА персон (personaIds), не на реордер/обновление полей — иначе каждый тик стора гонял бы сеть
   }, [personaIds]);
 
   // Создание персоны и выполненные задачи считаются из уже загруженных реактивных

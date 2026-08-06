@@ -68,14 +68,6 @@ export function AiLauncher() {
     return () => window.removeEventListener(NAV_CHANGE_EVENT, resolve);
   }, [online]);
 
-  // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
-  // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
-  useEffect(() => {
-    const onNav = () => { setSuggestion(null); setFabLevel('none'); setRecs([]); };
-    window.addEventListener(NAV_CHANGE_EVENT, onNav);
-    return () => window.removeEventListener(NAV_CHANGE_EVENT, onNav);
-  }, []);
-
   // Контекст собираем на момент открытия (getNav синхронен вне React)
   const buildCtx = (): AiActionCtx => {
     const nav = getNav();
@@ -95,6 +87,14 @@ export function AiLauncher() {
   // Свайп-закрытие проактивного балуна на тач-экране (смещение вправо за экран)
   const [dragX, setDragX] = useState(0);
   const swipeStart = useRef<number | null>(null);
+
+  // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
+  // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
+  useEffect(() => {
+    const onNav = () => { setSuggestion(null); setFabLevel('none'); setRecs([]); };
+    window.addEventListener(NAV_CHANGE_EVENT, onNav);
+    return () => window.removeEventListener(NAV_CHANGE_EVENT, onNav);
+  }, []);
 
   // Список действий пересчитывается на каждый ввод, пока палитра открыта. Рекомендованные
   // (recs) получают уровень (recLevel) для бейджа/подсветки и поднимаются в начало группы.
@@ -133,6 +133,7 @@ export function AiLauncher() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, gradedFab]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс активного пункта на 0 при смене поиска
   useEffect(() => { setIdx(0); }, [q, open]);
   // Держим активный (стрелками) пункт в видимой области списка. block:'nearest' —
   // не дёргает, если пункт уже виден (напр. при наведении мышью).

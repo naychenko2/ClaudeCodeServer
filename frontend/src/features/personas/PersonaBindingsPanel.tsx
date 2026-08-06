@@ -16,8 +16,9 @@ import { SectionLabel } from '../tasks/bits';
 import {
   BINDING_ICONS, BINDING_TYPE_META, BINDING_TYPE_ORDER, MODE_HINT,
   BindingModeBadge, BindingTypeIcon, bindingsCounter,
-  fetchBindingTargets, useBindingLabels,
+  fetchBindingTargets,
 } from './bindingMeta';
+import { useBindingLabels } from './useBindingLabels';
 import { Stepper, Crumb } from './stepperUi';
 import { ToolTargetPicker } from './ToolTargetPicker';
 
@@ -94,6 +95,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // prop (обновляется через realtime personas_changed после сохранения).
   const [allAccess, setAllAccess] = useState(persona.allProjectsAccess ?? false);
   const [allAccessBusy, setAllAccessBusy] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- черновик флага «все проекты» зеркалирует состояние персоны
   useEffect(() => { setAllAccess(persona.allProjectsAccess ?? false); }, [persona.id, persona.allProjectsAccess]);
 
   const toggleAllAccess = async (next: boolean) => {
@@ -134,7 +136,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // Инлайн-ввод описания для «✨ Создать привязку»: null — закрыт, строка — черновик
   const [genPrompt, setGenPrompt] = useState<string | null>(null);
   // Последний запуск был генерацией по описанию (для подписи прогресса и «Повторить»)
-  const genModeRef = useRef<string | null>(null);
+  const [genMode, setGenMode] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -148,6 +150,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   }, [persona.id]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс и перезагрузка привязок при смене персоны
     setBindings(null);
     void load();
   }, [load]);
@@ -155,7 +158,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // Realtime: привязки меняются PUT'ом персоны (personas_changed action='updated') —
   // перечитываем список; черновик условия развёрнутой карточки не трогаем.
   const loadRef = useRef(load);
-  loadRef.current = load;
+  useEffect(() => { loadRef.current = load; }, [load]);
   useEffect(() => {
     const off = onMessage((msg: ServerMessage) => {
       if (msg.type === 'personas_changed' && msg.action === 'updated' && msg.personaId === persona.id) {
@@ -378,6 +381,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   useEffect(() => {
     if (condJob.status === 'done' && condJob.result != null && expanded) {
       const cond = condJob.result;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- запись AI-сгенерированного условия в черновик по завершении
       setCondDraft(cond);
       void putBinding(expanded, { condition: cond });
       resetAiJob(condKey);
@@ -390,6 +394,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
 
   useEffect(() => {
     if (panelCondJob.status === 'done' && panelCondJob.result != null && panel) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- запись AI-сгенерированного условия в черновик панели по завершении
       setPanel({ ...panel, condition: panelCondJob.result });
       resetAiJob(panelCondKey);
     } else if (panelCondJob.status === 'error') {
@@ -419,7 +424,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
     setPanel(null);
     setExpandedId(null);
     setGenPrompt(null);
-    genModeRef.current = null;
+    setGenMode(null);
     runAiJob<SuggestResult>(suggestKey, async () => {
       const [bindingsRes, skillsRes] = await Promise.allSettled([
         api.personas.suggestBindings(persona.id),
@@ -449,7 +454,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // подбираются навыки реестра под тот же запрос. Результат — общий блок кандидатов.
   const runGenerate = (prompt: string) => {
     setGenPrompt(null);
-    genModeRef.current = prompt;
+    setGenMode(prompt);
     runAiJob<SuggestResult>(suggestKey, async () => {
       const [bindingsRes, skillsRes] = await Promise.allSettled([
         api.personas.generateBindings(persona.id, prompt),
@@ -847,14 +852,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         {suggestJob.status !== 'idle' && (
           <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
             {suggestJob.status === 'running' ? (
-              <WaitingIndicator hint={genModeRef.current !== null
+              <WaitingIndicator hint={genMode !== null
                 ? 'Создаю привязку по описанию — до минуты'
                 : 'Подбираю источники и навыки под роль персоны — до минуты'} />
             ) : suggestJob.status === 'error' ? (
               <div style={{ fontSize: 12.5, color: C.dangerText }}>
                 {suggestJob.error}{' '}
                 <button
-                  onClick={() => genModeRef.current !== null ? runGenerate(genModeRef.current) : runSuggest()}
+                  onClick={() => genMode !== null ? runGenerate(genMode) : runSuggest()}
                   style={linkBtn}
                 >Повторить</button>{' '}
                 <button onClick={() => resetAiJob(suggestKey)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>
@@ -1164,6 +1169,7 @@ function TargetPicker({ panel, ownProjectId, toolPicker, onChange }: {
     // У инструментов свой пикер с собственной загрузкой (нужен personaId в запросе)
     if (type === 'tool') return;
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка каталога целей при смене типа цели
     setItems(null);
     setLoadError(false);
     fetchBindingTargets(catalogType, type === 'notes' && notesSource ? notesSource.id : undefined)
@@ -1316,6 +1322,7 @@ function PersonasSubPicker({ panel, onChange }: {
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка списка персон для привязки при смене проекта
     setItems(null);
     setLoadError(false);
     fetchBindingTargets('personasInProject', projectId)

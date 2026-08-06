@@ -17,6 +17,7 @@ export function useProjectTerminals(projectId: string) {
   // (В WorkspacePage в deps эффекта сидел ещё leftTab — лишний refresh при смене
   // вкладки; refresh идемпотентен, сюда эту зависимость не тянем.)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка на обновления терминалов и первичный refresh
     void refresh();
     return terminalApi.onTerminalMessage(msg => {
       if (msg.type === 'terminal_status') void refresh();

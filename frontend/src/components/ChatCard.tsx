@@ -187,10 +187,10 @@ export function ChatCard({
   // название» из AI-хаба. Ввод при этом НЕ трогаем — набранное важнее, а сохранение
   // всё равно победит (бэкенд на явном имени ставит NameLocked). Но молчать нельзя:
   // разошлись — подсвечиваем поле и объясняем в тултипе, что именно перезапишем
-  const startNameRef = useRef<string | null>(null);
-  const externalName = editing && (s.name ?? '') !== (startNameRef.current ?? '') ? (s.name ?? '') : null;
+  const [startName, setStartName] = useState<string | null>(null);
+  const externalName = editing && (s.name ?? '') !== (startName ?? '') ? (s.name ?? '') : null;
 
-  const startRename = () => { startNameRef.current = s.name ?? ''; setDraft(s.name ?? ''); setEditing(true); };
+  const startRename = () => { setStartName(s.name ?? ''); setDraft(s.name ?? ''); setEditing(true); };
   const cancelRename = () => { setEditing(false); setSaving(false); };
   const commitRename = async () => {
     if (!onRename || !editing || saving) return;

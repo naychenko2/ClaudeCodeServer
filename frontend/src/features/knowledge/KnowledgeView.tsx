@@ -81,6 +81,7 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
     // alive-флаг: при частых knowledge_changed (version бампается подряд) устаревший
     // ответ не должен перетирать более свежий список документов
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс docs/ошибки перед загрузкой при смене базы
     setDocs(null); setLoadErr(null);
     api.knowledgeBases.get(kb.id)
       .then(d => { if (alive) setDocs(d.documents); })
@@ -89,10 +90,12 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
   }, [kb.id, version]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс поиска при смене базы знаний
     setQuery(''); setHits(null);
   }, [kb.id]);
 
   // Смена базы — закрываем просмотр документа (содержимое принадлежит старой базе)
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- закрытие просмотрщика документа при смене базы
   useEffect(() => { setViewDoc(null); }, [kb.id]);
 
   // AI-хаб: действие «Поиск по смыслу в базе» из палитры — включаем семантический
@@ -121,6 +124,7 @@ export function KnowledgeView({ kb, isMobile, onBack, onAddDocument, onDelete }:
 
   useEffect(() => {
     const q = query.trim();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- часть debounce-эффекта: очистка результатов на пустом запросе
     if (!q) { setHits(null); setSearching(false); return; }
     setSearching(true);
     const t = setTimeout(() => {

@@ -1,9 +1,10 @@
-import { memo, useState, useEffect, useContext, useRef } from 'react';
+import { memo, useState, useEffect, useContext } from 'react';
 import { Check } from 'lucide-react';
 import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
 import { usePersonas, ensurePersonasLoaded } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
+import { useNow } from '../../lib/useNow';
 import { ToolUseView, toolWord, type ToolUseItem } from './ToolUseView';
 import { splitAgentResultTail } from '../../lib/agentTail';
 import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaByAgentType } from './PersonaTaskView';
@@ -16,6 +17,12 @@ function parseTranscriptDir(result: string | undefined): string | null {
   if (!result) return null;
   const m = result.match(/Transcript dir:\s*(.+)/);
   return m ? m[1].trim() : null;
+}
+
+// Галочка завершённого workflow. Вынесена из рендера (static-components):
+// компонент, объявленный внутри тела, пересоздавался бы на каждый рендер.
+function DoneIcon() {
+  return <Check size={14} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />;
 }
 
 // React.memo: пропсы (workflow-элемент, массивы агентов) пересоздаются только при
@@ -95,19 +102,19 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // Длительность активной фазы (замечена на клиенте, не серверный таймстамп —
   // такого поля нет в WorkflowAgentInfo): без него долгая фаза без завершённых
   // агентов выглядит как зависание (см. тикет — DeepSeek Pro, первый агент ~10 мин).
-  // Тик раз в 20с двигает текст, пока карточка смонтирована
-  const [, setDurationTick] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setDurationTick(v => v + 1), 20000);
-    return () => clearInterval(t);
-  }, []);
-  const phaseStartRef = useRef<Map<number, number>>(new Map());
+  // useNow раз в 20с двигает текст, пока карточка смонтирована. Теперь now — состояние,
+  // а не Date.now() в рендере (purity).
+  const now = useNow(20000);
   const activePhaseIdx = !isSettled && phases.length > 0 && completedPhaseCount < phases.length ? completedPhaseCount : -1;
-  if (activePhaseIdx >= 0 && !phaseStartRef.current.has(activePhaseIdx)) {
-    phaseStartRef.current.set(activePhaseIdx, Date.now());
-  }
+  // Момент входа фазы в active — состояние, пишется эффектом один раз на фазу
+  const [phaseStarts, setPhaseStarts] = useState<Map<number, number>>(() => new Map());
+  useEffect(() => {
+    if (activePhaseIdx < 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- фиксируем момент входа фазы в active (один раз на фазу)
+    setPhaseStarts(prev => (prev.has(activePhaseIdx) ? prev : new Map(prev).set(activePhaseIdx, now)));
+  }, [activePhaseIdx, now]);
   const activePhaseMinutes = activePhaseIdx >= 0
-    ? Math.floor((Date.now() - (phaseStartRef.current.get(activePhaseIdx) ?? Date.now())) / 60000)
+    ? Math.floor((now - (phaseStarts.get(activePhaseIdx) ?? now)) / 60000)
     : null;
 
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
@@ -116,6 +123,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
     if (!isDone || localAgents !== null) return;
     const dir = parseTranscriptDir(workflow.result as string | undefined);
     if (!dir) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- фолбэк-загрузка агентов из локальной транскрипции
     setLocalLoading(true);
     api.workflow.getAgents(dir)
       .then(r => setLocalAgents(r.agents))
@@ -128,10 +136,6 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-
-  const DoneIcon = () => (
-    <Check size={14} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
-  );
 
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgPanel }}>

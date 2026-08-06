@@ -19,15 +19,17 @@ import { NoteTasksSection } from './NoteTasksSection';
 import { DocCommentedMarkdown, PersonaAssignMenu, filterAssignablePersonas } from './DocComments';
 import { useOnline } from '../../hooks/useOnline';
 import { OfflineError } from '../../lib/offline';
+import { useNow } from '../../lib/useNow';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
 import { showToast } from '../../lib/toast';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../../lib/selectionScope';
 import { ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
 import {
-  SourceBadge, usePanelWidth,
+  SourceBadge,
   IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
+import { usePanelWidth } from './usePanelWidth';
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.
@@ -63,6 +65,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   useEffect(() => {
     if (commentTotal > 0 && !autoTabRef.current) { setSideTab('comments'); autoTabRef.current = true; }
   }, [commentTotal]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс панели в начальное состояние при смене заметки
   useEffect(() => { autoTabRef.current = false; setSideTab('connections'); setCommentTotal(0); }, [noteId]);
   const [note, setNote] = useState<NoteDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,14 +74,18 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [draftBody, setDraftBody] = useState('');
   const [saving, setSaving] = useState(false);
   const editingRef = useRef(false);
-  editingRef.current = editing;
+  useEffect(() => { editingRef.current = editing; }, [editing]);
+  // Живые часы для бейджа срока истечения: Date.now() в рендере нечистый (purity),
+  // а без тика отсчёт замирал до случайного перерендера. Интервал нужен только
+  // когда бейдж реально виден.
+  const now = useNow(30_000, !!note?.expiresAt && !editing);
   // Фидбек кнопки «Скопировать» + корень отрендеренного markdown (для копии с форматированием)
   const [copied, setCopied] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Ctrl+C без выделения: отдаём исходник заметки (см. selectionScope)
   const noteRef = useRef<NoteDetail | null>(null);
-  noteRef.current = note;
+  useEffect(() => { noteRef.current = note; }, [note]);
   // Регистрируемся после появления заметки: до неё root ещё не отрендерен (ранние return)
   const hasNote = note != null;
   useEffect(() => {
@@ -101,6 +108,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- индикатор загрузки перед перечитыванием заметки
     setLoading(true);
     // Читаем через офлайн-слой (черновик/кэш офлайн, сеть онлайн)
     getNoteForView(noteId)
@@ -154,6 +162,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [annReplyDraft, setAnnReplyDraft] = useState('');
   const [annReplySending, setAnnReplySending] = useState(false);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс устаревших ответов перед загрузкой ответов аннотации
     if (!note || !ann || ann.isReply) { setAnnReplies(null); return; }
     let alive = true;
     api.notes.replies(note.id).then(r => { if (alive) setAnnReplies(r); }).catch(() => {});
@@ -258,6 +267,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   };
   useEffect(() => {
     if (dailyJob.status === 'done' && dailyJob.result) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- применение результата AI-задачи: замена заметки по завершении
       setNote(dailyJob.result);
       bumpNotes();
       resetAiJob(dailyKey);
@@ -455,7 +465,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
           </button>
         )}
         {!editing && note.expiresAt && (() => {
-          const left = new Date(note.expiresAt).getTime() - Date.now();
+          const left = new Date(note.expiresAt).getTime() - now;
           if (left <= 0) return <span style={{ fontSize: 11, color: C.warning, flex: 'none', whiteSpace: 'nowrap' }}>⏳ скоро</span>;
           const min = Math.round(left / 60_000);
           const urgent = min < 60;

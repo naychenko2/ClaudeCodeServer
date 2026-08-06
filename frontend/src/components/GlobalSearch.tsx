@@ -17,6 +17,7 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
 
   useEffect(() => {
     const term = q.trim();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- часть debounce-эффекта: очистка результатов на коротком запросе
     if (term.length < 2) { setHits([]); setLoading(false); return; }
     setLoading(true);
     const h = setTimeout(() => {

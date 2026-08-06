@@ -30,6 +30,7 @@ import { C, R, SHADOW, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
+import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
@@ -485,15 +486,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // На стене жёлоб не считаем: там лента прокручивается во всю ширину колонки
   // (полоса у её правого края), и компенсировать перекос нечему
   useChatGutter(scrollRef, CHAT_MAX_W, !isMobile && !embedded);
-  // FAB AI-хаба должен вставать НАД композером (иначе налезает на композер и кнопку
-  // «вниз»): пробрасываем высоту композера в глобальную CSS-переменную, читаемую FAB.
+  // Композер — нижнее препятствие для круглешка AI: тот остаётся в углу, но ужимается,
+  // когда композер доходит до него (замер пересечения — в AiLauncher). Публикуем узел
+  // САМОГО композера, а не растянутую обёртку: та шириной во всю область чата, и по ней
+  // пересечение выходило истинным всегда — круг оставался ужатым при любом окне.
+  const composerObstacleRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    // embedded: переменная глобальная, несколько колонок стены перебивали бы друг друга
+    // embedded: препятствие глобальное, несколько колонок стены перебивали бы друг друга
     if (embedded) return;
-    const root = document.documentElement;
-    root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
-    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
-  }, [composerH, embedded]);
+    setFabObstacle(composerObstacleRef.current);
+    return () => setFabObstacle(null);
+    // composerH в зависимостях — им ловим момент, когда композер уже в DOM
+    // (первый замер высоты) и ref наконец не пустой
+  }, [embedded, composerH]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
@@ -1548,24 +1553,39 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       </div></div>
       </div>
 
-      {/* Плавающая кнопка «вниз» — появляется, когда лента отлистана вверх */}
+      {/* Плавающая кнопка «вниз» — появляется, когда лента отлистана вверх.
+          Геометрия повторяет композер (те же padding и CHAT_MAX_W по центру), поэтому
+          кнопка встаёт над кнопкой отправки — у правого края КОЛОНКИ ЧТЕНИЯ, а не
+          контейнера панели: в разделах «Проекты»/«Чаты» контейнер тянется до рельсы
+          панелей, и привязка к его краю уносила кнопку в пустоту сбоку от ленты.
+          По вертикали — прямо над композером: круглешок AI приклеен к углу ЭКРАНА и на
+          подошедший композер отвечает ужиманием, а не подъёмом, так что уступать ему
+          место не надо. */}
       {showScrollDown && (
-        <button
-          onClick={scrollToBottom}
-          title="Вниз чата"
-          style={{
-            // Когда включён AI-хаб, поднимаем кнопку «вниз» выше FAB (над композером) с зазором.
-            // Служебная прокрутка — нейтральная (не accent), чтобы единственным акцентом в углу был FAB.
-            position: 'absolute', right: isMobile ? 16 : 20, bottom: composerH + 14 + 64,
-            width: 44, height: 44, borderRadius: '50%',
-            border: `1px solid ${C.border}`,
-            background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: SHADOW.card, zIndex: 15, transition: 'bottom 0.3s ease',
-          }}
-        >
-          <ArrowDown size={22} strokeWidth={2.2} />
-        </button>
+        <div style={{
+          position: 'absolute', left: 0, right: 0, bottom: composerH + 14,
+          padding: isMobile ? '0 12px' : '0 24px',
+          pointerEvents: 'none', zIndex: 15, transition: 'bottom 0.3s ease',
+        }}>
+          <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              onClick={scrollToBottom}
+              title="Вниз чата"
+              style={{
+                // Служебная прокрутка — нейтральная (не accent), чтобы единственным
+                // акцентом в углу оставался круглешок AI.
+                pointerEvents: 'auto',
+                width: 44, height: 44, borderRadius: '50%',
+                border: `1px solid ${C.border}`,
+                background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: SHADOW.card,
+              }}
+            >
+              <ArrowDown size={22} strokeWidth={2.2} />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Composer — плавающий над лентой; фон прозрачный, контент виден под/вокруг него */}
@@ -1578,7 +1598,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
         padding: isMobile ? '0 12px 12px' : `0 24px ${headerIsland ? 0 : 18}px`,
         pointerEvents: 'none',
       }}>
-        <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
+        {/* Именно этот узел — препятствие для круглешка AI: у него РЕАЛЬНАЯ геометрия
+            композера (ограничен CHAT_MAX_W и центрирован). Внешняя обёртка растянута
+            left:0/right:0, и замер по ней всегда давал пересечение с углом кнопки —
+            круг был ужат даже когда композер визуально далеко */}
+        <div ref={composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',

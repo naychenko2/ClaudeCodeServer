@@ -7,6 +7,7 @@ import { C } from '../../lib/design';
 import { getModule, useModules } from '../../lib/modules';
 import { useThemeMode, getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
 import { ModuleHost } from './ModuleHost';
+import { PageCanvas } from '../ui/PageCanvas';
 
 // Generic-раздел внешнего модуля (контракт §7, ТЗ R6): шапка-хаб + ModuleHost
 // с remote ./Tab. НЕ частный случай под конкретный модуль — любой модуль из реестра.
@@ -24,7 +25,7 @@ export function ModuleScreen({ moduleId, auth, onLogout, onHubTab }: {
   const module = getModule(moduleId);
 
   return (
-    <div style={{ minHeight: '100vh', background: C.bgMain, display: 'flex', flexDirection: 'column' }}>
+    <PageCanvas>
       <HubHeader value={`module:${moduleId}`} onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>
         {module
@@ -35,6 +36,6 @@ export function ModuleScreen({ moduleId, auth, onLogout, onHubTab }: {
             />
           : <div style={{ padding: 32, color: C.textMuted }}>Модуль не найден или отключён.</div>}
       </div>
-    </div>
+    </PageCanvas>
   );
 }

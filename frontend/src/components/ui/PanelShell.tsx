@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { Children } from 'react';
 import { X, type LucideIcon } from 'lucide-react';
-import { C, ISLAND } from '../../lib/design';
+import { C, ISLAND, SHADOW } from '../../lib/design';
 import { useCanHover } from '../../lib/pointer';
 import { ICON_STROKE } from './icons';
 import { IconButton } from './IconButton';
@@ -51,6 +51,9 @@ interface PanelShellProps {
   dropTarget?: boolean;
   // Кратковременная подсветка «панель уже открыта»
   flash?: boolean;
+  // Держим акцентную подсветку, пока курсор на кнопке этой панели в рельсе —
+  // статичная (без вспышки flash), чтобы глаз сразу связал кнопку с карточкой
+  highlighted?: boolean;
   // Атрибуты корневого Island: onDragOver/onDragLeave/onDrop для DnD
   rootProps?: HTMLAttributes<HTMLDivElement>;
   // Доступ к корневому узлу карточки — для замеров раскладки (высота панели
@@ -110,6 +113,7 @@ export function PanelShell({
   dragged = false,
   dropTarget = false,
   flash = false,
+  highlighted = false,
   rootProps,
   rootRef,
   headerProps,
@@ -319,11 +323,11 @@ export function PanelShell({
     <PanelHeaderSlotContext.Provider value={slotValue}>
     <Island
       bg={ISLAND.bg}
-      borderColor={dropTarget || flash ? C.accent : ISLAND.border}
+      borderColor={dropTarget || flash || highlighted ? C.accent : ISLAND.border}
       // Перетаскиваемая панель «вдавливается»: теряет тень и чуть уменьшается,
       // будто прижата к холсту. Полупрозрачной её не делаем — сквозь неё
       // просвечивал контент, и было не понять, что именно едет за курсором.
-      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : dragged ? 'none' : ISLAND.shadow}
+      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : dragged ? 'none' : highlighted ? `${ISLAND.shadow}, ${SHADOW.focus}` : ISLAND.shadow}
       style={{
         // fill=true (дефолт) — flex:1, панель растягивается на всю высоту.
         // fill=false — flex: '0 1 auto', панель по контенту, но сжимается

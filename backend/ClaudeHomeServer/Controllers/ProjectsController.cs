@@ -27,7 +27,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
         var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.ToolsEnabled, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.Icon, p.McpServersOff, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.Icon, p.McpServersOff, BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id) };
     }
 
     [HttpGet("builtin-prompt")]
@@ -223,7 +223,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var oldRoot = p.RootPath;
         try
         {
-            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.ToolsEnabled, req.Color, req.McpServersOff);
+            var updated = projects.Update(id, req.Name, req.RootPath, req.SystemPrompt, req.ShowHiddenFiles, req.PermissionRules, req.GroupId, req.Color, req.McpServersOff);
 
             // Смена папки проекта: перенести запись знаний под новый ключ — иначе запись сиротеет,
             // для нового пути создаётся дубль-датасет, а mcp dify молча теряет dataset_id
@@ -598,6 +598,6 @@ public record CreateProjectRequest(string Name, string? RootPath, bool CreateDir
     bool EnableGit = false, bool GitAutoCommit = false, bool GitAutoPush = false, string? Color = null);
 // McpServersOff — ключи серверов личного реестра, выключенных в этом проекте
 // (deny-list; null = не менять, пустой список = «никто не выключен»)
-public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, bool? ToolsEnabled = null, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOff = null);
+public record UpdateProjectRequest(string? Name, string? RootPath, string? SystemPrompt, bool? ShowHiddenFiles, List<PermissionRule>? PermissionRules = null, string? GroupId = null, string? Color = null, List<string>? McpServersOff = null);
 public record UpdateBoardColumnsRequest(List<BoardColumn>? Columns);
 public record TeamMemoryRequest(string Text, TeamMemoryType? Type = null);

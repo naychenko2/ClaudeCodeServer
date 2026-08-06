@@ -22,7 +22,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, Button, IconButton } from '../components/ui';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
@@ -47,7 +47,6 @@ import * as terminalApi from '../lib/terminalSignalr';
 import { DesktopWorkspace } from './workspace/DesktopWorkspace';
 import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
-import type { PanelKey } from './workspace/panelStackState';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
@@ -279,8 +278,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     // Сохранённое 'agents' — ключ до переименования вкладки персон
     const saved = (savedRaw as string) === 'agents' ? 'personas' : savedRaw;
     if (!isLeftTab(saved)) return 'sessions';
-    // «Инструменты» существуют только при включённых инструментах проекта
-    return saved !== 'tools' || project.toolsEnabled ? saved : 'sessions';
+    return saved;
   });
   const [activeSession, setActiveSession] = useState<Session | null>(() => {
     // Стартовая сессия от «Поговорить» проектной персоны (раздел «Персоны»): проект уже
@@ -374,14 +372,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Нужно для резолва контекста «в рамках какой задачи» в ArtifactsPanel/бэйджах чата
   // (плашка в ChatOriginBadge полагается на getTaskById из уже загруженного стора)
   useEffect(() => { void ensureTasksLoaded(); }, []);
-
-  // Инструменты выключили в настройках (projectForEdit) — уводим с вкладки «Инструменты»,
-  // иначе останется висеть недоступный режим. При включении вкладка появится сама
-  // (leftTabOptions пересчитывается из projectForEdit) — перезагрузка не нужна.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- увод с вкладки «Инструменты» при её отключении в настройках
-    if (leftTab === 'tools' && !projectForEdit.toolsEnabled) setLeftTab('sessions');
-  }, [projectForEdit.toolsEnabled, leftTab]);
 
   // Вкладка «Команда»: список персон — в сайдбаре, форма — в центральной зоне.
   // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
@@ -643,7 +633,9 @@ const windowWidth = useWindowWidth();
     // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
     // поэтому им нужна своя вкладка — иначе доступ к ним с телефона пропадает совсем
     { value: 'skills' as LeftTab, label: 'Навыки', icon: LEFT_TAB_ICONS.skills },
-    ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
+    // На мобиле рельсы панелей проекта нет, и ящик рельсы не работает — поэтому
+    // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями)
+    { value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools },
   ];
 
   // Мобильный таббар проекта: показываем столько вкладок, сколько влезает по ширине
@@ -820,15 +812,6 @@ const windowWidth = useWindowWidth();
     void buildCodeGraph(project.id);
   }, [project.id]);
 
-  // Явная активация панели из рельсы (клик открыл её). У графа, в отличие от
-  // «Файлов»/«Задач», нет списка элементов — панель инспектирует единственный
-  // документ, поэтому открываем его в центре вместе с панелью. Вешать на mount
-  // панели нельзя: она монтируется и при восстановлении раскладки из localStorage,
-  // и граф выпрыгивал бы поверх чата при каждом входе в проект.
-  const handlePanelOpen = useCallback((k: PanelKey) => {
-    if (k === 'graph') ensureGraphOpen();
-  }, [ensureGraphOpen]);
-
   // Панели сессии для МОБИЛЬНОЙ ветки (десктоп собирает их в DesktopWorkspace).
   // Раньше их строила правая зона внутри себя — теперь контент приходит снаружи.
   const mobileSessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
@@ -902,12 +885,6 @@ const windowWidth = useWindowWidth();
     handleSelectSession(session);
   };
 
-  // Сколько чатов у проекта. Нужно ЗДЕСЬ, а не внутри панели: пустая панель «Чаты»
-  // не показывается совсем (как сайдбар в разделе «Чаты»), и пока её нет — считать
-  // некому. Точное значение приходит от SessionList, пока панель на экране;
-  // первичная загрузка и удаление чата обрабатываются тут.
-  const [chatCount, setChatCount] = useState<number | null>(null);
-
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;
   // SessionList подхватит его в список через activeSession.
@@ -917,9 +894,6 @@ const windowWidth = useWindowWidth();
     setCreatingSession(true);
     try {
       const s = await api.sessions.create(project.id, 'auto');
-      // Панель чатов скрыта, пока чатов нет, — считаем сами: её SessionList ещё
-      // не смонтирован и сообщить о появлении первого чата некому
-      setChatCount(n => (n ?? 0) + 1);
       handleSelectSession(s);
     } catch (e) {
       showToast('Чат', e instanceof Error ? e.message : 'Не удалось создать чат');
@@ -948,7 +922,6 @@ const windowWidth = useWindowWidth();
   const handleClearSession = useCallback(() => {
     setActiveSession(null);
     setPendingMessage(undefined);
-    setChatCount(0);
   }, []);
 
   // Возобновление прерванного (orphaned) чата живёт внутри ChatPanel: обычный ход
@@ -982,21 +955,6 @@ const windowWidth = useWindowWidth();
       } catch { /* офлайн — оставляем как есть */ }
     });
     return () => { leaveProject(project.id).catch(() => {}); unsub(); };
-  }, [project.id]);
-
-  // Первичная загрузка числа чатов и слежение за удалениями (само состояние — выше,
-  // рядом с обработчиками сессий: handleCreateSession инкрементирует его синхронно)
-  useEffect(() => {
-    let alive = true;
-    const refresh = () => {
-      api.sessions.list(project.id)
-        .then(list => { if (alive) setChatCount(list.length); })
-        .catch(() => { /* офлайн — оставляем прежнее значение */ });
-    };
-    refresh();
-    // Чат могли удалить и мимо панели (временный по сроку, другая вкладка)
-    const off = onMessage(msg => { if (msg.type === 'chat_deleted') refresh(); });
-    return () => { alive = false; off(); };
   }, [project.id]);
 
   // Обновляем статус activeSession при status_changed — иначе session.status в ChatPanel frozen
@@ -1306,9 +1264,9 @@ const windowWidth = useWindowWidth();
 
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: viewportH, background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-        {/* Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях */}
-        <CanvasBackdrop />
+      // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях.
+      // Высота — измеренная viewportH, а не 100dvh: см. комментарий при viewportH
+      <PageCanvas style={{ height: viewportH }}>
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
@@ -1341,7 +1299,7 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsChanged={setChatCount} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа
@@ -1427,14 +1385,12 @@ const windowWidth = useWindowWidth();
             onClose={() => setEditProjectOpen(false)}
           />
         )}
-      </div>
+      </PageCanvas>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — начинается от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
       <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={() => setEditProjectOpen(true)} />
 
@@ -1452,8 +1408,6 @@ const windowWidth = useWindowWidth();
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
           railCounts={railCounts}
-          chatCount={chatCount}
-          onSessionsChanged={setChatCount}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
@@ -1507,12 +1461,7 @@ const windowWidth = useWindowWidth();
           onClosePreview={() => setActivePreviewId(null)}
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
-          onPanelOpen={handlePanelOpen}
           onOpenReader={readerFlag ? handleOpenReader : undefined}
-          // Из projectForEdit, а не из project: настройки правят именно его, и по
-          // старому объекту Терминал с Preview появлялись в рельсе только после
-          // перезагрузки страницы
-          toolsEnabled={!!projectForEdit.toolsEnabled}
           panels={{
             files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} />,
             knowledge: <KnowledgePanel project={project} isMobile={false} />,
@@ -1522,7 +1471,7 @@ const windowWidth = useWindowWidth();
             changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
-            graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
+            graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
             // Навыки и агенты рабочей папки. onChanged кладёт свежий состав в тот же
             // skillsData, откуда композер берёт «/»-команды: установка навыка в панели
             // видна в подсказке сразу, без перезагрузки страницы
@@ -1544,6 +1493,6 @@ const windowWidth = useWindowWidth();
           onClose={() => setEditProjectOpen(false)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }

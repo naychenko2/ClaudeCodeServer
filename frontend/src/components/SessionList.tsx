@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { FilterX, ChevronUp, ChevronDown } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown, MessageCircle } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
@@ -468,6 +468,18 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           шапкой. Без группировки список начинается сразу карточкой — ей нужен
           обычный отступ, иначе она липнет к заголовку. */}
       <div style={{ flex: 1, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+        {/* Чатов в проекте нет вовсе (список уже приехал) — не голая панель, а empty-state.
+            Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
+            нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт
+            в тулбаре панели сверху, дублировать его в empty незачем. */}
+        {loaded && sessions.length === 0 && (
+          <EmptyState
+            compact
+            icon={<MessageCircle size={20} strokeWidth={2} />}
+            title="Чатов пока нет"
+            subtitle="Начните первый чат по этому проекту."
+          />
+        )}
         {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
           <EmptyState
             compact

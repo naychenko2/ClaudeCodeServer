@@ -94,14 +94,6 @@ body {
 .composer-dot:nth-child(2) { animation-delay: 0.2s; }
 .composer-dot:nth-child(3) { animation-delay: 0.4s; }
 
-/* Регистрируем переменную позиции FAB как длину — тогда её смена (при разносе
-   композера грипом ⋮ высота меняется) анимируется, и «круг с AI-действиями» не прыгает.
-   Без @property изменение var() в calc() браузер не проигрывает через transition. */
-@property --cc-fab-bottom {
-  syntax: '<length>';
-  inherits: true;
-  initial-value: 20px;
-}
 /* Правый отступ FAB: в новом интерфейсе проекта (workspace-cc-panels) правую кромку
    занимают рельса и панели инструментов — FAB встаёт у зоны чата, а не лезет на них.
    НЕ анимируется намеренно: кнопка мгновенно оказывается на новом месте —
@@ -111,7 +103,33 @@ body {
   inherits: true;
   initial-value: 20px;
 }
-:root { transition: --cc-fab-bottom 0.3s ease; }
+/* Отступ FAB от краёв экрана: обычно 20px (уютный угол), но когда справа распахнута
+   панель во всю высоту, PanelZone ставит 6px и кнопка прижимается плотнее к краю.
+   Регистрируем как длину, чтобы смена 20↔6 проигрывалась плавно (смещение), а не снапом. */
+@property --cc-fab-inset {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 20px;
+}
+/* Базовый нижний край FAB. Отдельно от бокового (--cc-fab-inset): в компактном режиме
+   кнопка прижимается к правому краю (6px), но снизу должна стоять на одной линии с
+   островами — PanelZone ставит туда ISLAND.pad (16px). Регистрируем как длину — смена
+   плавная. Подъём над композером — отдельный канал (--cc-fab-composer). */
+@property --cc-fab-bottom {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 20px;
+}
+/* Размер FAB: по умолчанию 54 (панель не распахнута), 36 когда справа распахнута панель
+   во всю высоту (ставит PanelZone). Регистрируем как длину — уменьшение/увеличение плавное. */
+@property --cc-fab-size {
+  syntax: '<length>';
+  inherits: true;
+  initial-value: 54px;
+}
+/* --cc-fab-size НЕ анимируем на :root: смену размера проигрывает transition width/height
+   самой кнопки (registered @property триггерит его). Иначе выходит двойная анимация в 2 шага. */
+:root { transition: --cc-fab-bottom 0.3s ease, --cc-fab-inset 0.22s ease; }
 
 
 /* Поле ввода чата: прячем скроллбар (поле растёт до maxHeight, дальше скроллится
@@ -283,11 +301,34 @@ body {
 .cc-no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
 .cc-no-scrollbar::-webkit-scrollbar { display: none; }
 
+/* === Экран загрузки приложения === */
+/* Дыхание логотипа, пока приложение поднимается. Медленное и неглубокое:
+   заставка не должна мигать — она показывает, что процесс жив, а не тянет
+   внимание. Появляется сама с задержкой (см. .cc-boot-veil): при быстром
+   старте вспышка заставки раздражала бы сильнее пустого экрана. */
+@keyframes cc-logo-breath {
+  0%, 100% { opacity: 0.5; transform: scale(0.975); }
+  50%      { opacity: 1;   transform: scale(1); }
+}
+.cc-boot-logo { animation: cc-logo-breath 1.9s ease-in-out infinite; }
+.cc-boot-veil { animation: cc-fade-in 260ms ease 260ms both; }
+/* Строка состояния появляется намного позже знака: она нужна, только если
+   ожидание затянулось. При обычном старте так и не успевает проявиться —
+   и правильно, объяснять там нечего. */
+.cc-boot-hint { animation: cc-fade-in 300ms ease 1400ms both; }
+
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }
   .cc-smoke i { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
+  /* Скелетон перестаёт бежать, но подложка обязана остаться видимой — иначе на месте
+     загрузки просто пустота. Отсюда ровная заливка вместо градиента. */
+  .cc-skel { animation: none; background: var(--c-bg-selected); }
   .cc-overlay, .cc-modal-card, .cc-sheet-card { animation: none; }
+  /* Заставка остаётся видимой, просто перестаёт дышать и проявляться */
+  .cc-boot-logo { animation: none; }
+  .cc-boot-veil { animation: none; }
+  .cc-boot-hint { animation: none; }
 }
 
 /* === Аудиоплеер: кастомный слайдер прогресса === */
@@ -401,7 +442,8 @@ body {
   55%      { transform: translateY(-2px); }
   68%      { transform: translateY(0); }
 }
-.cc-fab-hop { animation: cc-fab-hop 1.6s ease-in-out infinite; }
+/* 3 прыжка и замирает; перезапуск на новую подсказку — ре-триггером класса в AiLauncher */
+.cc-fab-hop { animation: cc-fab-hop 1.6s ease-in-out 3; }
 @keyframes cc-fab-huff {
   0%, 100% { transform: scale(1); }
   50%      { transform: scale(.95) translateY(1px); }

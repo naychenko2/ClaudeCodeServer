@@ -1699,7 +1699,7 @@ function HeaderSlotDemoContent() {
 // Все 9 панелей (План/Агенты/Персона + Файлы/Изменения/Задачи/Команда/
 // Терминал/Preview) в виде мини-PanelShell — одна сетка, чтобы видеть,
 // что рецепт общий: Island + IslandHeader (icon+title) + контент на C.bgWhite.
-// accent=true у Терминал/Preview — они доступны только при toolsEnabled.
+// accent=true у Терминал/Preview — их кнопки по умолчанию лежат в ящике рельсы.
 function PanelsSection() {
   return (
     <Island>
@@ -1846,8 +1846,8 @@ function PanelsSection() {
                   <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '70%' }} />
                   <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '90%' }} />
                   <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '45%' }} />
-                  {/* accent=true — Терминал/Preview: требуют toolsEnabled.
-                      Подпись-признак вместо живого состояния. */}
+                  {/* accent=true — Терминал/Preview: их кнопки по умолчанию в ящике
+                      рельсы. Подпись-признак вместо живого состояния. */}
                   {accent && (
                     <div style={{
                       marginTop: SP.xs,
@@ -1859,7 +1859,7 @@ function PanelsSection() {
                       borderRadius: R.sm,
                       alignSelf: 'flex-start',
                     }}>
-                      toolsEnabled
+                      по умолчанию в «…»
                     </div>
                   )}
                 </div>
@@ -2449,8 +2449,8 @@ function PanelsSection() {
           Сессийная группа (План/Агенты/Персона) — данные тянет из артефактов
           сессии и store персон; в витрине он пуст, поэтому плашки не видны.
           Проектные (Файлы/Изменения/Задачи/Команда/Терминал/Preview) берут
-          данные из своих сервисов. Терминал/Preview показываются только при
-          toolsEnabled проекта.
+          данные из своих сервисов. Кнопки Терминал/Preview по умолчанию лежат
+          в ящике рельсы («…») — как редко используемые.
         </p>
       </div>
     </Island>

@@ -6,7 +6,7 @@ import { api } from '../lib/api';
 import { onMessage } from '../lib/signalr';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { EmptyState, IconButton, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
 
 interface Props {
   project: Project;
@@ -636,18 +636,17 @@ export function KnowledgePanel({ project, isMobile = false, alwaysShowIcons = fa
 
         <div style={{ padding: '4px 0' }}>
           {!error && (!status?.datasetId || status.documents.length === 0) ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 16 }}>
-              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
-                <div style={{ width: 48, height: 48, borderRadius: 14, background: C.bgInset, color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                  <Database size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} color={C.textMuted} />
-                </div>
-                <div style={{ textAlign: 'center' }}>
-                  <div style={{ fontFamily: FONT.serif, fontWeight: 500, fontSize: 18, color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4 }}>Нет документов</div>
-                  <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
-                    Добавьте файл через<br />файловый менеджер
-                  </div>
-                </div>
-              </div>
+            <div style={{ display: 'flex', flexDirection: 'column', padding: '8px 16px 20px', gap: 16 }}>
+              {/* Тот же примитив пустого состояния, что у остальных панелей (чаты,
+                  задачи, документы). inline — чтобы под ним в поток встали обучающие
+                  подсказки, а не растянуло empty на всю высоту панели */}
+              <EmptyState
+                compact
+                inline
+                icon={<Database size={20} strokeWidth={ICON_STROKE} />}
+                title="Нет документов"
+                subtitle="Добавьте файл через файловый менеджер"
+              />
 
               {/* Подсказки о базе знаний */}
               <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.border}`, paddingTop: 16 }}>

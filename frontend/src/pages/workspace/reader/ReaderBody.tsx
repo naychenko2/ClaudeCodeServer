@@ -3,7 +3,7 @@
 // provider-limit-reader-header-v1.html §2) плюс однократная плашка приватности при
 // первом открытии (ADR-005 §1). Кнопка «отправить прочитанное в чат» сюда НЕ
 // добавляется — это инвариант ADR (текст в панели недоверенный), а не забытая деталь.
-import { AlertTriangle, Newspaper } from 'lucide-react';
+import { FileQuestion, Newspaper } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { Button, EmptyState } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
@@ -39,7 +39,9 @@ function ErrorView({ state, actions, onClose }: { state: ReaderPanelState; actio
   const ordered = ACTION_ORDER.filter(a => copy.actions.includes(a));
   return (
     <EmptyState
-      icon={<AlertTriangle size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
+      // Не авария, а «эта страница не читается рядом» — иконка под стать тону
+      // текстов (см. комментарий в readerErrors.ts), без аварийного треугольника
+      icon={<FileQuestion size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
       title="Не получилось показать страницу рядом"
       subtitle={copy.reason}
       action={

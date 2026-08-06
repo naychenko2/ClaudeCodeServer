@@ -10,7 +10,7 @@ import { PanelZone } from './workspace/PanelZone';
 import { projectsPanels } from './workspace/panelStackState';
 import { PROJECTS_KEYS } from './workspace/panelCatalog';
 import { Button, IslandScaffold } from '../components/ui';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import { PillSwitch } from '../components/Toolbar';
 import type { HubTabValue } from '../components/HubTabs';
@@ -260,9 +260,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // ===== Десктоп/планшет: две панели =====
   if (wide) {
     return (
-      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-        {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-        <CanvasBackdrop />
+      <PageCanvas>
         <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
         <div style={{ flex: 1, minHeight: 0 }}>
           <IslandScaffold
@@ -352,15 +350,14 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           />
         </div>
         {dialogs}
-      </div>
+      </PageCanvas>
     );
   }
 
   // ===== Мобильный: одна колонка =====
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон и на мобиле — под списком проектов */}
-      <CanvasBackdrop />
+    // Дудл-фон и на мобиле — под списком проектов
+    <PageCanvas>
       <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
       <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '0 22px' }}>
 
@@ -448,7 +445,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       </div>
 
       {dialogs}
-    </div>
+    </PageCanvas>
   );
 }
 

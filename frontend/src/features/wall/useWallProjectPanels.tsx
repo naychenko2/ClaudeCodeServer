@@ -120,12 +120,11 @@ export function buildWallProjectPanels(
         onBuild={() => openOverlay({ kind: 'graph' })}
       />
     ),
-    // Инструменты (гейт toolsEnabled — у вызывающего): live-состояние в хуках
-    // внутри компонентов-обёрток, panels сами по себе — чистый JSX
-    ...(project.toolsEnabled ? {
-      terminal: <WallTerminalPanel key={project.id} projectId={project.id} />,
-      preview: <WallServicesPanel key={project.id} projectId={project.id} onOpenPreview={id => openOverlay({ kind: 'preview', serviceId: id })} />,
-    } : null),
+    // Терминал и Сервисы: live-состояние в хуках внутри компонентов-обёрток,
+    // panels сами по себе — чистый JSX. По дефолту их кнопки лежат в ящике рельсы
+    // (defaultTucked у wsPanels), но контент подаём всегда — достанут из «…».
+    terminal: <WallTerminalPanel key={project.id} projectId={project.id} />,
+    preview: <WallServicesPanel key={project.id} projectId={project.id} onOpenPreview={id => openOverlay({ kind: 'preview', serviceId: id })} />,
   };
 }
 

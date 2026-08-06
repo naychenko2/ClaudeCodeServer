@@ -304,7 +304,7 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOff?: string[] }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOff?: string[] }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
     // массива и валидирует уникальность имён без учёта регистра)
@@ -1132,6 +1132,55 @@ export const api = {
           // undefined — не трогать выбор «Начала»; '' — вернуть авто-README
           home: scope.home === undefined ? null : scope.home,
         }),
+      }),
+    // Вынести текущую область в файл .docs репозитория: дальше она версионируется и
+    // одинакова у всех, кто открыл репозиторий, а setScope правит уже файл
+    saveScopeFile: (projectId: string) =>
+      request<DocsScopeInfo>(`/projects/${projectId}/docs/scope-file`, { method: 'POST' }),
+    // Порядок страниц папки — правка .order в рабочем дереве, поэтому только по жесту
+    // пользователя. items — имена БЕЗ расширения в новом порядке (как строки в файле);
+    // это подмножество папки, остальные её строки сервер оставляет на своих местах.
+    // Ответ — свежий индекс: порядок приезжает вместе с подтверждением
+    // Создать документ или раздел. name — ЧЕЛОВЕЧЕСКОЕ название: имя файла из него делает
+    // сервер (пробелы → дефисы), а само название становится заголовком первой строки.
+    // Раздел создаётся парой «страница + папка» — в wiki он существует только так
+    create: (projectId: string, folder: string, name: string, kind: 'doc' | 'section') =>
+      request<{ path: string; index: DocEntry[] }>(`/projects/${projectId}/docs/create`, {
+        method: 'POST',
+        body: JSON.stringify({ folder, name, kind }),
+      }),
+    // Переименовать документ или раздел. Раздел переезжает парой со всем поддеревом:
+    // moved — карта «старый путь → новый» по каждому переехавшему документу, по ней
+    // панель чинит закреплённые и открытый документ. updateLinks=false оставляет чужие
+    // файлы нетронутыми и возвращает число ссылок, оставшихся битыми
+    rename: (projectId: string, path: string, newName: string, updateLinks: boolean) =>
+      request<{ path: string; updatedDocs: number; brokenLinks: number; moved: Record<string, string>; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/rename`, {
+          method: 'POST',
+          body: JSON.stringify({ path, newName, updateLinks }),
+        }),
+    // Удалить документ или раздел. Раздел уходит парой «страница + папка» со всем
+    // содержимым, включая файлы, которых панель не показывала (removedFiles).
+    // brokenLinks — сколько ссылок на удалённое осталось: починить их нечем
+    remove: (projectId: string, path: string) =>
+      request<{ removed: string[]; brokenLinks: number; removedFiles: number; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/delete`, {
+          method: 'POST',
+          body: JSON.stringify({ path }),
+        }),
+    // Перенести документ или раздел в другую папку области. Раздел переезжает со всем
+    // поддеревом; updateLinks чинит и чужие ссылки на переехавшее, и его собственные —
+    // при смене папки меняется глубина, и относительные пути ломаются в обе стороны
+    move: (projectId: string, path: string, targetFolder: string, updateLinks: boolean) =>
+      request<{ path: string; updatedDocs: number; brokenLinks: number; moved: Record<string, string>; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/move`, {
+          method: 'POST',
+          body: JSON.stringify({ path, targetFolder, updateLinks }),
+        }),
+    setOrder: (projectId: string, folder: string, items: string[]) =>
+      request<DocEntry[]>(`/projects/${projectId}/docs/order`, {
+        method: 'PUT',
+        body: JSON.stringify({ folder, items }),
       }),
   },
 

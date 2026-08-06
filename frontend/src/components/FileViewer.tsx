@@ -42,6 +42,7 @@ import { NoteConnections } from '../features/notes/NoteConnections';
 import { NoteView } from '../features/notes/NoteView';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
+import { getExtMeta } from './FileExplorer';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
@@ -857,6 +858,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     }
   };
 
+  // Escape закрывает файл (handleClose сам спросит про несохранённое). Не перехватываем,
+  // если печатают в поле/редакторе или уже открыт диалог/меню — там Escape нужнее им.
+  // Через ref: слушатель вешаем один раз, но зовём всегда свежий handleClose.
+  const closeRef = useRef(handleClose);
+  closeRef.current = handleClose;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      void closeRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Смена режима «сплит ↔ на весь экран»: FileViewer при этом пересоздаётся
   // (в WorkspacePage это две разные ветки дерева), поэтому несохранённые правки
   // пропали бы молча — спрашиваем тем же диалогом, что и при закрытии.
@@ -1058,6 +1076,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const dotAt = fileName.lastIndexOf('.');
   const nameBase = dotAt > 0 ? fileName.slice(0, dotAt) : fileName;
   const nameExt = dotAt > 0 ? fileName.slice(dotAt) : '';
+  // Плитка расширения перед именем — как в списке файлов (getExtMeta: фон/цвет/лейбл)
+  const extMeta = getExtMeta(fileName);
 
   // --- Вкладки (включая «Просмотр | Код» для HTML) ---
   const htmlSplit = isHtml && !editing && !isOfficeFile && !fileContent?.isBinary;
@@ -1169,6 +1189,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       {a.loading ? <InlineSpinner /> : a.icon}
     </ToolbarIconButton>
   );
+  // Слот главного действия режима («Править»/«Сохранить»/…) — на десктопе живёт в правом
+  // якоре, на мобиле в конце строки. На узких ступенях кнопка ужимается в иконку.
+  const actionSlot = (mainAction || cancelAction) ? (
+    actionAsIcon
+      ? <>{cancelAction && actionIcon(cancelAction)}{mainAction && actionIcon(mainAction)}</>
+      : <>{cancelAction && actionButton(cancelAction)}{mainAction && actionButton(mainAction)}</>
+  ) : null;
 
   // --- Вторичные действия: одинаковые кнопки, лишние уезжают в «···» справа налево ---
   const secondary: { key: string; node: ReactNode; item: OverflowItem }[] = [];
@@ -1329,8 +1356,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // его вовсе, иначе строка получает лишний зазор в пустом месте
   const commentsChipVisible = showChips && !!commentCounts && commentCounts.total > 0 && !editing && tab === 'file';
   const diffChipVisible = showChips && !!diffStats && tab === 'diff';
-  // eslint-disable-next-line react-hooks/refs -- mainAction/cancelAction не refs: компилятор помечает их из-за onClick-колбэка с drawioRef внутри (вызов только из события)
-  const badgesVisible = commentsChipVisible || diffChipVisible || showTabs || !!(mainAction || cancelAction);
+  const badgesVisible = commentsChipVisible || diffChipVisible || showTabs;
 
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
   // notes-API с переименованием): тот же функционал, что в разделе «Заметки».
@@ -1382,35 +1408,46 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           [режим][закрыть] не сжимается и доступен при любой ширине. */}
       <Toolbar isMobile={isMobile}>
         <div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flex: 1, minWidth: 0 }}>
-        {/* Левый фиксированный блок: «назад» на мобиле, ☰ на широких ступенях десктопа
-            (на узких ☰ уезжает в «···»). Здесь же — back/forward по истории открытых
-            файлов: их ширина обязана войти в fixedLeftRef, иначе useToolbarOverflow
-            не учтёт её и неправильно посчитает число влезающих вторичных кнопок */}
-        {(isMobile || (onOpenSidebar && !iconTier) || canFileBack || canFileForward) && (
-          <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
-            {isMobile ? (
-              <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
-                <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
-              </BackButton>
-            ) : onOpenSidebar && !iconTier ? (
-              <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
-                <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+        {/* Левый блок: на десктопе «Закрыть» + ☰ + back/forward, на мобиле «Файлы».
+            Ширина входит в fixedLeftRef — useToolbarOverflow учитывает её в расчёте «···». */}
+        <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
+          {isMobile ? (
+            <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
+              <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
+            </BackButton>
+          ) : (
+            <>
+              {/* Закрыть файл — слева */}
+              <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
+                <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               </ToolbarIconButton>
-            ) : null}
-            {/* Back/Forward: видимы, пока есть хотя бы одно направление навигации;
-                неактивная — disabled. На мобиле рядом с «Файлы», на десктопе — после ☰ */}
-            {(canFileBack || canFileForward) && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <ToolbarIconButton isMobile={isMobile} onClick={onFileBack} disabled={!canFileBack} title="Назад по истории файлов">
-                  <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+              {onOpenSidebar && !iconTier && (
+                <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+                  <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
                 </ToolbarIconButton>
-                <ToolbarIconButton isMobile={isMobile} onClick={onFileForward} disabled={!canFileForward} title="Вперёд по истории файлов">
-                  <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                </ToolbarIconButton>
-              </div>
-            )}
-          </div>
-        )}
+              )}
+              {/* Back/Forward: видимы, пока есть хотя бы одно направление навигации; неактивная — disabled */}
+              {(canFileBack || canFileForward) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <ToolbarIconButton isMobile={isMobile} onClick={onFileBack} disabled={!canFileBack} title="Назад по истории файлов">
+                    <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                  </ToolbarIconButton>
+                  <ToolbarIconButton isMobile={isMobile} onClick={onFileForward} disabled={!canFileForward} title="Вперёд по истории файлов">
+                    <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                  </ToolbarIconButton>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Плитка расширения перед именем — как в списке файлов */}
+        <span style={{
+          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+          background: extMeta.bg, color: extMeta.fg,
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 7.5, fontWeight: 700,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '-0.02em',
+        }}>{extMeta.label}</span>
 
         {/* Имя файла — единственный гибкий элемент строки. Расширение отдельным span'ом:
             ellipsis режет хвост, а по нему и узнают файл. title — полный путь. */}
@@ -1422,7 +1459,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           {nameExt && <span style={{ flexShrink: 0 }}>{nameExt}</span>}
         </span>
 
-        {/* Бейджи + вкладки + главное действие — несжимаемый блок */}
+        {/* Бейджи + вкладки — несжимаемый блок */}
         {badgesVisible && (
         <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
         {/* Комментарии к документу (флаг doc-annotations): счётчик в тулбаре */}
@@ -1493,22 +1530,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             />
           )
         )}
-
-        {/* Слот главного действия режима — ровно одна кнопка (+ необязательная «Отмена»).
-            Неприкосновенен: на узких ступенях меняет форму на иконку, но не сворачивается. */}
-        {actionAsIcon
-          ? <>
-              {/* eslint-disable-next-line react-hooks/refs -- cancelAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
-              {cancelAction && actionIcon(cancelAction)}
-              {/* eslint-disable-next-line react-hooks/refs -- mainAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
-              {mainAction && actionIcon(mainAction)}
-            </>
-          : <>
-              {/* eslint-disable-next-line react-hooks/refs -- cancelAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
-              {cancelAction && actionButton(cancelAction)}
-              {/* eslint-disable-next-line react-hooks/refs -- mainAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
-              {mainAction && actionButton(mainAction)}
-            </>}
         </div>
         )}
 
@@ -1520,47 +1541,48 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           <ToolbarOverflowMenu isMobile={isMobile} items={menuItems} title="Ещё" />
         )}
 
-        {/* Правый якорь-выход: режим просмотра + «Закрыть». Несжимаемая группа последним
-            ребёнком строки — эти две кнопки доступны всегда, даже когда панель ужата
-            до минимума и всё остальное уехало в «···». */}
+        {/* На мобиле правого якоря нет — главное действие ставим в конце строки */}
+        {isMobile && actionSlot}
+
+        {/* Правый якорь: режим просмотра (прячется при уходе курсора) + «Править» — контрастная
+            кнопка, самая правая, видна всегда. Несжимаемая группа последним ребёнком строки. */}
         {!isMobile && (
           <div ref={rightRef} style={{ display: 'flex', gap: SP.xs, alignItems: 'center', flexShrink: 0 }}>
             {/* Режим просмотра: сплит с чатом / на весь экран. Ступени: подписи →
-                только иконки → тумблер с иконкой ЦЕЛЕВОГО состояния. Показываем и в
-                правке: иначе из полноэкранного режима не выйти, пока не закончишь. */}
+                только иконки → тумблер-иконка. */}
             {onToggleFullscreen && (
-              tier === 'tight' ? (
-                <ToolbarIconButton
-                  isMobile={isMobile}
-                  onClick={handleToggleMode}
-                  title={fullscreen ? 'Свернуть: сплит с чатом' : 'Развернуть на весь экран'}
-                >
-                  {fullscreen
-                    ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                    : <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                </ToolbarIconButton>
-              ) : (
-                <PillSwitch
-                  value={fullscreen ? 'full' : 'split'}
-                  iconsOnly={tier !== 'comfort'}
-                  options={[
-                    { value: 'split' as const, label: 'Сплит', title: 'Сплит с чатом', icon: <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
-                    { value: 'full' as const, label: 'Полный', title: 'На весь экран', icon: <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
-                  ]}
-                  onChange={(v) => {
-                    // handleToggleMode — toggle без аргумента, поэтому клик по уже активному
-                    // сегменту (напр. «Сплит», когда уже сплит) должен быть no-op, иначе toggle
-                    // уведёт в противоположный режим
-                    if (v === 'full' && !fullscreen) handleToggleMode();
-                    if (v === 'split' && fullscreen) handleToggleMode();
-                  }}
-                />
-              )
+              <span style={{ display: 'flex', alignItems: 'center' }}>
+                {tier === 'tight' ? (
+                  <ToolbarIconButton
+                    isMobile={isMobile}
+                    onClick={handleToggleMode}
+                    title={fullscreen ? 'Свернуть: сплит с чатом' : 'Развернуть на весь экран'}
+                  >
+                    {fullscreen
+                      ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                      : <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                  </ToolbarIconButton>
+                ) : (
+                  <PillSwitch
+                    value={fullscreen ? 'full' : 'split'}
+                    iconsOnly={tier !== 'comfort'}
+                    options={[
+                      { value: 'split' as const, label: 'Сплит', title: 'Сплит с чатом', icon: <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+                      { value: 'full' as const, label: 'Полный', title: 'На весь экран', icon: <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+                    ]}
+                    onChange={(v) => {
+                      // handleToggleMode — toggle без аргумента, поэтому клик по уже активному
+                      // сегменту (напр. «Сплит», когда уже сплит) должен быть no-op, иначе toggle
+                      // уведёт в противоположный режим
+                      if (v === 'full' && !fullscreen) handleToggleMode();
+                      if (v === 'split' && fullscreen) handleToggleMode();
+                    }}
+                  />
+                )}
+              </span>
             )}
-
-            <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
-              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </ToolbarIconButton>
+            {/* Главное действие («Править») — контрастная, самая правая, видна всегда */}
+            {actionSlot}
           </div>
         )}
         </div>{/* конец строки шапки */}

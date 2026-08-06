@@ -75,10 +75,15 @@ export const FOCUS_VIEW_H = 560;
 // иначе десктопная пропорция ужимает узлы до нечитаемых 5px на 390px экрана.
 export const FOCUS_VIEW_W_MOBILE = 390;
 export const FOCUS_VIEW_H_MOBILE = 620;
+// Карта в панели рельсы: раскладка та же вертикальная, что на мобиле, но полоса
+// широкая и низкая — иначе холст вписался бы по высоте и занял треть ширины
+export const FOCUS_VIEW_W_PANEL = 340;
+export const FOCUS_VIEW_H_PANEL = 250;
 
 // Лимит соседей на сторону: 16 + 16 = «~32 соседа на экран» из спеки Майи
 export const FOCUS_LIMIT = 16;
 export const FOCUS_LIMIT_MOBILE = 6;
+export const FOCUS_LIMIT_PANEL = 4;
 
 // Глубина 2: второе кольцо строим только для самых связанных соседей — полная
 // окрестность глубины 2 у SessionManager это 471 узел, то есть снова каша
@@ -159,17 +164,20 @@ function clip(label: string, max: number): string {
 export function buildFocusModel(
   graph: CodeGraph,
   centerId: string,
-  opts: FocusOptions & { depth2?: boolean; mobile?: boolean } = {},
+  opts: FocusOptions & { depth2?: boolean; mobile?: boolean; panel?: boolean } = {},
 ): FocusModel | null {
   const center = graph.nodes.find(n => n.id === centerId);
   if (!center) return null;
 
   const degree = opts.degree ?? graphDegree(graph);
   const godSet = new Set(graph.godNodes);
-  const mobile = !!opts.mobile;
-  const viewW = mobile ? FOCUS_VIEW_W_MOBILE : FOCUS_VIEW_W;
-  const viewH = mobile ? FOCUS_VIEW_H_MOBILE : FOCUS_VIEW_H;
-  const limit = mobile ? FOCUS_LIMIT_MOBILE : FOCUS_LIMIT;
+  // Панель наследует вертикальную раскладку мобилы (соседи сверху и снизу), но со
+  // своими размерами холста и более жёстким лимитом соседей
+  const panel = !!opts.panel;
+  const mobile = panel || !!opts.mobile;
+  const viewW = panel ? FOCUS_VIEW_W_PANEL : mobile ? FOCUS_VIEW_W_MOBILE : FOCUS_VIEW_W;
+  const viewH = panel ? FOCUS_VIEW_H_PANEL : mobile ? FOCUS_VIEW_H_MOBILE : FOCUS_VIEW_H;
+  const limit = panel ? FOCUS_LIMIT_PANEL : mobile ? FOCUS_LIMIT_MOBILE : FOCUS_LIMIT;
   const maxLabel = mobile ? 13 : 22;
   const nOpts: FocusOptions = { filters: opts.filters, hideTests: opts.hideTests, degree };
 

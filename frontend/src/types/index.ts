@@ -27,7 +27,6 @@ export interface Project {
   difyDatasetId?: string;
   systemPrompt?: string;
   showHiddenFiles?: boolean;
-  toolsEnabled?: boolean;        // вкладка «Инструменты» (терминал + preview)
   permissionRules?: PermissionRule[];
   boardColumns?: BoardColumn[];   // кастомные колонки Kanban-доски; отсутствует = дефолтные 3
   builtInSystemPrompt?: string;
@@ -199,6 +198,12 @@ export interface DocsScopeInfo {
   defaults: DocsScope;
   documents: DocOption[];          // документы области — варианты для «Начала»
   home: string | null;             // что сейчас работает «Началом» (выбор или README)
+  // Откуда взята область: 'file' — версионируемый .docs в корне репозитория (общий для
+  // всех, кто его открыл), 'project' — настройка продукта, своя у каждого владельца
+  scopeSource: 'file' | 'project';
+  // Заполнено, когда .docs есть, но не разобран: область при этом взята из настройки
+  // проекта, и без объяснения расхождение «в файле одно, в панели другое» необъяснимо
+  scopeFileError?: string | null;
 }
 
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)

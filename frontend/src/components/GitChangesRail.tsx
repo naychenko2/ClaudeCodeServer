@@ -841,8 +841,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 onClick={() => selectScope('working')}
                 style={{
                   // Геометрия как у строки ветки ниже (gap 6, кнопки 28): счётчик и
-                  // отмена встают ровно под fetch/pull, а «Зафиксировать» — под публикацией
-                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 32, padding: '2px 8px',
+                  // отмена встают ровно под fetch/pull, а «Зафиксировать» — под публикацией.
+                  // Правый padding 0 (а не 8): ряд ветки ниже боковых отступов не имеет,
+                  // и лишние 8px справа увели бы всю тройку кнопок на колонку левее
+                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 32, padding: '2px 0 2px 8px',
                   borderRadius: 8, cursor: 'pointer',
                   background: isWorking ? C.accentLight : 'transparent',
                 }}

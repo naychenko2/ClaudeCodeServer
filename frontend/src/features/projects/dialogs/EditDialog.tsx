@@ -168,7 +168,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [iconColor, setIconColor] = useState<string | null>(project.icon?.color ?? null);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
-  const [toolsEnabled, setToolsEnabled] = useState(project.toolsEnabled ?? false);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   const [draftPrompt, setDraftPrompt] = useState('');
   const [promptParts, setPromptParts] = useState<SystemPromptPart[] | null>(null);
@@ -193,7 +192,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         groupId,
         systemPrompt,
         showHiddenFiles,
-        toolsEnabled,
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
         color: iconColor ?? '',
       });
@@ -422,10 +420,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
         <SettingsRow title="Показывать файлы и папки, начинающиеся с точки">
           <span style={{ fontSize: 13, color: C.textPrimary }}>Скрытые файлы и папки</span>
           <Toggle checked={showHiddenFiles} onChange={setShowHiddenFiles} />
-        </SettingsRow>
-        <SettingsRow title="Встроенный терминал и предпросмотр dev-сервера">
-          <span style={{ fontSize: 13, color: C.textPrimary }}>Инструменты</span>
-          <Toggle checked={toolsEnabled} onChange={setToolsEnabled} />
         </SettingsRow>
         <SettingsRow last>
           <span style={{ fontSize: 13, color: C.textPrimary }}>

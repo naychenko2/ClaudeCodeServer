@@ -3,20 +3,25 @@
 // ключей localStorage, валидация мусора и нормализация весов.
 import { describe, it, expect } from 'vitest';
 import {
-  sanitizeLayout, parseLayout, addPanel, nextPlacement, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
+  sanitizeLayout, parseLayout, addPanel, placeByRail, removePanel, swapPanels, movePanelToNewColumn, movePanelAt,
   parseWeights, parseWidth, normalizeWeights, parseColFlex, normalizeColFlex,
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
-  isTucked, tuckPanel, untuckPanel, parseTucked,
-  COL_DEFAULT, COL_MIN, COL_MAX,
+  isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail, mergeTuckDefaults,
+  railSequence, COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
 } from '../../pages/workspace/panelStackState';
+import { RAIL_GROUPS } from '../../pages/workspace/panelCatalog';
 
 // Компактный конструктор пары зон: остальные поля берутся дефолтные
 function zones(left: string[][], right: string[][]): PanelZones {
   return sanitizeZones({ left: { layout: left }, right: { layout: right } });
 }
+
+// Первая группа рельсы (содержимое проекта) целиком — reorderRail переставляет
+// кнопку только внутри своей группы и ждёт её ПОЛНЫЙ состав
+const PROJECT_GROUP = RAIL_GROUPS[0];
 
 describe('sanitizeLayout', () => {
   it('мусор даёт пустую раскладку', () => {
@@ -74,12 +79,74 @@ describe('addPanel — дефолтная расстановка', () => {
     expect(l).toEqual([['tasks'], ['plan', 'files']]);
   });
 
-  it('nextPlacement учитывает сторону: у левой зоны новая колонка с индексом 0', () => {
-    expect(nextPlacement([['plan', 'files']], 'left')).toEqual({ newColumn: true });
-    expect(nextPlacement([['plan']], 'left')).toEqual({ ci: 0 });
-    // правая (дефолт) — прежнее правило: колонка у конца
-    expect(nextPlacement([['plan', 'files']], 'right')).toEqual({ newColumn: true });
-    expect(nextPlacement([['plan']])).toEqual({ ci: 0 });
+});
+
+describe('placeByRail — панель встаёт по порядку кнопок рельсы', () => {
+  // Порядок кнопок столбца сверху вниз
+  const seq = ['plan', 'files', 'tasks', 'team'] as const;
+  const place = (layout: string[][], k: string, side: 'left' | 'right' = 'right', cap = 4) =>
+    placeByRail(layout as never, k as never, side, cap, seq as never);
+
+  it('встаёт в СЕРЕДИНУ колонки — между кнопками, что выше и ниже её в рельсе', () => {
+    // plan(0) и tasks(2) открыты, открываем files(1) — его место между ними
+    const r = place([['plan', 'tasks']], 'files');
+    expect(r.layout).toEqual([['plan', 'files', 'tasks']]);
+    expect(r).toMatchObject({ ci: 0, ri: 1, newColumn: false });
+  });
+
+  it('самая верхняя кнопка встаёт первой, самая нижняя — последней', () => {
+    expect(place([['files', 'tasks']], 'plan').layout).toEqual([['plan', 'files', 'tasks']]);
+    expect(place([['plan', 'files']], 'team').layout).toEqual([['plan', 'files', 'team']]);
+  });
+
+  it('колонка не отсортирована (перетащили руками) — место по числу панелей выше в рельсе', () => {
+    // В колонке порядок team(3), plan(0). У files(1) выше по рельсе только plan —
+    // значит место одно: после первой панели, а не «перед первой, что ниже».
+    const r = place([['team', 'plan']], 'files');
+    expect(r.layout).toEqual([['team', 'files', 'plan']]);
+    expect(r.ri).toBe(1);
+  });
+
+  it('пустая зона — первая колонка', () => {
+    expect(place([], 'files')).toMatchObject({ layout: [['files']], ci: 0, ri: 0, newColumn: true });
+  });
+
+  it('колонка полна — новая панель заводит колонку У РЕЛЬСЫ, прежние отъезжают к центру', () => {
+    // cap 2, колонка у рельсы забита; открываем files — он НЕ втискивается между
+    // plan и tasks, а встаёт своей колонкой у рельсы (у правой зоны — конец массива)
+    const r = placeByRail([['plan', 'tasks']] as never, 'files' as never, 'right', 2, seq as never);
+    expect(r.layout).toEqual([['plan', 'tasks'], ['files']]);
+    expect(r).toMatchObject({ ci: 1, ri: 0, newColumn: true });
+  });
+
+  it('у левой зоны новая колонка зеркальна — тоже у рельсы, в начало', () => {
+    const r = placeByRail([['plan', 'tasks']] as never, 'files' as never, 'left', 2, seq as never);
+    expect(r.layout).toEqual([['files'], ['plan', 'tasks']]);
+    expect(r).toMatchObject({ ci: 0, ri: 0, newColumn: true });
+  });
+
+  it('уже открытые панели не перетасовываются: полная колонка остаётся как была', () => {
+    // Ни одна панель не покидает свою колонку — даже та, что ниже новой по рельсе
+    const before = [['team'], ['plan', 'tasks']];
+    const r = placeByRail(before as never, 'files' as never, 'right', 2, seq as never);
+    expect(r.layout).toEqual([['team'], ['plan', 'tasks'], ['files']]);
+    // исходная раскладка не тронута (чистая функция)
+    expect(before).toEqual([['team'], ['plan', 'tasks']]);
+  });
+
+  it('по одной панели на колонку — каждая следующая заводит колонку у рельсы', () => {
+    const r = placeByRail([['tasks'], ['plan']] as never, 'files' as never, 'right', 1, seq as never);
+    expect(r.layout).toEqual([['tasks'], ['plan'], ['files']]);
+    expect(r).toMatchObject({ ci: 2, ri: 0, newColumn: true });
+  });
+
+  it('панель уже открыта — addPanel не дублирует её даже с порядком кнопок', () => {
+    expect(addPanel([['plan']] as never, 'plan' as never, 'right', 4, seq as never)).toEqual([['plan']]);
+  });
+
+  it('addPanel без порядка кнопок кладёт в конец колонки у рельсы', () => {
+    // Без railSeq сравнивать ранги не с чем — панель просто дописывается
+    expect(addPanel([['tasks']] as never, 'plan' as never)).toEqual([['tasks', 'plan']]);
   });
 });
 
@@ -475,10 +542,10 @@ describe('tuckPanel / untuckPanel — ящик рельсы («…»)', () => {
     expect(back.left.layout).toEqual([['chats']]);
   });
 
-  it('parseTucked отбрасывает мусор, дубли и переводит упразднённые ключи', () => {
-    expect(parseTucked(['tasks', 'personas', 'мусор', 'tasks', 7])).toEqual(['tasks', 'team']);
-    expect(parseTucked(null)).toEqual([]);
-    expect(parseTucked({ tasks: true })).toEqual([]);
+  it('parseKeyList отбрасывает мусор, дубли и переводит упразднённые ключи', () => {
+    expect(parseKeyList(['tasks', 'personas', 'мусор', 'tasks', 7])).toEqual(['tasks', 'team']);
+    expect(parseKeyList(null)).toEqual([]);
+    expect(parseKeyList({ tasks: true })).toEqual([]);
   });
 
   it('переживает сериализацию состояния', () => {
@@ -486,6 +553,115 @@ describe('tuckPanel / untuckPanel — ящик рельсы («…»)', () => {
     const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
     expect(isTucked(restored, 'tasks')).toBe(true);
     expect(homeOf(restored, 'tasks')).toBe('right');
+  });
+});
+
+describe('mergeTuckDefaults — разовая укладка редких кнопок в ящик', () => {
+  const WANT = ['graph', 'knowledge', 'skills', 'terminal', 'preview'] as const;
+
+  it('первый запуск: все кнопки уезжают в ящик и отмечаются в applied', () => {
+    const r = mergeTuckDefaults([], WANT, []);
+    expect(r.changed).toBe(true);
+    expect(r.tucked).toEqual([...WANT]);
+    expect(r.applied).toEqual([...WANT]);
+  });
+
+  it('существующий пользователь: ящик пополняется, свои спрятанные кнопки целы', () => {
+    const r = mergeTuckDefaults(['tasks'], WANT, []);
+    expect(r.tucked).toEqual(['tasks', ...WANT]);
+  });
+
+  it('повторный запуск ничего не трогает', () => {
+    const r = mergeTuckDefaults([...WANT], WANT, [...WANT]);
+    expect(r.changed).toBe(false);
+    expect(r.tucked).toEqual([...WANT]);
+  });
+
+  // Главная защита: человек достал кнопку из ящика — она обязана там и остаться.
+  // Без applied миграция утаскивала бы её обратно на каждом запуске.
+  it('кнопку, возвращённую в столбец, обратно в ящик не уводит', () => {
+    const afterUntuck = ['graph', 'knowledge', 'skills', 'preview'] as const; // terminal достали
+    const r = mergeTuckDefaults(afterUntuck, WANT, [...WANT]);
+    expect(r.changed).toBe(false);
+    expect(r.tucked).not.toContain('terminal');
+  });
+
+  // Набор defaultTucked со временем пополняется — новая кнопка обязана доехать до
+  // тех, кто прошлую волну уже прошёл, не тронув разобранные ими старые
+  it('новая кнопка в наборе доезжает до старожилов один раз', () => {
+    const r = mergeTuckDefaults(['graph'], [...WANT, 'toc'], [...WANT]);
+    expect(r.changed).toBe(true);
+    expect(r.tucked).toEqual(['graph', 'toc']);
+    expect(r.applied).toEqual([...WANT, 'toc']);
+  });
+
+  it('дубль в ящике не плодится', () => {
+    const r = mergeTuckDefaults(['graph'], ['graph'], []);
+    expect(r.tucked).toEqual(['graph']);
+  });
+});
+
+describe('sortRail / reorderRail — порядок кнопок рельсы', () => {
+  // Группа рельсы — набор ключей каталога; здесь берём её укороченный вид,
+  // чтобы тесты не зависели от состава PROJECT_KEYS
+  const GROUP = ['files', 'docs', 'changes', 'tasks'] as const;
+
+  it('без сохранённого порядка группа идёт как есть (каталожная очерёдность)', () => {
+    expect(sortRail([], GROUP)).toEqual(['files', 'docs', 'changes', 'tasks']);
+  });
+
+  it('ключи вне сохранённого порядка уходят в ХВОСТ, сохраняя каталожную очерёдность', () => {
+    // Порядок задавали, когда «Документации» ещё не было: она встаёт последней,
+    // а не туда, где стоит в реестре
+    expect(sortRail(['tasks', 'files', 'changes'], GROUP)).toEqual(['tasks', 'files', 'changes', 'docs']);
+  });
+
+  it('перестановка материализует ВСЮ группу, а не один сдвинутый ключ', () => {
+    const z = reorderRail(emptyZones(), GROUP, 'tasks', 'files');
+    expect(z.railOrder).toEqual(['tasks', 'files', 'docs', 'changes']);
+    expect(sortRail(z.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
+  });
+
+  it('before=null отправляет кнопку в конец группы', () => {
+    const z = reorderRail(emptyZones(), GROUP, 'files', null);
+    expect(sortRail(z.railOrder, GROUP)).toEqual(['docs', 'changes', 'tasks', 'files']);
+  });
+
+  it('порядок, дающий ту же очерёдность, состояние не меняет', () => {
+    const base = emptyZones();
+    // «Файлы» и так стоят перед «Документацией» — писать нечего
+    expect(reorderRail(base, GROUP, 'files', 'docs')).toBe(base);
+    // Ключ не из этой группы и дроп на себя — тоже
+    expect(reorderRail(base, GROUP, 'plan', 'files')).toBe(base);
+    expect(reorderRail(base, GROUP, 'files', 'files')).toBe(base);
+  });
+
+  it('перестановка в одной группе не трогает порядок другой', () => {
+    const SESSION = ['plan', 'agents', 'context'] as const;
+    const withSession = reorderRail(emptyZones(), SESSION, 'context', 'plan');
+    const both = reorderRail(withSession, GROUP, 'tasks', 'files');
+    expect(sortRail(both.railOrder, SESSION)).toEqual(['context', 'plan', 'agents']);
+    expect(sortRail(both.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
+  });
+
+  it('кнопка, закрытая в другой зоне или спрятанная в ящик, места в группе не теряет', () => {
+    // Место задаётся СОСЕДОМ, а не индексом: «Изменения» лежат в ящике и в столбце
+    // их не видно, но в порядке группы они остаются между «Документацией» и «Задачами»
+    const base = sanitizeZones({ left: { layout: [] }, right: { layout: [] }, tucked: ['changes'] });
+    const z = reorderRail(base, GROUP, 'tasks', 'docs');
+    expect(sortRail(z.railOrder, GROUP)).toEqual(['files', 'tasks', 'docs', 'changes']);
+  });
+
+  it('переживает сериализацию состояния', () => {
+    const saved = reorderRail(zones([['chats']], [['tasks']]), GROUP, 'tasks', 'files');
+    const restored = sanitizeZones(JSON.parse(JSON.stringify(saved)));
+    expect(sortRail(restored.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
+  });
+
+  it('порядок и переезд кнопки на чужую рельсу живут независимо', () => {
+    const moved = closePanelTo(reorderRail(zones([['chats']], [['tasks']]), GROUP, 'tasks', 'files'), 'left', 'tasks');
+    expect(homeOf(moved, 'tasks')).toBe('left');
+    expect(sortRail(moved.railOrder, GROUP)).toEqual(['tasks', 'files', 'docs', 'changes']);
   });
 });
 
@@ -576,6 +752,47 @@ describe('revealPanel — внешний запрос показать пане�
     // панель уехала в левую зону — её оставляют там, а не тащат обратно домой
     const переехала = zones([['changes']], []);
     expect(revealPanel(переехала, 'changes')).toEqual({ zones: переехала, wasOpen: true });
+  });
+
+  // Ниже — ФОЛБЭК-путь (домашняя зона не смонтирована): он обязан размещать по тому
+  // же правилу рельсы, что и клик по кнопке. Обычно показ исполняет сама зона —
+  // registerOpener, живая вместимость колонки.
+  it('встаёт на своё место в колонке по порядку кнопок, а не в конец', () => {
+    // Порядок рельсы: chats, files, changes, tasks… — «Изменения» выше «Задач»,
+    // значит встают ПЕРЕД ними. Прежнее правило пушило панель в конец колонки.
+    const r = revealPanel(zones([], [['tasks']]), 'changes');
+    expect(r.zones.right.layout).toEqual([['changes', 'tasks']]);
+  });
+
+  it('колонка полна — новая растёт У РЕЛЬСЫ, как и по клику', () => {
+    // Правая зона, вместимость фолбэка COL_CAP=2: колонка забита, значит changes
+    // заводит свою колонку у рельсы — конец массива. Прежние панели не двигаются.
+    const r = revealPanel(zones([], [['files', 'tasks']]), 'changes');
+    expect(r.zones.right.layout).toEqual([['files', 'tasks'], ['changes']]);
+  });
+
+  it('порядок кнопок пользователя учитывается', () => {
+    // Переставим changes ПОСЛЕ tasks в столбце — показ обязан положить панель уже
+    // под задачами: правило читает railOrder, а не порядок реестра
+    const base = reorderRail(zones([], [['tasks']]), PROJECT_GROUP, 'changes', null);
+    expect(revealPanel(base, 'changes').zones.right.layout).toEqual([['tasks', 'changes']]);
+  });
+});
+
+describe('railSequence — канонический порядок кнопок для фолбэка', () => {
+  it('группы идут подряд: проектные, инструменты, контекст', () => {
+    const seq = railSequence([]);
+    expect(seq.indexOf('files')).toBeLessThan(seq.indexOf('terminal'));
+    expect(seq.indexOf('terminal')).toBeLessThan(seq.indexOf('plan'));
+    expect(seq.indexOf('plan')).toBeLessThan(seq.indexOf('toc'));
+  });
+
+  it('внутри группы действует пользовательский порядок', () => {
+    const z = reorderRail(emptyZones(), PROJECT_GROUP, 'tasks', 'files');
+    const seq = railSequence(z.railOrder);
+    expect(seq.indexOf('tasks')).toBeLessThan(seq.indexOf('files'));
+    // граница групп при этом на месте: перестановка не выносит ключ из своей группы
+    expect(seq.indexOf('tasks')).toBeLessThan(seq.indexOf('terminal'));
   });
 });
 

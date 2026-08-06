@@ -9,7 +9,7 @@ import {
   Link2, Tag, Calendar, MessageCircle, Play, Sun, Search, History, FileText, List, FilePlus2,
   Sparkles, ImagePlus, BookOpen,
   GitBranch, GitCompare, FileClock, MessageCircleQuestion, BookPlus, ListChecks, MessagesSquare,
-  CalendarClock, CalendarX2, Users,
+  CalendarClock, CalendarX2, Users, Columns3,
   ShieldCheck, Copy, Zap, Network, UserPlus, LayoutDashboard, RotateCcw, ListPlus, PenLine,
 } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
@@ -17,6 +17,7 @@ import type { NavSnapshot } from '../nav';
 import { api } from '../api';
 import { showToast } from '../toast';
 import { openNoteById } from '../../features/notes/saveToNote';
+import { addChatsToWall } from '../../features/wall/wallSuggest';
 import { startChatWithPrompt } from './startChat';
 
 // Событие для контекстных действий: «владелец» (открытый компонент — NoteView,
@@ -31,7 +32,7 @@ export function dispatchAiRun(action: string) {
 const PRODUCT_HISTORY_EVENT = 'open-product-history'; // = HubHeader.PRODUCT_HISTORY_EVENT
 export const OPEN_GLOBAL_SEARCH_EVENT = 'cc-open-global-search';
 
-export type AiSection = 'notes' | 'tasks' | 'chat' | 'global' | 'personas' | 'knowledge' | 'project';
+export type AiSection = 'notes' | 'tasks' | 'chat' | 'global' | 'personas' | 'knowledge' | 'project' | 'wall';
 
 export interface AiActionCtx {
   nav: NavSnapshot | null;
@@ -99,6 +100,7 @@ const IcCapture = <ListPlus {...ico} />;
 const IcRetitle = <PenLine {...ico} />;
 const IcToc = <List {...ico} />;
 const IcTranslate = <Sparkles {...ico} />;
+const IcWall = <Columns3 {...ico} />;
 
 // --- Предикаты контекста ---
 const noteOpen = (c: AiActionCtx) => c.nav?.screen === 'notes' && !!c.nav.note;
@@ -116,6 +118,9 @@ const docOpen = (c: AiActionCtx) => fileOpen(c) && DOC_EXTS.has(fileExt(c));
 const TEXT_EXTS = new Set(['md', 'markdown', 'mdx', 'txt', 'text', 'rst', 'tex', 'json', 'yaml', 'yml', 'log', 'ini', 'cfg', 'toml']);
 const summarizableOpen = (c: AiActionCtx) => fileOpen(c) && (DOC_EXTS.has(fileExt(c)) || TEXT_EXTS.has(fileExt(c)));
 const calendarScreen = (c: AiActionCtx) => c.nav?.screen === 'calendar';
+// Стена: чаты там живут колонками (embedded), и активного чата палитра не видит —
+// действия, которым нужна лента чата, на стене создавали бы новый чат и уводили с экрана
+const wallScreen = (c: AiActionCtx) => c.nav?.screen === 'wall';
 const projectOpen = (c: AiActionCtx) => c.nav?.screen === 'project' && !!c.nav.project;
 const homeScreen = (c: AiActionCtx) => c.nav?.screen === 'home';
 // Git-действия осмысленны только в git-репозитории. Пока статус не выяснен (undefined) —
@@ -288,7 +293,8 @@ export const AI_ACTIONS: AiAction[] = [
     // раздел — дашборд проекта / сводка задач / статистика заметок / свободная тема
     id: 'chat.widget', title: 'Показать интерактивный виджет', hint: 'дашборд, график или сводка прямо в чате',
     section: 'chat', sectionLabel: 'Чат', icon: IcOverview,
-    when: c => c.online,
+    // На стене не предлагаем: «прямо в чате» там означало бы новый чат вне стены
+    when: c => c.online && !wallScreen(c),
     contextual: c => projectOpen(c) || calendarScreen(c) || noteOpen(c),
     run: c => startChatWithPrompt(widgetPrompt(c), c),
   },
@@ -432,6 +438,26 @@ export const AI_ACTIONS: AiAction[] = [
     run: c => startChatWithPrompt(
       `Добавь файл «${c.nav?.file}» в подходящую базу знаний: предложи, в какую именно (или новую), `
       + `и по моему согласию проиндексируй через kb_add_document.`, c),
+  },
+
+  // ===== Стена =====
+  {
+    // Чаты, которых нет колонкой: живые (идёт ход / ждёт ответа) и тронутые за сутки.
+    // Отбор — правила wallSuggest, тот же, что у проактивной подсказки: балун и клик
+    // обязаны делать одно и то же
+    id: 'wall.addActive', title: 'Поставить чаты на стену', hint: 'живые и те, с которыми работали за сутки',
+    section: 'wall', sectionLabel: 'Стена', icon: IcWall,
+    when: c => wallScreen(c) && c.online, contextual: wallScreen,
+    run: async () => {
+      const added = await addChatsToWall();
+      if (added === 0) {
+        showToast('Стена', 'Нет чатов, которые стоило бы поставить рядом', 'info');
+        return;
+      }
+      showToast('Стена', added === 1
+        ? 'Чат встал колонкой'
+        : `На стену встали ${added} ${added < 5 ? 'чата' : 'чатов'}`);
+    },
   },
 
   // ===== Глобальные =====

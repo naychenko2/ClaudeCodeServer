@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import type { Project, AuthState } from './types'
+import { C } from './lib/design'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -17,7 +18,7 @@ import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
-import { C } from './lib/design'
+import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { showToast } from './lib/toast'
@@ -66,6 +67,16 @@ function isDevUiKitHash(): boolean {
 function isDevTeamPlanSimHash(): boolean {
   return window.location.hash === '#/team-plan-sim';
 }
+
+// Dev-only витрины служебных экранов, которые иначе видно лишь при стечении
+// обстоятельств: #/boom роняет рендер намеренно (заглушка ErrorBoundary),
+// #/boot показывает заставку старта (обычно она мелькает доли секунды и лишь
+// на медленной загрузке). Признак снимается ЗДЕСЬ, при загрузке модуля:
+// навигация ниже приводит незнакомый hash к известному экрану ещё до первого
+// рендера, и проверка внутри компонента его уже не увидела бы.
+// В prod обе ветки вырезаются вместе с DEV.
+const devBoom = import.meta.env.DEV && window.location.hash === '#/boom';
+const devBoot = import.meta.env.DEV && window.location.hash === '#/boot';
 
 // Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
 // при загрузке страницы, до первого рендера (WorkspacePage заберёт pending-значения)
@@ -141,6 +152,16 @@ export default function App() {
   // условие всегда ложно и режим не активируется.
   const [uiKitMode, setUiKitMode] = useState(() => isDevUiKitHash())
   const [teamPlanSimMode, setTeamPlanSimMode] = useState(() => isDevTeamPlanSimHash())
+
+  // Демо экрана ошибки #/boom (dev). Начальное значение — из константы модуля:
+  // на старте hash успевают нормализовать до первого рендера. Обратно режим не
+  // выключается: из упавшего дерева возвращают кнопки самой заглушки.
+  const [boomMode, setBoomMode] = useState(devBoom)
+
+  // Демо заставки старта #/boot (dev). В отличие от #/boom выключается сам при
+  // смене hash: заставка своих кнопок не имеет, и выходом служит любая навигация
+  // (клик по ней, «назад» браузера).
+  const [bootMode, setBootMode] = useState(devBoot)
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.
@@ -524,8 +545,14 @@ export default function App() {
   useEffect(() => { ensureNotificationsSubscribed(); }, []);
 
   // Dev-витрина #/ui-kit — переключение hash (вход/выход из режима) без перезагрузки.
+  // Тем же слушателем ловим #/boom: иначе демо экрана ошибки открывалось бы только
+  // с полной перезагрузкой, а вписанный в адресную строку hash ничего не делал.
   useEffect(() => {
-    const onHash = () => setUiKitMode(isDevUiKitHash());
+    const onHash = () => {
+      setUiKitMode(isDevUiKitHash());
+      if (import.meta.env.DEV && window.location.hash === '#/boom') setBoomMode(true);
+      if (import.meta.env.DEV) setBootMode(window.location.hash === '#/boot');
+    };
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -831,11 +858,25 @@ export default function App() {
     setAuth(null)
   }
 
+  // Намеренное падение для просмотра экрана ошибки (см. devBoom выше)
+  if (boomMode) throw new Error('Демо экрана ошибки: #/boom в dev-режиме');
+
+  // Заставка старта напоказ (см. devBoot выше). display:contents у обёртки —
+  // чтобы клик-выход не добавлял лишний бокс поверх раскладки заставки
+  if (bootMode) {
+    return (
+      <div style={{ display: 'contents' }} onClick={() => { window.location.hash = ''; }}>
+        {/* С hint — в демо ждать некуда, и строку состояния надо показать */}
+        <LoadingScreen hint="Проверяю вход" />
+      </div>
+    );
+  }
+
   // Early-return в режиме #/ui-kit: показываем витрину раньше UpdatePrompt/authChecking.
   // В prod UiKitPage === null → ветка недостижима и вырезается компилятором.
   if (uiKitMode && UiKitPage) {
     return (
-      <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+      <Suspense fallback={<LoadingScreen hint="Загружаю витрину" />}>
         <UiKitPage />
       </Suspense>
     );
@@ -855,7 +896,7 @@ export default function App() {
       <UpdatePrompt />
       {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
       {authChecking
-        ? <div style={{ minHeight: '100vh', background: C.bgMain }} />
+        ? <LoadingScreen hint="Проверяю вход" />
         : !auth
           ? <LoginPage onConnect={setAuth} />
           : effectiveHubTab === 'home'

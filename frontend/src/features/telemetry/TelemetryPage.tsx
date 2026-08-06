@@ -5,11 +5,11 @@
 // или SigNoz не отвечает — заглушка «настрой, администратор», решение по /api/telemetry/status
 // (а не по ненадёжному iframe onerror).
 import { useEffect, useRef, useState } from 'react';
-import { AlertTriangle } from 'lucide-react';
+import { Gauge, Unplug } from 'lucide-react';
 import type { AuthState } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../../components/ui/PageCanvas';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { C, FONT, FS } from '../../lib/design';
 import { api } from '../../lib/api';
@@ -65,9 +65,7 @@ export function TelemetryPage({ auth, onLogout, onHubTab }: Props) {
   if (ready) { ensureTelemetryCookie(); ensureSignozLightDefault(); }
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader
         value="telemetry" onTab={onHubTab} auth={auth} onLogout={onLogout}
         // Иконка «Открыть в новом окне» в шапке — только когда SigNoz доступен
@@ -93,7 +91,11 @@ export function TelemetryPage({ auth, onLogout, onHubTab }: Props) {
           />
         ) : (
           <EmptyState
-            icon={<AlertTriangle size={26} strokeWidth={1.8} />}
+            // Выключенный раздел — не авария: там, где телеметрию просто не
+            // включали, аварийный треугольник пугал на ровном месте
+            icon={status?.configured
+              ? <Unplug size={26} strokeWidth={1.8} />
+              : <Gauge size={26} strokeWidth={1.8} />}
             title={status?.configured ? 'SigNoz недоступен' : 'Телеметрия не настроена'}
             subtitle={
               status?.configured
@@ -114,6 +116,6 @@ export function TelemetryPage({ auth, onLogout, onHubTab }: Props) {
           />
         )}
       </div>
-    </div>
+    </PageCanvas>
   );
 }

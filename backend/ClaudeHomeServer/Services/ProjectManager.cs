@@ -139,7 +139,7 @@ public class ProjectManager
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
-        bool? toolsEnabled = null, string? color = null, List<string>? mcpServersOff = null)
+        string? color = null, List<string>? mcpServersOff = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -160,7 +160,6 @@ public class ProjectManager
         }
         if (systemPrompt is not null) project.SystemPrompt = systemPrompt;
         if (showHiddenFiles is not null) project.ShowHiddenFiles = showHiddenFiles.Value;
-        if (toolsEnabled is not null) project.ToolsEnabled = toolsEnabled.Value;
         if (permissionRules is not null) project.PermissionRules = permissionRules.Count == 0 ? null : permissionRules;
         // groupId: null = не менять; "" = убрать из группы; иначе — привязать к группе
         if (groupId is not null) project.GroupId = groupId.Length == 0 ? null : groupId;

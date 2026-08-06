@@ -7,7 +7,7 @@
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
-import { C, FONT, ISLAND, CHAT_COLUMN_W } from '../../lib/design';
+import { C, FONT, ISLAND, CHAT_COLUMN_W, SPLASH_W } from '../../lib/design';
 import { useCenterOffset } from '../../lib/centerOffset';
 import { Button, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
@@ -110,21 +110,13 @@ interface Props {
   // Документ «Граф зависимостей»: открывается из панельки «Граф», живёт в центре
   graphOpen: boolean;
   graphArea: ReactNode;
-  // Панели проекта: доступность инструментов + готовый контент панелек.
-  // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
-  toolsEnabled: boolean;
+  // Панели проекта: готовый контент панелек. Контент общий для обеих зон — панель
+  // рисует та зона, в которой она лежит.
   panels: Partial<Record<PanelKey, ReactNode>>;
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
   onOpenReader?: (url: string) => void;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
   railCounts?: Partial<Record<PanelKey, number>>;
-  // Сколько чатов у проекта; null — ещё не знаем. Пока чатов нет, панель «Чаты»
-  // не рендерится совсем — как сайдбар в разделе «Чаты»
-  chatCount: number | null;
-  // Точное число от списка чатов, пока панель на экране
-  onSessionsChanged: (n: number) => void;
-  // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
-  onPanelOpen?: (k: PanelKey) => void;
   // Открыть режим «Стена» (док стены под доком проектов; вкладки в таббаре у стены нет)
   onOpenWall?: () => void;
 }
@@ -189,12 +181,12 @@ export function DesktopWorkspace(p: Props) {
   // здесь только содержимое — список чатов на белом фоне контентной зоны, как у
   // панелей правой рельсы. Переключатель проектов жил сначала шапкой внутри этой
   // панели, потом отдельной панелью «Проекты»; теперь это док второй левой рельсы.
-  // Пока чатов нет — панели нет вовсе (undefined в наборе). Так же ведёт себя сайдбар
-  // раздела «Чаты»: пустой список показывать незачем, а создать чат зовёт центр.
-  // chatCount === null — ещё считаем: панель показываем, чтобы она не мигала на старте.
-  const chatsPanel = p.chatCount === 0 ? undefined : (
+  // Панель есть ВСЕГДА, даже когда чатов ноль: иначе её кнопка пропадала из рельсы
+  // (нет контента → keyAvailable=false), край рельсы дёргался и вход в чаты терялся.
+  // Пустой список сам показывает empty-state с кнопкой «Новый чат» (см. SessionList).
+  const chatsPanel = (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsChanged={p.onSessionsChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
     </div>
   );
 
@@ -250,9 +242,13 @@ export function DesktopWorkspace(p: Props) {
   // резиновые: им положено занимать всю колонку целиком).
   // Ширина — CHAT_COLUMN_W, а не CHAT_MAX_W: компенсации отдаётся только то, что
   // остаётся сверх ПОЛНОЙ потребности ленты (колонка + жёлоб + полоса прокрутки).
+  // Но ленты может и не быть: пока чат не выбран, в центре стоит заставка вдвое уже,
+  // и её потребность — SPLASH_W. Дашь тут CHAT_COLUMN_W — на окне ноутбука запаса
+  // не останется вовсе, компенсация выродится в ноль и заставку перекосит.
   const chatOnly = !p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen
     && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
-  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(chatOnly ? CHAT_COLUMN_W : undefined);
+  const centerContentW = chatOnly ? (p.activeSession ? CHAT_COLUMN_W : SPLASH_W) : undefined;
+  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(centerContentW);
 
   // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
   // (flex:1 в колонке острова растягивает её на всю высоту). По бокам — доп. воздух
@@ -284,9 +280,7 @@ export function DesktopWorkspace(p: Props) {
         side="left"
         panels={zonePanels}
         railCounts={p.railCounts}
-        toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
-        onPanelOpen={p.onPanelOpen}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
           // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
@@ -415,9 +409,8 @@ export function DesktopWorkspace(p: Props) {
         compact={p.isTablet}
         panels={zonePanels}
         railCounts={p.railCounts}
-        toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
-        onPanelOpen={p.onPanelOpen}
+        centerFileOpen={!!p.openFile}
       />
     </div>
   );

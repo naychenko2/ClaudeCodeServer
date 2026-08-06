@@ -1506,24 +1506,39 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       </div></div>
       </div>
 
-      {/* Плавающая кнопка «вниз» — появляется, когда лента отлистана вверх */}
+      {/* Плавающая кнопка «вниз» — появляется, когда лента отлистана вверх.
+          Геометрия повторяет композер (те же padding и CHAT_MAX_W по центру), поэтому
+          кнопка встаёт над кнопкой отправки — у правого края КОЛОНКИ ЧТЕНИЯ, а не
+          контейнера панели: в разделах «Проекты»/«Чаты» контейнер тянется до рельсы
+          панелей, и привязка к его краю уносила кнопку в пустоту сбоку от ленты.
+          По вертикали — прямо над композером: круглешок AI приклеен к углу ЭКРАНА и на
+          подошедший композер отвечает ужиманием, а не подъёмом, так что уступать ему
+          место не надо. */}
       {showScrollDown && (
-        <button
-          onClick={scrollToBottom}
-          title="Вниз чата"
-          style={{
-            // Когда включён AI-хаб, поднимаем кнопку «вниз» выше FAB (над композером) с зазором.
-            // Служебная прокрутка — нейтральная (не accent), чтобы единственным акцентом в углу был FAB.
-            position: 'absolute', right: isMobile ? 16 : 20, bottom: composerH + 14 + 64,
-            width: 44, height: 44, borderRadius: '50%',
-            border: `1px solid ${C.border}`,
-            background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            boxShadow: SHADOW.card, zIndex: 15, transition: 'bottom 0.3s ease',
-          }}
-        >
-          <ArrowDown size={22} strokeWidth={2.2} />
-        </button>
+        <div style={{
+          position: 'absolute', left: 0, right: 0, bottom: composerH + 14,
+          padding: isMobile ? '0 12px' : '0 24px',
+          pointerEvents: 'none', zIndex: 15, transition: 'bottom 0.3s ease',
+        }}>
+          <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', display: 'flex', justifyContent: 'flex-end' }}>
+            <button
+              onClick={scrollToBottom}
+              title="Вниз чата"
+              style={{
+                // Служебная прокрутка — нейтральная (не accent), чтобы единственным
+                // акцентом в углу оставался круглешок AI.
+                pointerEvents: 'auto',
+                width: 44, height: 44, borderRadius: '50%',
+                border: `1px solid ${C.border}`,
+                background: C.bgCard, color: C.textSecondary, cursor: 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                boxShadow: SHADOW.card,
+              }}
+            >
+              <ArrowDown size={22} strokeWidth={2.2} />
+            </button>
+          </div>
+        </div>
       )}
 
       {/* Composer — плавающий над лентой; фон прозрачный, контент виден под/вокруг него */}

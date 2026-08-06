@@ -151,12 +151,15 @@ interface Props {
   // Проброс обновлённого проекта в стор после иконочной мутации (generate/select/upload/recrop),
   // не дожидаясь «Сохранить» — иначе список стухнет при закрытии крестиком. Realtime у проектов нет.
   onIconUpdated?: (updated: Project) => void;
+  // Секция MCP сохраняет своё поле сама, минуя handleConfirm — без этого проброса
+  // повторное открытие диалога показывало состояние до клика (устаревший project prop)
+  onProjectUpdated?: (updated: Project) => void;
   onClose: () => void;
 }
 
 type View = 'main' | 'prompt' | 'rules';
 
-export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onClose }: Props) {
+export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
   const online = useOnline();
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
@@ -435,7 +438,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
           </Button>
         </SettingsRow>
       </div>
-      <McpProjectSection project={project} />
+      <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       <GitHistorySection project={project} />
       <ProjectSyncToggle projectId={project.id} online={online} />
     </Modal>

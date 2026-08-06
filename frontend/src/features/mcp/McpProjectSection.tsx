@@ -9,7 +9,7 @@ import type { McpServer, Project } from '../../types';
 // в этом проекте (deny-list Project.McpServersOff — сервер едет в ход везде, пока его
 // не выключили здесь). Встроенных серверов продукта тут нет: они доступны всегда.
 // Своих серверов нет — секция не рисуется вовсе, чтобы не занимать место пустотой.
-export function McpProjectSection({ project }: { project: Project }) {
+export function McpProjectSection({ project, onUpdated }: { project: Project; onUpdated?: (updated: Project) => void }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [off, setOff] = useState<string[]>(project.mcpServersOff ?? []);
   const [err, setErr] = useState('');
@@ -36,7 +36,11 @@ export function McpProjectSection({ project }: { project: Project }) {
     setOff(next);
     setErr('');
     api.projects.update(project.id, { mcpServersOff: next })
-      .then(saved => { if (seqRef.current === seq) setOff(saved.mcpServersOff ?? []); })
+      .then(saved => {
+        if (seqRef.current !== seq) return;
+        setOff(saved.mcpServersOff ?? []);
+        onUpdated?.(saved);
+      })
       .catch((e: unknown) => {
         if (seqRef.current !== seq) return;
         setOff(prev);

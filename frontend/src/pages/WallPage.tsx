@@ -364,6 +364,7 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
           project={editProject}
           onSuccess={updated => { updateProject(updated); setEditProject(null); }}
           onIconUpdated={updateProject}
+          onProjectUpdated={updateProject}
           onClose={() => setEditProject(null)}
         />
       )}

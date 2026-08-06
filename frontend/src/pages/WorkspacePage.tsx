@@ -1399,6 +1399,7 @@ const windowWidth = useWindowWidth();
             project={projectForEdit}
             onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
             onIconUpdated={setProjectForEdit}
+            onProjectUpdated={setProjectForEdit}
             onClose={() => setEditProjectOpen(false)}
           />
         )}
@@ -1515,6 +1516,7 @@ const windowWidth = useWindowWidth();
           project={projectForEdit}
           onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
           onIconUpdated={setProjectForEdit}
+          onProjectUpdated={setProjectForEdit}
           onClose={() => setEditProjectOpen(false)}
         />
       )}

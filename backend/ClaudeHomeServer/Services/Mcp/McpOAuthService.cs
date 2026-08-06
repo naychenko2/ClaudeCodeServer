@@ -55,6 +55,17 @@ public class McpOAuthService(
     private readonly TimeSpan _timeout = TimeSpan.FromSeconds(
         Math.Clamp(config.GetValue("Mcp:OAuthTimeoutSeconds", 20), 1, 120));
 
+    // Discovery обходит несколько адресов подряд (проба 401 + well-known кандидаты ресурса
+    // и authorization server) — без своего таймаута на попытку общий таймаут одного запроса
+    // (_timeout выше) складывается по недоступному хосту в минуты. Общий потолок на всю
+    // цепочку — на случай, если кандидатов набежит больше, чем закладывались, по образцу
+    // Mcp:ProbeTimeoutSeconds у McpProbeService
+    private readonly TimeSpan _discoveryTimeout = TimeSpan.FromSeconds(
+        Math.Clamp(config.GetValue("Mcp:OAuthDiscoveryTimeoutSeconds", 5), 1, 30));
+
+    private readonly TimeSpan _discoveryOverallTimeout = TimeSpan.FromSeconds(
+        Math.Clamp(config.GetValue("Mcp:OAuthDiscoveryOverallTimeoutSeconds", 20), 5, 60));
+
     private readonly string? _publicBaseUrl = config["Mcp:PublicBaseUrl"]?.TrimEnd('/');
 
     // state → незавершённый вход. Только в памяти: рестарт сервера обрывает вход, и это
@@ -102,7 +113,7 @@ public class McpOAuthService(
         CleanupPending();
 
         var oauth = record.Auth.OAuth ?? new McpOAuthConfig();
-        var (issuer, endpoints) = await DiscoverAsync(serverUrl, oauth, ct);
+        var (issuer, endpoints) = await DiscoverWithinBudgetAsync(serverUrl, oauth, ct);
 
         var clientId = Trim(input?.ClientId) ?? Trim(oauth.ClientId);
         var clientSecretRef = oauth.ClientSecretRef;
@@ -305,6 +316,24 @@ public class McpOAuthService(
 
     // ── discovery ────────────────────────────────────────────────────────────────────
 
+    // Общий потолок на всю цепочку discovery. Каждый шаг внутри (GetJsonAsync,
+    // ProbeResourceMetadataUrlAsync) сам глотает сетевые ошибки и таймауты попытки и просто
+    // переходит к следующему кандидату — при недоступном хосте DiscoverAsync поэтому не
+    // бросает исключение, а тихо доезжает до дефолтных путей спеки. Раз оборвались по этому
+    // потолку — значит хост не отвечал вовсе, и вместо того, чтобы тащить угаданные (и заведомо
+    // недостижимые) пути дальше в DCR, говорим человеку правду сразу
+    private async Task<(Uri Issuer, McpOAuthEndpoints Endpoints)> DiscoverWithinBudgetAsync(
+        Uri serverUrl, McpOAuthConfig oauth, CancellationToken ct)
+    {
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(_discoveryOverallTimeout);
+        var result = await DiscoverAsync(serverUrl, oauth, cts.Token);
+        if (cts.IsCancellationRequested && !ct.IsCancellationRequested)
+            throw new McpOAuthException(
+                $"Сервер авторизации не отвечает (проверка адресов заняла больше {_discoveryOverallTimeout.TotalSeconds:0} с)");
+        return result;
+    }
+
     // Адрес authorization server и его эндпоинты. Уже найденный issuer не ищем заново:
     // повторный вход после отзыва доступа не должен зависеть от того, отвечает ли сервер 401
     private async Task<(Uri Issuer, McpOAuthEndpoints Endpoints)> DiscoverAsync(
@@ -350,7 +379,7 @@ public class McpOAuthService(
                 Content = new StringContent(McpProbeProtocol.InitializeRequest(), Encoding.UTF8, "application/json"),
             };
             request.Headers.TryAddWithoutValidation("Accept", "application/json, text/event-stream");
-            using var response = await Client().SendAsync(request, ct);
+            using var response = await DiscoveryClient().SendAsync(request, ct);
             if (response.StatusCode is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)) return null;
             return McpOAuthDiscovery.ResourceMetadataFrom(
                 response.Headers.WwwAuthenticate.Select(h => h.ToString()));
@@ -365,7 +394,7 @@ public class McpOAuthService(
     {
         try
         {
-            using var response = await Client().GetAsync(url, ct);
+            using var response = await DiscoveryClient().GetAsync(url, ct);
             if (!response.IsSuccessStatusCode) return null;
             var body = await response.Content.ReadAsStringAsync(ct);
             using var document = JsonDocument.Parse(body);
@@ -409,7 +438,13 @@ public class McpOAuthService(
             };
             response = await Client().SendAsync(request, ct);
         }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        // TaskCanceledException от таймаута несёт бесполезное для человека «A task was
+        // canceled» — называем настоящую причину, а не пересказываем исключение
+        catch (TaskCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new McpOAuthException("Сервер авторизации не отвечает — регистрация клиента не выполнена");
+        }
+        catch (HttpRequestException ex)
         {
             throw new McpOAuthException("Регистрация клиента не удалась: " + ex.Message);
         }
@@ -567,6 +602,14 @@ public class McpOAuthService(
     {
         var client = httpFactory.CreateClient(HttpClientName);
         client.Timeout = _timeout;
+        return client;
+    }
+
+    // Короткий таймаут одной попытки discovery — _discoveryTimeout, а не общий _timeout
+    private HttpClient DiscoveryClient()
+    {
+        var client = httpFactory.CreateClient(HttpClientName);
+        client.Timeout = _discoveryTimeout;
         return client;
     }
 

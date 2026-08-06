@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -216,6 +217,54 @@ public class McpOAuthServiceTests : IDisposable
         var query = System.Web.HttpUtility.ParseQueryString(new Uri(start.AuthorizeUrl).Query);
         query["client_id"].Should().Be("client-руками");
         http.BodyOf("https://auth.example.com/register").Should().BeNull("DCR не нужен, client_id задан");
+    }
+
+    // ── таймаут discovery ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Вход_НедоступныйСерверАвторизации_УкладываетсяВПотолокИДаётПонятнуюОшибку()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "ccs-mcp-oauth-hang-" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        try
+        {
+            var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(dir, "projects.json"),
+                ["Mcp:OAuthDiscoveryTimeoutSeconds"] = "1",
+                ["Mcp:OAuthDiscoveryOverallTimeoutSeconds"] = "5",
+            }).Build();
+            var registry = new McpRegistry(config, new McpSecretStore(config));
+            var service = new McpOAuthService(registry, new McpSecretStore(config), new McpStatusStore(config),
+                new StubHttpClientFactory(new HangingHandler()), config, NullLogger<McpOAuthService>.Instance);
+            var record = NewRecord(registry);
+
+            var stopwatch = Stopwatch.StartNew();
+            var act = () => service.StartAsync(Owner, record, Redirect, input: null);
+            var thrown = await act.Should().ThrowAsync<McpOAuthException>();
+            stopwatch.Stop();
+
+            thrown.Which.Message.Should().Contain("не отвечает");
+            // Раньше та же недоступность authorization server держала запрос 90-100с
+            // (стандартные таймауты HttpClient складывались по цепочке discovery)
+            stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(15),
+                "общий потолок discovery не должен складываться в минуты ожидания");
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* уборка best-effort */ }
+        }
+    }
+
+    // Сервер, который никогда не отвечает — имитация мёртвого/зависшего authorization server
+    private sealed class HangingHandler : HttpMessageHandler
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+            throw new InvalidOperationException("недостижимо — Delay должен был отмениться раньше");
+        }
     }
 
     // ── обновление токена ────────────────────────────────────────────────────────────

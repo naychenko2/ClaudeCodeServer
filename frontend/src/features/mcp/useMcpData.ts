@@ -128,7 +128,9 @@ export interface McpData {
   oauthPending: Record<string, boolean>;
   oauthNotice: Record<string, string>;
   startOAuth: (server: McpServer, clientId?: string) => Promise<void>;
-  completeOAuth: (server: McpServer, code: string) => Promise<void>;
+  // true — код принят; false — отказ (сообщение уже легло в oauthNotice), вызывающий
+  // решает, чистить ли форму — на отказе поле с кодом должно остаться для повтора
+  completeOAuth: (server: McpServer, code: string) => Promise<boolean>;
   dismissOAuthNotice: (server: McpServer) => void;
 }
 
@@ -251,11 +253,11 @@ export function useMcpData(): McpData {
     }
   };
 
-  const completeOAuth = async (server: McpServer, code: string) => {
+  const completeOAuth = async (server: McpServer, code: string): Promise<boolean> => {
     const session = oauthSessions[server.id];
     if (!session) {
       setOauthNotice(n => ({ ...n, [server.id]: 'Сессия входа истекла — нажмите «Войти» заново' }));
-      return;
+      return false;
     }
     try {
       await api.mcp.oauthComplete(server.id, session.state, code.trim());
@@ -263,8 +265,10 @@ export function useMcpData(): McpData {
       setOauthSessions(p => { const n = { ...p }; delete n[server.id]; return n; });
       setOauthNotice(n => { const c = { ...n }; delete c[server.id]; return c; });
       refreshOne(server.id);
+      return true;
     } catch (e) {
       setOauthNotice(n => ({ ...n, [server.id]: msg(e, 'Код не принят') }));
+      return false;
     }
   };
 

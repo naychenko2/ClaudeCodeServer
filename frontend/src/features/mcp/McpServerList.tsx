@@ -264,8 +264,11 @@ function ManualOAuthCode({ server, data }: { server: McpServer; data: McpData })
   const submit = async () => {
     if (!code.trim() || busy) return;
     setBusy(true);
-    try { await data.completeOAuth(server, code); setCode(''); setOpen(false); }
-    finally { setBusy(false); }
+    try {
+      // На отказе оставляем поле открытым с введённым кодом — ошибка уже видна строкой
+      // выше (oauthNotice), а закрытие формы читалось бы как «получилось»
+      if (await data.completeOAuth(server, code)) { setCode(''); setOpen(false); }
+    } finally { setBusy(false); }
   };
 
   return (

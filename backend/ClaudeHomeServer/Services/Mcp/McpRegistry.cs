@@ -204,6 +204,9 @@ public class McpRegistry
     /// Разбор вставленного фрагмента <c>{"mcpServers": {...}}</c> (формат самого CLI):
     /// возвращает черновики записей без секретов — значения env/headers приходят голыми,
     /// пометить их секретами и увезти в стор обязан вызывающий. Мусорные узлы пропускаются.
+    /// Source = Manual: единственный вызывающий — POST /api/mcp/servers/import, ручное
+    /// действие пользователя (вставка конфига в форму «Добавить»), а не автообнаружение
+    /// в глобальном .mcp.json/~/.claude.json — этим наследство помечается отдельно, здесь его нет.
     /// </summary>
     public static List<McpServerRecord> ParseImport(JsonElement root)
     {
@@ -221,7 +224,7 @@ public class McpRegistry
             {
                 Key = prop.Name.Trim().ToLowerInvariant(),
                 Label = prop.Name,
-                Source = McpServerSource.LegacyMcpConfig,
+                Source = McpServerSource.Manual,
                 Enabled = false, // импортированное включает человек, посмотрев на содержимое
             };
             var url = Str(node, "url");

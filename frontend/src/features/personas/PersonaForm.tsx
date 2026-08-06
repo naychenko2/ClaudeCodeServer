@@ -9,8 +9,16 @@ import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
 import { ModelTierPicker } from '../../components/ModelTierPicker';
-import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
-import { parseTier, type ModelTierKey } from '../../lib/modelTiers';
+import { PresetOptions } from '../../components/PresetOptions';
+import { RoutePicker } from '../modelProviders/RoutePicker';
+import { EffectiveLine } from '../modelProviders/EffectiveLine';
+import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
+import { parseTier, useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
+import {
+  chainSummary, findPreset, invalidateEffectiveLines, presetIdOf, routeDisplayLabel,
+  usePresets, usePreview, useSpecialtySettings, type EffectiveLineContext,
+} from '../../lib/presets';
+import { effectiveSpecialtyRecord } from '../../lib/specialties';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
@@ -120,6 +128,12 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [model, setModel] = useState(persona?.model ?? initial?.model ?? '');
   // Уровень модели ('' — не задан): слот, которым персона работает, когда явной модели нет
   const [modelTier, setModelTier] = useState<ModelTierKey | ''>(parseTier(persona?.modelTier));
+  // Свои модели по уровням (ADR-007 §2): модель или пресет в ячейке; пусто — наследуется
+  // (специальность → «Модели по умолчанию»). Блок свёрнут, пока ничего не задано
+  const [tierStrong, setTierStrong] = useState(persona?.tierStrong ?? '');
+  const [tierMedium, setTierMedium] = useState(persona?.tierMedium ?? '');
+  const [tierWeak, setTierWeak] = useState(persona?.tierWeak ?? '');
+  const [tierCellsOpen, setTierCellsOpen] = useState(false);
   const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
   // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
   const [specialty, setSpecialty] = useState<PersonaSpecialty>(
@@ -222,6 +236,63 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Возможности провайдера выбранной модели — показываем «Усилие рассуждения» только если поддерживается
   const caps = useModelCaps(model);
+
+  // Пресеты и модели слотов — для группы «Пресеты» в выборе модели и ячеек уровней
+  const presets = usePresets();
+  const tierModels = useTierModels();
+  const specSettings = useSpecialtySettings();
+  const chainCtx = { tierModels, ollamaModel: undefined };
+  // Пресет в поле «Модель»: найден — карточка с цепочкой; удалён — честная пометка
+  const modelPreset = findPreset(presets, presetIdOf(model));
+  const brokenModelPreset = !!presetIdOf(model) && presets.length > 0 && !modelPreset;
+
+  // Ячейка уровня персоны: значение и установщик по ключу уровня
+  const tierCell = (t: ModelTierKey): string =>
+    t === 'strong' ? tierStrong : t === 'medium' ? tierMedium : tierWeak;
+  const setTierCell = (t: ModelTierKey, v: string) => {
+    if (t === 'strong') setTierStrong(v);
+    else if (t === 'medium') setTierMedium(v);
+    else setTierWeak(v);
+  };
+
+  // Подсказки пустых ячеек уровней — из preview-резолва по специальности, выбранной
+  // в форме сейчас (не по сохранённой персоне). Без специальности превью не зовём:
+  // place-резолв бэкенда уровень из query не применяет и вернул бы модель дефолтного
+  // уровня места для всех трёх ячеек — локальная оценка из слоёв точнее (слот уровня).
+  // Три статических вызова хука (TIER_ORDER фиксирован)
+  const cellHintCtx = (t: ModelTierKey): EffectiveLineContext =>
+    ({ kind: 'specialty', specialtyKey: specialty !== 'none' ? specialty : undefined, tier: t });
+  const cellHint: Record<ModelTierKey, ReturnType<typeof usePreview>> = {
+    strong: usePreview(cellHintCtx('strong')),
+    medium: usePreview(cellHintCtx('medium')),
+    weak: usePreview(cellHintCtx('weak')),
+  };
+
+  // Подпись пустой ячейки персоны: фактическое значение из резолва — «Как у
+  // специальности · …», если ответ дала ячейка специальности, иначе «Как у всех · …».
+  // До ответа превью (или при его сбое) — локальная оценка из слоёв настроек
+  const personaCellPlaceholder = (t: ModelTierKey): string => {
+    const d = cellHint[t];
+    if (d?.model) {
+      return d.source === 'specialty-cell'
+        ? `Как у специальности · ${modelLabel(d.model)}`
+        : `Как у всех · ${modelLabel(d.model)}`;
+    }
+    const cellOfRec = (r: { tierStrong?: string | null; tierMedium?: string | null; tierWeak?: string | null } | null | undefined) =>
+      (t === 'strong' ? r?.tierStrong : t === 'medium' ? r?.tierMedium : r?.tierWeak) || '';
+    const rec = specialty !== 'none' && specSettings
+      ? effectiveSpecialtyRecord(specSettings.global, specSettings.owner, specialty) : null;
+    const defRec = specSettings?.owner.defaultSpecialty ?? specSettings?.global.defaultSpecialty ?? null;
+    const fromSpec = cellOfRec(rec) || cellOfRec(defRec);
+    if (fromSpec) return `Как у специальности · ${routeDisplayLabel(fromSpec, presets, chainCtx)}`;
+    return tierModels[t] ? `Как у всех · ${modelLabel(tierModels[t])}` : 'Как у всех';
+  };
+
+  // Свёрнутая подпись блока «Свои модели по уровням»: пусто — наследование, задано — что именно
+  const filledTierCells = TIER_ORDER.filter(t => tierCell(t));
+  const tierCellsSummary = filledTierCells.length === 0
+    ? 'как у специальности'
+    : filledTierCells.map(t => `${TIER_TITLE[t]}: ${routeDisplayLabel(tierCell(t), presets, chainCtx)}`).join(' · ');
 
   // Акцент персоны из выбранного цвета — им красим роль в hero и (через onColorChange) тулбар
   const accentColor = AGENT_COLORS[color] ?? C.accent;
@@ -399,6 +470,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       instructions: instructions.trim(),
     },
     model, modelTier, effort, scope,
+    tierStrong, tierMedium, tierWeak,
     projectId: scope === 'project' ? projectId : '',
     color, greeting: greeting.trim(), memoryEnabled,
     tools: [...tools].sort(),
@@ -426,6 +498,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       },
       model: persona?.model ?? '',
       modelTier: parseTier(persona?.modelTier),
+      tierStrong: persona?.tierStrong ?? '',
+      tierMedium: persona?.tierMedium ?? '',
+      tierWeak: persona?.tierWeak ?? '',
       effort: persona?.effort ?? '',
       scope: s,
       projectId: s === 'project' ? (persona?.projectId ?? defaultProjectId ?? '') : '',
@@ -460,6 +535,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       model: isEdit ? model : (model || undefined),
       // Уровень модели по той же схеме: правка шлёт "" (сброс), создание — только заданный
       modelTier: isEdit ? modelTier : (modelTier || undefined),
+      // Свои модели по уровням — та же схема («»→ сброс ячейки к наследованию)
+      tierStrong: isEdit ? tierStrong : (tierStrong || undefined),
+      tierMedium: isEdit ? tierMedium : (tierMedium || undefined),
+      tierWeak: isEdit ? tierWeak : (tierWeak || undefined),
       effort: isEdit ? effort : (effort || undefined),
       scope,
       projectId: scope === 'project' ? projectId : undefined,
@@ -479,6 +558,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         ? await api.personas.update(persona!.id, dto)
         : await api.personas.create(dto);
       bumpPersonas();
+      invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
       onSaved(saved);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить персону');
@@ -932,9 +1012,50 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <SectionLabel style={{ marginBottom: 14 }}>Поведение и контекст</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
         <Field label="Модель">
-          {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
-              обязан показывать его, а не модель обычного нового чата */}
-          <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
+          {modelPreset || brokenModelPreset ? (
+            // Выбран пресет: карточка с именем и порядком шагов (битая ссылка — приглушённо,
+            // место ведёт себя как пустое); «Сменить» возвращает к выбору модели
+            <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
+              <div style={{
+                flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: R.md,
+                border: `1px solid ${brokenModelPreset ? C.border : C.accent}`,
+                background: brokenModelPreset ? C.bgWhite : C.accentLight,
+              }}>
+                <div style={{
+                  fontSize: 13, fontWeight: 600, fontFamily: FONT.sans,
+                  color: brokenModelPreset ? C.textMuted : C.textHeading,
+                }}>
+                  {brokenModelPreset ? 'Пресет удалён — работает настройка по умолчанию' : modelPreset!.name}
+                </div>
+                {modelPreset && (
+                  <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2, lineHeight: 1.35 }}>
+                    {chainSummary(modelPreset, chainCtx)}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setModel('')}
+                style={{
+                  flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 12px',
+                  borderRadius: R.md, cursor: 'pointer', border: `1px solid ${C.border}`,
+                  background: C.bgWhite, fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+                  color: C.accent,
+                }}
+              >
+                Сменить
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Пресет — третий вариант в том же выборе (спека, блок 2); пустая группа
+                  не показывается вовсе */}
+              <PresetOptions value={model} onPick={setModel} ctx={chainCtx} />
+              {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
+                  обязан показывать его, а не модель обычного нового чата */}
+              <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
+            </div>
+          )}
         </Field>
 
         {/* Уровень слабее явной модели выше: задал модель — она и пойдёт в ход */}
@@ -944,7 +1065,88 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             onChange={setModelTier}
             defaultHint={model ? 'работает выбранной моделью' : 'как настроено для чатов персон'}
           />
+          <div style={{ marginTop: 6 }}>
+            <EffectiveLine ctx={{ kind: 'persona', personaId: persona?.id }} />
+          </div>
         </Field>
+
+        {/* Свои модели по уровням (спека, блок 4): три ячейки — модель или пресет;
+            пустая — наследуется (специальность → «Модели по умолчанию») */}
+        <div style={{ gridColumn: '1 / -1' }}>
+          {tierCellsOpen ? (
+            <Field label="Свои модели по уровням">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {TIER_ORDER.map(t => {
+                  const cell = tierCell(t);
+                  return (
+                    <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 64, flexShrink: 0, fontSize: 12.5, color: C.textSecondary }}>
+                        {TIER_TITLE[t]}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                        <RoutePicker
+                          route={cell}
+                          label={cell ? routeDisplayLabel(cell, presets, chainCtx) : ''}
+                          models={models}
+                          tierModels={tierModels}
+                          placeholder={personaCellPlaceholder(t)}
+                          showTiers={false}
+                          showPresets
+                          onChange={v => setTierCell(t, v)}
+                        />
+                      </div>
+                      {cell && (
+                        <button
+                          type="button"
+                          onClick={() => setTierCell(t, '')}
+                          title="Вернуть наследование"
+                          style={{
+                            flexShrink: 0, font: 'inherit', fontSize: 11.5, color: C.accent,
+                            background: 'transparent', border: 'none', padding: 0,
+                            cursor: 'pointer', textDecoration: 'underline',
+                          }}
+                        >
+                          Сбросить
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setTierCellsOpen(false)}
+                  style={{
+                    alignSelf: 'flex-start', font: 'inherit', fontSize: 12, fontWeight: 600,
+                    color: C.textMuted, background: 'none', border: 'none', padding: '2px 2px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Свернуть
+                </button>
+              </div>
+            </Field>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setTierCellsOpen(true)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                padding: '8px 11px', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
+                border: `1px solid ${C.border}`, background: C.bgWhite, font: 'inherit',
+              }}
+            >
+              <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
+                Свои модели по уровням:
+              </span>
+              <span style={{
+                flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {tierCellsSummary}
+              </span>
+            </button>
+          )}
+        </div>
 
         {caps.supportsEffort && (
           <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">

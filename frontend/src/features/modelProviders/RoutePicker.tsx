@@ -1,22 +1,26 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { ModelPicker } from '../../components/ModelPicker';
-import { QuickOptionCard } from '../../components/ModelProvidersSections';
+import { QuickOptionCard } from '../../components/QuickOptionCard';
+import { PresetOptions } from '../../components/PresetOptions';
 import { TIERS, TIER_ORDER, routeTier, tierSubtitle, type TierKey } from '../../components/modelProvidersShared';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { usePresets, presetIdOf } from '../../lib/presets';
 import { C, FONT, FS, R, SHADOW, Z } from '../../lib/design';
 import type { ModelOption } from '../../lib/models';
 
 const PANEL_W = 320;
 const PANEL_MAX_H = 340;
 
-// Единый контрол выбора маршрута (модель по умолчанию специальности / правило пресета):
-// триггер + всплывающая панель с карточками трёх слотов и полным ModelPicker. Совпадает
-// с дропдауном строки «Кто что выполняет» (ActionRow), но переиспользуется в новых вкладках.
+// Единый контрол выбора маршрута (ячейка матрицы специальности / шаг цепочки пресета):
+// триггер + всплывающая панель с карточками уровней, группой «Пресеты» и полным
+// ModelPicker. Флаги showTiers/showPresets режут состав панели под место: в ячейке
+// уровня нельзя выбрать уровень (тавтология), в шаге цепочки — пресет (вложенность).
 // Два вида триггера: обычная кнопка-строка и мини-карточка (макет специальностей).
 export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle,
+  showTiers = true, showPresets = false,
 }: {
   route: string;
   label: string;
@@ -30,11 +34,18 @@ export function RoutePicker({
   placeholder?: string;
   // Режим мини-карточки: триггер — карточка с заголовком сверху и значением ниже
   cardTitle?: string;
+  // Показывать карточки уровней (сильная/средняя/слабая). В поле, которое само адресовано
+  // уровнем (ячейка матрицы), уровни не предлагаем — «сильная = средняя» была бы петлёй
+  showTiers?: boolean;
+  // Показывать группу «Пресеты» (пресет — третий вариант выбора). В шаге цепочки
+  // не предлагаем: пресет в пресет не вкладывается (бэкенд отклоняет 400)
+  showPresets?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const presets = usePresets();
   const activeTier = routeTier(route);
   const interactive = !busy && !readOnly;
 
@@ -72,7 +83,8 @@ export function RoutePicker({
   }, [open]);
 
   const pick = (v: string) => { onChange(v); setOpen(false); };
-  const pickerValue = activeTier || route === 'local' ? '' : route;
+  // Подсветка в ModelPicker: слот/локаль/пресет — не модельные значения, им нечего светить
+  const pickerValue = activeTier || route === 'local' || presetIdOf(route) ? '' : route;
 
   const panel = open && pos ? (
     <div
@@ -84,7 +96,7 @@ export function RoutePicker({
         boxShadow: SHADOW.dropdown, padding: 8, zIndex: Z.dropdown,
       }}
     >
-      {TIER_ORDER.map(t => (
+      {showTiers && TIER_ORDER.map(t => (
         <QuickOptionCard
           key={t}
           title={TIERS[t].title}
@@ -100,6 +112,14 @@ export function RoutePicker({
           active={route === 'local'}
           onClick={() => pick('local')}
         />
+      )}
+      {showPresets && (
+        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }} />
+      )}
+      {!showPresets && presets.length > 0 && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
+          Пресет в пресет не вкладывается — выпишите шаги подряд.
+        </div>
       )}
       <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />
       <ModelPicker

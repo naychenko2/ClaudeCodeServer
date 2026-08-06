@@ -15,6 +15,7 @@ import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { UsageScreen } from './UsageScreen';
 import { ModelProvidersTabsModal } from '../features/modelProviders/ModelProvidersTabsModal';
 import { api } from '../lib/api';
+import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 
 interface Props {
@@ -59,6 +60,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
   const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
+
+  // «Собрать цепочку…» из панелей выбора модели — открыть раздел на вкладке «Пресеты»
+  useEffect(() => subscribeModelProvidersNav(() => setShowBackgroundTasks(true)), []);
 
   const isAdmin = auth.role === 'admin';
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';

@@ -18,7 +18,7 @@ function DividerPill({ text, warn }: { text: string; warn?: boolean }) {
     }}>
       <div style={{ flex: 1, height: 1, background: C.border }} />
       <div style={{
-        fontSize: FS.sm, whiteSpace: 'nowrap', padding: '3px 10px', borderRadius: R.full,
+        fontSize: FS.sm, whiteSpace: 'nowrap', padding: '3px 10px', borderRadius: R.max,
         background: warn ? C.warningBg : C.bgSelected,
         border: `1px solid ${warn ? C.warning : C.border}`,
         color: warn ? C.warningText : C.textSecondary,

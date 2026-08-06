@@ -5,6 +5,8 @@ import { C, FONT, FS, MODAL_W } from '../../lib/design';
 import { api } from '../../lib/api';
 import { useModels, useProviders } from '../../lib/models';
 import { useSpecialtyCatalog } from '../../lib/specialties';
+import { updateSpecialtySettings } from '../../lib/presets';
+import { consumeOpenRequest, subscribeModelProvidersNav } from '../../lib/modelProvidersNav';
 import { useProviderData, buildProviderTiles, type TierKey } from '../../components/modelProvidersShared';
 import { ProviderTiles, SlotsSection, ApplySection } from '../../components/ModelProvidersSections';
 import { SpecialtiesTab } from './SpecialtiesTab';
@@ -26,7 +28,13 @@ export function ModelProvidersTabsModal({ onClose, isAdmin }: { onClose: () => v
   const providers = useProviders();
   const catalog = useSpecialtyCatalog();
 
-  const [tab, setTab] = useState<TabKey>(isAdmin ? 'providers' : 'slots');
+  // Навигация «Собрать цепочку…»: маунт по запросу — сразу вкладка «Пресеты»
+  // (consume в инициализаторе); уже открытая модалка переключается по событию
+  const [tab, setTab] = useState<TabKey>(() =>
+    consumeOpenRequest() ? 'presets' : (isAdmin ? 'providers' : 'slots'));
+  useEffect(() =>
+    subscribeModelProvidersNav(() => { if (consumeOpenRequest()) setTab('presets'); }),
+  []);
 
   // Настройки специальностей и пресетов: глобальный + личный слой
   const [settings, setSettings] = useState<SpecialtySettingsResponse | null>(null);
@@ -36,7 +44,7 @@ export function ModelProvidersTabsModal({ onClose, isAdmin }: { onClose: () => v
   useEffect(() => {
     let cancelled = false;
     api.specialties.getSettings()
-      .then(s => { if (!cancelled) setSettings(s); })
+      .then(s => { if (!cancelled) { setSettings(s); updateSpecialtySettings(s); } })
       .catch(e => { if (!cancelled) setSettingsError(e instanceof Error ? e.message : 'Не удалось загрузить настройки'); });
     return () => { cancelled = true; };
   }, []);
@@ -46,6 +54,21 @@ export function ModelProvidersTabsModal({ onClose, isAdmin }: { onClose: () => v
   // (уже выправленной пред. попытки) перезаписывал бы актуальный результат и красная
   // плашка «прилипала» бы после того, как причина уже устранена (D3)
   const saveSeqRef = useRef<{ global: number; owner: number }>({ global: 0, owner: 0 });
+  // Зеркало settings для обновления общего стора вне апдейтера (см. commit ниже)
+  const settingsRef = useRef<SpecialtySettingsResponse | null>(null);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
+
+  // Слияние сохранённого слоя в ответ настроек: PUT отдаёт только слой — объединённый
+  // список пресетов пересобираем из слоёв (личные впереди, как EffectivePresetsWithScope)
+  const mergeSavedLayer = (base: SpecialtySettingsResponse, scope: 'global' | 'owner',
+    saved: SpecialtySettingsLayer): SpecialtySettingsResponse => {
+    const merged = { ...base, [scope]: saved };
+    merged.presets = [
+      ...merged.owner.presets.map(p => ({ ...p, scope: 'owner' as const })),
+      ...merged.global.presets.map(p => ({ ...p, scope: 'global' as const })),
+    ];
+    return merged;
+  };
 
   // Оптимистичное сохранение слоя: применяем сразу, при ошибке откатываем. Ответ бэка
   // несёт нормализованный слой — им и сверяемся после записи.
@@ -57,7 +80,13 @@ export function ModelProvidersTabsModal({ onClose, isAdmin }: { onClose: () => v
     setSettingsError(null);
     const commit = (saved: SpecialtySettingsLayer) => {
       if (saveSeqRef.current[scope] !== seq) return; // устарел — следующая попытка уже в полёте
-      setSettings(s => s ? { ...s, [scope]: saved } : s);
+      // Апдейтер обязан быть ЧИСТЫМ: он исполняется в фазе рендера модалки, и побочный
+      // updateSpecialtySettings внутри него дёргал подписчиков стора (PresetOptions в
+      // RoutePicker и др.) — «Cannot update a component while rendering a different
+      // component» (дефект приёмки). Обновление стора — отдельно, после setState.
+      setSettings(s => s ? mergeSavedLayer(s, scope, saved) : s);
+      const cur = settingsRef.current;
+      if (cur) updateSpecialtySettings(mergeSavedLayer(cur, scope, saved)); // свежие пресеты/ячейки — остальным экранам
     };
     const fail = (e: unknown) => {
       if (saveSeqRef.current[scope] !== seq) return;
@@ -184,7 +213,6 @@ export function ModelProvidersTabsModal({ onClose, isAdmin }: { onClose: () => v
               <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>
             ) : (
               <PresetsTab
-                catalog={catalog ?? []}
                 globalLayer={settings.global}
                 ownerLayer={settings.owner}
                 isAdmin={isAdmin}
@@ -193,6 +221,7 @@ export function ModelProvidersTabsModal({ onClose, isAdmin }: { onClose: () => v
                 ollamaModel={ollamaModel}
                 savingScope={savingScope}
                 onSaveLayer={handleSaveLayer}
+                onGoProviders={isAdmin ? () => setTab('providers') : undefined}
               />
             )
           )}

@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -146,10 +146,10 @@ export const api = {
   // ollama ответа /usage.
   localActions: {
     setRoute: (key: string, route: string) =>
-      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
         { method: 'PUT', body: JSON.stringify({ route }) }),
     reset: (key: string) =>
-      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
         { method: 'DELETE' }),
     // Массовый автоподбор исполнителя всем действиям по пресету; актуальные маршруты фронт
     // затем перечитывает из /usage. preset: 'tiers' | 'tiers-local'.
@@ -200,6 +200,20 @@ export const api = {
         // пикеры подписывают пункт «По умолчанию (<модель>)»
         assignments?: Record<string, string | null>;
       }>('/models'),
+    // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
+    // что запуск хода — второй точки истины нет)
+    preview: (q: { place?: string; personaId?: string; specialty?: string; tier?: string }) => {
+      const qs = new URLSearchParams();
+      if (q.place) qs.set('place', q.place);
+      if (q.personaId) qs.set('personaId', q.personaId);
+      if (q.specialty) qs.set('specialty', q.specialty);
+      if (q.tier) qs.set('tier', q.tier);
+      const s = qs.toString();
+      return request<ModelPreviewResponse>(`/models/preview${s ? `?${s}` : ''}`);
+    },
+    // Места, где выбран пресет (диалог удаления)
+    presetUsage: (id: string) =>
+      request<PresetUsageResponse>(`/models/presets/${encodeURIComponent(id)}/usage`),
   },
 
   featureFlags: {

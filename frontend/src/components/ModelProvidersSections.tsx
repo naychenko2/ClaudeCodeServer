@@ -1,12 +1,20 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronDown, RotateCcw, Zap } from 'lucide-react';
+import { ChevronDown, Link2, RotateCcw, Zap } from 'lucide-react';
 import { IconButton, Toggle, Button, Menu, MenuItem } from './ui';
 import { ModelPicker } from './ModelPicker';
+import { PresetOptions } from './PresetOptions';
+import { QuickOptionCard } from './QuickOptionCard';
+import { EffectiveLine } from '../features/modelProviders/EffectiveLine';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { api, type ModelTiers } from '../lib/api';
 import { C, FONT, FS, R, SP, SHADOW, Z } from '../lib/design';
 import { useModels, useProviders, modelLabel, providerLabel, loadModels,
   type ProviderCapabilities, type ModelOption } from '../lib/models';
+import {
+  chainSummary, findPreset, invalidateEffectiveLines, isPresetRoute, presetIdOf,
+  presetRoute, presetValueLabel, resolvePlacePreset, stepsWord, usePresets,
+  useSpecialtySettings,
+} from '../lib/presets';
 import type { OllamaActionInfo, AppSettings } from '../types';
 import {
   ROW_CLASS, groupHeaderStyle, levelTitleStyle, BRIEFING_KEY,
@@ -68,6 +76,7 @@ export function SlotsSection({ isAdmin, data, contextUserId, onContextUserId }: 
 }) {
   const models = useModels();
   const providers = useProviders();
+  const presets = usePresets();
   const { globalSettings, setGlobalSettings, setOwnTiers, setUserTiers,
     selectedTiers, globalTiers } = data;
 
@@ -109,17 +118,17 @@ export function SlotsSection({ isAdmin, data, contextUserId, onContextUserId }: 
     const patch: Partial<ModelTiers> = { [t]: model };
     if (!isAdmin) {
       api.meModelTiers.save(patch)
-        .then(saved => { setOwnTiers(saved); void loadModels(); })
+        .then(saved => { setOwnTiers(saved); void loadModels(); invalidateEffectiveLines(); })
         .catch(e => { rollback(); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); })
         .finally(() => setDefaultBusy(null));
     } else if (contextUserId) {
       api.adminUserModelTiers.save(contextUserId, patch)
-        .then(saved => { setUserTiers(saved); void loadModels(); })
+        .then(saved => { setUserTiers(saved); void loadModels(); invalidateEffectiveLines(); })
         .catch(e => { rollback(); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); })
         .finally(() => setDefaultBusy(null));
     } else {
       api.settings.save({ [TIERS[t].field]: model })
-        .then(saved => { setGlobalSettings(saved); void loadModels(); })
+        .then(saved => { setGlobalSettings(saved); void loadModels(); invalidateEffectiveLines(); })
         .catch(e => { rollback(); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); })
         .finally(() => setDefaultBusy(null));
     }
@@ -177,6 +186,33 @@ export function SlotsSection({ isAdmin, data, contextUserId, onContextUserId }: 
     } finally {
       setChipBusy(null);
     }
+  }
+
+  // Подпись слота: у пресета — имя и порядок шагов, у битой ссылки — честная пометка
+  // (место ведёт себя как пустое), у пустого личного слота — наследование общего.
+  function slotSubtitle(route: string, inheritedModel?: string | null): string {
+    const ctx = {
+      tierModels: { strong: data.effectiveTierModel('strong'), medium: data.effectiveTierModel('medium'), weak: data.effectiveTierModel('weak') },
+      ollamaModel: data.info?.model ?? undefined,
+    };
+    if (isPresetRoute(route)) {
+      const p = findPreset(presets, presetIdOf(route));
+      return p ? `${p.name} · ${chainSummary(p, ctx)}` : 'Пресет удалён — работает настройка по умолчанию';
+    }
+    if (route) return tierSubtitle(route);
+    if (inheritedModel) {
+      return isPresetRoute(inheritedModel)
+        ? `Как у всех · ${presetValueLabel(inheritedModel, presets)}`
+        : tierSubtitle('', inheritedModel);
+    }
+    return tierSubtitle('', inheritedModel);
+  }
+
+  // Самоссылка: слот уровня T указывает на пресет, внутри которого есть шаг «уровень T»
+  // (уровни в пресете разворачиваются из этих же слотов) — бэкенд пропустит такой шаг
+  function selfRefStep(route: string, t: TierKey): boolean {
+    const p = findPreset(presets, presetIdOf(route));
+    return !!p && p.steps.some(s => routeTier(s) === t);
   }
 
   // Провайдеры, для которых можно нарисовать чипс быстрого выбора тройки.
@@ -277,6 +313,7 @@ export function SlotsSection({ isAdmin, data, contextUserId, onContextUserId }: 
         const editing = editingTier === t;
         const rowBusy = defaultBusy === t;
         const inheritedModel = isAdmin && !contextUserId ? undefined : globalTierModel(t);
+        const selfRef = selfRefStep(model, t);
         return (
           <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
             <div style={{
@@ -291,7 +328,7 @@ export function SlotsSection({ isAdmin, data, contextUserId, onContextUserId }: 
                 </div>
                 <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {tierSubtitle(model, inheritedModel)} · {TIERS[t].hint}
+                  {slotSubtitle(model, inheritedModel)} · {TIERS[t].hint}
                 </div>
               </div>
               {model && (
@@ -314,16 +351,34 @@ export function SlotsSection({ isAdmin, data, contextUserId, onContextUserId }: 
                 {editing ? 'Отмена' : 'Сменить'}
               </Button>
             </div>
+            {selfRef && (
+              <div style={{
+                fontSize: FS.xs, color: C.warningText, lineHeight: 1.45, padding: '0 2px',
+              }}>
+                Шаг «{TIERS[t].title}» внутри пресета указывает обратно на эту же настройку —
+                он будет пропущен.
+              </div>
+            )}
             {editing && (
-              <ModelPicker
-                value={model}
-                options={models}
-                onChange={m => saveTier(t, m)}
-                collapsible={false}
-                // Здесь модели слотов и выбираются: пункт «По умолчанию» ссылался бы
-                // сам на себя — сброса слота из UI сознательно нет
-                hideDefault
-              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <PresetOptions
+                  value={model}
+                  onPick={m => saveTier(t, m)}
+                  ctx={{
+                    tierModels: { strong: data.effectiveTierModel('strong'), medium: data.effectiveTierModel('medium'), weak: data.effectiveTierModel('weak') },
+                    ollamaModel: data.info?.model ?? undefined,
+                  }}
+                />
+                <ModelPicker
+                  value={isPresetRoute(model) ? '' : model}
+                  options={models}
+                  onChange={m => saveTier(t, m)}
+                  collapsible={false}
+                  // Здесь модели слотов и выбираются: пункт «По умолчанию» ссылался бы
+                  // сам на себя — сброса слота из UI сознательно нет
+                  hideDefault
+                />
+              </div>
             )}
           </div>
         );
@@ -406,11 +461,13 @@ export function ApplySection({ isAdmin, data }: {
   async function pick(a: OllamaActionInfo, route: string) {
     setBusy(a.key);
     setError(null);
-    patch({ ...a, route, routedToOllama: route === 'local', source: 'admin' });
+    // preset сбрасываем: до ответа сервера пресет покажет разбор route (он ещё сырой)
+    patch({ ...a, route, preset: null, routedToOllama: route === 'local', source: 'admin' });
     try {
       const res = await api.localActions.setRoute(a.key, route);
-      patch({ ...a, route: res.route, routedToOllama: res.route === 'local',
+      patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
+      invalidateEffectiveLines();
     } catch (e) {
       patch(a);
       setError(e instanceof Error ? e.message : 'Не удалось сохранить');
@@ -424,7 +481,7 @@ export function ApplySection({ isAdmin, data }: {
     setError(null);
     try {
       const res = await api.localActions.reset(a.key);
-      patch({ ...a, route: res.route, routedToOllama: res.route === 'local',
+      patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сбросить');
@@ -534,30 +591,9 @@ export function ApplySection({ isAdmin, data }: {
   );
 }
 
-// Компактная карточка-опция «Локальная модель» / слот — строка-карточка (имя + подпись).
-export function QuickOptionCard({ title, subtitle, active, onClick }: {
-  title: string; subtitle: string; active: boolean; onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      style={{
-        width: '100%', display: 'flex', flexDirection: 'column', gap: 2,
-        padding: '8px 10px', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
-        border: `1px solid ${active ? C.accent : C.border}`,
-        background: active ? C.accentLight : C.bgWhite,
-      }}
-    >
-      <span style={{ fontSize: FS.md, fontWeight: 600, color: active ? C.textHeading : C.textPrimary, fontFamily: FONT.sans }}>
-        {title}
-      </span>
-      <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.35 }}>
-        {subtitle}
-      </span>
-    </button>
-  );
-}
+// Компактная карточка-опция вынесена в QuickOptionCard.tsx (ею пользуется и группа
+// «Пресеты»); реэкспорт оставлен для существующих импортов (RoutePicker и др.)
+export { QuickOptionCard };
 
 const PANEL_W = 320;
 const PANEL_MAX_H = 340;
@@ -587,12 +623,19 @@ export function ActionRow({ action: a, first, busy, ollamaModel, tierModels, mod
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+  const presets = usePresets();
+  const settingsLoaded = useSpecialtySettings() !== null;
   const overridden = a.source === 'admin';
   const route = a.route ?? '';
   const activeTier = routeTier(route);
   const selectColor = a.routedToOllama ? C.accent : C.textSecondary;
   // «Сильному» действию выбрана локаль — по факту пойдёт фолбэк (локаль пропускается)
   const localOnStrong = a.requiresStrong && route === 'local';
+  // Выбранный пресет: с нового бэка — поле preset в ответе места (route при этом
+  // развёрнут в первый шаг и ссылки не несёт); на переходный период распознаём
+  // ссылку в самом route. name=null в поле — битая ссылка (пресет удалён)
+  const { preset, broken: brokenPreset, presetId } =
+    resolvePlacePreset(route, a.preset, presets, settingsLoaded);
 
   // Клик вне панели / Escape — закрыть
   useEffect(() => {
@@ -630,10 +673,23 @@ export function ActionRow({ action: a, first, busy, ollamaModel, tierModels, mod
     setPos({ top, left, maxHeight });
   }, [open]);
 
-  // Выбор из панели: '' из ModelPicker невозможен (пункт скрыт), приходит слот или модель
+  // Выбор из панели: '' из ModelPicker невозможен (пункт скрыт), приходит слот,
+  // модель, локаль или preset-ссылка
   const pick = (v: string) => { onPick(v); setOpen(false); };
-  // Для подсветки в ModelPicker: конкретная модель — её id, слот/локаль — ничего
-  const pickerValue = activeTier || route === 'local' ? '' : route;
+  // Для подсветки в ModelPicker: конкретная модель — её id, слот/локаль/пресет — ничего
+  const pickerValue = activeTier || route === 'local' || presetId ? '' : route;
+  const chainCtx = { tierModels, ollamaModel };
+  // Подпись триггера: пресет — имя + длина цепочки, битая ссылка — честная пометка
+  const triggerLabel = brokenPreset
+    ? 'Пресет удалён — работает настройка по умолчанию'
+    : preset
+      ? `${preset.name} · ${stepsWord(preset.steps.length)}`
+      : routeLabel(route, ollamaModel, tierModels);
+  const triggerTitle = brokenPreset
+    ? 'Пресет удалён — работает настройка по умолчанию. Нажмите, чтобы выбрать другой'
+    : preset
+      ? `Сейчас пойдёт: ${chainSummary(preset, chainCtx)}`
+      : 'С чего начинать действие; дальше — локальная модель, затем AI';
 
   return (
     <div
@@ -690,20 +746,23 @@ export function ActionRow({ action: a, first, busy, ollamaModel, tierModels, mod
           type="button"
           onClick={() => setOpen(o => !o)}
           disabled={busy}
-          title="С чего начинать действие; дальше — локальная модель, затем AI"
+          title={triggerTitle}
           style={{
             display: 'flex', alignItems: 'center', gap: 6, maxWidth: 230,
             fontFamily: FONT.sans, fontSize: FS.xs,
             padding: '4px 8px 4px 9px', borderRadius: R.md,
             cursor: busy ? 'default' : 'pointer', opacity: busy ? 0.5 : 1,
-            color: selectColor, background: C.bgWhite,
+            color: brokenPreset ? C.textMuted : selectColor, background: C.bgWhite,
             border: `1px solid ${open ? C.accent : (a.routedToOllama ? C.accent : C.border)}`,
             outline: 'none', transition: 'border-color 0.15s, box-shadow 0.15s',
             boxShadow: open ? SHADOW.focus : 'none',
           }}
         >
+          {preset && (
+            <Link2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.textMuted }} />
+          )}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-            {routeLabel(a.route, ollamaModel, tierModels)}
+            {triggerLabel}
           </span>
           <ChevronDown
             size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
@@ -721,6 +780,7 @@ export function ActionRow({ action: a, first, busy, ollamaModel, tierModels, mod
               boxShadow: SHADOW.dropdown, padding: 8, zIndex: Z.dropdown,
             }}
           >
+            <EffectiveLine ctx={{ kind: 'action', actionKey: a.key }} />
             {/* Три слота сверху — обычный выбор; локаль ниже и только фоновым местам */}
             {TIER_ORDER.map(t => (
               <QuickOptionCard
@@ -739,6 +799,9 @@ export function ActionRow({ action: a, first, busy, ollamaModel, tierModels, mod
                 onClick={() => pick('local')}
               />
             )}
+            {/* value — ссылка на пресет (в route он развёрнут в первый шаг),
+                иначе подсветка выбранного пресета пропадала бы */}
+            <PresetOptions value={presetId ? presetRoute(presetId) : route} onPick={pick} ctx={chainCtx} scope="global" />
             <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />
             <ModelPicker
               value={pickerValue}

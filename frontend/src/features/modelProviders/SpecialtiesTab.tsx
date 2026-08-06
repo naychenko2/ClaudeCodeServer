@@ -1,17 +1,24 @@
 import { useMemo, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { RotateCcw } from 'lucide-react';
+import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { routeLabel, type TierKey } from '../../components/modelProvidersShared';
+import { TIER_ORDER, TIER_TITLE } from '../../lib/modelTiers';
+import type { TierKey } from '../../components/modelProvidersShared';
 import { RoutePicker } from './RoutePicker';
+import { EffectiveLine } from './EffectiveLine';
 import { C, FONT, FS, R } from '../../lib/design';
 import { usePersonas } from '../../lib/personas';
+import { routeDisplayLabel, usePresets, usePreview, type ChainLabelContext } from '../../lib/presets';
+import { modelLabel } from '../../lib/models';
 import {
-  DEFAULT_GLOBAL_PRESET_ID, DEFAULT_OWNER_PRESET_ID,
-  defaultRouteFor, specialtyLabel, withDefaultRoute,
+  ANY_SPECIALTY, effectiveSpecialtyRecord, specialtyLabel, withDefaultTier, withTierCell,
 } from '../../lib/specialties';
 import type { ModelOption } from '../../lib/models';
-import type { Persona, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtyTemplate } from '../../types';
+import type {
+  ModelTierValue, Persona, SpecialtyCatalogEntry, SpecialtySettingsLayer,
+  SpecialtyTemplate, SpecialtyTemplateSettings,
+} from '../../types';
 
 // Возможности персоны: полный набор ключей (null у шаблона/персоны = «все»)
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
@@ -28,6 +35,9 @@ const EXECUTOR_HINT: Record<string, string> = {
 // «Новые» специальности волны — бейдж в списке (переименованный executor не считаем новым)
 const NEW_KEYS = new Set(['backendExecutor', 'frontendExecutor']);
 
+// Одноразовый баннер о переносе прежних правил (спека, блок 5): закрывается навсегда
+const MIGRATION_BANNER_KEY = 'cc-specialties-migration-banner-dismissed';
+
 function sameSet(a: string[] | null, b: string[] | null): boolean {
   const norm = (x: string[] | null) => JSON.stringify([...(x ?? ALL_TOOL_KEYS)].sort());
   return norm(a) === norm(b);
@@ -43,6 +53,11 @@ function personaDeviates(p: Persona, t: SpecialtyTemplate | null): boolean {
   return JSON.stringify(pDis) !== JSON.stringify(tDis);
 }
 
+// Есть ли у записи заполненные поля итерации 2 (матрица или уровень по умолчанию)
+function recordFilled(r: SpecialtyTemplateSettings | null | undefined): boolean {
+  return !!(r && (r.tierStrong || r.tierMedium || r.tierWeak || r.defaultTier));
+}
+
 const sectionTitleStyle: CSSProperties = {
   fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
   textTransform: 'uppercase', letterSpacing: '0.06em', margin: '10px 2px 2px',
@@ -51,6 +66,12 @@ const sectionTitleStyle: CSSProperties = {
 const flabelStyle: CSSProperties = {
   fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
   textTransform: 'uppercase', letterSpacing: '0.05em',
+};
+
+const selectStyle: CSSProperties = {
+  font: 'inherit', fontSize: FS.xs, color: C.textPrimary,
+  background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.md,
+  padding: '6px 8px', outline: 'none', width: '100%',
 };
 
 // Компактная ссылка-сброс под мини-карточкой значения (глобально/лично)
@@ -74,6 +95,59 @@ function ResetLink({ busy, title, onClick }: { busy: boolean; title: string; onC
   );
 }
 
+// Личная ячейка уровня специальности. Вынесена в компонент: плейсхолдер пустой ячейки
+// берётся из preview-резолва (хук — нельзя в renderMatrix, он вызывается в цикле).
+function OwnerTierCell({ specKey, tier: t, value, presets, labelCtx, models, tierModels,
+  ollamaModel, busy, fallbackPlaceholder, onChange, onReset }: {
+  specKey: string;
+  tier: TierKey;
+  value: string;
+  presets: ReturnType<typeof usePresets>;
+  labelCtx: ChainLabelContext;
+  models: ModelOption[];
+  tierModels: Record<TierKey, string>;
+  ollamaModel?: string;
+  busy: boolean;
+  fallbackPlaceholder: string;
+  onChange: (v: string) => void;
+  onReset: () => void;
+}) {
+  // «Любая специальность» — не ключ каталога, превью её не резолвит (specialtyKey
+  // пуст → запроса нет): плейсхолдер остаётся локальной оценкой из слоёв
+  const d = usePreview(specKey === ANY_SPECIALTY
+    ? { kind: 'specialty', specialtyKey: undefined, tier: t }
+    : { kind: 'specialty', specialtyKey: specKey, tier: t });
+  // Плейсхолдер по спеке: «Как у всех · {модель}» — фактическое значение из резолва;
+  // до ответа (или при его сбое) — локальная оценка из слоёв
+  const placeholder = d?.model
+    ? `Как у всех · ${modelLabel(d.model)}`
+    : fallbackPlaceholder;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+      <RoutePicker
+        route={value}
+        label={value ? routeDisplayLabel(value, presets, labelCtx) : ''}
+        models={models}
+        tierModels={tierModels}
+        ollamaModel={ollamaModel}
+        cardTitle={`${TIER_TITLE[t]} · только для меня`}
+        busy={busy}
+        placeholder={placeholder}
+        showTiers={false}
+        showPresets
+        onChange={onChange}
+      />
+      {value && (
+        <ResetLink
+          busy={busy}
+          title="Вернуть «как у всех»"
+          onClick={onReset}
+        />
+      )}
+    </div>
+  );
+}
+
 export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, models,
   tierModels, ollamaModel, savingScope, onSaveLayer }: {
   catalog: SpecialtyCatalogEntry[];
@@ -87,7 +161,12 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
   onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
 }) {
   const personas = usePersonas();
+  const presets = usePresets();
   const [openKeys, setOpenKeys] = useState<Set<string>>(() => new Set());
+  const [bannerDismissed, setBannerDismissed] = useState(
+    () => localStorage.getItem(MIGRATION_BANNER_KEY) === '1');
+
+  const labelCtx: ChainLabelContext = { tierModels, ollamaModel };
 
   const executors = useMemo(() => catalog.filter(e => e.executorFamily), [catalog]);
   const others = useMemo(() => catalog.filter(e => !e.executorFamily && e.key !== 'none'), [catalog]);
@@ -102,20 +181,144 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
   const manualCount = (key: string, template: SpecialtyTemplate | null): number =>
     personas.filter(p => p.specialty === key && personaDeviates(p, template)).length;
 
+  // Ячейка уровня в записи специальности
+  const cellOf = (rec: SpecialtyTemplateSettings | null | undefined, t: TierKey): string =>
+    (t === 'strong' ? rec?.tierStrong : t === 'medium' ? rec?.tierMedium : rec?.tierWeak) ?? '';
+
+  // Записать ячейку / уровень по умолчанию в слой (key 'any' — «Любая специальность»)
+  const setCell = (scope: 'global' | 'owner', key: string, t: TierKey, value: string,
+    template: SpecialtyTemplate | null) => {
+    const layer = scope === 'global' ? globalLayer : ownerLayer;
+    onSaveLayer(scope, withTierCell(layer, key, t, value, template));
+  };
+  const setDefTier = (scope: 'global' | 'owner', key: string, value: ModelTierValue | '',
+    template: SpecialtyTemplate | null) => {
+    const layer = scope === 'global' ? globalLayer : ownerLayer;
+    onSaveLayer(scope, withDefaultTier(layer, key, value, template));
+  };
+
+  // Подпись пустой личной ячейки: ближайшее фактическое значение ниже по цепочке
+  // (owner-запись, если есть, заменяет глобальную ЦЕЛИКОМ — глобальную ячейку предлагаем
+  // только когда личной записи нет вовсе; дальше «Любая специальность», затем слот)
+  const ownerPlaceholder = (key: string, t: TierKey): string => {
+    const ownerRec = key === ANY_SPECIALTY ? ownerLayer.defaultSpecialty : ownerLayer.specialties[key];
+    const globalRec = key === ANY_SPECIALTY ? globalLayer.defaultSpecialty : globalLayer.specialties[key];
+    const defRec = ownerLayer.defaultSpecialty ?? globalLayer.defaultSpecialty;
+    const next = (!ownerRec ? cellOf(globalRec, t) : '') || cellOf(defRec, t) || tierModels[t];
+    if (!next) return 'Как у всех';
+    return `Как у всех · ${routeDisplayLabel(next, presets, labelCtx)}`;
+  };
+
+  // Редактор матрицы + уровня по умолчанию (общий для специальности и «Любой»)
+  const renderMatrix = (key: string, template: SpecialtyTemplate | null) => {
+    const globalRec = key === ANY_SPECIALTY ? globalLayer.defaultSpecialty : globalLayer.specialties[key];
+    const ownerRec = key === ANY_SPECIALTY ? ownerLayer.defaultSpecialty : ownerLayer.specialties[key];
+    return (
+      <>
+        {/* Уровень по умолчанию: каким уровнем работают персоны специальности без своего */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 10 }}>
+          <div style={flabelStyle}>Уровень по умолчанию</div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+              <span style={{ fontSize: 10.5, color: C.textMuted }}>Для всех</span>
+              <select
+                value={globalRec?.defaultTier ?? ''}
+                disabled={!isAdmin || savingScope === 'global'}
+                onChange={e => setDefTier('global', key, e.target.value as ModelTierValue | '', template)}
+                style={selectStyle}
+                aria-label="Уровень по умолчанию для всех"
+              >
+                <option value="">Не задан</option>
+                {TIER_ORDER.map(t => <option key={t} value={t}>{TIER_TITLE[t]}</option>)}
+              </select>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+              <span style={{ fontSize: 10.5, color: C.textMuted }}>Только для меня</span>
+              <select
+                value={ownerRec?.defaultTier ?? ''}
+                disabled={savingScope === 'owner'}
+                onChange={e => setDefTier('owner', key, e.target.value as ModelTierValue | '', template)}
+                style={selectStyle}
+                aria-label="Уровень по умолчанию только для меня"
+              >
+                <option value="">
+                  {globalRec?.defaultTier ? `Как у всех · ${TIER_TITLE[globalRec.defaultTier]}` : 'Как у всех'}
+                </option>
+                {TIER_ORDER.map(t => <option key={t} value={t}>{TIER_TITLE[t]}</option>)}
+              </select>
+            </label>
+          </div>
+          <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px' }}>
+            Каким уровнем работают персоны этой специальности, если у них не задан свой.
+          </div>
+        </div>
+
+        {/* Модели по уровням: три ячейки, в каждой — модель или пресет */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={flabelStyle}>Модели по уровням</div>
+          {TIER_ORDER.map(t => {
+            const globalCell = cellOf(globalRec, t);
+            const ownerCell = cellOf(ownerRec, t);
+            return (
+              <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
+                    <RoutePicker
+                      route={globalCell}
+                      label={globalCell ? routeDisplayLabel(globalCell, presets, labelCtx) : ''}
+                      models={models}
+                      tierModels={tierModels}
+                      ollamaModel={ollamaModel}
+                      cardTitle={`${TIER_TITLE[t]} · для всех`}
+                      readOnly={!isAdmin}
+                      busy={savingScope === 'global'}
+                      placeholder="Не задана — решает место применения"
+                      showTiers={false}
+                      showPresets
+                      onChange={v => setCell('global', key, t, v, template)}
+                    />
+                    {isAdmin && globalCell && (
+                      <ResetLink
+                        busy={savingScope === 'global'}
+                        title="Убрать модель, общую для всех"
+                        onClick={() => setCell('global', key, t, '', template)}
+                      />
+                    )}
+                  </div>
+                  <OwnerTierCell
+                    specKey={key}
+                    tier={t}
+                    value={ownerCell}
+                    presets={presets}
+                    labelCtx={labelCtx}
+                    models={models}
+                    tierModels={tierModels}
+                    ollamaModel={ollamaModel}
+                    busy={savingScope === 'owner'}
+                    fallbackPlaceholder={ownerPlaceholder(key, t)}
+                    onChange={v => setCell('owner', key, t, v, template)}
+                    onReset={() => setCell('owner', key, t, '', template)}
+                  />
+                </div>
+                {/* «Любая специальность» не ключ каталога — превью-эндпоинт её не
+                    резолвит, строку не показываем */}
+                {key !== ANY_SPECIALTY && (
+                  <EffectiveLine ctx={{ kind: 'specialty', specialtyKey: key, tier: t }} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </>
+    );
+  };
+
   const renderRow = (e: SpecialtyCatalogEntry) => {
     const open = openKeys.has(e.key);
-    const globalRoute = defaultRouteFor(globalLayer, DEFAULT_GLOBAL_PRESET_ID, e.key) ?? '';
-    const ownerRoute = defaultRouteFor(ownerLayer, DEFAULT_OWNER_PRESET_ID, e.key) ?? '';
     const template = e.template;
-    const source = ownerLayer.specialties[e.key] ? 'модель: только для меня'
-      : globalLayer.specialties[e.key] ? 'модель: для всех' : 'модель: по умолчанию';
+    const source = ownerLayer.specialties[e.key] ? 'только для меня'
+      : globalLayer.specialties[e.key] ? 'для всех' : 'по умолчанию';
     const manual = manualCount(e.key, template);
-
-    const setRoute = (scope: 'global' | 'owner', route: string) => {
-      const presetId = scope === 'global' ? DEFAULT_GLOBAL_PRESET_ID : DEFAULT_OWNER_PRESET_ID;
-      const layer = scope === 'global' ? globalLayer : ownerLayer;
-      onSaveLayer(scope, withDefaultRoute(layer, presetId, e.key, route));
-    };
 
     return (
       <div key={e.key} style={{
@@ -136,7 +339,7 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
               </span>
               {NEW_KEYS.has(e.key) && (
                 <span style={{
-                  fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: R.full,
+                  fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: R.max,
                   background: C.infoBg, color: C.info, whiteSpace: 'nowrap', flexShrink: 0,
                 }}>новая</span>
               )}
@@ -156,57 +359,7 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
             padding: '0 13px 13px', borderTop: `1px solid ${C.borderLight}`,
             display: 'flex', flexDirection: 'column', gap: 12,
           }}>
-            {/* Модель по умолчанию: глобально + личное переопределение (по образцу слотов) */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 10 }}>
-              <div style={flabelStyle}>Модель по умолчанию</div>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-                  <RoutePicker
-                    route={globalRoute}
-                    label={routeLabel(globalRoute, ollamaModel, tierModels)}
-                    models={models}
-                    tierModels={tierModels}
-                    ollamaModel={ollamaModel}
-                    cardTitle="Для всех"
-                    readOnly={!isAdmin}
-                    busy={savingScope === 'global'}
-                    placeholder="не задана — работает модель по умолчанию"
-                    onChange={r => setRoute('global', r)}
-                  />
-                  {isAdmin && globalRoute && (
-                    <ResetLink
-                      busy={savingScope === 'global'}
-                      title="Убрать модель, общую для всех"
-                      onClick={() => setRoute('global', '')}
-                    />
-                  )}
-                </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 0 }}>
-                  <RoutePicker
-                    route={ownerRoute}
-                    label={ownerRoute ? routeLabel(ownerRoute, ollamaModel, tierModels) : ''}
-                    models={models}
-                    tierModels={tierModels}
-                    ollamaModel={ollamaModel}
-                    cardTitle="Только для меня"
-                    busy={savingScope === 'owner'}
-                    placeholder={`Как у всех${globalRoute ? ` · ${routeLabel(globalRoute, ollamaModel, tierModels)}` : ''}`}
-                    onChange={r => setRoute('owner', r)}
-                  />
-                  {ownerRoute && (
-                    <ResetLink
-                      busy={savingScope === 'owner'}
-                      title="Вернуть «как у всех»"
-                      onClick={() => setRoute('owner', '')}
-                    />
-                  )}
-                </div>
-              </div>
-              <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px' }}>
-                Персона без своей модели работает моделью специальности. Модель,
-                выбранная в самой персоне, всегда сильнее.
-              </div>
-            </div>
+            {renderMatrix(e.key, template)}
 
             {/* Шаблон прав и инструментов: эффективное значение, источник, ручные правки персон */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -224,7 +377,7 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
                       const on = template.tools === null || template.tools.includes(k);
                       return (
                         <span key={k} style={{
-                          fontSize: 11, padding: '3px 8px', borderRadius: R.full,
+                          fontSize: 11, padding: '3px 8px', borderRadius: R.max,
                           background: C.bgPanel, border: `1px solid ${on ? C.border : C.dashed}`,
                           color: on ? C.textSecondary : C.textMuted,
                           textDecoration: on ? 'none' : 'line-through',
@@ -235,7 +388,7 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
                     })}
                     {template.access === 'custom' && (template.disallowedTools ?? []).map(d => (
                       <span key={d} style={{
-                        fontSize: 11, padding: '3px 8px', borderRadius: R.full,
+                        fontSize: 11, padding: '3px 8px', borderRadius: R.max,
                         background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, color: C.dangerText,
                       }}>
                         − {d}
@@ -251,12 +404,12 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 {manual > 0 ? (
                   <span style={{
-                    fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: R.full,
+                    fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: R.max,
                     background: C.warningBg, color: C.warningText,
                   }}>правили вручную: {manual}</span>
                 ) : (
                   <span style={{
-                    fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: R.full,
+                    fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: R.max,
                     background: C.bgSelected, color: C.textSecondary,
                   }}>без ручных правок</span>
                 )}
@@ -273,27 +426,97 @@ export function SpecialtiesTab({ catalog, globalLayer, ownerLayer, isAdmin, mode
     );
   };
 
-  // Ни одной специальности не задана своя модель — ни глобально, ни лично
-  const noRoutes = !catalog.some(e =>
-    defaultRouteFor(globalLayer, DEFAULT_GLOBAL_PRESET_ID, e.key)
-    || defaultRouteFor(ownerLayer, DEFAULT_OWNER_PRESET_ID, e.key));
+  // «Любая специальность» — запись defaultSpecialty слоёв (наследник правила "any" из v1):
+  // срабатывает для специальности без своей записи. Только матрица и уровень — права
+  // и инструменты к ней не применяются (их бэкенд читает только из записи специальности).
+  const anyRecord = effectiveSpecialtyRecord(globalLayer, ownerLayer, ANY_SPECIALTY);
+  const anyFilled = recordFilled(anyRecord);
+  const anyOpen = openKeys.has(ANY_SPECIALTY);
+
+  // Ни у одной специальности не заданы свои модели — ни глобально, ни лично
+  const noMatrices = !recordFilled(globalLayer.defaultSpecialty) && !recordFilled(ownerLayer.defaultSpecialty)
+    && !Object.values(globalLayer.specialties).some(recordFilled)
+    && !Object.values(ownerLayer.specialties).some(recordFilled);
+
+  // Баннер о переносе прежних правил — только если поля реально заполнены (миграция v1→v2)
+  const showMigrationBanner = !bannerDismissed && !noMatrices;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px' }}>
-        Специальность задаёт персоне модель по умолчанию и стартовый набор прав
-        и инструментов — дальше персона правится как обычно.
+        У специальности свои сильная, средняя и слабая модели: задаёте один раз —
+        работают все её персоны. Персона может поставить своё.
       </div>
 
-      {noRoutes && (
+      {showMigrationBanner && (
+        <div style={{
+          background: C.infoBg, border: `1px solid ${C.border}`, borderRadius: R.xl,
+          padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 8,
+          fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5,
+        }}>
+          <span>
+            Ваши прежние правила перенесены в модели специальностей. Проверьте строку
+            «Сейчас пойдёт» — персона с уровнем теперь берёт модель у своей специальности,
+            а не общую. Сами пресеты пришлось пересобрать: раньше это были наборы правил,
+            теперь — цепочки моделей.
+          </span>
+          <Button
+            variant="ghost" size="sm"
+            style={{ alignSelf: 'flex-start' }}
+            onClick={() => {
+              localStorage.setItem(MIGRATION_BANNER_KEY, '1');
+              setBannerDismissed(true);
+            }}
+          >
+            Понятно
+          </Button>
+        </div>
+      )}
+
+      {noMatrices && (
         <div style={{
           background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
           padding: '12px 14px', fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5,
         }}>
-          Пока ни у одной специальности нет своей модели — персоны работают моделью
-          по умолчанию. Задайте модель специальности — и все её персоны пойдут ею разом.
+          Ни у одной специальности нет своих моделей — все персоны работают моделями
+          по умолчанию. Задайте специальности модели по уровням, и все её персоны
+          пойдут ими разом.
         </div>
       )}
+
+      {/* «Любая специальность» — применяется, когда у конкретной записи нет */}
+      <div style={{
+        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+        overflow: 'hidden',
+      }}>
+        <div
+          onClick={() => toggle(ANY_SPECIALTY)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 13px', cursor: 'pointer' }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>
+              Любая специальность
+            </div>
+            <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 1 }}>
+              {anyFilled
+                ? 'Сработает для специальности без своих настроек'
+                : 'Срабатывает для специальности без своих настроек'}
+            </div>
+          </div>
+          <span style={{
+            color: C.textMuted, fontSize: 12, flexShrink: 0,
+            transform: anyOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s',
+          }}>▾</span>
+        </div>
+        {anyOpen && (
+          <div style={{
+            padding: '0 13px 13px', borderTop: `1px solid ${C.borderLight}`,
+            display: 'flex', flexDirection: 'column', gap: 12,
+          }}>
+            {renderMatrix(ANY_SPECIALTY, null)}
+          </div>
+        )}
+      </div>
 
       <div style={sectionTitleStyle}>Исполнители</div>
       {executors.map(renderRow)}

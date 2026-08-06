@@ -942,6 +942,15 @@ export interface OllamaUsageInfo {
   actions: OllamaActionInfo[];
 }
 
+// Раскрытие пресета в ответе места каталога: заполнено, когда назначение места —
+// общий пресет (route при этом развёрнут в первый шаг — для «Сейчас пойдёт»);
+// name null — битая ссылка (пресет удалён)
+export interface PlacePresetRef {
+  id: string;
+  name: string | null;
+  steps: string[];
+}
+
 export interface OllamaActionInfo {
   key: string;
   title: string;
@@ -951,9 +960,11 @@ export interface OllamaActionInfo {
   // Откуда взято действующее значение: дефолт каталога, конфиг Ollama:Actions или выбор админа
   source?: 'default' | 'config' | 'admin';
   // Исполнитель первого шага: 'local' | 'tier:strong|medium|weak' (слот) | id модели
-  // провайдера; легаси 'claude'/'default' ≙ tier:medium. Дальше действие идёт по цепочке
-  // «выбранное → локаль → claude»
+  // провайдера; легаси 'claude'/'default' ≙ tier:medium. Если назначение — пресет,
+  // здесь развёрнутый первый шаг цепочки, а сам пресет — в поле preset
   route?: string;
+  // Пресет назначения (разворачивается в route на бэке); null — назначение не пресет
+  preset?: PlacePresetRef | null;
   // Действию нужна сильная модель (лицо продукта, генерация артефактов) — локаль ему не
   // годится; пресеты подбирают Claude/облачную модель. В UI помечается бейджем.
   requiresStrong?: boolean;
@@ -1625,40 +1636,81 @@ export interface SpecialtyCatalogEntry {
   template: SpecialtyTemplate | null;
 }
 
-// Правило выбора модели в пресете: для специальности (ключ или "any") — маршрут.
-// Лексика маршрутов — как у назначений мест: tier:strong|medium|weak, id модели,
-// local, claude, default.
-export interface ModelRouteRule {
-  specialty: string;
-  route: string;
-}
-
-// Именованный пресет правил выбора модели (порядок правил значим)
+// Именованный пресет — упорядоченная цепочка шагов (ADR-007 §1). Шаг — маршрут
+// в лексике назначений мест: tier:strong|medium|weak, id модели, local, claude, default.
+// Ссылаться на другой пресет шаг не может (вложенность запрещена бэкенд-валидацией).
 export interface ModelRoutePreset {
   id: string;
   name: string;
   description?: string | null;
-  rules: ModelRouteRule[];
+  steps: string[];
 }
 
-// Настройка шаблона специальности в слое (глобальном или личном)
+// Пресет в объединённом списке GET /api/specialties/settings: личные впереди,
+// затем общие; scope — признак слоя (общий чужой читается, но не правится)
+export interface ScopedPreset extends ModelRoutePreset {
+  scope: 'owner' | 'global';
+}
+
+// Настройка специальности в слое (глобальном или личном): шаблон прав + матрица
+// моделей по уровням (ADR-007 §2). Значение ячейки — id модели ИЛИ "preset:{id}";
+// пустая ячейка — «спроси матрицу шире». defaultTier — уровень по умолчанию для
+// персон специальности без своего. Запись в личном слое заменяет глобальную ЦЕЛИКОМ.
 export interface SpecialtyTemplateSettings {
   access: PersonaAccess;
   tools?: string[] | null;
   disallowedTools?: string[] | null;
+  tierStrong?: string | null;
+  tierMedium?: string | null;
+  tierWeak?: string | null;
+  defaultTier?: ModelTierValue | null;
 }
 
-// Слой настроек специальностей и пресетов: шаблоны + пресеты правил
+// Слой настроек специальностей и пресетов: шаблоны + «любая специальность» + пресеты-цепочки
 export interface SpecialtySettingsLayer {
   specialties: Record<string, SpecialtyTemplateSettings>;
+  // «Любая специальность»: применяется, когда у конкретной специальности записи нет
+  defaultSpecialty?: SpecialtyTemplateSettings | null;
   presets: ModelRoutePreset[];
 }
 
-// Ответ GET /api/specialties/settings: глобальный слой и личный слой вызывающего
+// Ответ GET /api/specialties/settings: глобальный слой, личный слой вызывающего
+// и объединённый список пресетов с признаком слоя
 export interface SpecialtySettingsResponse {
   version: number;
+  // Эффективный бюджет подмен цепочки хода (per-owner → global → дефолт, кламп 1..5):
+  // шаги пресета за пределом бюджета+1 приглушаются как «обычно не используется»
+  maxSubstitutions?: number;
   global: SpecialtySettingsLayer;
   owner: SpecialtySettingsLayer;
+  presets: ScopedPreset[];
+}
+
+// Ответ GET /api/models/preview — эффективный резолв для строки «Сейчас пойдёт»
+// (спека, блок 4). model — первая развёрнутая модель хода (null — пустой резолв или
+// битый пресет); source — где выбрано значение; tier/tierOrigin — эффективный уровень
+// и кто его задал; preset — раскрытие ссылки preset:{id}; chain — план фолбэка.
+export interface ModelPreviewResponse {
+  model: string | null;
+  source: 'persona-model' | 'persona-cell' | 'specialty-cell'
+    | 'owner-slot' | 'instance-slot' | 'place-assignment' | 'explicit' | null;
+  tier: ModelTierValue | null;
+  tierOrigin: 'task' | 'persona' | 'specialty' | 'place' | null;
+  preset: { id: string; name: string | null; steps: string[]; broken: boolean } | null;
+  chain: string[];
+}
+
+// Ответ GET /api/models/presets/{id}/usage — места, где выбран пресет
+// (диалог удаления, спека блок 6). ownerId — null у общих мест (инстанс/место каталога)
+export interface PresetUsageEntry {
+  kind: 'instance-slot' | 'owner-slot' | 'specialty-cell' | 'persona-model' | 'persona-cell' | 'place';
+  label: string;
+  ownerId?: string | null;
+}
+export interface PresetUsageResponse {
+  presetId: string;
+  count: number;
+  usages: PresetUsageEntry[];
 }
 
 // Параметры кропа загруженного аватара: масштаб + смещение центра окна
@@ -1705,8 +1757,14 @@ export interface Persona {
   contract?: PersonaContract | null; // структурированный контракт (P1)
   model?: string;
   // Уровень модели персоны (слот); отсутствует — не задан. Слабее явной model и слабее
-  // уровня самой задачи, когда персона выступает исполнителем
+  // уровня самой задачи, когда персона выступает исполнителем.
+  // Семантика (ADR-007 §2): уровень разворачивается по самой узкой заполненной матрице —
+  // своя (tierStrong/… ниже) → специальности → слоты владельца.
   modelTier?: ModelTierValue;
+  // Свои модели по уровням: id модели ИЛИ "preset:{id}"; пусто — наследуется
+  tierStrong?: string | null;
+  tierMedium?: string | null;
+  tierWeak?: string | null;
   effort?: string;
   scope: PersonaScope;
   projectId?: string;         // задан только для scope === 'project'

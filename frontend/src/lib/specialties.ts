@@ -5,7 +5,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
-import type { SpecialtyCatalogEntry, SpecialtySettingsLayer } from '../types';
+import type { ModelTierValue, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtyTemplateSettings } from '../types';
 
 let _catalog: SpecialtyCatalogEntry[] | null = null;
 let _loading: Promise<void> | null = null;
@@ -43,24 +43,14 @@ export function useSpecialtyCatalog(): SpecialtyCatalogEntry[] | null {
   );
 }
 
-// Подпись специальности по ключу; "any" — специальное значение правил пресетов.
-// Ключ без пары в каталоге показываем как есть (лучше сырой ключ, чем пустота).
+// Подпись специальности по ключу; "any" — «Любая специальность» (запись defaultSpecialty
+// слоя, наследник правила "any" из v1). Ключ без пары в каталоге — как есть.
 export const ANY_SPECIALTY = 'any';
 
 export function specialtyLabel(catalog: SpecialtyCatalogEntry[] | null, key: string): string {
   if (key === ANY_SPECIALTY) return 'Любая специальность';
   return catalog?.find(e => e.key === key)?.label ?? key;
 }
-
-// --- Системные пресеты «по умолчанию» ---
-// Модель по умолчанию для специальности хранится правилом «специальность → маршрут»
-// в системном пресете слоя: глобальный слой задаёт общие значения, личный — только
-// переопределения. Id разные НАМЕРЕННО: личный пресет с id глобального заместил бы
-// его ЦЕЛИКОМ (EffectivePresets бэкенда), а так личное правило бьёт свою специальность,
-// а неуказанные специальности наследуют глобальное правило — семантика «Как у всех».
-export const DEFAULT_GLOBAL_PRESET_ID = 'default-global';
-export const DEFAULT_OWNER_PRESET_ID = 'default-personal';
-export const DEFAULT_PRESET_NAME = 'По умолчанию';
 
 export function emptyLayer(): SpecialtySettingsLayer {
   return { specialties: {}, presets: [] };
@@ -70,39 +60,6 @@ export function cloneLayer(layer: SpecialtySettingsLayer): SpecialtySettingsLaye
   return JSON.parse(JSON.stringify(layer)) as SpecialtySettingsLayer;
 }
 
-// Маршрут специальности из системного пресета слоя; null — правила нет
-export function defaultRouteFor(layer: SpecialtySettingsLayer, presetId: string, specKey: string): string | null {
-  const preset = layer.presets.find(p => p.id === presetId);
-  const rule = preset?.rules.find(r => r.specialty === specKey);
-  return rule?.route || null;
-}
-
-// Иммутабельно задать/снять маршрут специальности в системном пресете слоя.
-// route '' снимает правило; опустевший пресет удаляется (пустой слой = сброс личных
-// переопределений на бэкенде). Имя пресета задаётся при создании.
-export function withDefaultRoute(
-  layer: SpecialtySettingsLayer, presetId: string, specKey: string, route: string,
-): SpecialtySettingsLayer {
-  const next = cloneLayer(layer);
-  let preset = next.presets.find(p => p.id === presetId);
-  if (!preset) {
-    if (!route) return next;
-    preset = { id: presetId, name: DEFAULT_PRESET_NAME, description: null, rules: [] };
-    next.presets.push(preset);
-  }
-  const i = preset.rules.findIndex(r => r.specialty === specKey);
-  if (route) {
-    if (i >= 0) preset.rules[i] = { specialty: specKey, route };
-    else preset.rules.push({ specialty: specKey, route });
-  } else if (i >= 0) {
-    preset.rules.splice(i, 1);
-  }
-  if (preset.rules.length === 0) {
-    next.presets = next.presets.filter(p => p.id !== presetId);
-  }
-  return next;
-}
-
 // Id пресета: crypto.randomUUID в secure-контексте, иначе запасной вариант
 // (образец — BoardColumnsDialog). Бэкенд досоздаёт пустой id сам, но фронт
 // задаёт его сразу, чтобы оптимистичный апдейт и инлайн-переименование сходились.
@@ -110,9 +67,60 @@ export function newPresetId(): string {
   try { return crypto.randomUUID(); } catch { return `preset-${Date.now()}-${Math.round(Math.random() * 1e6)}`; }
 }
 
-// Создать новый пресет в слое: имя проверяет вызывающий
-export function withNewPreset(layer: SpecialtySettingsLayer, name: string): SpecialtySettingsLayer {
+// --- Матрица моделей по уровням у специальности (ADR-007 §2) ---
+
+// Запись специальности в слое: существующую возвращаем как есть; новую — с шаблоном
+// прав, скопированным из ЭФФЕКТИВНОГО шаблона (запись слоя заменяет запись нижнего
+// слоя ЦЕЛИКОМ — «пустая» owner-запись сбросила бы права специальности к дефолту кода).
+function recordOf(layer: SpecialtySettingsLayer, key: string,
+  template: SpecialtyCatalogEntry['template']): SpecialtyTemplateSettings {
+  if (key === ANY_SPECIALTY) {
+    return layer.defaultSpecialty ?? {
+      access: 'full', tools: null, disallowedTools: null,
+    };
+  }
+  return layer.specialties[key] ?? {
+    access: template?.access ?? 'full',
+    tools: template?.tools ?? null,
+    disallowedTools: template?.disallowedTools ?? null,
+  };
+}
+
+// Иммутабельно записать запись обратно в слой (key "any" → defaultSpecialty)
+function withRecord(layer: SpecialtySettingsLayer, key: string,
+  rec: SpecialtyTemplateSettings): SpecialtySettingsLayer {
   const next = cloneLayer(layer);
-  next.presets.push({ id: newPresetId(), name, description: null, rules: [] });
+  if (key === ANY_SPECIALTY) next.defaultSpecialty = rec;
+  else next.specialties[key] = rec;
   return next;
+}
+
+// Задать/очистить ячейку уровня у специальности (value '' — очистить к наследованию).
+// template — эффективный шаблон прав (нужен при создании записи, см. recordOf).
+export function withTierCell(layer: SpecialtySettingsLayer, key: string,
+  tier: 'strong' | 'medium' | 'weak', value: string,
+  template: SpecialtyCatalogEntry['template'] = null): SpecialtySettingsLayer {
+  const rec = { ...recordOf(layer, key, template) };
+  const cell = value.trim() || null;
+  if (tier === 'strong') rec.tierStrong = cell;
+  else if (tier === 'medium') rec.tierMedium = cell;
+  else rec.tierWeak = cell;
+  return withRecord(layer, key, rec);
+}
+
+// Задать/снять «Уровень по умолчанию» специальности ('' — снять)
+export function withDefaultTier(layer: SpecialtySettingsLayer, key: string,
+  tier: ModelTierValue | '', template: SpecialtyCatalogEntry['template'] = null): SpecialtySettingsLayer {
+  const rec = { ...recordOf(layer, key, template) };
+  rec.defaultTier = tier || null;
+  return withRecord(layer, key, rec);
+}
+
+// Действующая запись специальности для владельца: owner-слой ЦЕЛИКОМ заменяет
+// глобальный (без полевого слияния) — повторяет семантику бэкенда (TemplateSettings).
+// "any": owner defaultSpecialty → глобальный defaultSpecialty.
+export function effectiveSpecialtyRecord(globalLayer: SpecialtySettingsLayer,
+  ownerLayer: SpecialtySettingsLayer, key: string): SpecialtyTemplateSettings | null {
+  if (key === ANY_SPECIALTY) return ownerLayer.defaultSpecialty ?? globalLayer.defaultSpecialty ?? null;
+  return ownerLayer.specialties[key] ?? globalLayer.specialties[key] ?? null;
 }

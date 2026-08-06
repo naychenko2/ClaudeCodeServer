@@ -469,15 +469,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // (полоса у её правого края), и компенсировать перекос нечему
   useChatGutter(scrollRef, CHAT_MAX_W, !isMobile && !embedded);
   // Композер — нижнее препятствие для круглешка AI: тот остаётся в углу, но ужимается,
-  // когда композер доходит до него (замер пересечения — в AiLauncher).
+  // когда композер доходит до него (замер пересечения — в AiLauncher). Публикуем узел
+  // САМОГО композера, а не растянутую обёртку: та шириной во всю область чата, и по ней
+  // пересечение выходило истинным всегда — круг оставался ужатым при любом окне.
+  const composerObstacleRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // embedded: препятствие глобальное, несколько колонок стены перебивали бы друг друга
     if (embedded) return;
-    setFabObstacle(composerWrapRef.current);
+    setFabObstacle(composerObstacleRef.current);
     return () => setFabObstacle(null);
-    // composerH в зависимостях — им ловим момент, когда обёртка композера уже в DOM
+    // composerH в зависимостях — им ловим момент, когда композер уже в DOM
     // (первый замер высоты) и ref наконец не пустой
-  }, [embedded, composerH, composerWrapRef]);
+  }, [embedded, composerH]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
@@ -1551,7 +1554,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
         padding: isMobile ? '0 12px 12px' : `0 24px ${headerIsland ? 0 : 18}px`,
         pointerEvents: 'none',
       }}>
-        <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
+        {/* Именно этот узел — препятствие для круглешка AI: у него РЕАЛЬНАЯ геометрия
+            композера (ограничен CHAT_MAX_W и центрирован). Внешняя обёртка растянута
+            left:0/right:0, и замер по ней всегда давал пересечение с углом кнопки —
+            круг был ужат даже когда композер визуально далеко */}
+        <div ref={composerObstacleRef} style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', pointerEvents: 'auto' }}>
           {mode === 'bypass' && (
             <div style={{
               display: 'flex', alignItems: 'center', gap: 7, marginBottom: 6, padding: '6px 12px',

@@ -379,6 +379,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
         wrapper.removeChild(container);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- редактор живёт один раз на файл; cacheKey/mode/onReady не должны пересоздавать OO-инстанс (переключение режима — силами самого редактора)
   }, [projectId, filePath]);
 
   if (error) {

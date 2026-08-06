@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Folder, GitBranch, Lock, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
@@ -29,7 +29,7 @@ function GitHistorySection({ project }: { project: Project }) {
   const [firstDate, setFirstDate] = useState<string | null>(null);
   const [err, setErr] = useState('');
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     try {
       const st = await api.git.status(project.id);
       setIsRepo(st.isRepo);
@@ -46,9 +46,9 @@ function GitHistorySection({ project }: { project: Project }) {
       }
     } catch { /* оффлайн/ошибка — секция покажет «недоступно» через isRepo=false без карточек? нет: просто молчим */ }
     finally { setLoading(false); }
-  };
+  }, [project.id]);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка состояния git-репозитория при смене проекта
-  useEffect(() => { void reload(); }, [project.id]);
+  useEffect(() => { void reload(); }, [reload]);
 
   const run = async (op: () => Promise<unknown>) => {
     setBusy(true); setErr('');

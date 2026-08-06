@@ -256,11 +256,11 @@ export default function App() {
 
   const online = useOnline()
   const onlineRef = useRef(online)
-  onlineRef.current = online
+  useEffect(() => { onlineRef.current = online }, [online])
   const useOnlineRef = useRef(() => onlineRef.current)
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
-  projectIdRef.current = project?.id
+  useEffect(() => { projectIdRef.current = project?.id }, [project?.id])
 
   // Toast «Связь восстановлена» — только на переходе offline → online (старт офлайн
   // и первый онлайн не озвучиваем; прогрев кэша и drain очередей делается эффектом ниже)
@@ -503,6 +503,7 @@ export default function App() {
       })
       .catch(() => { /* сервер недоступен — остаёмся в проекте, не трогаем состояние */ })
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- реагируем на смену id, а не объекта: эффект сам зовёт setProject(fresh), включение project дало бы цикл перезапросов
   }, [auth, online, project?.id])
 
   // Watcher: сервер уведомил об изменении файлов проекта → инкрементальный ре-синк офлайн-кэша
@@ -758,7 +759,7 @@ export default function App() {
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).
   // Listener ставится один раз; свежее замыкание openNotificationUrl — через ref.
   const openUrlRef = useRef(openNotificationUrl)
-  openUrlRef.current = openNotificationUrl
+  useEffect(() => { openUrlRef.current = openNotificationUrl })
   useEffect(() => {
     const onOpenUrl = (e: Event) => {
       const url = (e as CustomEvent<{ url: string }>).detail?.url

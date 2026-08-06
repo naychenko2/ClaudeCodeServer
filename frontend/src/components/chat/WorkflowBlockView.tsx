@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useContext, useRef } from 'react';
+import { memo, useState, useEffect, useContext } from 'react';
 import { Check } from 'lucide-react';
 import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/api';
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
@@ -105,13 +105,16 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
   // useNow раз в 20с двигает текст, пока карточка смонтирована. Теперь now — состояние,
   // а не Date.now() в рендере (purity).
   const now = useNow(20000);
-  const phaseStartRef = useRef<Map<number, number>>(new Map());
   const activePhaseIdx = !isSettled && phases.length > 0 && completedPhaseCount < phases.length ? completedPhaseCount : -1;
-  if (activePhaseIdx >= 0 && !phaseStartRef.current.has(activePhaseIdx)) {
-    phaseStartRef.current.set(activePhaseIdx, now);
-  }
+  // Момент входа фазы в active — состояние, пишется эффектом один раз на фазу
+  const [phaseStarts, setPhaseStarts] = useState<Map<number, number>>(() => new Map());
+  useEffect(() => {
+    if (activePhaseIdx < 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- фиксируем момент входа фазы в active (один раз на фазу)
+    setPhaseStarts(prev => (prev.has(activePhaseIdx) ? prev : new Map(prev).set(activePhaseIdx, now)));
+  }, [activePhaseIdx, now]);
   const activePhaseMinutes = activePhaseIdx >= 0
-    ? Math.floor((now - (phaseStartRef.current.get(activePhaseIdx) ?? now)) / 60000)
+    ? Math.floor((now - (phaseStarts.get(activePhaseIdx) ?? now)) / 60000)
     : null;
 
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)

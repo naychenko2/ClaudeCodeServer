@@ -436,7 +436,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
   const inFlight = useRef(new Set<string>());
   const dirCacheRef = useRef(dirCache);
-  dirCacheRef.current = dirCache;
+  useEffect(() => { dirCacheRef.current = dirCache; }, [dirCache]);
 
   const [sortMode, setSortMode] = useState<FileSortMode>(loadSortMode);
   const [showSortMenu, setShowSortMenu] = useState(false);
@@ -1816,49 +1816,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* === Диалог перемещения === */}
-      {showMoveModal && movingEntry && (() => {
-        const [movingParent] = splitPath(movingEntry.path);
-        const available = allDirs.filter(d => {
-          if (d.path === movingParent) return false; // уже здесь
-          if (movingEntry.isDirectory && (d.path === movingEntry.path || normPath(d.path).startsWith(normPath(movingEntry.path) + '/'))) return false;
-          // правила vault заметок: тип файла / папки заметок ↔ обычные
-          if (notesMoveBlocked(movingEntry.path, movingEntry.isDirectory, d.path)) return false;
-          return true;
-        });
-        return (
-          <Modal
-            width={MODAL_W.form}
-            onClose={() => { setShowMoveModal(false); setMovingEntry(null); }}
-            title={`Переместить: ${movingEntry.name}`}
-            subtitle={available.length === 0 ? 'Нет доступных папок — откройте нужные папки в дереве' : 'Выберите целевую папку'}
-          >
-            <div style={{ maxHeight: 320, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2, margin: '0 -4px' }}>
-              {available.length === 0 ? (
-                <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, padding: '8px 4px' }}>
-                  Раскройте папки в проводнике, чтобы они появились здесь.
-                </div>
-              ) : available.map(d => (
-                <button
-                  key={d.path}
-                  onPointerDown={e => { e.stopPropagation(); handleMove(movingEntry, d.path); }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: 8,
-                    padding: '9px 8px', background: 'none', border: 'none',
-                    cursor: 'pointer', borderRadius: R.md, textAlign: 'left',
-                    fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary,
-                    width: '100%',
-                  }}
-                  onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
-                  onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
-                >
-                  <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.label}</span>
-                </button>
-              ))}
-            </div>
-          </Modal>
-        );
-      })()}
+      {showMoveModal && movingEntry && (
+        <MoveDialog
+          entry={movingEntry}
+          allDirs={allDirs}
+          onMove={handleMove}
+          onClose={() => { setShowMoveModal(false); setMovingEntry(null); }}
+        />
+      )}
 
       {/* === Трансформация в Markdown: выбор папки назначения === */}
       {mdEntry && (() => {
@@ -2011,5 +1976,56 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         />
       )}
     </div>
+  );
+}
+
+// Диалог перемещения файла/папки — вынесен из JSX-IIFE: компилятор не разбирал
+// сужение movingEntry внутри инлайн-функции и ругался на передачу «ref» в обработчик
+function MoveDialog({ entry, allDirs, onMove, onClose }: {
+  entry: FileEntry;
+  allDirs: Array<{ path: string; label: string }>;
+  onMove: (entry: FileEntry, targetDir: string) => void;
+  onClose: () => void;
+}) {
+  const [movingParent] = splitPath(entry.path);
+  const available = allDirs.filter(d => {
+    if (d.path === movingParent) return false; // уже здесь
+    if (entry.isDirectory && (d.path === entry.path || normPath(d.path).startsWith(normPath(entry.path) + '/'))) return false;
+    // правила vault заметок: тип файла / папки заметок ↔ обычные
+    if (notesMoveBlocked(entry.path, entry.isDirectory, d.path)) return false;
+    return true;
+  });
+  return (
+    <Modal
+      width={MODAL_W.form}
+      onClose={onClose}
+      title={`Переместить: ${entry.name}`}
+      subtitle={available.length === 0 ? 'Нет доступных папок — откройте нужные папки в дереве' : 'Выберите целевую папку'}
+    >
+      <div style={{ maxHeight: 320, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2, margin: '0 -4px' }}>
+        {available.length === 0 ? (
+          <div style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans, padding: '8px 4px' }}>
+            Раскройте папки в проводнике, чтобы они появились здесь.
+          </div>
+        ) : available.map(d => (
+          <button
+            key={d.path}
+            onPointerDown={e => { e.stopPropagation(); onMove(entry, d.path); }}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '9px 8px', background: 'none', border: 'none',
+              cursor: 'pointer', borderRadius: R.md, textAlign: 'left',
+              fontFamily: FONT.mono, fontSize: 12.5, color: C.textPrimary,
+              width: '100%',
+            }}
+            onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = C.bgInset; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = 'none'; }}
+          >
+            <span style={{ flexShrink: 0, display: 'flex' }}><FolderIcon /></span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{d.label}</span>
+          </button>
+        ))}
+      </div>
+    </Modal>
   );
 }

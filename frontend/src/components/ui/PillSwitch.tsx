@@ -78,7 +78,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   // Подсветка текста: на кого «нацелена» пилюля прямо сейчас (при drag — ближайший).
   const [highlight, setHighlight] = useState(activeIndex);
   const thumbRef = useRef(thumb);
-  thumbRef.current = thumb;
+  useEffect(() => { thumbRef.current = thumb; }, [thumb]);
 
   // Ставит пилюлю на активный сегмент (меряя его по DOM). Если пилюля уже где-то стоит
   // и позиция сменилась — оставляем прошлый кадр отрисоваться и на след. кадре съезжаем

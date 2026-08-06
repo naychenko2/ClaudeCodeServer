@@ -110,6 +110,7 @@ export function ToolbarOverflowMenu({
   const setTriggerRef = (el: HTMLElement | null) => { triggerElRef.current = el; };
   let trigger: ReactNode;
   if (renderTrigger) {
+    // eslint-disable-next-line react-hooks/refs -- setTriggerRef — callback ref, React зовёт его на коммите, не в рендере
     trigger = renderTrigger({ open, toggle, ref: setTriggerRef });
   } else if (triggerLabel) {
     // Кнопка с подписью (например «Фильтры») — chip-стиль тулбара

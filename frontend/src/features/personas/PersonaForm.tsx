@@ -442,11 +442,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     }
   };
 
-  // Отдаём тулбару-родителю императивные действия
+  // Отдаём тулбару-родителю императивные действия. save — через ref-зеркало: он
+  // замыкает всю форму, и мемоизация превратилась бы в простыню зависимостей, а
+  // императивный вызов всегда должен видеть свежие поля.
+  const saveRef = useRef(save);
+  useEffect(() => { saveRef.current = save; });
   useImperativeHandle(ref, () => ({
-    save,
+    save: () => saveRef.current(),
     remove: () => { if (persona && onDelete) onDelete(persona); },
-  }), [save, persona, onDelete]);
+  }), [persona, onDelete]);
 
   // Сообщаем родителю состояние формы (для кнопок тулбара)
   useEffect(() => {

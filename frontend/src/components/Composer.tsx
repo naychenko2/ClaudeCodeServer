@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
@@ -540,6 +540,17 @@ export function Composer({
     return () => document.removeEventListener('mousedown', onDown);
   }, [modeMenuOpen, lockInfoOpen]);
 
+  // Низ мобильного меню режимов — по позиции кнопки (fixed во всю ширину чуть выше неё).
+  // Меряем в layout-эффекте: читать ref в рендере нельзя, а число без изменений
+  // не триггерит ререндер (setState с тем же значением выходит сразу).
+  const [modeMenuBottom, setModeMenuBottom] = useState(80);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- меряем каждый рендер, пока меню открыто: позиция кнопки плавает от высоты композера
+  useLayoutEffect(() => {
+    if (!modeMenuOpen || !isMobile) return;
+    const r = modeRef.current?.getBoundingClientRect();
+    setModeMenuBottom(r ? window.innerHeight - r.top + 6 : 80);
+  });
+
   const hasText = text.trim().length > 0;
 
   // Обновление состояния autocomplete при каждом изменении текста
@@ -624,6 +635,8 @@ export function Composer({
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
+    // Прямая DOM-мутация осознанно: высота поля не должна гонять ререндер на каждый ввод
+    // eslint-disable-next-line react-hooks/immutability -- стиль DOM-узла из эффекта, не рендер-данные
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
@@ -636,6 +649,7 @@ export function Composer({
     setText('');
     setDraft(sessionId, '');
     if (textareaRef.current) {
+      // eslint-disable-next-line react-hooks/immutability -- сброс высоты DOM-узла из обработчика отправки
       textareaRef.current.style.height = '34px';
     }
   };
@@ -1075,7 +1089,7 @@ export function Composer({
           // bottom — чуть выше кнопки по getBoundingClientRect, чтобы меню не уезжало за край
           // экрана, когда кнопка сместилась из-за переноса строк.
           ...(isMobile
-            ? (() => { const r = modeRef.current?.getBoundingClientRect(); return { position: 'fixed' as const, left: 16, right: 16, bottom: r ? window.innerHeight - r.top + 6 : 80 }; })()
+            ? { position: 'fixed' as const, left: 16, right: 16, bottom: modeMenuBottom }
             : { position: 'absolute' as const, bottom: 'calc(100% + 6px)', left: 0, minWidth: 248 }),
           maxWidth: 'calc(100vw - 32px)',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
@@ -1264,6 +1278,7 @@ export function Composer({
   // Сворачиваемые кнопки полосы — в порядке показа. Не влезли → уезжают в «⋯» с конца
   // (то есть справа налево). Режим прав не сворачиваем: он и так крайний слева, а внутри
   // меню его собственный список выбора выглядел бы вложенным меню.
+  // eslint-disable-next-line react-hooks/refs -- кнопки не refs: taint от onClick-обработчиков, читающих refs только в событиях
   const collapsible = [
     { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
     slashButton && { key: 'slash', node: slashButton, item: { key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>, label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton } },

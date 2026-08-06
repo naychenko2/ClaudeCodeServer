@@ -74,7 +74,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   const [draftBody, setDraftBody] = useState('');
   const [saving, setSaving] = useState(false);
   const editingRef = useRef(false);
-  editingRef.current = editing;
+  useEffect(() => { editingRef.current = editing; }, [editing]);
   // Живые часы для бейджа срока истечения: Date.now() в рендере нечистый (purity),
   // а без тика отсчёт замирал до случайного перерендера. Интервал нужен только
   // когда бейдж реально виден.
@@ -85,7 +85,7 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   // Ctrl+C без выделения: отдаём исходник заметки (см. selectionScope)
   const noteRef = useRef<NoteDetail | null>(null);
-  noteRef.current = note;
+  useEffect(() => { noteRef.current = note; }, [note]);
   // Регистрируемся после появления заметки: до неё root ещё не отрендерен (ранние return)
   const hasNote = note != null;
   useEffect(() => {

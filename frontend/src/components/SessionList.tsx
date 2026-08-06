@@ -69,11 +69,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const initializedRef = useRef(false);
   // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
   const activeRef = useRef(activeSession);
-  activeRef.current = activeSession;
+  useEffect(() => { activeRef.current = activeSession; }, [activeSession]);
   const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
+  useEffect(() => { onSelectRef.current = onSelect; });
   const onClearedRef = useRef(onCleared);
-  onClearedRef.current = onCleared;
+  useEffect(() => { onClearedRef.current = onCleared; });
 
   // === Реестр общих тегов проекта ===
   // Optimistic state поверх project.tagRegistry: reorder/создание видны сразу, ответ
@@ -168,8 +168,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         initializedRef.current = true;
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
         // центр показывает пустое состояние с кнопкой «Новый чат» (создание только по клику).
-        if (!activeSession && list.length > 0) {
-          onSelect(list[0], undefined, true);
+        // Читаем через ref-зеркала: эффект живёт на весь project.id, пропсы за это время свежие.
+        if (!activeRef.current && list.length > 0) {
+          onSelectRef.current(list[0], undefined, true);
         }
       }
     };
@@ -263,6 +264,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       // Чужую (глобальную) сессию в список этого проекта не добавляем
       return activeSession.projectId === project.id ? [activeSession, ...prev] : prev;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сужение до полей осознанно: эффект зовёт setSessions, и зависимость от всего объекта activeSession дала бы цикл
   }, [activeSession?.id, activeSession?.name, activeSession?.model, activeSession?.mode, project.id]);
 
   const handleSessionUpdated = (updated: Session) => {

@@ -44,6 +44,14 @@ export function MentionsDropdown({ personas, query, onSelect, onClose, anchorRef
   const selectedRef = useRef(0);
   useEffect(() => { selectedRef.current = 0; }, [query]);
 
+  const highlightItem = (idx: number) => {
+    const items = containerRef.current?.querySelectorAll<HTMLButtonElement>('[data-mention-item]');
+    if (!items) return;
+    items.forEach((el, i) => {
+      el.style.background = i === idx ? C.accentLight : 'transparent';
+    });
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.stopPropagation(); onClose(); return; }
@@ -64,14 +72,6 @@ export function MentionsDropdown({ personas, query, onSelect, onClose, anchorRef
     document.addEventListener('keydown', onKey, true);
     return () => document.removeEventListener('keydown', onKey, true);
   }, [filtered, onSelect, onClose]);
-
-  const highlightItem = (idx: number) => {
-    const items = containerRef.current?.querySelectorAll<HTMLButtonElement>('[data-mention-item]');
-    if (!items) return;
-    items.forEach((el, i) => {
-      el.style.background = i === idx ? C.accentLight : 'transparent';
-    });
-  };
 
   if (filtered.length === 0) return null;
 

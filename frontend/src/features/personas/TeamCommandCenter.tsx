@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
   Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight,
@@ -62,14 +62,14 @@ export function TeamCommandCenter({
 
   useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try { setEvents((await api.projects.events(project.id, { limit })) as unknown as EventRow[] ?? []); }
     catch { setEvents([]); }
     try { setMem(await api.projects.teamMemory(project.id)); } catch { setMem([]); }
     try { setTasks(await api.tasks.listByProject(project.id)); } catch { setTasks([]); }
-  };
+  }, [project.id, limit]);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка ленты с интервалом поллинга
-  useEffect(() => { void refresh(); }, [project.id, limit]);
+  useEffect(() => { void refresh(); }, [refresh]);
 
   // Realtime: перечитываем ленту/память/задачи по событиям изменений (с дебаунсом) —
   // иначе «Активность» и индикаторы «в работе»/«на связи» заморожены до перемонтирования.
@@ -82,8 +82,7 @@ export function TeamCommandCenter({
     });
     const poll = setInterval(() => { void refresh(); }, 60_000);
     return () => { off(); if (t) clearTimeout(t); clearInterval(poll); };
-    // eslint-disable-next-line
-  }, [project.id, limit]);
+  }, [refresh]);
 
   const inFlight = useMemo(() => {
     const m = new Map<string, string>();

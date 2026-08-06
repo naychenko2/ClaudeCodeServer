@@ -110,6 +110,7 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
       })
       .catch(() => { if (!cancelled) setNotFound(true); });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initialPath/isMobile нужны только на момент загрузки; смену файла при открытом коммите обрабатывает эффект ниже, перезапрос не нужен
   }, [project.id, sha]);
 
   // Смена запрошенного файла при уже открытом коммите (клик по другому файлу того же коммита)

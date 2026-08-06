@@ -69,8 +69,10 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
   // роняло бы активное распознавание
   const onResultRef = useRef(onResult);
   const onFallbackRef = useRef(onKeyboardFallback);
-  onResultRef.current = onResult;
-  onFallbackRef.current = onKeyboardFallback;
+  useEffect(() => {
+    onResultRef.current = onResult;
+    onFallbackRef.current = onKeyboardFallback;
+  });
 
   const hasSpeech = typeof window !== 'undefined' &&
     ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);

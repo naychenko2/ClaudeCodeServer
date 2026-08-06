@@ -28,7 +28,7 @@ export function ModuleHost({ module, theme, user, onTitleChange }: {
   const [Tab, setTab] = useState<ModuleTabComponent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const themeRef = useRef(theme);
-  themeRef.current = theme;
+  useEffect(() => { themeRef.current = theme; }, [theme]);
 
   useEffect(() => {
     let alive = true;
@@ -39,7 +39,8 @@ export function ModuleHost({ module, theme, user, onTitleChange }: {
       .then(cmp => { if (alive) setTab(() => cmp); })
       .catch(e => { if (alive) setError(String(e?.message ?? e)); });
     return () => { alive = false; };
-  }, [module.id, module.remoteEntry]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сужение до полей осознанно: объект module пересобирается родителем на каждый рендер, а перезагружать remote нужно только при смене id/entry/exposed
+  }, [module.id, module.remoteEntry, module.exposedModule]);
 
   if (error) {
     return <ModuleFallback name={module.displayName} detail={error} />;

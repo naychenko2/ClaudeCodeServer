@@ -389,7 +389,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       });
     });
     return () => cleanups.forEach(f => f());
-  }, [shown, enabled, content]);
+  }, [shown, enabled, content, fmOffset]);
 
   const panel = enabled && items.length > 0 && (
     <div ref={panelRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>

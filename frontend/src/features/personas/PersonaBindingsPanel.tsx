@@ -136,7 +136,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // Инлайн-ввод описания для «✨ Создать привязку»: null — закрыт, строка — черновик
   const [genPrompt, setGenPrompt] = useState<string | null>(null);
   // Последний запуск был генерацией по описанию (для подписи прогресса и «Повторить»)
-  const genModeRef = useRef<string | null>(null);
+  const [genMode, setGenMode] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -158,7 +158,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // Realtime: привязки меняются PUT'ом персоны (personas_changed action='updated') —
   // перечитываем список; черновик условия развёрнутой карточки не трогаем.
   const loadRef = useRef(load);
-  loadRef.current = load;
+  useEffect(() => { loadRef.current = load; }, [load]);
   useEffect(() => {
     const off = onMessage((msg: ServerMessage) => {
       if (msg.type === 'personas_changed' && msg.action === 'updated' && msg.personaId === persona.id) {
@@ -404,7 +404,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
     setPanel(null);
     setExpandedId(null);
     setGenPrompt(null);
-    genModeRef.current = null;
+    setGenMode(null);
     runAiJob<SuggestResult>(suggestKey, async () => {
       const [bindingsRes, skillsRes] = await Promise.allSettled([
         api.personas.suggestBindings(persona.id),
@@ -434,7 +434,7 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   // подбираются навыки реестра под тот же запрос. Результат — общий блок кандидатов.
   const runGenerate = (prompt: string) => {
     setGenPrompt(null);
-    genModeRef.current = prompt;
+    setGenMode(prompt);
     runAiJob<SuggestResult>(suggestKey, async () => {
       const [bindingsRes, skillsRes] = await Promise.allSettled([
         api.personas.generateBindings(persona.id, prompt),
@@ -825,14 +825,14 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
         {suggestJob.status !== 'idle' && (
           <div style={{ borderTop: `1px solid ${C.borderLight}`, marginTop: 14, paddingTop: 18 }}>
             {suggestJob.status === 'running' ? (
-              <WaitingIndicator hint={genModeRef.current !== null
+              <WaitingIndicator hint={genMode !== null
                 ? 'Создаю привязку по описанию — до минуты'
                 : 'Подбираю источники и навыки под роль персоны — до минуты'} />
             ) : suggestJob.status === 'error' ? (
               <div style={{ fontSize: 12.5, color: C.dangerText }}>
                 {suggestJob.error}{' '}
                 <button
-                  onClick={() => genModeRef.current !== null ? runGenerate(genModeRef.current) : runSuggest()}
+                  onClick={() => genMode !== null ? runGenerate(genMode) : runSuggest()}
                   style={linkBtn}
                 >Повторить</button>{' '}
                 <button onClick={() => resetAiJob(suggestKey)} style={{ ...linkBtn, color: C.textMuted }}>Закрыть</button>

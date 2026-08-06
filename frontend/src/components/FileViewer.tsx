@@ -506,9 +506,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
   // В режиме зернистого stage дифф — worktree против ИНДЕКСА (git diff без staged),
   // иначе патчи хунков не соответствовали бы содержимому индекса
-  const fetchDiff = () => gitStagePath
+  const fetchDiff = useCallback(() => gitStagePath
     ? api.git.diff(project.id, filePath, false)
-    : api.files.getDiff(project.id, filePath);
+    : api.files.getDiff(project.id, filePath),
+  [project.id, filePath, gitStagePath]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- массовый сброс промежуточного UI-состояния перед загрузкой нового файла
@@ -544,7 +545,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     if (isHostMode) setDiff(null);
     // diff недоступен офлайн — мягко игнорируем ошибку
     else fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
-  }, [project.id, filePath, gitStagePath, isHostMode]);
+  }, [project.id, filePath, gitStagePath, isHostMode, fetchDiff]);
 
   // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
   useEffect(() => {
@@ -667,7 +668,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       setBlame(null);   // авторство устарело — перечитается при открытии вкладки
       setBlameError(false);
     });
-  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode]);
+  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, fetchDiff]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -899,7 +900,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
   // Ctrl+C без выделения: отдаём исходник открытого текстового файла (см. selectionScope)
   const copySourceRef = useRef<() => string | null>(() => null);
-  copySourceRef.current = () => (isCopyableText ? (fileContent?.content ?? null) : null);
+  useEffect(() => {
+    copySourceRef.current = () => (isCopyableText ? (fileContent?.content ?? null) : null);
+  });
   useEffect(() => {
     const el = contentAreaRef.current;
     if (!el) return;
@@ -1102,6 +1105,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     if (!loadError && tab === 'file' && isCopyableText && !isDrawio && !(isHtml && htmlTab === 'preview')) {
       const copyTitle = copied ? 'Скопировано'
         : isMarkdown ? 'Скопировать Markdown (Shift — с форматированием)' : 'Скопировать содержимое';
+      // eslint-disable-next-line react-hooks/refs -- secondary — локальный массив рендера; taint от обработчиков, читающих refs только в событиях
       secondary.push({
         key: 'copy',
         node: (
@@ -1234,6 +1238,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // его вовсе, иначе строка получает лишний зазор в пустом месте
   const commentsChipVisible = showChips && !!commentCounts && commentCounts.total > 0 && !editing && tab === 'file';
   const diffChipVisible = showChips && !!diffStats && tab === 'diff';
+  // eslint-disable-next-line react-hooks/refs -- mainAction/cancelAction не refs: компилятор помечает их из-за onClick-колбэка с drawioRef внутри (вызов только из события)
   const badgesVisible = commentsChipVisible || diffChipVisible || showTabs || !!(mainAction || cancelAction);
 
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
@@ -1402,11 +1407,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             Неприкосновенен: на узких ступенях меняет форму на иконку, но не сворачивается. */}
         {actionAsIcon
           ? <>
+              {/* eslint-disable-next-line react-hooks/refs -- cancelAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
               {cancelAction && actionIcon(cancelAction)}
+              {/* eslint-disable-next-line react-hooks/refs -- mainAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
               {mainAction && actionIcon(mainAction)}
             </>
           : <>
+              {/* eslint-disable-next-line react-hooks/refs -- cancelAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
               {cancelAction && actionButton(cancelAction)}
+              {/* eslint-disable-next-line react-hooks/refs -- mainAction не ref: taint от onClick с drawioRef (срабатывает только по событию) */}
               {mainAction && actionButton(mainAction)}
             </>}
         </div>
@@ -1985,13 +1994,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 // группы различаются чередующимся фоном.
 function BlameView({ lines }: { lines: GitBlameLine[] }) {
   const rows = useMemo(() => {
-    let group = -1;
-    let prevSha = '';
-    return lines.map(l => {
-      const first = l.sha !== prevSha;
-      if (first) { group++; prevSha = l.sha; }
-      return { l, first, group };
-    });
+    const out: { l: GitBlameLine; first: boolean; group: number }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const first = i === 0 || lines[i].sha !== lines[i - 1].sha;
+      out.push({ l: lines[i], first, group: i === 0 ? 0 : out[i - 1].group + (first ? 1 : 0) });
+    }
+    return out;
   }, [lines]);
   return (
     <div style={{ fontFamily: FONT.mono, fontSize: 12, lineHeight: '1.55' }}>

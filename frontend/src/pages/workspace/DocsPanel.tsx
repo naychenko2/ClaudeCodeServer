@@ -241,7 +241,7 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, onTogglePin, onContextMenu }: {
+function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, active = false, onTogglePin, onContextMenu }: {
   folder: string;
   // Действия раздела правым кликом — те же, что у строки документа (переименование)
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -267,6 +267,10 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
   pagePath?: string;
   // Закрепление страницы раздела — как у документа: бейдж под курсором становится булавкой
   pinned?: boolean;
+  // Страница раздела ПОКАЗАНА сейчас: выделяем подпись, как выделили бы строку документа.
+  // Своей строки у страницы в дереве нет — она и есть эта подпись, поэтому без выделения
+  // здесь открытого документа в списке не видно вообще
+  active?: boolean;
   onTogglePin?: () => void;
 }) {
   const title = titleProp ?? groupLabel(folder);
@@ -348,6 +352,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
           align="left" dense
           onClick={onOpenPage}
           highlightOnHover
+          active={active}
           // md-бейдж/булавка раздела — сразу перед подписью, следом за шевроном
           beforeTitle={pinBadge}
           // Правая линия делает то же, что двойной шеврон: у раздела с поддеревом —
@@ -2075,6 +2080,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         onContextMenu={page ? e => openRowMenu(page, e) : undefined}
                         pagePath={page?.path}
                         pinned={!!page && pinned.has(page.path)}
+                        // Строкой страница раздела в дереве не рисуется — выделение
+                        // открытого документа достаётся подписи его блока
+                        active={!!page && isShown(page.path)}
                         onTogglePin={page ? () => togglePin(page.path) : undefined}
                         subtreeCollapsed={deepCollapsed.has(folder)}
                         // Двойной шеврон — только у раздела с вложенными подпапками

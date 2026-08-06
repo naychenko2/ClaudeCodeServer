@@ -32,7 +32,7 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  */
 export function ListDateDivider({
   title, subtitle, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
-  highlightOnHover = false, onLineClick, lineTitleAttr, onLineHover, beforeTitle,
+  highlightOnHover = false, active = false, onLineClick, lineTitleAttr, onLineHover, beforeTitle,
 }: {
   title: string;
   // Приписка сразу после подписи, приглушённо: у групп документации это родительский
@@ -51,6 +51,10 @@ export function ListDateDivider({
   // Подсветить подложку под курсором. Включаем там, где клик ОТКРЫВАЕТ документ (страница
   // раздела), а не просто сворачивает группу: подложка обещает переход к контенту
   highlightOnHover?: boolean;
+  // Разделитель-документ ПОКАЗАН сейчас (страница раздела открыта). Выделяется тем же
+  // способом, что строка документа, — иначе открытого документа в списке не видно вовсе:
+  // строкой страница раздела не рисуется, она и есть эта подпись
+  active?: boolean;
   // Свой обработчик на правую линию: когда сама подпись открывает документ, черта справа
   // остаётся под сворачивание группы — как шеврон. Клик по ней не всплывает к onClick
   onLineClick?: () => void;
@@ -74,7 +78,7 @@ export function ListDateDivider({
       {beforeTitle}
       <span style={{
         fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',
-        color: flash ? C.accent : C.textSecondary,
+        color: flash ? C.accent : active ? C.textHeading : C.textSecondary,
       }}>
         {title}
       </span>
@@ -140,8 +144,10 @@ export function ListDateDivider({
       style={{
         ...layout,
         width: '100%', border: 'none',
-        background: highlightOnHover && hover ? C.bgInset : 'transparent',
-        borderRadius: highlightOnHover ? R.md : undefined,
+        // Порядок как у строки документа: выделение сильнее наведения — иначе подсветка
+        // открытого раздела гасла под курсором, будто документ закрылся
+        background: active ? C.bgSelected : highlightOnHover && hover ? C.bgInset : 'transparent',
+        borderRadius: highlightOnHover || active ? R.md : undefined,
         cursor: 'pointer', font: 'inherit', textAlign: 'left',
       }}
     >

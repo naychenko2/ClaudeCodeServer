@@ -218,6 +218,15 @@ export function AiLauncher() {
     return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener(OPEN_AI_EVENT, onOpen); };
   }, []);
 
+  // Пока палитра открыта, кнопки в DOM нет — mouseleave по ней уже не придёт, и признак
+  // наведения залипает: закрыв палитру, пользователь видел кнопку в РАЗВЁРНУТОМ виде,
+  // хотя курсор давно в стороне. Гасим признак на каждой смене состояния палитры;
+  // если курсор и правда над кнопкой, ближайшее движение мыши вернёт наведение.
+  useEffect(() => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+    setFabHover(false);
+  }, [open]);
+
   const close = () => setOpen(false);
   const fire = (a: AiAction) => { close(); a.run(buildCtx()); };
 

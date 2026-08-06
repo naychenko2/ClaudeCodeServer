@@ -370,6 +370,45 @@ describe('applyServerMessage: ожидание ответа пользовате
   });
 });
 
+// Жизненный цикл вызова планировщика (три состояния контракта: start / success / отказ).
+// Транзитное событие — карточку плана/отказа не подменяет, только ведёт живой флаг
+// ChatState.teamPlanning (плашка «идёт» в ChatPanel) и добавляет строку-итог на успехе
+describe('applyServerMessage: team_planning', () => {
+  const planningMsg = (over: Partial<Extract<ServerMessage, { type: 'team_planning' }>> = {}) =>
+    ({
+      type: 'team_planning' as const, start: false, success: false,
+      subtaskCount: 0, waveCount: 0, elapsedMs: 0, route: null, failure: null,
+      promptChars: 0, responseChars: 0,
+      ...over,
+    });
+
+  it('start=true — teamPlanning взводится, в ленту ничего не добавляется', () => {
+    const next = run([planningMsg({ start: true })]);
+    expect(next.items).toEqual([]);
+    expect(next.teamPlanning).toEqual({ startedAt: expect.any(Number) });
+  });
+
+  it('success=true — teamPlanning гасится, в ленту добавляется одна строка-итог', () => {
+    const running = run([planningMsg({ start: true })]);
+    const next = applyServerMessage(running, msg(planningMsg({
+      start: false, success: true, subtaskCount: 5, waveCount: 2, elapsedMs: 46_000,
+    })));
+    expect(next.teamPlanning).toBeNull();
+    expect(next.items).toEqual([
+      { kind: 'team_planning_done', subtaskCount: 5, waveCount: 2, elapsedMs: 46_000 },
+    ]);
+  });
+
+  it('success=false (отказ) — teamPlanning гасится, лента не трогается (карточка отказа придёт своим путём)', () => {
+    const running = run([planningMsg({ start: true })]);
+    const next = applyServerMessage(running, msg(planningMsg({
+      start: false, success: false, failure: 'Планировщик не уложился во время',
+    })));
+    expect(next.teamPlanning).toBeNull();
+    expect(next.items).toEqual([]);
+  });
+});
+
 // --- result / error / exited / file_changed ---
 
 describe('applyServerMessage: завершение хода', () => {
@@ -708,6 +747,17 @@ describe('normalizeHistory', () => {
     expect(normalizeHistory([])).toEqual([]);
   });
 
+  // StoredModelSwitchedMessage (model_switched) — пометка «Ответила …» переживает
+  // перезагрузку страницы: поля с диска (model/previousModel/reason) переносятся как есть
+  it('model_switched из истории восстанавливает пометку подмены модели', () => {
+    const raw = [
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: 'rate_limit' },
+    ];
+    expect(normalizeHistory(raw)).toEqual([
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: 'rate_limit' },
+    ]);
+  });
+
   // В истории поле зовётся timestamp, в ленте — ts. Без перекладывания панель поста
   // после перезагрузки оставалась бы без времени, хотя на диске оно есть
   it('timestamp из истории становится ts, модель переносится как есть', () => {
@@ -801,6 +851,50 @@ describe('фейловер провайдера', () => {
   it('тихий фейловер пула (auto) не оставляет следов в ленте', () => {
     const next = run([{ type: 'provider_switched', provider: 'my-second', auto: true }]);
     expect(next.items).toEqual([]);
+  });
+});
+
+// --- Пометка подмены модели: провалившийся ход перезапущен фолбэком на другой модели ---
+
+describe('пометка подмены модели (провалившийся ход + фолбэк)', () => {
+  const started = (model: string) =>
+    ({ type: 'session_started' as const, claudeSessionId: 'c1', isResume: false, model, mode: 'default' });
+
+  it('auto + смена модели → пометка model_switched вместо provider_switched', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'deepseek', model: 'deepseek-chat', label: 'Автофолбэк: смена провайдера → «DeepSeek»', auto: true },
+    ]);
+    expect(next.items).toEqual([
+      { kind: 'session_started', model: 'claude-opus-4-8', mode: 'default', cwd: undefined, toolCount: undefined, mcpServers: undefined, turnWorktree: undefined },
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: undefined, rawLabel: 'Автофолбэк: смена провайдера → «DeepSeek»' },
+    ]);
+  });
+
+  it('auto + смена модели + reason с провода — прокидывается в пометку', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'deepseek', model: 'deepseek-chat', label: 'Автофолбэк: смена провайдера → «DeepSeek»', auto: true, reason: 'rate_limit' },
+    ]);
+    expect(next.items[1]).toEqual(
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: 'rate_limit', rawLabel: 'Автофолбэк: смена провайдера → «DeepSeek»' },
+    );
+  });
+
+  it('auto без модели (ротация подписки того же провайдера) — пометки модели нет', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'acc-b', label: 'Автофолбэк: подписка «acc-a» → «acc-b»', auto: true },
+    ]);
+    expect(next.items.some(it => it.kind === 'model_switched')).toBe(false);
+  });
+
+  it('auto + та же модель (гипотетически) — пометки модели нет, разъезда с provider_switched тоже', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'acc-b', model: 'claude-opus-4-8', auto: true },
+    ]);
+    expect(next.items.some(it => it.kind === 'model_switched' || it.kind === 'provider_switched')).toBe(false);
   });
 });
 

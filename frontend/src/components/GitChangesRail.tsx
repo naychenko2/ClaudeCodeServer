@@ -2,15 +2,16 @@
 // Две зоны: вверху файлы активного скоупа (текущие изменения ИЛИ выбранный коммит),
 // внизу селектор скоупов (строка «Не зафиксировано» + стек незапушенных коммитов).
 // Данные/мутации — через стор lib/git.ts; форма фиксации и диалог промпта — локально.
-// Отдельный компонент (панель «Файлы»/GitChangesPanel не трогаем).
+// Здесь же настройки самого репозитория (авто-ведение истории, вход в Forgejo) —
+// единственная git-поверхность продукта после того, как «Файлы» вернулись к дереву.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Wand2, FolderClosed,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
-  Check, Plus, Archive, ArchiveRestore, Trash2,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink,
 } from 'lucide-react';
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../types';
 import { api } from '../lib/api';
@@ -18,15 +19,16 @@ import { C, R, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
-  gitStashPush, gitStashPop, gitStashDrop, clearGitError,
+  gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow, gitInit,
 } from '../lib/git';
-import { splitPath, relTime } from './GitPanel';
+import { splitPath, relTime } from '../lib/gitFormat';
 import { PublishDialog } from './PublishDialog';
 import { ListDateDivider } from './ListDateDivider';
+import { EmptyState } from './EmptyState';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
 import { getExtMeta } from './FileExplorer';
-import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented } from './ui';
+import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
@@ -34,14 +36,18 @@ const VIEW_KEY = 'cc_git_changes_view';
 const SCOPE_H_KEY = 'cc_git_scope_h';   // высота стека коммитов зоны скоупов (ресайз)
 const SCOPE_H_DEFAULT = 4 * 34;         // по умолчанию видно ~4 скоупа
 
-// Кнопка действия в строке скоупа: белая у «Зафиксировать», акцентная у публикации
-// (она перекрывает фон в своём месте использования). Ширина фиксированная и общая —
-// кнопки стоят одна под другой, и разъезжающиеся по длине текста края читались бы
-// как небрежность
-const scopeActionStyle: CSSProperties = {
-  flexShrink: 0, width: 110, fontSize: 11, fontWeight: 600, color: C.textHeading, background: C.bgWhite,
-  border: `1px solid ${C.border}`, borderRadius: 6, padding: '3px 0', textAlign: 'center',
-  cursor: 'pointer', whiteSpace: 'nowrap',
+// Квадратная кнопка-действие иконкой (вместо текста) в нижней зоне: галка
+// «Зафиксировать» в белой обводке и accent-заливка у публикации. Габарит 28 —
+// как у соседних IconButton (fetch/pull, отмена всех), чтобы ряд не рябил
+const scopeIconBtnBase: CSSProperties = {
+  flexShrink: 0, width: 28, height: 28, borderRadius: R.md, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+};
+const commitIconStyle: CSSProperties = {
+  ...scopeIconBtnBase, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading,
+};
+const publishIconStyle: CSSProperties = {
+  ...scopeIconBtnBase, background: C.accent, border: 'none', color: C.onAccent,
 };
 
 // Светлая компактная кнопка делегирования фиксации чату (в форме)
@@ -143,6 +149,7 @@ function buildTree(files: RowFile[]): TreeNode[] {
 export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
+  const hasPanelHeader = useHasPanelHeader();
 
   const [activeScope, setActiveScope] = useState<'working' | string>('working'); // string = sha коммита
   const [mode, setMode] = useState<'list' | 'commit'>('list');
@@ -168,6 +175,15 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const [newBranchName, setNewBranchName] = useState('');
   const [pendingCheckout, setPendingCheckout] = useState<string | null>(null); // ветка, ждущая подтверждения (грязное дерево)
   const [stashDropConfirm, setStashDropConfirm] = useState<GitStashEntry | null>(null); // стэш, ждущий подтверждения удаления
+  const [repoMenu, setRepoMenu] = useState<DOMRect | null>(null);              // меню настроек репозитория (шапка)
+  const [gitInitBusy, setGitInitBusy] = useState(false);                       // подключение git к проекту без репозитория
+  const [gitInitError, setGitInitError] = useState<string | null>(null);
+  const [forgejoCreds, setForgejoCreds] = useState<{ login: string; password: string | null } | null>(null);
+  const [credsBusy, setCredsBusy] = useState(false);
+  const [savingNow, setSavingNow] = useState(false);                           // «Сохранить сейчас» (документный режим)
+  // Меню настроек репозитория живёт порталом: пока оно открыто, контролы шапки не
+  // гаснут — иначе кнопка, которой его открыли, исчезает под курсором
+  usePanelHeaderHold(!!repoMenu);
 
   // Загрузка стора + стека незапушенных + remote при монтировании панели
   useEffect(() => {
@@ -176,6 +192,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     void loadGitRemote(project.id);
     void loadGitStash(project.id);
   }, [project.id]);
+
+  // Документный режим (авто-коммит после хода ИИ): историю ведёт сервер, и ручная
+  // фиксация пользователю не нужна — панель открывается на ветке, а не на «Не
+  // зафиксировано». Ровно один раз за монтирование, когда приехал remote: дальше
+  // скоуп выбирает пользователь, и переставлять его под ним нельзя.
+  const autoScopeApplied = useRef(false);
+  useEffect(() => {
+    if (autoScopeApplied.current || !st.remote) return;
+    autoScopeApplied.current = true;
+    if (st.remote.autoCommit) setActiveScope('branch');
+  }, [st.remote]);
 
   // Git-бар чата просит показать текущие изменения: сбрасываем скоуп на «Не
   // зафиксировано» (если панель была открыта на коммите/стэше/ветке). При закрытой
@@ -239,6 +266,47 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     if (scope !== activeScope) onScopeChange?.();  // смена скоупа — сбросить центр к чату
     setActiveScope(scope);
     setMode('list');
+  };
+
+  // Проект без git: панель предлагает подключить его (раньше это жило в меню
+  // сортировки «Файлов» — там, где искать такое некому)
+  const handleGitInit = async () => {
+    if (gitInitBusy) return;
+    setGitInitBusy(true);
+    setGitInitError(null);
+    const r = await gitInit(project.id);
+    setGitInitBusy(false);
+    if (!r.ok) setGitInitError(r.error ?? 'Не удалось создать git-репозиторий');
+  };
+
+  // === Настройки репозитория (меню в шапке панели) ===
+  const remote = st.remote;
+  const handleToggleAutoCommit = () => {
+    if (!remote) return;
+    // Выключение авто-коммита выключает и авто-пуш (он без коммитов бессмыслен)
+    void gitSetAutoCommit(project.id, !remote.autoCommit, !remote.autoCommit ? remote.autoPush : false);
+  };
+  const handleToggleAutoPush = () => {
+    if (!remote?.autoCommit) return;
+    void gitSetAutoCommit(project.id, true, !remote.autoPush);
+  };
+  const openForgejoCreds = async () => {
+    try { setForgejoCreds(await api.git.forgejoCredentials(project.id)); }
+    catch { /* сервер не настроен/аккаунта нет — пункт меню и так за serverEnabled */ }
+  };
+  const resetForgejoPass = async () => {
+    setCredsBusy(true);
+    try { setForgejoCreds(await api.git.resetForgejoPassword(project.id)); }
+    catch { /* молча */ }
+    finally { setCredsBusy(false); }
+  };
+
+  // Документный режим: сохранить накопленное сейчас, не дожидаясь хода ИИ
+  const docMode = remote?.autoCommit === true;
+  const pendingCount = (status?.staged.length ?? 0) + (status?.unstaged.length ?? 0) + (status?.untracked.length ?? 0);
+  const handleSaveNow = async () => {
+    setSavingNow(true);
+    try { await gitSaveNow(project.id); } finally { setSavingNow(false); }
   };
 
   // Ветки: список грузим лениво при открытии меню, чекаут — только на другую ветку
@@ -506,9 +574,18 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // кнопки живут в шапке панели, а подпись убрана — активный скоуп и так подсвечен
   // в нижнем селекторе. Состояние (вид, режим выбора, свёрнутые папки) остаётся
   // внутри компонента: наружу уходит не узел, а портал в слот шапки.
-  // История ветки списком файлов не управляется — кнопок там нет.
-  const headerControls = isBranch ? null : (
-    <PanelHeaderSlot>
+  //
+  // Разделение внутри слота: списком файлов история ветки не управляется, поэтому
+  // его контролы живут под !isBranch. А настройки репозитория нужны в ЛЮБОМ скоупе
+  // (в документном режиме панель открывается сразу на ветке — там их и ищут), и
+  // потому стоят вне этого условия.
+  //
+  // Шапки может не быть — на телефоне панель живёт вкладкой сайдбара, без карточки
+  // PanelShell. Тогда те же контролы рисуются своей строкой в теле (приём DocsPanel):
+  // без этого слот молча ничего не отрендерит и управление панелью пропадёт.
+  const controls = (
+    <>
+        {!isBranch && <>
         {/* Режим выбора файлов (чекбоксы) — только для текущих изменений */}
         {isWorking && rows.length > 0 && (
           <>
@@ -545,12 +622,91 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             { value: 'tree', label: 'Деревом', icon: <ListTree size={14} strokeWidth={ICON_STROKE} /> },
           ]}
         />
-    </PanelHeaderSlot>
+        </>}
+        {/* Настройки репозитория: авто-ведение истории и веб-UI git-сервера.
+            anchor-режим меню — слот шапки лежит внутри карточки с transform,
+            и absolute-позиционирование уехало бы вместе с ней */}
+        {remote && (
+          <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
+            onClick={e => setRepoMenu(repoMenu ? null : e.currentTarget.getBoundingClientRect())}>
+            <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        )}
+    </>
   );
+
+  const headerControls = hasPanelHeader
+    ? <PanelHeaderSlot>{controls}</PanelHeaderSlot>
+    : (
+      <div style={{
+        flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4,
+        padding: '8px 12px', borderBottom: `1px solid ${C.border}`,
+      }}>{controls}</div>
+    );
+
+  // Меню настроек репозитория — портал по якорю кнопки в шапке
+  const repoMenuEl = repoMenu && remote && (
+    <Menu anchor={repoMenu} minWidth={260} maxHeight={200} onClose={() => setRepoMenu(null)}>
+      <MenuItem
+        icon={remote.autoCommit ? <Check size={15} strokeWidth={2} /> : <></>}
+        label={
+          <span title="Каждый ход ИИ фиксируется коммитом. Для документов; не для кода с параллельной ручной работой">
+            Авто-сохранение после хода ИИ
+          </span>
+        }
+        onClick={handleToggleAutoCommit}
+      />
+      <MenuItem
+        disabled={!remote.autoCommit}
+        icon={remote.autoCommit && remote.autoPush ? <Check size={15} strokeWidth={2} /> : <></>}
+        label="…и отправлять на сервер"
+        onClick={handleToggleAutoPush}
+      />
+      {remote.serverEnabled && (
+        <MenuItem
+          icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
+          label="Вход в Forgejo…"
+          onClick={() => { setRepoMenu(null); void openForgejoCreds(); }}
+        />
+      )}
+      {remote.htmlUrl && (
+        <MenuItem
+          icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
+          label="Открыть в Forgejo"
+          onClick={() => { setRepoMenu(null); window.open(remote.htmlUrl!, '_blank', 'noopener'); }}
+        />
+      )}
+    </Menu>
+  );
+
+  // Проект вне git: показывать нечего — вместо пустых зон предлагаем подключить
+  // репозиторий. Ждём загрузки статуса, иначе экран моргнёт этим состоянием
+  if (st.statusLoaded && !status?.isRepo) {
+    return (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
+        <EmptyState
+          icon={<GitBranch size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+          title="Проект без git"
+          subtitle="В папке проекта будет создан репозиторий — появится история правок и фиксация изменений. Если настроен сервер Forgejo, также будет создан удалённый репозиторий."
+          action={
+            <Button size="md" variant="primary" disabled={gitInitBusy} onClick={() => void handleGitInit()}>
+              {gitInitBusy ? 'Подключаю…' : 'Подключить git'}
+            </Button>
+          }
+        />
+        {gitInitError && (
+          <div style={{ padding: '0 16px', fontSize: 12.5, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.45, textAlign: 'center' }}>
+            {gitInitError}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {headerControls}
+      {repoMenuEl}
       {st.error && (
         <div onClick={() => clearGitError(project.id)} title="Скрыть"
           style={{ margin: '8px 12px', fontSize: 12, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.4, cursor: 'pointer' }}>
@@ -584,6 +740,30 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             : rows.map(f => renderFileRow(f, 0, true))}
         </div>
       </div>
+
+      {/* Плашка документного режима — над селектором скоупов: она про рабочее дерево,
+          и стоять должна рядом со строкой «Не зафиксировано», которую замещает по
+          смыслу. Видна в любом скоупе: состояние «сохранено / ждёт хода» одинаково
+          важно и когда смотришь историю. Кнопки push здесь нет — публикацией
+          заведует «Опубликовать» в ряду ветки. */}
+      {docMode && mode === 'list' && (
+        <div style={{
+          margin: '0 10px 8px', padding: '9px 12px', borderRadius: R.lg, flexShrink: 0,
+          background: pendingCount === 0 ? C.successBg : C.warningBg,
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontFamily: FONT.sans, lineHeight: 1.4, color: pendingCount === 0 ? C.successText : C.warningText }}>
+            {pendingCount === 0
+              ? 'Все изменения сохранены — история ведётся автоматически'
+              : `Изменений: ${pendingCount} — сохранятся после хода ИИ`}
+          </span>
+          {pendingCount > 0 && (
+            <Button size="sm" variant="primary" disabled={savingNow || st.busy} onClick={() => void handleSaveNow()}>
+              {savingNow ? 'Сохраняю…' : 'Сохранить сейчас'}
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* === Нижняя зона: форма фиксации ИЛИ селектор скоупов === */}
       {mode === 'commit' ? (
@@ -684,8 +864,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
                       title="Зафиксировать изменения"
-                      style={scopeActionStyle}
-                    >Зафиксировать</button>
+                      style={commitIconStyle}
+                    >
+                      <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                    </button>
                   </>
                 )}
               </div>
@@ -746,52 +928,58 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         </div>
       )}
 
-      {/* === Ветка: строка в стиле скоупа (селектор ветки + fetch/pull); в режиме фиксации скрыта === */}
+      {/* === Ветка: капсула split-button (тело = коммиты ветки, стрелка = меню веток)
+             + fetch/pull/публикация иконками; в режиме фиксации скрыта === */}
       {mode === 'list' && (
-      <div style={{ padding: '0 8px 6px', flexShrink: 0 }}>
-        {/* Весь ряд ветки = один скоуп: подсветка на всю длину, включая fetch/pull */}
-        <div
-          onMouseEnter={() => setHoveredRow('branch')}
-          onMouseLeave={() => setHoveredRow(null)}
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6, borderRadius: 8, padding: '0 2px 0 0',
-            background: (isBranch || branchMenu) ? C.accentLight : hoveredRow === 'branch' ? C.bgSelected : 'transparent',
-          }}
-        >
+      <div style={{ padding: '0 8px 8px', flexShrink: 0 }}>
+        {/* Разделитель + воздух: отбиваем ряд ветки от скролла скоупов выше */}
+        <div style={{ height: 1, background: C.borderLight, margin: '2px 6px 8px' }} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>
-            {/* Тело строки = выбор скоупа «ветка» (история в верхней зоне);
-                стрелка вниз — отдельная кнопка, открывает меню выбора/создания ветки */}
+            {/* Капсула с рамкой = явный контрол (читается кликабельной и без ховера,
+                живёт на тач). Активный скоуп «ветка» / открытое меню — accent */}
             <div
-              onClick={() => selectScope('branch')}
-              title={status?.branch ?? undefined}
               style={{
-                flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 32,
-                padding: '4px 4px 4px 8px', borderRadius: 8, cursor: 'pointer', textAlign: 'left',
-                background: 'transparent',
+                flex: 1, minWidth: 0, display: 'flex', alignItems: 'stretch', overflow: 'hidden',
+                border: `1px solid ${(isBranch || branchMenu) ? C.accent : C.border}`, borderRadius: 8,
+                background: (isBranch || branchMenu) ? C.accentLight : C.bgWhite,
               }}
             >
-              {st.busy
-                ? <span style={{ width: 13, height: 13, flexShrink: 0, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
-                : <GitBranch size={13} strokeWidth={ICON_STROKE} color={isBranch ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />}
-              <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isBranch ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {status?.detached ? `${status.branch ?? 'HEAD'} (detached)` : (status?.branch ?? '—')}
-              </span>
-              {(ahead > 0 || (status?.behind ?? 0) > 0) && (
-                <span style={{ fontFamily: FONT.mono, fontSize: 10, color: isBranch ? C.accent : C.textMuted, flexShrink: 0, display: 'flex', gap: 3 }}>
-                  {ahead > 0 && <span>↑{ahead}</span>}
-                  {(status?.behind ?? 0) > 0 && <span>↓{status?.behind}</span>}
+              {/* Тело = выбор скоупа «ветка»: список её коммитов открывается в верхней зоне */}
+              <div
+                onClick={() => selectScope('branch')}
+                title={status?.branch ?? undefined}
+                style={{
+                  flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 32,
+                  padding: '4px 8px', cursor: 'pointer', textAlign: 'left',
+                }}
+              >
+                {st.busy
+                  ? <span style={{ width: 13, height: 13, flexShrink: 0, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
+                  : <GitBranch size={13} strokeWidth={ICON_STROKE} color={isBranch ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />}
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 500, color: isBranch ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {status?.detached ? `${status.branch ?? 'HEAD'} (detached)` : (status?.branch ?? '—')}
                 </span>
-              )}
+                {(ahead > 0 || (status?.behind ?? 0) > 0) && (
+                  <span style={{ fontFamily: FONT.mono, fontSize: 10, color: isBranch ? C.accent : C.textMuted, flexShrink: 0, display: 'flex', gap: 3 }}>
+                    {ahead > 0 && <span>↑{ahead}</span>}
+                    {(status?.behind ?? 0) > 0 && <span>↓{status?.behind}</span>}
+                  </span>
+                )}
+              </div>
+              {/* Вертикальный разделитель отбивает стрелку от тела — видно, что это
+                  отдельное действие (меню веток), а не часть выбора скоупа */}
+              <div style={{ width: 1, flexShrink: 0, background: (isBranch || branchMenu) ? C.accentMuted : C.border }} />
               <button
                 onClick={e => { e.stopPropagation(); openBranchMenu(); }}
                 disabled={st.busy}
                 title="Выбрать ветку"
                 style={{
-                  display: 'flex', alignItems: 'center', flexShrink: 0, padding: '3px 4px', margin: '-3px 0',
-                  border: 'none', background: 'transparent', borderRadius: 6, cursor: st.busy ? 'default' : 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 30,
+                  border: 'none', background: 'transparent', cursor: st.busy ? 'default' : 'pointer',
                 }}
               >
-                <ChevronDown size={12} strokeWidth={ICON_STROKE} color={branchMenu ? C.accent : C.textMuted} />
+                <ChevronDown size={14} strokeWidth={ICON_STROKE} color={(branchMenu || isBranch) ? C.accent : C.textMuted} />
               </button>
             </div>
             {branchMenu && (
@@ -820,10 +1008,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           <IconButton size="sm" title="Забрать и слить (pull)" disabled={st.busy} onClick={() => void gitPull(project.id)}>
             <ArrowDownToLine size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
-          {/* Публикация — тем же стилем, что «Зафиксировать»: только подпись, без
-              иконки и числа (счёт коммитов и так виден стрелкой ↑N в строке ветки).
-              Кнопка на месте всегда (нечего публиковать → приглушена и не нажимается),
-              чтобы ряд не прыгал */}
+          {/* Публикация — accent-иконкой (главное действие панели); число коммитов не
+              дублируем, оно видно стрелкой ↑N в капсуле. Нечего публиковать → гаснет,
+              но остаётся на месте (ряд не прыгает) */}
           <button
             onClick={() => setPublishConfirm(true)}
             disabled={!canPublish || st.busy}
@@ -831,18 +1018,12 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               ? `Опубликовать (git push): ${ahead || st.unpushed.length} коммит(ов)`
               : 'Публиковать нечего'}
             style={{
-              // Габариты общие с «Зафиксировать», вид — акцентный: публикация
-              // остаётся главным действием панели
-              ...scopeActionStyle,
-              background: C.accent, color: C.onAccent, border: 'none',
+              ...publishIconStyle,
               cursor: canPublish && !st.busy ? 'pointer' : 'default',
               opacity: canPublish && !st.busy ? 1 : 0.4,
-              // Правый край в одну линию с «Зафиксировать»: строка скоупа отступает
-              // от края на 8px, а ряд ветки — на 2px, добираем разницу
-              marginRight: 6,
             }}
           >
-            Опубликовать
+            <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </button>
         </div>
       </div>
@@ -917,6 +1098,33 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         >
           <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
             Отложенные изменения будут удалены безвозвратно.
+          </div>
+        </Modal>
+      )}
+
+      {/* === Данные входа в веб-UI Forgejo (приватные репо анониму отдают 404) === */}
+      {forgejoCreds && (
+        <Modal
+          width={MODAL_W.confirm}
+          onClose={() => setForgejoCreds(null)}
+          title="Вход в Forgejo"
+          subtitle="Логин и пароль для веб-интерфейса git-сервера"
+          footer={<ModalActions confirmLabel="Готово" onConfirm={() => setForgejoCreds(null)} onCancel={() => setForgejoCreds(null)} />}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, fontFamily: FONT.mono, fontSize: 13 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ color: C.textMuted, width: 64, flexShrink: 0, fontFamily: FONT.sans, fontSize: 12.5 }}>Логин</span>
+              <span style={{ color: C.textHeading, userSelect: 'all' }}>{forgejoCreds.login}</span>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <span style={{ color: C.textMuted, width: 64, flexShrink: 0, fontFamily: FONT.sans, fontSize: 12.5 }}>Пароль</span>
+              {forgejoCreds.password
+                ? <span style={{ color: C.textHeading, userSelect: 'all', overflowWrap: 'anywhere' }}>{forgejoCreds.password}</span>
+                : <span style={{ color: C.textMuted, fontFamily: FONT.sans, fontSize: 12.5 }}>не сохранён — сбросьте</span>}
+            </div>
+            <Button size="sm" variant="dashed" disabled={credsBusy} onClick={() => void resetForgejoPass()} style={{ alignSelf: 'flex-start', marginTop: 2 }}>
+              {credsBusy ? 'Сбрасываю…' : 'Сбросить пароль'}
+            </Button>
           </div>
         </Modal>
       )}

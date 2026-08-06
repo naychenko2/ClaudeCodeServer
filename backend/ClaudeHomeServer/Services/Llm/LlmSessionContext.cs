@@ -99,6 +99,20 @@ public sealed record ModuleMcpServer(string Key, string Command, IReadOnlyList<s
 // (null/пусто — модулей нет или все скрыты фич-флагами module-{id}).
 public sealed record ModulesMcpContext(IReadOnlyList<ModuleMcpServer> Servers);
 
+// Один MCP-сервер из личного реестра владельца (Services/Mcp/McpRegistry): Key — ключ
+// сервера в конфиге хода, Transport — stdio|http|sse. Значения Env/Headers приходят уже
+// РАЗВЁРНУТЫМИ (плейсхолдеры secret:<id> резолвнуты в McpSecretStore) — секрет живёт только
+// во временном конфиге хода. AuthVersion входит в отпечаток запуска: заголовки запекаются
+// в файл на старте процесса, и обновлённый токен живому процессу иначе не доедет.
+public sealed record ExternalMcpServer(string Key, string Transport,
+    string? Command, IReadOnlyList<string> Args, IReadOnlyDictionary<string, string> Env,
+    string? Url, IReadOnlyDictionary<string, string> Headers,
+    bool AlwaysLoad, int AuthVersion);
+
+// Контекст серверов личного реестра: аддитивно к наследству из .mcp.json (одноимённая
+// запись реестра его перекрывает), но встроенные серверы продукта ставятся позже и выигрывают.
+public sealed record ExternalMcpContext(IReadOnlyList<ExternalMcpServer> Servers);
+
 // Выделенный memory-сервер персоны-консультанта (файлового сабагента): ключ сервера
 // в MCP-конфиге хода ("pmem_<handle>") + env memory-server ЭТОЙ персоны. Файл агента
 // ссылается на сервер по имени (mcpServers: [pmem_<handle>]), а определение с токеном
@@ -189,4 +203,9 @@ public sealed record LlmSessionContext(
     // CLAUDE.md и каталог скиллов для блока «слой CLI». Резолвится в SessionManager
     // (ConfigRootFor знает раскладку профилей и песочницы), сюда приходит готовым;
     // null — слой CLI собирается без файлов профиля.
-    string? CliConfigRoot = null);
+    string? CliConfigRoot = null,
+    // MCP-серверы личного реестра владельца: вычисляется на КАЖДЫЙ ход (правка реестра
+    // применяется без пересоздания адаптера, как у PersonaAgentsProvider). Решение
+    // принимается только по owner/project/persona — от свойств хода состав не зависит.
+    // null — фича выключена, нет владельца или реестр пуст.
+    Func<ExternalMcpContext?>? ExternalMcpProvider = null);

@@ -33,10 +33,11 @@ import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../componen
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
-  PANEL_META, PANEL_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
-  isFullHeight, type PanelKey, type Zone,
+  PANEL_META, PANEL_KEYS, CENTER_KEYS, PROJECT_KEYS, SESSION_KEYS, TOOLS_KEYS, WORKSPACE_KEYS,
+  type PanelKey, type Zone,
 } from './panelCatalog';
-import { wsPanels, homeOf, isZoneCollapsed, nextPlacement, zoneOf, type PanelZonesStore } from './panelStackState';
+import { PanelFillContext, usePanelFillRequests } from './panelFill';
+import { wsPanels, homeOf, isTucked, isZoneCollapsed, nextPlacement, zoneOf, COL_CAP, PANEL_MIN_H, type PanelZonesStore } from './panelStackState';
 import { usePanelColResize, usePanelDnd, usePanelRowResize, usePanelWidthDrag } from './zoneGestures';
 import { usePanelPeek } from './panelPeek';
 import { useRailHover } from './railHover';
@@ -103,7 +104,7 @@ export function PanelZone({
   railFooter, floating,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, closeTo, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
+  const { zones, toggle, closeTo, tuck, untuck, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width, colFlex } = zoneState;
   const windowWidth = useWindowWidth();
@@ -114,7 +115,10 @@ export function PanelZone({
   const { colRefs, colDragging, handleColDrag } = usePanelColResize(colFlex, next => setColFlex(side, next));
   // Высоты панелей, стоящих по контенту: по их сумме укорачивается сплиттер ширины,
   // иначе его grip висит в пустоте под короткой колонкой.
-  const [panelHeightRef, panelH] = usePanelHeights<PanelKey>();
+  const [panelHeightRef, panelH, panelHeightNow] = usePanelHeights<PanelKey>();
+  // Панели, которые САМИ просят всю высоту колонки (нижняя зона превью у «Документации»).
+  // Требование приходит из панели через контекст — см. panelFill.ts
+  const [fillWanted, fillSinkFor] = usePanelFillRequests<PanelKey>();
 
   // Компактный режим: до ДВУХ панелей стеком; выбор локальный эфемерный —
   // раскладка зоны не трогается. Третья открытая вытесняет самую старую (FIFO).
@@ -154,23 +158,102 @@ export function PanelZone({
   // терпим ТОЛЬКО у ОДИНОЧНОЙ панели в колонке у центра: короткий список чатов не
   // должен растягиваться на весь экран. Как только в колонке у центра 2+ панели —
   // они тянутся до низа и делят высоту по весам (обычный ресайз), иначе колонка
-  // рваная. Во втором и дальних рядах панели тянутся всегда; панели полной высоты
-  // (FULL_HEIGHT_KEYS, напр. Документация) — тянутся всегда, даже одиночкой у
-  // центра. colLen — число панелей в колонке.
+  // рваная. Во втором и дальних рядах панели тянутся всегда; панель, попросившая
+  // высоту сама (fillWanted — напр. «Документация» с включённым превью снизу),
+  // тянется даже одиночкой у центра. colLen — число панелей в колонке.
   // floating: панели всплывают поверх контента, и «высота по содержимому» там
   // означала бы попап, который прыгает в размере от панели к панели. Слой всегда
   // одной высоты — открытие следующей панели не дёргает картинку.
   const panelStretched = (k: PanelKey, vi: number, colLen: number): boolean =>
-    !!floating || isFullHeight(k) || vi !== centerVi || colLen > 1;
+    !!floating || !!fillWanted[k] || vi !== centerVi || colLen > 1;
   // Колонка стоит по контенту целиком — под ней свободный низ (место для новой
   // панели, растяжимая направляющая, укороченный сплиттер ширины).
   const colByContent = (keys: PanelKey[], vi: number): boolean =>
     !keys.some(k => panelStretched(k, vi, keys.length));
 
+  // Панель встаёт в колонку так, чтобы УЖЕ ОТКРЫТЫЕ не меняли размер:
+  //  • есть свободный низ (колонка стоит по контенту) — новая занимает ровно его;
+  //  • низа нет — половину отдаёт ОДИН сосед по месту вставки, прочие не шевелятся.
+  // Без этого все панели колонки становились равновесными (вес 1 у каждой) и делили
+  // высоту поровну: открытие одной панели дёргало всю колонку, хотя человек нажал
+  // одну кнопку.
+  //
+  // Веса считаются ПО ПИКСЕЛЯМ (живой DOM), поэтому дальше всё работает как обычно:
+  // ресайз границы, перестановки, закрытие. null — по месту не вышло (замеров нет
+  // или соседу нечем делиться): такую панель зона уводит в новую колонку, а если
+  // выбора нет (дроп в конкретное место) — колонка делится по весам, как раньше.
+  // Живая высота панели колонки: у растянутой её знает слот (ресайз высот держит
+  // на него ссылку), у стоящей по контенту — замер panelHeights. Именно ЖИВАЯ, а не
+  // из состояния panelH: то обновляется наблюдателем и на момент клика отстаёт от
+  // экрана — раскладка поехала бы по протухшим числам.
+  const panelHeightIn = (k: PanelKey): number | null =>
+    panelRefs.current[k]?.offsetHeight ?? panelHeightNow(k);
+
+  const insertPlan = (ci: number, skip: PanelKey | null, at?: number): { keys: PanelKey[]; own: number[]; mine: number } | null => {
+    const vi = columns.findIndex(c => c.ci === ci);
+    if (vi < 0) return null;
+    // Панель может ехать из этой же колонки — её саму в расчёт не берём
+    const keys = columns[vi].keys.filter(x => x !== skip);
+    if (keys.length === 0) return null;
+    const colH = colRefs.current[ci]?.getBoundingClientRect().height ?? 0;
+    if (colH <= 0) return null;
+    const heights: number[] = [];
+    for (const key of keys) {
+      const h = panelHeightIn(key);
+      if (h == null || h <= 0) return null; // панели ещё нет в DOM
+      heights.push(h);
+    }
+    // Свободный низ колонки: зазор перед новой панелью тоже отсюда
+    const free = colH - heights.reduce((a, b) => a + b, 0) - GAP * keys.length;
+    if (free >= PANEL_MIN_H) return { keys, own: heights, mine: free };
+    // Пустоты нет — половину отдаёт сосед по месту вставки (новый зазор тоже с него)
+    const di = Math.min(keys.length - 1, Math.max(0, (at ?? keys.length) - 1));
+    const shared = heights[di] - GAP;
+    if (shared < PANEL_MIN_H * 2) return null; // делить нечего
+    const own = [...heights];
+    own[di] = shared / 2;
+    return { keys, own, mine: shared / 2 };
+  };
+
+  // Записать план весами. Пиксели переводим в ОБЫЧНЫЙ масштаб (среднее 1 на панель):
+  // словарь весов общий на обе зоны, и сырые пиксели придавили бы панели соседней
+  // зоны до нуля — там веса единичные.
+  const keepHeightsOnInsert = (k: PanelKey, ci: number, at?: number) => {
+    const plan = insertPlan(ci, k, at);
+    if (!plan) return;
+    const total = plan.mine + plan.own.reduce((a, b) => a + b, 0);
+    const scale = (plan.keys.length + 1) / total;
+    const next: Partial<Record<PanelKey, number>> = {};
+    next[k] = plan.mine * scale;
+    plan.keys.forEach((key, i) => { next[key] = plan.own[i] * scale; });
+    setWeights(next);
+  };
+
+  // Вместимость колонки у рельсы для правила размещения (см. addPanel): панель идёт
+  // ВНИЗ, пока туда есть куда встать не двигая соседей — то есть пока insertPlan
+  // что-то возвращает. Не влезла — заводит колонку сбоку. Раньше вместимость была
+  // зашита числом («по две на колонку»), и третья панель уезжала вбок при пустом
+  // экране, а на тесной колонке новая, наоборот, ужимала всех соседей.
+  const colCapNow = (): number => {
+    const railCi = isLeft ? 0 : layout.length - 1;
+    const len = layout[railCi]?.length ?? 0;
+    if (len === 0) return COL_CAP;
+    return insertPlan(railCi, null) ? len + 1 : len;
+  };
+
   // Иконка панели живёт в ТОЙ зоне, где панель лежит; закрытая — в домашней.
   // Отсюда «иконка едет вместе с панелью», а закрытие возвращает её домой.
-  const railKeyVisible = (k: PanelKey): boolean => {
+  //
+  // withTucked=false — не учитывать ящик рельсы: по такому счёту решается, есть ли
+  // в зоне чем управлять (иначе, спрятав всё кроме одной кнопки, человек потерял бы
+  // и «Свернуть все», и сам ящик).
+  const railKeyVisible = (k: PanelKey, withTucked = true): boolean => {
     if (!keyAvailable(k)) return false;
+    // Кнопка убрана в ящик — в столбце её нет. ОТКРЫТАЯ панель исключение: её
+    // кнопка возвращается в рельсу, пока панель на экране, иначе закрыть панель
+    // привычным кликом было бы нечем. В компактном режиме ящика нет вовсе, и
+    // спрятанная кнопка иначе стала бы недоступной.
+    if (withTucked && !compact && isTucked(zones, k) && zoneOf(zones, k) === null) return false;
     // Где панель сейчас лежит (null — закрыта). В компактном режиме раскладка
     // зоны не участвует: там свой эфемерный стек.
     const at = compact ? (tabletKeys.includes(k) ? side : null) : zoneOf(zones, k);
@@ -186,8 +269,27 @@ export function PanelZone({
 
   // Показывать нечего: рельсу не рисуем вовсе, чтобы у контента не торчала пустая
   // полоса. Ширина зоны при этом 0 — иначе FAB AI-хаба уедет под невидимую рельсу.
-  const availableKeys = PANEL_KEYS.filter(railKeyVisible);
-  const railHidden = !!hideWhenEmpty && availableKeys.length === 0 && openKeys.length === 0;
+  // Панели, доступные в этой зоне, СЧИТАЯ спрятанные в ящик: по этому счёту зона
+  // решает, показывать ли рельсу и есть ли чем управлять. Вызов стрелкой, а не
+  // ссылкой на функцию: filter вторым аргументом отдаёт индекс, и он молча сошёл бы
+  // за флаг «учитывать ящик».
+  const availableAll = PANEL_KEYS.filter(k => railKeyVisible(k, false));
+  // Кнопки, лежащие в ящике ЭТОЙ рельсы: спрятанные, закрытые и приписанные к этой
+  // стороне (открытая панель показывает кнопку в столбце, а не строкой в меню).
+  const tuckedKeys = compact ? [] : availableAll.filter(k => isTucked(zones, k) && zoneOf(zones, k) === null);
+  // Ящик разворачивается обратно в столбец, когда прятать больше нечего: спрятаны
+  // ВСЕ кнопки зоны, и рельса состояла бы из одной «…». Такая рельса ничего не
+  // экономит и не говорит, что за ней, — вместо привычной кнопки (закрыл чаты и
+  // открываешь их обратно тем же местом) человек видит безымянное многоточие.
+  // Само состояние ящика при этом не трогаем: вернулась хоть одна кнопка в столбец —
+  // спрятанные снова уезжают в меню.
+  const stashRevealed = !compact && tuckedKeys.length > 0 && tuckedKeys.length === availableAll.length;
+  // Кнопки, стоящие в столбце прямо сейчас: по ним решается, есть ли что убирать
+  // в ящик (последнюю кнопку рельсы туда не отдаём).
+  const columnKeys = stashRevealed ? availableAll : availableAll.filter(k => railKeyVisible(k));
+  // Счёт «есть ли зоне что показать» идёт по availableAll: спрятанные кнопки со
+  // столбца ушли, но рельса нужна — без неё ящик вместе с ними исчез бы с экрана.
+  const railHidden = !!hideWhenEmpty && availableAll.length === 0 && openKeys.length === 0;
 
   // === ВИДИМОСТЬ РЕЛЬСЫ ===
   // Рельса стоит, пока зоне есть что показать: даже единственная открытая панель
@@ -198,11 +300,12 @@ export function PanelZone({
   // Пустая зона — исключение: она появляется на экране только чтобы принять
   // перетаскиваемую панель, и рельса в ней состояла бы из одних служебных кнопок
   // («режим» и «свернуть все») — управлять ими там нечем.
-  const zoneEmpty = availableKeys.length === 0 && openKeys.length === 0;
+  const zoneEmpty = availableAll.length === 0 && openKeys.length === 0;
   const showRail = !railHidden && !zoneEmpty;
   // Управлять раскладкой при единственной доступной панели нечем: тумблер режима
-  // и «свернуть все» в этом случае не рисуем.
-  const singlePanelMode = availableKeys.length === 1 && !compact;
+  // и «свернуть все» в этом случае не рисуем. Считаем со спрятанными: убранная в
+  // ящик кнопка никуда не делась, просто лежит в меню.
+  const singlePanelMode = availableAll.length === 1 && !compact;
 
   // Ремонт сохранённой раскладки: панель, которой на этом экране в этой зоне быть
   // не может, выселяется домой. Иначе она пропадала совсем — в родной зоне её нет
@@ -250,8 +353,12 @@ export function PanelZone({
     // в её слот, хозяин уходит закрытым. Так кнопкой можно открыть панель именно
     // вместо конкретной соседки, а не туда, куда решит раскладка.
     onSwap: (from, to) => {
-      if (zoneOf(zones, from) === null) replaceWith(from, to);
-      else swapWith(from, to);
+      if (zoneOf(zones, from) === null) {
+        // Кнопку вытащили из ящика прямо на панель — она встаёт в её слот, а сама
+        // кнопка возвращается на рельсу: дроп в раскладку и есть жест возврата
+        if (dnd.fromTucked) untuck(side, from);
+        replaceWith(from, to);
+      } else swapWith(from, to);
     },
   });
 
@@ -268,7 +375,7 @@ export function PanelZone({
   const ghostKey = !compact && !soloMode && !dnd.active
     && hoverKey && !openKeys.includes(hoverKey) && keyAvailable(hoverKey)
     ? hoverKey : null;
-  const ghostAt = ghostKey ? nextPlacement(layout, side) : null;
+  const ghostAt = ghostKey ? nextPlacement(layout, side, colCapNow()) : null;
   // Колонка призрака в ВИДИМЫХ координатах: раскладка может держать колонки из
   // недоступных на этом экране панелей, и их индексы со списком columns не совпадают
   const ghostCol = ghostAt && 'ci' in ghostAt ? columns.findIndex(c => c.ci === ghostAt.ci) : -1;
@@ -346,8 +453,10 @@ export function PanelZone({
   //  • кнопка закрытой панели — только на рельсе ДРУГОЙ стороны (переезд кнопки);
   //    на своей дроп ничего бы не изменил.
   // Закрытая на своей стороне мишени не даёт; открытую принимают ОБЕ рельсы.
+  // Кнопку тащат из ящика — её принимает и СВОЯ рельса: это возврат кнопки в
+  // столбец, ради него дроп сюда и делают.
   const railDrop = dnd.accepting && dnd.from !== null
-    && (dragClosed ? homeOf(zones, dnd.from) !== side : true)
+    && (dragClosed && !dnd.fromTucked ? homeOf(zones, dnd.from) !== side : true)
     ? dnd.from : null;
   // Дроп на СВОЮ рельсу открытой панели = закрыть; иначе (чужая рельса) = перенос.
   const railWillClose = railDrop != null && !dragClosed && dnd.fromZone === side;
@@ -362,7 +471,7 @@ export function PanelZone({
   // иначе у контента торчала бы пустая полоса рельсы. Док под рельсой от раскладки
   // не зависит: пока он есть, зона остаётся на экране (капсула рельсы при этом
   // схлопнута — showRail её погасит).
-  if (availableKeys.length === 0 && openKeys.length === 0 && !acceptsForeign && !railFooter) return null;
+  if (availableAll.length === 0 && openKeys.length === 0 && !acceptsForeign && !railFooter) return null;
 
   // Где лежит перетаскиваемая панель в ВИДИМОЙ раскладке этой зоны (null — тащат
   // из соседней). Нужно, чтобы не предлагать места, дающие ту же раскладку:
@@ -410,7 +519,15 @@ export function PanelZone({
       // размером в полколонки без опознавательных знаков читается как «что-то
       // сломалось», а не как «панель встанет сюда»
       icon={dnd.from ? PANEL_META[dnd.from].Icon : undefined}
-      {...dnd.guideProps(`row:${vi}:${ri}`, from => moveAt(from, side, col.ci, layoutRowFor(col, ri)))}
+      {...dnd.guideProps(`row:${vi}:${ri}`, from => {
+        // Кнопку вытащили ИЗ ЯЩИКА прямо в раскладку — это и возврат кнопки на
+        // рельсу, и открытие панели одним жестом
+        if (dnd.fromTucked) untuck(side, from);
+        // Колонка стоит по контенту — гость встаёт в её свободный низ, а не делит
+        // высоту с соседями пополам (см. keepHeightsOnInsert)
+        keepHeightsOnInsert(from, col.ci, ri);
+        moveAt(from, side, col.ci, layoutRowFor(col, ri));
+      })}
     />
   );
 
@@ -422,13 +539,18 @@ export function PanelZone({
       dndActive={dnd.accepting && !colGuideUseless(vi)}
       base={base}
       edge={edge}
-      {...dnd.guideProps(`col:${vi}`, from => moveToNewColumn(from, side, layoutSepFor(vi)))}
+      {...dnd.guideProps(`col:${vi}`, from => {
+        if (dnd.fromTucked) untuck(side, from);
+        moveToNewColumn(from, side, layoutSepFor(vi));
+      })}
     />
   );
 
   // Иконки одной группы рельсы: скрытые отсеиваются здесь же — пустая группа не
   // рисуется вовсе, вместе со своим разделителем (это делает PanelRail).
-  const railGroup = (keys: readonly PanelKey[]): RailItem[] => keys.filter(railKeyVisible).map(k => ({
+  // tucked — набор строится для ЯЩИКА («…»): фильтр там свой (кнопки как раз убраны
+  // со столбца), а перетаскивание строки помечается как жест возврата.
+  const railGroup = (keys: readonly PanelKey[], tucked = false): RailItem[] => keys.filter(k => tucked || (stashRevealed ? railKeyVisible(k, false) : railKeyVisible(k))).map(k => ({
     key: k,
     title: PANEL_META[k].title,
     Icon: PANEL_META[k].Icon,
@@ -440,10 +562,19 @@ export function PanelZone({
     //
     // Начало перетаскивания снимает превью: браузер не шлёт mouseleave при
     // dragstart, поэтому назначенный по наведению попап доживал до конца
-    // перетаскивания и выскакивал уже ПОСЛЕ дропа, в покинутой рельсе.
+    // перетаскивания и выскакивал уже ПОСЛЕ дропа, в покинутой рельсе. Снимаем
+    // СЛЕДУЮЩИМ кадром — по той же причине, по какой отложено и само состояние
+    // перетаскивания (см. dragSourceProps): перерисовка в обработчике dragstart
+    // отменяет жест.
     dragProps: compact ? undefined : (() => {
-      const src = dnd.dragSourceProps(k);
-      return { ...src, onDragStart: (e: DragEvent<HTMLElement>) => { peeked.clear(); src.onDragStart?.(e); } };
+      const src = dnd.dragSourceProps(k, { tucked });
+      return {
+        ...src,
+        onDragStart: (e: DragEvent<HTMLElement>) => {
+          src.onDragStart?.(e);
+          requestAnimationFrame(() => peeked.clear());
+        },
+      };
     })(),
     // Наведение — на десктопе для ЛЮБОЙ иконки (на тач-экране наведения не
     // бывает). Место показывается только для закрытой панели, но решает это
@@ -474,7 +605,18 @@ export function PanelZone({
       if (compact) {
         // До двух панелей: третья вытесняет самую старую (FIFO)
         setTabletPanels(cur => cur.includes(k) ? cur.filter(x => x !== k) : [...cur, k].slice(-2));
-      } else toggle(side, k);
+      } else {
+        // Вместимость колонки считаем ОДИН раз на клик: и место панели, и веса
+        // должны исходить из одной и той же высоты
+        const cap = colCapNow();
+        // Панель открывается в колонку, стоящую по контенту — соседи сохраняют
+        // свою высоту, новая забирает свободный низ (см. keepHeightsOnInsert)
+        if (!isOpen && !soloMode) {
+          const at = nextPlacement(layout, side, cap);
+          if ('ci' in at) keepHeightsOnInsert(k, at.ci);
+        }
+        toggle(side, k, cap);
+      }
       // Панель в результате клика ОТКРЫЛАСЬ — сообщаем подписчику (граф и т.п.)
       if (!isOpen) onPanelOpen?.(k);
     },
@@ -487,7 +629,7 @@ export function PanelZone({
   const renderPanel = (k: PanelKey, multiInCol: boolean, vi?: number): ReactNode => {
     const { title, Icon } = PANEL_META[k];
     const stretched = vi === undefined
-      ? multiInCol || isFullHeight(k)
+      ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
     const onCloseThis = compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k);
     const shell = (
@@ -515,7 +657,11 @@ export function PanelZone({
         rootRef={stretched ? undefined : panelHeightRef(k)}
         {...dnd.panelProps(k)}
       >
-        {content(k)}
+        {/* Панель может попросить всю высоту сама (см. panelFill) — приёмник её
+            запроса привязан к ключу и живёт ровно вокруг её содержимого */}
+        <PanelFillContext.Provider value={fillSinkFor(k)}>
+          {content(k)}
+        </PanelFillContext.Provider>
       </PanelShell>
     );
     // Слот ставится ВСЕГДА — иначе при появлении соседа в колонке менялся бы тип
@@ -530,8 +676,11 @@ export function PanelZone({
       <PanelSlot
         fill={stretched}
         weight={shares ? zones.weights[k] : undefined}
-        // Ссылка на слот нужна ресайзу высот по весам — а он бывает только у делящих
-        slotRef={shares ? el => { panelRefs.current[k] = el; } : undefined}
+        // Ссылка на слот нужна ресайзу высот (он бывает только у делящих) и расчёту
+        // места для новой панели (insertPlan) — а тому нужна высота ЛЮБОЙ панели
+        // колонки, включая одиночную растянутую: у неё нет ни веса, ни замера
+        // panelHeights, и без слота её высота была бы неизвестна.
+        slotRef={el => { panelRefs.current[k] = el; }}
       >
         {shell}
       </PanelSlot>
@@ -557,7 +706,7 @@ export function PanelZone({
       iconAction={{
         Icon: Pin,
         title: 'Закрепить панель',
-        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek); onPanelOpen?.(peek); },
+        onClick: () => { peeked.clear(); setPinned(peek); toggle(side, peek, colCapNow()); onPanelOpen?.(peek); },
       }}
       fill={peekFull}
       // Временный слой обозначаем ТЕНЬЮ, а не цветной рамкой: акцентная обводка
@@ -569,6 +718,14 @@ export function PanelZone({
       {content(peek)}
     </PanelShell>
   );
+
+  // Строки ящика этой рельсы. Собираются тем же сборщиком, что и группы иконок:
+  // клик, бейдж и ручка перетаскивания у них те же, отличается только место, где
+  // их рисуют.
+  // Развёрнутый ящик пуст: его кнопки уже стоят в столбце (см. stashRevealed)
+  const tuckedItems = stashRevealed ? [] : railGroup(tuckedKeys, true);
+  // Кружки спрятанных панелей не видны — их сумма переезжает на кнопку «…»
+  const tuckedBadge = tuckedItems.reduce((n, it) => n + (it.badge ?? 0), 0);
 
   const rail = (
     <PanelRail
@@ -582,9 +739,13 @@ export function PanelZone({
       } : undefined}
       footer={railFooter}
       // Три группы: содержимое ПРОЕКТА, инструменты запуска (Терминал, Сервисы) и
-      // панели ТЕКУЩЕЙ СЕССИИ. Разделители между ними PanelRail рисует сам и убирает
-      // вместе с пустой группой — выключенные инструменты уносят и свою черту.
-      groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup(SESSION_KEYS)]}
+      // всё, что относится к ТЕКУЩЕМУ КОНТЕКСТУ — панели сессии (План, Агенты, Персона)
+      // и панели центральной области (Оглавление). Последние две категории разделены в
+      // реестре (у них разные источники видимости), но в рельсе идут ОДНОЙ группой:
+      // это соседи по смыслу — «что сейчас перед глазами», и черта между ними делила бы
+      // рельсу там, где деления нет. Разделители PanelRail рисует сам и убирает вместе
+      // с пустой группой — выключенные инструменты уносят и свою черту.
+      groups={[railGroup(PROJECT_KEYS), railGroup(TOOLS_KEYS), railGroup([...SESSION_KEYS, ...CENTER_KEYS])]}
       // Свой зазор до центра нужен только при закрытых панелях: иначе его даёт
       // прокладка перед зоной
       // Зазор до центра обычно даёт сама зона (её сплиттер/крайняя направляющая), но
@@ -592,11 +753,30 @@ export function PanelZone({
       // зона места не занимает вовсе, и без этого зазора центр прыгал бы на 8px при
       // каждом открытии панели
       gapToCenter={openKeys.length === 0 || floating ? RAIL_GAP : 0}
-      // Тумблер режима и «свернуть все» в компактном и однопанельном режимах не
-      // нужны — там управлять нечем
-      modeToggle={compact || singlePanelMode ? undefined : {
-        soloMode,
-        onToggle: () => setMode(side, soloMode ? 'multi' : 'solo'),
+      // Ящик рельсы: редкие кнопки, которые сюда перетащили, и тумблер режима зоны
+      // (своей кнопки в столбце у режима больше нет). В компактном режиме ящика нет
+      // вовсе — там ни колонок, ни перетаскивания; при единственной панели он нужен,
+      // только если в нём что-то лежит.
+      overflow={compact || (singlePanelMode && tuckedItems.length === 0) ? undefined : {
+        items: tuckedItems,
+        modeToggle: singlePanelMode ? undefined : {
+          soloMode,
+          onToggle: () => setMode(side, soloMode ? 'multi' : 'solo'),
+        },
+        badge: tuckedBadge || null,
+        dragActive: dnd.active,
+        // Дроп на «…» убирает кнопку панели в ящик (открытая при этом закрывается).
+        // Мишень не предлагается тому, кто лежит в ЭТОМ же ящике (дроп ничего не
+        // изменил бы), и последней кнопке столбца: рельса осталась бы из одного
+        // многоточия, а его тут же развернуло бы обратно (см. stashRevealed) —
+        // жест, который отменяет сам себя, лучше не предлагать вовсе. Из ящика
+        // соседней стороны кнопку принимаем — так она переезжает между ящиками,
+        // не появляясь по дороге в столбце.
+        drop: dnd.accepting && dnd.from !== null
+          && !(isTucked(zones, dnd.from) && homeOf(zones, dnd.from) === side)
+          && columnKeys.some(k => k !== dnd.from)
+          ? { active: true, ...dnd.guideProps('overflow', from => tuck(side, from)) }
+          : undefined,
       }}
       collapse={compact || singlePanelMode ? undefined : {
         collapsed: isZoneCollapsed(zoneState),
@@ -616,10 +796,17 @@ export function PanelZone({
             // иначе иконка панели — «встанет/переедет сюда»
             icon: railWillClose ? undefined : PANEL_META[railDrop].Icon,
             ...dnd.guideProps('rail', from => {
+              // Кнопку вернули из ящика на рельсу: панель не открываем — возвращают
+              // именно кнопку (открытие — это дроп в раскладку)
+              if (dnd.fromTucked) untuck(side, from);
               // Открытую панель на чужой рельсе ОТКРЫВАЕМ в этой зоне (перенос);
               // остальное (закрытие своей / переезд кнопки) делает closeTo
-              if (!railWillClose && zoneOf(zones, from) !== null) toggle(side, from);
-              else closeTo(side, from);
+              else if (!railWillClose && zoneOf(zones, from) !== null) {
+                const cap = colCapNow();
+                const at = nextPlacement(layout, side, cap);
+                if ('ci' in at) keepHeightsOnInsert(from, at.ci);
+                toggle(side, from, cap);
+              } else closeTo(side, from);
             }),
           }
         : undefined}
@@ -645,7 +832,7 @@ export function PanelZone({
   };
   const splitterLen = compact
     // Компактный стек: две панели делят высоту между собой, одна стоит по контенту
-    ? contentLen(tabletKeys, k => tabletKeys.length > 1 || isFullHeight(k))
+    ? contentLen(tabletKeys, k => tabletKeys.length > 1 || !!fillWanted[k])
     : (columns[centerVi]
         ? contentLen(columns[centerVi].keys, k => panelStretched(k, centerVi, columns[centerVi].keys.length))
         : null);

@@ -18,7 +18,7 @@ namespace ClaudeHomeServer.Controllers;
 public class LocalActionsAdminController(
     LocalActionOverridesStore store, LocalActionRouter router,
     LlmProviderRegistry providers, ModelCatalogService models,
-    LocalActionPresetService presets) : ControllerBase
+    LocalActionPresetService presets, SpecialtySettingsStore specialty) : ControllerBase
 {
     // route: "local" | "tier:strong|medium|weak" (слоты тиров) | id модели провайдера;
     // легаси "claude"/"default" принимаются и трактуются как tier:medium (LocalActionRouter.Parse)
@@ -71,7 +71,17 @@ public class LocalActionsAdminController(
                 || CloudCheapClient.IsDirectRoute(route)))
             return BadRequest(new { error = "Этому месту нужна агентная модель — локальная и direct-модели не подходят" });
 
-        if (route is not (LocalActionOverridesStore.LocalRoute
+        // preset:{id} — ссылка на пресет-цепочку (ADR-007 §3): допустимое значение места
+        // каталога. Место назначения общее для всех, поэтому пресет обязан быть общим
+        // (глобальным) — личный пресет у других пользователей стал бы битой ссылкой.
+        if (LocalActionOverridesStore.IsPresetRoute(route))
+        {
+            var presetId = LocalActionOverridesStore.ParsePresetRoute(route);
+            if (presetId is null || !specialty.Snapshot.Global.Presets
+                    .Any(p => string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)))
+                return BadRequest(new { error = "Пресет не найден среди общих пресетов" });
+        }
+        else if (route is not (LocalActionOverridesStore.LocalRoute
                 or LocalActionOverridesStore.ClaudeRoute
                 or LocalActionOverridesStore.DefaultRoute)
             && LocalActionOverridesStore.ParseTierRoute(route) is null
@@ -79,7 +89,8 @@ public class LocalActionsAdminController(
             return BadRequest(new { error });
 
         if (!store.Set(key, route))
-            return BadRequest(new { error = "Не удалось сохранить настройку" });
+            return StatusCode(StatusCodes.Status500InternalServerError,
+                new { error = "Не удалось сохранить настройку на диск — проверьте путь и права data" });
 
         return Ok(Describe(key));
     }
@@ -121,6 +132,31 @@ public class LocalActionsAdminController(
                 _ => route.Model,
             },
             source = route.Source.ToString().ToLowerInvariant(),
+            // preset:{id} (ADR-007 §3) — ссылка на цепочку. Развёрнутый route/source выше не
+            // ломаем — они для «Сейчас пойдёт» и обратной совместимости; по preset UI показывает
+            // имя цепочки, а не маскирует его слотом первого шага. Место общее для всех → пресет
+            // ищем только среди общих (global). Битая ссылка (id нет в общих) → name=null, steps=[].
+            preset = DescribePreset(store.TryGet(key), specialty.Snapshot.Global.Presets),
         };
+    }
+
+    // Блок preset-ответа места каталога. name=null + пустые steps — признак битой ссылки.
+    private sealed record CatalogPresetDescriptor(string Id, string? Name, IReadOnlyList<string> Steps);
+
+    // Собирает preset-блок ответа места каталога. null — хранимое значение не является валидной
+    // ссылкой preset:{id} (обычный маршрут: слот, модель, локаль, легаси). Валидная ссылка —
+    // { id, name, steps }; битая (id не найден среди общих пресетов) — { id, name: null, steps: [] }.
+    // Вынесено в internal static ради прямого unit-теста: через HTTP битую ссылку не смоделировать,
+    // т.к. валидация Set отсекает несуществующий id ещё до записи в стор.
+    internal static object? DescribePreset(string? stored, IReadOnlyList<ModelRoutePreset> globalPresets)
+    {
+        // ParsePresetRoute отсекает и не-ссылки, и «preset:» без id (невалидный маршрут,
+        // которого в сторе не бывает) — для обоих случаев preset отсутствует.
+        if (LocalActionOverridesStore.ParsePresetRoute(stored) is not { } id) return null;
+        var preset = globalPresets.FirstOrDefault(
+            p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase));
+        return preset is null
+            ? new CatalogPresetDescriptor(id, null, Array.Empty<string>())
+            : new CatalogPresetDescriptor(preset.Id, preset.Name, preset.Steps);
     }
 }

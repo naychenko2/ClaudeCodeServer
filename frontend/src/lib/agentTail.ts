@@ -20,6 +20,12 @@ const USAGE_RE = /\n?\s*<usage>([\s\S]*?)<\/usage>\s*$/;
 const AGENT_ID_RE = /(?:^|\n)\s*agentId:\s*([\w-]+)(?:\s*\([^)]*\))?\s*$/;
 
 export function splitAgentResultTail(result: string): { body: string; tail: AgentResultTail | null } {
+  // Обе регулярки ниже сканируют текст целиком, а результаты инструментов бывают
+  // в десятки килобайт — на ленте это выходило в сотни миллисекунд при открытии чата.
+  // Хвост есть у считанных элементов, поэтому сначала дешёвая проверка подстрокой:
+  // нет ни одного маркера — разбирать нечего.
+  if (!result.includes('<usage>') && !result.includes('agentId:')) return { body: result, tail: null };
+
   let body = result;
   const tail: AgentResultTail = {};
   let found = false;

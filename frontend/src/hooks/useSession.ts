@@ -127,6 +127,12 @@ function updateItems(sid: string, fn: (items: ChatItem[]) => ChatItem[]) {
 // joinSession: хаб идемпотентен и на КАЖДЫЙ вызов шлёт вызвавшему авторитетный
 // status_changed, который редьюсер применяет к isWaiting. Бэкенд менять не нужно.
 
+// Потолок ожидания входа в группу перед снятием истории (см. joinAndLoadHistory).
+// На живом соединении join укладывается в десятки миллисекунд, поэтому окно короткое:
+// когда хаб висит в Reconnecting, история должна читаться практически сразу, а дыру
+// в этом случае закрывает повторный снимок после входа.
+const JOIN_WAIT_MS = 400;
+
 const RECONCILE_POLL_MS = 25_000;   // как часто переспрашиваем статус занятого открытого чата
 const RECONCILE_WINDOW_MS = 10_000; // сколько ждём replay, чтобы засчитать его как ответ на запрос
 
@@ -314,8 +320,22 @@ function ensureJoined(sid: string, projectId?: string) {
 async function joinAndLoadHistory(sid: string, projectId?: string) {
   setState(sid, prev => ({ ...prev, projectId }));
 
+  // Вход в группу СНАЧАЛА, но с коротким потолком ожидания: снятая после входа история
+  // уже покрывает всё до него, поэтому повторный снимок (у активных чатов это мегабайты
+  // JSON на каждое открытие) не нужен вовсе. На живом соединении join занимает десятки
+  // миллисекунд и первый показ ленты не задерживает.
+  let joinDone = false;
+  const joined = joinTracked(sid).then(() => { joinDone = true; });
   // История — приоритет и грузится НЕЗАВИСИМО от SignalR. Офлайн соединение
   // может «зависнуть» в Reconnecting, поэтому join не должен блокировать историю.
+  await Promise.race([
+    joined.catch(() => { /* не вошли — читаем историю и лечимся снимком после join */ }),
+    new Promise(r => setTimeout(r, JOIN_WAIT_MS)),
+  ]);
+  // Снимок на момент старта запроса истории: позже join мог доехать сам, но история
+  // к тому времени уже снята — и дыру закрывать всё равно придётся снимком.
+  const joinedBeforeHistory = joinDone;
+
   try {
     const raw = await loadHistory(sid, projectId);
     const items = normalizeFor(sid, raw);
@@ -334,13 +354,13 @@ async function joinAndLoadHistory(sid: string, projectId?: string) {
     setState(sid, prev => ({ ...prev, isHistoryLoading: false }));
   }
 
-  // Присоединение к группе — фоном, не блокирует чтение истории.
-  // Офлайн промис не зарезолвится — это нормально, при reconnect перезайдём.
-  joinTracked(sid)
+  // Офлайн промис join не зарезолвится — это нормально, при reconnect перезайдём.
+  joined
     .then(() => {
-      // Снапшот ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют»:
-      // всё, что появится позже этого снимка, гарантированно доедет живьём.
-      return reloadHistory(sid, projectId);
+      // Снимок ПОСЛЕ входа в группу закрывает дыру «история снята — событий ещё не шлют».
+      // Нужен только когда в группу мы вошли уже ПОСЛЕ снятия истории (join не уложился
+      // в JOIN_WAIT_MS): иначе история и так снята из-под живой подписки.
+      if (!joinedBeforeHistory) return reloadHistory(sid, projectId);
     })
     .then(() => refreshTeamImplement(sid))
     .catch(() => { /* офлайн — остаёмся без группы, читаем из кэша */ });
@@ -402,7 +422,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     };
   }, [sessionId, projectId, isGroup]);
 
-  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
+  const state = sessionId ? getState(sessionId) : { items: [] as ChatItem[], isWaiting: false, isJoined: false, isHistoryLoading: false, rateLimits: {} as Record<string, RateLimitInfo>, isCompacting: false, compactNote: undefined as string | undefined, workLoop: undefined as WorkLoopState | undefined, teamImplement: undefined as TeamImplementState | undefined, teamPlanning: undefined as { startedAt: number } | null | undefined, promptSuggestion: null as string | null, pending: [] as PendingChatMessage[], composerRestore: null as ComposerRestore | null };
 
   // Снять сообщение из очереди (крестик на карточке-призраке). Ответ сервера придёт
   // событием pending_messages — локально состояние не правим, чтобы не разъехалось.
@@ -585,9 +605,10 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
 
   // Решение по карточке плана командной реализации. Оптимистично применяем видимую
   // часть (смена исполнителя / решённое состояние) — сервер переиздаст карточку
-  // событием team_plan с тем же planId и приведёт её к своему состоянию.
+  // событием team_plan с тем же planId и приведёт её к своему состоянию (у edit —
+  // резолвит с supersededBy, точный номер версии оптимистично не угадываем).
   const respondTeamPlan = useCallback(async (planId: string, decision: TeamPlanDecision,
-    subtaskId?: string, executorPersonaId?: string) => {
+    subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
     if (!sessionId) return;
     setState(sessionId, prev => ({
       ...prev,
@@ -608,7 +629,7 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       }),
     }));
     await joinTracked(sessionId); // гарантируем группу перед ответом
-    await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId);
+    await sendTeamPlanDecision(sessionId, planId, decision, subtaskId, executorPersonaId, feedback);
   }, [sessionId]);
 
   // Решение по карточке остановки. Гасим карточку оптимистично — сервер переиздаст её
@@ -642,5 +663,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     sendSetMode(sessionId, mode).catch(() => {});
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, teamPlanning: state.teamPlanning, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
 }

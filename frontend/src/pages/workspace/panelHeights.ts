@@ -20,9 +20,15 @@ export function usePanelHeights<K extends string>(): [
   // заново
   (k: K) => (el: HTMLElement | null) => void,
   Partial<Record<K, number>>,
+  // Живой замер панели по ключу (null — панель не по контенту либо ещё не в DOM).
+  // Нужен там, где решение принимается ПО СОБЫТИЮ, а не по рендеру: состояние
+  // heights обновляется только когда ResizeObserver донесёт изменение, и на момент
+  // клика может отставать от того, что на экране.
+  (k: K) => number | null,
 ] {
   const [heights, setHeights] = useState<Partial<Record<K, number>>>({});
   const observers = useRef(new Map<K, ResizeObserver>());
+  const nodes = useRef(new Map<K, HTMLElement>());
   const refs = useRef(new Map<K, (el: HTMLElement | null) => void>());
 
   const refFor = useCallback((k: K) => {
@@ -34,6 +40,7 @@ export function usePanelHeights<K extends string>(): [
     const ref = (el: HTMLElement | null) => {
       observers.current.get(k)?.disconnect();
       observers.current.delete(k);
+      if (el) nodes.current.set(k, el); else nodes.current.delete(k);
       // Панель растянулась или уехала — забываем замер (сплиттер снова во всю высоту)
       if (!el) {
         setHeights(cur => {
@@ -54,5 +61,7 @@ export function usePanelHeights<K extends string>(): [
     return ref;
   }, []);
 
-  return [refFor, heights];
+  const heightOf = useCallback((k: K) => nodes.current.get(k)?.offsetHeight ?? null, []);
+
+  return [refFor, heights, heightOf];
 }

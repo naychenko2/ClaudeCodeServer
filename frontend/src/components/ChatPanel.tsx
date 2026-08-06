@@ -14,6 +14,7 @@ import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic } from '../features/team/teamMechanics';
+import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
@@ -45,6 +46,7 @@ import { buildMediaVisibility } from './chat/mediaDedup';
 import { isTasksCreate } from './chat/TaskCreatedView';
 import { isWidgetShow } from './chat/WidgetView';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
+import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 
 interface Props {
   session: Session;
@@ -90,6 +92,11 @@ interface Props {
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
+// Прогрессивный рендер ленты (см. visibleTail): сколько узлов монтируем сразу при
+// открытии чата и какими порциями дорисовываем остальное в простое браузера.
+const TAIL_FIRST = 40;
+const TAIL_STEP = 120;
+
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const TOO_BIG_MSG = 'Файл больше 100 МБ — такой пока не загрузим';
 const UPLOAD_FAIL_MSG = 'Не удалось загрузить файл. Попробуйте ещё раз';
@@ -134,7 +141,7 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 }
 
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -165,6 +172,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     }
     return session.teamImplement ?? null;
   }, [liveTeamImplement, session.teamImplement]);
+  // Плашка «Команда готовит план…» в ленте: живёт на стадии планирования и гаснет
+  // с карточкой плана/отказа (см. teamPlanningIndicatorVisible)
+  const showTeamPlanningIndicator = useMemo(
+    () => teamPlanningIndicatorVisible(teamImplementState, items, liveTeamPlanning),
+    [teamImplementState, items, liveTeamPlanning],
+  );
   const handleToggleTeamImplementAuto = useCallback(async () => {
     if (!teamImplementState) return;
     try {
@@ -725,26 +738,22 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   }, [respondPlan]);
 
   // Обвязка карточки плана «Командной реализации»: состояние режима + действия.
-  // Решение уходит в хаб (run/reassign/cancel), правка плана — обычным сообщением
-  // координатору. Контекст, а не пропы: карточка лежит глубоко в ленте.
+  // Решение (в т.ч. edit — правка плана текстом) уходит в хаб, координатору ход не
+  // выдаётся: сервер сам гасит карточку и пересобирает план. Контекст, а не пропы —
+  // карточка лежит глубоко в ленте.
   const handleRespondTeamPlan = useCallback((planId: string, decision: TeamPlanDecision,
-    subtaskId?: string, executorPersonaId?: string) => {
-    respondTeamPlan(planId, decision, subtaskId, executorPersonaId).catch(err => {
+    subtaskId?: string, executorPersonaId?: string, feedback?: string) => {
+    respondTeamPlan(planId, decision, subtaskId, executorPersonaId, feedback).catch(err => {
       showToast('Командная реализация', err instanceof Error ? err.message : 'Не удалось отправить решение по плану');
     });
   }, [respondTeamPlan]);
-  const handleTeamPlanMessage = useCallback((text: string) => {
-    atBottomRef.current = true;
-    send(text, [], modeRef.current);
-  }, [send, atBottomRef]);
   const teamPlanCtx = useMemo<TeamPlanChatContext | null>(() => teamImplementState ? {
     autoWaves: teamImplementState.autoWaves,
     waveNumber: teamImplementState.waveNumber,
     planCardId: teamImplementState.planCardId ?? null,
     executorPersonaIds: teamImplementState.executorPersonaIds,
     onRespond: handleRespondTeamPlan,
-    onSendMessage: handleTeamPlanMessage,
-  } : null, [teamImplementState, handleRespondTeamPlan, handleTeamPlanMessage]);
+  } : null, [teamImplementState, handleRespondTeamPlan]);
 
   // Обвязка карточек остановки (Э4): решение уходит в хаб, карточка гаснет.
   // Контекст живёт, пока включён режим — в выключенном чате карточки только читаются
@@ -1320,6 +1329,30 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
   }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility]);
 
+  // Прогрессивный рендер ленты: при открытии чата монтируем только её хвост, остальное
+  // дорисовываем в простое браузера. В тяжёлых чатах (больше тысячи элементов) разовый
+  // маунт всей ленты держал главный поток секунду с лишним — это и ощущалось залипанием
+  // при переключении между чатами. Пользователь смотрит конец ленты, поэтому хвоста
+  // хватает на первый кадр, а начало доезжает за доли секунды.
+  const [visibleTail, setVisibleTail] = useState(TAIL_FIRST);
+  useEffect(() => { setVisibleTail(TAIL_FIRST); }, [session.id]);
+  useEffect(() => {
+    if (visibleTail >= renderedItems.length) return;
+    const grow = () => setVisibleTail(v => v + TAIL_STEP);
+    // requestIdleCallback: доращиваем, когда поток свободен, чтобы не воевать за кадры
+    // с прокруткой и стримом. Где его нет (Safari) — обычный таймер.
+    const ric = window.requestIdleCallback;
+    if (ric) {
+      const id = ric(grow, { timeout: 300 });
+      return () => window.cancelIdleCallback?.(id);
+    }
+    const id = window.setTimeout(grow, 32);
+    return () => window.clearTimeout(id);
+  }, [visibleTail, renderedItems.length]);
+  const visibleNodes = visibleTail >= renderedItems.length
+    ? renderedItems
+    : renderedItems.slice(-visibleTail);
+
   // Подпал цветом проекта под верхом чата (см. слой в разметке ниже)
   const projectWash = projectTopWash(project);
 
@@ -1435,7 +1468,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
           )
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{visibleNodes}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+
+        {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
+            планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
+            Гаснет сама: стадия уходит с planning при карточке плана или отказа */}
+        {showTeamPlanningIndicator && <TeamPlanningIndicator startedAt={liveTeamPlanning?.startedAt} />}
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает

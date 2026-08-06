@@ -155,6 +155,23 @@ public class ProjectManagerTests : IDisposable
     }
 
     [Fact]
+    public void Update_McpServersOff_НормализуетИСбрасываетПустымСписком()
+    {
+        var created = _sut.Create("P", MkDir("mcp"), TestUserId, TestUsername);
+        created.McpServersOff.Should().BeNull("по умолчанию в проекте не выключен никто");
+
+        // ключи приходят из UI: нормализуем как в реестре (нижний регистр, без дублей)
+        var updated = _sut.Update(created.Id, null, null, mcpServersOff: [" Context7 ", "context7", "figma"]);
+        updated.McpServersOff.Should().Equal("context7", "figma");
+
+        // null = не менять
+        _sut.Update(created.Id, "Другое имя", null).McpServersOff.Should().Equal("context7", "figma");
+
+        // пустой список = «выключенных нет»
+        _sut.Update(created.Id, null, null, mcpServersOff: []).McpServersOff.Should().BeNull();
+    }
+
+    [Fact]
     public void Update_NonExistent_ThrowsKeyNotFound()
     {
         var act = () => _sut.Update("nope", "X", null);

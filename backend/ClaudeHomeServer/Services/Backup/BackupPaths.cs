@@ -18,7 +18,7 @@ public static class BackupPaths
 
     // Секреты: в основной архив не попадают никогда, уезжают отдельным локальным архивом
     public static readonly string[] SecretFileNames =
-        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json"];
+        ["jwt-secret.txt", "vapid-keys.json", "module-keys.json", "mcp-secrets.json"];
 
     /// <summary>
     /// Брать ли файл в основной архив. <paramref name="relativePath"/> — путь относительно
@@ -55,6 +55,13 @@ public static class BackupPaths
         if (root.Equals("logs", StringComparison.OrdinalIgnoreCase)) return false;
         // Конфиги MCP на один ход и cwd one-shot вызовов — живут минуты
         if (root.Equals("sandbox-tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        // Последний известный статус MCP-серверов: наблюдение, а не настройка. Восстановленное
+        // из архива, оно врёт — описывает состояние чужой машины в прошлом. Заново приедет
+        // из первого же system/init (или пробы по кнопке).
+        if (segments.Length == 1
+            && fileName.Equals(Mcp.McpStatusStore.FileName, StringComparison.OrdinalIgnoreCase))
+            return false;
+
         // Снимки промпта ходов — диагностический лог (последние 50 ходов на чат):
         // восстанавливать нечего, а в облако они бы поехали десятками мегабайт
         if (root.Equals("prompt-snapshots", StringComparison.OrdinalIgnoreCase)) return false;

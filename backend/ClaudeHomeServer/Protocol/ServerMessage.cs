@@ -285,7 +285,10 @@ public record TeamPlanMessage(
         string PlanId,
         Models.TeamImplementPlan Plan,
         bool Resolved,
-        bool? Approved)
+        bool? Approved,
+        // Версия, заменившая эту карточку (перепланирование): фронт рисует «заменена
+        // версией vN» вместо «план отменён». null — прочие исходы (запуск, отмена, открыта).
+        int? SupersededBy = null)
     : ServerMessage("team_plan");
 
 // Карточка остановки режима «Командная реализация» (Э4): блокер исполнителя, провал задачи,
@@ -304,6 +307,33 @@ public record TeamEscalationMessage(
         // Автор карточки (Э8): координатор на момент публикации — карточка идёт от его лица
         string? PersonaId = null)
     : ServerMessage("team_escalation");
+
+// Жизненный цикл планировщика «Командной реализации» (Э2). Транзитное событие для ленты
+// штаба: показывает спиннер «Штаб планирует…» и снимает его по факту результата.
+// В историю не пишется — карточка плана (TeamPlanMessage) или карточка отказа
+// (TeamEscalationMessage) уже там, дублировать не надо; при рестарте сервера просто
+// пропадает (карточка подтянется через /api/.../history). Событие НЕ переиздаётся по
+// смене состояния — клиент по одному сообщению знает и факт, и результат.
+//  • Start=true           — планировщик запущен. Прочие поля диагностические (для логов).
+//  • Start=false, Success=true  — план собран, см. SubtaskCount/WaveCount/Route/ElapsedMs.
+//  • Start=false, Success=false — отказ, см. Failure (тот же текст, что в карточке отказа).
+// Failure == null у успеха; PromptChars/ResponseChars — диагностика для лога фронта
+// (карточка их не показывает, но клик по «что случилось» в dev-режиме открывает подробности).
+public record TeamPlanningMessage(
+        bool Start,
+        bool Success,
+        int SubtaskCount,
+        int WaveCount,
+        long ElapsedMs,
+        // Описание маршрута, как в логе: «model=nemotron:free», «tier=strong», «claude», «local».
+        string? Route,
+        // Причина отказа (текст для человека): «Планировщик не уложился во время»,
+        // «Планировщик не уместил план в лимит вывода», «Планировщик вернул неразборчивый план».
+        // null у Start=true и у Success=true.
+        string? Failure,
+        int PromptChars = 0,
+        int ResponseChars = 0)
+    : ServerMessage("team_planning");
 
 // Состояние режима «Командная реализация»: для бейджа в композере
 // и маркера в списке чатов. Stage — wire-токен стадии (planning/confirming/wave/…).
@@ -336,7 +366,13 @@ public record TeamImplementMessage(
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
 // подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
 // на стороннего провайдера, Label — подпись разделителя «Продолжено на …».
-public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null, bool Auto = false)
+// Reason — структурированная причина автоподмены (wire-значения FallbackErrorClass:
+// rate_limit | usage_limit | provider_error | unreachable). Label остаётся текстом
+// разделителя, а по Reason фронт показывает каноническую формулировку подсказки
+// («Исчерпан лимит», «Провайдер выключен», «Эндпоинт недоступен») вместо сырого
+// текста маркера. null — подмена не автоматическая либо причина неизвестна.
+public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null,
+    bool Auto = false, string? Reason = null)
     : ServerMessage("provider_switched");
 
 // Лимит подписки исчерпан: предложение продолжить чат карточкой с кнопками в ленте —

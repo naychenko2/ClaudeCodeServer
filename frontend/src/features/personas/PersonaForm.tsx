@@ -3,13 +3,22 @@ import { Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project } from '../../types';
 import { api } from '../../lib/api';
-import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
+import { useSpecialtyCatalog } from '../../lib/specialties';
+import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
 import { ModelTierPicker } from '../../components/ModelTierPicker';
-import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
-import { parseTier, type ModelTierKey } from '../../lib/modelTiers';
+import { PresetOptions } from '../../components/PresetOptions';
+import { RoutePicker } from '../modelProviders/RoutePicker';
+import { EffectiveLine } from '../modelProviders/EffectiveLine';
+import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
+import { parseTier, useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
+import {
+  chainSummary, findPreset, invalidateEffectiveLines, presetIdOf, routeDisplayLabel,
+  usePresets, usePreview, useSpecialtySettings, type EffectiveLineContext,
+} from '../../lib/presets';
+import { effectiveSpecialtyRecord } from '../../lib/specialties';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
@@ -86,9 +95,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const isEdit = !!persona;
   const isMobile = useIsMobile();
   const models = useModels();
-  // Возможности переехали во вкладку «Знания» — вместо тумблеров показываем
-  // плашку-переадресацию. Прежний блок тумблеров оставлен как ветка-легаси.
-  const bindingsEnabled = true;
 
   const [name, setName] = useState(persona?.name ?? initial?.name ?? '');
   // Ручной @handle. При создании авто-подставляется из имени, пока пользователь не тронул поле.
@@ -119,10 +125,22 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [model, setModel] = useState(persona?.model ?? initial?.model ?? '');
   // Уровень модели ('' — не задан): слот, которым персона работает, когда явной модели нет
   const [modelTier, setModelTier] = useState<ModelTierKey | ''>(parseTier(persona?.modelTier));
+  // Свои модели по уровням (ADR-007 §2): модель или пресет в ячейке; пусто — наследуется
+  // (специальность → «Модели по умолчанию»). Блок свёрнут, пока ничего не задано
+  const [tierStrong, setTierStrong] = useState(persona?.tierStrong ?? '');
+  const [tierMedium, setTierMedium] = useState(persona?.tierMedium ?? '');
+  const [tierWeak, setTierWeak] = useState(persona?.tierWeak ?? '');
+  const [tierCellsOpen, setTierCellsOpen] = useState(false);
   const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
   // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
   const [specialty, setSpecialty] = useState<PersonaSpecialty>(
     persona?.specialty ?? initial?.specialty ?? 'none');
+  // Каталог специальностей: null — ещё грузится или сервер недоступен
+  const specialtyCatalog = useSpecialtyCatalog();
+  // Отложенная смена специальности: ждёт подтверждения перезаписи прав шаблоном
+  const [pendingSpecialty, setPendingSpecialty] = useState<PersonaSpecialty | null>(null);
+  // Плашка «права подставлены из шаблона» после подстановки
+  const [templateNote, setTemplateNote] = useState<string | null>(null);
   const [scope, setScope] = useState<PersonaScope>(persona?.scope ?? defaultScope ?? 'global');
   const [projectId, setProjectId] = useState(persona?.projectId ?? defaultProjectId ?? '');
   const [greeting, setGreeting] = useState(persona?.greeting ?? initial?.greeting ?? '');
@@ -138,6 +156,44 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [memoryEnabled, setMemoryEnabled] = useState(persona?.memoryEnabled ?? false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Смена специальности: подставляет права и инструменты из эффективного шаблона,
+  // дальше они правятся вручную. Если текущие поля уже отличаются от нового шаблона —
+  // спрашивает подтверждение (защита ручных правок). Без каталога (ещё не загружен) —
+  // обычный setSpecialty.
+  const applySpecialtyTemplate = (next: PersonaSpecialty) => {
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (template) {
+      setAccess(template.access);
+      setTools(template.tools ?? ALL_TOOL_KEYS);
+      setDisallowedText((template.disallowedTools ?? []).join(', '));
+      setTemplateNote('Права и инструменты подставлены из шаблона специальности — можно поправить');
+    } else {
+      setTemplateNote(null);
+    }
+    setSpecialty(next);
+  };
+
+  const changeSpecialty = (next: PersonaSpecialty) => {
+    if (next === specialty) return;
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (!template) {
+      setSpecialty(next);
+      setTemplateNote(null);
+      return;
+    }
+    const templateTools = [...(template.tools ?? ALL_TOOL_KEYS)].sort().join(',');
+    const templateDis = template.access === 'custom' ? [...(template.disallowedTools ?? [])].sort() : [];
+    const currentDis = access === 'custom' ? [...parseDisallowed(disallowedText)].sort() : [];
+    const differs = access !== template.access
+      || [...tools].sort().join(',') !== templateTools
+      || JSON.stringify(currentDis) !== JSON.stringify(templateDis);
+    if (differs) {
+      setPendingSpecialty(next);
+      return;
+    }
+    applySpecialtyTemplate(next);
+  };
 
   // Аватар: текущее состояние (обновляется после выбора кандидата), возможность
   // генерации (настроен ли fal), поле промпта. Статус/результат генерации — в
@@ -177,6 +233,63 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
 
   // Возможности провайдера выбранной модели — показываем «Усилие рассуждения» только если поддерживается
   const caps = useModelCaps(model);
+
+  // Пресеты и модели слотов — для группы «Пресеты» в выборе модели и ячеек уровней
+  const presets = usePresets();
+  const tierModels = useTierModels();
+  const specSettings = useSpecialtySettings();
+  const chainCtx = { tierModels, ollamaModel: undefined };
+  // Пресет в поле «Модель»: найден — карточка с цепочкой; удалён — честная пометка
+  const modelPreset = findPreset(presets, presetIdOf(model));
+  const brokenModelPreset = !!presetIdOf(model) && presets.length > 0 && !modelPreset;
+
+  // Ячейка уровня персоны: значение и установщик по ключу уровня
+  const tierCell = (t: ModelTierKey): string =>
+    t === 'strong' ? tierStrong : t === 'medium' ? tierMedium : tierWeak;
+  const setTierCell = (t: ModelTierKey, v: string) => {
+    if (t === 'strong') setTierStrong(v);
+    else if (t === 'medium') setTierMedium(v);
+    else setTierWeak(v);
+  };
+
+  // Подсказки пустых ячеек уровней — из preview-резолва по специальности, выбранной
+  // в форме сейчас (не по сохранённой персоне). Без специальности превью не зовём:
+  // place-резолв бэкенда уровень из query не применяет и вернул бы модель дефолтного
+  // уровня места для всех трёх ячеек — локальная оценка из слоёв точнее (слот уровня).
+  // Три статических вызова хука (TIER_ORDER фиксирован)
+  const cellHintCtx = (t: ModelTierKey): EffectiveLineContext =>
+    ({ kind: 'specialty', specialtyKey: specialty !== 'none' ? specialty : undefined, tier: t });
+  const cellHint: Record<ModelTierKey, ReturnType<typeof usePreview>> = {
+    strong: usePreview(cellHintCtx('strong')),
+    medium: usePreview(cellHintCtx('medium')),
+    weak: usePreview(cellHintCtx('weak')),
+  };
+
+  // Подпись пустой ячейки персоны: фактическое значение из резолва — «Как у
+  // специальности · …», если ответ дала ячейка специальности, иначе «Как у всех · …».
+  // До ответа превью (или при его сбое) — локальная оценка из слоёв настроек
+  const personaCellPlaceholder = (t: ModelTierKey): string => {
+    const d = cellHint[t];
+    if (d?.model) {
+      return d.source === 'specialty-cell'
+        ? `Как у специальности · ${modelLabel(d.model)}`
+        : `Как у всех · ${modelLabel(d.model)}`;
+    }
+    const cellOfRec = (r: { tierStrong?: string | null; tierMedium?: string | null; tierWeak?: string | null } | null | undefined) =>
+      (t === 'strong' ? r?.tierStrong : t === 'medium' ? r?.tierMedium : r?.tierWeak) || '';
+    const rec = specialty !== 'none' && specSettings
+      ? effectiveSpecialtyRecord(specSettings.global, specSettings.owner, specialty) : null;
+    const defRec = specSettings?.owner.defaultSpecialty ?? specSettings?.global.defaultSpecialty ?? null;
+    const fromSpec = cellOfRec(rec) || cellOfRec(defRec);
+    if (fromSpec) return `Как у специальности · ${routeDisplayLabel(fromSpec, presets, chainCtx)}`;
+    return tierModels[t] ? `Как у всех · ${modelLabel(tierModels[t])}` : 'Как у всех';
+  };
+
+  // Свёрнутая подпись блока «Свои модели по уровням»: пусто — наследование, задано — что именно
+  const filledTierCells = TIER_ORDER.filter(t => tierCell(t));
+  const tierCellsSummary = filledTierCells.length === 0
+    ? 'как у специальности'
+    : filledTierCells.map(t => `${TIER_TITLE[t]}: ${routeDisplayLabel(tierCell(t), presets, chainCtx)}`).join(' · ');
 
   // Акцент персоны из выбранного цвета — им красим роль в hero и (через onColorChange) тулбар
   const accentColor = AGENT_COLORS[color] ?? C.accent;
@@ -354,6 +467,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       instructions: instructions.trim(),
     },
     model, modelTier, effort, scope,
+    tierStrong, tierMedium, tierWeak,
     projectId: scope === 'project' ? projectId : '',
     color, greeting: greeting.trim(), memoryEnabled,
     tools: [...tools].sort(),
@@ -381,6 +495,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       },
       model: persona?.model ?? '',
       modelTier: parseTier(persona?.modelTier),
+      tierStrong: persona?.tierStrong ?? '',
+      tierMedium: persona?.tierMedium ?? '',
+      tierWeak: persona?.tierWeak ?? '',
       effort: persona?.effort ?? '',
       scope: s,
       projectId: s === 'project' ? (persona?.projectId ?? defaultProjectId ?? '') : '',
@@ -415,6 +532,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       model: isEdit ? model : (model || undefined),
       // Уровень модели по той же схеме: правка шлёт "" (сброс), создание — только заданный
       modelTier: isEdit ? modelTier : (modelTier || undefined),
+      // Свои модели по уровням — та же схема («»→ сброс ячейки к наследованию)
+      tierStrong: isEdit ? tierStrong : (tierStrong || undefined),
+      tierMedium: isEdit ? tierMedium : (tierMedium || undefined),
+      tierWeak: isEdit ? tierWeak : (tierWeak || undefined),
       effort: isEdit ? effort : (effort || undefined),
       scope,
       projectId: scope === 'project' ? projectId : undefined,
@@ -434,6 +555,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         ? await api.personas.update(persona!.id, dto)
         : await api.personas.create(dto);
       bumpPersonas();
+      invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
       onSaved(saved);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить персону');
@@ -891,9 +1013,50 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       <SectionLabel style={{ marginBottom: 14 }}>Поведение и контекст</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
         <Field label="Модель">
-          {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
-              обязан показывать его, а не модель обычного нового чата */}
-          <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
+          {modelPreset || brokenModelPreset ? (
+            // Выбран пресет: карточка с именем и порядком шагов (битая ссылка — приглушённо,
+            // место ведёт себя как пустое); «Сменить» возвращает к выбору модели
+            <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
+              <div style={{
+                flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: R.md,
+                border: `1px solid ${brokenModelPreset ? C.border : C.accent}`,
+                background: brokenModelPreset ? C.bgWhite : C.accentLight,
+              }}>
+                <div style={{
+                  fontSize: 13, fontWeight: 600, fontFamily: FONT.sans,
+                  color: brokenModelPreset ? C.textMuted : C.textHeading,
+                }}>
+                  {brokenModelPreset ? 'Пресет удалён — работает настройка по умолчанию' : modelPreset!.name}
+                </div>
+                {modelPreset && (
+                  <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2, lineHeight: 1.35 }}>
+                    {chainSummary(modelPreset, chainCtx)}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setModel('')}
+                style={{
+                  flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 12px',
+                  borderRadius: R.md, cursor: 'pointer', border: `1px solid ${C.border}`,
+                  background: C.bgWhite, fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
+                  color: C.accent,
+                }}
+              >
+                Сменить
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {/* Пресет — третий вариант в том же выборе (спека, блок 2); пустая группа
+                  не показывается вовсе */}
+              <PresetOptions value={model} onPick={setModel} ctx={chainCtx} />
+              {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
+                  обязан показывать его, а не модель обычного нового чата */}
+              <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
+            </div>
+          )}
         </Field>
 
         {/* Уровень слабее явной модели выше: задал модель — она и пойдёт в ход */}
@@ -903,7 +1066,88 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
             onChange={setModelTier}
             defaultHint={model ? 'работает выбранной моделью' : 'как настроено для чатов персон'}
           />
+          <div style={{ marginTop: 6 }}>
+            <EffectiveLine ctx={{ kind: 'persona', personaId: persona?.id }} />
+          </div>
         </Field>
+
+        {/* Свои модели по уровням (спека, блок 4): три ячейки — модель или пресет;
+            пустая — наследуется (специальность → «Модели по умолчанию») */}
+        <div style={{ gridColumn: '1 / -1' }}>
+          {tierCellsOpen ? (
+            <Field label="Свои модели по уровням">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {TIER_ORDER.map(t => {
+                  const cell = tierCell(t);
+                  return (
+                    <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ width: 64, flexShrink: 0, fontSize: 12.5, color: C.textSecondary }}>
+                        {TIER_TITLE[t]}
+                      </span>
+                      <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+                        <RoutePicker
+                          route={cell}
+                          label={cell ? routeDisplayLabel(cell, presets, chainCtx) : ''}
+                          models={models}
+                          tierModels={tierModels}
+                          placeholder={personaCellPlaceholder(t)}
+                          showTiers={false}
+                          showPresets
+                          onChange={v => setTierCell(t, v)}
+                        />
+                      </div>
+                      {cell && (
+                        <button
+                          type="button"
+                          onClick={() => setTierCell(t, '')}
+                          title="Вернуть наследование"
+                          style={{
+                            flexShrink: 0, font: 'inherit', fontSize: 11.5, color: C.accent,
+                            background: 'transparent', border: 'none', padding: 0,
+                            cursor: 'pointer', textDecoration: 'underline',
+                          }}
+                        >
+                          Сбросить
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                <button
+                  type="button"
+                  onClick={() => setTierCellsOpen(false)}
+                  style={{
+                    alignSelf: 'flex-start', font: 'inherit', fontSize: 12, fontWeight: 600,
+                    color: C.textMuted, background: 'none', border: 'none', padding: '2px 2px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Свернуть
+                </button>
+              </div>
+            </Field>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setTierCellsOpen(true)}
+              style={{
+                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
+                padding: '8px 11px', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
+                border: `1px solid ${C.border}`, background: C.bgWhite, font: 'inherit',
+              }}
+            >
+              <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
+                Свои модели по уровням:
+              </span>
+              <span style={{
+                flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+                {tierCellsSummary}
+              </span>
+            </button>
+          )}
+        </div>
 
         {caps.supportsEffort && (
           <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
@@ -940,78 +1184,47 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер ролей, голос брифинга, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
           <select
             value={specialty}
-            onChange={e => setSpecialty(e.target.value as PersonaSpecialty)}
+            onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)}
             style={selectStyle}
             aria-label="Специальность"
           >
             <option value="none">Не задана</option>
-            <option value="analyst">Аналитик</option>
-            <option value="planner">Планировщик</option>
-            <option value="reviewer">Ревьюер</option>
-            <option value="executor">Исполнитель</option>
-            <option value="secretary">Секретарь</option>
-            <option value="coordinator">Координатор</option>
-            <option value="mentor">Ментор</option>
-            <option value="designer">Дизайнер</option>
-            <option value="consultant">Консультант</option>
-            <option value="librarian">Библиотекарь</option>
-            <option value="tester">Тестировщик</option>
+            {specialtyCatalog
+              ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
+                <option key={e.key} value={e.key}>{e.label}</option>
+              ))
+              : (<>
+                <option value="analyst">Аналитик</option>
+                <option value="planner">Планировщик</option>
+                <option value="reviewer">Ревьюер</option>
+                <option value="executor">Исполнитель</option>
+                <option value="secretary">Секретарь</option>
+                <option value="coordinator">Координатор</option>
+                <option value="mentor">Ментор</option>
+                <option value="designer">Дизайнер</option>
+                <option value="consultant">Консультант</option>
+                <option value="librarian">Библиотекарь</option>
+                <option value="tester">Тестировщик</option>
+              </>)}
           </select>
+          {templateNote && (
+            <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+              {templateNote}
+            </span>
+          )}
         </Field>
       </div>
-    </div>
-  );
 
-  // === Секция 3.5 — Возможности (инструменты per-persona) ===
-  const toggleTool = (key: string) =>
-    setTools(prev => prev.includes(key) ? prev.filter(t => t !== key) : [...prev, key]);
-
-  // При включённой фиче persona-bindings источники/инструменты настраиваются во
-  // вкладке «Знания» — здесь блок «Возможности» не показываем.
-  const toolsSection = bindingsEnabled ? null : (
-    <div style={section}>
-      <SectionLabel style={{ marginBottom: 4 }}>Возможности</SectionLabel>
-      <div style={{ fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans, marginBottom: 14 }}>
-        Какими инструментами персона может пользоваться в чате
-      </div>
-
-      {/* Профиль доступа (P6): full / readOnly / custom */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 18 }}>
-        <FieldLabel>Профиль доступа</FieldLabel>
-        <SegmentedControl<PersonaAccess>
-          value={access}
-          onChange={setAccess}
-          columns={3}
-          options={[
-            { value: 'full', label: 'Полный' },
-            { value: 'readOnly', label: 'Только чтение' },
-            { value: 'custom', label: 'Свой' },
-          ]}
+      {pendingSpecialty && (
+        <ConfirmDialog
+          title="Заменить права и инструменты?"
+          subtitle="Текущие профиль доступа и инструменты отличаются от шаблона новой специальности. Заменить их шаблоном? Ручные правки будут перезаписаны."
+          confirmLabel="Заменить"
+          cancelLabel="Оставить как есть"
+          onConfirm={() => { applySpecialtyTemplate(pendingSpecialty); setPendingSpecialty(null); }}
+          onCancel={() => setPendingSpecialty(null)}
         />
-        {access === 'readOnly' && (
-          <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-            Смотрит и советует, но ничего не меняет: без правок файлов, Bash и мутаций задач/заметок
-          </span>
-        )}
-        {access === 'custom' && (
-          <Field hint="Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete">
-            <TextArea value={disallowedText} onChange={setDisallowedText} autoGrow minHeight={56}
-              placeholder="Bash, Edit, Write" />
-          </Field>
-        )}
-      </div>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {TOOL_OPTIONS.map(t => (
-          <div key={t.key} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans }}>{t.title}</div>
-              <div style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans, marginTop: 1 }}>{t.hint}</div>
-            </div>
-            <Toggle checked={tools.includes(t.key)} onChange={() => toggleTool(t.key)} />
-          </div>
-        ))}
-      </div>
+      )}
     </div>
   );
 
@@ -1117,7 +1330,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
         {heroSection}
         {characterSection}
         {behaviorSection}
-        {toolsSection}
         {memorySection}
         {dangerSection}
         {error && (
@@ -1144,13 +1356,8 @@ function parseDisallowed(s: string): string[] {
   return Array.from(new Set(s.split(',').map(t => t.trim()).filter(Boolean)));
 }
 
-// Возможности персоны: ключи и подписи тумблеров. Полный набор = «без ограничений».
+// Возможности персоны (Persona.Tools): полный набор = «без ограничений»
 const ALL_TOOL_KEYS = ['tasks', 'notes', 'web'];
-const TOOL_OPTIONS: { key: string; title: string; hint: string }[] = [
-  { key: 'tasks', title: 'Задачи', hint: 'Ведёт ваши задачи через инструменты задач' },
-  { key: 'notes', title: 'Заметки', hint: 'Читает и пишет в базу знаний' },
-  { key: 'web', title: 'Веб', hint: 'Ищет и читает страницы в интернете' },
-];
 
 // Пресеты тона — single-select: выбор записывает текст в редактируемый слот «Тон»
 const TONE_PRESETS: { label: string; text: string }[] = [

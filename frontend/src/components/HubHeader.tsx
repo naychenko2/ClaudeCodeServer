@@ -13,8 +13,11 @@ import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { UsageScreen } from './UsageScreen';
-import { ModelProvidersModal } from './ModelProvidersModal';
+import { ModelProvidersTabsModal } from '../features/modelProviders/ModelProvidersTabsModal';
+import { McpServersModal } from '../features/mcp/McpServersModal';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { api } from '../lib/api';
+import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
 
 interface Props {
@@ -59,6 +62,11 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
   const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
+  const [showMcpServers, setShowMcpServers] = useState(false);
+  const mcpRegistry = useFeature(FLAGS.mcpRegistry);
+
+  // «Собрать цепочку…» из панелей выбора модели — открыть раздел на вкладке «Пресеты»
+  useEffect(() => subscribeModelProvidersNav(() => setShowBackgroundTasks(true)), []);
 
   const isAdmin = auth.role === 'admin';
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
@@ -110,8 +118,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   // живут в меню аватара, поэтому здесь их нет.
   // «Стена» вкладки в таббаре НЕ имеет вовсе: вход — из воркспейса
   // проекта (док стены под доком проектов, DnD чата туда / пункт меню чата).
-  // 'wall' сидит в TABLESS (HubTabs), поэтому и активная стена вкладку не
-  // дописывает — PillSwitch умеет «нет выбранного». Диплинк #/wall работает.
+  // Активная стена подсвечивает пилюлю «Проекты» (displayValue в HubTabs) —
+  // это рабочий режим раздела проектов. Диплинк #/wall работает.
 
   const PRIMARY_MOBILE: HubTab[] = ['chats', 'projects', 'calendar'];
   const HIDDEN_MOBILE: HubTab[] = ['notes', 'personas'];
@@ -290,6 +298,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowUsage={() => setShowUsage(true)}
           onShowBackgroundTasks={() => setShowBackgroundTasks(true)}
+          // «MCP-серверы» — за фич-флагом mcp-registry: без флага пункта в меню нет
+          onShowMcpServers={mcpRegistry ? () => setShowMcpServers(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
           // «Знания», «Аналитика токенов» и «Что нового» живут здесь на обеих платформах:
@@ -309,7 +319,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
-      {showBackgroundTasks && <ModelProvidersModal isAdmin={isAdmin} onClose={() => setShowBackgroundTasks(false)} />}
+      {showBackgroundTasks && <ModelProvidersTabsModal isAdmin={isAdmin} onClose={() => setShowBackgroundTasks(false)} />}
+      {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
     </div>
   );
 }

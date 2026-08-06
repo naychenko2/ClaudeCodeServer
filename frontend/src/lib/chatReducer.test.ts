@@ -67,6 +67,11 @@ describe('возврат в чат посреди идущего хода', () =
     ['session_ended', { type: 'exited', code: 0 }],
     ['truncated', { type: 'truncated' }],
     ['redacted_thinking', { type: 'redacted_thinking' }],
+    ['team_planning_done', {
+      type: 'team_planning', start: false, success: true,
+      subtaskCount: 2, waveCount: 1, elapsedMs: 1000, route: null, failure: null,
+      promptChars: 0, responseChars: 0,
+    }],
   ];
 
   it.each(liveOnlyEvents)('%s в ленте не блокирует снимок', (_name, event) => {

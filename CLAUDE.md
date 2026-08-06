@@ -215,6 +215,17 @@ available». Ограничения по ходу — на бэкенде: се�
 инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов
 при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md).
 
+**Личный реестр MCP-серверов** (флаг `mcp-registry`) — раздел «MCP-серверы»: свои внешние
+серверы владельца (не встроенные продуктовые выше) со статусом, пробой, входом по OAuth и
+доступом по проектам/персонам. Хранение — `McpServerRecord` в `data/mcp-servers.json` (без
+секретов) + `data/mcp-secrets.json` (значения, в `BackupPaths.SecretFileNames`) +
+`data/mcp-status.json` (наблюдения, в бэкап не едет). Каскад доступности реестр →
+`Project.McpServersOff` (deny-list) → Off-привязка персоны `mcp:<ключ>` (без `condition` —
+тот же инвариант состава хода). Доставка в ход — `SessionManager.BuildExternalMcpProvider` →
+`ClaudeSession.BuildTurnMcpConfig`, `AuthVersion` в отпечатке запуска. Известное ограничение:
+полный цикл входа по OAuth не проверялся на реальном сервере с учётными данными. Подробности —
+[docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
+
 ## Заметки и Знания (Dify RAG)
 
 Заметки — Obsidian-совместимый markdown-vault (`[[wikilinks]]`, backlinks, граф): настоящие
@@ -386,15 +397,24 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 ## Соглашения
 
-- **CI гоняет тесты на Linux** (`ubuntu-latest`, [.github/workflows/ci.yml](.github/workflows/ci.yml)),
+- **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`, [.github/workflows/ci.yml](.github/workflows/ci.yml)),
   а разработка идёт на Windows — тесты обязаны быть платформонезависимыми, иначе зелёные
   локально они падают в CI. Главная ловушка — пути: `Path.IsPathRooted("C:\\…")` на Linux
   даёт `false`, поэтому Windows-литералы там считаются относительными и проверки путей
   срабатывают не по тому правилу. Пути в тестах строить от `Path.GetTempPath()` +
   `Path.Combine`, разделители не хардкодить. Помнить и про остальное: регистрозависимость
-  ФС, отсутствие `.exe`, недоступность WinAPI. Сомневаешься — прогони набор в контейнере:
+  ФС, отсутствие `.exe`, недоступность WinAPI.
+  **Вторая ловушка — тайминги.** Раннер CI слабее рабочей машины и гоняет тесты параллельно,
+  так что ThreadPool там голодает: коллбэк `Timer`/фоновая задача приезжает много позже
+  своего срока. Слепая пауза (`await Task.Delay(500)` в расчёте на окно в 30мс) даёт
+  плавающий провал вида «collection is empty» — ждать надо **событие**, а не время:
+  `TaskCompletionSource` + `Task.WhenAny(tcs.Task, Task.Delay(таймаут))` со щедрым потолком
+  (образец — `WorkflowWatcherTests`, `SessionManagerTests`).
+  Сомневаешься — прогони набор в контейнере:
   `docker run --rm -v "<репа>:/src" -w /src/backend mcr.microsoft.com/dotnet/sdk:10.0 dotnet test ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj`
-  (после этого пересобери локально: контейнер оставляет в `bin`/`obj` Linux-артефакты)
+  (после этого пересобери локально: контейнер оставляет в `bin`/`obj` Linux-артефакты).
+  Если `bin` занят запущенным продуктом («Access to the path … is denied»), добавь
+  `-p:ArtifactsPath=/tmp/artifacts` — сборка уедет мимо рабочего дерева и гасить процесс не придётся.
 - **Тесты и их категории.** Большинство — чистые юнит-тесты (Services, моки, in-memory),
   1–50ms. Медленные — две группы: **Controllers** (поднимают `WebApplicationFactory` —
   полный HTTP-pipeline ASP.NET, 400–970ms) и **GitServiceTests** (гоняют настоящий `git`

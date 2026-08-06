@@ -61,6 +61,16 @@ public class BackupPathsTests
     }
 
     [Fact]
+    public void СтатусыMcpСерверов_Исключены()
+    {
+        // Наблюдение, а не настройка: восстановленное из архива, оно описывает состояние
+        // чужой машины в прошлом. Заново приедет из первого же system/init
+        BackupPaths.ShouldInclude("mcp-status.json").Should().BeFalse();
+        // А сам реестр серверов — настройка, он в архив едет (секретов в нём нет)
+        BackupPaths.ShouldInclude("mcp-servers.json").Should().BeTrue();
+    }
+
+    [Fact]
     public void РеестрPid_Исключен()
     {
         // Восстановленный список PID заставил бы следующий старт убить по протухшим

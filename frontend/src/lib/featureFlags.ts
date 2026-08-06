@@ -13,6 +13,7 @@ export const FLAGS = {
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
   linkReader: 'link-reader',
+  mcpRegistry: 'mcp-registry',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

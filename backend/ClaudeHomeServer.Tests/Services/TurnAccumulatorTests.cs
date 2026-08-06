@@ -90,6 +90,67 @@ public class TurnAccumulatorTests : IDisposable
         started.TurnWorktree.Should().BeNull();
     }
 
+    // Пометка автоподмены модели пишется в историю, чтобы после F5/рестарта человек
+    // видел, что отвечала не та модель. PreviousModel — модель последнего session_started
+    // этого хода (провалившаяся попытка успела его прислать).
+    [Fact]
+    public void OnModelSwitched_ПишетПометкуВИсторию()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnSessionStarted("claude-opus-4-8", "auto");
+        acc.OnModelSwitched("deepseek-chat", acc.LastStartedModel(), "rate_limit");
+
+        var all = acc.GetAll();
+        all.OfType<StoredModelSwitchedMessage>().Should().ContainSingle()
+            .Which.Should().Match<StoredModelSwitchedMessage>(m =>
+                m.Model == "deepseek-chat"
+                && m.PreviousModel == "claude-opus-4-8"
+                && m.Reason == "rate_limit");
+    }
+
+    // Без PreviousModel (в начале чата ещё не было session_started) пилюля не пишется —
+    // иначе в истории «Ответила X — была Y», а Y неизвестна
+    [Fact]
+    public void OnModelSwitched_БезSessionStarted_НеПишетПометку()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnModelSwitched("deepseek-chat", acc.LastStartedModel(), "rate_limit");
+
+        acc.GetAll().OfType<StoredModelSwitchedMessage>().Should().BeEmpty();
+    }
+
+    // LastStartedModel: обход с хвоста текущего хода вглубь истории — модель
+    // предыдущего хода остаётся «последней известной» к моменту подмены в новом
+    [Fact]
+    public void LastStartedModel_ОбходОтХвостаВглубьИстории()
+    {
+        var history = new List<StoredMessage>
+        {
+            new StoredSessionStartedMessage("gpt-4", "auto"),
+            new StoredTextMessage("старый ответ"),
+        };
+        var acc = new TurnAccumulator(history);
+        acc.OnSessionStarted("claude-opus-4-8", "auto");
+
+        acc.LastStartedModel().Should().Be("claude-opus-4-8",
+            "свежий session_started в текущем ходу — приоритет у него");
+    }
+
+    [Fact]
+    public void LastStartedModel_НетВТекущемХоду_ИзИстории()
+    {
+        var history = new List<StoredMessage>
+        {
+            new StoredSessionStartedMessage("claude-opus-4-8", "auto"),
+            new StoredTextMessage("прошлый ответ"),
+        };
+        var acc = new TurnAccumulator(history);
+        // Нового session_started в этом ходу нет
+
+        acc.LastStartedModel().Should().Be("claude-opus-4-8",
+            "для подмены в начале нового хода берётся модель прошлого");
+    }
+
     // Признак «ход идёт в чужом дереве» переживает перезагрузку истории — попадает в
     // снимок хода наравне с Model/Mode, а не теряется между сериализацией и десериализацией
     [Fact]

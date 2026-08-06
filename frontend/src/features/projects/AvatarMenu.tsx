@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu, Coins, Palette, Activity } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu, Coins, Palette, Activity, Plug } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -58,9 +58,12 @@ interface Props {
   // «Поставщики моделей» (настройка слотов и фоновых ИИ-действий) — доступно всем,
   // но режим диалога зависит от роли (admin видит уровни 1 и 3 + чужие профили).
   onShowBackgroundTasks?: () => void;
+  // «MCP-серверы» (личный реестр внешних инструментов) — соседний пункт; за фич-флагом
+  // mcp-registry, поэтому HubHeader передаёт колбэк только при включённом флаге
+  onShowMcpServers?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onOpenSpend, onOpenTelemetry, onShowBackgroundTasks }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onOpenSpend, onOpenTelemetry, onShowBackgroundTasks, onShowMcpServers }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -184,6 +187,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Cpu size={ICON_SIZE.xs} strokeWidth={2} />
               Поставщики моделей
+            </button>
+          )}
+          {onShowMcpServers && (
+            <button
+              onClick={() => { setOpen(false); onShowMcpServers(); }}
+              style={dropdownItem}
+            >
+              <Plug size={ICON_SIZE.xs} strokeWidth={2} />
+              MCP-серверы
             </button>
           )}
           <button

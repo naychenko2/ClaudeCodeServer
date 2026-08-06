@@ -246,6 +246,45 @@ internal class TurnAccumulator
         }
     }
 
+    // Пометка «Ответила …» при автоподмене модели фолбэком уровня 2 (сторонний
+    // провайдер с моделью-эквивалентом). Уровень 1 (ротация подписок) модель не
+    // трогает — пилюля там не нужна. PreviousModel — модель последнего session_started
+    // этого хода (провалившаяся попытка успела его прислать). null — пометки не
+    // пишем: в начале чата session_started ещё нет, и без PreviousModel пилюля в
+    // истории врала бы («Ответила X — была Y»), а Y неизвестна.
+    public void OnModelSwitched(string model, string? previousModel, string? reason)
+    {
+        if (previousModel is null) return;
+        lock (_lock)
+        {
+            FlushBuffers();
+            _currentTurn.Add(new StoredModelSwitchedMessage
+            {
+                Model = model,
+                PreviousModel = previousModel,
+                Reason = reason,
+            });
+        }
+    }
+
+    // Последняя модель session_started этого хода: точка сравнения для пометки
+    // «Ответила …» в OnModelSwitched. Обход — от хвоста текущего хода вглубь истории:
+    // session_started предыдущего хода к моменту следующей подмены ещё актуален
+    // (модель не менялась между попытками, если не было другой подмены).
+    public string? LastStartedModel()
+    {
+        lock (_lock)
+        {
+            for (var i = _currentTurn.Count - 1; i >= 0; i--)
+                if (_currentTurn[i] is StoredSessionStartedMessage s && !string.IsNullOrEmpty(s.Model))
+                    return s.Model;
+            for (var i = _history.Count - 1; i >= 0; i--)
+                if (_history[i] is StoredSessionStartedMessage s && !string.IsNullOrEmpty(s.Model))
+                    return s.Model;
+        }
+        return null;
+    }
+
     public void OnAskQuestion(string toolUseId, object? input)
     {
         lock (_lock)
@@ -314,6 +353,24 @@ internal class TurnAccumulator
             if (card is null) return false;
             card.Plan = plan;
             if (approved is not null) { card.Resolved = true; card.Approved = approved; }
+            return true;
+        }
+    }
+
+    // Погасить карточку плана как ЗАМЕНЁННУЮ новой версией (перепланирование по правке
+    // человека или clarify): не решение «отменено», а устаревание — фронт по SupersededBy
+    // рисует её иначе. Идемпотентна: уже разрешённую карточку не трогает.
+    // false — карточки с таким id нет либо она уже разрешена.
+    public bool OnTeamPlanSuperseded(string planId, int supersededByVersion)
+    {
+        lock (_lock)
+        {
+            var card = _currentTurn.Concat(_history).OfType<StoredTeamPlanMessage>()
+                .LastOrDefault(m => m.PlanId == planId && !m.Resolved);
+            if (card is null) return false;
+            card.Resolved = true;
+            card.Approved = false;
+            card.SupersededBy = supersededByVersion;
             return true;
         }
     }

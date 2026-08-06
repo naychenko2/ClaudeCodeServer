@@ -69,6 +69,10 @@ public class TaskExecutionServiceTests
             .Should().BeNull();
     }
 
+    // Примечание: специальность персоны в резолве исполнителя теперь идёт через матрицы
+    // (ADR-007 §2) и тестируется на уровне ModelAssignmentResolver.ExecutorModel/PersonaModel
+    // — см. LocalActionRoutingTests (порядок «персона → специальность → владелец», DefaultTier).
+
     // ─── Отслеживание сессии ─────────────────────────────────────────────────
 
     [Fact]

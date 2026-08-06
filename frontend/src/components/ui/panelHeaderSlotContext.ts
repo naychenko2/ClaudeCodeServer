@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react';
+import { createContext, useContext, useEffect } from 'react';
 
 // Связь «панель ↔ шапка её карточки» для PanelHeaderSlot. Вынесено из .tsx
 // отдельным модулем: файл с компонентом не должен экспортировать ничего кроме
@@ -19,9 +19,13 @@ export interface PanelHeaderSlotValue {
   // кладётся главное действие панели («+ Чат», «+ Задача», «+ Проект»): оно
   // должно быть видно всегда, иначе на пустой панели непонятно, чем её наполнить.
   elPinned: HTMLElement | null;
+  // Удержать контролы шапки видимыми, пока панель этого просит. Нужно попапам:
+  // меню открывается порталом в body, курсор уходит с карточки — и шапка гасила
+  // контролы вместе с кнопкой, которой это меню открыли.
+  hold: (held: boolean) => void;
 }
 
-const EMPTY: PanelHeaderSlotValue = { hasHeader: false, el: null, elLeft: null, elPinned: null };
+const EMPTY: PanelHeaderSlotValue = { hasHeader: false, el: null, elLeft: null, elPinned: null, hold: () => {} };
 
 export const PanelHeaderSlotContext = createContext<PanelHeaderSlotValue>(EMPTY);
 
@@ -30,4 +34,16 @@ export const PanelHeaderSlotContext = createContext<PanelHeaderSlotValue>(EMPTY)
 // флагу — как раньше делал проп hideViewSwitcher, только без участия владельца.
 export function useHasPanelHeader(): boolean {
   return useContext(PanelHeaderSlotContext).hasHeader;
+}
+
+// Пока active — контролы шапки не гаснут, даже если курсор ушёл с карточки.
+// Панель вызывает это на время жизни своего попапа (меню, поповера): открыть меню
+// кнопкой в шапке и увидеть, как эта кнопка исчезает, — не поведение, а дефект.
+export function usePanelHeaderHold(active: boolean): void {
+  const { hold } = useContext(PanelHeaderSlotContext);
+  useEffect(() => {
+    if (!active) return;
+    hold(true);
+    return () => hold(false);
+  }, [active, hold]);
 }

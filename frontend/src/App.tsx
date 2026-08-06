@@ -28,7 +28,7 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
-import { isWallActive } from './lib/wallMode'
+import { isWallActive, setWallActive } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -54,8 +54,17 @@ const UiKitPage = import.meta.env.DEV
   ? lazy(() => import('./dev/UiKitPage').then(m => ({ default: m.UiKitPage })))
   : null;
 
+// Симуляция паузы планирования (индикатор «Команда готовит план…») — тоже dev-only
+const TeamPlanSimPage = import.meta.env.DEV
+  ? lazy(() => import('./dev/TeamPlanSimPage').then(m => ({ default: m.TeamPlanSimPage })))
+  : null;
+
 function isDevUiKitHash(): boolean {
   return window.location.hash === '#/ui-kit';
+}
+
+function isDevTeamPlanSimHash(): boolean {
+  return window.location.hash === '#/team-plan-sim';
 }
 
 // Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
@@ -131,6 +140,7 @@ export default function App() {
   // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,
   // условие всегда ложно и режим не активируется.
   const [uiKitMode, setUiKitMode] = useState(() => isDevUiKitHash())
+  const [teamPlanSimMode, setTeamPlanSimMode] = useState(() => isDevTeamPlanSimHash())
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.
@@ -345,6 +355,7 @@ export default function App() {
     // поэтому стандартный seed ниже сбросил бы URL на дефолт (#/home) → hashchange listener
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
+    if (isDevTeamPlanSimHash()) return;
     const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'wall' ? 'wall' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
@@ -519,6 +530,13 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  // Dev-симуляция паузы планирования #/team-plan-sim — тот же механизм
+  useEffect(() => {
+    const onHash = () => setTeamPlanSimMode(isDevTeamPlanSimHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
   const openProject = (p: Project) => {
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))
@@ -540,6 +558,17 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
+  // Выход со стены её собственной кнопкой (рельса стены, заглушка на узком экране):
+  // возвращает В ПРОЕКТ, из которого на стену вошли, — он всё это время «спал» в
+  // state и восстанавливается как при возврате из любого другого раздела. К СПИСКУ
+  // проектов уводит другой жест — клик по подсвеченной пилюле «Проекты» (switchHubTab).
+  // Проекта нет (пришли по диплинку #/wall) — остаётся список.
+  const exitWall = () => {
+    setWallActive(false)
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
+    navPush(project ? { screen: 'project', project, view: 'sidebar', file: null } : { screen: 'projects' })
+  }
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
@@ -559,8 +588,21 @@ export default function App() {
         navReplace(rest)
       }
     }
+    // Клик по «Проектам» с самой стены (там эта пилюля подсвечена как активная) —
+    // явный выход из режима стены к списку проектов: тот же жест, что повторный
+    // клик по активному разделу с открытым проектом ниже
+    if (t === 'projects' && hubTab === 'wall') {
+      setWallActive(false)
+      localStorage.removeItem(OPEN_PROJECT_KEY)
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setProject(null)
+      setHubTab('projects')
+      navPush({ screen: 'projects' })
+      return
+    }
     // Возврат в рабочий режим: пока стена «активна», вкладка «Проекты» ведёт на неё,
-    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене)
+    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене или
+    // кликом по подсвеченным «Проектам» прямо со стены)
     if (t === 'projects' && hubTab !== 'wall' && isWallActive()) {
       localStorage.setItem(HUB_TAB_KEY, 'wall')
       setHubTab('wall')
@@ -799,6 +841,15 @@ export default function App() {
     );
   }
 
+  // Early-return в режиме #/team-plan-sim — та же механика, что у витрины UI-кита
+  if (teamPlanSimMode && TeamPlanSimPage) {
+    return (
+      <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+        <TeamPlanSimPage />
+      </Suspense>
+    );
+  }
+
   return (
     <>
       <UpdatePrompt />
@@ -812,7 +863,7 @@ export default function App() {
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
           : effectiveHubTab === 'wall'
-            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onExitWall={exitWall} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'

@@ -60,10 +60,16 @@ public enum PersonaAccess { Full, ReadOnly, Custom }
 // брифинга (Secretary), группировкой/статусом команды и роутингом памяти команды.
 // None — не задана: оркестрация берёт явные слоты либо дефолт каталога; работает
 // с любыми персонами, не только OmO.
+// BackendExecutor/FrontendExecutor — профильные исполнители рядом с универсальным
+// (Executor): ведут себя как исполнитель во всех механизмах (write-набор сабагента,
+// роутинг oh-my-claudecode, git-секция), но различаются подписью и шаблоном прав
+// (SpecialtyCatalog). Подписи и шаблоны — в SpecialtyCatalog, значения добавлены
+// в конец без миграции данных.
 public enum PersonaSpecialty
 {
     None, Analyst, Planner, Reviewer, Executor, Secretary,
-    Coordinator, Mentor, Designer, Consultant, Librarian, Tester
+    Coordinator, Mentor, Designer, Consultant, Librarian, Tester,
+    BackendExecutor, FrontendExecutor
 }
 
 // Состояние кропа загруженного аватара: масштаб и смещение центра окна
@@ -148,7 +154,16 @@ public class Persona
     public string? Model { get; set; }
     // Уровень модели персоны: слот «сильная/средняя/слабая» вместо конкретной модели.
     // Слабее явной Model (та задана точечно) и слабее уровня самой задачи. null — не задан.
+    // Семантика (ADR-007 §2, блок 5): уровень разворачивается по самой узкой заполненной
+    // матрице — сначала своя (TierStrong/Medium/Weak ниже), потом специальности, потом слоты
+    // владельца. Пока матрицы пусты — байт в байт прежнее поведение («работай N-моделью владельца»).
     public ModelTier? ModelTier { get; set; }
+    // Свои модели по уровням (ADR-007 §2): значение ячейки — id модели ИЛИ "preset:{id}".
+    // Пустая ячейка = «спроси специальность, затем слоты владельца». Явная Model сильнее
+    // любой ячейки; "tier:*" в ячейке запрещён валидацией (уровень уже выбран строкой).
+    public string? TierStrong { get; set; }
+    public string? TierMedium { get; set; }
+    public string? TierWeak { get; set; }
     public string? Effort { get; set; }
     // Специальность (функциональная роль) для оркестрации — брифинг, статус команды,
     // память команды. None — не задана. См. PersonaSpecialty.

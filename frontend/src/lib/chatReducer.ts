@@ -53,6 +53,14 @@ export interface ChatState {
   // Live-состояние режима «Командная реализация» (событие team_implement).
   // undefined — событий ещё не было (UI берёт значение из Session.teamImplement)
   teamImplement?: TeamImplementState;
+  // Живое состояние вызова планировщика (событие team_planning, транзитное — не персистится).
+  // undefined — событий не было в этой сессии (плашка ориентируется только на стадию режима,
+  // как раньше — актуально сразу после REST-гидратации/входа в чат посреди планирования);
+  // { startedAt } — планировщик запущен, момент получения события клиентом (переживает
+  // ремонт плашки, честнее отсчёта от Date.now() при монтировании); null — планировщик уже
+  // закончил (событие приходит раньше, чем стадия team_implement — та ждёт запись файла
+  // плана на диск, и без этого поля плашка «работает» ещё висела бы после готового результата)
+  teamPlanning?: { startedAt: number } | null;
   // Подсказка следующего сообщения — чип в композере.
   // Эфемерная: в историю не пишется, сбрасывается при отправке хода (в хуке).
   promptSuggestion: string | null;
@@ -185,7 +193,7 @@ export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
   'user_message', 'session_started', 'text', 'thinking', 'tool_use',
   'ask_question', 'plan_review', 'team_plan', 'team_escalation',
   'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
-  'work_loop_stopped',
+  'work_loop_stopped', 'model_switched',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -210,6 +218,16 @@ export function serverHistoryNewer(serverItems: ChatItem[], prevItems: ChatItem[
   if (s === null) return false;
   const p = lastText(prev);
   return p === null ? s.length > 0 : s.length > p.length;
+}
+
+// Модель последнего session_started этого чата — точка сравнения для пометки «Ответила …»
+// (провалившаяся попытка перед фолбэк-подменой всегда успевает прислать свой session_started)
+function lastKnownModel(items: ChatItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === 'session_started' && it.model) return it.model;
+  }
+  return null;
 }
 
 // Последний блок сабагента данного вида у данного родителя — для дедупа эха
@@ -585,6 +603,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // или чат тихо переехал внутри пула); явная миграция добавляет разделитель
       const items = prev.items.map(it =>
         it.kind === 'provider_limit' && !it.resolved ? { ...it, resolved: true } : it);
+
+      // Автофолбэк сменил МОДЕЛЬ (уровень 2 цепочки — другой провайдер с моделью-эквивалентом):
+      // отдельная пометка «Ответила …», а не пилюля provider_switched. Ротация подписок того
+      // же провайдера (уровень 1) модель не трогает и msg.model не несёт — своей пометки не
+      // получает, остаётся на существующей логике ниже (блок G model-providers-rework.md).
+      // Сверяем с моделью последнего session_started этого чата — она гарантированно есть
+      // к этому моменту (провалившаяся попытка перед подменой уже её прислала)
+      if (msg.auto && msg.model) {
+        const prevModel = lastKnownModel(prev.items);
+        if (prevModel && prevModel !== msg.model)
+          return withItems([...items,
+            { kind: 'model_switched', model: msg.model, previousModel: prevModel, reason: msg.reason, rawLabel: msg.label }]);
+      }
+
       return withItems(msg.auto || !msg.label
         ? items
         : [...items, { kind: 'provider_switched', label: msg.label }]);
@@ -647,6 +679,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       const card: ChatItem = {
         kind: 'team_plan', planId: msg.planId, plan: msg.plan,
         resolved: msg.resolved, approved: msg.approved,
+        ...(msg.supersededBy != null ? { supersededBy: msg.supersededBy } : {}),
       };
       if (idx < 0) return withItems([...prev.items, card]);
       const items = prev.items.slice();
@@ -685,6 +718,25 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       items[idx] = card;
       return withItems(items);
     }
+
+    case 'team_planning':
+      // Жизненный цикл вызова планировщика (транзитное событие, в историю не пишется).
+      // teamPlanning — источник правды для плашки «идёт», НЕ дожидающийся стадии режима
+      // (та переключается отдельным событием team_implement и может отстать на запись
+      // файла плана на диск). success=false — отказ: карточка team_escalation с тем же
+      // текстом причины уже в пути, вторую строку с ним же не добавляем — просто гасим плашку
+      if (msg.start) return { ...prev, teamPlanning: { startedAt: Date.now() } };
+      if (!msg.success) return { ...prev, teamPlanning: null };
+      return {
+        ...prev,
+        teamPlanning: null,
+        items: [...prev.items, {
+          kind: 'team_planning_done',
+          subtaskCount: msg.subtaskCount,
+          waveCount: msg.waveCount,
+          elapsedMs: msg.elapsedMs,
+        }],
+      };
 
     case 'prompt_suggestion':
       // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает

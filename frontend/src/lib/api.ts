@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -146,10 +146,10 @@ export const api = {
   // ollama ответа /usage.
   localActions: {
     setRoute: (key: string, route: string) =>
-      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
         { method: 'PUT', body: JSON.stringify({ route }) }),
     reset: (key: string) =>
-      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
         { method: 'DELETE' }),
     // Массовый автоподбор исполнителя всем действиям по пресету; актуальные маршруты фронт
     // затем перечитывает из /usage. preset: 'tiers' | 'tiers-local'.
@@ -182,6 +182,45 @@ export const api = {
     list: () => request<{ items: ModuleInfo[] }>('/modules'),
   },
 
+  // Личный реестр MCP-серверов владельца (фича mcp-registry). Секретные значения наружу
+  // не выходят: в McpValue у секрета value = null, а в форме пустое значение секрета
+  // означает «оставить как было».
+  mcp: {
+    list: () => request<McpServer[]>('/mcp/servers'),
+    get: (id: string) => request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`),
+    // Встроенные серверы продукта — только наблюдение статуса, записи в реестре нет
+    builtin: () => request<McpBuiltinServer[]>('/mcp/servers/builtin'),
+    create: (data: McpServerUpsert) =>
+      request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: McpServerUpsert) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    setEnabled: (id: string, enabled: boolean) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable`, {
+        method: 'POST', body: JSON.stringify({ enabled }),
+      }),
+    delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов
+    probe: (id: string) =>
+      request<McpProbeResult>(`/mcp/servers/${encodeURIComponent(id)}/probe`, { method: 'POST' }),
+    // Импорт фрагмента {"mcpServers": {...}} — записи заводятся выключенными
+    import: (fragment: unknown) =>
+      request<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>('/mcp/servers/import', {
+        method: 'POST', body: JSON.stringify(fragment),
+      }),
+    // Диагностика вызовов инструментов — только админ (данные всех владельцев)
+    calls: (failures = 50) => request<McpCallsResponse>(`/mcp/calls?failures=${failures}`),
+    // Вход по OAuth (волна 7): start отдаёт адрес окна провайдера, complete — запасной
+    // путь с кодом, вставленным вручную (сервер принимает только loopback-адрес возврата)
+    oauthStart: (id: string, clientId?: string) =>
+      request<McpOAuthStartResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/start`, {
+        method: 'POST', body: JSON.stringify(clientId ? { clientId } : {}),
+      }),
+    oauthComplete: (id: string, state: string, code: string) =>
+      request<McpOAuthCompleteResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/complete`, {
+        method: 'POST', body: JSON.stringify({ state, code }),
+      }),
+  },
+
   providers: {
     balance: (key: string) => request<ProviderBalanceInfo>(`/providers/${key}/balance`),
     usage: (key: string) =>
@@ -200,6 +239,20 @@ export const api = {
         // пикеры подписывают пункт «По умолчанию (<модель>)»
         assignments?: Record<string, string | null>;
       }>('/models'),
+    // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
+    // что запуск хода — второй точки истины нет)
+    preview: (q: { place?: string; personaId?: string; specialty?: string; tier?: string }) => {
+      const qs = new URLSearchParams();
+      if (q.place) qs.set('place', q.place);
+      if (q.personaId) qs.set('personaId', q.personaId);
+      if (q.specialty) qs.set('specialty', q.specialty);
+      if (q.tier) qs.set('tier', q.tier);
+      const s = qs.toString();
+      return request<ModelPreviewResponse>(`/models/preview${s ? `?${s}` : ''}`);
+    },
+    // Места, где выбран пресет (диалог удаления)
+    presetUsage: (id: string) =>
+      request<PresetUsageResponse>(`/models/presets/${encodeURIComponent(id)}/usage`),
   },
 
   featureFlags: {
@@ -208,6 +261,21 @@ export const api = {
       request<{ values: Record<string, boolean> }>(`/feature-flags/${key}`, {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
+      }),
+  },
+
+  // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные
+  // шаблоны прав; настройки — глобальный слой (пишет только админ) и личный слой вызывающего.
+  specialties: {
+    list: () => request<SpecialtyCatalogEntry[]>('/specialties'),
+    getSettings: () => request<SpecialtySettingsResponse>('/specialties/settings'),
+    saveOwnerLayer: (layer: SpecialtySettingsLayer) =>
+      request<{ owner: SpecialtySettingsLayer }>('/specialties/settings', {
+        method: 'PUT', body: JSON.stringify(layer),
+      }),
+    saveGlobalLayer: (layer: SpecialtySettingsLayer) =>
+      request<{ global: SpecialtySettingsLayer }>('/specialties/settings/global', {
+        method: 'PUT', body: JSON.stringify(layer),
       }),
   },
 
@@ -236,7 +304,7 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOff?: string[] }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
     // массива и валидирует уникальность имён без учёта регистра)
@@ -1439,8 +1507,27 @@ export const api = {
     // (часть сайтов не читается, это норма, а не поломка), поэтому здесь гасим исключение
     // request() при non-2xx и возвращаем обе ветки как данные — вызывающему нечего ловить.
     read: (url: string) => readReaderPage(url),
+    // Серверная проба встраиваемости (ADR-006 §1): POST /api/reader/embed-check, вердикт по
+    // заголовкам финального ответа (X-Frame-Options / CSP frame-ancestors). Поле reason —
+    // телеметрия/отладка; фронт на него НЕ ветвится — любой исход, кроме явного
+    // embeddable:true (включая 401/403/429 и сетевые сбои), означает «не встраивается»
+    // и тихо уводит панель в MD-режим.
+    embedCheck: (url: string) => checkReaderEmbeddable(url),
   },
 };
+
+async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
+  try {
+    const data = await request<{ embeddable?: unknown }>('/reader/embed-check', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+    return { embeddable: !!data && data.embeddable === true };
+  } catch {
+    // Сбой пробы — не исключение для показа, а сигнал идти MD-путём (ADR-006 §1)
+    return { embeddable: false };
+  }
+}
 
 function normalizeReaderError(raw: unknown, httpStatus?: number | null): { code: ReaderErrorCode; httpStatus?: number | null } {
   const code = raw && typeof raw === 'object' && 'code' in raw && typeof (raw as { code?: unknown }).code === 'string'

@@ -24,6 +24,26 @@ public class ClaudeSession : ILlmSessionAdapter
     // со следующего хода, чат её не «замораживает». Итоговый null = слот пуст, решает CLI.
     private string? EffectiveModel => _assignments?.Resolve(UsageKey, Info.Model, Info.OwnerId) ?? Info.Model;
 
+    // Эффективная модель для слоя фолбэка (FallbackLlmSessionAdapter): пара «модель × подписка»
+    // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
+    internal string? EffectiveTurnModel => EffectiveModel;
+
+    // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
+    // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
+    // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
+    // (тесты) — один элемент (эффективная модель), т.е. цепочки нет.
+    internal IReadOnlyList<string> EffectiveTurnChain =>
+        _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
+        ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
+
+    // Явный тир хода для фолбэка (ADR-007 §5.1): дефолт места каталога, когда модель выбирается
+    // по месту (Info.Model пуст). При явной модели (персона/задача/выбор) тир не известен надёжно
+    // — отдаём null, и адаптер использует реверс-эвристику по слотам (как раньше, без регрессии).
+    internal ModelTier? EffectiveTurnTier =>
+        string.IsNullOrEmpty(Info.Model) && LocalActionCatalog.Find(UsageKey) is { } action
+            ? LocalActionCatalog.EffectiveDefaultTier(action)
+            : null;
+
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>
         Info.TaskExecution || Info.TaskId is not null ? LocalActionCatalog.TasksExecutor
@@ -173,6 +193,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Текущий прогон; присваивает поток хода (под _turnLock), обнуляет финализация reader'а
     private CliRun? _run;
 
+    // Прогон существует — чат занят по-настоящему. Доживание фоновых агентов сюда попадает,
+    // но чат при нём уже Active, так что реанимации мёртвого Working это не мешает.
+    public bool HasLiveTurn => _run is not null;
+
     // Хвостовой ридер главного транскрипта: завершения фоновых задач (<task-notification>)
     // CLI пишет в транскрипт, в stdout завершённого хода их может не быть (проверено live) —
     // без ридера pending прогона не опустел бы и процесс висел бы до потолка BgLingerTimeout
@@ -312,6 +336,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
+    // MCP-серверы личного реестра владельца: вычисляется на каждый ход, чтобы правка
+    // реестра применялась без пересоздания адаптера
+    private readonly Func<ExternalMcpContext?>? _externalMcpProvider;
     // Браузер (плагин playwright) в этой сессии: false — гасим плагин на запуске CLI
     private readonly bool _browserEnabled;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
@@ -382,6 +409,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _widgetsMcp = context.WidgetsMcp;
         _codeGraphMcp = context.CodeGraphMcp;
         _personaAgentsProvider = context.PersonaAgentsProvider;
+        _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
@@ -439,8 +467,13 @@ public class ClaudeSession : ILlmSessionAdapter
         var hasFalAi = !string.IsNullOrEmpty(_falMcpApiKey);
         var hasGlif = !string.IsNullOrEmpty(_glifMcpToken);
         var userServers = LoadUserScopeMcpServers();
+        // Личный реестр владельца: состав решается по owner/project/persona в SessionManager,
+        // от свойств хода не зависит (иначе сигнатура запуска «мерцала» бы между ходами)
+        var externalMcp = _externalMcpProvider?.Invoke();
+        var hasExternal = externalMcp is { Servers.Count: > 0 };
         if (!hasTasks && !hasNotes && !hasMemory && !hasPersonas && !hasWorkspace && !hasNotifications
             && !hasWidgets && !hasCodeGraph && !hasDataset && !hasModules && !hasFalAi && !hasGlif && userServers is null
+            && !hasExternal
             && !(hasConsultants && memoryServerPath is not null)) return (null, "", []);
 
         try
@@ -479,6 +512,50 @@ public class ClaudeSession : ILlmSessionAdapter
                         }
                         servers[key] = clone;
                     }
+                }
+            }
+
+            // Серверы личного реестра владельца — сразу после базового конфига: одноимённая
+            // запись реестра перекрывает наследство из .mcp.json (человек правил реестр
+            // осознанно, а глобальный файл — на весь инстанс), а встроенные серверы продукта
+            // ставятся ниже и всё равно выигрывают (их ключи в реестре зарезервированы).
+            if (hasExternal)
+            {
+                foreach (var srv in externalMcp!.Servers)
+                {
+                    var node = new System.Text.Json.Nodes.JsonObject();
+                    if (string.Equals(srv.Transport, "stdio", StringComparison.OrdinalIgnoreCase))
+                    {
+                        node["command"] = srv.Command ?? "";
+                        var argsArr = new System.Text.Json.Nodes.JsonArray();
+                        foreach (var arg in srv.Args) argsArr.Add(arg);
+                        node["args"] = argsArr;
+                        if (srv.Env.Count > 0)
+                        {
+                            var envObj = new System.Text.Json.Nodes.JsonObject();
+                            foreach (var (name, value) in srv.Env) envObj[name] = value;
+                            node["env"] = envObj;
+                        }
+                    }
+                    else
+                    {
+                        node["type"] = srv.Transport.ToLowerInvariant();
+                        node["url"] = srv.Url ?? "";
+                        if (srv.Headers.Count > 0)
+                        {
+                            var headersObj = new System.Text.Json.Nodes.JsonObject();
+                            foreach (var (name, value) in srv.Headers) headersObj[name] = value;
+                            node["headers"] = headersObj;
+                        }
+                    }
+                    if (srv.AlwaysLoad) node["alwaysLoad"] = true;
+                    // Та же адаптация к среде, что у наследства: в песочнице переписываются
+                    // loopback-адреса и хостовые пути; непереводимый путь → сервер пропускается
+                    if (!AdaptServerForRuntime(srv.Key, node)) continue;
+                    servers[srv.Key] = node;
+                    // Отпечаток: alwaysLoad меняет момент подключения, AuthVersion — заголовки,
+                    // запечённые в файл конфига на старте процесса. Сам секрет в сигнатуру не идёт.
+                    shapes[srv.Key] = $"a{(srv.AlwaysLoad ? 1 : 0)}:v{srv.AuthVersion}";
                 }
             }
 
@@ -889,10 +966,11 @@ public class ClaudeSession : ILlmSessionAdapter
         }
     }
 
-    // Адаптация стороннего описания MCP-сервера (базовый конфиг / user-scope) к среде:
-    // локально — без изменений; в песочнице переписываем абсолютные Windows-пути в args
-    // на контейнерные. Непереводимый путь → сервер пропускается (false). POSIX-пути
-    // оставляем как есть: конфиги, писанные для контейнера (/app/...), в образе валидны.
+    // Адаптация стороннего описания MCP-сервера (базовый конфиг / user-scope / личный реестр)
+    // к среде: локально — без изменений; в песочнице переписываем абсолютные Windows-пути
+    // (args и command) на контейнерные, а loopback-адреса (env и url) — на host.docker.internal.
+    // Непереводимый путь → сервер пропускается (false). POSIX-пути оставляем как есть:
+    // конфиги, писанные для контейнера (/app/...), в образе валидны.
     private bool AdaptServerForRuntime(string key, System.Text.Json.Nodes.JsonNode node)
     {
         if (!_launcher.IsSandboxed) return true;
@@ -906,6 +984,27 @@ public class ClaudeSession : ILlmSessionAdapter
                     || !jv.TryGetValue<string>(out var envVal)) continue;
                 var rewritten = RewriteLoopbackUrl(envVal);
                 if (!ReferenceEquals(rewritten, envVal)) envObj[name] = rewritten;
+            }
+        }
+        // Адрес http/sse-сервера: тот же loopback хоста. Без этого локальный сервер
+        // из песочницы молча мёртв — CLI стучится в 127.0.0.1 внутри контейнера
+        if (node["url"] is System.Text.Json.Nodes.JsonValue urlVal
+            && urlVal.TryGetValue<string>(out var url))
+        {
+            var rewrittenUrl = RewriteLoopbackUrl(url);
+            if (!ReferenceEquals(rewrittenUrl, url)) node["url"] = rewrittenUrl;
+        }
+        // Команда запуска stdio-сервера: голое имя («node», «npx») оставляем среде,
+        // абсолютный хост-путь переводим — иначе процесс в контейнере не стартует
+        if (node["command"] is System.Text.Json.Nodes.JsonValue cmdVal
+            && cmdVal.TryGetValue<string>(out var command)
+            && command is { Length: > 2 } && char.IsLetter(command[0]) && command[1] == ':')
+        {
+            try { node["command"] = _launcher.Paths.ToRuntime(command); }
+            catch (InvalidOperationException)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] MCP-сервер «{key}» пропущен: путь {command} недоступен в песочнице");
+                return false;
             }
         }
         if (node["args"] is not System.Text.Json.Nodes.JsonArray argsArr) return true;

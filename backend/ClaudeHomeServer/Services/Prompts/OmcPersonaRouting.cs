@@ -26,10 +26,13 @@ public static class OmcPersonaRouting
     };
 
     // Исполнительские типы (правят файлы/запускают команды) — доступны только персонам
-    // с write-доступом в сабагентах (PersonaConsultantToolset.IsExecutor)
+    // с write-доступом в сабагентах (PersonaConsultantToolset.IsExecutor). Профильные
+    // исполнители (бэкенд/фронтенд) замещают те же типы, что универсальный.
     private static readonly Dictionary<PersonaSpecialty, string[]> ExecutorSpecialtyToAgents = new()
     {
         [PersonaSpecialty.Executor] = ["executor", "debugger", "git-master"],
+        [PersonaSpecialty.BackendExecutor] = ["executor", "debugger", "git-master"],
+        [PersonaSpecialty.FrontendExecutor] = ["executor", "debugger", "git-master"],
         [PersonaSpecialty.Tester] = ["qa-tester", "test-engineer", "verifier"],
     };
 
@@ -39,6 +42,14 @@ public static class OmcPersonaRouting
     [
         ("аналитик", PersonaSpecialty.Analyst),
         ("планировщик", PersonaSpecialty.Planner),
+        // Профильные исполнители — ДО общих «исполнитель»/«разработчик»: первый матч
+        // побеждает, «бэкенд-разработчик» обязан попасть в BackendExecutor, а не в Executor
+        ("бэкенд", PersonaSpecialty.BackendExecutor),
+        ("бэкэнд", PersonaSpecialty.BackendExecutor),
+        ("backend", PersonaSpecialty.BackendExecutor),
+        ("фронтенд", PersonaSpecialty.FrontendExecutor),
+        ("фронтэнд", PersonaSpecialty.FrontendExecutor),
+        ("frontend", PersonaSpecialty.FrontendExecutor),
         ("мастер", PersonaSpecialty.Executor),
         ("исполнитель", PersonaSpecialty.Executor),
         ("разработчик", PersonaSpecialty.Executor),

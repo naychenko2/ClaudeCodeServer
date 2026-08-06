@@ -1,7 +1,8 @@
-// Тело панели «Чтение»: пусто / загрузка / ошибка / статья — все состояния из макета
-// (docs/mockups/link-reader-v1.html §4) плюс однократная плашка приватности при первом
-// открытии (ADR-005 §1). Кнопка «отправить прочитанное в чат» сюда НЕ добавляется —
-// это инвариант ADR (текст в панели недоверенный), а не забытая деталь.
+// Тело панели «Чтение»: пусто / загрузка / ошибка / статья / страница целиком —
+// состояния из макетов (docs/mockups/link-reader-v1.html §4,
+// provider-limit-reader-header-v1.html §2) плюс однократная плашка приватности при
+// первом открытии (ADR-005 §1). Кнопка «отправить прочитанное в чат» сюда НЕ
+// добавляется — это инвариант ADR (текст в панели недоверенный), а не забытая деталь.
 import { AlertTriangle, Newspaper } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { Button, EmptyState } from '../../../components/ui';
@@ -56,7 +57,8 @@ function ErrorView({ state, actions, onClose }: { state: ReaderPanelState; actio
   );
 }
 
-// Плашка приватности — однократная, ВНУТРИ панели, не модалка (ADR §1)
+// Плашка приватности — однократная, ВНУТРИ панели, не модалка; один текст на оба
+// режима ридера, MD и «Страница целиком» (ADR-005 §1, ADR-006 §4)
 function PrivacyBanner({ onDismiss }: { onDismiss: () => void }) {
   return (
     <div style={{
@@ -64,11 +66,13 @@ function PrivacyBanner({ onDismiss }: { onDismiss: () => void }) {
       padding: SP.md, marginBottom: SP.md, display: 'flex', flexDirection: 'column', gap: 6,
     }}>
       <div style={{ fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>
-        Страницу открывает сервер, а не ваш браузер
+        В режиме «Страница целиком» сайт видит ваш IP-адрес
       </div>
       <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
-        Сайт увидит адрес сервера, а не ваш. Ваши куки и вход не передаются — закрытые страницы
-        так не откроются. Прочитанное нигде не сохраняется.
+        Когда панель показывает текст статьи, по ссылке идёт сервер — сайт видит его адрес, а не
+        ваш. Когда страница открывается целиком, её загружает ваш браузер, как обычную вкладку, —
+        сайт видит вас, как при переходе по ссылке. В обоих случаях ваши куки и вход не
+        передаются: закрытые страницы так не откроются, а прочитанное нигде не сохраняется.
       </div>
       <div>
         <Button variant="secondary" size="xs" onClick={onDismiss}>Понятно</Button>
@@ -97,10 +101,39 @@ export function ReaderBody({ state, actions, onClose, maxWidth = 680 }: Props) {
       />
     );
   }
+  // Режим «Страница целиком»: живой сайт в sandbox-iframe во всё тело панели.
+  // Атрибуты — строго белый список ADR-006 §3; моста фрейм ↔ приложение нет:
+  // сообщения от фрейма не обрабатываются, postMessage внутрь не шлётся. Плашка
+  // приватности рендерится и здесь (ADR-006 §4): в этом режиме страницу грузит
+  // браузер пользователя напрямую, а не сервер — человеку это важно узнать не
+  // меньше, чем в MD-режиме.
+  if (state.mode === 'page' && !state.loading && !state.error && state.url) {
+    return (
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        {!state.bannerDismissed && (
+          <div style={{ padding: `${SP.md}px ${SP.md}px 0` }}>
+            <PrivacyBanner onDismiss={actions.dismissBanner} />
+          </div>
+        )}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
+          <iframe
+            src={state.url}
+            sandbox="allow-scripts"
+            referrerPolicy="no-referrer"
+            credentialless
+            allow=""
+            title={hostOf(state.url)}
+            onLoad={actions.onIframeLoad}
+            style={{ flex: 1, width: '100%', minHeight: 0, border: 'none', background: 'transparent' }}
+          />
+        </div>
+      </div>
+    );
+  }
   return (
     <div style={{ flex: 1, minHeight: 0, overflow: 'auto', padding: `${SP.lg}px ${SP.lg}px 28px`, background: C.bgPanel }}>
       <div style={{ maxWidth, margin: '0 auto' }}>
-        {/* Плашка объясняет саму механику ридера (сервер идёт по ссылке, не браузер) —
+        {/* Плашка объясняет механику обоих режимов ридера (ADR-006 §4) —
             показывается при первом открытии НЕЗАВИСИМО от того, загрузилась статья
             или нет (ошибка/загрузка — тоже открытие панели), иначе на ошибающемся
             сервере пользователь её вообще ни разу не увидит */}
@@ -127,4 +160,8 @@ export function ReaderBody({ state, actions, onClose, maxWidth = 680 }: Props) {
 function anchorOf(url: string | null): string | null {
   if (!url) return null;
   try { return decodeURIComponent(new URL(url).hash.replace(/^#/, '')) || null; } catch { return null; }
+}
+
+function hostOf(url: string): string {
+  try { return new URL(url).hostname; } catch { return url; }
 }

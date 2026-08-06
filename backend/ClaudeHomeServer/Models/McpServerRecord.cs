@@ -21,16 +21,29 @@ public enum McpServerSource { Manual, LegacyMcpConfig, LegacyUserScope }
 public class McpOAuthConfig
 {
     public string? AuthorizationServer { get; set; }
+    /// <summary>
+    /// Адрес обмена кода и рефреша, найденный при discovery. Хранится, чтобы обновление
+    /// токена перед ходом не ходило заново по всей цепочке well-known.
+    /// </summary>
+    public string? TokenEndpoint { get; set; }
     public string? ClientId { get; set; }
     /// <summary>Ссылка на секрет с client_secret (id записи в McpSecretStore).</summary>
     public string? ClientSecretRef { get; set; }
     public List<string>? Scopes { get; set; }
-    /// <summary>Ссылка на секрет с access-токеном.</summary>
+    /// <summary>
+    /// Ссылка на запись токенов в McpSecretStore: access, refresh и срок лежат ОДНОЙ
+    /// записью (<see cref="Services.Mcp.McpSecretEntry"/>) — рефреш переписывает их вместе.
+    /// </summary>
     public string? AccessTokenRef { get; set; }
-    /// <summary>Ссылка на секрет с refresh-токеном.</summary>
+    /// <summary>Наследство каркаса волны 1: refresh-токен живёт в записи AccessTokenRef.</summary>
     public string? RefreshTokenRef { get; set; }
     /// <summary>Срок жизни access-токена (UTC); null — неизвестен.</summary>
     public DateTime? ExpiresAt { get; set; }
+    /// <summary>
+    /// redirect_uri, зарегистрированный в DCR и использованный при выдаче кода. Тот же
+    /// адрес обязан уйти в запрос обмена — сервер сверяет точное совпадение.
+    /// </summary>
+    public string? RedirectUri { get; set; }
 }
 
 /// <summary>

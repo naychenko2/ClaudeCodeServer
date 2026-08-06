@@ -27,7 +27,9 @@ public class McpProbeService(
     McpStatusStore statusStore,
     IHttpClientFactory httpFactory,
     IConfiguration config,
-    ILogger<McpProbeService> log)
+    ILogger<McpProbeService> log,
+    // Опционально (в тестах не передаётся): обновление истекающего токена OAuth перед пробой
+    McpOAuthService? oauth = null)
 {
     /// <summary>Имя тихого HTTP-клиента (чужой сервер лежит штатно — не засыпаем консоль).</summary>
     public const string HttpClientName = "mcp-probe";
@@ -214,11 +216,20 @@ public class McpProbeService(
 
     // ── http / sse ───────────────────────────────────────────────────────────────────
 
-    private async Task<McpProbeResult> ProbeHttpAsync(string ownerId, McpServerRecord record,
+    private async Task<McpProbeResult> ProbeHttpAsync(string ownerId, McpServerRecord original,
         CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(record.Url))
+        if (string.IsNullOrWhiteSpace(original.Url))
             return Failed("У записи не задан адрес сервера");
+
+        // Тот же шаг, что и перед ходом: истекающий токен OAuth обновляем, провал — «нужен вход».
+        // Иначе проба говорила бы «сервер не пускает» про запись, которую ход бы починил сам
+        var record = original.Auth.Kind == McpAuthKind.OAuth2 && oauth is not null
+            ? await oauth.EnsureFreshAsync(ownerId, original, ct)
+            : original;
+        if (record is null)
+            return new McpProbeResult(false, McpServerStatuses.NeedsAuth, null, 0, [],
+                "Нужен вход: токен истёк и не обновился");
 
         var headers = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (name, value) in record.Headers ?? [])

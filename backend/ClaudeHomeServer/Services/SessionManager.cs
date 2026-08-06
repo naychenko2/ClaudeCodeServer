@@ -288,6 +288,8 @@ public class SessionManager : IDisposable
     private readonly Mcp.McpSecretStore? _mcpSecrets;
     // Последний известный статус серверов: пишется из system/init каждого хода; null — в тестах
     private readonly Mcp.McpStatusStore? _mcpStatus;
+    // OAuth внешних серверов: обновление протухшего токена перед сборкой конфига хода; null — в тестах
+    private readonly Mcp.McpOAuthService? _mcpOAuth;
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -340,11 +342,15 @@ public class SessionManager : IDisposable
         Mcp.McpSecretStore? mcpSecrets = null,
         // Опционально (в тестах не передаётся): последний известный статус MCP-серверов —
         // наблюдение из system/init каждого хода, фонового поллинга нет
-        Mcp.McpStatusStore? mcpStatus = null)
+        Mcp.McpStatusStore? mcpStatus = null,
+        // Опционально (в тестах не передаётся): OAuth внешних серверов — обновление
+        // истекающего токена перед ходом, иначе инструменты сервера получали бы 401
+        Mcp.McpOAuthService? mcpOAuth = null)
     {
         _mcpRegistry = mcpRegistry;
         _mcpSecrets = mcpSecrets;
         _mcpStatus = mcpStatus;
+        _mcpOAuth = mcpOAuth;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
@@ -1817,19 +1823,31 @@ public class SessionManager : IDisposable
                     // сторож состава McpToolsetStabilityTests)
                     if (!_bindings.ServerToolEnabled(ownerId, persona, "mcp:" + record.Key)) continue;
                     var stdio = record.Transport == McpTransport.Stdio;
-                    var env = ResolveValues(record.Env);
-                    var headers = ResolveValues(record.Headers);
-                    if (!stdio && !ApplyAuthHeaders(record, headers)) continue;
+                    // OAuth: токен, доживающий последние секунды, обновляем ДО сборки конфига —
+                    // заголовок запекается на старте CLI и живому процессу уже не доедет.
+                    // null — вход протух и не восстановился: сервер снимается с хода, а статус
+                    // «нужен вход» уже записан (молча ронять инструменты в 401 нельзя)
+                    var fresh = record.Auth.Kind == McpAuthKind.OAuth2 && _mcpOAuth is not null
+                        ? _mcpOAuth.EnsureFresh(ownerId, record)
+                        : record;
+                    if (fresh is null)
+                    {
+                        _log.LogWarning("MCP-сервер «{Key}» снят с хода: нужен вход (OAuth)", record.Key);
+                        continue;
+                    }
+                    var env = ResolveValues(fresh.Env);
+                    var headers = ResolveValues(fresh.Headers);
+                    if (!stdio && !ApplyAuthHeaders(fresh, headers)) continue;
                     servers.Add(new ExternalMcpServer(
-                        record.Key,
-                        record.Transport.ToString().ToLowerInvariant(),
-                        stdio ? record.Command : null,
-                        record.Args ?? [],
+                        fresh.Key,
+                        fresh.Transport.ToString().ToLowerInvariant(),
+                        stdio ? fresh.Command : null,
+                        fresh.Args ?? [],
                         env,
-                        stdio ? null : record.Url,
+                        stdio ? null : fresh.Url,
                         headers,
-                        record.AlwaysLoad,
-                        record.AuthVersion));
+                        fresh.AlwaysLoad,
+                        fresh.AuthVersion));
                 }
                 return servers.Count > 0 ? new ExternalMcpContext(servers) : null;
             }

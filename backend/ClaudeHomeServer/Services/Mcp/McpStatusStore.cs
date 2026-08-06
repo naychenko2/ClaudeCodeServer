@@ -131,6 +131,24 @@ public class McpStatusStore
         }
     }
 
+    /// <summary>
+    /// Сервер снят с хода из-за авторизации: токенов нет или рефреш провалился (волна 7).
+    /// Источник Init — наблюдение и правда пришло со старта хода, просто до запуска CLI.
+    /// Пишем всегда: человек должен увидеть «нужен вход», а не гадать, почему сервера нет.
+    /// </summary>
+    public McpServerStatusEntry RecordAuthFailure(string ownerId, string serverKey, string error)
+    {
+        var now = DateTime.UtcNow;
+        lock (_lock)
+        {
+            var bag = Bag(ownerId);
+            Apply(bag, serverKey, McpServerStatuses.NeedsAuth, McpObservationSource.Init,
+                sessionId: null, error, now);
+            Save(now);
+            return bag[serverKey];
+        }
+    }
+
     /// <summary>Убирает наблюдение (сервер удалён из реестра или сменил ключ).</summary>
     public void Remove(string ownerId, string serverKey)
     {

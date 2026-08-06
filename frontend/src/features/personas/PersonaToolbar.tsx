@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, Pencil, Trash2, User, X, Zap } from 'lucide-react';
+import { Book, CheckSquare, ChevronLeft, EllipsisVertical, Layers, Pencil, Star, Trash2, User, X, Zap } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona } from '../../types';
 import { C, FONT, R } from '../../lib/design';
@@ -60,6 +60,10 @@ interface EditProps extends CommonProps {
   talking?: boolean;
   onTalk: () => void;
   onDelete: () => void;
+  // Дефолт-персона (фича default-personas-onboarding): признак «эта персона — дефолт
+  // своей зоны» и действие назначения; onMakeDefault не задан — пункт меню не рисуется
+  isDefault?: boolean;
+  onMakeDefault?: () => void;
 }
 
 interface CreateProps extends CommonProps {
@@ -120,7 +124,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
     );
   }
 
-  const { persona, zoneLabel, view, onView, editing, onEdit, onCancelEdit, onDelete } = props;
+  const { persona, zoneLabel, view, onView, editing, onEdit, onCancelEdit, onDelete, isDefault, onMakeDefault } = props;
   const lines = personaTitleLines(persona);
 
   return (
@@ -141,6 +145,17 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
             </span>
           )}
           <span style={zoneBadge(accent)}>{zoneLabel}</span>
+          {/* Бейдж дефолт-персоны зоны (фича default-personas-onboarding) */}
+          {isDefault && (
+            <span title="Персона по умолчанию для новых чатов этой зоны" style={{
+              display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 600,
+              padding: '1px 7px', borderRadius: R.pill, background: C.accentLight, color: C.accent,
+              whiteSpace: 'nowrap', flexShrink: 0,
+            }}>
+              <Star size={10} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+              по умолчанию
+            </span>
+          )}
         </div>
       </div>
 
@@ -167,7 +182,15 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
                   <EllipsisVertical size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
                 </IconButton>
                 {menuOpen && (
-                  <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={180}>
+                  <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={220}>
+                    {/* Назначение дефолт-персоны зоны (фича default-personas-onboarding) */}
+                    {onMakeDefault && !isDefault && (
+                      <MenuItem
+                        icon={<Star size={15} strokeWidth={ICON_STROKE} />}
+                        label="Сделать персоной по умолчанию"
+                        onClick={() => { setMenuOpen(false); onMakeDefault(); }}
+                      />
+                    )}
                     <MenuItem
                       danger
                       icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}

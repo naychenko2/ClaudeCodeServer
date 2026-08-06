@@ -37,6 +37,9 @@ import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
 import { useGitState, ensureGit } from '../lib/git';
 import { ensurePersonasLoaded } from '../lib/personas';
+import { createChatWithContextPersona } from '../lib/defaultPersona';
+import { useFeature, FLAGS } from '../lib/featureFlags';
+import { ProjectOnboardingGate } from '../features/onboarding/OnboardingPage';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
@@ -867,6 +870,42 @@ const windowWidth = useWindowWidth();
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
 
+  // Гейт онбординга проекта (фича default-personas-onboarding): рабочее пространство
+  // недоступно, пока у проекта нет персоны по умолчанию (руководителя). Свежий дефолт
+  // проверяем с сервера: project из localStorage может не знать о поле defaultPersonaId —
+  // гейт активируется только по подтверждённому null, без ложной вспышки.
+  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  const [projectDefaultId, setProjectDefaultId] = useState<string | null | undefined>(project.defaultPersonaId);
+  useEffect(() => {
+    if (project.defaultPersonaId !== undefined) setProjectDefaultId(project.defaultPersonaId);
+  }, [project.defaultPersonaId]);
+  const [projectGate, setProjectGate] = useState(false);
+  useEffect(() => {
+    if (!onboardingOn) { setProjectGate(false); return; }
+    let cancelled = false;
+    api.projects.list()
+      .then(list => {
+        if (cancelled) return;
+        const fresh = list.find(p => p.id === project.id);
+        if (!fresh) return;
+        setProjectDefaultId(fresh.defaultPersonaId ?? null);
+        if (!fresh.defaultPersonaId) setProjectGate(true);
+      })
+      .catch(() => { /* офлайн — гейт не поднимаем, работаем как раньше */ });
+    return () => { cancelled = true; };
+  }, [onboardingOn, project.id]);
+  // Завершение онбординга: гейт снимает сам ProjectOnboardingGate (по концу хода или
+  // кнопке), здесь освежаем дефолт проекта — новые чаты сразу пойдут от руководителя
+  const handleProjectOnboardingDone = useCallback(() => {
+    setProjectGate(false);
+    api.projects.list()
+      .then(list => {
+        const fresh = list.find(p => p.id === project.id);
+        if (fresh) setProjectDefaultId(fresh.defaultPersonaId ?? null);
+      })
+      .catch(() => {});
+  }, [project.id]);
+
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;
   // SessionList подхватит его в список через activeSession.
@@ -875,7 +914,9 @@ const windowWidth = useWindowWidth();
     if (creatingSession) return;
     setCreatingSession(true);
     try {
-      const s = await api.sessions.create(project.id, 'auto');
+      // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
+      const s = await createChatWithContextPersona(
+        { id: project.id, defaultPersonaId: projectDefaultId ?? null }, { mode: 'auto' });
       // Панель чатов скрыта, пока чатов нет, — считаем сами: её SessionList ещё
       // не смонтирован и сообщить о появлении первого чата некому
       setChatCount(n => (n ?? 0) + 1);
@@ -894,7 +935,9 @@ const windowWidth = useWindowWidth();
     void (async () => {
       try {
         if (where === 'chat' && activeSession) { handleSelectSession(activeSession, msg); return; }
-        const s = await api.sessions.create(project.id, 'auto');
+        // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
+        const s = await createChatWithContextPersona(
+          { id: project.id, defaultPersonaId: projectDefaultId ?? null }, { mode: 'auto' });
         handleSelectSession(s, msg);
       } catch (e) {
         showToast('Чат', e instanceof Error ? e.message : 'Не удалось открыть чат');
@@ -1326,6 +1369,8 @@ const windowWidth = useWindowWidth();
             onClose={() => setEditProjectOpen(false)}
           />
         )}
+        {/* Обязательный онбординг проекта — оверлей поверх рабочего пространства */}
+        {projectGate && <ProjectOnboardingGate project={project} onDone={handleProjectOnboardingDone} />}
       </div>
     );
   }
@@ -1430,6 +1475,8 @@ const windowWidth = useWindowWidth();
           onClose={() => setEditProjectOpen(false)}
         />
       )}
+      {/* Обязательный онбординг проекта — оверлей поверх рабочего пространства */}
+      {projectGate && <ProjectOnboardingGate project={project} onDone={handleProjectOnboardingDone} />}
     </div>
   );
 }

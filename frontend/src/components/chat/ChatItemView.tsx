@@ -11,6 +11,8 @@ import { relPath, stripRoot } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
 import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
+import { stripTeamMechanicMarkers, TeamMechanicOfferCard, type TeamMechanicOffer } from '../../features/team/TeamMechanicOffer';
+import { useContextPersona } from '../../lib/contextPersona';
 import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -485,6 +487,10 @@ function AgentMessageView({ text, persona, neutralTitle = 'Агент', note, or
 }) {
   // В не-персон-чате стор мог быть не загружен — подтягиваем, чтобы резолвить лицо автора
   useEffect(() => { void ensurePersonasLoaded(); }, []);
+  // Лицо продукта (фича default-personas-onboarding): без персоны-автора аватаром идёт
+  // релевантная персона контекста; серый робот — только когда резолвер не дал никого
+  const ctxPersona = useContextPersona();
+  const face = persona ?? ctxPersona;
   const accent = persona ? (AGENT_COLORS[persona.avatar?.color ?? ''] ?? AGENT_NEUTRAL) : AGENT_NEUTRAL;
   const title = persona ? personaLabel(persona) : neutralTitle;
   return (
@@ -498,8 +504,8 @@ function AgentMessageView({ text, persona, neutralTitle = 'Агент', note, or
         display: 'flex', alignItems: 'center', gap: 9, padding: '9px 12px',
         background: `${accent}17`, borderBottom: `1px solid ${C.divider}`,
       }}>
-        {persona ? (
-          <PersonaAvatar persona={persona} size={28} />
+        {face ? (
+          <PersonaAvatar persona={face} size={28} />
         ) : (
           <div aria-hidden style={{
             width: 28, height: 28, borderRadius: '50%', flexShrink: 0,
@@ -565,6 +571,10 @@ interface ItemProps {
   // рисует разделитель «ход в дереве агента», 'returned' — «ход вернулся в проект»;
   // undefined — этот session_started прозрачен, рендерится в null (как сегодня)
   turnBoundaryKind?: 'entered' | 'returned';
+  // Предложение командной механики (маркер <team-mechanic/> в этом тексте; фича
+  // default-personas-onboarding): карточка с кнопкой запуска. Дедуп «одна механика —
+  // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда
+  teamMechanicOffer?: { offer: TeamMechanicOffer; launched: boolean; onRun: () => void };
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
@@ -690,7 +700,7 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
@@ -832,11 +842,22 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Доклад делегированной задачи (модель Z) — гостевая реплика несёт маркер первой
       // строкой; распознаём его и рендерим бейджем, а в тело идёт только сам доклад
       const report = parseDelegationReport(item.text);
+      // Маркер предложения механики <team-mechanic/> из отображаемого текста стрижём всегда
+      // (вместе с незакрытым префиксом в хвосте стрима); карточку рендерит проп ниже
+      const bodyText = stripTeamMechanicMarkers(report ? report.body : item.text, streaming);
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
-          <TextMessageView text={report ? report.body : item.text} online={online} onRetry={onRetry} streaming={streaming}
+          <TextMessageView text={bodyText} online={online} onRetry={onRetry} streaming={streaming}
             model={item.model} ts={item.ts} />
+          {/* Карточка предложения командной механики — запуск только по кнопке */}
+          {teamMechanicOffer && (
+            <TeamMechanicOfferCard
+              offer={teamMechanicOffer.offer}
+              launched={teamMechanicOffer.launched}
+              onRun={teamMechanicOffer.onRun}
+            />
+          )}
         </div>
       );
       // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»).

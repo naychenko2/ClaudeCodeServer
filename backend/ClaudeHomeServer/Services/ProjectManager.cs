@@ -172,6 +172,29 @@ public class ProjectManager
         return project;
     }
 
+    // Дефолт-персона проекта («руководитель», фича default-personas-onboarding); null — сброс.
+    // Отдельным методом, а не параметром Update — настройка узкая, приходит из make-default.
+    public Project SetDefaultPersona(string id, string? personaId)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.DefaultPersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    // Сессия незавершённого онбординга проекта (null — онбординг завершён/сброшен)
+    public Project SetOnboardingSession(string id, string? sessionId)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.OnboardingSessionId = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
     // Область документации для панели «Документы». Отдельным методом, а не параметром
     // Update: настройка узкая и приходит из самой панели, а Update и без того на девяти
     // параметрах. null у оси = вернуть её к дефолту; пустой список = «ничего отсюда».

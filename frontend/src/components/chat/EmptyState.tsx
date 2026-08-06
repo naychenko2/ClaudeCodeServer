@@ -5,6 +5,7 @@ import { NewChatSetup } from './NewChatSetup';
 import { useAssistantName } from './contexts';
 import { personaLabel, personaTitleLines } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { useContextPersona } from '../../lib/contextPersona';
 
 // Чипы-подсказки для empty state проектного чата
 const HINTS = ['Объясни структуру проекта', 'Найди и почини падающие тесты'];
@@ -29,14 +30,22 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   onPickPersona?: (p: Persona) => void;
 }) {
   const asstName = useAssistantName();
+  // Лицо пустого чата (фича default-personas-onboarding): аватар персоны чата
+  // (или дефолт-персоны контекста); нейтральный favicon — только когда персоны нет
+  const facePersona = useContextPersona({
+    personaId: session?.personaId ?? null,
+    projectDefaultId: project ? (project.defaultPersonaId ?? null) : undefined,
+  });
   return (
           <div style={{
             flex: 1, display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
             gap: 12, paddingTop: 40,
           }}>
-            {/* Логотип */}
-            <img src="/favicon.svg" alt="" width={46} height={46} style={{ display: 'block' }} />
+            {/* Лицо чата: аватар релевантной персоны, fallback — нейтральный логотип */}
+            {facePersona
+              ? <PersonaAvatar persona={facePersona} size={46} />
+              : <img src="/favicon.svg" alt="" width={46} height={46} style={{ display: 'block' }} />}
 
             {!hasProject ? (
               <>

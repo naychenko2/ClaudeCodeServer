@@ -17,6 +17,8 @@ import {
   computeContextState, canShow, markShown, markDismissed,
   isProactiveEnabled, setProactiveEnabled, type Suggestion, type ActionRec,
 } from '../../lib/ai/proactive';
+import { useContextPersona } from '../../lib/contextPersona';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
 // AI-хаб (pull-слой): плавающая кнопка + командная палитра. Открывается кликом,
 // хоткеем ⌘/Ctrl+K или событием 'cc-open-ai'. Палитра через getNav() знает текущий
@@ -43,6 +45,9 @@ export function AiLauncher() {
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
   const aiBusy = useAiBusy();
+  // Лицо AI-хаба (фича default-personas-onboarding): аватар релевантной персоны
+  // (чат → проект → личная дефолт-персона); null — нейтральный логотип, как раньше
+  const facePersona = useContextPersona();
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
 
   // Git-статус текущего проекта — чтобы git-действия (разбор коммитов, ревью diff, история
@@ -350,17 +355,31 @@ export function AiLauncher() {
           onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; enterFab(); }}
           onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; leaveFab(); }}
         >
-          {/* Логотип «AI Home» (домик с трубой) на весь круг. Покой — серый; идея — подскок
-              (cc-fab-hop на кнопке); работа — «пыхтит» (cc-fab-huff) + дым из трубы. */}
-          <img
-            src="/pwa-64x64.png" alt="" aria-hidden
-            className={aiBusy ? 'cc-fab-huff' : undefined}
-            style={{
-              position: 'absolute', inset: 0, width: '100%', height: '100%',
-              objectFit: 'cover', borderRadius: '50%', display: 'block',
-              ...(fabDim && !aiBusy ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
-            }}
-          />
+          {/* Лицо кнопки: аватар релевантной персоны (фича default-personas-onboarding),
+              fallback — логотип «AI Home» (домик с трубой) на весь круг. Покой — серый;
+              идея — подскок (cc-fab-hop на кнопке); работа — «пыхтит» (cc-fab-huff) + дым. */}
+          {facePersona ? (
+            <span
+              aria-hidden
+              className={aiBusy ? 'cc-fab-huff' : undefined}
+              style={{
+                position: 'absolute', inset: 0, display: 'block', borderRadius: '50%', overflow: 'hidden',
+                ...(fabDim && !aiBusy ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+              }}
+            >
+              <PersonaAvatar persona={facePersona} size={isMobile ? FAB_MOBILE : 54} />
+            </span>
+          ) : (
+            <img
+              src="/pwa-64x64.png" alt="" aria-hidden
+              className={aiBusy ? 'cc-fab-huff' : undefined}
+              style={{
+                position: 'absolute', inset: 0, width: '100%', height: '100%',
+                objectFit: 'cover', borderRadius: '50%', display: 'block',
+                ...(fabDim && !aiBusy ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+              }}
+            />
+          )}
           {aiBusy && <span className="cc-smoke cc-fab-smoke" aria-hidden><i /><i /><i /><i /></span>}
         </button>
       )}
@@ -370,9 +389,12 @@ export function AiLauncher() {
           <div
             style={{ ...paletteStyle, ...(isMobile ? { width: '100%', maxWidth: '100%', borderRadius: `${R.sheet}px ${R.sheet}px 0 0`, maxHeight: '82vh' } : {}) }}
             onMouseDown={e => e.stopPropagation()} role="dialog" aria-label="AI-палитра">
-            {/* Поиск + бейдж контекста */}
+            {/* Поиск + бейдж контекста; слева — лицо хаба (аватар релевантной персоны,
+                fallback — нейтральная искра) */}
             <div style={searchRow}>
-              <span style={{ color: C.accent, display: 'flex', flex: 'none' }}><SparkleIcon size={18} /></span>
+              {facePersona
+                ? <span style={{ display: 'flex', flex: 'none' }}><PersonaAvatar persona={facePersona} size={22} /></span>
+                : <span style={{ color: C.accent, display: 'flex', flex: 'none' }}><SparkleIcon size={18} /></span>}
               <input
                 ref={inputRef} value={q} onChange={e => setQ(e.target.value)} onKeyDown={onInputKey}
                 placeholder="Что сделать с помощью AI…" autoComplete="off" style={inputStyle}

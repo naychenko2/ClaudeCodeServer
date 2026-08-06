@@ -353,6 +353,38 @@ public class UserStore
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
     /// <summary>
+    /// Личная дефолт-персона пользователя (фича default-personas-onboarding); null — сброс.
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetDefaultPersona(string id, string? personaId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            user.DefaultPersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Сессия незавершённого онбординга пользователя (null — онбординг завершён/сброшен).
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetOnboardingSession(string id, string? sessionId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            user.OnboardingSessionId = string.IsNullOrWhiteSpace(sessionId) ? null : sessionId;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Устанавливает per-user пороги индикатора контекста (null — сброс к дефолтам).
     /// Возвращает false если пользователь не найден.
     /// </summary>

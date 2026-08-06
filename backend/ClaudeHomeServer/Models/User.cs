@@ -41,6 +41,13 @@ public class User
     public string? ForgejoToken { get; set; }
     // Пароль веб-входа в Forgejo (открыто, как токен) — приватные репо анониму отдают 404
     public string? ForgejoPassword { get; set; }
+    // Личная дефолт-персона (фича default-personas-onboarding): итог обязательного
+    // онбординга первого входа. «Онбординг пройден» = DefaultPersonaId != null —
+    // отдельного bool не заводим. null — онбординг не пройден (или дефолт осиротел).
+    public string? DefaultPersonaId { get; set; }
+    // Сессия незавершённого онбординга пользователя — для резюма прерванного интервью.
+    // Чистится при финализации онбординга (назначении дефолт-персоны из этой сессии).
+    public string? OnboardingSessionId { get; set; }
 }
 
 // Значения User.ExecutionEnvironment

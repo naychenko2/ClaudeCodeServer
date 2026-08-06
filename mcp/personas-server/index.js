@@ -370,6 +370,21 @@ const TOOLS = [
       properties: { id: { type: 'string', description: 'ID персоны' } },
     },
   },
+  {
+    // ВСЕГДА в tools/list — до модульных спредов (инвариант стабильности состава: инструмент
+    // не смеет мерцать между ходами). Ограничение — на бэкенде: вызов из чата разрешён только
+    // онбординг-сессии (по X-Caller-Session-Id), в остальных чатах сервер откажет.
+    name: 'personas_set_default',
+    description: 'Назначить персону дефолтной: глобальную — личной дефолт-персоной пользователя, ' +
+      'проектную — руководителем её проекта. Только для чата-онбординга и строго ПОСЛЕ явного ' +
+      'подтверждения пользователем созданной персоны; в обычных чатах бэкенд откажет — тогда ' +
+      'предложи пользователю сменить дефолт в настройках.',
+    inputSchema: {
+      type: 'object',
+      required: ['personaId'],
+      properties: { personaId: { type: 'string', description: 'ID персоны, назначаемой дефолтной' } },
+    },
+  },
   ...(MANAGE ? [{
     name: 'personas_create',
     description: `Создать персону — AI-собеседника с именем, ролью и характером. ${CONTEXT_NOTE} ` +
@@ -679,6 +694,10 @@ async function callTool(name, args) {
 
     case 'personas_get':
       return json(await api(`/api/personas/${encodeURIComponent(args.id)}`));
+
+    case 'personas_set_default':
+      // Гейт онбординг-сессии — на бэкенде по X-Caller-Session-Id (api() шлёт его всегда)
+      return json(await api(`/api/personas/${encodeURIComponent(args.personaId)}/make-default`, { method: 'POST' }));
 
     case 'personas_create': {
       const body = personaBody(args, FIELD_KEYS);

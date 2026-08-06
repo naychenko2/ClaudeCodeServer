@@ -8,6 +8,7 @@ import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
+import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ChatFilterResetActions } from './FilterBar';
 import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
@@ -137,7 +138,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { if (loaded) onSessionsChanged?.(sessions.length); }, [loaded, sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
-    const s = await api.sessions.create(project.id, 'auto');
+    // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
+    const s = await createChatWithContextPersona(project, { mode: 'auto' });
     // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);
     onSelect(s);

@@ -417,6 +417,45 @@ public class PersonaBindingsService
         return added ? _personas.UpdateBindings(persona.Id, ownerId, bindings) : persona;
     }
 
+    // --- Профиль дефолт-персоны (онбординг) ---
+
+    // Досев профиля дефолт-персоны по итогам онбординга (фича default-personas-onboarding):
+    // Specialty=Coordinator, Access=Full, Tool-привязки personas-manage/tasks/notes (Mode=Auto);
+    // проектной — плюс дефолтные привязки к данным её проекта (SeedProjectDefaults).
+    // Автопривязка «персоны проекта» из спеки покрыта модулем personas-manage (scoped по
+    // проекту) — отдельный тип привязки не нужен. Вызывается ТОЛЬКО из онбординг-финализации
+    // (make-default из онбординг-сессии): ручная смена дефолта из настроек существующую
+    // персону не трогает — молчаливая дозапись Access=Full+manage была бы тихой эскалацией
+    // прав. Идемпотентно по Access/Specialty и Tool-привязкам: уже-посеянный профиль
+    // (Coordinator+Full) не перетираем — пользовательские правки Access/Specialty между
+    // повторными финализациями сохраняются; Tool-привязки тех же ключей не дублируются.
+    public Persona SeedDefaultPersonaProfile(string ownerId, Persona persona)
+    {
+        var alreadySeeded = persona.Access == PersonaAccess.Full
+            && persona.Specialty == PersonaSpecialty.Coordinator;
+        if (!alreadySeeded)
+        {
+            persona = _personas.Update(persona.Id, ownerId, name: null, role: null, description: null,
+                systemPrompt: null, model: null, effort: null, scope: null, projectId: null,
+                color: null, greeting: null, memoryEnabled: null,
+                access: PersonaAccess.Full, specialty: PersonaSpecialty.Coordinator);
+        }
+
+        var bindings = new List<PersonaBinding>(persona.Bindings ?? []);
+        var added = false;
+        foreach (var key in new[] { "personas-manage", "tasks", "notes" })
+        {
+            if (bindings.Any(b => b.Type == PersonaBindingType.Tool
+                    && string.Equals(b.Target, key, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            bindings.Add(new PersonaBinding { Type = PersonaBindingType.Tool, Target = key });
+            added = true;
+        }
+        if (added) persona = _personas.UpdateBindings(persona.Id, ownerId, bindings);
+
+        return SeedProjectDefaults(ownerId, persona);
+    }
+
     // --- Каталог целей ---
 
     // Известные датасеты владельца: базы знаний его проектов + датасет заметок «{username}:notes».

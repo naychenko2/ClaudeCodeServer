@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]
-public class SessionsController(SessionManager sessions, ProjectManager projects) : ControllerBase
+public class SessionsController(SessionManager sessions, ProjectManager projects,
+    FeatureFlagService flags) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -30,10 +31,17 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
         if (!OwnsProject(projectId)) return NotFound();
+        // Страховка инварианта «новый чат человека — только с персоной» (флаг
+        // default-personas-onboarding): без personaId и resumeSessionId — 400. Основной
+        // механизм — фронтовый хелпер; служебные пути (задачи, one-shot) REST не используют.
+        if (string.IsNullOrWhiteSpace(req.PersonaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
+            && flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding))
+            return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
         try
         {
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
-            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name, req.Model, req.AgentName, req.Effort);
+            var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
+                req.Model, req.AgentName, req.Effort, personaId: req.PersonaId);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
@@ -99,7 +107,9 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     }
 }
 
-public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null);
+// PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
+// (либо resumeSessionId — продолжение существующего разговора).
+public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null);
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
 // N > 0 — временная, авто-удаление через N минут после последней активности

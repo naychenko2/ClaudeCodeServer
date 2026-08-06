@@ -241,6 +241,7 @@ public class SessionManager : IDisposable
     private readonly Git.GitService? _git;
     // Учёт glif-генераций (null — в тестах или когда фича не настроена)
     private readonly GlifAccountService? _glif;
+    private readonly SkillsService? _skills;
     // Аналитика расхода токенов (null — в тестах: сбор выключен)
     private readonly Spend.ISpendCollector? _spend;
     // Per-ход slice top-10 god-nodes Code Graph в системный промпт (ADR вариант A);
@@ -292,8 +293,12 @@ public class SessionManager : IDisposable
         // Опционально (в тестах не передаётся): трекер активности аккаунтов пула подписок
         SubscriptionActivityTracker? activity = null,
         // Опционально: учёт glif-генераций; без него детект glif_cost не работает
-        GlifAccountService? glif = null)
+        GlifAccountService? glif = null,
+        // Опционально (в тестах не передаётся): скиллы для блока «Командные механики»
+        // руководителя проекта; без него в блоке остаются механики без скилла
+        SkillsService? skills = null)
     {
+        _skills = skills;
         _teamPlanning = teamPlanning;
         _activity = activity;
         _glif = glif;
@@ -1023,7 +1028,8 @@ public class SessionManager : IDisposable
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? agentName = null,
-        string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null)
+        string? effort = null, string? personaId = null, bool taskExecution = false, string? taskId = null,
+        string? onboardingKind = null)
     {
         var project = _projects.GetById(projectId)
             ?? throw new KeyNotFoundException($"Проект не найден: {projectId}");
@@ -1045,6 +1051,8 @@ public class SessionManager : IDisposable
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
+            // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
+            OnboardingKind = onboardingKind,
         };
 
         await StartNewSessionAsync(session, project.RootPath, project.SystemPrompt,
@@ -1056,7 +1064,8 @@ public class SessionManager : IDisposable
     // системный промпт — только встроенная часть (rawSystemPrompt=null), без проектных правил.
     public async Task<Session> CreateChatAsync(string ownerId, ClaudeMode mode,
         string? resumeSessionId = null, string? name = null, string? model = null, string? effort = null,
-        string? personaId = null, bool taskExecution = false, string? taskId = null)
+        string? personaId = null, bool taskExecution = false, string? taskId = null,
+        string? onboardingKind = null)
     {
         var rootPath = ResolveChatRoot(ownerId);
 
@@ -1076,6 +1085,8 @@ public class SessionManager : IDisposable
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
+            // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
+            OnboardingKind = onboardingKind,
         };
 
         await StartNewSessionAsync(session, rootPath, rawSystemPrompt: null, permissionRules: null);
@@ -1253,6 +1264,20 @@ public class SessionManager : IDisposable
     private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<RecallBlock?>>? Recall, Persona? Persona)
         BuildPersonaLayer(Session session, string? ownerId)
     {
+        // Онбординг пользователя (фича default-personas-onboarding): персоны у сессии ещё
+        // нет — слой ведёт системный «Мастер настройки» тем же каналом PersonaPromptProvider.
+        // После назначения дефолта персона садится в эту же сессию (SetPersona → AdapterStale),
+        // слой пересобирается и становится обычным персонным.
+        if (session.OnboardingKind == OnboardingKinds.User && session.PersonaId is null)
+        {
+            if (ownerId is null) return (null, null, null, null);
+            return (() =>
+            {
+                var owner = _users.GetById(ownerId);
+                return Prompts.OnboardingPrompts.UserMaster(owner?.DisplayName ?? owner?.Username);
+            }, null, null, null);
+        }
+
         if (session.PersonaId is null || ownerId is null) return (null, null, null, null);
         var persona = _personas.Get(session.PersonaId, ownerId);
         if (persona is null) return (null, null, null, null);
@@ -1261,7 +1286,8 @@ public class SessionManager : IDisposable
             var p = session.PersonaId is { } pid ? _personas.Get(pid, ownerId) : null;
             if (p is null) return null;
             var built = _promptBuilder.Build(p, session.Model, session.PersonaSwitched,
-                greeted: !string.IsNullOrWhiteSpace(p.Greeting));
+                greeted: !string.IsNullOrWhiteSpace(p.Greeting),
+                teamMechanicsBlock: BuildTeamMechanicsBlock(session, p));
             // Групповой чат: надстройка со списком участников и правилом «говори только за себя»
             if (session.Participants is { Count: > 1 } memberIds)
             {
@@ -1269,6 +1295,12 @@ public class SessionManager : IDisposable
                     .OfType<Persona>().ToList();
                 if (members.Count > 1) built += "\n\n" + BuildGroupChatHint(p, members);
             }
+            // Онбординг проекта: надстройка наставника поверх слоя личной дефолт-персоны.
+            // После финализации (назначен Project.DefaultPersonaId) исчезает сама —
+            // промпт пересобирается каждый ход
+            if (session.OnboardingKind == OnboardingKinds.Project && session.ProjectId is { } prjId
+                && _projects.GetById(prjId) is { } prj && string.IsNullOrEmpty(prj.DefaultPersonaId))
+                built += "\n\n" + Prompts.OnboardingPrompts.ProjectOnboardingOverlay(prj.Name);
             return built;
         };
         // Долгая память — только если включена у персоны
@@ -1285,6 +1317,36 @@ public class SessionManager : IDisposable
                 BuildPersonaRecallProvider(ownerId, persona.Id), persona);
         }
         return (prompt, null, null, persona);
+    }
+
+    // Блок «Командные механики» для руководителя проекта (мост в механики, фича
+    // default-personas-onboarding): добавляется, только когда персона чата — дефолт-персона
+    // его проекта (Project.DefaultPersonaId). Состав — по установленным скиллам
+    // (TeamMechanicsPromptCatalog); без SkillsService (тесты) остаются механики без скилла.
+    // Только промпт: состав MCP-инструментов не меняется, зависимость от хода отсутствует.
+    private string? BuildTeamMechanicsBlock(Session session, Persona persona)
+    {
+        if (session.ProjectId is not { } projectId) return null;
+        var project = _projects.GetById(projectId);
+        if (project is null || project.DefaultPersonaId != persona.Id) return null;
+        return Prompts.TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
+    }
+
+    // Имена установленных скиллов (глобальные + плагинные) для фильтра каталога механик.
+    // Ошибки чтения — пустой набор (блок сузится до механик без скилла, ход не падает).
+    private IReadOnlySet<string> InstalledSkillNames()
+    {
+        if (_skills is null) return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            return _skills.GetGlobalSkills().Select(s => s.Name)
+                .Concat(_skills.GetPluginSkills().Select(s => s.Name))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
     }
 
     // Провайдер блока «Привязанные знания и правила» персоны (флаг persona-bindings):

@@ -67,4 +67,10 @@ public class Project
     public string? CommitPromptOverride { get; set; }
     // Иконка проекта: инициалы+цвет по умолчанию, картинка (сгенерированная/загруженная) опционально
     public ProjectIcon Icon { get; set; } = new();
+    // Дефолт-персона проекта («руководитель проекта», фича default-personas-onboarding):
+    // итог обязательного онбординга проекта. null — онбординг проекта не пройден.
+    public string? DefaultPersonaId { get; set; }
+    // Сессия незавершённого онбординга проекта — для резюма прерванного интервью.
+    // Чистится при финализации (назначении дефолт-персоны проекта из этой сессии).
+    public string? OnboardingSessionId { get; set; }
 }

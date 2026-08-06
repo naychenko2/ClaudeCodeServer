@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/chats")]
-public class ChatsController(SessionManager sessions, FileService files, ILogger<ChatsController> logger) : ControllerBase
+public class ChatsController(SessionManager sessions, FileService files, FeatureFlagService flags,
+    ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -40,10 +41,17 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateChatRequest req)
     {
+        // Страховка инварианта «новый чат человека — только с персоной» (флаг
+        // default-personas-onboarding): без personaId и resumeSessionId — 400. Основной
+        // механизм — фронтовый хелпер; групповые чаты (createGroup) и служебные пути не трогаем.
+        if (string.IsNullOrWhiteSpace(req.PersonaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
+            && flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding))
+            return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
         var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
         try
         {
-            var chat = await sessions.CreateChatAsync(UserId, mode, req.ResumeSessionId, req.Name, req.Model, req.Effort);
+            var chat = await sessions.CreateChatAsync(UserId, mode, req.ResumeSessionId, req.Name,
+                req.Model, req.Effort, personaId: req.PersonaId);
             return CreatedAtAction(nameof(GetAll), new { }, chat);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
@@ -296,7 +304,9 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
     }
 }
 
-public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null);
+// PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
+// (либо resumeSessionId — продолжение существующего разговора).
+public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? Effort = null, string? PersonaId = null);
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать чат постоянным;
 // N > 0 — временный, авто-удаление через N минут после последней активности

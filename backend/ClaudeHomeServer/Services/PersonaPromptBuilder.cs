@@ -11,8 +11,12 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
 {
     // model — модель сессии/персоны: по ней резолвится провайдер и его дисциплинарный слой.
     // switched — собеседника меняли по ходу разговора; greeted — чат начат с приветствия персоны.
-    public string Build(Persona persona, string? model, bool switched = false, bool greeted = false) =>
-        BuildCore(persona, providers.ProviderKey(model), switched, greeted);
+    // teamMechanicsBlock — блок «Командные механики» руководителя проекта (мост в механики,
+    // фича default-personas-onboarding): собирает SessionManager.BuildTeamMechanicsBlock,
+    // null — персона не руководитель или предложить нечего.
+    public string Build(Persona persona, string? model, bool switched = false, bool greeted = false,
+        string? teamMechanicsBlock = null) =>
+        BuildCore(persona, providers.ProviderKey(model), switched, greeted, teamMechanicsBlock);
 
     // Промпт файлового сабагента: модель исполнения неизвестна на этапе генерации
     // (.md общий для чатов всех провайдеров, сабагент бежит на модели сессии) —
@@ -22,7 +26,8 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
 
     internal const string SubagentProviderKey = "subagent";
 
-    internal static string BuildCore(Persona persona, string providerKey, bool switched, bool greeted)
+    internal static string BuildCore(Persona persona, string providerKey, bool switched, bool greeted,
+        string? teamMechanicsBlock = null)
     {
         var sb = new StringBuilder();
 
@@ -63,6 +68,10 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
         // Дисциплинарный слой (P2): состав секций зависит от провайдера модели
         foreach (var section in DisciplineFor(providerKey))
             sb.Append("\n\n").Append(section);
+
+        // Мост в командные механики: блок руководителя проекта (готовый текст от вызывающего)
+        if (!string.IsNullOrEmpty(teamMechanicsBlock))
+            sb.Append("\n\n").Append(teamMechanicsBlock);
 
         if (switched)
             sb.Append("\n\nРанее в этом разговоре мог отвечать другой собеседник — продолжай " +

@@ -22,6 +22,7 @@ public class PersonasController : ControllerBase
     private readonly PersonaManager _personas;
     private readonly ProjectManager _projects;
     private readonly SessionManager _sessions;
+    private readonly UserStore _users;
     private readonly PersonaMemoryService _memory;
     private readonly PersonaBindingsService _bindings;
     private readonly NotesService _notes;
@@ -38,7 +39,7 @@ public class PersonasController : ControllerBase
     private readonly IHubContext<SessionHub> _hub;
 
     public PersonasController(PersonaManager personas, ProjectManager projects,
-        SessionManager sessions, PersonaMemoryService memory, PersonaBindingsService bindings,
+        SessionManager sessions, UserStore users, PersonaMemoryService memory, PersonaBindingsService bindings,
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
         FalImageService falImage,
         Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
@@ -49,6 +50,7 @@ public class PersonasController : ControllerBase
         _personas = personas;
         _projects = projects;
         _sessions = sessions;
+        _users = users;
         _memory = memory;
         _bindings = bindings;
         _notes = notes;
@@ -285,13 +287,111 @@ public class PersonasController : ControllerBase
     }
 
     [HttpDelete("{id}")]
-    public async Task<IActionResult> Delete(string id)
+    public async Task<IActionResult> Delete(string id, [FromQuery] string? successorId = null)
     {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+
+        // Дефолт-персона удаляется только с преемником по той же зоне — остаться без
+        // дефолта нельзя (фича default-personas-onboarding, единственная точка каскада)
+        var isUserDefault = _users.GetById(UserId)?.DefaultPersonaId == id;
+        var defaultOfProjects = _projects.GetByOwner(UserId)
+            .Where(p => p.DefaultPersonaId == id).ToList();
+        if (isUserDefault || defaultOfProjects.Count > 0)
+        {
+            if (string.IsNullOrWhiteSpace(successorId))
+                return BadRequest(new { error = "Это дефолт-персона: выберите преемника" });
+            var successor = _personas.Get(successorId, UserId);
+            if (successor is null || successor.Id == id)
+                return BadRequest(new { error = "Преемник не найден или совпадает с удаляемой персоной" });
+            if (isUserDefault && successor.Scope != PersonaScope.Global)
+                return BadRequest(new { error = "Преемником личной дефолт-персоны может быть только глобальная персона" });
+            foreach (var project in defaultOfProjects)
+                if (successor.Scope != PersonaScope.Project || successor.ProjectId != project.Id)
+                    return BadRequest(new { error = $"Преемником руководителя проекта «{project.Name}» может быть только персона этого проекта" });
+
+            if (isUserDefault) _users.SetDefaultPersona(UserId, successor.Id);
+            foreach (var project in defaultOfProjects)
+                _projects.SetDefaultPersona(project.Id, successor.Id);
+            await Broadcast("default", successor.Id);
+        }
+
         if (!_personas.Delete(id, UserId)) return NotFound();
         // Чистим долгую память персоны: Dify-датасет + data/persona-memory.json (иначе осиротят)
         await _memory.DeletePersonaAsync(id);
         await Broadcast("deleted", id);
         return NoContent();
+    }
+
+    // Назначить персону дефолтной (фича default-personas-onboarding): глобальную — личным
+    // дефолтом владельца (User.DefaultPersonaId), проектную — дефолтом её проекта
+    // (Project.DefaultPersonaId). REST из UI свободен; вызов из чата (X-Caller-Session-Id
+    // от MCP personas_set_default) разрешён ТОЛЬКО онбординг-сессии — иначе любая
+    // manage-персона могла бы переназначить дефолт владельца из любого разговора.
+    // Из онбординг-сессии назначение финализирует онбординг: досев профиля дефолта,
+    // «просыпание» персоны в том же чате, событие onboarding_completed.
+    [HttpPost("{id}/make-default")]
+    [DenyOnDelegatedTurn("Назначение дефолт-персоны")]
+    public async Task<IActionResult> MakeDefault(string id)
+    {
+        var persona = _personas.Get(id, UserId);
+        if (persona is null) return NotFound();
+
+        // MCP-гейт: ход из чата обязан идти из онбординг-сессии (смена дефолта — в настройках)
+        Session? onboarding = null;
+        if (Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault()
+            is { Length: > 0 } callerSessionId)
+        {
+            onboarding = _sessions.GetOwned(callerSessionId, UserId);
+            if (onboarding?.OnboardingKind is null)
+                return BadRequest(new
+                {
+                    error = "Назначение дефолт-персоны из чата доступно только сессии онбординга. "
+                        + "Смена дефолта выполняется в настройках — попроси об этом пользователя.",
+                });
+        }
+
+        if (persona.Scope == PersonaScope.Global)
+        {
+            _users.SetDefaultPersona(UserId, id);
+        }
+        else
+        {
+            var project = persona.ProjectId is null ? null : _projects.GetById(persona.ProjectId);
+            if (project is null || project.OwnerId != UserId)
+                return BadRequest(new { error = "Проект персоны не найден или недоступен" });
+            _projects.SetDefaultPersona(project.Id, id);
+        }
+
+        if (onboarding is not null)
+            await FinalizeOnboardingAsync(onboarding, persona);
+
+        // Событие и для инвалидации кэша auth.me / DTO проекта на фронте:
+        // смена дефолта видна резолверу аватаров без перезагрузки
+        await Broadcast("default", id);
+        return Ok(persona);
+    }
+
+    // Финализация онбординга (make-default пришёл из онбординг-сессии): досев профиля
+    // дефолт-персоны, у пользовательского — «просыпание» персоны в этом же чате
+    // (SetPersona: адаптер лениво пересоберётся, активный ход не рвётся) и очистка
+    // User.OnboardingSessionId; у проектного — очистка Project.OnboardingSessionId.
+    private async Task FinalizeOnboardingAsync(Session onboarding, Persona persona)
+    {
+        // Досев профиля — только онбординг-путь (свежесозданная мастером/наставником персона)
+        persona = _bindings.SeedDefaultPersonaProfile(UserId, persona);
+        if (onboarding.OnboardingKind == OnboardingKinds.User)
+        {
+            _sessions.SetPersona(onboarding.Id, UserId, persona.Id);
+            _users.SetOnboardingSession(UserId, null);
+        }
+        else if (onboarding.OnboardingKind == OnboardingKinds.Project && onboarding.ProjectId is { } pid)
+        {
+            _projects.SetOnboardingSession(pid, null);
+        }
+        // Гейт на фронте снимается не по этому событию mid-turn, а по концу хода (result)
+        // или кнопке «Перейти в систему» — событие лишь помечает завершение
+        await _sessions.BroadcastSessionMessageAsync(onboarding.Id,
+            new OnboardingCompletedMessage(onboarding.OnboardingKind!, persona.Id, onboarding.ProjectId));
     }
 
     // Чаты, которые ведутся от лица этой персоны

@@ -12,6 +12,7 @@
 
 import type { AiActionCtx } from './actions';
 import { api } from '../api';
+import { createChatWithContextPersona } from '../defaultPersona';
 import { showToast } from '../toast';
 
 const PENDING_KEY = 'cc_pending_chat_prompt';
@@ -40,17 +41,19 @@ export async function startChatWithPrompt(text: string, ctx: AiActionCtx): Promi
     let personaId: string | null = null;
     try { personaId = (await api.personas.match(text, project?.id)).personaId; } catch { /* без персоны */ }
     if (project) {
-      // Чат В ПРОЕКТЕ: создаём сессию (от лица персоны, если подобрана) и открываем каналом диплинка.
+      // Чат В ПРОЕКТЕ: создаём сессию (от лица персоны, если подобрана) и открываем каналом
+      // диплинка. Без подобранной персоны — дефолт-персона контекста (хелпер инварианта;
+      // без флага — прежний api.sessions.create с его дефолтным режимом acceptEdits).
       const s = personaId
         ? await api.personas.createChat(personaId, { projectId: project.id })
-        : await api.sessions.create(project.id);
+        : await createChatWithContextPersona(project, { mode: 'acceptEdits' });
       sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${s.id}`);
       window.dispatchEvent(new Event('cc-pending-project-chat'));
     } else {
-      // ГЛОБАЛЬНЫЙ чат: от лица персоны (если подобрана) либо обычный чат вне проекта.
+      // ГЛОБАЛЬНЫЙ чат: от лица персоны (если подобрана) либо дефолт-персоны контекста.
       const chat = personaId
         ? await api.personas.createChat(personaId, {})
-        : await api.chats.create();
+        : await createChatWithContextPersona();
       window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
     }
   } catch (e) {

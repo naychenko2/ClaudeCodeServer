@@ -28,6 +28,8 @@ import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
+import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
+import { OnboardingPage } from './features/onboarding/OnboardingPage'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -251,6 +253,15 @@ export default function App() {
   }, [])
   const isMobileView = useIsMobile()
 
+  // Гейт обязательного онбординга первого входа (фича default-personas-onboarding).
+  // Липкий: needsOnboarding гаснет посреди интервью (broadcast смены дефолта), но гейт
+  // держится до конца хода/кнопки — снимает его сам OnboardingPage через onDone.
+  const me = useMe()
+  const [onboardingGate, setOnboardingGate] = useState(false)
+  useEffect(() => {
+    if (auth && me.loaded && me.needsOnboarding) setOnboardingGate(true)
+  }, [auth, me.loaded, me.needsOnboarding])
+
   const online = useOnline()
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
@@ -283,6 +294,10 @@ export default function App() {
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
+        // Стор дефолт-персоны/онбординга (фича default-personas-onboarding) — от него
+        // живут гейт первого входа и резолвер аватаров. Кормим ПОСЛЕ setAllFlags,
+        // чтобы needsOnboarding не сработал раньше, чем известен флаг
+        if (me) setMeFromServer(me)
         // Имя могли поправить в профиле после логина — подхватываем без перевхода
         const fresh = me?.displayName?.trim() || undefined
         setAuth(prev => (prev && prev.displayName !== fresh ? { ...prev, displayName: fresh } : prev))
@@ -318,6 +333,7 @@ export default function App() {
       sessionStorage.removeItem('cc_role')
       sessionStorage.removeItem('cc_user_id')
       idbClear() // чистим кэш, чтобы данные не утекли к следующей сессии
+      clearMe()
       // Раздел сбрасываем вместе с адресом: initialHash читается один раз при загрузке
       // модуля, поэтому вход без перезагрузки страницы оставил бы hubTab прошлого
       // пользователя — при смене аккаунта человек видел бы чужой раздел
@@ -740,6 +756,7 @@ export default function App() {
     sessionStorage.removeItem('cc_role')
     sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
+    clearMe()
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
     // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя
     localStorage.setItem(HUB_TAB_KEY, 'projects')
@@ -813,6 +830,10 @@ export default function App() {
           AI-кнопка перекрывала бы его контролы в правом нижнем углу — прячем её там */}
       {auth && !authChecking && effectiveHubTab !== 'telemetry' && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
+      {/* Полноэкранный гейт онбординга — поверх всего, без навигации и «Пропустить» */}
+      {auth && !authChecking && onboardingGate && (
+        <OnboardingPage onDone={() => setOnboardingGate(false)} />
+      )}
     </>
   )
 }

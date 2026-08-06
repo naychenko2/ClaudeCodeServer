@@ -6,6 +6,8 @@ import { C, FONT } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
+import { useMe, refreshMe } from '../../lib/defaultPersona';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
 import { ConfirmDialog, IslandScaffold } from '../../components/ui';
@@ -25,6 +27,7 @@ import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
 import { PersonasHub } from './PersonasHub';
+import { DeletePersonaDialog } from './DeletePersonaDialog';
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -133,20 +136,10 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
     if (getNav()?.persona) navReplace({ screen: 'personas' });
   };
 
-  // Удаление в два шага: запрос подтверждения (диалог) → само удаление
+  // Удаление в два шага: запрос подтверждения (диалог) → само удаление.
+  // DeletePersonaDialog сам обрабатывает 400 «нужен преемник» у дефолт-персоны.
   const [deleteTarget, setDeleteTarget] = useState<Persona | null>(null);
   const onDelete = (p: Persona) => setDeleteTarget(p);
-  const doDelete = async (p: Persona) => {
-    try {
-      await api.personas.remove(p.id);
-      bumpPersonas();
-      clearSelection();
-    } catch {
-      showToast('Персоны', 'Не удалось удалить персону.');
-    } finally {
-      setDeleteTarget(null);
-    }
-  };
 
   // «Поговорить»: создаём чат от лица персоны и уводим пользователя в раздел разговоров.
   // Глобальная персона → чат вне проекта (таб «Чаты»). Проектная → её проект и стартовая сессия.
@@ -256,12 +249,9 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       <HubHeader value="personas" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
       {deleteTarget && (
-        <ConfirmDialog
-          title="Удалить персону?"
-          subtitle={<>Персона «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{personaLabel(deleteTarget)}</strong>» будет удалена без возможности восстановления.</>}
-          confirmLabel="Удалить"
-          confirmVariant="danger"
-          onConfirm={() => doDelete(deleteTarget)}
+        <DeletePersonaDialog
+          persona={deleteTarget}
+          onDeleted={() => { bumpPersonas(); clearSelection(); setDeleteTarget(null); }}
           onCancel={() => setDeleteTarget(null)}
         />
       )}
@@ -342,6 +332,21 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
   const accent = AGENT_COLORS[liveColor ?? persona.avatar?.color ?? ''] ?? C.accent;
 
+  // Смена дефолт-персоны (фича default-personas-onboarding): глобальную можно назначить
+  // личным дефолтом из меню тулбара; проектную здесь не трогаем — её дефолт живёт в проекте
+  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  const me = useMe();
+  const isDefault = onboardingOn && !isProjectScope && me.defaultPersonaId === persona.id;
+  const makeDefault = async () => {
+    try {
+      await api.personas.makeDefault(persona.id);
+      await refreshMe();
+      showToast('Персоны', `«${personaLabel(persona)}» — теперь ваша персона по умолчанию.`);
+    } catch (e) {
+      showToast('Персоны', e instanceof Error ? e.message : 'Не удалось назначить персону по умолчанию.');
+    }
+  };
+
   const content = view === 'memory'
     // Память — под тулбаром, свой заголовок не нужен (идентичность уже в тулбаре)
     ? <div style={{ flex: 1, minHeight: 0 }}><PersonaMemoryPanel persona={persona} isMobile={isMobile} embedded /></div>
@@ -394,6 +399,8 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         talking={talking}
         onTalk={onTalk}
         onDelete={onDelete}
+        isDefault={isDefault}
+        onMakeDefault={onboardingOn && !isProjectScope ? () => void makeDefault() : undefined}
         onSave={() => void formRef.current?.save()}
         onBack={onBack}
         isMobile={isMobile}

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { History } from 'lucide-react';
 import type { HomeSessionInfo } from '../../types';
-import { api } from '../../lib/api';
+import { createChatWithContextPersona } from '../../lib/defaultPersona';
 import type { HubTab } from '../../components/HubTabs';
 import { WidgetCard, WidgetAction, WidgetEmpty, MiniSegment } from './WidgetCard';
 import { SessionRow, openSession } from './SessionRow';
@@ -34,7 +34,8 @@ export function RecentSessionsWidget({ recent, onHubTab }: {
     if (creating) return;
     setCreating(true);
     try {
-      const chat = await api.chats.create();
+      // Под флагом default-personas-onboarding — от лица личной дефолт-персоны
+      const chat = await createChatWithContextPersona();
       window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
     } catch {
       setCreating(false);

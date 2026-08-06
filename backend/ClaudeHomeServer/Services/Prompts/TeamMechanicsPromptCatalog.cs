@@ -1,0 +1,59 @@
+using System.Text;
+
+namespace ClaudeHomeServer.Services.Prompts;
+
+// Серверный мини-каталог командных механик для промпт-блока руководителя проекта
+// (мост в механики, фича default-personas-onboarding). Id СТРОГО из union TeamMechanicId
+// в frontend/src/features/team/teamMechanics.ts — дрейф ловит TeamMechanicsCatalogTests
+// (тест читает фронтовый файл, третьей копии списка нет). Запуск механики остаётся на
+// фронте: карточка по маркеру <team-mechanic/> в ленте + buildTeamTurnText по клику —
+// бэкенд только предлагает.
+public static class TeamMechanicsPromptCatalog
+{
+    // RequiredSkill — имя скилла из реестра фронта (поле requiredSkill в TEAM_MECHANICS);
+    // null — механика работает без скилла (промпт-обвязка или REST-режим).
+    public sealed record MechanicInfo(string Id, string Name, string WhenUseful, string? RequiredSkill);
+
+    public static readonly IReadOnlyList<MechanicInfo> All =
+    [
+        new("discuss", "Дискуссия", "быстро собрать мнения персон команды по вопросу", null),
+        new("panel", "Панель экспертов", "спорная тема, нужны дебаты: идеи → критика → синтез", "panel-of-experts"),
+        new("consensus", "Консенсус-план", "нетривиальная фича: план через спор до одобрения критика", "oh-my-claudecode:ralplan"),
+        new("interview", "Интервью", "размытая постановка: вопросы до кристальной ясности требований", "oh-my-claudecode:deep-interview"),
+        new("autopilot", "Автопилот", "от идеи до работающего кода в один заход", "oh-my-claudecode:autopilot"),
+        new("implementMode", "Командная реализация", "крупная фича: чат-штаб с планом, задачами и волнами исполнителей", null),
+        new("implement", "Командный спринт", "понятная задача, которую можно быстро разбить и раздать субагентам", "team-implement"),
+        new("qa", "QA-цикл", "прогнать проверки (тесты/сборка/линт) и чинить до зелёного", "oh-my-claudecode:ultraqa"),
+        new("review", "Ревью-консилиум", "ревью изменений с нескольких линз плюс проверка находок", "review-consilium"),
+        new("redteam", "Красная команда", "атака готового решения с разных углов до релиза", "red-team"),
+        new("trace", "Трассировка", "непонятное поведение: конкурирующие гипотезы «почему»", "oh-my-claudecode:trace"),
+        new("sci", "Анализ кода", "глубоко изучить кодовую базу параллельными агентами", "oh-my-claudecode:sciomc"),
+    ];
+
+    // Блок «Командные механики» для системного промпта руководителя проекта: доступные
+    // механики (фильтр по установленным скиллам) + протокол маркера <team-mechanic/>.
+    // Автозапуска нет: запуск только по кнопке пользователя; после отказа в этом разговоре
+    // не навязывать — инструкция промпта, серверного состояния не заводим (транскрипт хода
+    // в контексте). null — предложить нечего (ни одной доступной механики).
+    public static string? BuildPromptBlock(IReadOnlySet<string> installedSkills)
+    {
+        var available = All
+            .Where(m => m.RequiredSkill is null || installedSkills.Contains(m.RequiredSkill))
+            .ToList();
+        if (available.Count == 0) return null;
+
+        var sb = new StringBuilder();
+        sb.AppendLine("## Командные механики");
+        sb.AppendLine("Ты — руководитель этого проекта. Когда задача пользователя хорошо ложится " +
+                      "на одну из командных механик — предложи её запуск ОДНИМ маркером в тексте ответа:");
+        sb.AppendLine("<team-mechanic id=\"...\" topic=\"суть задачи своими словами\"/>");
+        sb.AppendLine("Сопроводи маркер одной фразой-обоснованием, почему механика уместна. " +
+                      "Запускает механику пользователь кнопкой на карточке — сам её не запускай " +
+                      "и текст её команды не пиши. Если пользователь отказался — реши задачу сам " +
+                      "и в этом разговоре механики больше не предлагай.");
+        sb.AppendLine("Доступные механики (id — название: когда уместна):");
+        foreach (var m in available)
+            sb.AppendLine($"- {m.Id} — {m.Name}: {m.WhenUseful}");
+        return sb.ToString().TrimEnd();
+    }
+}

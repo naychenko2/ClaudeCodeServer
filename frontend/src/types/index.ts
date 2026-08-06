@@ -33,6 +33,11 @@ export interface Project {
   builtInSystemPrompt?: string;
   icon?: ProjectIcon;             // иконка проекта: инициалы+цвет или картинка
   tagRegistry?: ProjectTag[];     // реестр общих тегов проекта (имя, порядок, цвет)
+  // Персона-«руководитель проекта» (фича default-personas-onboarding): дефолт для новых
+  // чатов проекта; null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
+  defaultPersonaId?: string | null;
+  // Живая сессия онбординга проекта — для резюма прерванного интервью
+  onboardingSessionId?: string | null;
 }
 
 // Иконка проекта (по образцу PersonaAvatar): инициалы на цветном фоне или картинка
@@ -682,7 +687,11 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }
   | { type: 'knowledge_changed'; action: string; datasetId?: string }
-  | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory'; personaId?: string }
+  | { type: 'personas_changed'; action: 'created' | 'updated' | 'deleted' | 'memory' | 'default'; personaId?: string }
+  // Онбординг завершён (фича default-personas-onboarding): дефолт-персона назначена из
+  // онбординг-сессии. Гейт снимается НЕ по этому событию mid-turn, а по концу хода
+  // (result) или кнопке «Перейти в систему» — событие лишь помечает завершение
+  | { type: 'onboarding_completed'; kind: 'user' | 'project'; personaId: string; projectId?: string | null }
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
   // Изменение git-статуса проекта (commit/stage/checkout/…) — клиент перезапрашивает статус
   | { type: 'git_status_changed'; projectId: string }
@@ -1162,6 +1171,22 @@ export interface GeneratedSkill {
   name: string;
   description: string;
   body: string;
+}
+
+// Ответ GET /api/auth/me — профиль текущего пользователя + эффективные настройки.
+// Поля онбординга (фича default-personas-onboarding): defaultPersonaId — личная
+// дефолт-персона (null — онбординг не пройден), needsOnboarding — обязательный гейт
+// онбординга при входе, onboardingSessionId — живая сессия интервью для резюма.
+export interface Me {
+  userId: string;
+  username: string;
+  displayName?: string | null;
+  role: string;
+  featureFlags?: Record<string, boolean>;
+  contextThresholds?: { warnPct: number; dangerPct: number } | null;
+  defaultPersonaId?: string | null;
+  needsOnboarding?: boolean;
+  onboardingSessionId?: string | null;
 }
 
 export interface AuthState {

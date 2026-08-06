@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { C } from '../../lib/design';
 import { pickVerb } from '../chat/thinkingVerbs';
 import aiHome from '../../assets/ai-home.png';
+import { useContextPersona } from '../../lib/contextPersona';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
 // Живой индикатор ожидания: значок-логотип «AI Home» с дымком из трубы + «печатная машинка» по синонимам.
 // Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
@@ -19,6 +21,10 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
     && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   // Шутливые глаголы крутятся всегда; в режиме планирования отличается только цвет пульса (индиго)
   const pulseColor = planning ? C.plan : C.accent;
+  // Лицо индикатора = релевантная персона контекста (фича default-personas-onboarding).
+  // Анимация аватара (варианты дымка/подскока) — за воротами дизайнера; тут только подключаем
+  // сам аватар вместо маски «домик с дымом»: лицо персоны в size=19 + сохранённый cc-smoke.
+  const facePersona = useContextPersona();
 
   const [text, setText] = useState(awaitingResponse ? 'Ожидаю ответа…' : '');
 
@@ -55,19 +61,33 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        {/* Значок-логотип «AI Home» маской (тонируется под тему/режим) + дымок из трубы */}
-        <span style={{ position: 'relative', width: 19, height: 18, flexShrink: 0, display: 'inline-block' }}>
-          <span style={{
-            display: 'block', width: 19, height: 18, background: pulseColor,
-            WebkitMaskImage: `url(${aiHome})`, maskImage: `url(${aiHome})`,
-            WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
-            WebkitMaskPosition: 'center', maskPosition: 'center',
-            WebkitMaskSize: 'contain', maskSize: 'contain',
-          }} />
-          {!reduced && (
-            <span className="cc-smoke"><i /><i /><i /><i /></span>
-          )}
-        </span>
+        {/* Лицо: аватар релевантной персоны (фича default-personas-onboarding),
+            fallback — логотип «AI Home» маской (тонируется под тему/режим) + дымок из трубы */}
+        {facePersona ? (
+          <span style={{ position: 'relative', width: 19, height: 18, flexShrink: 0, display: 'inline-block' }}>
+            <span style={{
+              position: 'absolute', inset: 0, display: 'block', borderRadius: '50%', overflow: 'hidden',
+            }}>
+              <PersonaAvatar persona={facePersona} size={19} />
+            </span>
+            {!reduced && (
+              <span className="cc-smoke"><i /><i /><i /><i /></span>
+            )}
+          </span>
+        ) : (
+          <span style={{ position: 'relative', width: 19, height: 18, flexShrink: 0, display: 'inline-block' }}>
+            <span style={{
+              display: 'block', width: 19, height: 18, background: pulseColor,
+              WebkitMaskImage: `url(${aiHome})`, maskImage: `url(${aiHome})`,
+              WebkitMaskRepeat: 'no-repeat', maskRepeat: 'no-repeat',
+              WebkitMaskPosition: 'center', maskPosition: 'center',
+              WebkitMaskSize: 'contain', maskSize: 'contain',
+            }} />
+            {!reduced && (
+              <span className="cc-smoke"><i /><i /><i /><i /></span>
+            )}
+          </span>
+        )}
         <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
           <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
             {text}

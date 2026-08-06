@@ -19,6 +19,7 @@ import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
 import { ensurePersonasLoaded } from '../lib/personas';
+import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
 import { markChatRead, useUnreadChatCount } from '../lib/chatReadState';
 
@@ -155,7 +156,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (creating) return;
     setCreating(true);
     try {
-      const chat = await api.chats.create();
+      // Под флагом default-personas-onboarding чат создаётся от лица личной дефолт-персоны
+      const chat = await createChatWithContextPersona();
       setChats(prev => [chat, ...prev]);
       selectChat(chat);
     } catch (e) {

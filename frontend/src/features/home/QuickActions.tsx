@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { FolderPlus, MessageCirclePlus, NotebookPen, Plus, UserPlus, Zap } from 'lucide-react';
 import type { Project, ProjectGroup } from '../../types';
 import { api } from '../../lib/api';
+import { createChatWithContextPersona } from '../../lib/defaultPersona';
 import { C, FONT } from '../../lib/design';
 import { openTaskInSection } from '../../lib/tasks';
 import { ensureNotesLoaded } from '../../lib/notes';
@@ -58,7 +59,8 @@ export function QuickActions({ onHubTab, onOpenProject }: {
     if (creatingChat) return;
     setCreatingChat(true);
     try {
-      const chat = await api.chats.create();
+      // Под флагом default-personas-onboarding — от лица личной дефолт-персоны
+      const chat = await createChatWithContextPersona();
       window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
     } catch {
       setCreatingChat(false);

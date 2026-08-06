@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
   Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight,
-  MoreHorizontal, Settings, Wand2, EllipsisVertical, X,
+  MoreHorizontal, Settings, Wand2, EllipsisVertical, X, Crown,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft } from '../../types';
@@ -10,6 +10,7 @@ import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
 import { C, FONT, R, SHADOW } from '../../lib/design';
@@ -60,6 +61,21 @@ export function TeamCommandCenter({
   const stripe = projectColor(project.id).main;
 
   useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
+
+  // Руководитель проекта (фича default-personas-onboarding): дефолт-персона для чатов
+  // проекта. Локальный снимок — project из пропсов не обновляется по broadcast'у.
+  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  const [leadId, setLeadId] = useState<string | null>(project.defaultPersonaId ?? null);
+  useEffect(() => { setLeadId(project.defaultPersonaId ?? null); }, [project.id, project.defaultPersonaId]);
+  const makeLead = async (p: Persona) => {
+    try {
+      await api.personas.makeDefault(p.id);
+      setLeadId(p.id);
+      showToast('Команда', `«${personaLabel(p)}» — теперь руководитель проекта.`);
+    } catch (e) {
+      showToast('Команда', e instanceof Error ? e.message : 'Не удалось назначить руководителя проекта.');
+    }
+  };
 
   const refresh = async () => {
     try { setEvents((await api.projects.events(project.id, { limit })) as unknown as EventRow[] ?? []); }
@@ -187,7 +203,8 @@ export function TeamCommandCenter({
               inFlight={inFlight} onlineSet={onlineSet} tasksActive={tasksActive} chatsToday={chatsToday}
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
-              onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} />
+              onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe}
+              leadId={onboardingOn ? leadId : null} onMakeLead={onboardingOn ? makeLead : undefined} />
           )}
           {tab === 'memory' && (
             <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />
@@ -212,10 +229,16 @@ function OverviewPanel(props: {
   inFlight: Map<string, string>; onlineSet: Set<string>; tasksActive: number; chatsToday: number;
   personaById: (id: string) => Persona | undefined; onOpenPersona: (id: string) => void; onSwitchTab: (t: Tab) => void; onOpenEvent: (e: EventRow) => void;
   onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onMenuOpen: () => void; stripe: string;
+  // Руководитель проекта (фича default-personas-onboarding): текущий дефолт и смена;
+  // onMakeLead не задан — блок руководителя не рисуется (флаг выключен)
+  leadId: string | null; onMakeLead?: (p: Persona) => Promise<void>;
 }) {
-  const { project, team, events, mem, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe } = props;
+  const { project, team, events, mem, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, leadId, onMakeLead } = props;
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
+  // Меню смены руководителя проекта
+  const [leadMenuOpen, setLeadMenuOpen] = useState(false);
+  const lead = leadId ? personaById(leadId) : undefined;
 
   if (team.length === 0) {
     return (
@@ -247,6 +270,39 @@ function OverviewPanel(props: {
           <StatusChip color={C.textSecondary}>{tasksActive} задач активно</StatusChip>
           <StatusChip color={C.textSecondary}>{chatsToday} чатов сегодня</StatusChip>
         </div>
+        {/* Руководитель проекта — дефолт-персона чатов проекта; смена через меню
+            (фича default-personas-onboarding) */}
+        {onMakeLead && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            <Crown size={14} color={C.accent} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: 12, color: C.textMuted, fontFamily: FONT.sans }}>Руководитель проекта:</span>
+            {lead ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                <PersonaAvatar persona={lead} size={22} />
+                <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, fontFamily: FONT.sans, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {personaLabel(lead)}
+                </span>
+              </span>
+            ) : (
+              <span style={{ fontSize: 13, color: C.textMuted, fontFamily: FONT.sans }}>не назначен</span>
+            )}
+            {team.length > 0 && (
+              <div style={{ position: 'relative' }}>
+                <Button variant="ghost" size="sm" onClick={() => setLeadMenuOpen(o => !o)}>
+                  {lead ? 'Сменить' : 'Назначить'}
+                </Button>
+                {leadMenuOpen && (
+                  <Menu onClose={() => setLeadMenuOpen(false)} top={32} minWidth={220}>
+                    {team.filter(p => p.id !== leadId).map(p => (
+                      <MenuItem key={p.id} label={personaLabel(p)}
+                        onClick={() => { setLeadMenuOpen(false); void onMakeLead(p); }} />
+                    ))}
+                  </Menu>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           <Button variant="primary" size="sm" disabled={team.length < 2} leftIcon={<MessageSquare size={15} />}
             title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : undefined}

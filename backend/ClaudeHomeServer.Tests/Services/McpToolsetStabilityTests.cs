@@ -190,4 +190,93 @@ public class McpToolsetStabilityTests
 
         body.Should().Contain("ConsultantsEnabled(");
     }
+
+    // --- personas-server: personas_set_default безусловно в tools/list ---
+
+    private static string? FindMcpServer(string server)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            var candidate = Path.Combine(dir.FullName, "mcp", server, "index.js");
+            if (File.Exists(candidate)) return candidate;
+            dir = dir.Parent;
+        }
+        return null;
+    }
+
+    // tools/list живого personas-server с заданными env (паттерн NotesAndTasksMcpServerToolsTests).
+    // null — node недоступен (тест скипается).
+    private static IReadOnlyList<string>? ListPersonasTools(string serverPath,
+        params (string Key, string Value)[] env)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "node",
+            ArgumentList = { serverPath },
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        // Бэкенд не нужен: tools/list считается из env, в сеть сервер не ходит
+        psi.Environment["PERSONAS_API_URL"] = "http://127.0.0.1:1";
+        psi.Environment["PERSONAS_API_TOKEN"] = "test";
+        foreach (var (key, value) in env) psi.Environment[key] = value;
+
+        System.Diagnostics.Process? proc;
+        try { proc = System.Diagnostics.Process.Start(psi); }
+        catch (Exception ex) { Skip.If(true, $"node недоступен: {ex.Message}"); return null; }
+        Skip.If(proc is null, "не удалось запустить node");
+
+        using (proc!)
+        {
+            proc.StandardInput.WriteLine("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+            proc.StandardInput.Flush();
+
+            var line = proc.StandardOutput.ReadLine();
+            proc.StandardInput.Close();
+            if (!proc.WaitForExit(10_000)) proc.Kill(entireProcessTree: true);
+
+            line.Should().NotBeNullOrWhiteSpace("сервер обязан ответить на tools/list");
+            using var doc = System.Text.Json.JsonDocument.Parse(line!);
+            return doc.RootElement.GetProperty("result").GetProperty("tools")
+                .EnumerateArray()
+                .Select(t => t.GetProperty("name").GetString()!)
+                .ToList();
+        }
+    }
+
+    /// <summary>
+    /// personas_set_default обязан присутствовать в tools/list ВСЕГДА — даже с выключенными
+    /// модулями manage/automation и аварийным PERSONAS_WRITE=0 (инвариант стабильности состава:
+    /// ограничение живёт на бэкенде — вызов разрешён только онбординг-сессии).
+    /// </summary>
+    [SkippableFact]
+    public void PersonasSetDefault_ВСоставеВсегда_ДажеБезМодулей()
+    {
+        var serverPath = FindMcpServer("personas-server");
+        Skip.If(serverPath is null, "mcp/personas-server/index.js не найден");
+
+        var tools = ListPersonasTools(serverPath!,
+            ("PERSONAS_WRITE", "0"), ("PERSONAS_MANAGE", "0"), ("PERSONAS_AUTOMATION", "0"));
+        if (tools is null) return;
+
+        tools.Should().Contain("personas_set_default");
+        // Ядро сервера на месте — разрез модулей его не задел
+        tools.Should().Contain("personas_list").And.Contain("personas_get");
+    }
+
+    /// <summary>И в полном составе (все модули включены) инструмент никуда не девается.</summary>
+    [SkippableFact]
+    public void PersonasSetDefault_ВСоставе_СМодулями()
+    {
+        var serverPath = FindMcpServer("personas-server");
+        Skip.If(serverPath is null, "mcp/personas-server/index.js не найден");
+
+        var tools = ListPersonasTools(serverPath!);
+        if (tools is null) return;
+
+        tools.Should().Contain("personas_set_default").And.Contain("personas_create");
+    }
 }

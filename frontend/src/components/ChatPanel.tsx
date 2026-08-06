@@ -14,7 +14,8 @@ import { api, setGitSessionContext } from '../lib/api';
 import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
-import { detectTeamMechanic } from '../features/team/teamMechanics';
+import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
+import { parseTeamMechanicOffer, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
@@ -762,9 +763,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
   // Сообщаем AI-палитре, что чат открыт (переписка + хвост) — чтобы действия чата были
   // доступны и в проектных чатах, где активная сессия не отражается в nav.
   useEffect(() => {
-    setChatContext(true, hasMessages, chatTail);
+    // personaId — резолверу релевантной персоны (аватары AI-хаба вне чата)
+    setChatContext(true, hasMessages, chatTail, session.personaId);
     return () => setChatContext(false, false);
-  }, [hasMessages, chatTail]);
+  }, [hasMessages, chatTail, session.personaId]);
 
   // Триггер «завершение хода Claude»: по переходу isWaiting → false просим AI-хаб
   // переоценить контекст (уместно ли извлечь задачи, собрать итог в заметку и т.п.).
@@ -940,6 +942,57 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
     return tail.length > 0 ? tail.join('\n') : undefined;
   }, [items]);
 
+  // === Мост в командные механики (фича default-personas-onboarding) ===
+  // Маркеры <team-mechanic/> в текстах ассистента → карточки предложений. Дедуп «одна
+  // механика — одна карточка на чат»: карточку несёт ПЕРВЫЙ текст ленты с маркером
+  // этой механики, повторные предложения той же механики карточек не плодят.
+  const mechanicOffers = useMemo(() => {
+    const map = new Map<number, TeamMechanicOffer>();
+    const seen = new Set<TeamMechanicId>();
+    items.forEach((it, i) => {
+      if (it.kind !== 'text' || it.parentToolUseId) return;
+      if (!it.text.includes('<team-mechanic')) return;
+      const offer = parseTeamMechanicOffer(it.text);
+      if (!offer || seen.has(offer.id)) return;
+      seen.add(offer.id);
+      map.set(i, offer);
+    });
+    return map;
+  }, [items]);
+  // «Запущено»: механика уже уходила ходом этого чата (детект по ленте — переживает F5)
+  // либо кнопка нажата только что (локальная пометка до появления user_message). Это же
+  // компенсирует потерю промпт-инструкции «не навязывать после отказа» при компакции.
+  const [clickedMechanics, setClickedMechanics] = useState<ReadonlySet<TeamMechanicId>>(new Set());
+  const launchedMechanics = useMemo(() => {
+    const s = new Set<TeamMechanicId>(clickedMechanics);
+    for (const it of items) {
+      if (it.kind !== 'user_message') continue;
+      const m = detectTeamMechanic(it.text);
+      if (m) s.add(m);
+    }
+    // implementMode текстом не детектится (обычное сообщение) — «запущено» = режим включён
+    if (teamImplementState) s.add('implementMode');
+    return s;
+  }, [items, clickedMechanics, teamImplementState]);
+  const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer) => {
+    setClickedMechanics(prev => new Set(prev).add(offer.id));
+    try {
+      // «Командная реализация» — режим чата: включается REST-ом ДО отправки темы
+      if (offer.id === 'implementMode') {
+        const updated = await api.chats.setTeamImplement(session.id, true, {
+          autoWaves: DEFAULT_TEAM_SETTINGS.modeAutoWaves,
+          executorPersonaIds: [],
+        });
+        onSessionUpdated?.(updated);
+      }
+      atBottomRef.current = true;
+      await send(buildTeamTurnText(offer.id, offer.topic, DEFAULT_TEAM_SETTINGS, chatContext), [], modeRef.current);
+    } catch (err) {
+      showToast('Командные механики', err instanceof Error ? err.message : 'Не удалось запустить механику');
+      setClickedMechanics(prev => { const n = new Set(prev); n.delete(offer.id); return n; });
+    }
+  }, [session.id, send, chatContext, onSessionUpdated, atBottomRef]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
@@ -974,12 +1027,20 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
       turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
+      teamMechanicOffer={item.kind === 'text' && mechanicOffers.has(i)
+        ? {
+            offer: mechanicOffers.get(i)!,
+            launched: launchedMechanics.has(mechanicOffers.get(i)!.id),
+            onRun: () => void runTeamMechanic(mechanicOffers.get(i)!),
+          }
+        : undefined}
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
+    mechanicOffers, launchedMechanics, runTeamMechanic,
   ]);
 
   // Блок действий: подряд идущие карточки инструментов + изменения файлов объединяем

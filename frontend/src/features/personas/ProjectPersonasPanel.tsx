@@ -16,6 +16,8 @@ import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
+import { DeletePersonaDialog } from './DeletePersonaDialog';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useIsMobile } from '../../lib/breakpoints';
 
 // Проектная вкладка «Команда»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
@@ -98,20 +100,10 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   // Подтверждение отмены несохранённых изменений — через ConfirmDialog вместо window.confirm
   const [confirmDiscard, setConfirmDiscard] = useState<null | (() => void)>(null);
 
-  // Удаление в два шага: запрос подтверждения (диалог) → само удаление
+  // Удаление в два шага: запрос подтверждения (диалог) → само удаление.
+  // DeletePersonaDialog сам обрабатывает 400 «нужен преемник» у руководителя проекта.
   const [deleteTarget, setDeleteTarget] = useState<Persona | null>(null);
   const onDelete = (p: Persona) => setDeleteTarget(p);
-  const doDelete = async (p: Persona) => {
-    try {
-      await api.personas.remove(p.id);
-      bumpPersonas();
-      onCleared();
-    } catch {
-      showToast('Персоны', 'Не удалось удалить персону.');
-    } finally {
-      setDeleteTarget(null);
-    }
-  };
 
   // «Поговорить»: чат от лица персоны — сессия создаётся в этом проекте
   // (projectId кладёт в проект и чат глобальной персоны, позванной из «Команды»).
@@ -130,6 +122,23 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   };
 
   const accent = AGENT_COLORS[liveColor ?? persona?.avatar?.color ?? ''] ?? C.accent;
+
+  // Смена руководителя проекта (фича default-personas-onboarding): проектную персону
+  // можно назначить дефолтом проекта из меню тулбара. Локальный снимок дефолта —
+  // project из пропсов не обновляется по broadcast'у.
+  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  const [projectDefaultId, setProjectDefaultId] = useState<string | null>(project.defaultPersonaId ?? null);
+  useEffect(() => { setProjectDefaultId(project.defaultPersonaId ?? null); }, [project.id, project.defaultPersonaId]);
+  const isDefault = onboardingOn && !!persona && projectDefaultId === persona.id;
+  const makeDefault = async (p: Persona) => {
+    try {
+      await api.personas.makeDefault(p.id);
+      setProjectDefaultId(p.id);
+      showToast('Персоны', `«${personaTitleLines(p).primary}» — теперь руководитель проекта.`);
+    } catch (e) {
+      showToast('Персоны', e instanceof Error ? e.message : 'Не удалось назначить руководителя проекта.');
+    }
+  };
 
   // Создание — пошаговый мастер целиком (тулбар внутри компонента).
   // После успеха родитель выбирает созданную персону → откроется её редактор.
@@ -165,6 +174,8 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           talking={talking}
           onTalk={() => talk(persona)}
           onDelete={() => onDelete(persona)}
+          isDefault={isDefault}
+          onMakeDefault={onboardingOn ? () => void makeDefault(persona) : undefined}
           onSave={() => void formRef.current?.save()}
           onBack={onBack}
           onClose={onClose}
@@ -232,12 +243,9 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
         <PersonaEditFab accent={accent} onClick={() => setEditing(true)} />
       )}
       {deleteTarget && (
-        <ConfirmDialog
-          title="Удалить персону?"
-          subtitle={<>Персона «<strong style={{ color: C.textPrimary, fontWeight: 600 }}>{personaTitleLines(deleteTarget).primary}</strong>» будет удалена без возможности восстановления.</>}
-          confirmLabel="Удалить"
-          confirmVariant="danger"
-          onConfirm={() => doDelete(deleteTarget)}
+        <DeletePersonaDialog
+          persona={deleteTarget}
+          onDeleted={() => { bumpPersonas(); onCleared(); setDeleteTarget(null); }}
           onCancel={() => setDeleteTarget(null)}
         />
       )}

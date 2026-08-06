@@ -10,7 +10,8 @@ namespace ClaudeHomeServer.Controllers;
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController(UserStore users, JwtService jwt, FeatureFlagService flags) : ControllerBase
+public class AuthController(UserStore users, JwtService jwt, FeatureFlagService flags,
+    PersonaManager personas) : ControllerBase
 {
     [AllowAnonymous]
     [EnableRateLimiting("auth-login")]
@@ -44,9 +45,21 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var me = userId is null ? null : users.GetById(userId);
         var contextThresholds = me?.ContextThresholds;
         var executionEnvironment = me?.ExecutionEnvironment ?? ExecutionEnvironments.Local;
+        // Дефолт-персона (фича default-personas-onboarding). Нормализация сироты на чтении:
+        // DefaultPersonaId с несуществующей персоной отдаём как null — онбординг-гейт сам
+        // чинит осиротевший дефолт вместо молчаливого нарушения «остаться без дефолта нельзя»
+        var defaultPersonaId = me?.DefaultPersonaId is { } dpid && userId is not null
+            && personas.Get(dpid, userId) is not null ? dpid : null;
+        var needsOnboarding = userId is not null && defaultPersonaId is null
+            && flags.IsEnabled(userId, FeatureFlagKeys.DefaultPersonasOnboarding);
         // displayName отдаём и здесь: имя могли поправить в users.json уже после логина,
         // а перевыпускать токен ради этого незачем
-        return Ok(new { userId, username, displayName = me?.DisplayName, role, featureFlags, contextThresholds, executionEnvironment });
+        return Ok(new
+        {
+            userId, username, displayName = me?.DisplayName, role, featureFlags,
+            contextThresholds, executionEnvironment,
+            defaultPersonaId, needsOnboarding, onboardingSessionId = me?.OnboardingSessionId,
+        });
     }
 
     // Таймзона пользователя (IANA, например "Europe/Moscow") — фронт шлёт при старте.

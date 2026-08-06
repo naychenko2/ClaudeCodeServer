@@ -215,6 +215,17 @@ available». Ограничения по ходу — на бэкенде: се�
 инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов
 при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md).
 
+**Личный реестр MCP-серверов** (флаг `mcp-registry`) — раздел «MCP-серверы»: свои внешние
+серверы владельца (не встроенные продуктовые выше) со статусом, пробой, входом по OAuth и
+доступом по проектам/персонам. Хранение — `McpServerRecord` в `data/mcp-servers.json` (без
+секретов) + `data/mcp-secrets.json` (значения, в `BackupPaths.SecretFileNames`) +
+`data/mcp-status.json` (наблюдения, в бэкап не едет). Каскад доступности реестр →
+`Project.McpServersOff` (deny-list) → Off-привязка персоны `mcp:<ключ>` (без `condition` —
+тот же инвариант состава хода). Доставка в ход — `SessionManager.BuildExternalMcpProvider` →
+`ClaudeSession.BuildTurnMcpConfig`, `AuthVersion` в отпечатке запуска. Известное ограничение:
+полный цикл входа по OAuth не проверялся на реальном сервере с учётными данными. Подробности —
+[docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
+
 ## Заметки и Знания (Dify RAG)
 
 Заметки — Obsidian-совместимый markdown-vault (`[[wikilinks]]`, backlinks, граф): настоящие

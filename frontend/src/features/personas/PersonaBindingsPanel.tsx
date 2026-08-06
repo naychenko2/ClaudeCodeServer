@@ -180,6 +180,26 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const localBindings = list.filter(b => !CROSS_PROJECT_TYPES.includes(b.type));
   const crossBindings = list.filter(b => CROSS_PROJECT_TYPES.includes(b.type));
 
+  // Сводка «MCP: N из M доступны» — каталог тот же, что у пикера инструментов (статический
+  // + серверы личного реестра владельца, ключи «mcp:»). Доступен — нет Off-привязки на ключ.
+  const [toolCatalog, setToolCatalog] = useState<BindingTarget[] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetchBindingTargets('tool', undefined, persona.id).then(l => { if (alive) setToolCatalog(l); }).catch(() => { if (alive) setToolCatalog([]); });
+    return () => { alive = false; };
+  }, [persona.id]);
+  const mcpServers = useMemo(() => (toolCatalog ?? []).filter(t => t.id.toLowerCase().startsWith('mcp:')), [toolCatalog]);
+  const mcpAvailableCount = useMemo(() => {
+    const lastMode = new Map<string, PersonaBindingMode>();
+    for (const b of list) {
+      if (b.type !== 'tool') continue;
+      const key = b.target.toLowerCase();
+      if (!key.startsWith('mcp:')) continue;
+      lastMode.set(key, b.mode);
+    }
+    return mcpServers.filter(t => lastMode.get(t.id.toLowerCase()) !== 'off').length;
+  }, [mcpServers, list]);
+
   // === Мутации (мгновенное сохранение) ===
 
   const putBinding = async (b: PersonaBinding, patch: Partial<PersonaBindingDto>) => {
@@ -634,6 +654,13 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
             Пресет «Минимум»
           </Button>
         </div>
+
+        {/* Сводка по серверам личного MCP-реестра — сколько из них сейчас не выключены */}
+        {mcpServers.length > 0 && (
+          <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>
+            MCP: {mcpAvailableCount} из {mcpServers.length} доступны
+          </div>
+        )}
 
         {/* Доступ ко всем проектам — персона-уровневый флаг, не привязка (только у глобальных) */}
         {persona.scope === 'global' && (

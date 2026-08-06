@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -182,6 +182,45 @@ export const api = {
     list: () => request<{ items: ModuleInfo[] }>('/modules'),
   },
 
+  // Личный реестр MCP-серверов владельца (фича mcp-registry). Секретные значения наружу
+  // не выходят: в McpValue у секрета value = null, а в форме пустое значение секрета
+  // означает «оставить как было».
+  mcp: {
+    list: () => request<McpServer[]>('/mcp/servers'),
+    get: (id: string) => request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`),
+    // Встроенные серверы продукта — только наблюдение статуса, записи в реестре нет
+    builtin: () => request<McpBuiltinServer[]>('/mcp/servers/builtin'),
+    create: (data: McpServerUpsert) =>
+      request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: McpServerUpsert) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    setEnabled: (id: string, enabled: boolean) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable`, {
+        method: 'POST', body: JSON.stringify({ enabled }),
+      }),
+    delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов
+    probe: (id: string) =>
+      request<McpProbeResult>(`/mcp/servers/${encodeURIComponent(id)}/probe`, { method: 'POST' }),
+    // Импорт фрагмента {"mcpServers": {...}} — записи заводятся выключенными
+    import: (fragment: unknown) =>
+      request<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>('/mcp/servers/import', {
+        method: 'POST', body: JSON.stringify(fragment),
+      }),
+    // Диагностика вызовов инструментов — только админ (данные всех владельцев)
+    calls: (failures = 50) => request<McpCallsResponse>(`/mcp/calls?failures=${failures}`),
+    // Вход по OAuth (волна 7): start отдаёт адрес окна провайдера, complete — запасной
+    // путь с кодом, вставленным вручную (сервер принимает только loopback-адрес возврата)
+    oauthStart: (id: string, clientId?: string) =>
+      request<McpOAuthStartResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/start`, {
+        method: 'POST', body: JSON.stringify(clientId ? { clientId } : {}),
+      }),
+    oauthComplete: (id: string, state: string, code: string) =>
+      request<McpOAuthCompleteResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/complete`, {
+        method: 'POST', body: JSON.stringify({ state, code }),
+      }),
+  },
+
   providers: {
     balance: (key: string) => request<ProviderBalanceInfo>(`/providers/${key}/balance`),
     usage: (key: string) =>
@@ -265,7 +304,7 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOff?: string[] }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
     // массива и валидирует уникальность имён без учёта регистра)

@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MCP-серверы — модалка управления</title>
+<style>
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05); --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.4); --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12); --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --c-overlay: rgba(23,19,15,.42);
+  font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35); --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65); --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45); --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --c-overlay: rgba(0,0,0,.62);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--c-bg-panel);color:var(--c-text-primary);min-height:100vh}
+.mono{font-family:'JetBrains Mono','Courier New',monospace}
+
+.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--c-bg-white);border-bottom:1px solid var(--c-border)}
+.topbar h1{font-family:'PT Serif',Georgia,serif;font-size:15px;margin:0 12px 0 0;color:var(--c-text-heading);font-weight:700}
+.btn{font:inherit;font-size:12px;color:var(--c-text-secondary);background:var(--c-bg-panel);
+  border:1px solid var(--c-border);border-radius:8px;padding:6px 10px;cursor:pointer}
+.btn.on{background:var(--c-accent-light);color:var(--c-accent);border-color:var(--c-accent-muted)}
+
+.stage{padding:32px 16px 80px;display:flex;justify-content:center}
+.stage.mob{padding:16px 0}
+.stage.mob .modal-shell{max-width:390px;border:6px solid #000;border-radius:36px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.stage.mob .modal{border-radius:26px;max-height:82vh}
+.stage.mob .grabber{display:block}
+
+.modal-shell{width:100%;max-width:720px;position:relative}
+.modal{background:var(--c-bg-card);border-radius:20px;box-shadow:var(--shadow-modal);
+  border:1px solid var(--c-border-light);display:flex;flex-direction:column;max-height:88vh;overflow:hidden}
+.grabber{display:none;width:36px;height:4px;border-radius:4px;background:var(--c-dashed);margin:10px auto 0;flex-shrink:0}
+.modal-head{padding:18px 22px 12px;border-bottom:1px solid var(--c-border-light);flex-shrink:0}
+.stage.mob .modal-head{padding-top:8px}
+.modal-head .row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.modal-head h2{font-family:'PT Serif',Georgia,serif;font-size:19px;margin:0;color:var(--c-text-heading)}
+.modal-head p{font-size:12.5px;color:var(--c-text-secondary);margin:4px 0 0}
+.x{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  color:var(--c-text-muted);cursor:pointer;font-size:15px;flex-shrink:0}
+.x:hover{background:var(--c-bg-selected)}
+
+.tabs{display:flex;gap:2px;padding:0 22px;border-bottom:1px solid var(--c-border-light);overflow-x:auto;flex-shrink:0}
+.tab-btn{font:inherit;font-size:13px;font-weight:600;color:var(--c-text-secondary);background:transparent;
+  border:none;border-bottom:2px solid transparent;padding:10px 12px;cursor:pointer;white-space:nowrap;
+  display:flex;align-items:center;gap:5px}
+.tab-btn.active{color:var(--c-accent);border-bottom-color:var(--c-accent)}
+.tab-btn .cnt{font-size:10.5px;font-weight:700;color:var(--c-text-muted)}
+.tab-btn.active .cnt{color:var(--c-accent)}
+
+.body{overflow-y:auto;padding:16px 22px 24px;display:flex;flex-direction:column;gap:8px}
+.tab-panel{display:none;flex-direction:column;gap:8px}
+.tab-panel.active{display:flex}
+
+.section-title{font-size:11px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;
+  letter-spacing:.06em;margin:10px 2px 2px}
+.section-title:first-child{margin-top:0}
+.hint{font-size:11.5px;color:var(--c-text-muted);line-height:1.45;padding:0 2px}
+
+/* --- Карточка сервера --- */
+.srv-card{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;
+  padding:11px 13px;display:flex;flex-direction:column;gap:6px}
+.srv-card + .srv-card{margin-top:6px}
+.srv-card.off{opacity:.62}
+.srv-top{display:flex;align-items:center;gap:8px}
+.srv-name{font-size:13.5px;font-weight:600;color:var(--c-text-heading);display:flex;align-items:center;gap:7px;
+  min-width:0;flex:1}
+.srv-name .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.transport{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--c-text-muted);
+  border:1px solid var(--c-border);border-radius:6px;padding:1px 6px;flex-shrink:0}
+.dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.dot.ok{background:var(--c-success)} .dot.warn{background:var(--c-warning)}
+.dot.bad{background:var(--c-danger)} .dot.mute{background:var(--c-text-muted)}
+.srv-card.checking .dot{background:var(--c-warning);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+.badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:9px;white-space:nowrap;flex-shrink:0}
+.badge.own{background:var(--c-bg-selected);color:var(--c-text-secondary)}
+.badge.builtin{background:var(--c-info-bg);color:var(--c-info)}
+.badge.legacy{background:var(--c-warning-bg);color:var(--c-warning-text)}
+.badge.admin{background:var(--c-accent-light);color:var(--c-accent)}
+
+.srv-url{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--c-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.srv-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.srv-status{font-size:12px;display:flex;align-items:center;gap:5px}
+.srv-status.ok{color:var(--c-success-text)} .srv-status.warn{color:var(--c-warning-text)}
+.srv-status.bad{color:var(--c-danger-text)} .srv-status.mute{color:var(--c-text-muted)}
+.srv-actions{display:flex;align-items:center;gap:6px;flex-shrink:0}
+
+.btn-sm{font:inherit;font-size:11.5px;font-weight:600;color:var(--c-text-secondary);
+  background:var(--c-bg-panel);border:1px solid var(--c-border);border-radius:8px;
+  padding:5px 10px;cursor:pointer}
+.btn-sm:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.btn-sm[disabled]{opacity:.55;cursor:default}
+.btn-accent{font:inherit;font-size:11.5px;font-weight:600;color:var(--c-on-accent);
+  background:var(--c-accent);border:none;border-radius:8px;padding:5px 12px;cursor:pointer;
+  box-shadow:var(--shadow-button)}
+.btn-accent:hover{filter:brightness(1.05)}
+.icon-btn{width:26px;height:26px;border-radius:7px;border:1px solid var(--c-border);background:var(--c-bg-white);
+  color:var(--c-text-muted);cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:center}
+.icon-btn:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+
+/* Тумблер — визуальная копия ui/Toggle (42×25, трек C.track, бегунок C.bgWhite) */
+.tgl{width:42px;height:25px;border-radius:25px;padding:3px;background:var(--c-track);
+  display:flex;align-items:center;cursor:pointer;flex-shrink:0;transition:background .2s}
+.tgl.on{background:var(--c-accent)}
+.tgl .th{width:19px;height:19px;border-radius:50%;background:var(--c-bg-white);
+  box-shadow:var(--shadow-thumb);transition:margin .2s}
+.tgl.on .th{margin-left:17px}
+.tgl.sm{width:34px;height:21px}
+.tgl.sm .th{width:15px;height:15px}
+.tgl.sm.on .th{margin-left:13px}
+
+/* --- Встроенные серверы: компактные плитки --- */
+.tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.tile{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:10px;padding:9px 11px;
+  display:flex;flex-direction:column;gap:3px}
+.tile .name{font-size:12.5px;font-weight:600;color:var(--c-text-heading);display:flex;align-items:center;gap:6px}
+.tile .stat{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--c-text-secondary)}
+.tile .dot{width:6px;height:6px}
+
+/* --- Пустое состояние --- */
+.empty{border:1px dashed var(--c-dashed);border-radius:14px;padding:26px 20px;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:8px}
+.empty .t{font-size:14px;font-weight:600;color:var(--c-text-heading)}
+.empty p{font-size:12.5px;color:var(--c-text-secondary);line-height:1.55;margin:0;max-width:430px}
+
+/* --- Вкладка «Добавить» --- */
+.segmented{display:flex;background:var(--c-bg-selected);border-radius:9px;padding:3px;gap:2px;
+  align-self:flex-start;max-width:100%}
+.seg-btn{font:inherit;font-size:12px;font-weight:600;color:var(--c-text-secondary);background:transparent;
+  border:none;border-radius:7px;padding:6px 14px;cursor:pointer;white-space:nowrap}
+.seg-btn.active{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.seg-panel{display:none;flex-direction:column;gap:10px;padding-top:4px}
+.seg-panel.active{display:flex}
+.f{display:flex;flex-direction:column;gap:5px}
+.f label{font-size:11px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em}
+.f input[type=text],.f textarea{font:inherit;font-size:14px;color:var(--c-text-heading);
+  background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;padding:8px 12px;
+  width:100%;outline:none}
+.f input.mono,.f textarea{font-family:'JetBrains Mono',monospace;font-size:12.5px}
+.f input:focus,.f textarea:focus{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.f textarea{resize:vertical;min-height:120px;line-height:1.55}
+.kv-row{display:grid;grid-template-columns:1fr 1.4fr auto auto;gap:6px;align-items:center}
+.kv-row input{font:inherit;font-size:12.5px;color:var(--c-text-heading);background:var(--c-bg-white);
+  border:1px solid var(--c-border);border-radius:10px;padding:7px 10px;outline:none;min-width:0}
+.kv-row input:focus{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.kv-row input.mono{font-family:'JetBrains Mono',monospace;font-size:11.5px}
+.kv-row input[disabled]{color:var(--c-text-muted);background:var(--c-bg-panel)}
+.kv-secret{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--c-text-secondary);
+  cursor:pointer;white-space:nowrap;user-select:none}
+.kv-secret input{accent-color:var(--c-accent);width:14px;height:14px;cursor:pointer}
+.add-kv{font:inherit;font-size:11.5px;font-weight:600;color:var(--c-accent);background:var(--c-accent-light);
+  border:1px dashed var(--c-accent-muted);border-radius:8px;padding:7px;cursor:pointer;text-align:center}
+.form-foot{display:flex;justify-content:flex-end;gap:8px;padding-top:8px;border-top:1px solid var(--c-border-light)}
+.btn-ghost{font:inherit;font-size:12.5px;font-weight:600;color:var(--c-text-secondary);background:transparent;
+  border:1px solid var(--c-border);border-radius:10px;padding:8px 16px;cursor:pointer}
+.btn-primary{font:inherit;font-size:12.5px;font-weight:600;color:var(--c-on-accent);background:var(--c-accent);
+  border:none;border-radius:10px;padding:8px 18px;cursor:pointer;box-shadow:var(--shadow-button)}
+
+/* --- Вкладка «Доступ» --- */
+.mx-wrap{overflow-x:auto;border:1px solid var(--c-border);border-radius:10px;background:var(--c-bg-white)}
+table.mx{border-collapse:collapse;width:100%;min-width:460px}
+.mx th{font-size:10.5px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em;
+  text-align:left;padding:8px 12px;border-bottom:1px solid var(--c-border-light);white-space:nowrap}
+.mx td{padding:8px 12px;border-top:1px solid var(--c-border-light);font-size:12.5px;vertical-align:middle}
+.mx tr:first-child td{border-top:none}
+.mx td.srv{color:var(--c-text-heading);font-weight:600;white-space:nowrap}
+.mx td.srv .sub{display:block;font-weight:400;font-size:10.5px;color:var(--c-text-muted)}
+.mx td.c{text-align:center}
+.mx .mark{color:var(--c-success-text);font-weight:700}
+.mx .dash{color:var(--c-text-muted)}
+.link-btn{font:inherit;font-size:11.5px;color:var(--c-accent);background:transparent;border:none;
+  cursor:pointer;padding:0;text-decoration:underline;white-space:nowrap}
+
+/* --- Вкладка «Диагностика» --- */
+.diag-table{border-collapse:collapse;width:100%;min-width:520px}
+.diag-table th{font-size:10.5px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;
+  letter-spacing:.05em;text-align:left;padding:8px 12px;border-bottom:1px solid var(--c-border-light);white-space:nowrap}
+.diag-table td{padding:8px 12px;border-top:1px solid var(--c-border-light);font-size:12px;vertical-align:top}
+.diag-table tr:first-child td{border-top:none}
+.diag-table td.tool{font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--c-text-heading);white-space:nowrap}
+.diag-table td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.diag-table td .fail{color:var(--c-danger-text);font-size:11px}
+.diag-table td .ago{color:var(--c-text-muted);font-size:11px}
+.diag-table th.num{text-align:right}
+
+/* --- Диалог подтверждения удаления --- */
+.overlay{position:fixed;inset:0;background:var(--c-overlay);z-index:50;display:flex;
+  align-items:center;justify-content:center;padding:16px}
+.confirm{width:100%;max-width:380px;background:var(--c-bg-card);border:1px solid var(--c-border-light);
+  border-radius:20px;box-shadow:var(--shadow-modal);padding:18px 20px}
+.confirm h3{font-family:'PT Serif',Georgia,serif;font-size:16px;margin:0 0 6px;color:var(--c-text-heading)}
+.confirm p{font-size:12.5px;color:var(--c-text-secondary);line-height:1.5;margin:0 0 14px}
+.confirm-actions{display:flex;justify-content:flex-end;gap:8px}
+.btn-danger{font:inherit;font-size:12.5px;font-weight:600;color:#fff;background:var(--c-danger);
+  border:none;border-radius:10px;padding:8px 16px;cursor:pointer}
+
+@media(max-width:640px){
+  .tiles{grid-template-columns:repeat(2,1fr)}
+  .modal-head{padding:14px 14px 8px} .tabs{padding:0 14px} .body{padding:12px 14px 20px}
+  .kv-row{grid-template-columns:1fr 1fr auto auto}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>MCP-серверы — модалка управления</h1>
+  <button class="btn" id="themeBtn" onclick="toggleTheme()">Тёмная тема</button>
+  <button class="btn" id="mobBtn" onclick="toggleMobile()">Мобильная раскладка 390px</button>
+  <button class="btn" id="emptyBtn" onclick="toggleEmpty()">Пустой список</button>
+  <button class="btn" onclick="openDelete()">Диалог удаления</button>
+</div>
+
+<div class="stage" id="stage">
+<div class="modal-shell">
+<div class="modal">
+  <div class="grabber"></div>
+  <div class="modal-head">
+    <div class="row">
+      <div>
+        <h2>MCP-серверы</h2>
+        <p>Внешние инструменты, которыми пользуются чаты и персоны: что подключено, живо ли оно и кому доступно.</p>
+      </div>
+      <div class="x">×</div>
+    </div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" onclick="showTab('servers', this)">Серверы <span class="cnt">10</span></button>
+    <button class="tab-btn" onclick="showTab('add', this)">Добавить</button>
+    <button class="tab-btn" onclick="showTab('access', this)">Доступ</button>
+    <button class="tab-btn" onclick="showTab('diag', this)">Диагностика <span class="badge admin">админ</span></button>
+  </div>
+
+  <div class="body">
+
+    <!-- === Серверы === -->
+    <div class="tab-panel active" id="tab-servers">
+      <div class="section-title">Ваши серверы</div>
+
+      <div id="serverList">
+        <!-- Работает -->
+        <div class="srv-card" data-probe="ok">
+          <div class="srv-top">
+            <span class="dot ok"></span>
+            <div class="srv-name"><span class="n">Miro</span><span class="badge own">свой</span></div>
+            <span class="transport">http</span>
+            <div class="tgl on" onclick="flip(this)"><div class="th"></div></div>
+          </div>
+          <div class="srv-url" title="https://mcp.miro.com/v1/boards/team-42/stream?workspace=naychenko&profile=design-system&region=eu-central">https://mcp.miro.com/v1/boards/team-42/stream?workspace=naychenko&profile=design-system&region=eu-central</div>
+          <div class="srv-foot">
+            <div class="srv-status ok">Работает · 9 инструментов · проверен сегодня в 14:32</div>
+            <div class="srv-actions">
+              <button class="btn-sm" onclick="probe(this)">Проверить</button>
+              <button class="icon-btn" title="Изменить">✎</button>
+              <button class="icon-btn" title="Удалить" onclick="openDelete()">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Нужен вход — приглашение к действию, не ошибка -->
+        <div class="srv-card" data-probe="ok">
+          <div class="srv-top">
+            <span class="dot warn"></span>
+            <div class="srv-name"><span class="n">Figma</span><span class="badge own">свой</span></div>
+            <span class="transport">http</span>
+            <div class="tgl on" onclick="flip(this)"><div class="th"></div></div>
+          </div>
+          <div class="srv-url">https://mcp.figma.com/mcp</div>
+          <div class="srv-foot">
+            <div class="srv-status warn">Нужен вход · токен истёк 12 августа</div>
+            <div class="srv-actions">
+              <button class="btn-accent" onclick="probe(this)">Войти</button>
+              <button class="btn-sm" onclick="probe(this)">Проверить</button>
+              <button class="icon-btn" title="Изменить">✎</button>
+              <button class="icon-btn" title="Удалить" onclick="openDelete()">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Не отвечает -->
+        <div class="srv-card" data-probe="fail">
+          <div class="srv-top">
+            <span class="dot bad"></span>
+            <div class="srv-name"><span class="n">Файловый сервер</span><span class="badge own">свой</span></div>
+            <span class="transport">stdio</span>
+            <div class="tgl on" onclick="flip(this)"><div class="th"></div></div>
+          </div>
+          <div class="srv-url" title="npx -y @modelcontextprotocol/server-filesystem --root C:\Users\naych\Documents\shared --readonly --follow-symlinks=false">npx -y @modelcontextprotocol/server-filesystem --root C:\Users\naych\Documents\shared --readonly --follow-symlinks=false</div>
+          <div class="srv-foot">
+            <div class="srv-status bad">Не отвечает · таймаут 10 с · проверка сегодня в 14:30</div>
+            <div class="srv-actions">
+              <button class="btn-sm" onclick="probe(this)">Проверить</button>
+              <button class="icon-btn" title="Изменить">✎</button>
+              <button class="icon-btn" title="Удалить" onclick="openDelete()">✕</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Не проверялся + наследство -->
+        <div class="srv-card" data-probe="ok">
+          <div class="srv-top">
+            <span class="dot mute"></span>
+            <div class="srv-name"><span class="n">github-mcp</span><span class="badge legacy">наследство</span></div>
+            <span class="transport">stdio</span>
+            <div class="tgl on" onclick="flip(this)"><div class="th"></div></div>
+          </div>
+          <div class="srv-url">npx -y @github/mcp-server --token ••••••••</div>
+          <div class="srv-foot">
+            <div class="srv-status mute">Не проверялся · нажмите «Проверить»</div>
+            <div class="srv-actions">
+              <button class="btn-sm" onclick="probe(this)">Проверить</button>
+              <button class="icon-btn" title="Изменить">✎</button>
+              <button class="icon-btn" title="Удалить" onclick="openDelete()">✕</button>
+            </div>
+          </div>
+        </div>
+        <div class="hint">«Наследство» — серверы из старого конфига: они работают как раньше, а здесь их можно
+          проверить, доправить и пересохранить. Проверка не блокирует список — остальные карточки остаются живыми.</div>
+      </div>
+
+      <!-- Пустое состояние (включается кнопкой в шапке) -->
+      <div class="empty" id="emptyState" style="display:none">
+        <div class="t">Своих серверов пока нет</div>
+        <p>Пока подключены только встроенные серверы продукта. Добавьте свой — например, Miro
+          или файловый сервер — и он станет доступен в чатах и персонам.</p>
+        <button class="btn-accent" style="font-size:12.5px;padding:8px 18px"
+          onclick="showTab('add', document.querySelectorAll('.tab-btn')[1]);toggleEmpty()">Добавить сервер</button>
+      </div>
+
+      <div class="section-title">Встроенные в продукт</div>
+      <div class="tiles">
+        <div class="tile"><div class="name">tasks</div><div class="stat"><span class="dot ok"></span>18 инструментов</div></div>
+        <div class="tile"><div class="name">notes</div><div class="stat"><span class="dot ok"></span>9 инструментов</div></div>
+        <div class="tile"><div class="name">wsp</div><div class="stat"><span class="dot ok"></span>14 инструментов</div></div>
+        <div class="tile"><div class="name">personas</div><div class="stat"><span class="dot ok"></span>7 инструментов</div></div>
+        <div class="tile"><div class="name">memory</div><div class="stat"><span class="dot ok"></span>8 инструментов</div></div>
+        <div class="tile"><div class="name">widgets</div><div class="stat"><span class="dot mute"></span>не проверялся</div></div>
+      </div>
+      <div class="hint">Встроенные серверы — часть продукта: у них только статус, удалить или выключить их
+        отсюда нельзя.</div>
+    </div>
+
+    <!-- === Добавить === -->
+    <div class="tab-panel" id="tab-add">
+      <div class="segmented">
+        <button class="seg-btn active" onclick="showSeg(this,'seg-stdio')">stdio</button>
+        <button class="seg-btn" onclick="showSeg(this,'seg-http')">http</button>
+        <button class="seg-btn" onclick="showSeg(this,'seg-json')">JSON-фрагмент</button>
+      </div>
+
+      <div class="seg-panel active" id="seg-stdio">
+        <div class="f">
+          <label>Название</label>
+          <input type="text" value="Файловый сервер" />
+        </div>
+        <div class="f">
+          <label>Команда</label>
+          <input type="text" class="mono" value="npx -y @modelcontextprotocol/server-filesystem" />
+        </div>
+        <div class="f">
+          <label>Аргументы</label>
+          <input type="text" class="mono" value="--root C:\Users\naych\Documents\shared --readonly" />
+        </div>
+        <div class="f">
+          <label>Переменные окружения</label>
+          <div class="kv-row">
+            <input class="mono" value="LOG_LEVEL" placeholder="Ключ" />
+            <input class="mono" value="warn" placeholder="Значение" />
+            <label class="kv-secret"><input type="checkbox" /> секрет</label>
+            <button class="icon-btn">✕</button>
+          </div>
+          <div class="kv-row">
+            <input class="mono" value="FS_API_TOKEN" placeholder="Ключ" />
+            <input class="mono" type="text" value="••••••••••" placeholder="Значение" />
+            <label class="kv-secret"><input type="checkbox" checked /> секрет</label>
+            <button class="icon-btn">✕</button>
+          </div>
+          <button class="add-kv">+ Добавить переменную</button>
+          <div class="hint">Секретные значения после сохранения не показываются — в форме редактирования
+            вместо них будет только отметка «задано».</div>
+        </div>
+        <div class="form-foot">
+          <button class="btn-ghost">Отмена</button>
+          <button class="btn-primary">Добавить сервер</button>
+        </div>
+      </div>
+
+      <div class="seg-panel" id="seg-http">
+        <div class="f">
+          <label>Название</label>
+          <input type="text" value="Miro" />
+        </div>
+        <div class="f">
+          <label>Адрес</label>
+          <input type="text" class="mono" value="https://mcp.miro.com/v1/boards/team-42/stream?workspace=naychenko" />
+        </div>
+        <div class="f">
+          <label>Заголовки</label>
+          <div class="kv-row">
+            <input class="mono" value="Authorization" placeholder="Ключ" />
+            <input class="mono" value="Bearer ••••••••••" placeholder="Значение" />
+            <label class="kv-secret"><input type="checkbox" checked /> секрет</label>
+            <button class="icon-btn">✕</button>
+          </div>
+          <div class="kv-row">
+            <input class="mono" value="X-Workspace" placeholder="Ключ" />
+            <input class="mono" value="design" placeholder="Значение" />
+            <label class="kv-secret"><input type="checkbox" /> секрет</label>
+            <button class="icon-btn">✕</button>
+          </div>
+          <button class="add-kv">+ Добавить заголовок</button>
+        </div>
+        <div class="form-foot">
+          <button class="btn-ghost">Отмена</button>
+          <button class="btn-primary">Добавить сервер</button>
+        </div>
+      </div>
+
+      <div class="seg-panel" id="seg-json">
+        <div class="f">
+          <label>JSON-фрагмент</label>
+          <textarea class="mono">{
+  "mcpServers": {
+    "github-mcp": {
+      "command": "npx",
+      "args": ["-y", "@github/mcp-server"],
+      "env": { "GITHUB_TOKEN": "…" }
+    }
+  }
+}</textarea>
+          <div class="hint">Вставьте объект <span class="mono">mcpServers</span> из конфига Claude Code
+            или Claude Desktop — каждый сервер из фрагмента добавится как свой. Пары из
+            <span class="mono">env</span> и <span class="mono">headers</span> с признаком секрета сохранятся
+            в защищённом хранилище.</div>
+        </div>
+        <div class="form-foot">
+          <button class="btn-ghost">Отмена</button>
+          <button class="btn-primary">Добавить из JSON</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- === Доступ === -->
+    <div class="tab-panel" id="tab-access">
+      <div class="section-title">Проекты</div>
+      <div class="hint">Сервер включён везде, пока его не выключили в конкретном проекте. Встроенные серверы
+        продукта здесь не показаны — они доступны всегда.</div>
+      <div class="mx-wrap">
+        <table class="mx">
+          <thead>
+            <tr><th>Сервер</th><th class="c" style="text-align:center">AI Home</th>
+              <th style="text-align:center">ClaudeCodeServer</th><th style="text-align:center">Личное</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="srv">Miro</td>
+              <td class="c"><div class="tgl sm on" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm on" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm" onclick="flip(this)"><div class="th"></div></div></td>
+            </tr>
+            <tr>
+              <td class="srv">Figma</td>
+              <td class="c"><div class="tgl sm on" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm" onclick="flip(this)"><div class="th"></div></div></td>
+            </tr>
+            <tr>
+              <td class="srv">Файловый сервер</td>
+              <td class="c"><div class="tgl sm on" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm on" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm on" onclick="flip(this)"><div class="th"></div></div></td>
+            </tr>
+            <tr>
+              <td class="srv">github-mcp<span class="sub">наследство</span></td>
+              <td class="c"><div class="tgl sm" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm on" onclick="flip(this)"><div class="th"></div></div></td>
+              <td class="c"><div class="tgl sm" onclick="flip(this)"><div class="th"></div></div></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="section-title">Персоны</div>
+      <div class="hint">Доступ персон настраивается в студии персоны — здесь только обзор, чтобы было видно,
+        у кого сервер уже задействован, прежде чем его выключать или удалять.</div>
+      <div class="mx-wrap">
+        <table class="mx">
+          <thead>
+            <tr><th>Персона</th><th style="text-align:center">Miro</th><th style="text-align:center">Figma</th>
+              <th style="text-align:center">Файлы</th><th style="text-align:center">github-mcp</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td class="srv">Майя<span class="sub">дизайнер</span></td>
+              <td class="c"><span class="mark">✓</span></td>
+              <td class="c"><span class="mark">✓</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><button class="link-btn">Студия →</button></td>
+            </tr>
+            <tr>
+              <td class="srv">Денис<span class="sub">backend</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><span class="mark">✓</span></td>
+              <td class="c"><span class="mark">✓</span></td>
+              <td class="c"><button class="link-btn">Студия →</button></td>
+            </tr>
+            <tr>
+              <td class="srv">Кира<span class="sub">frontend</span></td>
+              <td class="c"><span class="mark">✓</span></td>
+              <td class="c"><span class="mark">✓</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><span class="mark">✓</span></td>
+              <td class="c"><button class="link-btn">Студия →</button></td>
+            </tr>
+            <tr>
+              <td class="srv">Софья<span class="sub">аналитик</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><span class="dash">—</span></td>
+              <td class="c"><button class="link-btn">Студия →</button></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- === Диагностика (только админ) === -->
+    <div class="tab-panel" id="tab-diag">
+      <div class="hint">Счётчики вызовов MCP-инструментов с момента запуска сервера и последние сбои.
+        Вкладка видна только администратору — здесь данные всех владельцев.</div>
+      <div class="mx-wrap">
+        <table class="diag-table">
+          <thead>
+            <tr><th>Инструмент</th><th>Сервер</th><th class="num">Вызовы</th>
+              <th class="num">Отказы</th><th>Последний сбой</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="tool">tasks_list</td><td>tasks</td><td class="num">1 204</td>
+              <td class="num">0</td><td><span class="ago">—</span></td></tr>
+            <tr><td class="tool">notes_search</td><td>notes</td><td class="num">812</td>
+              <td class="num">3</td><td><span class="fail">fetch failed</span> <span class="ago">· сегодня 12:04</span></td></tr>
+            <tr><td class="tool">personas_bindings_list</td><td>personas</td><td class="num">340</td>
+              <td class="num">0</td><td><span class="ago">—</span></td></tr>
+            <tr><td class="tool">miro_create_board</td><td>Miro</td><td class="num">96</td>
+              <td class="num">1</td><td><span class="fail">401 Unauthorized</span> <span class="ago">· вчера 18:41</span></td></tr>
+            <tr><td class="tool">fs_read_file</td><td>Файловый сервер</td><td class="num">57</td>
+              <td class="num">12</td><td><span class="fail">таймаут 10 с</span> <span class="ago">· сегодня 14:30</span></td></tr>
+            <tr><td class="tool">memory_recall</td><td>memory</td><td class="num">2 031</td>
+              <td class="num">0</td><td><span class="ago">—</span></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="hint">Строка с растущими отказами — повод нажать «Проверить» на вкладке «Серверы»:
+        так «молчаливые» поломки авторизации перестают быть невидимыми.</div>
+    </div>
+
+  </div>
+</div>
+</div>
+</div>
+
+<!-- Подтверждение удаления -->
+<div class="overlay" id="delOverlay" style="display:none" onclick="closeDelete(event)">
+  <div class="confirm">
+    <h3>Удалить «Miro»?</h3>
+    <p>Сервер отключится у 2 персон и во всех проектах. Секретные значения будут стёрты —
+      чтобы подключить его снова, ключи придётся ввести заново.</p>
+    <div class="confirm-actions">
+      <button class="btn-ghost" onclick="hideDelete()">Отмена</button>
+      <button class="btn-danger" onclick="hideDelete()">Удалить</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function toggleTheme(){
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  document.getElementById('themeBtn').textContent = dark ? 'Тёмная тема' : 'Светлая тема';
+  document.getElementById('themeBtn').classList.toggle('on', !dark);
+}
+function toggleMobile(){
+  const st = document.getElementById('stage');
+  st.classList.toggle('mob');
+  document.getElementById('mobBtn').classList.toggle('on', st.classList.contains('mob'));
+}
+function showTab(name, btn){
+  document.querySelectorAll('.tab-panel').forEach(p=>p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  btn.classList.add('active');
+}
+function showSeg(btn, panelId){
+  const seg = btn.parentElement;
+  seg.querySelectorAll('.seg-btn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.seg-panel').forEach(p=>p.classList.remove('active'));
+  document.getElementById(panelId).classList.add('active');
+}
+function flip(t){
+  t.classList.toggle('on');
+  const card = t.closest('.srv-card');
+  if(card) card.classList.toggle('off', !t.classList.contains('on'));
+}
+// Проба: ожидание только на своей карточке, список живёт дальше
+function probe(btn){
+  const card = btn.closest('.srv-card'); if(!card || card.classList.contains('checking')) return;
+  const st = card.querySelector('.srv-status');
+  const dot = card.querySelector('.dot');
+  const prev = { text: st.textContent, cls: st.className, dot: dot.className };
+  card.classList.add('checking');
+  st.className = 'srv-status mute';
+  st.textContent = 'Проверяем… обычно 2–3 секунды';
+  card.querySelectorAll('button').forEach(b=>b.disabled = true);
+  setTimeout(()=>{
+    card.classList.remove('checking');
+    card.querySelectorAll('button').forEach(b=>b.disabled = false);
+    if(card.dataset.probe === 'fail'){
+      dot.className = 'dot bad';
+      st.className = 'srv-status bad';
+      st.textContent = 'Не отвечает · таймаут 10 с · проверка только что';
+    } else {
+      dot.className = 'dot ok';
+      st.className = 'srv-status ok';
+      st.textContent = 'Работает · 9 инструментов · проверен только что';
+    }
+  }, 2400);
+}
+function toggleEmpty(){
+  const list = document.getElementById('serverList');
+  const empty = document.getElementById('emptyState');
+  const showEmpty = empty.style.display === 'none';
+  empty.style.display = showEmpty ? 'flex' : 'none';
+  list.style.display = showEmpty ? 'none' : 'block';
+  document.getElementById('emptyBtn').classList.toggle('on', showEmpty);
+  if(showEmpty) showTab('servers', document.querySelectorAll('.tab-btn')[0]);
+}
+function openDelete(){ document.getElementById('delOverlay').style.display = 'flex'; }
+function hideDelete(){ document.getElementById('delOverlay').style.display = 'none'; }
+function closeDelete(e){ if(e.target.id === 'delOverlay') hideDelete(); }
+</script>
+</body>
+</html>

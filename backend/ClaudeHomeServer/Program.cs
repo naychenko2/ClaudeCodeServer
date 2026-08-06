@@ -273,6 +273,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFa
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 // Наблюдаемость вызовов продуктовых MCP-серверов (счётчики + последние сбои, только в памяти)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
+// Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
+// и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpRegistry>();
+// Последний известный статус серверов (data/mcp-status.json — в архив не едет) и разовая
+// проба по кнопке: фонового поллинга нет, наблюдение приходит из system/init каждого хода
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
+// Вход в чужой сервер по OAuth: discovery, регистрация клиента, обмен кода и обновление
+// токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
@@ -360,6 +371,22 @@ builder.Services.AddQuietHttpClient(
         Consequence: "Принудительное сохранение документа ждёт таймаут."))
     .WithoutEgressProxy();
 builder.Services.AddHttpClient("glif");
+// Проба MCP-сервера из личного реестра: чужой сервер лежит штатно (не поднят, сменил адрес),
+// и человек видит причину в ответе — консоли не нужны стектрейсы на каждый клик
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.McpProbeService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Probe",
+        Subject: "внешним MCP-сервером",
+        Consequence: "Проверка сервера показала отказ — сам ход это не ломает."));
+// Authorization server чужого MCP-сервера: недоступен ровно так же штатно (нет DCR, лежит
+// well-known, отозван клиент) — человек видит причину в ответе, консоли стектрейсы не нужны
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.McpOAuthService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.OAuth",
+        Subject: "сервером авторизации MCP",
+        Consequence: "Вход в сервер не выполнен — инструменты этого сервера в ход не поедут."));
 // Сторонний провайдер — опциональная зависимость: баланс уходит в протухший кэш, каталог
 // моделей — в дефолтный список, фоновое действие — к другой модели. Мёртвый провайдер
 // не должен засыпать консоль стектрейсами (см. QuietHttpLogger)

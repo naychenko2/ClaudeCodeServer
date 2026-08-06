@@ -14,6 +14,8 @@ import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { UsageScreen } from './UsageScreen';
 import { ModelProvidersTabsModal } from '../features/modelProviders/ModelProvidersTabsModal';
+import { McpServersModal } from '../features/mcp/McpServersModal';
+import { useFeature, FLAGS } from '../lib/featureFlags';
 import { api } from '../lib/api';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
@@ -60,6 +62,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showUsage, setShowUsage] = useState(false);
   const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
+  const [showMcpServers, setShowMcpServers] = useState(false);
+  const mcpRegistry = useFeature(FLAGS.mcpRegistry);
 
   // «Собрать цепочку…» из панелей выбора модели — открыть раздел на вкладке «Пресеты»
   useEffect(() => subscribeModelProvidersNav(() => setShowBackgroundTasks(true)), []);
@@ -292,6 +296,8 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowUsage={() => setShowUsage(true)}
           onShowBackgroundTasks={() => setShowBackgroundTasks(true)}
+          // «MCP-серверы» — за фич-флагом mcp-registry: без флага пункта в меню нет
+          onShowMcpServers={mcpRegistry ? () => setShowMcpServers(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
           // «Знания», «Аналитика токенов» и «Что нового» живут здесь на обеих платформах:
@@ -312,6 +318,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
       {showBackgroundTasks && <ModelProvidersTabsModal isAdmin={isAdmin} onClose={() => setShowBackgroundTasks(false)} />}
+      {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
     </div>
   );
 }

@@ -38,6 +38,11 @@ public static class FeatureFlagKeys
     // Режим чтения внешних ссылок рядом с чатом (docs/adr/ADR-005-link-reader-server.md):
     // панель «Чтение» + кнопка-компаньон у внешней ссылки. Гейтит и панель, и эндпоинт.
     public const string LinkReader = "link-reader";
+
+    // Личный реестр MCP-серверов: раздел управления, группа в пикере инструментов персоны
+    // и подмешивание серверов реестра в ход (гейт стоит в резолвере доставки — снятие
+    // флага честно убирает серверы, а не оставляет их работать втихую).
+    public const string McpRegistry = "mcp-registry";
 }
 
 /// <summary>
@@ -93,6 +98,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.LinkReader,
             Title: "Режим чтения ссылок",
             Description: "У внешней ссылки в ответе Claude появляется кнопка «Открыть рядом» — страница открывается панелью рядом с разговором, без перехода в браузер.",
+            Default: false,
+            Stage: "dev"),
+
+        // Личный реестр MCP-серверов (Services/Mcp): свои внешние инструменты в чатах
+        // и у персон. Флаг гейтит и доставку серверов в ход — снимаем после недели
+        // работы своего сервера без падений статуса.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.McpRegistry,
+            Title: "MCP-серверы",
+            Description: "Свой список внешних MCP-серверов: видно, какие подключены и работают ли они, можно добавить новый и выдать доступ конкретной персоне.",
             Default: false,
             Stage: "dev"),
     ];

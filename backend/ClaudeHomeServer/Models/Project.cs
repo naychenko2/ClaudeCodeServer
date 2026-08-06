@@ -67,4 +67,9 @@ public class Project
     public string? CommitPromptOverride { get; set; }
     // Иконка проекта: инициалы+цвет по умолчанию, картинка (сгенерированная/загруженная) опционально
     public ProjectIcon Icon { get; set; } = new();
+    // Ключи серверов личного реестра MCP (McpRegistry), выключенных В ЭТОМ проекте.
+    // Именно deny-list, а не allow-list: новый сервер владельца доезжает во все его
+    // проекты сам, а пустой/null список = «включено всё, что включено в реестре».
+    // Ось каскада реестр → проект → персона (см. SessionManager.BuildExternalMcpProvider).
+    public List<string>? McpServersOff { get; set; }
 }

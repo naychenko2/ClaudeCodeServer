@@ -183,6 +183,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           groups={orderedGroups}
           onSuccess={updated => { upsertProject(updated); closeDialog(); }}
           onIconUpdated={upsertProject}
+          onProjectUpdated={upsertProject}
           onClose={closeDialog}
         />
       )}

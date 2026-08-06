@@ -18,6 +18,7 @@ public class PersonaBindingsServiceTests : IDisposable
     private readonly ProjectManager _projects;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _sut;
+    private readonly ClaudeHomeServer.Services.Mcp.McpRegistry _mcp;
     private readonly string _userId;
 
     public PersonaBindingsServiceTests()
@@ -44,9 +45,11 @@ public class PersonaBindingsServiceTests : IDisposable
         var notesKb = new NotesKnowledgeService(knowledge, notesSvc, _users, config,
             NullLogger<NotesKnowledgeService>.Instance);
 
+        _mcp = new ClaudeHomeServer.Services.Mcp.McpRegistry(config,
+            new ClaudeHomeServer.Services.Mcp.McpSecretStore(config));
         _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), _users, config,
-            NullLogger<PersonaBindingsService>.Instance);
+            NullLogger<PersonaBindingsService>.Instance, _mcp);
     }
 
     public void Dispose()
@@ -191,6 +194,89 @@ public class PersonaBindingsServiceTests : IDisposable
         // Иначе Off-привязку на такой ключ отклонит валидация ValidateAsync
         foreach (var key in PersonaBindingsService.ServerKeys)
             PersonaBindingsService.ToolCatalog.Should().ContainKey(key);
+    }
+
+    // --- Серверы личного реестра как Tool-ключи «mcp:<ключ>» ---
+
+    private McpServerRecord MakeServer(string key, string? label = null) =>
+        _mcp.Create(_userId, new McpServerRecord
+        {
+            Key = key,
+            Label = label ?? key,
+            Transport = McpTransport.Stdio,
+            Command = "node",
+        });
+
+    [Fact]
+    public void ToolCatalogFor_ДобавляетСерверыРеестра_НеТрогаяСтатическийКаталог()
+    {
+        MakeServer("context7", "Context7");
+
+        var catalog = _sut.ToolCatalogFor(_userId);
+        catalog.Should().ContainKey("mcp:context7");
+        catalog["mcp:context7"].Label.Should().Be("Context7");
+        // хинт обязан говорить, что условие у такой привязки не работает
+        catalog["mcp:context7"].Hint.Should().Contain("не учитывается");
+        // статический каталог общий для всех владельцев — его расширять нельзя
+        PersonaBindingsService.ToolCatalog.Should().NotContainKey("mcp:context7");
+        // чужой владелец записи не видит
+        _sut.ToolCatalogFor("другой-владелец").Should().NotContainKey("mcp:context7");
+    }
+
+    [Fact]
+    public void McpКлюч_ДефолтВключён_ВыключаетТолькоOffПривязка()
+    {
+        MakeServer("context7");
+        var persona = MakePersona();
+
+        _sut.GetToolDefaultState(_userId, persona, "mcp:context7").Should().Be((true, (string?)null));
+        _sut.ServerToolEnabled(_userId, persona, "mcp:context7").Should().BeTrue();
+
+        // суженный список возможностей на mcp-ключи не влияет (как и у прочих ServerKeys)
+        var narrow = MakePersona(tools: ["tasks"]);
+        _sut.ServerToolEnabled(_userId, narrow, "mcp:context7").Should().BeTrue();
+
+        var off = MakePersona(bindings: [ToolBinding("mcp:context7", PersonaBindingMode.Off)]);
+        _sut.ServerToolEnabled(_userId, off, "mcp:context7").Should().BeFalse();
+        // Auto-привязка ничего не выключает — сервер и так включён
+        var auto = MakePersona(bindings: [ToolBinding("mcp:context7", PersonaBindingMode.Auto)]);
+        _sut.ServerToolEnabled(_userId, auto, "mcp:context7").Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ValidateAsync_McpКлюч_СверяетсяСРеестромВладельца()
+    {
+        MakeServer("context7");
+
+        var ok = await _sut.ValidateAsync(_userId, ToolBinding("mcp:context7", PersonaBindingMode.Off), null, null);
+        ok.Should().BeNull();
+
+        var missing = await _sut.ValidateAsync(_userId, ToolBinding("mcp:нет-такого", PersonaBindingMode.Off), null, null);
+        missing.Should().NotBeNull();
+
+        // чужому владельцу тот же ключ недоступен
+        var alien = await _sut.ValidateAsync("другой-владелец", ToolBinding("mcp:context7", PersonaBindingMode.Off), null, null);
+        alien.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void PurgeMcpBindings_УбираетПривязкиНаУдалённыйСервер()
+    {
+        MakeServer("context7");
+        var persona = _personas.Create(_userId, "Тест", null, null, null, null, null,
+            PersonaScope.Global, null, null, null, memoryEnabled: false);
+        _personas.UpdateBindings(persona.Id, _userId,
+        [
+            ToolBinding("mcp:context7", PersonaBindingMode.Off),
+            ToolBinding("tasks", PersonaBindingMode.Off),
+        ]);
+
+        _sut.PurgeMcpBindings(_userId, "context7").Should().Be(1);
+
+        var updated = _personas.Get(persona.Id, _userId)!;
+        updated.Bindings.Should().ContainSingle().Which.Target.Should().Be("tasks");
+        // повторный вызов уже никого не трогает
+        _sut.PurgeMcpBindings(_userId, "context7").Should().Be(0);
     }
 
     // --- SectionEnabled (секции-надстройки с дефолтом по specialty) ---

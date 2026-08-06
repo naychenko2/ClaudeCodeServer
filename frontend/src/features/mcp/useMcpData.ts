@@ -6,6 +6,11 @@ import type {
   McpBuiltinServer, McpProbeResult, McpServer, McpServerUpsert, Persona, Project,
 } from '../../types';
 
+// Popup входа + таймер опроса «окно закрыли» на сервер — не состояние React: перекладывать
+// Window/interval id в setState незачем, а очистка при повторном «Войти» и при получении
+// postMessage должна быть синхронной
+interface OAuthWindow { win: Window; timer: number; }
+
 // Владелец состояния раздела «MCP-серверы» — один на всю модалку: список серверов,
 // наблюдения встроенных, проекты и персоны нужны сразу нескольким вкладкам
 // («Серверы» подписывает карточку строкой «кому доступен», «Доступ» рисует те же данные
@@ -41,9 +46,7 @@ export function plural(n: number, one: string, few: string, many: string): strin
 // свежая проба (в сторе наблюдений его нет) — поэтому она передаётся отдельно.
 export function mcpStatusLine(status: McpServer['status'], probe?: McpProbeResult): string {
   if (!status || status.status === 'unknown') return 'Не проверялся · нажмите «Проверить»';
-  // Вход по OAuth приедет в волне 7 — до тех пор нельзя обещать кнопку «Войти»,
-  // которой ещё нет: фиксированный текст ведёт к реальному действию (правка ключа)
-  if (status.status === 'needs-auth') return 'Нужен вход · сервер не принял авторизацию';
+  if (status.status === 'needs-auth') return 'Сервер требует входа';
   const tone = mcpStatusTone(status.status);
   const parts = [tone.label];
   const tools = probe?.toolCount;
@@ -54,6 +57,30 @@ export function mcpStatusLine(status: McpServer['status'], probe?: McpProbeResul
   const when = relTime(status.observedAt);
   if (when) parts.push(status.source === 'probe' ? `проверен ${when}` : `наблюдался в чатах ${when}`);
   return parts.join(' · ');
+}
+
+function formatExpiry(iso?: string | null): string {
+  if (!iso) return '';
+  const t = Date.parse(iso);
+  if (isNaN(t)) return '';
+  return new Date(t).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+}
+
+// Строка статуса сервера с OAuth-авторизацией, пока по нему не было ни одной пробы/хода:
+// «сервер требует входа» до логина, «вход выполнен · токен действует до …» сразу после —
+// не дожидаясь следующей пробы (сразу после успешного входа bx.status снова «не проверялся»,
+// иначе карточка на секунду соврала бы, что вход снова нужен)
+export function mcpAuthLine(server: McpServer, probe?: McpProbeResult): string {
+  const status = server.status?.status;
+  const isOAuth = server.auth.kind === 'oauth2';
+  if (isOAuth && (status == null || status === 'unknown' || status === 'needs-auth')) {
+    if (server.auth.hasTokens) {
+      const expiry = formatExpiry(server.auth.expiresAt);
+      return expiry ? `Вход выполнен · токен действует до ${expiry}` : 'Вход выполнен';
+    }
+    return 'Сервер требует входа';
+  }
+  return mcpStatusLine(server.status, probe);
 }
 
 // Строка «кому доступен» на карточке: главный сценарий фичи — человек, выдавший сервер
@@ -96,6 +123,13 @@ export interface McpData {
   setProjectOff: (project: Project, serverKey: string, off: boolean) => void;
   personasOffCount: (serverKey: string) => number;
   projectsOffCount: (serverKey: string) => number;
+  // Вход по OAuth (волна 7). oauthPending[serverId] — открыто окно провайдера, ждём
+  // postMessage; oauthNotice[serverId] — сообщение под карточкой (окно закрыли / отказ)
+  oauthPending: Record<string, boolean>;
+  oauthNotice: Record<string, string>;
+  startOAuth: (server: McpServer, clientId?: string) => Promise<void>;
+  completeOAuth: (server: McpServer, code: string) => Promise<void>;
+  dismissOAuthNotice: (server: McpServer) => void;
 }
 
 export function useMcpData(): McpData {
@@ -129,6 +163,13 @@ export function useMcpData(): McpData {
 
   const replace = (updated: McpServer) =>
     setServers(list => list?.map(s => (s.id === updated.id ? updated : s)) ?? list);
+
+  // После входа обновляем только эту карточку (новый статус, срок токена), не трогая
+  // остальной список — полная перезагрузка сбросила бы независимое состояние других карточек
+  const refreshOne = useCallback(
+    (id: string) => api.mcp.get(id).then(replace).catch(() => loadServers()),
+    [loadServers],
+  );
 
   const setEnabled = (server: McpServer, enabled: boolean) => {
     const seq = (saveSeq.current[server.id] ?? 0) + 1;
@@ -170,6 +211,86 @@ export function useMcpData(): McpData {
       setChecking(c => ({ ...c, [server.id]: false }));
     }
   };
+
+  // state сервера (не React-стейт, ключ oauth/start) → id записи, ждущей ответа окна входа
+  const [oauthSessions, setOauthSessions] = useState<Record<string, { key: string; state: string }>>({});
+  const [oauthNotice, setOauthNotice] = useState<Record<string, string>>({});
+  const oauthWindows = useRef<Record<string, OAuthWindow>>({});
+
+  const stopOAuthPoll = (id: string) => {
+    const w = oauthWindows.current[id];
+    if (w) { window.clearInterval(w.timer); delete oauthWindows.current[id]; }
+  };
+
+  const startOAuth = async (server: McpServer, clientId?: string) => {
+    dismissOAuthNotice(server);
+    stopOAuthPoll(server.id);
+    try {
+      const started = await api.mcp.oauthStart(server.id, clientId);
+      const win = window.open(started.authorizeUrl, 'mcp-oauth', 'width=520,height=720');
+      if (!win) {
+        setOauthNotice(n => ({ ...n, [server.id]: 'Не удалось открыть окно входа — разрешите всплывающие окна и попробуйте снова' }));
+        return;
+      }
+      setOauthSessions(p => ({ ...p, [server.id]: { key: server.key, state: started.state } }));
+      const timer = window.setInterval(() => {
+        if (!win.closed) return;
+        window.clearInterval(timer);
+        delete oauthWindows.current[server.id];
+        setOauthSessions(p => {
+          if (!p[server.id]) return p; // уже разрешилось сообщением от callback-страницы
+          const next = { ...p };
+          delete next[server.id];
+          return next;
+        });
+        setOauthNotice(n => ({ ...n, [server.id]: 'Окно закрыто — вход не завершён' }));
+      }, 500);
+      oauthWindows.current[server.id] = { win, timer };
+    } catch (e) {
+      setOauthNotice(n => ({ ...n, [server.id]: msg(e, 'Не удалось начать вход') }));
+    }
+  };
+
+  const completeOAuth = async (server: McpServer, code: string) => {
+    const session = oauthSessions[server.id];
+    if (!session) {
+      setOauthNotice(n => ({ ...n, [server.id]: 'Сессия входа истекла — нажмите «Войти» заново' }));
+      return;
+    }
+    try {
+      await api.mcp.oauthComplete(server.id, session.state, code.trim());
+      stopOAuthPoll(server.id);
+      setOauthSessions(p => { const n = { ...p }; delete n[server.id]; return n; });
+      setOauthNotice(n => { const c = { ...n }; delete c[server.id]; return c; });
+      refreshOne(server.id);
+    } catch (e) {
+      setOauthNotice(n => ({ ...n, [server.id]: msg(e, 'Код не принят') }));
+    }
+  };
+
+  const dismissOAuthNotice = (server: McpServer) =>
+    setOauthNotice(n => { if (!(server.id in n)) return n; const c = { ...n }; delete c[server.id]; return c; });
+
+  // Ответ окна провайдера: страница /api/mcp/oauth/callback шлёт postMessage опубликовавшему
+  // окну и закрывается сама. Сверяем по ключу сервера — он в сообщении есть, id pending-записи нет
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const payload = e.data as { type?: string; ok?: boolean; key?: string; error?: string } | null;
+      if (!payload || payload.type !== 'mcp-oauth') return;
+      const id = Object.keys(oauthSessions).find(sid => oauthSessions[sid].key === payload.key);
+      if (!id) return;
+      stopOAuthPoll(id);
+      setOauthSessions(p => { const n = { ...p }; delete n[id]; return n; });
+      if (payload.ok) {
+        setOauthNotice(n => { if (!(id in n)) return n; const c = { ...n }; delete c[id]; return c; });
+        refreshOne(id);
+      } else {
+        setOauthNotice(n => ({ ...n, [id]: payload.error || 'Вход не удался' }));
+      }
+    };
+    window.addEventListener('message', onMessage);
+    return () => window.removeEventListener('message', onMessage);
+  }, [oauthSessions, refreshOne]);
 
   const remove = async (server: McpServer) => {
     await api.mcp.delete(server.id);
@@ -222,11 +343,15 @@ export function useMcpData(): McpData {
   const projectsOffCount = (serverKey: string) =>
     projects.filter(p => (p.mcpServersOff ?? []).includes(serverKey)).length;
 
+  const oauthPending: Record<string, boolean> = {};
+  for (const id of Object.keys(oauthSessions)) oauthPending[id] = true;
+
   return {
     servers, builtin, projects, personas, error, setError,
     checking, probes, reload: loadServers,
     setEnabled, probe, remove, save, importJson, setProjectOff,
     personasOffCount, projectsOffCount,
+    oauthPending, oauthNotice, startOAuth, completeOAuth, dismissOAuthNotice,
   };
 }
 

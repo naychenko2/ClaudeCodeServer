@@ -42,6 +42,13 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
   const [url, setUrl] = useState(server?.url ?? '');
   const [env, setEnv] = useState<Pair[]>(() => toPairs(server?.env));
   const [headers, setHeaders] = useState<Pair[]>(() => toPairs(server?.headers));
+  // Способ входа — только у http/sse (OAuth ограничен транспортом на бэке). 'headers' —
+  // всё как раньше (заголовки вручную, включая apikey/bearer из наследства); переключение
+  // на него у записи с oauth2 явно сбрасывает kind — иначе тумблер соврал бы о состоянии
+  const initialAuthKind = server?.auth.kind ?? 'none';
+  const [authMode, setAuthMode] = useState<'headers' | 'oauth'>(
+    initialAuthKind === 'oauth2' ? 'oauth' : 'headers');
+  const [oauthClientId, setOauthClientId] = useState(server?.auth.clientId ?? '');
   const [json, setJson] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -50,6 +57,14 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
   const changeLabel = (v: string) => {
     setLabel(v);
     if (!keyTouched) setKey(slugify(v, true));
+  };
+
+  // undefined — не трогать авторизацию (наследство apikey/bearer из импорта остаётся как
+  // было). Явный kind шлём только когда включаем OAuth либо гасим его — тумблер не должен
+  // молчать о смене режима, которую сам же показывает
+  const authField = () => {
+    if (authMode === 'oauth') return { kind: 'oauth2', clientId: oauthClientId.trim() || null };
+    return initialAuthKind === 'oauth2' ? { kind: 'none' } : undefined;
   };
 
   const submit = async () => {
@@ -70,7 +85,7 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
         transport: mode,
         ...(mode === 'stdio'
           ? { command: command.trim(), args: splitArgs(args), env: toInputs(env) }
-          : { url: url.trim(), headers: toInputs(headers) }),
+          : { url: url.trim(), headers: toInputs(headers), auth: authField() }),
       });
       onDone();
     } catch (e) {
@@ -146,6 +161,29 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
               <Field label="Адрес">
                 <TextField value={url} onChange={setUrl} mono placeholder="https://mcp.example.com/mcp" />
               </Field>
+              <Field
+                label="Способ входа"
+                hint={authMode === 'oauth'
+                  ? 'Кнопка «Войти» появится на карточке сервера — вход по OAuth 2.1 с PKCE.'
+                  : 'Заголовки ниже (Authorization, X-Api-Key…) — как раньше.'}
+              >
+                <InlineSegmented
+                  value={authMode}
+                  options={[
+                    { value: 'headers' as const, label: 'Заголовки' },
+                    { value: 'oauth' as const, label: 'OAuth' },
+                  ]}
+                  onChange={setAuthMode}
+                />
+              </Field>
+              {authMode === 'oauth' && (
+                <Field
+                  label="Client ID"
+                  hint="Нужен только серверам без автоматической регистрации клиента (DCR). Если сервер её поддерживает — оставьте пустым, AI Home зарегистрируется сам при первом входе."
+                >
+                  <TextField value={oauthClientId} onChange={setOauthClientId} mono placeholder="необязательно" />
+                </Field>
+              )}
               <PairList
                 title="Заголовки"
                 addLabel="+ Добавить заголовок"

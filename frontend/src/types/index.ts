@@ -2278,7 +2278,7 @@ export interface McpServerUpsert {
   env?: McpValueInput[];
   url?: string | null;
   headers?: McpValueInput[];
-  auth?: { kind?: string; headerName?: string | null; secret?: string | null };
+  auth?: { kind?: string; headerName?: string | null; secret?: string | null; clientId?: string | null };
   enabled?: boolean;
   alwaysLoad?: boolean;
   allowReadOnlyPersonas?: boolean;
@@ -2291,6 +2291,17 @@ export interface McpProbeResult {
   toolCount?: number | null;
   toolNames?: string[] | null;
   error?: string | null;
+}
+
+// Вход по OAuth (волна 7) — ответы POST .../oauth/start и .../oauth/complete
+export interface McpOAuthStartResult {
+  authorizeUrl: string;
+  state: string;
+  redirectUri: string;
+}
+export interface McpOAuthCompleteResult {
+  ok: boolean;
+  key: string;
 }
 
 // Диагностика вызовов MCP-инструментов (GET /api/mcp/calls, только админ)

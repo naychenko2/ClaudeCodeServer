@@ -1,10 +1,11 @@
+import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Pencil, Plug, X } from 'lucide-react';
-import { Button, EmptyState, IconButton, Toggle } from '../../components/ui';
+import { Button, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { groupHeaderStyle } from '../../components/modelProvidersShared';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { accessSummary, mcpStatusLine, mcpStatusTone } from './useMcpData';
+import { accessSummary, mcpAuthLine, mcpStatusTone } from './useMcpData';
 import type { McpData } from './useMcpData';
 import type { McpBuiltinServer, McpServer } from '../../types';
 
@@ -116,6 +117,11 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
   const checking = !!data.checking[server.id];
   const tone = mcpStatusTone(server.status?.status);
   const needsAuth = !checking && server.status?.status === 'needs-auth';
+  // OAuth есть только у http/sse (McpOAuthService.StartAsync отказывает stdio) — у него
+  // «Войти» ведёт к настоящему действию, у stdio остаётся только правка настроек записи
+  const canLogin = needsAuth && server.transport !== 'stdio';
+  const oauthBusy = !!data.oauthPending[server.id];
+  const oauthNotice = data.oauthNotice[server.id];
   const legacy = server.source !== 'manual';
   const personasOff = data.personasOffCount(server.key);
   const projectsOff = data.projectsOffCount(server.key);
@@ -182,9 +188,12 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
       }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
           <div style={{ fontSize: FS.sm, color: checking ? C.textMuted : tone.text }}>
-            {checking ? 'Проверяем… обычно 2–3 секунды' : mcpStatusLine(server.status, data.probes[server.id])}
+            {checking ? 'Проверяем… обычно 2–3 секунды' : mcpAuthLine(server, data.probes[server.id])}
           </div>
-          {needsAuth && (
+          {oauthNotice && (
+            <div style={{ fontSize: FS.xs, color: C.warningText }}>{oauthNotice}</div>
+          )}
+          {needsAuth && !canLogin && (
             <div style={{ fontSize: FS.xs, color: C.textMuted }}>
               Проверьте ключ в{' '}
               <button
@@ -199,6 +208,15 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
           )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+          {canLogin && (
+            <Button
+              variant="primary"
+              size="md"
+              loading={oauthBusy}
+              disabled={checking}
+              onClick={() => void data.startOAuth(server)}
+            >Войти</Button>
+          )}
           <Button variant="ghost" size="md" disabled={checking} onClick={() => void data.probe(server)}>
             Проверить
           </Button>
@@ -214,6 +232,50 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
           )}
         </div>
       </div>
+
+      {canLogin && oauthBusy && (
+        <ManualOAuthCode server={server} data={data} />
+      )}
+    </div>
+  );
+}
+
+// Запасной путь входа: часть серверов принимает только http://127.0.0.1:PORT/… и до
+// нашего callback код не доезжает — окно провайдера открыто, но повисает на чужом адресе.
+// Свёрнуто по умолчанию: 95% входов закрываются сами через postMessage, поле — не для них.
+function ManualOAuthCode({ server, data }: { server: McpServer; data: McpData }) {
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{
+          alignSelf: 'flex-start', font: 'inherit', fontSize: FS.xs, color: C.textMuted,
+          background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'underline',
+        }}
+      >Окно не вернулось само? Вставить код вручную</button>
+    );
+  }
+
+  const submit = async () => {
+    if (!code.trim() || busy) return;
+    setBusy(true);
+    try { await data.completeOAuth(server, code); setCode(''); setOpen(false); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <TextField value={code} onChange={setCode} mono placeholder="Код из адресной строки окна входа" onEnter={submit} />
+      </div>
+      <Button variant="ghost" size="md" disabled={!code.trim() || busy} loading={busy} onClick={() => void submit()}>
+        Завершить
+      </Button>
     </div>
   );
 }

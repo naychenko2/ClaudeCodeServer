@@ -215,7 +215,10 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             Kind = authKind,
             HeaderName = req.Auth?.HeaderName ?? existing?.Auth.HeaderName,
             SecretRef = existing?.Auth.SecretRef,
-            // OAuth-настройки правит только волна 7 (McpOAuthService) — здесь переносим как есть
+            // OAuth-настройки (issuer, токены) правит только волна 7 (McpOAuthService) —
+            // здесь переносим как есть. Единственное исключение — ClientId: его можно
+            // вписать заранее, для серверов без автоматической регистрации клиента (DCR),
+            // до первого нажатия «Войти».
             OAuth = existing?.Auth.OAuth,
         };
         if (authKind == McpAuthKind.ApiKey && string.IsNullOrWhiteSpace(auth.HeaderName))
@@ -225,6 +228,24 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
         if (authKind is McpAuthKind.ApiKey or McpAuthKind.Bearer && string.IsNullOrEmpty(auth.SecretRef))
             return "Не задано значение ключа или токена";
         if (authKind == McpAuthKind.None) auth.SecretRef = null;
+        if (authKind == McpAuthKind.OAuth2 && !string.IsNullOrWhiteSpace(req.Auth?.ClientId))
+        {
+            // Копия, а не правка на месте: OAuth — тот же объект, что живёт в реестре
+            // (Get не клонирует), а неудачная валидация ниже не должна портить его задним числом
+            var existingOAuth = auth.OAuth;
+            auth.OAuth = new McpOAuthConfig
+            {
+                AuthorizationServer = existingOAuth?.AuthorizationServer,
+                TokenEndpoint = existingOAuth?.TokenEndpoint,
+                ClientId = req.Auth.ClientId.Trim(),
+                ClientSecretRef = existingOAuth?.ClientSecretRef,
+                Scopes = existingOAuth?.Scopes,
+                AccessTokenRef = existingOAuth?.AccessTokenRef,
+                RefreshTokenRef = existingOAuth?.RefreshTokenRef,
+                ExpiresAt = existingOAuth?.ExpiresAt,
+                RedirectUri = existingOAuth?.RedirectUri,
+            };
+        }
         draft.Auth = auth;
         return null;
     }
@@ -255,7 +276,7 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
 /// <summary>Значение env/headers из формы. Secret + пустой Value = «оставить как было».</summary>
 public record McpValueInput(string Name, string? Value, bool Secret = false);
 
-public record McpAuthInput(string? Kind, string? HeaderName, string? Secret);
+public record McpAuthInput(string? Kind, string? HeaderName, string? Secret, string? ClientId);
 
 public record McpServerUpsertRequest(
     string? Key, string? Label, string? Description, string? Transport,

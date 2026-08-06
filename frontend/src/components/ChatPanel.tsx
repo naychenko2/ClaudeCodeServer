@@ -29,6 +29,7 @@ import { C, R, SHADOW, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
+import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
@@ -467,15 +468,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // На стене жёлоб не считаем: там лента прокручивается во всю ширину колонки
   // (полоса у её правого края), и компенсировать перекос нечему
   useChatGutter(scrollRef, CHAT_MAX_W, !isMobile && !embedded);
-  // FAB AI-хаба должен вставать НАД композером (иначе налезает на композер и кнопку
-  // «вниз»): пробрасываем высоту композера в глобальную CSS-переменную, читаемую FAB.
+  // Композер — нижнее препятствие для круглешка AI: тот остаётся в углу, но ужимается,
+  // когда композер доходит до него (замер пересечения — в AiLauncher).
   useEffect(() => {
-    // embedded: переменная глобальная, несколько колонок стены перебивали бы друг друга
+    // embedded: препятствие глобальное, несколько колонок стены перебивали бы друг друга
     if (embedded) return;
-    const root = document.documentElement;
-    root.style.setProperty('--cc-fab-composer', `${composerH + 12}px`);
-    return () => { root.style.setProperty('--cc-fab-composer', '0px'); };
-  }, [composerH, embedded]);
+    setFabObstacle(composerWrapRef.current);
+    return () => setFabObstacle(null);
+    // composerH в зависимостях — им ловим момент, когда обёртка композера уже в DOM
+    // (первый замер высоты) и ref наконец не пустой
+  }, [embedded, composerH, composerWrapRef]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 

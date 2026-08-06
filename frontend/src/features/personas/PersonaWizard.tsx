@@ -29,6 +29,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
 import { effortsForProvider } from '../../lib/effort';
+import { setFabObstacle } from '../../lib/ai/fabObstacle';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { PersonaAvatar } from './PersonaAvatar';
 import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
@@ -153,14 +154,13 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const accentColor = AGENT_COLORS[color] ?? C.accent;
 
   // FAB AI-хаба сидит в правом нижнем углу поверх всего — у мастера там же кнопка
-  // «Далее» в футере. Поднимаем FAB над футером тем же каналом, что ChatPanel — над композером.
+  // «Далее» в футере. Отдаём футер FAB как нижнее препятствие тем же каналом, что
+  // ChatPanel — композер: кнопка останется в углу, но ужмётся, если футер до неё достаёт.
   const footerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const root = document.documentElement;
-    if (step === 9) { root.style.setProperty('--cc-fab-composer', '0px'); return; }
-    const h = footerRef.current?.offsetHeight ?? 64;
-    root.style.setProperty('--cc-fab-composer', `${h + 12}px`);
-    return () => { root.style.setProperty('--cc-fab-composer', '0px'); };
+    if (step === 9) { setFabObstacle(null); return; }
+    setFabObstacle(footerRef.current);
+    return () => setFabObstacle(null);
   }, [step]);
 
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);

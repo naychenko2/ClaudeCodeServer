@@ -8,6 +8,7 @@ import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
+import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
 import { useIsMobile } from '../../lib/breakpoints';
 import { FLAGS } from '../../lib/featureFlags';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
@@ -17,6 +18,50 @@ import {
   computeContextState, canShow, markShown, markDismissed,
   isProactiveEnabled, setProactiveEnabled, type Suggestion, type ActionRec,
 } from '../../lib/ai/proactive';
+
+// Полный размер круглешка — от него считаем налезание (см. useFabObstacleOverlap)
+const FAB_FULL = 54;
+// Зазор между кнопкой и препятствием: ужимаемся, не дожидаясь касания впритык
+const FAB_CLEARANCE = 10;
+
+// Налезает ли нижнее препятствие (композер чата, футер мастера персон) на угол кнопки.
+// Замер ведём по геометрии ПОЛНОГО размера (54), а не текущего: иначе ужавшаяся кнопка
+// перестала бы пересекаться, выросла обратно и замигала бы туда-сюда.
+// Позиция кнопки задана от правого-нижнего края, поэтому её right/bottom от размера не
+// зависят — левый-верхний угол полного круга достраиваем от них.
+function useFabObstacleOverlap(fabRef: React.RefObject<HTMLElement | null>, active: boolean): boolean {
+  const [overlap, setOverlap] = useState(false);
+  useEffect(() => {
+    if (!active) { setOverlap(false); return; }
+    let ro: ResizeObserver | null = null;
+    const measure = () => {
+      const fab = fabRef.current;
+      const ob = getFabObstacle();
+      if (!fab || !ob) { setOverlap(false); return; }
+      const f = fab.getBoundingClientRect();
+      const o = ob.getBoundingClientRect();
+      if (o.width === 0 && o.height === 0) { setOverlap(false); return; }
+      setOverlap(
+        o.right > f.right - FAB_FULL - FAB_CLEARANCE && o.left < f.right + FAB_CLEARANCE &&
+        o.bottom > f.bottom - FAB_FULL - FAB_CLEARANCE && o.top < f.bottom + FAB_CLEARANCE,
+      );
+    };
+    // Наблюдаем само препятствие: композер и растёт в высоту (разнос грипом, длинный
+    // текст), и меняет ширину, когда открывается панель — оба случая двигают его кромку
+    // к кнопке. Плюс resize окна: он двигает саму кнопку, а не препятствие.
+    const attach = () => {
+      ro?.disconnect();
+      const ob = getFabObstacle();
+      if (ob) { ro = ro ?? new ResizeObserver(measure); ro.observe(ob); }
+      measure();
+    };
+    const unsub = subscribeFabObstacle(attach);
+    window.addEventListener('resize', measure);
+    attach();
+    return () => { unsub(); ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, [fabRef, active]);
+  return overlap;
+}
 
 // AI-хаб (pull-слой): плавающая кнопка + командная палитра. Открывается кликом,
 // хоткеем ⌘/Ctrl+K или событием 'cc-open-ai'. Палитра через getNav() знает текущий
@@ -44,6 +89,12 @@ export function AiLauncher() {
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
   const aiBusy = useAiBusy();
+  // Режим «Стены» — кнопка там всегда компактная (см. эффект на NAV_CHANGE_EVENT)
+  const [wallMode, setWallMode] = useState(() => getNav()?.screen === 'wall');
+  // Композер чата (или футер мастера персон) дошёл до угла кнопки → ужимаем её
+  const obstacleOverlap = useFabObstacleOverlap(fabRef, !open && !isMobile);
+  // Компактный круг: на стене всегда, в остальных местах — когда снизу подпёрло
+  const fabSmall = wallMode || obstacleOverlap;
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
 
   // Git-статус текущего проекта — чтобы git-действия (разбор коммитов, ревью diff, история
@@ -71,8 +122,13 @@ export function AiLauncher() {
 
   // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
   // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
+  // Заодно ведём признак «Стена»: там колонок чатов много и композер у каждой свой —
+  // крупному кругу места нет, он всегда компактный.
   useEffect(() => {
-    const onNav = () => { setSuggestion(null); setFabLevel('none'); setRecs([]); };
+    const onNav = () => {
+      setSuggestion(null); setFabLevel('none'); setRecs([]);
+      setWallMode(getNav()?.screen === 'wall');
+    };
     window.addEventListener(NAV_CHANGE_EVENT, onNav);
     return () => window.removeEventListener(NAV_CHANGE_EVENT, onNav);
   }, []);
@@ -363,7 +419,13 @@ export function AiLauncher() {
             // Размер: базовый из var --cc-fab-size (54 без панели / 36 при распахнутой панели),
             // при наведении на десктопе — всегда 54. Растёт влево-вверх (угол приклеен к краю).
             // На мобиле размер фиксирован (36, там наведения и распахнутых панелей нет).
-            ...(fabHover && !isMobile ? { width: 54, height: 54 } : {}),
+            // Композер (или футер мастера персон), дошедший до угла, тоже ужимает кнопку:
+            // она остаётся в углу и просто занимает меньше места, а не уезжает вверх.
+            // На «Стене» компактный размер постоянный.
+            ...(fabSmall && !isMobile ? { width: 36, height: 36 } : {}),
+            // Наведение растит кнопку до полного размера — как в компактном режиме панелей.
+            // Исключение — подпёртая композером: там расти некуда, круг накрыл бы поле ввода.
+            ...(fabHover && !isMobile && !obstacleOverlap ? { width: 54, height: 54 } : {}),
             ...(isMobile ? { right: 16, width: 36, height: 36 } : {}),
             // Наведение на десктопе: в большом состоянии подъём (--cc-fab-lift = -2px), в
             // малом подъёма нет (0px) — там кнопка вместо этого растёт до 54.
@@ -512,15 +574,12 @@ const fabStyle: React.CSSProperties = {
   // Всегда в правом нижнем углу экрана. Боковой отступ — var --cc-fab-inset: обычно
   // 20px (уютный угол), но когда справа открыт остров-панель во всю высоту, PanelZone ставит
   // 6px и кнопка прижимается плотнее к краю (меньше налезает на остров). Нижний отступ
-  // отдельный и складывается из двух каналов, из которых берётся БОЛЬШИЙ:
-  //   --cc-fab-bottom   — базовый край (PanelZone): 16px в компактном режиме, чтобы кнопка
-  //                       стояла на одной линии с нижней кромкой островов, иначе 20px;
-  //   --cc-fab-composer — подъём над композером чата / футером мастера персон (0, когда
-  //                       поднимать не над чем), иначе круг накрывает поле ввода.
-  // Через max, а не «кто последний записал»: каналы ставят разные компоненты, и без
-  // него открытая панель гасила бы подъём над композером (и наоборот). Снизу ещё safe-area.
+  // отдельный (--cc-fab-bottom): в компактном режиме он равен отступу холста островов,
+  // чтобы кнопка стояла на одной линии с их нижней кромкой. Из угла кнопка не уезжает
+  // никогда — на подошедший снизу композер она отвечает не подъёмом, а ужиманием
+  // (см. useFabObstacleOverlap). Снизу ещё safe-area.
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + max(var(--cc-fab-bottom, 20px), var(--cc-fab-composer, 0px)))',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
   // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
   // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
   // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
@@ -586,7 +645,7 @@ const toggleThumb: React.CSSProperties = {
 const balloonStyle: React.CSSProperties = {
   // Над кнопкой в покое — её нижний отступ (var) + текущая высота кнопки (var, −8 нахлёст)
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + max(var(--cc-fab-bottom, 20px), var(--cc-fab-composer, 0px)) + var(--cc-fab-size, 54px) - 8px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -607,7 +666,7 @@ const balloonGhost: React.CSSProperties = {
 const hoverBalloonStyle: React.CSSProperties = {
   // Показывается на наведении, когда кнопка выросла до 54 — её нижний отступ (var) + высота
   position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
-  bottom: 'calc(env(safe-area-inset-bottom, 0px) + max(var(--cc-fab-bottom, 20px), var(--cc-fab-composer, 0px)) + 46px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

@@ -6,7 +6,7 @@
 // - computeSyncState — клиентский расчёт состояния (зеркало бэкенда; корневая метка = весь проект).
 
 import { useSyncExternalStore } from 'react';
-import type { FileEntry, SyncMark } from '../types';
+import type { FileEntry, Session, SyncMark } from '../types';
 import { api } from './api';
 import { isOnline } from './offline';
 import { idbGet, idbSet, idbKeys, idbDelete } from './idb';
@@ -210,6 +210,25 @@ async function saveMtimes(projectId: string, map: Record<string, string>): Promi
   await idbSet('synced-mtimes:' + projectId, { data: map, savedAt: Date.now() }).catch(() => {});
 }
 
+// --- Ревизии скачанных историй чатов ---
+// История чата — самый тяжёлый объект снапшота (у активных чатов это мегабайты), а
+// меняется она только когда в чате прошёл ход. Храним ревизию (updatedAt|messageCount)
+// на момент скачивания и повторно качаем ТОЛЬКО изменившиеся: иначе каждый снапшот
+// тянул истории всех чатов всех проектов заново (десятки МБ), забивал пул соединений
+// браузера и упирался в CPU разбором JSON — ровно в те секунды, когда пользователь
+// переключает чаты, отчего переключение и вставало на секунды.
+
+const chatRevision = (s: Session): string => `${s.updatedAt}|${s.messageCount}`;
+
+async function loadChatRevisions(projectId: string): Promise<Record<string, string>> {
+  const e = await idbGet<Record<string, string>>('synced-chats:' + projectId).catch(() => undefined);
+  return e?.data ?? {};
+}
+
+async function saveChatRevisions(projectId: string, map: Record<string, string>): Promise<void> {
+  await idbSet('synced-chats:' + projectId, { data: map, savedAt: Date.now() }).catch(() => {});
+}
+
 // --- Докачка содержимого ---
 
 // Минимальное время показа спиннера: на localhost докачка мгновенна, без этого спиннер незаметен.
@@ -289,7 +308,23 @@ export async function runOfflineSnapshot(priorityProjectId?: string): Promise<vo
         api.files.tree(p.id).catch(() => null),
       ]).then(([s, , t]) => [s, t] as const);
 
-      await mapLimit(sessions, 4, async s => { await api.sessions.getHistory(p.id, s.id).catch(() => {}); });
+      // Истории — только изменившиеся с прошлого снапшота (см. loadChatRevisions).
+      // Параллельность 2, а не 4: снапшот фоновый, и живым запросам открытого чата
+      // нужны свободные сокеты (HTTP/1.1 даёт ~6 на origin).
+      const knownRevs = await loadChatRevisions(p.id);
+      const staleChats = sessions.filter(s => knownRevs[s.id] !== chatRevision(s));
+      const freshRevs: Record<string, string> = {};
+      await mapLimit(staleChats, 2, async s => {
+        await api.sessions.getHistory(p.id, s.id);
+        freshRevs[s.id] = chatRevision(s);
+      });
+      // Метки живых чатов + успешно скачанных; удалённые чаты уходят сами (нет в sessions)
+      const nextRevs: Record<string, string> = {};
+      for (const s of sessions) {
+        const rev = freshRevs[s.id] ?? knownRevs[s.id];
+        if (rev) nextRevs[s.id] = rev;
+      }
+      await saveChatRevisions(p.id, nextRevs);
 
       // Дерево не получено (сервер недоступен/ошибка) — НЕ трогаем кэш этого проекта:
       // ни листинги, ни валидные пути, ни чистку. Проект просто не участвует в снапшоте.

@@ -63,7 +63,7 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
             },
             presets = new[]
             {
-                new { name = "Правила", rules = new[] { new { specialty = "backendExecutor", route = "tier:strong" } } },
+                new { name = "Правила", steps = new[] { "tier:strong" } },
             },
         };
 
@@ -123,7 +123,7 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
             specialties = new Dictionary<string, object>(),
             presets = new[]
             {
-                new { name = "Дешёвый фон", rules = new[] { new { specialty = "any", route = "tier:weak" } } },
+                new { name = "Дешёвый фон", steps = new[] { "tier:weak" } },
             },
         });
         await _user.PutAsJsonAsync("/api/specialties/settings", new
@@ -131,7 +131,7 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
             specialties = new Dictionary<string, object>(),
             presets = new[]
             {
-                new { name = "Дешёвый фон", rules = new[] { new { specialty = "any", route = "local" } } },
+                new { name = "Дешёвый фон", steps = new[] { "local" } },
             },
         });
 
@@ -142,9 +142,9 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
         presets.Should().HaveCount(2, "оба набора в одном списке");
         presets.Select(p => p.GetProperty("name").GetString()).Should().AllBeEquivalentTo("Дешёвый фон");
         presets[0].GetProperty("scope").GetString().Should().Be("owner");
-        presets[0].GetProperty("rules")[0].GetProperty("route").GetString().Should().Be("local");
+        presets[0].GetProperty("steps")[0].GetString().Should().Be("local");
         presets[1].GetProperty("scope").GetString().Should().Be("global");
-        presets[1].GetProperty("rules")[0].GetProperty("route").GetString().Should().Be("tier:weak");
+        presets[1].GetProperty("steps")[0].GetString().Should().Be("tier:weak");
 
         // Слои на месте — фронт правит пресеты по слоям, признак только в общем списке
         settings.GetProperty("global").GetProperty("presets").EnumerateArray().Should().ContainSingle();
@@ -194,7 +194,7 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
             },
             presets = new[]
             {
-                new { name = "Личный пресет владельца", rules = new[] { new { specialty = "any", route = "tier:weak" } } },
+                new { name = "Личный пресет владельца", steps = new[] { "tier:weak" } },
             },
         };
 

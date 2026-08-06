@@ -4,6 +4,7 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
+using FluentAssertions;
 using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -784,190 +785,386 @@ public class LocalActionRoutingTests
             resolver.PersonaModel(new Persona(), user.Id), user.Id));
     }
 
-    // --- Шаг 3 ADR: специальность персоны (между уровнем персоны и местом каталога) ---
+    // --- Матрицы уровней и пресеты-цепочки (ADR-007 §2, §3) ---
 
     private static SpecialtySettingsStore Specialty(IConfiguration config) =>
         new(config, NullLogger<SpecialtySettingsStore>.Instance);
 
-    private static SpecialtySettingsLayer SpecialtyLayer(
-        params (PersonaSpecialty Specialty, string Route)[] rules)
+    private static SpecialtyTemplateSettings Tmpl(string? strong = null, string? medium = null,
+        string? weak = null, ModelTier? defaultTier = null) => new()
     {
-        // Каждое правило кладём в один именованный пресет — порядок правил внутри пресета
-        // не важен для теста, важна обходимость через ResolveRoute
-        var preset = new ModelRoutePreset
+        TierStrong = strong,
+        TierMedium = medium,
+        TierWeak = weak,
+        DefaultTier = defaultTier,
+    };
+
+    // Резолвер с полным набором зависимостей (appSettings + store + userTiers + specialty)
+    private static (ModelAssignmentResolver Resolver, AppSettingsService App, UserStore Users,
+        UserModelTierResolver Tiers, SpecialtySettingsStore Specialty, LocalActionOverridesStore Store)
+        BuildResolverWithSpecialty()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var userTiers = new UserModelTierResolver(users, appSettings);
+        var store = Store(config);
+        var specialty = Specialty(config);
+        var resolver = new ModelAssignmentResolver(appSettings, store, userTiers, specialty);
+        return (resolver, appSettings, users, userTiers, specialty, store);
+    }
+
+    // --- Матрицы: персона → специальность → слоты владельца (ADR-007 §2, §8) ---
+
+    [Fact]
+    public void Resolver_ЯчейкаПерсоны_БьётЯчейкуСпециальности()
+    {
+        // §8: при уровне T модель берётся из ячейки персоны, даже если у специальности своё.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
         {
-            Name = "TestPreset",
-            Rules = rules.Select(r => new ModelRouteRule
-            {
-                Specialty = r.Specialty == PersonaSpecialty.None
-                    ? SpecialtyCatalog.AnySpecialtyKey
-                    : SpecialtyCatalog.KeyOf(r.Specialty),
-                Route = r.Route,
-            }).ToList(),
-        };
-        return new SpecialtySettingsLayer { Presets = [preset] };
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus") },
+        });
+
+        Assert.Equal("persona-opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Strong, TierStrong = "persona-opus" },
+            u1.Id));
     }
 
     [Fact]
-    public void Resolver_СпециальностьСМаршрутом_ВозвращаетКонкретнуюМодель()
+    public void Resolver_ЯчейкаПерсонаПуста_БерётсяИзСпециальности()
     {
-        // Маршрут специальности указывает на конкретную модель — она и отдаётся
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var user = users.Add("u1", "password123", "user");
-        var specialty = Specialty(config);
-        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "glm-5.2")));
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(users, appSettings), specialty);
+        // §8: пустая ячейка персоны → ячейка специальности.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierMedium = "slot-sonnet" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(medium: "spec-sonnet") },
+        });
 
-        Assert.Equal("glm-5.2", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, user.Id));
+        Assert.Equal("spec-sonnet", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Medium },
+            u1.Id));
     }
 
     [Fact]
-    public void Resolver_СпециальностьСТиром_РазворачиваетсяВСлот()
+    public void Resolver_МатрицыПусты_СлотВладельца()
     {
-        // Маршрут специальности — «tier:strong». Резолвер ОБЯЗАН развернуть его в модель
-        // через userTiers.ModelFor, иначе маркер ушёл бы наружу и осел в Session.Model.
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierStrong = "global-opus" });
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var user = users.Add("u1", "password123", "user");
-        users.SetModelTiers(user.Id, "user-sonnet", null, null);
-        var specialty = Specialty(config);
-        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "tier:strong")));
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(users, appSettings), specialty);
+        // §8: пустые матрицы персоны и специальности → слот владельца (эквивалент старому пути).
+        var (resolver, app, users, _, _, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierWeak = "slot-haiku" });
+        var u1 = users.Add("u1", "p", "user");
+        users.SetModelTiers(u1.Id, null, null, weak: "user-haiku");
 
-        // per-user слот владельца
-        Assert.Equal("user-sonnet", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, user.Id));
-        // Без ownerId — глобальный слот инстанса
+        Assert.Equal("user-haiku", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Weak },
+            u1.Id));
+    }
+
+    [Fact]
+    public void Resolver_DefaultTierСпециальности_ИсточникУровня()
+    {
+        // §8: при пустых TaskItem.ModelTier/Persona.ModelTier уровень даёт DefaultTier специальности.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            // У специальности НЕТ своих ячеек, только DefaultTier=Strong → разворот падает на слот
+            Specialties = { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Strong) },
+        });
+
+        // DefaultTier задаёт уровень; матрица специальности пуста → разворот падает на слот владельца
+        Assert.Equal("slot-opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1.Id));
+    }
+
+    [Fact]
+    public void Resolver_ЛичнаяМатрицаСпециальности_СильнееГлобальной()
+    {
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user").Id;
+        var u2 = users.Add("u2", "p", "user").Id;
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "global-opus") },
+        });
+        specialty.SetOwner(u1, new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "owner-opus") },
+        });
+
+        Assert.Equal("owner-opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Strong }, u1));
         Assert.Equal("global-opus", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, ownerId: null));
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Strong }, u2));
     }
 
     [Fact]
-    public void Resolver_МодельПерсоны_СильнееСпециальности()
+    public void Resolver_ЯвнаяМодельПерсоны_СильнееМатриц()
     {
-        // ADR шаг 1 (явная модель сущности) сильнее шага 3 (специальность)
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
-        var specialty = Specialty(config);
-        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "glm-5.2")));
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
-                NullLogger<UserStore>.Instance), appSettings), specialty);
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus") },
+        });
 
         Assert.Equal("haiku", resolver.PersonaModel(
-            new Persona { Model = "haiku", Specialty = PersonaSpecialty.BackendExecutor },
-            ownerId: "u1"));
-    }
-
-    [Fact]
-    public void Resolver_УровеньПерсоны_СильнееСпециальности()
-    {
-        // ADR шаг 2 (уровень сущности) сильнее шага 3 (специальность)
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierWeak = "haiku" });
-        var specialty = Specialty(config);
-        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "opus")));
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
-                NullLogger<UserStore>.Instance), appSettings), specialty);
-
-        Assert.Equal("haiku", resolver.PersonaModel(
-            new Persona { ModelTier = ModelTier.Weak, Specialty = PersonaSpecialty.BackendExecutor },
-            ownerId: "u1"));
-    }
-
-    [Fact]
-    public void Resolver_ЛичнаяНастройкаСпециальности_СильнееГлобальной()
-    {
-        // Per-owner пресет перебивает глобальный (та же логика слоёв, что у слотов)
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var u1 = users.Add("u1", "password123", "user").Id;
-        var u2 = users.Add("u2", "password123", "user").Id;
-        var specialty = Specialty(config);
-        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "global-model")));
-        specialty.SetOwner(u1, SpecialtyLayer((PersonaSpecialty.BackendExecutor, "owner-model")));
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(users, appSettings), specialty);
-
-        // u1 — личный пресет
-        Assert.Equal("owner-model", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1));
-        // u2 — глобальный
-        Assert.Equal("global-model", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u2));
-    }
-
-    [Fact]
-    public void Resolver_ЧужаяЛичнаяНастройка_НеВидна()
-    {
-        // Личный пресет u1 не виден u2 (per-owner изоляция — данные владельца только ему)
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
-        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
-        var u1 = users.Add("u1", "password123", "user").Id;
-        var u2 = users.Add("u2", "password123", "user").Id;
-        var specialty = Specialty(config);
-        // Глобального пресета нет — только личный u1. u2 не должен ничего увидеть
-        specialty.SetOwner(u1, SpecialtyLayer((PersonaSpecialty.BackendExecutor, "secret-model")));
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(users, appSettings), specialty);
-
-        Assert.Equal("secret-model", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1));
-        // u2 — ни пресета, ни дефолта: null (место решает само)
-        Assert.Null(resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u2));
-    }
-
-    [Fact]
-    public void Resolver_СпециальностьБезНастройки_ИдётДальше()
-    {
-        // Ни глобального, ни личного пресета по специальности — шаг 3 молча
-        // пропускается, цепочка возвращает null (место решает само)
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
-        var specialty = Specialty(config);
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
-                NullLogger<UserStore>.Instance), appSettings), specialty);
-
-        Assert.Null(resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, "u1"));
+            new Persona { Model = "haiku", Specialty = PersonaSpecialty.BackendExecutor,
+                TierStrong = "persona-opus", ModelTier = ModelTier.Strong }, "u1"));
     }
 
     [Fact]
     public void Resolver_СпециальностьNone_НеЗадействована()
     {
-        // Specialty == None — вызывающий код ResolveSpecialtyRoute не опрашивает стор;
-        // и тут мы защищаемся: ни одна ветка не сработает
-        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
-        var appSettings = new AppSettingsService(config);
-        appSettings.Save(new AppSettings { ModelTierStrong = "opus" });
-        var specialty = Specialty(config);
-        specialty.SetGlobal(SpecialtyLayer((PersonaSpecialty.BackendExecutor, "glm-5.2")));
-        var resolver = new ModelAssignmentResolver(appSettings, Store(config),
-            new UserModelTierResolver(new UserStore(config, new FakeHostEnvironment(),
-                NullLogger<UserStore>.Instance), appSettings), specialty);
+        var (resolver, app, _, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus") },
+        });
 
-        // Стор задан с правилом под BackendExecutor, но у персоны Specialty == None —
-        // правило не должно сработать. null — ни модель, ни уровень не заданы.
-        Assert.Null(resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.None }, "u1"));
+        // Specialty == None — матрица специальности не опрашивается; без модели/уровня → null
+        Assert.Null(resolver.PersonaModel(new Persona { Specialty = PersonaSpecialty.None }, "u1"));
+    }
+
+    // --- Дефолтный уровень места в резолве персоны (de-факто bugfix 2-й итерации): когда
+    //     ни Persona.ModelTier, ни Specialty.DefaultTier не заданы, уровень даёт дефолт места
+    //     (Strong для чата персоны) — им матрица персоны и разворачивается. Иначе ячейка
+    //     персоны молча не срабатывала. Порядок: Persona.ModelTier → Specialty.DefaultTier → место.
+
+    [Fact]
+    public void Resolver_ЯчейкаПерсоныБезУровня_ДефолтМестаСильная()
+    {
+        // Персона с заполненной ячейкой «сильная», без ModelTier и без DefaultTier специальности,
+        // в чате персоны (дефолт места Strong) идёт моделью своей ячейки.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl() }, // без ячеек, без DefaultTier
+        });
+
+        Assert.Equal("persona-opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, TierStrong = "persona-opus" },
+            u1.Id, ModelTier.Strong));
+    }
+
+    [Fact]
+    public void Resolver_ЯчейкаПерсоныБезУровня_ДефолтМестаСредняя()
+    {
+        // Тот же сценарий, дефолт места Medium → берётся средняя ячейка персоны.
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(medium: "spec-sonnet") },
+        });
+
+        Assert.Equal("persona-sonnet", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, TierMedium = "persona-sonnet" },
+            "u1", ModelTier.Medium));
+    }
+
+    [Fact]
+    public void Resolver_ЯвныйУровеньПерсоны_СильнееДефолтаМеста()
+    {
+        // Persona.ModelTier сильнее placeDefaultTier: уровень Weak при дефолте места Strong
+        // берёт слабую ячейку, а не сильную.
+        var (resolver, _, users, _, _, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+
+        Assert.Equal("persona-haiku", resolver.PersonaModel(
+            new Persona { TierStrong = "persona-opus", TierWeak = "persona-haiku", ModelTier = ModelTier.Weak },
+            "u1", ModelTier.Strong));
+    }
+
+    [Fact]
+    public void Resolver_ПустаяЯчейкаПриДефолтеМеста_ПадаетНаСпециальность()
+    {
+        // placeDefaultTier задаёт уровень, но ячейка персоны пуста → ячейка специальности,
+        // а если и она пуста — слот владельца (проверяет отдельный тест ниже).
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus") },
+        });
+
+        Assert.Equal("spec-opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1.Id, ModelTier.Strong));
+    }
+
+    [Fact]
+    public void Resolver_ПустаяЯчейкаИСпециальностьПриДефолтеМеста_СлотВладельца()
+    {
+        // Ячейки персоны и специальности пусты → слот владельца для уровня места.
+        var (resolver, app, users, _, _, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user");
+
+        Assert.Equal("slot-opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1.Id, ModelTier.Strong));
+    }
+
+    [Fact]
+    public void Resolver_ПресетВЯчейкеПриДефолтеМеста_Разворачивается()
+    {
+        // Ячейка персоны = preset:{id}, уровень из дефолта места → первый шаг цепочки.
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetOwner("u1", new SpecialtySettingsLayer
+        {
+            Presets = { Preset("p1", "opus", "glm-5.2") },
+        });
+
+        Assert.Equal("opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.None, TierStrong = "preset:p1" },
+            "u1", ModelTier.Strong));
+    }
+
+    // --- Пресет preset:{id} в четырёх местах выбора модели (ADR-007 §3, §8) ---
+
+    private static ModelRoutePreset Preset(string id, params string[] steps) => new()
+    {
+        Id = id,
+        Name = "P" + id,
+        Steps = steps.ToList(),
+    };
+
+    [Fact]
+    public void Resolver_ПресетВЯчейкеПерсоны_ПервыйШагЦепочки()
+    {
+        // §8 место «персона»: ячейка матрицы персоны = preset → первый шаг цепочки.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        users.Add("u1", "p", "user");
+        specialty.SetOwner("u1", new SpecialtySettingsLayer
+        {
+            Presets = { Preset("p1", "opus", "glm-5.2", "deepseek") },
+        });
+
+        Assert.Equal("opus", resolver.PersonaModel(
+            new Persona { Specialty = PersonaSpecialty.None, ModelTier = ModelTier.Strong, TierStrong = "preset:p1" }, "u1"));
+    }
+
+    [Fact]
+    public void Resolver_ПресетВЯвнойМоделиПерсоны_ПервыйШагЦепочки()
+    {
+        // §8 место «персона» (явная Model): Persona.Model = preset → первый шаг.
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetOwner("u1", new SpecialtySettingsLayer { Presets = { Preset("p1", "glm-5.2", "deepseek") } });
+
+        Assert.Equal("glm-5.2", resolver.PersonaModel(
+            new Persona { Model = "preset:p1" }, "u1"));
+    }
+
+    [Fact]
+    public void Resolver_ПресетВМестеКаталога_ПервыйШагЦепочки()
+    {
+        // §8 место «Кто что выполняет»: назначение админа = preset → первый шаг цепочки.
+        var (resolver, _, _, _, specialty, store) = BuildResolverWithSpecialty();
+        specialty.SetGlobal(new SpecialtySettingsLayer { Presets = { Preset("p1", "opus", "glm-5.2") } });
+        store.Set(LocalActionCatalog.ChatNew, "preset:p1");
+
+        // chat-new — агентное место, local/direct пропускаются; первый шаг opus
+        Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatNew, ownerId: "u1"));
+    }
+
+    [Fact]
+    public void Resolver_ПресетВСлотеВладельца_ПервыйШагЦепочки()
+    {
+        // §8 место «модели по умолчанию» (слот): User.ModelTierStrong = preset → первый шаг.
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        var u1 = users.Add("u1", "p", "user");
+        users.SetModelTiers(u1.Id, strong: "preset:p1", null, null);
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("p1", "tier:weak", "glm-5.2") },
+        });
+        // В пресете первый шаг tier:weak — разворачивается по слоту владельца (слабая = пусто → null),
+        // значит цепочка даёт пусто для первого шага и берёт второй: glm-5.2. Проверяем разворот:
+        resolver.ResolveChain(LocalActionCatalog.ChatNew, ownerId: u1.Id)
+            .Should().ContainInOrder("glm-5.2");
+    }
+
+    [Fact]
+    public void ResolveChain_Пресет_ВозвращаетВсеШагиКакМодели()
+    {
+        // §8 / §4: ResolveChain разворачивает пресет в упорядоченный список конкретных моделей
+        // (план фолбэка). tier:*-шаг разворачивается по слоту владельца.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus", ModelTierWeak = "slot-haiku" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetOwner(u1.Id, new SpecialtySettingsLayer
+        {
+            Presets = { Preset("p1", "glm-5.2", "tier:strong", "deepseek") },
+        });
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.ChatNew, "preset:p1", u1.Id);
+        chain.Should().BeEquivalentTo(new[] { "glm-5.2", "slot-opus", "deepseek" }, opts => opts.WithStrictOrdering(),
+            "tier:strong разворачивается по слоту владельца, остальные — как есть");
+    }
+
+    [Fact]
+    public void Resolver_БитаяСсылкаПресет_МестоКаталога_FailOpenНеПадает()
+    {
+        // §8: ссылка на удалённый пресет в месте каталога — fail-open (не падает, цепочка пуста
+        // → модель места не определена, решает CLI/дефолт). Битый пресет в ячейке матрицы
+        // персоны — см. в SpecialistsStoreTests/Resolver: разворачивается в пусто.
+        var (resolver, _, _, _, _, store) = BuildResolverWithSpecialty();
+        store.Set(LocalActionCatalog.ChatNew, "preset:no-such");
+
+        // Цепочка пуста → Resolve отдаёт null (не исключение, не маркер наружу)
+        Assert.Null(resolver.Resolve(LocalActionCatalog.ChatNew, ownerId: "u1"));
+        Assert.Empty(resolver.ResolveChain(LocalActionCatalog.ChatNew, ownerId: "u1"));
+    }
+
+    [Fact]
+    public void ResolveChain_ВложенныйПресетНевозможен_СторЕгоОтвергает()
+    {
+        // Валидация запрещает шаг preset:* внутри пресета —两层невозможна конструктивно.
+        var (resolver, _, _, _, specialty, _) = BuildResolverWithSpecialty();
+        var error = specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("outer", "preset:inner") },
+        });
+        Assert.NotNull(error);
+    }
+
+    [Fact]
+    public void ExecutorModel_ЗадачаБерётМатрицуПерсоны()
+    {
+        // §8 связка: уровень задачи разворачивается по матрице персоны-исполнителя.
+        var (resolver, app, users, _, _, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user");
+        var task = new TaskItem { Title = "t", OwnerId = u1.Id, ModelTier = ModelTier.Strong };
+        var persona = new Persona { Specialty = PersonaSpecialty.None, TierStrong = "persona-opus" };
+
+        Assert.Equal("persona-opus", resolver.ExecutorModel(task, persona, u1.Id));
+    }
+
+    [Fact]
+    public void ExecutorModel_ЯчейкаПерсоныБезУровня_ДефолтМестаStrong()
+    {
+        // Исполнение задачи: персона с ячейкой «сильная», без ModelTier и без уровня задачи —
+        // место tasks-executor (Strong) разворачивает её ячейку (дефект 2-й итерации: раньше
+        // такая ячейка молча не срабатывала).
+        var (resolver, _, users, _, _, _) = BuildResolverWithSpecialty();
+        var u1 = users.Add("u1", "p", "user");
+        var task = new TaskItem { Title = "t", OwnerId = u1.Id }; // без ModelTier
+        var persona = new Persona { Specialty = PersonaSpecialty.None, TierStrong = "persona-opus" };
+
+        Assert.Equal("persona-opus", resolver.ExecutorModel(task, persona, u1.Id));
     }
 
     [Fact]
@@ -1278,6 +1475,197 @@ public class LocalActionRoutingTests
         Assert.NotNull(body);
         Assert.Contains("\"max_tokens\":8192", body);
         Assert.DoesNotContain("\"max_tokens\":1024", body);
+    }
+
+    // --- Эффективный резолв для показа «Сейчас пойдёт» (Preview, ADR-007 §5 п.5) ---
+    // Та же кодовая дорога, что боевой резолв: источник, эффективный уровень и раскрытие пресета.
+
+    [Fact]
+    public void Preview_ЯчейкаПерсоныБезУровня_ИсточникИУровеньМеста()
+    {
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer { Specialties = { ["backendExecutor"] = Tmpl() } });
+
+        var d = resolver.Preview(LocalActionCatalog.ChatPersona,
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, TierStrong = "persona-opus" },
+            PersonaSpecialty.BackendExecutor, "u1", null);
+
+        Assert.Equal("persona-opus", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.PersonaCell, d.Source);
+        Assert.Equal(ModelTier.Strong, d.EffectiveTier);
+        Assert.Equal("place", d.TierOrigin);
+    }
+
+    [Fact]
+    public void Preview_ЯвнаяМодельПерсоны_ИсточникPersonaModel()
+    {
+        var (resolver, _, users, _, _, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+
+        var d = resolver.Preview(null,
+            new Persona { Model = "glm-5.2" }, PersonaSpecialty.None, "u1", null);
+
+        Assert.Equal("glm-5.2", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.PersonaModel, d.Source);
+        Assert.Null(d.Preset);
+    }
+
+    [Fact]
+    public void Preview_PresetВЯчейке_РаскрытиеИЦепочка()
+    {
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetOwner("u1", new SpecialtySettingsLayer { Presets = { Preset("p1", "opus", "glm-5.2") } });
+
+        var d = resolver.Preview(LocalActionCatalog.ChatPersona,
+            new Persona { Specialty = PersonaSpecialty.None, TierStrong = "preset:p1" },
+            PersonaSpecialty.None, "u1", null);
+
+        Assert.Equal("opus", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.PersonaCell, d.Source);
+        Assert.NotNull(d.Preset);
+        Assert.Equal("p1", d.Preset!.Id);
+        Assert.False(d.Preset.Broken);
+        Assert.Equal(new[] { "opus", "glm-5.2" }, d.Chain);
+    }
+
+    [Fact]
+    public void Preview_БитаяСсылкаПресета_ModelNullBroken()
+    {
+        var (resolver, _, users, _, _, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+
+        var d = resolver.Preview(LocalActionCatalog.ChatPersona,
+            new Persona { Specialty = PersonaSpecialty.None, TierStrong = "preset:missing" },
+            PersonaSpecialty.None, "u1", null);
+
+        Assert.Null(d.Model);
+        Assert.True(d.PresetBroken);
+        Assert.Equal("missing", d.Preset!.Id);
+    }
+
+    [Fact]
+    public void Preview_ПерсоныНет_НазначениеАдминаМеста()
+    {
+        var (resolver, _, users, _, _, store) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        store.Set(LocalActionCatalog.ChatPersona, "sonnet-5");
+
+        var d = resolver.Preview(LocalActionCatalog.ChatPersona, null, PersonaSpecialty.None, "u1", null);
+
+        Assert.Equal("sonnet-5", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.PlaceAssignment, d.Source);
+    }
+
+    [Fact]
+    public void Preview_ПерсоныНет_ДефолтМеста_СлотВладельца()
+    {
+        var (resolver, app, users, _, _, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "global-opus" });
+        var u1 = users.Add("u1", "p", "user");
+        users.SetModelTiers(u1.Id, strong: "user-opus", null, null);
+
+        var d = resolver.Preview(LocalActionCatalog.ChatPersona, null, PersonaSpecialty.None, u1.Id, null);
+
+        Assert.Equal("user-opus", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.OwnerSlot, d.Source);
+        Assert.Equal(ModelTier.Strong, d.EffectiveTier);
+        Assert.Equal("place", d.TierOrigin);
+    }
+
+    [Fact]
+    public void Preview_OverrideTierЗадачи_СильнееУровняПерсоны()
+    {
+        var (resolver, _, users, _, _, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+
+        // overrideTier=Weak при уровне персоны Strong берёт слабую ячейку; источник уровня — задача
+        var d = resolver.Preview(LocalActionCatalog.ChatPersona,
+            new Persona { TierStrong = "persona-opus", TierWeak = "persona-haiku", ModelTier = ModelTier.Strong },
+            PersonaSpecialty.None, "u1", ModelTier.Weak);
+
+        Assert.Equal("persona-haiku", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.PersonaCell, d.Source);
+        Assert.Equal("task", d.TierOrigin);
+        Assert.Equal(ModelTier.Weak, d.EffectiveTier);
+    }
+
+    // --- Ветка specialty-only: Preview по специальности без персоны (карточка специальности) ---
+
+    [Fact]
+    public void Preview_СпециальностьБезПерсоны_ЯчейкаСпециальности()
+    {
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus", defaultTier: ModelTier.Strong) },
+        });
+
+        var d = resolver.Preview(null, null, PersonaSpecialty.BackendExecutor, "u1", null);
+
+        Assert.Equal("spec-opus", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.SpecialtyCell, d.Source);
+        Assert.Equal("specialty", d.TierOrigin);
+        Assert.Equal(ModelTier.Strong, d.EffectiveTier);
+    }
+
+    [Fact]
+    public void Preview_СпециальностьБезПерсоны_ПресетВЯчейке()
+    {
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetOwner("u1", new SpecialtySettingsLayer
+        {
+            Presets = { Preset("p1", "opus", "glm-5.2") },
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "preset:p1", defaultTier: ModelTier.Strong) },
+        });
+
+        var d = resolver.Preview(null, null, PersonaSpecialty.BackendExecutor, "u1", null);
+
+        Assert.Equal("opus", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.SpecialtyCell, d.Source);
+        Assert.NotNull(d.Preset);
+        Assert.False(d.Preset!.Broken);
+        Assert.Equal(new[] { "opus", "glm-5.2" }, d.Chain);
+    }
+
+    [Fact]
+    public void Preview_СпециальностьБезПерсоны_ПустаяЯчейка_СлотВладельца()
+    {
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus" });
+        var u1 = users.Add("u1", "p", "user");
+        users.SetModelTiers(u1.Id, strong: "user-opus", null, null);
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Strong) }, // матрица пуста, только уровень
+        });
+
+        var d = resolver.Preview(null, null, PersonaSpecialty.BackendExecutor, u1.Id, null);
+
+        Assert.Equal("user-opus", d.Model);
+        Assert.Equal(ModelAssignmentResolver.ModelSource.OwnerSlot, d.Source);
+        Assert.Equal("specialty", d.TierOrigin);
+    }
+
+    [Fact]
+    public void Preview_СпециальностьБезПерсоны_БезУровня_Пусто()
+    {
+        // Нет ни overrideTier, ни ModelTier персоны, ни DefaultTier, ни place — уровень не
+        // определён, превью пустое (не падает на место: его нет).
+        var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
+        users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus") }, // ячейка есть, но уровень не задан
+        });
+
+        var d = resolver.Preview(null, null, PersonaSpecialty.BackendExecutor, "u1", null);
+
+        Assert.Null(d.Model);
+        Assert.Null(d.Source);
     }
 
     private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory

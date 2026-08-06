@@ -163,6 +163,16 @@ public class PersonaManager
         return AllTools.All(clean.Contains) ? null : clean;
     }
 
+    // Нормализация ячейки матрицы уровней персоны (ADR-007 §2): пусто → null, иначе id модели
+    // или "preset:{id}". Claude-ID чистим от алиаса окна (как Model), пресет не трогаем.
+    // tier:* в ячейке запрещает контроллер (ячейка уже адресована уровнем) — здесь не проверяем.
+    private static string? NormalizeTierCell(string? cell)
+    {
+        if (string.IsNullOrWhiteSpace(cell)) return null;
+        var v = cell.Trim();
+        return LocalActionOverridesStore.IsPresetRoute(v) ? v : LlmProviderRegistry.StripClaudeWindowAlias(v);
+    }
+
     // Нормализация контракта (P1): трим слотов, выброс пустых элементов списков;
     // полностью пустой контракт эквивалентен отсутствию → null (legacy-режим).
     internal static PersonaContract? NormalizeContract(PersonaContract? contract)
@@ -243,7 +253,8 @@ public class PersonaManager
         PersonaContract? contract = null, PersonaAccess access = PersonaAccess.Full,
         List<string>? disallowedTools = null, PersonaSpecialty specialty = PersonaSpecialty.None,
         bool allProjectsAccess = false, string? handle = null,
-        string? modelTier = null)
+        string? modelTier = null,
+        string? tierStrong = null, string? tierMedium = null, string? tierWeak = null)
     {
         var persona = new Persona
         {
@@ -256,6 +267,11 @@ public class PersonaManager
             Model = LlmProviderRegistry.StripClaudeWindowAlias(model),
             // Уровень модели: мусор и пустая строка — «не задан» (валидация — в контроллере)
             ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null,
+            // Свои модели по уровням (ADR-007 §2): значение ячейки — id модели ИЛИ "preset:{id}".
+            // tier:* в ячейке запрещает контроллер; здесь только нормализация.
+            TierStrong = NormalizeTierCell(tierStrong),
+            TierMedium = NormalizeTierCell(tierMedium),
+            TierWeak = NormalizeTierCell(tierWeak),
             Effort = effort,
             Specialty = specialty,
             Scope = scope,
@@ -415,7 +431,8 @@ public class PersonaManager
         PersonaContract? contract = null, PersonaAccess? access = null,
         List<string>? disallowedTools = null, PersonaSpecialty? specialty = null,
         bool? allProjectsAccess = null, string? handle = null,
-        string? modelTier = null)
+        string? modelTier = null,
+        string? tierStrong = null, string? tierMedium = null, string? tierWeak = null)
     {
         var persona = Get(id, userId)
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
@@ -456,6 +473,10 @@ public class PersonaManager
             // Уровень модели: null — не менять, "" (и мусор — его отсекает контроллер) — сбросить
             if (modelTier is not null)
                 persona.ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null;
+            // Свои модели по уровням: null — не менять, "" — сбросить, иначе id/preset:{id}
+            if (tierStrong is not null) persona.TierStrong = NormalizeTierCell(tierStrong);
+            if (tierMedium is not null) persona.TierMedium = NormalizeTierCell(tierMedium);
+            if (tierWeak is not null) persona.TierWeak = NormalizeTierCell(tierWeak);
             if (effort is not null) persona.Effort = effort.Length == 0 ? null : effort;
             // Специальность (функциональная роль): null — не менять; None — сбросить явно
             if (specialty is not null) persona.Specialty = specialty.Value;

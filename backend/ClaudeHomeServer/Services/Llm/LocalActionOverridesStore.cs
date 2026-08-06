@@ -26,6 +26,11 @@ public sealed class LocalActionOverridesStore
     // трактуются как tier:medium (LocalActionRouter.Parse) — сам стор их не переписывает.
     public const string TierPrefix = "tier:";
 
+    // Ссылка на именованный пресет-цепочку (ADR-007 §3): "preset:{id}" — допустимое значение
+    // там, где выбирается модель (слоты, ячейки матриц персоны/специальности, места каталога,
+    // явная модель). Хранится как есть, разворачивается в цепочку на границе запуска хода.
+    public const string PresetPrefix = "preset:";
+
     public static string TierRoute(ModelTier tier) =>
         TierPrefix + tier.ToString().ToLowerInvariant();
 
@@ -37,6 +42,22 @@ public sealed class LocalActionOverridesStore
             "tier:weak" => ModelTier.Weak,
             _ => null,
         };
+
+    // Это ссылка на пресет? ("preset:{id}"). Регистр префикса не важен — как у tier:.
+    public static bool IsPresetRoute(string? route) =>
+        !string.IsNullOrWhiteSpace(route)
+        && route!.Trim().StartsWith(PresetPrefix, StringComparison.OrdinalIgnoreCase);
+
+    // id пресета из ссылки "preset:{id}" либо null (не ссылка/пустой id). trim + оригинальный
+    // регистр id (id — Guid, но чужие значения не портим). По образцу ParseTierRoute.
+    public static string? ParsePresetRoute(string? route)
+    {
+        if (route is null) return null;
+        var span = route.AsSpan().Trim();
+        if (!span.StartsWith(PresetPrefix, StringComparison.OrdinalIgnoreCase)) return null;
+        var id = span[PresetPrefix.Length..].Trim();
+        return id.IsEmpty ? null : id.ToString();
+    }
 
     private readonly string _storePath;
     private readonly ILogger<LocalActionOverridesStore>? _log;
@@ -69,12 +90,20 @@ public sealed class LocalActionOverridesStore
         var value = route.Trim();
         lock (_writeLock)
         {
-            var next = new Dictionary<string, string>(_overrides, StringComparer.OrdinalIgnoreCase)
+            var prev = _overrides;
+            var next = new Dictionary<string, string>(prev, StringComparer.OrdinalIgnoreCase)
             {
                 [action.Key] = value,
             };
             _overrides = next;
-            Persist(next);
+            if (!Persist(next))
+            {
+                // Запись на диск не удалась — откатываем in-memory к прежнему состоянию,
+                // иначе настройка была бы видна применённой, но потерялась бы при рестарте.
+                // Set отдаёт false → контроллер вернёт 500, админ увидит, что не сохранилось.
+                _overrides = prev;
+                return false;
+            }
         }
         _log?.LogInformation("Маршрут действия «{Key}» задан админом: {Route}", actionKey, value);
         return true;
@@ -131,17 +160,23 @@ public sealed class LocalActionOverridesStore
         return true;
     }
 
-    private void Persist(Dictionary<string, string> snapshot)
+    // Возвращает false при ошибке записи — вызывающий (Set) откатит in-memory состояние,
+    // иначе админ видел бы настройку применённой, а при рестарте она терялась (ловушка
+    // финальной приёмки: успешный PUT не двигал mtime, Set молча отдавал true).
+    private bool Persist(Dictionary<string, string> snapshot)
     {
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
             File.WriteAllText(_storePath, JsonSerializer.Serialize(snapshot));
+            return true;
         }
         catch (Exception ex)
         {
-            // Настройка уже применена в памяти — теряем только персистентность до рестарта.
-            _log?.LogError(ex, "Не удалось записать {Path}", _storePath);
+            // Раньше исключение проглатывалось (только лог), и Set возвращал успех — настройка
+            // висела в памяти до рестарта и бесследно пропадала. Теперь честно отдаём失败.
+            _log?.LogError(ex, "Не удалось записать {Path} — настройка не сохранена на диск", _storePath);
+            return false;
         }
     }
 

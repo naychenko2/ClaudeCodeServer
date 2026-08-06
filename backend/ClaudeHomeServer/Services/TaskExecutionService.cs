@@ -42,10 +42,13 @@ public class TaskExecutionService
     // Среда исполнения владельца: путь справочника в постановке должен быть адресуем
     // ИЗ неё, а не с хоста. null — считаем среду локальной (перевод тождественный).
     private readonly Execution.ILauncherFactory? _launchers;
-    // Стор настроек специальностей: маршрут модели по специальности персоны (ADR
-    // model-resolution-and-fallback, шаг 3 цепочки резолва). null — настройка не
-    // подключена, шаг специальности в цепочке молча пропускается.
+    // Стор настроек специальностей: матрицы моделей по уровням и DefaultTier специальности
+    // (ADR-007 §2). null — настройка не подключена, матрицы специальности не участвуют.
     private readonly SpecialtySettingsStore? _specialtySettings;
+    // Резолвер модели исполнителя (ADR-007 §5.3): единая точка разворота уровня по матрицам
+    // «персона → специальность → слоты». null — фолбэк на статический ResolveExecutorModel
+    // (маркеры tier:*; для тестов без поднятого резолвера).
+    private readonly Llm.ModelAssignmentResolver? _assignments;
     // Волна 6 (живая приёмка волны 5): гард «не более одной живой сессии на задачу» ниже
     // читает task.LinkedSessionId ДО того, как CreateAsync/MarkClaudeStarted успеют его
     // выставить — секунды на подъём CLI-процесса. Второй конкурентный вызов ExecuteAsync той
@@ -65,13 +68,15 @@ public class TaskExecutionService
         ILogger<TaskExecutionService> log, IConfiguration config,
         Llm.UserModelTierResolver? tiers = null, Llm.LlmProviderRegistry? providers = null,
         PersonaAgentFileSync? agentFiles = null, Execution.ILauncherFactory? launchers = null,
-        SpecialtySettingsStore? specialtySettings = null)
+        SpecialtySettingsStore? specialtySettings = null,
+        Llm.ModelAssignmentResolver? assignments = null)
     {
         _tiers = tiers;
         _providers = providers;
         _agentFiles = agentFiles;
         _launchers = launchers;
         _specialtySettings = specialtySettings;
+        _assignments = assignments;
         _tasks = tasks;
         _sessions = sessions;
         _personas = personas;
@@ -155,12 +160,13 @@ public class TaskExecutionService
         }
 
         var name = "Задача: " + (task.Title.Length > 60 ? task.Title[..60] + "…" : task.Title);
-        // Шаг 3 цепочки ADR: маршрут по специальности персоны. Резолвим здесь (а не внутри
-        // ResolveExecutorModel), чтобы метод остался чистой функцией и его можно было гонять
-        // в тестах без поднятия стора. null у персоны, None-специальность или пустой пресет —
-        // specialtyRoute остаётся null, и цепочка в ResolveExecutorModel проходит мимо.
-        var specialtyRoute = ResolveSpecialtyRoute(task.OwnerId!, persona);
-        var model = ResolveExecutorModel(task, persona, specialtyRoute);
+        // Модель исполнителя (ADR-007 §5.3): единая точка резолвера — уровень задачи →
+        // модель персоны → уровень с матрицами (персона → специальность → слоты). Разворачивается
+        // здесь и замораживается в Session.Model (§5.2). _assignments null (тесты без резолвера) —
+        // фолбэк на статический маркерный ResolveExecutorModel.
+        var model = _assignments is not null
+            ? _assignments.ExecutorModel(task, persona, task.OwnerId)
+            : ResolveExecutorModel(task, persona);
         // taskExecution: true — форсирует tasks-MCP даже у персоны с ограничением Persona.Tools
         // (без «tasks»): исполнитель обязан управлять задачей через mcp__tasks__*.
         var session = task.ProjectId is not null
@@ -206,30 +212,19 @@ public class TaskExecutionService
     }
 
     /// <summary>
-    /// Модель чата-исполнителя: уровень задачи (её ставит постановщик под конкретную работу)
-    /// сильнее конкретной модели персоны, та — сильнее уровня персоны, тот — сильнее
-    /// специальности (ADR model-resolution-and-fallback, раздел 1). Уровень и маршрут
-    /// специальности отдаём «как есть» — в модель их развернёт ModelAssignmentResolver
-    /// (единая точка склейки слотов). null — ни один шаг не сработал: сессия возьмёт
-    /// модель по назначению места (tasks-executor).
+    /// Модель чата-исполнителя (статический фолбэк, ADR-007 §5.3): уровень задачи сильнее
+    /// модели персоны, та — сильнее уровня персоны. Отдаёт МАРКЕРЫ tier:* (в модель их
+    /// развернёт ModelAssignmentResolver по слотам владельца — БЕЗ матриц, т.к. стор тут не
+    /// доступен). Применяется, когда резолвер не подключён (тесты); в бою используется
+    /// ModelAssignmentResolver.ExecutorModel (с матрицами «персона → специальность → слоты»).
+    /// null — ни один шаг не сработал: сессия возьмёт модель по назначению места (tasks-executor).
     /// </summary>
-    internal static string? ResolveExecutorModel(TaskItem task, Persona? persona, string? specialtyRoute = null)
+    internal static string? ResolveExecutorModel(TaskItem task, Persona? persona)
     {
         if (task.ModelTier is { } taskTier) return Llm.LocalActionOverridesStore.TierRoute(taskTier);
         if (!string.IsNullOrWhiteSpace(persona?.Model)) return persona.Model;
         if (persona?.ModelTier is { } personaTier) return Llm.LocalActionOverridesStore.TierRoute(personaTier);
-        if (!string.IsNullOrWhiteSpace(specialtyRoute)) return specialtyRoute;
         return null;
-    }
-
-    // Маршрут специальности персоны из стора. null — либо специальность не задана (None),
-    // либо стор не подключён, либо ни один пресет не сработал; во всех случаях цепочка
-    // резолва просто перескакивает шаг 3 и идёт на место каталога (как до этой правки).
-    private string? ResolveSpecialtyRoute(string ownerId, Persona? persona)
-    {
-        if (persona is null || persona.Specialty == PersonaSpecialty.None) return null;
-        if (_specialtySettings is null) return null;
-        return _specialtySettings.ResolveRoute(ownerId, persona.Specialty);
     }
 
     // Алиасы тиров владельца для таблицы уровней в постановке: слот → модель → её алиас

@@ -242,4 +242,12 @@ public static class LocalActionCatalog
     // у агентных мест (задаётся явно в записи).
     public static ModelTier EffectiveDefaultTier(LocalAction action) =>
         action.Tier ?? (action.Profile == CheapProfile.Large ? ModelTier.Medium : ModelTier.Weak);
+
+    /// <summary>
+    /// Дефолтный уровень места по ключу каталога. Нужен вызывающим PersonaModel: уровень
+    /// места разворачивает матрицы персоны, когда ни у неё, ни у специальности своего
+    /// уровня нет (иначе ячейка персоны молча не срабатывала). null — неизвестный ключ.
+    /// </summary>
+    public static ModelTier? DefaultTierOf(string key) =>
+        Find(key) is { } action ? EffectiveDefaultTier(action) : null;
 }

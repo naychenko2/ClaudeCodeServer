@@ -75,7 +75,8 @@ public class FallbackLlmSessionAdapterTests
     private (FallbackLlmSessionAdapter Sut, FakeInnerAdapter Inner) BuildSut(
         ClaudeSubscriptionPool pool, LlmProviderRegistry? providers = null,
         string model = "sonnet", string provider = "acc-a",
-        int? modelFallbackMax = null, string? ownerId = null)
+        int? modelFallbackMax = null, string? ownerId = null,
+        string[]? chain = null, ModelTier? turnTier = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -93,9 +94,25 @@ public class FallbackLlmSessionAdapterTests
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
-            fallbackSettings: store);
+            fallbackSettings: store,
+            effectiveChain: chain is null ? null : () => chain,
+            turnTier: () => turnTier);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
+    }
+
+    // Провайдер с разными моделями по уровням (для теста явного тира §5.1): TierStrong ≠ TierMedium.
+    private static LlmProviderRegistry BuildProvidersWithTiers()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+            ["LlmProviders:deepseek:TierStrong"] = "ds-strong",
+            ["LlmProviders:deepseek:TierMedium"] = "ds-medium",
+        };
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
     }
 
     // Конфиг с уникальным DataPath во временной папке (как в SpecialtyTemplatesServiceTests):
@@ -255,10 +272,10 @@ public class FallbackLlmSessionAdapterTests
     }
 
     [Fact]
-    public async Task ПотолокНеЗадан_ДефолтТриПодмены()
+    public async Task ПотолокНеЗадан_ДефолтЧетыреПодмены()
     {
-        // Без стора (modelFallbackMax = null) потолок — дефолт 3 (FallbackSettingsStore.DefaultMaxSubstitutions).
-        // 6 подписок в пуле, но больше 4 попыток (1 стартовая + 3 подмены) не пройдёт.
+        // Без стора (modelFallbackMax = null) потолок — дефолт 4 (FallbackSettingsStore.DefaultMaxSubstitutions).
+        // 6 подписок в пуле, но больше 5 попыток (1 стартовая + 4 подмены) не пройдёт.
         var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
         var pool = BuildPool(keys);
         var (sut, inner) = BuildSut(pool, provider: "s1");
@@ -268,24 +285,24 @@ public class FallbackLlmSessionAdapterTests
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
-        inner.Attempts.Should().HaveCount(4, "1 исходная + максимум 3 подмены по дефолту");
-        Downstream().OfType<ProviderSwitchedMessage>().Should().HaveCount(3);
+        inner.Attempts.Should().HaveCount(5, "1 исходная + максимум 4 подмены по дефолту");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().HaveCount(4);
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("error");
         Downstream().OfType<ErrorMessage>().Should().ContainSingle()
-            .Which.Text.Should().Contain("потолок 3");
+            .Which.Text.Should().Contain("потолок 4");
     }
 
     [Fact]
     public async Task ВнеДиапазона_КлампитсяКДефолту()
     {
         // Потолок 99 в файле выходит за жёсткий 1..5 — адаптер должен игнорировать
-        // (клампится к дефолту 3), иначе жёсткий потолок ADR был бы обойдён.
+        // (клампится к дефолту 4), иначе жёсткий потолок ADR был бы обойдён.
         var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
         var pool = BuildPool(keys);
         var store = new FallbackSettingsStore(BuildTempConfiguration(out _));
         Assert.Equal("Потолок подмен должен быть в диапазоне 1..5", store.SetGlobal(99));
-        // global остаётся null → читается дефолт 3 (FallbackSettingsStore.DefaultMaxSubstitutions)
+        // global остаётся null → читается дефолт 4 (FallbackSettingsStore.DefaultMaxSubstitutions)
         var session = new Session { Provider = "s1", OwnerId = null };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
@@ -300,7 +317,7 @@ public class FallbackLlmSessionAdapterTests
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
-        inner.Attempts.Should().HaveCount(4, "99 отвергнут валидацией → global=null → дефолт 3 → 1 + 3 подмены");
+        inner.Attempts.Should().HaveCount(5, "99 отвергнут валидацией → global=null → дефолт 4 → 1 + 4 подмены");
     }
 
     [Fact]
@@ -375,6 +392,97 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
             .Which.Label.Should().Contain("смена провайдера");
         inner.Info.Model.Should().Be("deepseek-chat");
+    }
+
+    // --- Цепочка пресета (ADR-007 §4, §8) ---
+
+    [Fact]
+    public async Task Цепочка_СбойШага1_ИдётНаШаг2()
+    {
+        // §8: ход с цепочкой при ошибке перезапускается на модели ВТОРОГО шага, а не на
+        // модели-эквиваленте автоподбора. Цепочка: sonnet (нативный claude) → deepseek-chat.
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // шаг 1 (sonnet, acc-a) — сбой
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // шаг 2 (deepseek-chat) — успех
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[0].Should().Be(("acc-a", "sonnet"));
+        inner.Attempts[1].Should().Be(("deepseek", "deepseek-chat"), "шаг 2 цепочки, а не автоподбор");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Label.Should().Contain("Цепочка пресета");
+        inner.Info.Model.Should().Be("deepseek-chat");
+    }
+
+    [Fact]
+    public async Task ЦепочкаИсчерпана_АвтоподборНеСрабатывает()
+    {
+        // §8: при цепочке автоподбор выключен — исчерпание цепочки = финальный сбой,
+        // к сторонним провайдерам сами не уходим (уровень 2 не работает).
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+            ["LlmProviders:glm:ApiKey"] = "sk-glm",
+            ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.example.com",
+            ["LlmProviders:glm:Models:0:Id"] = "glm-4",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
+        // Все попытки — 429 (шаг 1 sonnet × acc-a, шаг 2 deepseek-chat)
+        for (var i = 0; i < 5; i++)
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // Ровно две попытки — цепочка исчерпана, к glm (автоподбор) НЕ ушли
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts.Should().NotContain(p => p.Provider == "glm",
+            "автоподбор при цепочке выключен");
+        Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
+    }
+
+    [Fact]
+    public async Task ЯвныйТирХода_ПобеждаетРеверсЭвристику()
+    {
+        // §8/§5.1: тир хода, переданный явно, побеждает реверс-эвристику ResolveTier при
+        // автоподборе. turnTier=Strong → EquivalentModel берёт TierStrong провайдера (ds-strong),
+        // хотя реверс-эвристика без _tiers дала бы Medium (ds-medium).
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProvidersWithTiers(), model: "sonnet",
+            turnTier: ModelTier.Strong);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // sonnet × acc-a — исчерпан
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // автоподбор → успех
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts[1].Model.Should().Be("ds-strong",
+            "явный Strong побеждает реверс (Medium → ds-medium)");
+    }
+
+    [Fact]
+    public async Task БезЯвногоТира_РеверсЭвристикаДаётMedium()
+    {
+        // Контрольный кейс к предыдущему: без явного тира (и без _tiers) реверс даёт Medium.
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProvidersWithTiers(), model: "sonnet");
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts[1].Model.Should().Be("ds-medium",
+            "без явного тира и _tiers реверс-эвристика даёт Medium");
     }
 
     [Fact]

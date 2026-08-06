@@ -1163,9 +1163,12 @@ public class SessionManager : IDisposable
             ? persona.ProjectId
             : contextProjectId;
 
-        // Персона без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
+        // Персона без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной».
+        // Дефолт места (Strong) передаётся в резолв, чтобы ячейка персоны без явного уровня сработала.
         var personaModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
-            _assignments.PersonaModel(persona, ownerId), resumeSessionId, ownerId);
+            _assignments.PersonaModel(persona, ownerId,
+                Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.ChatPersona)),
+            resumeSessionId, ownerId);
 
         if (!string.IsNullOrEmpty(targetProjectId)
             && _projects.GetById(targetProjectId) is { } project && project.OwnerId == ownerId)
@@ -1217,8 +1220,11 @@ public class SessionManager : IDisposable
         var leader = participants[0];
         var participantIds = participants.Select(p => p.Id).ToList();
         // Ведущая без своей модели идёт своим уровнем, без уровня — назначением места «чат с персоной»
+        // (дефолт места передаётся в резолв, чтобы ячейка ведущей без уровня сработала).
         var leaderModel = ResolveDefaultModel(Llm.LocalActionCatalog.ChatPersona,
-            _assignments.PersonaModel(leader, ownerId), resumeSessionId: null, ownerId);
+            _assignments.PersonaModel(leader, ownerId,
+                Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.ChatPersona)),
+            resumeSessionId: null, ownerId);
 
         if (leader.Scope == PersonaScope.Project && !string.IsNullOrEmpty(leader.ProjectId)
             && _projects.GetById(leader.ProjectId) is { } project && project.OwnerId == ownerId)
@@ -1829,7 +1835,8 @@ public class SessionManager : IDisposable
             // Владелец — ТОЛЬКО через ResolveOwnerId: у проектной сессии Session.OwnerId
             // равен null (он живёт у проекта), и личные слоты тиров молча подменялись бы
             // глобальными — см. комментарий у GetActiveTurnDelegation
-            var personaModel = _assignments.PersonaModel(persona, ResolveOwnerId(entry.Info));
+            var personaModel = _assignments.PersonaModel(persona, ResolveOwnerId(entry.Info),
+                Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.ChatPersona));
             if (!started)
             {
                 // ?? — а не присваивание в лоб: у персоны без своей модели чат остаётся на той,

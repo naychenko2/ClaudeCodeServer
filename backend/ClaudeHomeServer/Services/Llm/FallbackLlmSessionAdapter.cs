@@ -37,6 +37,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // заново (админская правка в UI применяется без рестарта). null — в тестах без DI,
     // читаем дефолт напрямую.
     private readonly FallbackSettingsStore? _fallbackSettings;
+    // Цепочка хода (ADR-007 §4): упорядоченные конкретные модели пресета (первая = основная,
+    // остальные = план фолбэка). null/один элемент — цепочки нет (существующий автоподбор).
+    // Вычисляется вызывающим (фабрикой через ClaudeSession.EffectiveTurnChain) на каждом ходу.
+    private readonly Func<IReadOnlyList<string>>? _effectiveChain;
+    // Явный тир хода (ADR-007 §5.1): известен на границе запуска (он выбирал строку матрицы).
+    // Побеждает реверс-эвристику ResolveTier при автоподборе модели-эквивалента. null — уровень
+    // не участвовал (явная модель), тогда работает реверс-эвристика по слотам владельца.
+    private readonly Func<ModelTier?>? _turnTier;
     // Лог подмен: без него оркестрацию нечем отлаживать на стенде (что классифицировали,
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
@@ -68,6 +76,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         string? initialProfileRoot,
         UserModelTierResolver? tiers = null,
         FallbackSettingsStore? fallbackSettings = null,
+        Func<IReadOnlyList<string>>? effectiveChain = null,
+        Func<ModelTier?>? turnTier = null,
         ILogger? log = null)
     {
         _inner = inner;
@@ -80,6 +90,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _initialProfileRoot = initialProfileRoot;
         _tiers = tiers;
         _fallbackSettings = fallbackSettings;
+        _effectiveChain = effectiveChain;
+        _turnTier = turnTier;
         _log = log;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
     }
@@ -238,14 +250,24 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var substitutions = 0;
         AttemptEnd? lastEnd = null;
 
+        // Цепочка хода (ADR-007 §4): конкретные модели пресета, первый = основной, остальные
+        // = план фолбэка. Есть цепочка (Count > 1) — фолбэк идёт по её шагам, автоподбор
+        // выключен; нет — действующий автоподбор (уровень 2). Вычисляем один раз за ход.
+        var chain = _effectiveChain?.Invoke() ?? Array.Empty<string>();
+        var hasChain = chain.Count > 1;
+        var chainIndex = 0;
+
         try
         {
             while (!_cts.IsCancellationRequested)
             {
                 if (_userInterrupted) { await SettleAsync(turn); return; }
 
-                var model = _effectiveModel() ?? "";
-                var key = CurrentProviderKey();
+                // Модель попытки: шаг цепочки (если есть) иначе эффективная модель сессии.
+                // После подмены Info.Model синхронизируем с шагом цепочки (ApplyTarget), чтобы
+                // следующий процесс стартовал на нужной модели.
+                var model = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
+                var key = ProviderKeyFor(model);
                 attempted.Add((model, key));
 
                 TaskCompletionSource<AttemptEnd> attemptTcs;
@@ -285,7 +307,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return;
                 }
 
-                var next = ResolveNextTarget(cls, end, attempted, model, key);
+                var next = ResolveNextTarget(cls, end, attempted, model, key, chain, hasChain, ref chainIndex);
                 if (next is null) { await FailExhaustedAsync(turn, trace, substitutions, end); return; }
 
                 // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
@@ -347,10 +369,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _ => true,
     };
 
-    // Уровень 1: другая подписка того же пула (та же модель). Уровень 2: следующий
-    // сторонний провайдер цепочки. null — кандидатов не осталось.
+    // Уровень 1: другая подписка того же пула (та же модель). Далее при цепочке (ADR-007 §4) —
+    // следующий шаг цепочки; без цепочки — уровень 2 (автоподбор модели-эквивалента). null —
+    // кандидатов не осталось. Цепочка вытесняет автоподбор: у хода с пресетом идём только по
+    // его шагам, провайдеров сами не подбираем.
     private FallbackTarget? ResolveNextTarget(FallbackErrorClass cls, AttemptEnd end,
-        HashSet<(string Model, string Key)> attempted, string model, string currentKey)
+        HashSet<(string Model, string Key)> attempted, string model, string currentKey,
+        IReadOnlyList<string> chain, bool hasChain, ref int chainIndex)
     {
         // Лимитные классы помечают подписку исчерпанной в пуле (существующий механизм):
         // 5xx/обрыв — НЕ помечают, это не квота аккаунта (инцидент 2026-08-02: ложные баны)
@@ -365,6 +390,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var modelForPool = string.IsNullOrWhiteSpace(model) ? null : model;
         var isNativeClaude = _providers?.ResolveByModel(modelForPool) is null;
 
+        // Уровень 1: ротация подписок пула (только нативные claude-модели; у сторонних пула нет —
+        // шаг считается исчерпанным сразу, переходим к следующему шагу цепочки/автоподбору)
         if (isNativeClaude && _pool.HasExtra)
         {
             // SessionManager.TryPoolFailover по rate_limit_event мог уже переключить чат
@@ -383,9 +410,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             foreach (var candidate in SubscriptionCandidates(modelForPool, currentKey))
             {
                 if (attempted.Contains((model, candidate))) continue;
-                // dst-корень может быть неизвестен (нет провайдеров, container без initialProfileRoot)
-                // — TryMigrateTranscript сам обрабатывает отсутствие транскрипта: новый ход
-                // стартует на чистом профиле целевой подписки, мигрировать нечего
                 var dstRoot = ResolveRootFor(candidate);
                 if (!TryMigrateTranscript(dstRoot)) continue;
                 return new FallbackTarget(candidate, null,
@@ -394,7 +418,29 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             }
         }
 
-        // Уровень 2: цепочка сторонних провайдеров в порядке конфига
+        // Цепочка пресета: следующий шаг (модель могла быть сторонней — у неё нет ротации,
+        // поэтому мы здесь). Автоподбор при цепочке выключен (ADR-007 §4). Каждый шаг цепочки,
+        // дойдя до своих подписок (у нативных), отработает уровень 1 на следующей итерации.
+        if (hasChain)
+        {
+            while (chainIndex + 1 < chain.Count)
+            {
+                chainIndex++;
+                var nextModel = chain[chainIndex];
+                var nextKey = ProviderKeyFor(nextModel);
+                if (attempted.Contains((nextModel, nextKey))) continue;
+                var dstRoot = ResolveRootFor(nextKey);
+                if (!TryMigrateTranscript(dstRoot)) continue;
+                var label = string.IsNullOrWhiteSpace(nextModel) ? KeyLabel(nextKey) : nextModel;
+                return new FallbackTarget(nextKey, nextModel,
+                    Label: $"Цепочка пресета: шаг {chainIndex + 1} → «{label}»",
+                    ProfileRoot: dstRoot, IsProviderSwitch: true);
+            }
+            // Цепочка исчерпана — финальный сбой, автоподбора нет
+            return null;
+        }
+
+        // Без цепочки — уровень 2: цепочка сторонних провайдеров в порядке конфига
         if (_providers is not null)
         {
             foreach (var provider in _providers.Enabled)
@@ -412,6 +458,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
 
         return null;
+    }
+
+    // Ключ пары для модели шага: провайдер по модели (приоритет), затем Provider сессии —
+    // тот же порядок, что у CurrentProviderKey, но от ЗАДАННОЙ модели шага цепочки, а не Info.Model.
+    private string ProviderKeyFor(string? model)
+    {
+        var byModel = _providers?.ResolveByModel(
+            string.IsNullOrWhiteSpace(model) ? null : model)?.Key;
+        return byModel ?? (string.IsNullOrEmpty(Info.Provider)
+            ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider);
     }
 
     // Кандидаты уровня 1: сначала штатный Pick (с учётом исчерпания, SupportsModel,
@@ -446,6 +502,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     private ModelTier ResolveTier(string? model)
     {
+        // Явный тир хода (ADR-007 §5.1): передан с границы запуска, побеждает реверс-эвристику.
+        // null — уровень не участвовал (явная модель), тогда сравнение со слотами ниже.
+        if (_turnTier?.Invoke() is { } explicitTier) return explicitTier;
         // У проектных сессий OwnerId пуст — слоты тогда глобальные, как и при резолве хода
         if (_tiers is null || string.IsNullOrWhiteSpace(model)) return ModelTier.Medium;
         foreach (var tier in new[] { ModelTier.Strong, ModelTier.Medium, ModelTier.Weak })

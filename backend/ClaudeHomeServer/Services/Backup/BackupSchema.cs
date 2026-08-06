@@ -16,5 +16,7 @@ public static class BackupSchema
     // 3 — из users.json убрано поле NtHash (NT-хэш пароля больше не хранится)
     // 4 — новые значения PersonaSpecialty (BackendExecutor, FrontendExecutor): старый код
     //     не знает их и уронил бы десериализацию personas.json при восстановлении
-    public const int Version = 4;
+    // 5 — SpecialtySettingsStore.FormatVersion 1→2 (пресет-цепочки Steps, матрицы уровней у
+    //     специальности/персоны): старый код не знает полей и обнулил бы стор при восстановлении
+    public const int Version = 5;
 }

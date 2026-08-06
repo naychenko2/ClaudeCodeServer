@@ -26,10 +26,10 @@ public sealed class FallbackSettingsStore
     // дальше честнее отдать ошибку. Любая пользовательская настройка клампится сюда.
     public const int HardMaxSubstitutions = 5;
 
-    // Дефолт при отсутствии настройки у обоих слоёв — подобран чтобы быть «безопасным»
-    // (не на каждом ходе прыгать по провайдерам, но и не одной попыткой задушить
-    // реальный сбой) и совпадал с ADR.
-    public const int DefaultMaxSubstitutions = 3;
+    // Дефолт при отсутствии настройки у обоих слоёв. Поднят с 3 до 4 (ADR-007): цепочка
+    // пресета до 5 шагов при дефолте 3 оставляла бы пятый шаг мёртвым — «пять шагов» должно
+    // значить пять. Потолок 1..5 остаётся жёстким (HardMaxSubstitutions).
+    public const int DefaultMaxSubstitutions = 4;
 
     public sealed class FallbackSettings
     {
@@ -151,9 +151,18 @@ public sealed class FallbackSettingsStore
         }
     }
 
+    // Чтение устойчиво к регистру имён свойств: стор пишет PascalCase (Save без Policy —
+    // дефолт S.T.J), но файл правят и руками, ожидая camelCase по конвенции ({"global":
+    // {"maxSubstitutions": 3}}). Без PropertyNameCaseInsensitive camelCase молчаливо
+    // игнорируется — настройка не применяется, диагностики нет (ловушка приёмки 19d8f18e).
+    private static readonly JsonSerializerOptions LoadOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     private void Load()
     {
-        var file = JsonFileStore.Load<FallbackSettingsFile>(_storePath, logger: _log);
+        var file = JsonFileStore.Load<FallbackSettingsFile>(_storePath, LoadOptions, _log);
         if (file is null) return;
         if (file.Version > FormatVersion)
         {

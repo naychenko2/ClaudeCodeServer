@@ -28,6 +28,22 @@ public class ClaudeSession : ILlmSessionAdapter
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
     internal string? EffectiveTurnModel => EffectiveModel;
 
+    // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
+    // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
+    // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
+    // (тесты) — один элемент (эффективная модель), т.е. цепочки нет.
+    internal IReadOnlyList<string> EffectiveTurnChain =>
+        _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
+        ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
+
+    // Явный тир хода для фолбэка (ADR-007 §5.1): дефолт места каталога, когда модель выбирается
+    // по месту (Info.Model пуст). При явной модели (персона/задача/выбор) тир не известен надёжно
+    // — отдаём null, и адаптер использует реверс-эвристику по слотам (как раньше, без регрессии).
+    internal ModelTier? EffectiveTurnTier =>
+        string.IsNullOrEmpty(Info.Model) && LocalActionCatalog.Find(UsageKey) is { } action
+            ? LocalActionCatalog.EffectiveDefaultTier(action)
+            : null;
+
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>
         Info.TaskExecution || Info.TaskId is not null ? LocalActionCatalog.TasksExecutor

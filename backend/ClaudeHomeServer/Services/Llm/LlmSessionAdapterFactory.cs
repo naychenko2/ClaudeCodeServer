@@ -111,7 +111,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,
-            context.Launcher, context.CliConfigRoot, _tiers, _fallbackSettings, _log);
+            context.Launcher, context.CliConfigRoot, _tiers, _fallbackSettings,
+            () => claudeSession.EffectiveTurnChain, () => claudeSession.EffectiveTurnTier, _log);
         return fallback;
     }
 }

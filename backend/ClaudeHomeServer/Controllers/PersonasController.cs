@@ -206,6 +206,8 @@ public class PersonasController : ControllerBase
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+        if (!IsValidTierCell(req.TierStrong) || !IsValidTierCell(req.TierMedium) || !IsValidTierCell(req.TierWeak))
+            return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
         if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
 
@@ -240,7 +242,8 @@ public class PersonasController : ControllerBase
                 req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled ?? true, templated.Tools, req.Contract,
                 templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
-                req.AllProjectsAccess ?? false, req.Handle, req.ModelTier);
+                req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
+                req.TierStrong, req.TierMedium, req.TierWeak);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindings.Count > 0)
@@ -273,6 +276,8 @@ public class PersonasController : ControllerBase
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+        if (!IsValidTierCell(req.TierStrong) || !IsValidTierCell(req.TierMedium) || !IsValidTierCell(req.TierWeak))
+            return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
         // Partial-update: null-поля не меняются, поэтому размер считаем по эффективному контракту.
         // Порог — только на рост: у раздутой персоны остаётся право сохранить сокращение
         if (req.Contract is not null || req.SystemPrompt is not null)
@@ -295,7 +300,8 @@ public class PersonasController : ControllerBase
             persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
                 req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
-                req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier);
+                req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
+                req.TierStrong, req.TierMedium, req.TierWeak);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         await Broadcast("updated", id);
@@ -2008,6 +2014,19 @@ public class PersonasController : ControllerBase
         return true;
     }
 
+    // Валидация ячейки матрицы уровней персоны (ADR-007 §2): пусто — годится, иначе id модели
+    // или "preset:{id}". tier:* в ячейке запрещён (ячейка уже адресована уровнем). Наличие
+    // пресета не проверяем — как у Model, ссылка становится битой только при удалении пресета.
+    private static bool IsValidTierCell(string? cell)
+    {
+        if (string.IsNullOrWhiteSpace(cell)) return true;
+        var v = cell.Trim();
+        if (Services.Llm.LocalActionOverridesStore.IsPresetRoute(v))
+            return Services.Llm.LocalActionOverridesStore.ParsePresetRoute(v) is not null;
+        // tier:* запрещён в ячейке; прочее трактуется как id модели
+        return Services.Llm.LocalActionOverridesStore.ParseTierRoute(v) is null;
+    }
+
     // Разбор CSV-параметра запроса (extraProjectIds/extraPersonaIds) в список id
     private static List<string> SplitCsv(string? csv) =>
         string.IsNullOrWhiteSpace(csv)
@@ -2059,7 +2078,11 @@ public record CreatePersonaRequest(
     // Ручной @handle (latin-slug); пусто — авто-генерация из имени. Занят/невалиден → 400
     string? Handle = null,
     // Уровень модели («strong|medium|weak») вместо конкретной Model; null/"" — не задан
-    string? ModelTier = null);
+    string? ModelTier = null,
+    // Свои модели по уровням (ADR-007 §2): id модели ИЛИ "preset:{id}"; null/"" — не задана
+    string? TierStrong = null,
+    string? TierMedium = null,
+    string? TierWeak = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -2089,7 +2112,11 @@ public record UpdatePersonaRequest(
     // Занят/невалиден → 400
     string? Handle = null,
     // Уровень модели: null — не менять, "" — сбросить, "strong|medium|weak" — задать
-    string? ModelTier = null);
+    string? ModelTier = null,
+    // Свои модели по уровням (ADR-007 §2): null — не менять, "" — сбросить, иначе id/preset:{id}
+    string? TierStrong = null,
+    string? TierMedium = null,
+    string? TierWeak = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

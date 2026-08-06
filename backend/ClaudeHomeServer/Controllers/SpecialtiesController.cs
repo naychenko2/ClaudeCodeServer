@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,7 +14,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/specialties")]
-public class SpecialtiesController(SpecialtySettingsStore settings) : ControllerBase
+public class SpecialtiesController(SpecialtySettingsStore settings, FallbackSettingsStore fallback) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -35,10 +36,15 @@ public class SpecialtiesController(SpecialtySettingsStore settings) : Controller
         }));
     }
 
-    // Настройки специальностей и пресетов правил: глобальный слой и личный слой
+    // Настройки специальностей и пресетов-цепочек: глобальный слой и личный слой
     // вызывающего (фронт рендерит оба уровня; эффективное значение — см. List/шаблоны)
     // плюс объединённый список пресетов с признаком слоя: набор один, различие между
     // «общий» и «мой» — в поле scope (личные впереди, в порядке резолва).
+    //
+    // Контракт v2 (ADR-007): пресет хранит упорядоченную цепочку steps (не rules);
+    // у специальности — матрица моделей по уровням (tierStrong/Medium/Weak) + defaultTier;
+    // у слоя — defaultSpecialty («любая специальность»). Слои сериализуются как есть
+    // (SpecialtySettingsLayer), пресеты разворачиваются в плоский список со steps.
     [HttpGet("settings")]
     public IActionResult GetSettings()
     {
@@ -46,6 +52,11 @@ public class SpecialtiesController(SpecialtySettingsStore settings) : Controller
         return Ok(new
         {
             version = SpecialtySettingsStore.FormatVersion,
+            // Эффективный бюджет подмен цепочки хода (ADR-007 §4): per-owner → global →
+            // дефолт, значение клампится в 1..HardMaxSubstitutions (FallbackSettingsStore).
+            // Фронт приглушает шаги пресета за этим пределом как «обычно не используется» —
+            // без этого числа UI хардкодил дефолт и считал приглушение от неверного потолка.
+            maxSubstitutions = fallback.ResolveMaxSubstitutions(UserId),
             global = file.Global,
             owner = file.Owners.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer(),
             presets = settings.EffectivePresetsWithScope(UserId).Select(e => new
@@ -53,7 +64,7 @@ public class SpecialtiesController(SpecialtySettingsStore settings) : Controller
                 id = e.Preset.Id,
                 name = e.Preset.Name,
                 description = e.Preset.Description,
-                rules = e.Preset.Rules,
+                steps = e.Preset.Steps,
                 scope = e.Scope,
             }),
         });

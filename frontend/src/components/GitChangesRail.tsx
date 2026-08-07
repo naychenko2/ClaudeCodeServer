@@ -64,20 +64,25 @@ const scopeRowStyle = (active: boolean, hovered: boolean, pressing = false): CSS
 });
 
 // Два главных действия панели — «Зафиксировать» в строке скоупа и «Опубликовать»
-// в ряду ветки — квадратными кнопками-иконками ОДНОГО габарита: они читаются как
-// пара. 24 (а не 28) — чтобы кнопка помещалась в строку скоупа высотой ROW_H и та
-// не росла под неё. Различает их только заливка: фиксация светлая, публикация accent
+// в ряду ветки — кнопками «иконка + подпись» ОДНОГО габарита: они читаются как пара.
+// Высота ровно ROW_H — кнопка помещается в строку скоупа и не растит её. Ширина
+// ОДНА фиксированная (а не по содержимому): подписи разной длины иначе давали бы
+// кнопки разной ширины, и пара распадалась бы. Запас к самой длинной подписи —
+// на случай другой метрики шрифта; boxSizing держит рамку внутри ширины, поэтому
+// светлая (с рамкой) и accent (без) кнопки совпадают до пикселя.
+// Различает их только заливка: фиксация светлая, публикация accent
+const ACTION_BTN_W = 118;
 const actionBtnBase: CSSProperties = {
-  flexShrink: 0, width: 24, height: 24, borderRadius: R.md, cursor: 'pointer',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  flexShrink: 0, width: ACTION_BTN_W, height: ROW_H, boxSizing: 'border-box',
+  borderRadius: R.md, cursor: 'pointer',
+  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: SP.xs,
+  padding: `0 ${SP.xs}px`, overflow: 'hidden',
+  fontFamily: FONT.sans, fontSize: FS.xs, lineHeight: 1, whiteSpace: 'nowrap',
 };
-// «Зафиксировать» — квадратом ROW_H: кнопка вписана в строку скоупа и не растит её
 const commitBtnStyle: CSSProperties = {
-  ...actionBtnBase, width: ROW_H, height: ROW_H,
+  ...actionBtnBase,
   background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading,
 };
-// Публикация — с подписью и ровно теми же метриками, что «Зафиксировать» выше:
-// два главных действия панели читаются как пара. Различает их только заливка
 const publishBtnStyle: CSSProperties = {
   ...commitBtnStyle, background: C.accent, border: 'none', color: C.onAccent,
 };
@@ -995,7 +1000,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                       title="Зафиксировать изменения"
                       style={{ ...commitBtnStyle, marginLeft: 'auto' }}
                     >
-                      <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                      <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                      Зафиксировать
                     </button>
                   </>
                 )}
@@ -1153,7 +1159,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           {/* Публикация — с подписью, тем же примитивом и размером, что «Зафиксировать»
               в строке скоупа выше: два главных действия панели читаются как пара.
               Число коммитов не дублируем, оно видно стрелкой ↑N в капсуле. Нечего
-              публиковать → гаснет, но остаётся на месте (ряд не прыгает) */}
+              публиковать → гаснет, но остаётся на месте (ряд не прыгает).
+              Ширина подписи фиксированная, поэтому ряд не переверстывается, когда
+              капсула ветки меняет длину имени */}
           <button
             onClick={() => setPublishConfirm(true)}
             disabled={!canPublish || st.busy}
@@ -1166,7 +1174,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               opacity: canPublish && !st.busy ? 1 : 0.4,
             }}
           >
-            <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            Опубликовать
           </button>
         </div>
       </div>

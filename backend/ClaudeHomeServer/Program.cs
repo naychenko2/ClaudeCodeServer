@@ -272,6 +272,9 @@ builder.Services.AddSingleton<GlifAccountService>();
 builder.Services.AddSingleton<UsageService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
+// Интерфейс указывает на тот же singleton — нужен контроллеру и подмене в тестах ролей
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IProviderBalanceService>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.ProviderBalanceService>());
 // Атрибуция file_changed чату-источнику при параллельных ходах одного проекта (см. FileChangeAttributor)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.FileChangeAttributor>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory,

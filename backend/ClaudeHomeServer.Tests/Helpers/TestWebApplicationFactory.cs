@@ -39,6 +39,10 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
 
     public string TempDir { get; } = Path.Combine(Path.GetTempPath(), "ccs_tests_" + Guid.NewGuid().ToString("N"));
 
+    // Точка подмены сервисов для конкретного теста (напр. стаб IProviderBalanceService): null —
+    // хост собирается как обычно. Применяется после встроенных регистраций, поэтому может их перетереть.
+    public Action<IServiceCollection>? ExtraServices { get; set; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Создаём users.json до старта хоста — UserStore прочитает его при инициализации
@@ -105,6 +109,9 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 if (scheme is not null) scheme.HandlerType = typeof(NoOpNegotiateHandler);
             });
         });
+
+        if (ExtraServices is { } extra)
+            builder.ConfigureServices(extra);
     }
 
     private static void CreateUsersFile(string dir)

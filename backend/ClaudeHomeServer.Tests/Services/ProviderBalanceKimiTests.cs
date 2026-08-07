@@ -172,11 +172,10 @@ public class ProviderBalanceKimiTests
     // ── Параллельные сессии и уровень подписки (дособрано 07.08.2026) ─────────────────
 
     [Fact]
-    public void ЖивойОтвет_УровеньПодписки_ВNote()
+    public void ЖивойОтвет_PlanLabel_ИмяПодпискиБезПриставки()
     {
-        // В снимке 26.07 membership.level = LEVEL_ADVANCED; parallel без details (окна нет),
-        // но подписку показываем
-        Parse(RealPayload)!.Note.Should().Be("Подписка: Advanced");
+        // Поле PlanLabel — primary: «Advanced» без «Подписка:», подпись рисует интерфейс
+        Parse(RealPayload)!.PlanLabel.Should().Be("Advanced");
     }
 
     [Fact]
@@ -198,7 +197,7 @@ public class ProviderBalanceKimiTests
         par.Value.Should().Be("2/30");
         par.Unit.Should().Be("count");
         par.ResetsAt.Should().BeNull();
-        b.Note.Should().Be("Подписка: Standard");
+        b.PlanLabel.Should().Be("Standard");
         // Квотные окна и история не изменились — доп. окно лишь добавилось последним
         b.Windows[0].Unit.Should().Be("percent");
         b.TrackHistory.Should().BeTrue();
@@ -216,17 +215,17 @@ public class ProviderBalanceKimiTests
 
         b!.Windows.Should().HaveCount(1);
         b.Windows![0].Unit.Should().Be("percent");
-        b.Note.Should().BeNull(); // уровня подписки в ответе нет
+        b.PlanLabel.Should().BeNull(); // уровня подписки в ответе нет
     }
 
     [Fact]
     public void УровеньПодписки_НеСLEVEL_НеПоказываем()
     {
-        // Чужой формат уровня (не LEVEL_*) — не угадываем, Note не ставим
+        // Чужой формат уровня (не LEVEL_*) — не угадываем, PlanLabel не ставим
         const string json = """
             {"usage":{"limit":"100","remaining":"94","resetTime":"2026-08-02T00:00:00Z"},
             "user":{"membership":{"level":"VIP_GOLD"}}}
             """;
-        Parse(json)!.Note.Should().BeNull();
+        Parse(json)!.PlanLabel.Should().BeNull();
     }
 }

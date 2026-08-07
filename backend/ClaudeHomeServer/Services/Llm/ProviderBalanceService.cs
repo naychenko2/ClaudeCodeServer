@@ -13,13 +13,35 @@ namespace ClaudeHomeServer.Services.Llm;
 // TrackHistory — годится ли TotalBalance точкой в историю графика: false, когда основным
 // стало НЕ то окно, что обычно (провайдер не отдал короткое), иначе в один ряд попали бы
 // точки разных окон и график запрыгал бы между шкалами.
-// Note — свободная строка «доп. сведения» в раскрытую карточку провайдера (null — не показывать):
-// напр. «В том числе подарочных: $5.50» у DeepSeek, «Подписка: Standard» у Kimi, расход по периодам
-// у OpenRouter, сводка за 24ч у FreeLLM. Контроллер отдаёт record как есть → в JSON уезжает как note.
+//
+// GrantedBalance — подарочный остаток (DeepSeek), валюта общая из Currency.
+// PlanLabel — уровень подписки строкой без приставки («Advanced» у Kimi); подпись рисует фронт.
+// KeyLimit — денежный лимит ключа (OpenRouter): это ПРЕДЕЛ, а не примечание, фронт рисует его
+//   шкалой с предупреждением, как квоту.
+// Spend — расход по данным самого провайдера (OpenRouter /key), НЕ наш SpendStore: у него своя
+//   правда, фронт подписывает «по данным OpenRouter».
+// Health — здоровье пула бесплатных моделей (FreeLLM): трафик за 24ч и состав живых платформ.
 public sealed record ProviderBalance(bool Available, string Currency, string TotalBalance,
     DateTime AsOf = default, DateTime? ResetsAt = null,
     IReadOnlyList<ProviderQuotaWindow>? Windows = null, bool TrackHistory = true,
-    string? Note = null);
+    double? GrantedBalance = null, string? PlanLabel = null,
+    ProviderKeyLimit? KeyLimit = null, ProviderSpend? Spend = null,
+    ProviderHealth? Health = null)
+{
+    // true — баланс это КВОТА (процент/счётчик), а не сумма в валюте. Whitelist: подтверждено только
+    // для "%" и "count"; пустая и неразобранная валюта → false (считаем деньгами). По нему контроллер
+    // режет историю не-админу — «по умолчанию закрыто» (см. GetUsage): сбой провайдера не должен
+    // раскрывать кошелёк. WithoutMoney() срезает денежные поля безусловно, это правило — только истории.
+    public bool IsQuota => Currency is "%" or "count";
+
+    // Вид без денег для не-админа: убираем баланс, валюту, подарочный остаток, лимит ключа и расход
+    // провайдера. Остаются квоты окон, сроки сброса, PlanLabel, Health — они объясняют поведение
+    // моделей и денег не раскрывают.
+    public object WithoutMoney() => new
+    {
+        Available, AsOf, ResetsAt, Windows, TrackHistory, PlanLabel, Health,
+    };
+}
 
 // Одно окно квоты подписки: подпись для UI, значение уже отформатированной строкой,
 // момент сброса и единица — "percent" (остаток в %, как у GLM/Kimi/MiniMax) или "count"
@@ -27,8 +49,29 @@ public sealed record ProviderBalance(bool Available, string Currency, string Tot
 // фронт по Unit выбирает, как рисовать значение, и не пишет "токенов" там, где их нет.
 public sealed record ProviderQuotaWindow(string Label, string Value, DateTime? ResetsAt, string Unit);
 
+// Денежный лимит ключа провайдера (OpenRouter /key): сколько ещё осталось из общего лимита.
+// Отдельная от ProviderQuotaWindow модель: это не процент и не счётчик вызовов, а пара сумм в валюте.
+public sealed record ProviderKeyLimit(double Remaining, double Total);
+
+// Расход по данным самого провайдера (OpenRouter /key): ежедневный/недельный/месячный в валюте.
+public sealed record ProviderSpend(double Daily, double Weekly, double Monthly);
+
+// Здоровье пула бесплатных моделей (FreeLLM): трафик за 24ч и состав живых платформ. Поля
+// nullable — соответствующий источник (provider_health / usage_summary) мог не ответить; фронт
+// живёт без каждого по отдельности. Сам Health есть, если разобралось хоть что-то.
+public sealed record ProviderHealth(double? Requests24h, double? SuccessRate,
+    int? PlatformsAlive, int? PlatformsTotal);
+
 // Точка истории баланса — для графика на экране «Использование»
 public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance, string Currency);
+
+/// <summary>Контракт сервиса баланса для контроллера и подмены в тестах ролей.</summary>
+public interface IProviderBalanceService
+{
+    LlmProviderConfig? GetSupported(string key);
+    Task<ProviderBalance?> GetAsync(string key, CancellationToken ct);
+    IReadOnlyList<ProviderBalanceSnapshot> GetSnapshots(string key);
+}
 
 // Состояние аккаунта CLI-провайдера. Источник задаётся конфигом провайдера (Balance):
 // "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance;
@@ -41,7 +84,7 @@ public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance,
 // каждое успешное обновление пишет снапшот в data/provider-usage-{key}.json (история для графика,
 // по основному — самому короткому — окну).
 public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderRegistry providers,
-    IConfiguration config)
+    IConfiguration config) : IProviderBalanceService
 {
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan SnapshotRetention = TimeSpan.FromDays(8);
@@ -133,16 +176,16 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             var root = doc.RootElement;
             var available = root.TryGetProperty("is_available", out var av) && av.ValueKind == JsonValueKind.True;
             string currency = "", total = "";
-            string? note = null;
+            double? granted = null;
             if (root.TryGetProperty("balance_infos", out var infos) && infos.ValueKind == JsonValueKind.Array
                 && infos.GetArrayLength() > 0)
             {
                 var first = infos[0];
                 currency = first.TryGetProperty("currency", out var c) ? c.GetString() ?? "" : "";
                 total = first.TryGetProperty("total_balance", out var t) ? t.GetString() ?? "" : "";
-                note = DeepSeekGrantedNote(first);
+                granted = DeepSeekGrantedBalance(first);
             }
-            return new ProviderBalance(available, currency, total, Note: note);
+            return new ProviderBalance(available, currency, total, GrantedBalance: granted);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -152,15 +195,12 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         }
     }
 
-    // Note баланса DeepSeek: если в balance_infos есть подарочный granted_balance > 0 —
-    // поясняем «В том числе подарочных: $X». При нуле/отсутствии не шумим (null).
-    // internal — под тестами: живой запрос требует ключа, формат фиксируем фикстурой.
-    internal static string? DeepSeekGrantedNote(JsonElement info)
+    // Подарочный остаток DeepSeek (internal — под тестами): granted_balance > 0, иначе null
+    // (ноль/отсутствие не шумим). Живой запрос требует ключа, формат фиксируем фикстурой.
+    internal static double? DeepSeekGrantedBalance(JsonElement info)
     {
         var granted = ReadNumber(info, "granted_balance");
-        if (double.IsNaN(granted) || granted <= 0) return null;
-        return "В том числе подарочных: $" + granted.ToString("0.##",
-            System.Globalization.CultureInfo.InvariantCulture);
+        return double.IsNaN(granted) || granted <= 0 ? null : granted;
     }
 
     // Формат Moonshot (Kimi): { status, data: { available_balance, voucher_balance, cash_balance } }
@@ -220,9 +260,10 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
 
             var remaining = credits - used;
             // /key самостоятелен: его отказ НЕ должен ронять деньги из /credits
-            string? note = await TryReadOpenRouterKeyNoteAsync(p, ct);
+            var key = await TryReadOpenRouterKeyAsync(p, ct);
             return new ProviderBalance(remaining > 0, "USD",
-                remaining.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture), Note: note);
+                remaining.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+                KeyLimit: key?.KeyLimit, Spend: key?.Spend);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -234,8 +275,8 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
 
     // Второй запрос баланса OpenRouter — GET {ApiBaseUrl}/key: расход по периодам и лимит ключа.
     // /key самостоятелен и НЕ должен ронять основной баланс из /credits: не ответил/не разобрался
-    // → Note нет, деньги живут как раньше. Таймаут/ошибки — как у соседей (10с, swallow в null)
-    private async Task<string?> TryReadOpenRouterKeyNoteAsync(LlmProviderConfig p, CancellationToken ct)
+    // → Spend/KeyLimit нет, деньги живут как раньше. Таймаут/ошибки — как у соседей (10с, swallow в null)
+    private async Task<OpenRouterKeyData?> TryReadOpenRouterKeyAsync(LlmProviderConfig p, CancellationToken ct)
     {
         try
         {
@@ -247,7 +288,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             using var resp = await client.SendAsync(req, timeoutCts.Token);
             if (!resp.IsSuccessStatusCode) return null;
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
-            return ParseOpenRouterKeyNote(doc.RootElement);
+            return ParseOpenRouterKey(doc.RootElement);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -258,28 +299,34 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     }
 
     // Разбор ответа GET /key OpenRouter (internal — под тестами): { data: { usage_daily,
-    // usage_weekly, usage_monthly, limit, limit_remaining } }. Note — «Расход: $D сегодня ·
-    // $W за неделю · $M за месяц» (+ «· лимит ключа: осталось $R из $L», когда limit задан числом).
-    // Любая из расходных частей не разобралась → Note нет (лучше никакой, чем частичный)
-    internal static string? ParseOpenRouterKeyNote(JsonElement root)
+    // usage_weekly, usage_monthly, limit, limit_remaining } }. Расход (Spend) и лимит ключа
+    // (KeyLimit) — независимые поля: не разобрался один — нет только он, а не весь результат.
+    internal sealed record OpenRouterKeyData(ProviderSpend? Spend, ProviderKeyLimit? KeyLimit);
+
+    internal static OpenRouterKeyData? ParseOpenRouterKey(JsonElement root)
     {
-        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object) return null;
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
+            return null;
+
+        // Spend — все три периода обязаны разобраться, иначе поля нет (лучше никакой, чем частичный)
+        ProviderSpend? spend = null;
         var daily = ReadNumber(data, "usage_daily");
         var weekly = ReadNumber(data, "usage_weekly");
         var monthly = ReadNumber(data, "usage_monthly");
-        if (double.IsNaN(daily) || double.IsNaN(weekly) || double.IsNaN(monthly)) return null;
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var note = "Расход: $" + daily.ToString("0.####", inv) + " сегодня · $" +
-            weekly.ToString("0.####", inv) + " за неделю · $" + monthly.ToString("0.####", inv) + " за месяц";
-        // limit приходит null (лимита нет) либо числом — null/мусор пропускаем без куска про лимит
+        if (!double.IsNaN(daily) && !double.IsNaN(weekly) && !double.IsNaN(monthly))
+            spend = new ProviderSpend(daily, weekly, monthly);
+
+        // KeyLimit — limit приходит null (лимита нет) либо числом; null/мусор/нет remaining → поля нет
+        ProviderKeyLimit? keyLimit = null;
         if (data.TryGetProperty("limit", out var limEl) && limEl.ValueKind == JsonValueKind.Number)
         {
+            var total = limEl.GetDouble();
             var remaining = ReadNumber(data, "limit_remaining");
             if (!double.IsNaN(remaining))
-                note += " · лимит ключа: осталось $" + remaining.ToString("0.####", inv) +
-                    " из $" + limEl.GetDouble().ToString("0.####", inv);
+                keyLimit = new ProviderKeyLimit(remaining, total);
         }
-        return note;
+
+        return spend is null && keyLimit is null ? null : new OpenRouterKeyData(spend, keyLimit);
     }
 
     // Число из JSON, приходящее как number или как строка; NaN — поля нет либо не разобрать.
@@ -557,9 +604,9 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     // Формат FreeLLM (локальный роутер бесплатных моделей, нет квот/денег): состояние пула и
     // трафик читаются через его MCP POST {BalanceUrl} (JSON-RPC 2.0 stateless, авторизация —
     // тот же unified-ключ, что в ApiKey, Bearer). URL по умолчанию — ApiBaseUrl без хвоста /v1 + /mcp.
-    // Два вызова tools/call: provider_health → окно count «Провайдеры» (живых/всего; жива платформа
-    // с keys.healthy > 0); usage_summary range=24h → Note «За 24ч: …». Один упал — живём на втором;
-    // оба → null. TrackHistory false: это не расход, в историю графика точки не идут.
+    // Два вызова tools/call: provider_health → состав платформ (окно count «Провайдеры» + Health);
+    // usage_summary range=24h → трафик за 24ч (часть Health).
+    // Один упал — живём на втором; оба → null. TrackHistory false: это не расход, в историю точки не идут.
     private async Task<ProviderBalance?> FetchFreeLlmAsync(LlmProviderConfig p, CancellationToken ct)
     {
         var url = string.IsNullOrWhiteSpace(p.BalanceUrl)
@@ -568,31 +615,34 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         {
             var client = httpFactory.CreateClient("llm-provider");
 
-            // provider_health → окно «Провайдеры» (живых/всего) и флаг Available
-            string? value = null;
+            // provider_health → состав платформ (живых/всего), флаг Available и окно «Провайдеры» (count).
+            // жива платформа с keys.healthy > 0
+            (int Alive, int Total)? platforms = null;
             var available = false;
             if (await CallFreeLlmToolAsync(client, url, p.ApiKey, "provider_health", null, ct) is { } health
                 && ParseFreeLlmHealth(health) is { } h)
             {
-                value = $"{h.Alive}/{h.Total}";
+                platforms = h;
                 available = h.Alive > 0;
             }
 
-            // usage_summary range=24h → Note «За 24ч: …»
-            string? note = null;
+            // usage_summary range=24h → трафик за 24ч (часть Health)
+            FreeLlmUsageData? usage = null;
             if (await CallFreeLlmToolAsync(client, url, p.ApiKey, "usage_summary", new { range = "24h" }, ct)
-                is { } usage)
-                note = ParseFreeLlmUsage(usage);
+                is { } usageEl)
+                usage = ParseFreeLlmUsageData(usageEl);
 
             // Оба вызова ничего не дали → баланса нет
-            if (value is null && note is null) return null;
+            if (platforms is null && usage is null) return null;
 
+            var value = platforms is { } pp ? $"{pp.Alive}/{pp.Total}" : null;
             var windows = value is null ? null : new List<ProviderQuotaWindow>
             {
                 new("Провайдеры", value, null, "count")
             };
             return new ProviderBalance(available, "count", value ?? "", ResetsAt: null,
-                Windows: windows, TrackHistory: false, Note: note);
+                Windows: windows, TrackHistory: false,
+                Health: ComposeFreeLlmHealth(platforms, usage));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -662,25 +712,26 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         return total > 0 ? (alive, total) : null;
     }
 
-    // Разбор usage_summary FreeLLM (internal — под тестами): { requests, success_rate, input_tokens,
-    // output_tokens }. Note «За 24ч: N запросов[, успех X%][ · токены N вх / N исх]». success_rate
-    // null → кусок с процентом опускаем; нет requests → Note нет совсем
-    internal static string? ParseFreeLlmUsage(JsonElement root)
+    // Разбор usage_summary FreeLLM (internal — под тестами): { requests, success_rate }.
+    // requests обязателен — без него данных нет; success_rate опционален. Health берёт оба.
+    internal sealed record FreeLlmUsageData(double Requests24h, double? SuccessRate);
+
+    internal static FreeLlmUsageData? ParseFreeLlmUsageData(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object) return null;
         var requests = ReadNumber(root, "requests");
         if (double.IsNaN(requests)) return null;
-        var inv = System.Globalization.CultureInfo.InvariantCulture;
-        var note = "За 24ч: " + (long)requests + " запросов";
-        var rate = ReadNumber(root, "success_rate");
-        if (!double.IsNaN(rate))
-            note += ", успех " + rate.ToString("0.#", inv) + "%";
-        var input = ReadNumber(root, "input_tokens");
-        var output = ReadNumber(root, "output_tokens");
-        if (!double.IsNaN(input) || !double.IsNaN(output))
-            note += " · токены " + (double.IsNaN(input) ? "—" : ((long)input).ToString()) +
-                " вх / " + (double.IsNaN(output) ? "—" : ((long)output).ToString()) + " исх";
-        return note;
+        var success = ReadNumber(root, "success_rate");
+        return new FreeLlmUsageData(requests, double.IsNaN(success) ? null : success);
+    }
+
+    // Сборка Health FreeLLM из двух источников: provider_health (платформы) и usage_summary (трафик).
+    // Health есть, если разобралось хоть что-то — фронт живёт без каждого поля по отдельности.
+    internal static ProviderHealth? ComposeFreeLlmHealth((int Alive, int Total)? platforms, FreeLlmUsageData? usage)
+    {
+        if (platforms is null && usage is null) return null;
+        return new ProviderHealth(usage?.Requests24h, usage?.SuccessRate,
+            platforms?.Alive, platforms?.Total);
     }
 
     // Unix-время из числового поля; порог отличает миллисекунды от секунд (как у GLM).
@@ -750,12 +801,12 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         // limit и занятость (details.length) приходят строками — через ReadNumber, как весь ответ Kimi
         var parallel = KimiParallelWindow(root);
         if (parallel is not null) windows.Add(parallel);
-        // Уровень подписки → Note («Подписка: Standard»). Неизвестный формат уровня — не показываем
-        var note = KimiMembershipNote(root);
+        // Уровень подписки → поле PlanLabel (без приставки «Подписка:», её рисует интерфейс)
+        var plan = KimiPlanLabel(root);
         // История — только по окну из limits[]: свалившись на недельное, мы писали бы в тот же
         // ряд проценты другого окна
         return new ProviderBalance(true, "%", fmt(p.RemainingPct), ResetsAt: p.ResetsAt, Windows: windows,
-            TrackHistory: fromLimits, Note: note);
+            TrackHistory: fromLimits, PlanLabel: plan);
     }
 
     // Одно окно квоты Kimi: остаток в процентах (нормализуем к 0..100, даже если limit ≠ 100),
@@ -812,9 +863,10 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         return new ProviderQuotaWindow("Параллельные сессии", $"{(long)used}/{(long)limit}", null, "count");
     }
 
-    // Уровень подписки Kimi → Note «Подписка: Standard». user.membership.level приходит как
-    // LEVEL_<ИМЯ>; <ИМЯ> разворачиваем с большой буквы (STANDARD → Standard). Чужой формат — null
-    private static string? KimiMembershipNote(JsonElement root)
+    // Уровень подписки Kimi (internal — под тестами): user.membership.level приходит как
+    // LEVEL_<ИМЯ>; <ИМЯ> разворачиваем с большой буквы (LEVEL_ADVANCED → «Advanced»). Без
+    // приставки «Подписка:» — её рисует интерфейс. Чужой формат уровня — null
+    internal static string? KimiPlanLabel(JsonElement root)
     {
         if (!root.TryGetProperty("user", out var user) || user.ValueKind != JsonValueKind.Object
             || !user.TryGetProperty("membership", out var mem) || mem.ValueKind != JsonValueKind.Object
@@ -826,7 +878,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             || level.Length <= prefix.Length)
             return null;
         var name = level[prefix.Length..]; // STANDARD, PRO, FREE …
-        return "Подписка: " + char.ToUpperInvariant(name[0]) + name[1..].ToLowerInvariant();
+        return char.ToUpperInvariant(name[0]) + name[1..].ToLowerInvariant();
     }
 
     // История баланса за последние дни — для графика на экране «Использование»

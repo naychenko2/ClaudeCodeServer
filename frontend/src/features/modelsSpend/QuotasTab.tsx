@@ -4,7 +4,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, ExternalLink } from 'lucide-react';
-import type { ProviderBalanceInfo, SpendOverviewResponse, UsageResponse } from '../../types';
+import type { ProviderBalanceInfo, SpendOverviewResponse, SubscriptionUsage, UsageResponse, UsageSnapshot } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, GROUP_COLORS, R, SP } from '../../lib/design';
 import { Button, Dot } from '../../components/ui';
@@ -13,13 +13,16 @@ import { useIsMobile } from '../../lib/breakpoints';
 import {
   cliProviderKeys, getModels, getProviders, providerCapsByKey, providerLabel, useModels,
 } from '../../lib/models';
-import { latestPerWindow, windowLabel } from '../../lib/rateLimit';
+import { fmtReset, latestPerWindow, seriesByWindow, snapshotFreshnessLabel, windowLabel, worstWindow } from '../../lib/rateLimit';
+import { rotationBadgeState } from '../../lib/rotation';
+import type { RotationBadgeState } from '../../lib/rotation';
 import { addDaysUtc, openSpend, plural, spendQuery, todayUtc } from '../../lib/spend';
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { showToast } from '../../lib/toast';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
-import type { ProviderCardData } from './ProviderCard';
+import type { FreshnessSpec, PillSpec, ProviderCardData } from './ProviderCard';
+import { parseQuotaWindow, type QuotaWindowView } from './QuotaWindow';
 
 // === Локальные хелперы (не вынесены в lib — повторяем) ===
 
@@ -59,7 +62,7 @@ const CABINET_URL: Record<string, string> = {
 
 // Цвет точки провайдера — детерминированный из палитры групп (как на экране «Использование»)
 const SOURCE_IDX: Record<string, number> = {
-  glm: 0, minimax: 1, alibabacloud: 3, deepseek: 5, kimi: 6,
+  glm: 0, minimax: 1, claude: 2, alibabacloud: 3, deepseek: 5, kimi: 6,
 };
 function sourceColor(key: string): string {
   const idx = SOURCE_IDX[key];
@@ -173,6 +176,201 @@ function ProviderChip({ name, color, off, badge, count }: { name: string; color:
   );
 }
 
+// === Нормализация в общую вью-модель (провайдеры + подписки → ProviderCardData) ===
+
+// Последний снимок по времени (любой, не только с долей) — для возраста свежести.
+// latestWithUtilization не подходит: аккаунт может приносить только resets-события ходов.
+function lastSnapshot(snaps: UsageSnapshot[]): UsageSnapshot | null {
+  let best: UsageSnapshot | null = null;
+  let bestT = -Infinity;
+  for (const s of snaps) {
+    const t = new Date(s.timestamp).getTime();
+    if (isNaN(t) || t <= bestT) continue;
+    best = s; bestT = t;
+  }
+  return best;
+}
+
+function providerFreshness(asOf?: string | null): FreshnessSpec | undefined {
+  if (!asOf || !fmtAgo(asOf)) return undefined;
+  const stale = isStale(asOf);
+  return {
+    dot: stale ? C.warning : C.success,
+    text: stale ? `на ${fmtClock(asOf)}` : fmtAgo(asOf)!,
+    textTone: stale ? C.warningText : undefined,
+  };
+}
+
+// Префикс сброса худшего окна для хинта: пятичасовое — «сброс окна», недельное — «сброс недели»
+const isFiveHourReset = (t: string) => /5|five|hour/i.test(t);
+
+// Хинт подписки: «сброс недели 11 авг, 03:00 · новые чаты направляются сюда».
+// Время опасного окна подсвечено dangerText; reason — из rotationBadgeState.
+function buildSubHint(worst: ReturnType<typeof worstWindow>, rot: RotationBadgeState): ReactNode {
+  if (!worst || !worst.resetsAt) return <>{rot.reason}</>;
+  const prefix = isFiveHourReset(worst.limitType)
+    ? 'сброс окна'
+    : worst.limitType.includes('extra') ? 'сброс перерасхода' : 'сброс недели';
+  const resetStr = fmtReset(worst.resetsAt);
+  const danger = worst.level === 'danger';
+  return <>
+    {prefix}{' '}
+    <span style={danger ? { color: C.dangerText } : undefined}>{resetStr}</span>
+    {' · '}{rot.reason}
+  </>;
+}
+
+interface SubFreshness { corner: FreshnessSpec; detail: ReactNode; copyCommand: string | null }
+
+// Свежесть подписки по каналу данных (таблица из архитектурного решения): точка/текст в
+// углу шапки + полная подпись в раскрытии. Не возраст, а состояние опроса OAuth.
+function subFreshness(sub: SubscriptionUsage, pollStatus: string | undefined, lastSnap: UsageSnapshot): SubFreshness {
+  const ts = lastSnap.timestamp;
+  if (pollStatus === 'unauthorized') {
+    return {
+      corner: { dot: C.textMuted, text: `по ходам · ${fmtAgo(ts) ?? ''}`, textTone: C.textMuted },
+      detail: <>Опрос лимитов недоступен: в профиле аккаунта setup-токен, а не полноценный вход. Цифры обновляются только когда в этом аккаунте идёт чат.</>,
+      copyCommand: sub.loginCommand ?? null,
+    };
+  }
+  if (pollStatus === 'error') {
+    return {
+      corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
+      detail: <>Опрос лимитов не отвечает — показаны последние снимки.</>,
+      copyCommand: null,
+    };
+  }
+  if (isStale(ts)) {
+    return {
+      corner: { dot: C.warning, text: `на ${fmtClock(ts)}`, textTone: C.warningText },
+      detail: <>Опрос лимитов не приносит свежих цифр дольше получаса.</>,
+      copyCommand: null,
+    };
+  }
+  return {
+    corner: { dot: C.success, text: fmtAgo(ts) ?? '' },
+    detail: <>Откуда цифры: {snapshotFreshnessLabel(lastSnap.source, ts)}</>,
+    copyCommand: null,
+  };
+}
+
+interface SubCtx {
+  rotationThreshold: number;
+  routingTarget?: string;
+  pollStatuses: Record<string, string>;
+  freeAvailable: boolean;
+  subs: Record<string, SubscriptionUsage>;
+  usageError: boolean;
+}
+
+// Подписка Claude → общая вью-модель. Окна — напрямую из latestPerWindow: при !hasUtil
+// не выдумываем «0%», а пишем «в пределах нормы» (как UsageWidget.WindowRow).
+function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: SubCtx): ProviderCardData {
+  const name = sub.name ?? key;
+  const color = sourceColor('claude');   // оба аккаунта пула — один цвет, различаются именем
+  const pollStatus = ctx.pollStatuses[key];
+  const lastSnap = lastSnapshot(sub.snapshots);
+
+  // Нет снимков совсем — «пустая» карточка: имя + тариф + хинт, без нулевых шкал (не ошибка)
+  if (!lastSnap) {
+    const unauthorized = pollStatus === 'unauthorized';
+    return {
+      key, name, color, state: 'ready', isFree: false, dim: ctx.usageError, onRetry: () => {},
+      windows: [], labelWidth: 92,
+      // Тариф — в шапке (раскрытия у пустой карточки нет, кроме unauthorized с командой)
+      pills: sub.tier ? [{ label: `Тариф: ${sub.tier}`, tone: 'plain' as const }] : [],
+      hint: unauthorized
+        ? 'Опрос лимитов недоступен — в профиле нет полноценного входа'
+        : 'Данных пока нет — цифры появятся после первого хода или ближайшего опроса',
+      hasExhausted: false,
+      expandable: !!(unauthorized && sub.loginCommand),
+      tier: sub.tier ?? null,
+      freshnessDetail: unauthorized && sub.loginCommand
+        ? <>Опрос лимитов недоступен: в профиле аккаунта setup-токен. Войдите в профиль аккаунта командой ниже — тогда опрос заработает.</>
+        : undefined,
+      copyCommand: unauthorized ? (sub.loginCommand ?? null) : null,
+    };
+  }
+
+  const windows = latestPerWindow(sub.snapshots);
+  const winViews: QuotaWindowView[] = windows.map(w => ({
+    label: windowLabel(w.limitType),
+    kind: 'percent',
+    usedPct: w.hasUtil ? w.pct : null,
+    usedCount: null, totalCount: null,
+    valueText: w.hasUtil ? `${w.pct}%` : 'в пределах нормы',
+    resetsAt: w.resetsAt ?? null,
+    exhausted: w.level === 'danger',
+  }));
+  const worst = worstWindow(windows);
+  const hasExhausted = winViews.some(w => w.exhausted);
+  const fresh = subFreshness(sub, pollStatus, lastSnap);
+
+  const isTarget = ctx.routingTarget === key;
+  const rot = rotationBadgeState({
+    inRotation: sub.inRotation,
+    utilization: sub.utilization,
+    threshold: ctx.rotationThreshold,
+    exhausted: sub.exhausted,
+    isTarget,
+    targetName: ctx.routingTarget ? (ctx.subs[ctx.routingTarget]?.name ?? ctx.routingTarget) : undefined,
+    freeAvailable: ctx.freeAvailable,
+  });
+  const series = seriesByWindow(sub.snapshots);
+  const trend = worst ? (series[worst.limitType] ?? []) : [];
+
+  return {
+    key, name, color, state: 'ready', isFree: false, dim: ctx.usageError, onRetry: () => {},
+    windows: winViews, labelWidth: 92, pills: [],
+    routingBadge: isTarget ? { tone: rot.tone, label: rot.label } : undefined,
+    freshness: fresh.corner,
+    hint: buildSubHint(worst, rot),
+    hasExhausted,
+    expandable: true,
+    tier: sub.tier ?? null,
+    thresholdNote: `Из ротации выводит нагрузка 5-часового окна выше ${Math.round((ctx.rotationThreshold || 0.8) * 100)}%`,
+    freshnessDetail: fresh.detail,
+    copyCommand: fresh.copyCommand,
+    trend: trend.length >= 2 ? trend : undefined,
+  };
+}
+
+// Квотный CLI-провайдер → общая вью-модель (готовое состояние)
+function providerReadyCard(
+  key: string, name: string, color: string,
+  bal: ProviderBalanceInfo,
+  snapshots: { timestamp: string; balance: number; currency: string }[],
+): ProviderCardData {
+  const windows = (bal.windows ?? []).map(parseQuotaWindow);
+  const percentWindows = windows.filter(w => w.kind === 'percent');
+  const countWindows = windows.filter(w => w.kind === 'count');
+  const hasExhausted = windows.some(w => w.exhausted);
+  const pills: PillSpec[] = [];
+  if (bal.planLabel) pills.push({ label: bal.planLabel, tone: 'plain' });
+  if (isFreeSource(key)) pills.push({ label: 'бесплатный', tone: 'free' });
+  if (hasExhausted) pills.push({ label: 'Предел', tone: 'danger' });
+  const trend = snapshots.length
+    ? snapshots
+        .filter(s => !isNaN(s.balance))
+        .map(s => ({ t: new Date(s.timestamp).getTime(), u: Math.max(0, Math.min(1, (100 - s.balance) / 100)) }))
+        .filter(p => !isNaN(p.t))
+        .sort((a, b) => a.t - b.t)
+    : [];
+  const cabinetUrl = CABINET_URL[key];
+  const expandable = countWindows.length > 0 || trend.length >= 2 || !!cabinetUrl;
+  return {
+    key, name, color, state: 'ready', isFree: isFreeSource(key), dim: false, onRetry: () => {},
+    windows: percentWindows, labelWidth: 64, pills,
+    freshness: providerFreshness(bal.asOf),
+    health: bal.health ?? null, hasExhausted,
+    exhaustedResetAt: windows.find(w => w.exhausted)?.resetsAt ?? null,
+    expandable,
+    countWindows: countWindows.length ? countWindows : undefined,
+    trend: trend.length >= 2 ? trend : undefined,
+    cabinetUrl,
+  };
+}
+
 export function QuotasTab({ onClose }: { onClose: () => void }) {
   const isMobile = useIsMobile();
   useModels();   // ре-рендер, когда каталог моделей догрузится (для pgrid-счётчика)
@@ -201,7 +399,9 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
 
   const loadUsage = useCallback(() => {
     setUsageError(false);
-    api.usage.get().then(setUsage).catch(() => { setUsageError(true); setUsage(null); });
+    // При ошибке прошлый usage не обнуляем: карточки подписок остаются на месте
+    // (притушенными), а не исчезают под баннером «показаны последние значения».
+    api.usage.get().then(setUsage).catch(() => { setUsageError(true); });
   }, []);
   const loadProvider = useCallback((key: string) => {
     setProv(prev => ({ ...prev, [key]: undefined }));
@@ -308,28 +508,39 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
     return found && total > 0 ? { alive, total, successRate: rate } : null;
   }, [prov]);
 
-  // Карточки квот (qgrid): квотные провайдеры + ненастроенные-без-баланса (Alibaba)
+  // Карточки квот (qgrid): подписки Claude + квотные провайдеры + ненастроенные-без-баланса (Alibaba)
   const quotaCards: ProviderCardData[] = useMemo(() => {
     const out: ProviderCardData[] = [];
+
+    // --- Подписки Claude (данные из сводки usage, не из balanceKeys) ---
+    const subs = usage?.subscriptions ?? {};
+    const subCtx: SubCtx = {
+      rotationThreshold: usage?.rotationThreshold ?? 0.8,
+      routingTarget: usage?.routingTarget,
+      pollStatuses: usage?.pollStatuses ?? {},
+      freeAvailable: Object.values(subs).some(s => s.inRotation !== false),
+      subs,
+      usageError,
+    };
+    for (const [key, sub] of Object.entries(subs)) {
+      out.push(buildSubscriptionCard(key, sub, subCtx));
+    }
+
+    // --- Квотные CLI-провайдеры ---
     for (const key of balanceKeys) {
       const data = prov[key];
       const bal = data?.balance ?? null;
       const isQuota = bal?.currency === '%' || (bal?.windows?.length ?? 0) > 0;
       if (data === null) {
-        // Ошибка — тип источника неизвестен, живёт в квотах (строчная раскладка, «—» не ломает ряд)
-        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'error', isFree: isFreeSource(key), retryAt, cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
+        out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'error', isFree: isFreeSource(key), retryAt, onRetry: () => loadProvider(key), windows: [], pills: [], hasExhausted: false, expandable: false });
         continue;
       }
       if (data === undefined || !bal) {
-        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'loading', isFree: isFreeSource(key), cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
+        out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'loading', isFree: isFreeSource(key), onRetry: () => loadProvider(key), windows: [], pills: [], hasExhausted: false, expandable: false });
         continue;
       }
       if (isQuota) {
-        out.push({
-          key, name: providerLabel(key), color: sourceColor(key), balance: bal,
-          snapshots: data.snapshots ?? [], state: 'ready', isFree: isFreeSource(key),
-          cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key),
-        });
+        out.push(providerReadyCard(key, providerLabel(key), sourceColor(key), bal, data.snapshots ?? []));
       }
     }
     // Настроен, но квоту не отдаёт (Alibaba Cloud) — отдельная строка
@@ -337,10 +548,10 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
       const c = providerCapsByKey(key);
       if (c.hasBalance || c.configured === false) continue;
       if (balanceKeys.includes(key)) continue;
-      out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'unavailable', isFree: isFreeSource(key), onRetry: () => {} });
+      out.push({ key, name: providerLabel(key), color: sourceColor(key), state: 'unavailable', isFree: isFreeSource(key), onRetry: () => {}, windows: [], pills: [], hasExhausted: false, expandable: false });
     }
     return out;
-  }, [prov, balanceKeys, providerKeys, loadProvider, retryAt]);
+  }, [prov, balanceKeys, providerKeys, loadProvider, retryAt, usage, usageError]);
 
   // Денежные плитки (админ): денежные CLI-провайдеры
   const moneyTiles: MoneyTileData[] = useMemo(() => {
@@ -450,7 +661,7 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
         <>
           <Lane title="Квоты подписок · израсходовано" />
           <div style={{ display: 'grid', gridTemplateColumns: qGridCols, gap: SP.sm }}>
-            {quotaCards.map(c => <ProviderCard key={c.key} data={c} />)}
+            {quotaCards.map(c => <ProviderCard key={c.key} data={c} isMobile={isMobile} />)}
           </div>
         </>
       )}

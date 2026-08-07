@@ -752,9 +752,10 @@ public class FallbackLlmSessionAdapterTests
     }
 
     // Постановка «Человеческий текст ошибки»: в ленте нет служебных терминов
-    // («фолбэк», «подмена», «потолок», «пара»), есть заголовок, подсказка и перенос
-    // частей через « · » (перенос строк в error-сообщении не рендерится). Модель в
-    // тексте не упоминается — только поставщик и причина.
+    // («фолбэк», «подмена», «потолок», «пара»), есть три блока (заголовок, попытки,
+    // подсказка), разделённые пустой строкой; по строке на попытку. ChatItemView
+    // рендерит переносы (white-space: pre-wrap), так что обходной « · » не нужен.
+    // Модель в тексте не упоминается — только поставщик и причина.
     [Fact]
     public async Task Исчерпание_ЧеловеческийТекст_БезСлужебныхТерминов()
     {
@@ -778,9 +779,17 @@ public class FallbackLlmSessionAdapterTests
         error.Text.Should().NotContain("Последняя ошибка");
         // Модель попытки (sonnet) в пользовательском тексте не упоминается
         error.Text.Should().NotContain("sonnet");
-        // По строке на попытку: обе подписки видны, разделены « · »
-        error.Text.Should().Contain("acc-a").And.Contain("acc-b");
-        error.Text.Should().Contain(" · ");
+        // Три блока, разделённые пустой строкой; по строке на попытку.
+        var blocks = error.Text.Split("\n\n");
+        blocks.Should().HaveCount(3, "заголовок / список попыток / подсказка");
+        blocks[0].Should().StartWith("Ни одна из доступных моделей не ответила");
+        var attemptLines = blocks[1].Split('\n');
+        attemptLines.Should().HaveCount(2, "по строке на попытку");
+        attemptLines[0].Should().Contain("acc-a");
+        attemptLines[1].Should().Contain("acc-b");
+        blocks[2].Should().StartWith("Попробуйте позже");
+        // Обходного разделителя « · » в сообщении больше нет
+        error.Text.Should().NotContain(" · ");
     }
 
     // Имя поставщика вместо ключа: подписка с DisplayName показывается именем (ключ

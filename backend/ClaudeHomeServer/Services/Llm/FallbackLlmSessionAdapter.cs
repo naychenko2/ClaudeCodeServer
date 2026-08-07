@@ -616,13 +616,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private async Task FailExhaustedAsync(FallbackTurn turn, IReadOnlyList<AttemptTrace> trace,
         int substitutions, AttemptEnd lastEnd)
     {
-        // Заголовок + по строке на попытку (поставщик и причина) + подсказка. Перенос
-        // строки в ленте error не рендерится (flex-span без pre-wrap), поэтому строки
-        // попыток для читаемости делим « · ». Служебные термины и ключи сюда не попадают.
-        var attempts = string.Join(" · ", trace.Select(t => $"{ProviderLabel(t.Key)} — {UserClassLabel(t.Class)}"));
+        // Три блока: заголовок, по строке на попытку (поставщик и причина), подсказка.
+        // Блоки разделены пустой строкой, строки попыток — \n: ChatItemView рендерит
+        // переносы в error-сообщениях (white-space: pre-wrap), так что обходной
+        // разделитель « · » больше не нужен. Служебные термины и ключи сюда не попадают.
+        var attempts = string.Join("\n", trace.Select(t => $"{ProviderLabel(t.Key)} — {UserClassLabel(t.Class)}"));
         await _downstream(new ErrorMessage(
-            "Ни одна из доступных моделей не ответила.\n"
-            + attempts + "\n"
+            "Ни одна из доступных моделей не ответила.\n\n"
+            + attempts + "\n\n"
             + "Попробуйте позже или выберите другую модель в настройках чата."));
 
         var reason = string.IsNullOrEmpty(lastEnd.Result?.ApiErrorStatus)

@@ -1594,7 +1594,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           fontSize: 13, color: C.dangerText, border: `1px solid ${C.dangerBorder}`,
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
         }}>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}><AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0 }} />{item.text}</span>
+          <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
+            <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>{item.text}</span>
+          </span>
           {item.canRetry && online && (
             <button
               onClick={onRetry}

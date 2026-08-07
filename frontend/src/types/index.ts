@@ -933,6 +933,25 @@ export interface ProviderBalanceInfo {
   // Доп. сведения в раскрытую карточку (напр. «В том числе подарочных: $5», расход по периодам,
   // уровень подписки, сводка за 24ч у FreeLLM) — null/отсутствует: показать нечего
   note?: string | null;
+  // === Типизированные поля «Модели и расход» (models-spend-data-spec) ===
+  // Все опциональны: «не разобралось — поля нет», вёрстка обязана жить без них.
+  // Пишет ли бэк историю баланса (для sparkline в раскрытии)
+  trackHistory?: boolean;
+  // Подарочный (бонусный) остаток в валюте баланса — показывается «из них $N подарочных»
+  grantedBalance?: number | null;
+  // Тариф подписки провайдера без приставки «Подписка:» (напр. "Standard") — пилюля в шапке
+  planLabel?: string | null;
+  // Предел расхода ключа (OpenRouter): шкала «осталось из $N лимита ключа», только в «Деньгах»
+  keyLimit?: { remaining: number; total: number } | null;
+  // Расход по данным самого провайдера (НЕ наш SpendStore) — подпись «по данным OpenRouter»
+  spend?: { daily: number; weekly: number; monthly: number } | null;
+  // Здоровье агрегатора (FreeLLM): запросы за 24ч, успешность, живые платформы
+  health?: {
+    requests24h?: number | null;
+    successRate?: number | null;
+    platformsAlive?: number | null;
+    platformsTotal?: number | null;
+  } | null;
 }
 
 // Снимок использования окна во времени (история с бэка, data/usage.json) — для экрана usage и тренда
@@ -2175,6 +2194,10 @@ export interface SpendOverviewResponse {
   totals: SpendTokens;
   turns: number;
   falGenerations: number;
+  // Оценка объёма по тарифам API за период (сумма SpendRecord.CostUsd), $.
+  // «Модели и расход» → плитка «По тарифам API»: бэк отдаёт не всегда —
+  // без поля плитка просто не рисуется.
+  costUsd?: number | null;
   byDay: SpendDayPoint[];
   cards: {
     users: SpendCardRow[];

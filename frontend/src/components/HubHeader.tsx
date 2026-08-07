@@ -13,9 +13,6 @@ import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
-// Прежний раздел «Поставщики моделей»: из меню убран (его заменил «Модели и расход»),
-// но остаётся точкой приземления диплинка «Собрать цепочку…» до задачи наполнения вкладок
-import { ModelProvidersTabsModal } from '../features/modelProviders/ModelProvidersTabsModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { api } from '../lib/api';
@@ -63,14 +60,11 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showModelsSpend, setShowModelsSpend] = useState(false);
-  // Открывается только диплинком «Собрать цепочку…» (subscribeModelProvidersNav) —
-  // пункта в меню аватара у него больше нет
-  const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const mcpRegistry = useFeature(FLAGS.mcpRegistry);
 
-  // «Собрать цепочку…» из панелей выбора модели — открыть раздел на вкладке «Пресеты»
-  useEffect(() => subscribeModelProvidersNav(() => setShowBackgroundTasks(true)), []);
+  // «Собрать цепочку…» из панелей выбора модели — открыть единый раздел «Модели и расход»
+  useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
 
   const isAdmin = auth.role === 'admin';
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
@@ -322,7 +316,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
-      {showBackgroundTasks && <ModelProvidersTabsModal isAdmin={isAdmin} onClose={() => setShowBackgroundTasks(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
     </div>
   );

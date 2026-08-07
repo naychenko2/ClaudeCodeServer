@@ -1,8 +1,8 @@
 import { C, FONT, FS, R } from '../lib/design';
 
 // Компактная карточка-опция «Локальная модель» / слот / пресет — строка-карточка
-// (имя + подпись). Вынесена из ModelProvidersSections, чтобы группа «Пресеты»
-// (PresetOptions) не тянула за собой весь файл секций (циклический импорт).
+// (имя + подпись). Отдельный файл, чтобы группа «Пресеты» (PresetOptions) не тянула
+// за собой весь слой секций выбора (циклический импорт).
 export function QuickOptionCard({ title, subtitle, active, onClick }: {
   title: string; subtitle: string; active: boolean; onClick: () => void;
 }) {

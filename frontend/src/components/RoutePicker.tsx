@@ -1,13 +1,13 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
-import { ModelPicker } from '../../components/ModelPicker';
-import { QuickOptionCard } from '../../components/QuickOptionCard';
-import { PresetOptions } from '../../components/PresetOptions';
-import { TIERS, TIER_ORDER, routeTier, tierSubtitle, type TierKey } from '../../components/modelProvidersShared';
-import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { usePresets, presetIdOf } from '../../lib/presets';
-import { C, FONT, FS, R, SHADOW, Z } from '../../lib/design';
-import type { ModelOption } from '../../lib/models';
+import { ModelPicker } from './ModelPicker';
+import { QuickOptionCard } from './QuickOptionCard';
+import { PresetOptions } from './PresetOptions';
+import { TIERS, TIER_ORDER, routeTier, tierSubtitle, type TierKey } from '../lib/modelProvidersShared';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
+import { usePresets, presetIdOf } from '../lib/presets';
+import { C, FONT, FS, R, SHADOW, Z } from '../lib/design';
+import type { ModelOption } from '../lib/models';
 
 const PANEL_W = 320;
 const PANEL_MAX_H = 340;

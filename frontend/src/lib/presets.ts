@@ -11,8 +11,8 @@ import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
 import { modelLabel, USAGE } from './models';
 import { TIER_TITLE } from './modelTiers';
-import type { TierKey } from '../components/modelProvidersShared';
-import { TIERS, routeTier, routeLabel } from '../components/modelProvidersShared';
+import type { TierKey } from './modelProvidersShared';
+import { TIERS, routeTier, routeLabel } from './modelProvidersShared';
 import type { ScopedPreset, SpecialtySettingsResponse, ModelRoutePreset,
   ModelPreviewResponse, PlacePresetRef } from '../types';
 

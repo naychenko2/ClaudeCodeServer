@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import { Toggle } from '../../components/ui';
-import { groupHeaderStyle } from '../../components/modelProvidersShared';
+import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FS, R, SP } from '../../lib/design';
 import { navPush } from '../../lib/nav';
 import { personaOffFor } from './useMcpData';

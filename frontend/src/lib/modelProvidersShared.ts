@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import type { CSSProperties, Dispatch, SetStateAction } from 'react';
-import { api, type ModelTiers } from '../lib/api';
-import { C, FONT, FS } from '../lib/design';
+import { api, type ModelTiers } from './api';
+import { C, FONT, FS } from './design';
 import { modelLabel, providerLabel, modelProvider,
-  type ProviderCapabilities, type ModelOption } from '../lib/models';
-import { effectiveTierModel as tierModelOf } from '../lib/modelTiers';
+  type ProviderCapabilities, type ModelOption } from './models';
+import { effectiveTierModel as tierModelOf } from './modelTiers';
 import type { OllamaUsageInfo, AppSettings, UserProfile } from '../types';
 
 // Общие константы, типы и хелперы раздела «Поставщики моделей» — без компонентов

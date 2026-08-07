@@ -11,7 +11,6 @@ import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { SESSION_KEYS } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
-import { UsageScreen } from '../components/UsageScreen';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, isLeftTab, type LeftTab } from '../lib/workspaceState';
@@ -328,14 +327,11 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const { reveal: revealPanelKey } = wsPanels.use();
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
-  const [showUsage, setShowUsage] = useState(false);
-  // «Модели и расход» — единый раздел вместо прежних «Использование»/«Поставщики моделей»;
-  // из мобильного меню «⋯» проекта открывается он, UsageScreen остаётся только диплинку
-  // «Подробная статистика» бейджа fal.ai (open-fal-stats) до наполнения вкладки квот
+  // «Модели и расход» — единый раздел вместо прежних «Использование»/«Поставщики моделей»:
+  // из мобильного меню «⋯» проекта и по диплинку «Подробная статистика» бейджа fal.ai
   const [showModelsSpend, setShowModelsSpend] = useState(false);
-  // Ссылка «Подробная статистика» в pop-up бейджа fal.ai открывает единый экран «Использование»
   useEffect(() => {
-    const open = () => setShowUsage(true);
+    const open = () => setShowModelsSpend(true);
     window.addEventListener('open-fal-stats', open);
     return () => window.removeEventListener('open-fal-stats', open);
   }, []);
@@ -1403,7 +1399,6 @@ const windowWidth = useWindowWidth();
           </div>
         )}
         {columnsDialogEl}
-        {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
         {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
         {editProjectOpen && (
           <EditDialog
@@ -1516,7 +1511,6 @@ const windowWidth = useWindowWidth();
       </div>
 
       {columnsDialogEl}
-      {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {editProjectOpen && (
         <EditDialog

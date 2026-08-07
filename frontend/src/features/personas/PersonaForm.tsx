@@ -10,8 +10,8 @@ import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
 import { ModelTierPicker } from '../../components/ModelTierPicker';
 import { PresetOptions } from '../../components/PresetOptions';
-import { RoutePicker } from '../modelProviders/RoutePicker';
-import { EffectiveLine } from '../modelProviders/EffectiveLine';
+import { RoutePicker } from '../../components/RoutePicker';
+import { EffectiveLine } from '../../components/EffectiveLine';
 import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
 import { parseTier, useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import {

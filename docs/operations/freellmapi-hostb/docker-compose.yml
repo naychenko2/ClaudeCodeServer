@@ -1,0 +1,39 @@
+# Docker Compose для FreeLLMAPI на Host B (192.168.7.208).
+# Поднять по инструкции в README.md этого каталога.
+# Запуск: `docker compose -f docker-compose.yml up -d`
+#
+# Отличия от исходного compose (C:\Sources\freellmapi\freellmapi\docker-compose.yml):
+# - образ грузится локально (`freellmapi:prod`, не из registry)
+# - HOST_BIND=0.0.0.0 — порт 3001 виден в LAN для CCS на Host A
+# - volume — тот же `freellmapi-data`, восстановлен из дампа
+
+services:
+  freellmapi:
+    image: freellmapi:prod
+    container_name: freellmapi
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      HOST_BIND: 0.0.0.0
+    ports:
+      - "0.0.0.0:3001:3001"
+    volumes:
+      - freellmapi-data:/app/server/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/ping').then((res) => { if (!res.ok) process.exit(1); }).catch(() => process.exit(1));"
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  freellmapi-data:

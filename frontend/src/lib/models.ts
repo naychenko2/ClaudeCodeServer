@@ -175,6 +175,32 @@ export function modelCaps(value?: string | null): ProviderCapabilities {
   return _providers[modelProvider(value)] ?? CLAUDE_CAPS;
 }
 
+// Каким запросом менять модель чата: обычным update или миграцией к другому провайдеру.
+// У НАЧАТОГО чата смена провайдера обычным update упирается в guard (транскрипт живёт
+// у эндпоинта провайдера), поэтому идёт миграцией. Логика вынесена из ChatPanel чистой
+// функцией: связка «пункт „По умолчанию“ × сменившееся назначение места» уже давала баг
+// с тостом «Не указана модель», и её надо держать под тестом.
+export type ModelChangePlan =
+  | { kind: 'migrate'; model: string }
+  | { kind: 'update' };
+
+export function planModelChange(
+  model: string,
+  chat: { model?: string | null; claudeSessionId?: string | null },
+  usage: UsageKey = USAGE.chatNew,
+): ModelChangePlan {
+  // «По умолчанию» — пустой value каталога, а миграции нужна КОНКРЕТНАЯ модель целевого
+  // провайдера (она перевозит транскрипт и продолжает через --resume). Разворачиваем
+  // пустую в модель назначения места ДО решения.
+  const effective = model || assignedModel(usage);
+  const crossProvider = modelProvider(effective, usage) !== modelProvider(chat.model, usage);
+  // Пустая модель в миграцию не уходит НИКОГДА: назначение места может быть не задано
+  // (слот пуст — модель выбирает CLI), и тогда migrateProvider ответил бы
+  // «Не указана модель» тостом в чат. Такой выбор — сброс, его место в update.
+  if (crossProvider && chat.claudeSessionId && effective) return { kind: 'migrate', model: effective };
+  return { kind: 'update' };
+}
+
 // Отображаемое имя ассистента по модели сессии — для строк в UI («… закончил», «Спросите …»).
 // У Claude ассистент брендируется нейтральным «AI» (имя провайдера «Claude» остаётся для
 // баланса/usage и групп моделей); у сторонних провайдеров — их собственное имя.

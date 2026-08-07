@@ -22,7 +22,7 @@ import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
 import { getDraft } from '../lib/drafts';
-import { useModelCaps, assistantName, modelProvider } from '../lib/models';
+import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
@@ -690,13 +690,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // эндпоинта), поэтому идёт миграцией — тот же путь, что в «Настройках чата».
   // У ещё не начатого чата (нет claudeSessionId) update проходит и на чужого провайдера.
   const handleModelChange = useCallback(async (model: string) => {
-    const crossProvider = modelProvider(model) !== modelProvider(session.model);
-    // «По умолчанию» — пустой value каталога, и слать его надо именно пустой строкой:
-    // на бэкенде null означает «поле не менять», а сброс модели — это IsNullOrWhiteSpace.
+    // Выбор пути (update или миграция) — в planModelChange, под тестом: там же разворот
+    // пункта «По умолчанию» в конкретную модель назначения места. В update уходит
+    // исходное значение — пустая строка сбрасывает Model=null в рамках того же провайдера.
+    const plan = planModelChange(model, session);
     const payload = { model };
     try {
-      const updated = crossProvider && session.claudeSessionId
-        ? await api.chats.migrateProvider(session.id, model)
+      const updated = plan.kind === 'migrate'
+        ? await api.chats.migrateProvider(session.id, plan.model)
         : session.projectId
           ? await api.sessions.update(session.projectId, session.id, payload)
           : await api.chats.update(session.id, payload);

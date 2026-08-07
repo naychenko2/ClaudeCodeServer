@@ -4,10 +4,10 @@ import { QuickOptionCard } from './QuickOptionCard';
 import { ChainStepsEditor } from './ChainStepsEditor';
 import { Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
-import { C, FONT } from '../lib/design';
+import { C, FONT, FS } from '../lib/design';
 import { chainSummary, findPreset, presetIdOf, presetRoute, usePresets, type ChainLabelContext } from '../lib/presets';
 import { requestNewPreset } from '../lib/modelProvidersNav';
-import { cloneLayer, newPresetId } from '../lib/specialties';
+import { newPresetId, withNewPreset } from '../lib/specialties';
 import type { ModelOption } from '../lib/models';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
 
@@ -18,14 +18,22 @@ export interface PresetCreationCtx {
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
   onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  // Когда сборка цепочки — не единственная правка слоя (матрица «Исключений»: тут же
+  // пишется ячейка тем же PUT) — потребитель подключает onCreated и сам ОДНИМ onSaveLayer
+  // фиксирует и пресет, и свою правку на том же клоне layer. Без onCreated — старое
+  // поведение (savePreset сам шлёт onSaveLayer пресета, отдельным вызовом от onPick).
+  onCreated?: (presetId: string, scope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
 }
 
 // Группа «Пресеты» в панелях выбора модели (спека, блок 2): между карточками уровней
 // и списком моделей. Пресет — третий вариант в том же выборе, отдельного контрола нет.
 // Пустая группа не показывается вовсе (пока пресетов нет — интерфейс не меняется).
-// scope — ограничить слой: место каталога общее для всех, поэтому «Кто что выполняет»
-// показывает только общие пресеты (личный бэкенд отклонит 400 — у других пользователей
-// он был бы битой ссылкой).
+// scope — двойная роль: (1) какие пресеты показывать (только своего слоя — если задан;
+// оба слоя — если нет), (2) в какой слой уйдёт НОВЫЙ пресет из inline-редактора. 'global' —
+// место общее для всех (каталог мест, «Для всех» в исключениях): личный пресет там был бы
+// битой ссылкой у всех, кроме автора (400 на бэкенде — LocalActionsAdminController.Set
+// проверяет только Global.Presets). Не задан — личный контекст (слот, «Только для меня»):
+// создаётся в owner, но в списке видны оба слоя — общий пресет тоже валиден для личного маршрута.
 export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingChange }: {
   value: string;
   onPick: (route: string) => void;
@@ -40,6 +48,9 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   const presets = scope ? all.filter(p => p.scope === scope) : all;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
+  // Заголовок редактора: черновик преднаполнен шагами уже выбранного пресета — честно
+  // подписываем как копию, а не «Новая цепочка» (молчаливый дубль без этого)
+  const [copyOf, setCopyOf] = useState<string | null>(null);
   useEffect(() => { onEditingChange?.(editing); }, [editing, onEditingChange]);
 
   // Раскрытый inline-редактор — вместо списка пресетов и кнопки (решение владельца
@@ -47,23 +58,32 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   // на месте, а не открывает раздел заново). Проверяем editing первым, чтобы состояние
   // не зависело от гонки с presets.length (см. ниже)
   if (editing && creation) {
+    const targetScope: 'global' | 'owner' = scope ?? 'owner';
     const savePreset = () => {
       if (!creation.settings || draft.length === 0) return;
-      const copy = { id: newPresetId(), name: `Цепочка ${all.length + 1}`, description: null, steps: draft };
-      const next = cloneLayer(creation.settings.owner);
-      next.presets.push(copy);
-      creation.onSaveLayer('owner', next);
-      onPick(presetRoute(copy.id));
+      // Номер по своему слою, первый свободный — иначе первая ЛИЧНАЯ цепочка при уже
+      // существующих общих зовётся «Цепочка 3» (считает по объединённому списку)
+      const scopedExisting = all.filter(p => p.scope === targetScope);
+      let n = 1;
+      while (scopedExisting.some(p => p.name === `Цепочка ${n}`)) n++;
+      const id = newPresetId();
+      const next = withNewPreset(creation.settings[targetScope], id, `Цепочка ${n}`, draft);
+      if (creation.onCreated) {
+        creation.onCreated(id, targetScope, next);
+      } else {
+        creation.onSaveLayer(targetScope, next);
+        onPick(presetRoute(id));
+      }
       setEditing(false);
     };
     const busy = creation.savingScope !== null;
     return (
       <>
         <div style={{
-          fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
+          fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
           textTransform: 'uppercase', letterSpacing: '0.4px', margin: '2px 0 0',
         }}>
-          Новая цепочка
+          {copyOf ? `Копия «${copyOf}»` : 'Новая цепочка'}
         </div>
         <ChainStepsEditor
           steps={draft}
@@ -85,51 +105,59 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   // подсказки это выглядело как «пресетов нет вовсе» (дефект приёмки 19d8f18e)
   const hiddenByScope = scope === 'global' && all.length > presets.length;
   const scopeNote = (
-    <div style={{ fontSize: 11.5, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
-      Местам доступны только общие пресеты — личные здесь не показываются.
+    <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
+      Месту доступны только общие пресеты — личные здесь не показываются.
     </div>
   );
-  if (presets.length === 0) return hiddenByScope ? scopeNote : null;
+  // «Собрать цепочку…» обязана остаться видна и при нуле пресетов, когда есть creation —
+  // иначе на чистой инсталляции завести первую цепочку неоткуда (MAJOR 5, ревью 65d8df66)
+  if (presets.length === 0 && !creation) return hiddenByScope ? scopeNote : null;
   const activeId = presetIdOf(value);
 
   const startEditing = () => {
     if (!creation) { requestNewPreset(); return; }
-    setDraft(findPreset(all, presetIdOf(value))?.steps ?? []);
+    const existing = findPreset(all, presetIdOf(value));
+    setDraft(existing?.steps ?? []);
+    setCopyOf(existing?.name ?? null);
     setEditing(true);
   };
 
   return (
     <>
-      <div style={{
-        fontFamily: FONT.sans, fontSize: 11, fontWeight: 700, color: C.textMuted,
-        textTransform: 'uppercase', letterSpacing: '0.4px', margin: '2px 0 0',
-      }}>
-        Пресеты
-      </div>
-      {presets.map(p => (
-        <div key={p.id} style={{ position: 'relative' }}>
-          <QuickOptionCard
-            title={p.name}
-            subtitle={chainSummary(p, ctx)}
-            active={activeId === p.id}
-            onClick={() => onPick(presetRoute(p.id))}
-          />
-          <Link2
-            size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-            style={{ position: 'absolute', top: 8, right: 10, color: C.textMuted, pointerEvents: 'none' }}
-          />
-        </div>
-      ))}
+      {presets.length > 0 && (
+        <>
+          <div style={{
+            fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+            textTransform: 'uppercase', letterSpacing: '0.4px', margin: '2px 0 0',
+          }}>
+            Пресеты
+          </div>
+          {presets.map(p => (
+            <div key={p.id} style={{ position: 'relative' }}>
+              <QuickOptionCard
+                title={p.name}
+                subtitle={chainSummary(p, ctx)}
+                active={activeId === p.id}
+                onClick={() => onPick(presetRoute(p.id))}
+              />
+              <Link2
+                size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+                style={{ position: 'absolute', top: 8, right: 10, color: C.textMuted, pointerEvents: 'none' }}
+              />
+            </div>
+          ))}
+        </>
+      )}
       {hiddenByScope && scopeNote}
-      {/* Вместо инлайн-цепочки «только для этого места» — переход в редактор пресетов
-          (спека, расхождение п.2). В контексте «только общие» (места каталога) не
-          показываем: кнопка начинает ЛИЧНЫЙ черновик, а месту он всё равно не годится */}
-      {scope !== 'global' && (
+      {/* Кнопка видна всегда, когда есть доступ к слоям — сборка идёт в targetScope
+          (см. savePreset выше), поэтому в контексте «только общие» она теперь тоже
+          валидна: создаёт ОБЩИЙ пресет, а не личный (было MAJOR 2 — 400 на сохранении) */}
+      {creation && (
         <button
           type="button"
           onClick={startEditing}
           style={{
-            alignSelf: 'flex-start', font: 'inherit', fontSize: 12, fontWeight: 600,
+            alignSelf: 'flex-start', font: 'inherit', fontSize: FS.sm, fontWeight: 600,
             color: C.accent, background: 'none', border: 'none', padding: '2px 2px',
             cursor: 'pointer', fontFamily: FONT.sans,
           }}

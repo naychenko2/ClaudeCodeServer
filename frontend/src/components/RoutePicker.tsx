@@ -21,7 +21,7 @@ const PANEL_MAX_H = 340;
 export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle,
-  showTiers = true, showPresets = false, presetCreation,
+  showTiers = true, showPresets = false, presetCreation, presetScope,
 }: {
   route: string;
   label: string;
@@ -49,7 +49,14 @@ export function RoutePicker({
     settings: SpecialtySettingsResponse | null;
     savingScope: 'global' | 'owner' | null;
     onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+    // См. PresetCreationCtx.onCreated — сливать сохранение пресета с ДРУГОЙ правкой того
+    // же слоя в один PUT (нужно там, где onChange этого пикера тоже пишет в этот слой).
+    onCreated?: (presetId: string, scope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
   };
+  // Слой пресетов группы «Пресеты»: 'global' — место общее (список и inline-создание
+  // ограничены общими пресетами), не задан — личный контекст (создание в owner, в списке
+  // видны оба слоя). Прокидывается в PresetOptions.scope как есть.
+  presetScope?: 'global' | 'owner';
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
@@ -68,16 +75,26 @@ export function RoutePicker({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
+      // Черновик цепочки правится — не схлопывать ЭТУ панель по клику снаружи. Актуально
+      // для вложенного пикера (шаг цепочки в ChainStepsEditor): его открытие/закрытие не
+      // должно утаскивать за собой родительский presetEditing-черновик (MAJOR 4, ревью 65d8df66)
+      if (presetEditing) return;
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      // Тот же случай для Escape: document-level слушатель есть у ОБОИХ пикеров разом —
+      // без гейта Escape, адресованный вложенному пикеру шага, закрывал бы и родителя,
+      // молча стирая черновик. Пока presetEditing — Escape достаётся только внутреннему.
+      if (presetEditing) return;
+      if (e.key === 'Escape') setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
     return () => {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [open]);
+  }, [open, presetEditing]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
@@ -130,7 +147,7 @@ export function RoutePicker({
         />
       )}
       {showPresets && (
-        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }}
+        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }} scope={presetScope}
           creation={presetCreation ? { models, ...presetCreation } : undefined}
           onEditingChange={setPresetEditing}
         />

@@ -67,6 +67,19 @@ export function newPresetId(): string {
   try { return crypto.randomUUID(); } catch { return `preset-${Date.now()}-${Math.round(Math.random() * 1e6)}`; }
 }
 
+// Клонирует базовый слой и дописывает в него НОВЫЙ пресет (inline-сборка цепочки,
+// PresetOptions.savePreset) — не сохраняет. Вызывающий решает: если это единственная
+// правка слоя — шлёт onSaveLayer сам; если рядом есть ДРУГАЯ правка того же слоя
+// (ячейка матрицы «Исключений») — обязан слить обе в ОДИН клон и один PUT. Раздельные
+// PUT по одному слою гонятся: второй ответ (по seq) побеждает первый и стирает только
+// что созданный пресет (ревью 65d8df66, CRITICAL 1 — «Исключения» теряли цепочку).
+export function withNewPreset(baseLayer: SpecialtySettingsLayer, id: string, name: string,
+  steps: string[]): SpecialtySettingsLayer {
+  const next = cloneLayer(baseLayer);
+  next.presets.push({ id, name, description: null, steps });
+  return next;
+}
+
 // --- Матрица моделей по уровням у специальности (ADR-007 §2) ---
 
 // Запись специальности в слое: существующую возвращаем как есть; новую — с шаблоном

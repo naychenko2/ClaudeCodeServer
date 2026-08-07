@@ -4,7 +4,7 @@ import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
 import { RoutePicker } from '../../components/RoutePicker';
-import { routeDisplayLabel, usePresets } from '../../lib/presets';
+import { presetRoute, routeDisplayLabel, usePresets } from '../../lib/presets';
 import {
   ANY_SPECIALTY, effectiveSpecialtyRecord, specialtyLabel, useSpecialtyCatalog, withTierCell,
 } from '../../lib/specialties';
@@ -72,6 +72,17 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
     const template = rows.find(e => e.key === key)?.template ?? null;
     const next = withTierCell(layer, key, t, value, template);
     onSaveLayer(scope, next);
+  };
+
+  // inline-сборка цепочки в ячейке матрицы: PresetOptions отдаёт СВЕЖИЙ слой (клон +
+  // новый пресет, ещё не сохранён) — дописываем ячейку на ТОМ ЖЕ объекте и сохраняем
+  // ОДНИМ onSaveLayer. Раздельные PUT (создать пресет, затем отдельно — ячейку) гонятся
+  // по одному слою: второй ответ побеждает первый и стирает только что созданный пресет
+  // (CRITICAL 1, ревью 65d8df66 — «Исключения» теряли цепочку на каждый клик «Сохранить»)
+  const onPresetCreated = (key: string, t: TierKey, presetId: string,
+    presetScope: 'global' | 'owner', freshLayer: SpecialtySettingsLayer) => {
+    const template = rows.find(e => e.key === key)?.template ?? null;
+    onSaveLayer(presetScope, withTierCell(freshLayer, key, t, presetRoute(presetId), template));
   };
 
   // Какие строки показывать по фильтру
@@ -163,6 +174,7 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
                         cellOf={cellOf} presets={presets} labelCtx={labelCtx}
                         settings={settings} onSaveLayer={onSaveLayer}
                         onCell={(t, v) => setCell(ANY_SPECIALTY, t, v)}
+                        onPresetCreated={(t, id, s, l) => onPresetCreated(ANY_SPECIALTY, t, id, s, l)}
                       />
                     )}
                     {visibleRows.map(e => {
@@ -179,6 +191,7 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
                           cellOf={cellOf} presets={presets} labelCtx={labelCtx}
                           settings={settings} onSaveLayer={onSaveLayer}
                           onCell={(t, v) => setCell(e.key, t, v)}
+                          onPresetCreated={(t, id, s, l) => onPresetCreated(e.key, t, id, s, l)}
                         />
                       );
                     })}
@@ -207,7 +220,7 @@ function Th({ children, style }: { children: React.ReactNode; style?: React.CSSP
 }
 
 function MatrixRow({ name, hint, mark, layer, anyKey, specKey, scope, canEdit, savingScope, models,
-  tierModels, ollamaModel, cellOf, presets, labelCtx, settings, onSaveLayer, onCell }: {
+  tierModels, ollamaModel, cellOf, presets, labelCtx, settings, onSaveLayer, onCell, onPresetCreated }: {
   name: string;
   hint?: string;
   mark?: boolean;
@@ -226,6 +239,7 @@ function MatrixRow({ name, hint, mark, layer, anyKey, specKey, scope, canEdit, s
   settings: SpecialtySettingsResponse;
   onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
   onCell: (t: TierKey, v: string) => void;
+  onPresetCreated: (t: TierKey, presetId: string, presetScope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
 }) {
   const rec = anyKey ? layer?.defaultSpecialty : (specKey ? layer?.specialties[specKey] : null);
   return (
@@ -248,7 +262,14 @@ function MatrixRow({ name, hint, mark, layer, anyKey, specKey, scope, canEdit, s
               ollamaModel={ollamaModel}
               showTiers={false}
               showPresets
-              presetCreation={{ settings, savingScope, onSaveLayer }}
+              // 'global' ("Для всех") — созданный пресет должен быть виден и валиден
+              // ВСЕМ, поэтому и список, и inline-создание ограничены общим слоем; 'owner'
+              // не передаём — личная ячейка резолвится и от общих пресетов тоже (MAJOR 3)
+              presetScope={scope === 'global' ? 'global' : undefined}
+              presetCreation={{
+                settings, savingScope, onSaveLayer,
+                onCreated: (id, s, l) => onPresetCreated(t, id, s, l),
+              }}
               readOnly={!canEdit}
               busy={savingScope === scope}
               cardTitle={`${['Сильная', 'Средняя', 'Слабая'][TIER_ORDER.indexOf(t)]} · ${scope === 'owner' ? 'только для меня' : 'для всех'}`}

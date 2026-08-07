@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Pin, Plus, Search } from 'lucide-react';
+import { EyeOff, Pin, Plus, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
 import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
@@ -9,7 +9,7 @@ import { ICON_STROKE } from '../../components/ui/icons';
 import { ProjectIcon, type ProjectIconOutline } from './ProjectIcon';
 import { ProjectPalette } from './ProjectPalette';
 import { useAllProjects, openProjectViaEvent, openNewProjectFlow } from './useAllProjects';
-import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore } from '../../lib/pinnedProjects';
+import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore, removeFromDock } from '../../lib/pinnedProjects';
 import { useProjectActivity, type ProjectActivity } from '../../lib/projectActivity';
 
 // Вертикальный док проектов — ВТОРАЯ левая рельса, под рельсой панелей. Раньше те же
@@ -55,7 +55,7 @@ const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
 // внутри вместо lucide-иконки квадратик проекта. Перетаскивание и контекст-меню
 // ловит span-обёртка (как dragProps у иконок панелей): pointer-события кнопке не
 // принадлежат, а прокидывать их сквозь примитив значило бы дырявить его API.
-function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, side, onPointerDown, onClick, onContextMenu }: {
+function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, side, onPointerDown, onClick, onContextMenu, onHide }: {
   p: Project;
   activity?: ProjectActivity;
   active: boolean;
@@ -71,6 +71,9 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
   onPointerDown: (e: React.PointerEvent, p: Project) => void;
   onClick: (p: Project) => void;
   onContextMenu: (e: React.MouseEvent, p: Project) => void;
+  // Убрать иконку из дока — кнопка в подписи. Не задана (открытый проект) — подпись
+  // просто называет иконку.
+  onHide?: (p: Project) => void;
 }) {
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (pressTimer.current) clearTimeout(pressTimer.current); }, []);
@@ -108,6 +111,14 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
         active={active && !outline}
         hoverSuppressed={dragActive}
         onClick={() => onClick(p)}
+        // Действие живёт в подписи, а не отдельной кнопкой рельсы: убирают ОДИН
+        // проект, и целятся при этом в его иконку. Пока иконку тащат, подписи нет
+        // вовсе — значит и кнопка не мешает дропу.
+        action={onHide && !dragActive ? {
+          Icon: EyeOff,
+          title: 'Убрать из дока (проект останется в поиске)',
+          onClick: () => onHide(p),
+        } : undefined}
       >
         <ProjectIcon project={p} size={ICON_BOX} radius={R.md} outline={outline} />
       </RailIconButton>
@@ -306,6 +317,8 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
     window.removeEventListener('pointerup', onDragUp);
   }, [onDragMove, onDragUp]);
 
+  const onIconHide = useCallback((p: Project) => { removeFromDock(p.id); }, []);
+
   const onIconClick = useCallback((p: Project) => {
     if (suppressClick.current) { suppressClick.current = false; return; }
     openCandidate(p);
@@ -407,6 +420,9 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
                   activity={activity.get(p.id)}
                   dragging={dragView?.id === p.id}
                   dragActive={!!dragView}
+                  // У открытого проекта кнопки нет: его иконка возвращается в док
+                  // как активная (см. items), и нажатие ничего бы не изменило
+                  onHide={p.id === project?.id ? undefined : onIconHide}
                   onPointerDown={onIconPointerDown}
                   onClick={onIconClick}
                   onContextMenu={openMenu}
@@ -503,6 +519,18 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
               onClick={() => { togglePin(menu.p.id); setMenu(null); }}>
               {isPinned(menu.p.id) ? 'Открепить' : 'Закрепить'}
             </button>
+            {/* Второй вход в то же действие, что и кнопка в подписи. Обязателен: пальцем
+                наведения нет, подпись с кнопкой на планшете не показывается вовсе (см.
+                RailIconButton), и меню по долгому нажатию — там единственный путь.
+                У открытого проекта пункта нет по той же причине, что и кнопки. */}
+            {menu.p.id !== project?.id && (
+              <button style={menuItemStyle}
+                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => { removeFromDock(menu.p.id); setMenu(null); }}>
+                Убрать из дока
+              </button>
+            )}
           </div>
         </div>,
         document.body,

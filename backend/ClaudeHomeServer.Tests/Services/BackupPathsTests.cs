@@ -17,6 +17,11 @@ public class BackupPathsTests
     [InlineData("instance-id.txt")]
     [InlineData("handle-migration-v1.done")]
     [InlineData(".personas-project-bindings-migrated")]
+    // Паспорта изменений (ADR-004): невосстановимы (сырьё — история чатов), в архив по
+    // умолчанию — исключений и секретов стор не содержит (SecretRedactor вычищает до сохранения)
+    [InlineData("dossiers/owner1/project1.json")]
+    [InlineData("dossiers/owner1/project1.archive.jsonl")]
+    [InlineData("dossiers/state.json")]
     public void СтейтИМаркерыМиграций_ПопадаютВАрхив(string path)
     {
         BackupPaths.ShouldInclude(path).Should().BeTrue();

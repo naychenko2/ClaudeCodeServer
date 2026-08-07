@@ -4,6 +4,7 @@ using System.Text.Json;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Dossiers;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -70,6 +71,7 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
     private readonly string _ownerId;
     private readonly IConfiguration _config;
     private readonly UserStore _users;
+    private readonly DossierStore _dossierStore;
 
     public ProjectKnowledgeSyncServiceTests()
     {
@@ -90,6 +92,7 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
         _projects = new ProjectManager(_config, _users, appSettings);
         _personas = new PersonaManager(_config);
         _wkStore = new WorkspaceKnowledgeStore(_config);
+        _dossierStore = new DossierStore(_config, null);
 
         var factory = new Mock<IHttpClientFactory>();
         factory.Setup(f => f.CreateClient(It.IsAny<string>()))
@@ -297,7 +300,7 @@ public class ProjectKnowledgeSyncServiceTests : IDisposable
             NullLogger<NotesKnowledgeService>.Instance);
         var teamMemory = new TeamMemoryService(_config);
         var cascade = new UserKnowledgeCascade(_knowledge, _wkStore, _projects, _personas,
-            personaMemory, teamMemory, notesKb, NullLogger<UserKnowledgeCascade>.Instance);
+            personaMemory, teamMemory, _dossierStore, notesKb, NullLogger<UserKnowledgeCascade>.Instance);
 
         // Запись знаний проекта владельца — каскад должен её снять
         var wk = _wkStore.GetOrCreate(_projectDir);

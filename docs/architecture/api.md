@@ -13,6 +13,10 @@ POST /api/auth/ping             { serverUrl, apiKey } → { ok } | 401 | 429  (�
 GET/POST/PUT/DELETE /api/projects
 GET/POST/DELETE     /api/projects/{id}/sessions       POST body: { mode, name?, resumeSessionId?, model? }
 PUT                 /api/projects/{id}/sessions/{sid} body: { name?, model? } → обновлённая сессия
+GET                 /api/projects/{id}/sessions/{sid}/history  ?limit=&before=  → [msg…] | { messages, hasMore, cursor }
+    без параметров — полный плоский массив (прежний контракт); с limit и/или before — страница:
+    tail (последние limit, дефолт 100) + hasMore + cursor (индекс старейшего в пачке; null на конце).
+    before — индекс, ДО которого (эксклюзивно) отдать сообщения; несуществующий → 400.
 GET                 /api/projects/{id}/files          ?path=
 GET                 /api/projects/{id}/files/search   ?q=
 GET/PUT             /api/projects/{id}/files/content  ?path=  → { content, isBinary, isImage, base64?, ... }

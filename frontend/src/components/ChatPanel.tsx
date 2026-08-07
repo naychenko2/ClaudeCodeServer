@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
-import { ArrowDown, RotateCw, CircleHelp } from 'lucide-react';
+import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
+import { ArrowDown, ArrowUp, RotateCw, CircleHelp } from 'lucide-react';
 import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
@@ -27,7 +27,7 @@ import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, modelProvider } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
-import { C, R, SHADOW, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
+import { C, R, SHADOW, SP, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
@@ -36,7 +36,8 @@ import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHea
 import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
-import { Modal, ModalActions, ConfirmDialog } from './ui';
+import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
+import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
 import { AttachPicker } from './chat/AttachPicker';
 import { ToolGroupBlock, AgentActionsBlock, itemKey, type ActivityEntry } from './chat/timeline';
@@ -94,10 +95,13 @@ interface Props {
 }
 
 // Предел одной загрузки — совпадает с RequestSizeLimit эндпоинта загрузки вложений
-// Прогрессивный рендер ленты (см. visibleTail): сколько узлов монтируем сразу при
-// открытии чата и какими порциями дорисовываем остальное в простое браузера.
-const TAIL_FIRST = 40;
-const TAIL_STEP = 120;
+// Окно рендера ленты (см. hiddenCount/visibleNodes): в DOM живут только последние
+// WINDOW_FIRST узлов — длинные чаты (тысячи элементов, десятки тысяч узлов DOM)
+// больше не держат главный поток секундами при открытии. Более ранняя история
+// догружается пачками по WINDOW_STEP: кнопкой «Показать предыдущие» или
+// прокруткой к самому верху (IntersectionObserver на якоре).
+const WINDOW_FIRST = 50;
+const WINDOW_STEP = 50;
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024;
 const TOO_BIG_MSG = 'Файл больше 100 МБ — такой пока не загрузим';
@@ -1419,29 +1423,59 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
   }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility]);
 
-  // Прогрессивный рендер ленты: при открытии чата монтируем только её хвост, остальное
-  // дорисовываем в простое браузера. В тяжёлых чатах (больше тысячи элементов) разовый
-  // маунт всей ленты держал главный поток секунду с лишним — это и ощущалось залипанием
-  // при переключении между чатами. Пользователь смотрит конец ленты, поэтому хвоста
-  // хватает на первый кадр, а начало доезжает за доли секунды.
-  const [visibleTail, setVisibleTail] = useState(TAIL_FIRST);
-  useEffect(() => { setVisibleTail(TAIL_FIRST); }, [session.id]);
+  // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
+  // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге
+  // новых сообщений хвост растёт сам, а позиция чтения в середине окна не прыгает.
+  // null = «по умолчанию» (показать последние WINDOW_FIRST) — до первого действия
+  // пользователя окно следует за концом ленты.
+  const [hiddenCount, setHiddenCount] = useState<number | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс окна при смене чата: панель переиспользуется между сессиями (без key), как и mode выше
+  useEffect(() => { setHiddenCount(null); }, [session.id]);
+  const hidden = Math.min(
+    hiddenCount ?? Math.max(0, renderedItems.length - WINDOW_FIRST),
+    Math.max(0, renderedItems.length - 1),
+  );
+  const visibleNodes = useMemo(
+    () => (hidden > 0 ? renderedItems.slice(hidden) : renderedItems),
+    [renderedItems, hidden],
+  );
+
+  // Подгрузка более ранних сообщений. Компенсация scrollTop на высоту вставленного
+  // блока — layout-эффектом до кадра, чтобы видимая часть ленты не сдвигалась
+  // (иначе каждое раскрытие давало бы скачок контента и рос CLS).
+  const prependCompRef = useRef<{ h: number; top: number } | null>(null);
+  const showEarlier = useCallback(() => {
+    const el = scrollRef.current;
+    if (el) prependCompRef.current = { h: el.scrollHeight, top: el.scrollTop };
+    setHiddenCount(h => {
+      const cur = h ?? Math.max(0, renderedItems.length - WINDOW_FIRST);
+      return Math.max(0, cur - WINDOW_STEP);
+    });
+  }, [renderedItems.length, scrollRef]);
+  useLayoutEffect(() => {
+    const p = prependCompRef.current;
+    if (!p) return;
+    prependCompRef.current = null;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = p.top + (el.scrollHeight - p.h);
+  }, [hidden, scrollRef]);
+
+  // Авто-догрузка при прокрутке к верху: якорь-сентинел перед первым видимым узлом.
+  // После вставки пачки компенсация уносит сентинел выше вьюпорта, поэтому цепочки
+  // «загрузилось всё сразу» нет — каждая порция требует нового подхода к верху.
+  const topSentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (visibleTail >= renderedItems.length) return;
-    const grow = () => setVisibleTail(v => v + TAIL_STEP);
-    // requestIdleCallback: доращиваем, когда поток свободен, чтобы не воевать за кадры
-    // с прокруткой и стримом. Где его нет (Safari) — обычный таймер.
-    const ric = window.requestIdleCallback;
-    if (ric) {
-      const id = ric(grow, { timeout: 300 });
-      return () => window.cancelIdleCallback?.(id);
-    }
-    const id = window.setTimeout(grow, 32);
-    return () => window.clearTimeout(id);
-  }, [visibleTail, renderedItems.length]);
-  const visibleNodes = visibleTail >= renderedItems.length
-    ? renderedItems
-    : renderedItems.slice(-visibleTail);
+    const sentinel = topSentinelRef.current;
+    const root = scrollRef.current;
+    if (!sentinel || !root || hidden <= 0) return;
+    const io = new IntersectionObserver(
+      entries => { if (entries.some(e => e.isIntersecting)) showEarlier(); },
+      // небольшой верхний запас — пачка подгружается чуть раньше касания края
+      { root, rootMargin: '240px 0px 0px 0px' },
+    );
+    io.observe(sentinel);
+    return () => io.disconnect();
+  }, [hidden, showEarlier, scrollRef]);
 
   // Подпал цветом проекта под верхом чата (см. слой в разметке ниже)
   const projectWash = projectTopWash(project);
@@ -1556,6 +1590,26 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
               personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange}
               compact={embedded} />
           )
+        )}
+
+        {/* Окно рендера: якорь авто-догрузки и кнопка «Показать предыдущие» —
+            видны, только пока сверху ленты остаются скрытые узлы */}
+        {hidden > 0 && (
+          <>
+            {/* 1px-якорь для IntersectionObserver: пересечение с верхом ленты = догрузить пачку */}
+            <div ref={topSentinelRef} style={{ height: 1 }} />
+            <div style={{ display: 'flex', justifyContent: 'center', paddingTop: SP.xxs, paddingBottom: SP.sm }}>
+              <Button
+                variant="ghostFilled"
+                size={isMobile ? 'md' : 'sm'}
+                pill
+                leftIcon={<ArrowUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                onClick={showEarlier}
+              >
+                Показать предыдущие ({Math.min(WINDOW_STEP, hidden)})
+              </Button>
+            </div>
+          </>
         )}
 
         <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{visibleNodes}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>

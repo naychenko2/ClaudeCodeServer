@@ -1,5 +1,7 @@
 // Обязательные онбординги (фича default-personas-onboarding): полноэкранный гейт
 // первого входа (личная дефолт-персона) и гейт проекта (персона-руководитель).
+// Если персоны зоны уже есть — первым идёт шаг выбора готовой персоны, интервью
+// стартует только по кнопке «Создать новую в разговоре» (без персон — сразу интервью).
 // Внутри — существующий чат-стек (ChatPanel/useSession) поверх сессии из
 // POST /api/onboarding/*/start. Пропустить нельзя; детерминированный выход из гейта:
 // «Начать заново» (новая сессия) и fallback «Создать персону из разговора»
@@ -75,6 +77,62 @@ function IntroPlaque({ kind, isMobile }: { kind: 'user' | 'project'; isMobile: b
   );
 }
 
+// Тексты шага выбора готовой персоны (он идёт ПЕРЕД интервью, когда персоны зоны уже есть)
+const PICK_TEXTS = {
+  user: {
+    title: 'Кто будет вашим ассистентом?',
+    subtitle: 'У вас уже есть персоны — выберите одну, она станет ассистентом по умолчанию. Или создайте новую: помощник задаст несколько вопросов и соберёт её.',
+    confirm: 'Сделать ассистентом',
+    create: 'Создать новую в разговоре',
+  },
+  project: {
+    title: 'Кто ведёт этот проект?',
+    subtitle: 'Выберите руководителя из персон проекта — он будет вести чаты и предлагать командные механики. Или создайте нового в коротком разговоре.',
+    confirm: 'Назначить руководителем',
+    create: 'Создать нового в разговоре',
+  },
+} as const;
+
+// Строка персоны в списке выбора — общая для шага выбора и модалки-страховки
+function PersonaChoiceRow({ p, selected, busy, disabled, onClick }: {
+  p: Persona;
+  selected?: boolean;
+  busy?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      onMouseEnter={e => { if (!disabled && !selected) e.currentTarget.style.background = C.accentLight; }}
+      onMouseLeave={e => { e.currentTarget.style.background = selected ? C.accentLight : 'transparent'; }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left',
+        padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg, fontFamily: FONT.sans,
+        background: selected ? C.accentLight : 'transparent',
+        border: `1px solid ${selected ? C.accent : C.border}`,
+        cursor: disabled ? 'default' : 'pointer',
+        opacity: disabled && !busy && !selected ? 0.55 : 1,
+        transition: 'background 0.15s, opacity 0.15s, border-color 0.15s',
+      }}
+    >
+      <PersonaAvatar persona={p} size={32} />
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+        <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {personaLabel(p)}
+        </span>
+        {p.description && (
+          <span style={{ fontSize: FS.xs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {p.description}
+          </span>
+        )}
+      </span>
+      {busy && <div className="tool-spinner" style={{ width: ICON_SIZE.sm, height: ICON_SIZE.sm, flexShrink: 0 }} />}
+    </button>
+  );
+}
+
 // Общий каркас онбординг-чата: старт/резюм сессии, чат-стек, завершение, страховки
 function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: {
   kind: 'user' | 'project';
@@ -100,16 +158,24 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
   const [pickOpen, setPickOpen] = useState(false);
   const [pickingId, setPickingId] = useState<string | null>(null);
 
+  // Шаг выбора готовой персоны — ПЕРЕД интервью; интервью стартует по явной кнопке
+  const [interviewing, setInterviewing] = useState(false);
+  const [pickChoiceId, setPickChoiceId] = useState<string | null>(null);
+
   // Кандидаты зоны гейта: личный — глобальные персоны, проектный — персоны проекта.
-  // Кнопка выбора показывается, только когда парк не пуст — при пустом она бессмысленна
+  // Шаг выбора и кнопка-страховка показываются, только когда парк не пуст
   const allPersonas = usePersonas();
-  useEffect(() => { void ensurePersonasLoaded(); }, []);
+  const [personasReady, setPersonasReady] = useState(false);
+  useEffect(() => { void ensurePersonasLoaded().finally(() => setPersonasReady(true)); }, []);
   const candidates = useMemo(
     () => allPersonas.filter(p => kind === 'user'
       ? p.scope === 'global'
       : p.scope === 'project' && p.projectId === project?.id),
     [allPersonas, kind, project?.id],
   );
+  // Пока список персон не загружен — не решаем: иначе на первом кадре candidates пуст
+  // и интервью успевало бы стартовать мимо шага выбора
+  const showPicker = personasReady && candidates.length > 0 && !interviewing;
 
   const load = useCallback(() => {
     setError(null);
@@ -117,7 +183,14 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
       .then(setSession)
       .catch(e => setError(e instanceof Error ? e.message : 'Не удалось запустить онбординг'));
   }, [start]);
-  useEffect(() => { load(); }, [load]);
+  // Сессию интервью заводим ровно один раз и только когда шаг выбора пройден или не нужен:
+  // лишняя сессия = лишний ход модели. Перезапуск идёт через restart(), не через этот эффект
+  const startedRef = useRef(false);
+  useEffect(() => {
+    if (startedRef.current || !personasReady || showPicker) return;
+    startedRef.current = true;
+    load();
+  }, [personasReady, showPicker, load]);
 
   // Завершение: onboarding_completed помечает (и освежает me/персон), гейт снимаем
   // по концу хода (result) — приветствие персоны успевает прозвучать в этом же чате
@@ -238,7 +311,8 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
           <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? FS.lg : FS.xl, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
             {title}
           </div>
-          {!isMobile && (
+          {/* На шаге выбора подзаголовок про интервью неуместен — экран объясняет себя сам */}
+          {!isMobile && !showPicker && (
             <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{subtitle}</div>
           )}
         </div>
@@ -275,9 +349,69 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
         )}
       </div>
 
-      {/* Чат интервью — существующий чат-стек поверх онбординг-сессии */}
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}>
-        {session ? (
+      {/* Шаг выбора готовой персоны (когда персоны зоны есть) — иначе чат интервью */}
+      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflowY: 'auto' }}>
+        {showPicker ? (
+          <div style={{
+            flex: 1, display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', justifyContent: 'center',
+            padding: isMobile ? SP.lg : SP.xl,
+          }}>
+            <div style={{
+              width: '100%', maxWidth: 480,
+              display: 'flex', flexDirection: 'column', gap: SP.lg,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, color: C.accent }}>
+                  <Users size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                  <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? FS.xl : FS.h2, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
+                    {PICK_TEXTS[kind].title}
+                  </div>
+                </div>
+                <div style={{ fontSize: FS.md, lineHeight: 1.55, color: C.textSecondary }}>
+                  {PICK_TEXTS[kind].subtitle}
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                {candidates.map(p => (
+                  <PersonaChoiceRow
+                    key={p.id}
+                    p={p}
+                    selected={pickChoiceId === p.id}
+                    busy={pickingId === p.id}
+                    disabled={!!pickingId}
+                    onClick={() => setPickChoiceId(p.id)}
+                  />
+                ))}
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: SP.sm }}>
+                <Button
+                  variant="primary" size="md" glow
+                  fullWidth={isMobile}
+                  disabled={!pickChoiceId}
+                  loading={!!pickingId}
+                  leftIcon={<ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                  onClick={() => {
+                    const p = candidates.find(c => c.id === pickChoiceId);
+                    if (p) void pickExisting(p);
+                  }}
+                >
+                  {PICK_TEXTS[kind].confirm}
+                </Button>
+                <Button
+                  variant="ghost" size="md"
+                  fullWidth={isMobile}
+                  disabled={!!pickingId}
+                  leftIcon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                  onClick={() => setInterviewing(true)}
+                >
+                  {PICK_TEXTS[kind].create}
+                </Button>
+              </div>
+            </div>
+          </div>
+        ) : session ? (
           <ChatPanel
             key={session.id}
             session={session}
@@ -322,39 +456,15 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
           onClose={() => { if (!pickingId) setPickOpen(false); }}
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxHeight: 320, overflowY: 'auto' }}>
-            {candidates.map(p => {
-              const busy = pickingId === p.id;
-              return (
-                <button
-                  key={p.id}
-                  disabled={!!pickingId}
-                  onClick={() => void pickExisting(p)}
-                  onMouseEnter={e => { if (!pickingId) e.currentTarget.style.background = C.accentLight; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                  style={{
-                    display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left',
-                    padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg, fontFamily: FONT.sans,
-                    background: 'transparent', border: `1px solid ${C.border}`,
-                    cursor: pickingId ? 'default' : 'pointer',
-                    opacity: pickingId && !busy ? 0.55 : 1,
-                    transition: 'background 0.15s, opacity 0.15s',
-                  }}
-                >
-                  <PersonaAvatar persona={p} size={32} />
-                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-                    <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      {personaLabel(p)}
-                    </span>
-                    {p.description && (
-                      <span style={{ fontSize: FS.xs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {p.description}
-                      </span>
-                    )}
-                  </span>
-                  {busy && <div className="tool-spinner" style={{ width: ICON_SIZE.sm, height: ICON_SIZE.sm, flexShrink: 0 }} />}
-                </button>
-              );
-            })}
+            {candidates.map(p => (
+              <PersonaChoiceRow
+                key={p.id}
+                p={p}
+                busy={pickingId === p.id}
+                disabled={!!pickingId}
+                onClick={() => void pickExisting(p)}
+              />
+            ))}
           </div>
         </Modal>
       )}

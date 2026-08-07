@@ -47,6 +47,9 @@ public class User
     public string? DefaultPersonaId { get; set; }
     // Сессия незавершённого онбординга пользователя — для резюма прерванного интервью.
     // Чистится при финализации онбординга (назначении дефолт-персоны из этой сессии).
+    // Сирота (сессию удалили через DELETE /api/chats/{id}) НЕ ломает повторный вход:
+    // OnboardingController.StartUser нормализует ссылку на чтении — GetOwned по
+    // несуществующему id даёт null и создаёт свежую сессию (каскада на удаление не нужно).
     public string? OnboardingSessionId { get; set; }
 }
 

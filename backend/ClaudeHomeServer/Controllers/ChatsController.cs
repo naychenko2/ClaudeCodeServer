@@ -60,6 +60,9 @@ public class ChatsController(SessionManager sessions, FileService files, Feature
 
     // Групповой чат (флаг persona-group-chats): 2-8 персон, первая — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
+    // Намеренно идёт мимо инварианта «новый чат человека — только с персоной» (гейт в Create):
+    // инвариант ловит одиночный чат БЕЗ персоны, а группа по определению состоит из персон
+    // (CreateGroupChatAsync сам валидирует состав), поэтому отдельная проверка здесь избыточна.
     [HttpPost("group")]
     public async Task<IActionResult> CreateGroup([FromBody] CreateGroupChatRequest req)
     {

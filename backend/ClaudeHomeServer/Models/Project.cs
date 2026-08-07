@@ -72,5 +72,8 @@ public class Project
     public string? DefaultPersonaId { get; set; }
     // Сессия незавершённого онбординга проекта — для резюма прерванного интервью.
     // Чистится при финализации (назначении дефолт-персоны проекта из этой сессии).
+    // Сирота (сессию удалили через DELETE /api/chats/{id}) НЕ ломает повторный вход:
+    // OnboardingController.StartProject нормализует ссылку на чтении — GetOwned по
+    // несуществующему id даёт null и создаёт свежую сессию (каскада на удаление не нужно).
     public string? OnboardingSessionId { get; set; }
 }

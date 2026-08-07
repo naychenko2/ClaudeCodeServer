@@ -50,6 +50,12 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         // чинит осиротевший дефолт вместо молчаливого нарушения «остаться без дефолта нельзя»
         var defaultPersonaId = me?.DefaultPersonaId is { } dpid && userId is not null
             && personas.Get(dpid, userId) is not null ? dpid : null;
+        // needsOnboarding — ГЛОБАЛЬНЫЙ гейт первого входа: «у пользователя нет личной
+        // дефолт-персоны». Намеренно не учитывает проектный дефолт (руководителя проекта):
+        // проектов может быть много, и сводить «есть ли хоть один без руководителя» в один
+        // флаг на auth/me — смешивать два независимых гейта. Проектный онбординг — локальное
+        // решение экрана: WorkspacePage смотрит project.defaultPersonaId и открывает свой гейт
+        // точечно по открытому проекту, не опираясь на этот флаг.
         var needsOnboarding = userId is not null && defaultPersonaId is null
             && flags.IsEnabled(userId, FeatureFlagKeys.DefaultPersonasOnboarding);
         // displayName отдаём и здесь: имя могли поправить в users.json уже после логина,

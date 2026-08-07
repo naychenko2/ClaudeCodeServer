@@ -22,6 +22,8 @@ import {
   gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow, gitInit,
 } from '../lib/git';
 import { splitPath, relTime } from '../lib/gitFormat';
+import { useIsTouch } from '../lib/breakpoints';
+import { useLongPress } from '../hooks/useLongPress';
 import { PublishDialog } from './PublishDialog';
 import { ListDateDivider } from './ListDateDivider';
 import { EmptyState } from './EmptyState';
@@ -147,6 +149,11 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const st = useGitState(project.id);
   const status = st.status;
   const hasPanelHeader = useHasPanelHeader();
+  // Тач-раскладка: действия строки — долгим нажатием. Все быстрые действия панели
+  // (откат правок, возврат и удаление отложенного) жили под наведением мыши, то есть
+  // на телефоне и планшете их не существовало вовсе. Высота строк при этом общая с
+  // «Файлами» и «Документами» — плотность списка одна на всех устройствах
+  const touch = useIsTouch();
 
   const [activeScope, setActiveScope] = useState<'working' | string>('working'); // string = sha коммита
   const [mode, setMode] = useState<'list' | 'commit'>('list');
@@ -423,6 +430,12 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const toggleCheck = (path: string) =>
     setUnchecked(prev => { const n = new Set(prev); n.has(path) ? n.delete(path) : n.add(path); return n; });
 
+  // === Долгое нажатие (тач) === Замена наведения: по удержанию строки открывается
+  // шторка с её действиями (откат правок, возврат и удаление отложенного)
+  const { pressingKey, pressProps } = useLongPress(touch);
+  const [touchMenu, setTouchMenu] = useState<
+    { kind: 'file'; file: RowFile } | { kind: 'stash'; stash: GitStashEntry } | null>(null);
+
   const ahead = status?.ahead ?? 0;
   // Кнопку «Опубликовать» показываем при незапушенных коммитах ИЛИ непустом стеке
   // (upstream мог не резолвиться, но локальные коммиты видны) — push сам разберётся с remote
@@ -447,6 +460,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         onClick={open}
         onMouseEnter={() => setHoveredRow(rowKey)}
         onMouseLeave={() => setHoveredRow(null)}
+        {...pressProps(rowKey, () => { if (isWorking) setTouchMenu({ kind: 'file', file: f }); })}
         style={{
           // Список (showParent) — двухэтажная строка (имя + путь), дерево — одна строка.
           // Размеры и отступы — общие с деревом «Файлов» (см. ROW_H выше)
@@ -454,11 +468,13 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           ...(showParent ? { minHeight: ROW_H_TWO_LINE } : { height: ROW_H }),
           padding: `1px ${SP.sm}px`, paddingLeft: SP.sm + depth * INDENT,
           borderRadius: R.md, cursor: 'pointer', boxSizing: 'border-box',
+          // Отклик на удержание: строка притухает, пока палец держат
+          opacity: pressingKey === rowKey ? 0.6 : 1,
           // Открытый файл выделяется как в «Файлах» и «Документах»: тёплая заливка плюс
           // полоска у левого края. Наведение — нейтральной подложкой
           background: isActiveFile ? C.accentMuted : hovered ? C.bgSelected : 'transparent',
           boxShadow: isActiveFile ? `inset 2px 0 0 ${C.accent}` : undefined,
-          transition: 'background 0.1s, box-shadow 0.1s',
+          transition: 'background 0.1s, box-shadow 0.1s, opacity 0.1s',
         }}
       >
         {isWorking && selectMode && (
@@ -496,25 +512,24 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             }}>{parent}</span>
           )}
         </span>
-        {/* Состояние файла — тем же значком, что в дереве «Файлов». Стоит перед
-            счётчиком строк: тот прячется под кнопкой отката при наведении, а значок
-            остаётся на виду */}
-        <FileStatusBadge status={f.status} />
-        {/* numstat +N/−M — скрываем под кнопкой отмены при ховере (та absolute поверх) */}
-        {(f.added != null || f.deleted != null) && (
-          <span style={{ display: 'flex', gap: 5, flexShrink: 0, fontFamily: FONT.mono, fontSize: 10.5, opacity: isWorking && hovered ? 0 : 1 }}>
+        {/* numstat +N/−M. В рабочем скоупе по наведению уступает место кнопке отката:
+            оба на одном слоте, а flex:1 у имени абсорбирует разницу — строка не
+            дёргается, и кнопке не нужно absolute-перекрытие */}
+        {isWorking && hovered && !st.busy ? (
+          <IconButton size="xs" tone="danger" color={C.danger} title="Отменить изменения"
+            style={{ flexShrink: 0 }}
+            onClick={e => { e.stopPropagation(); setDiscardPath(f.path); }}>
+            <Undo2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        ) : (f.added != null || f.deleted != null) && (
+          <span style={{ display: 'flex', gap: 5, flexShrink: 0, fontFamily: FONT.mono, fontSize: 10.5 }}>
             {f.added != null && f.added > 0 && <span style={{ color: C.diffAddText }}>+{f.added}</span>}
             {f.deleted != null && f.deleted > 0 && <span style={{ color: C.diffRemText }}>−{f.deleted}</span>}
           </span>
         )}
-        {/* Откат — absolute (не занимает место в покое), появляется по ховеру поверх numstat */}
-        {isWorking && hovered && !st.busy && (
-          <IconButton size="xs" tone="danger" color={C.danger} title="Отменить изменения"
-            style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)' }}
-            onClick={e => { e.stopPropagation(); setDiscardPath(f.path); }}>
-            <Undo2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-        )}
+        {/* Состояние файла — крайним справа: бросается в глаза и не путается с
+            плиткой типа (та слева). Тот же значок, что в дереве «Файлов» */}
+        <FileStatusBadge status={f.status} />
       </div>
     );
   };
@@ -886,7 +901,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 )}
               </div>
 
-              {/* Отложенное (stash): кнопки pop/drop появляются на месте времени по наведению */}
+              {/* Отложенное (stash): кнопки pop/drop появляются на месте времени по
+                  наведению, а на тач-раскладке — те же действия долгим нажатием */}
               {st.stashes.map((s: GitStashEntry) => {
                 const rowKey = `stash:${s.index}`;
                 const hovered = hoveredRow === rowKey;
@@ -897,7 +913,14 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     onClick={() => selectScope(rowKey)}
                     onMouseEnter={() => setHoveredRow(rowKey)}
                     onMouseLeave={() => setHoveredRow(null)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 7, minHeight: 32, position: 'relative', padding: '4px 8px', borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent' }}
+                    {...pressProps(rowKey, () => setTouchMenu({ kind: 'stash', stash: s }))}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 7, position: 'relative',
+                      minHeight: 32, padding: '4px 8px',
+                      borderRadius: R.md, cursor: 'pointer',
+                      background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent',
+                      opacity: pressingKey === rowKey ? 0.6 : 1, transition: 'opacity 0.1s',
+                    }}
                   >
                     <Archive size={13} strokeWidth={ICON_STROKE} color={active ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
                     <span title={s.message} style={{ flex: 1, minWidth: 0, fontSize: 12, color: active ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -1041,6 +1064,54 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </button>
         </div>
       </div>
+      )}
+
+      {/* === Действия строки на тач-раскладке (долгое нажатие) ===
+             Шторкой, а не меню по курсору: курсора нет, а список действий короткий.
+             Тот же приём, что в дереве «Файлов» */}
+      {touchMenu && (
+        <Modal
+          width={MODAL_W.form}
+          onClose={() => setTouchMenu(null)}
+          title={touchMenu.kind === 'file' ? 'Файл' : 'Отложенные изменения'}
+          subtitle={
+            <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>
+              {touchMenu.kind === 'file'
+                ? splitPath(touchMenu.file.path)[1]
+                : (touchMenu.stash.message || `stash@{${touchMenu.stash.index}}`)}
+            </span>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', margin: '0 -6px' }}>
+            {touchMenu.kind === 'file' ? (
+              <MenuItem
+                icon={<Undo2 size={15} strokeWidth={ICON_STROKE} />}
+                label="Отменить изменения"
+                danger
+                onClick={() => { const p = touchMenu.file.path; setTouchMenu(null); setDiscardPath(p); }}
+              />
+            ) : (
+              <>
+                <MenuItem
+                  icon={<ArchiveRestore size={15} strokeWidth={ICON_STROKE} />}
+                  label="Вернуть изменения"
+                  onClick={() => {
+                    const s = touchMenu.stash;
+                    setTouchMenu(null);
+                    if (activeScope === `stash:${s.index}`) setActiveScope('working');
+                    void gitStashPop(project.id, s.index);
+                  }}
+                />
+                <MenuItem
+                  icon={<Trash2 size={15} strokeWidth={ICON_STROKE} />}
+                  label="Удалить"
+                  danger
+                  onClick={() => { const s = touchMenu.stash; setTouchMenu(null); setStashDropConfirm(s); }}
+                />
+              </>
+            )}
+          </div>
+        </Modal>
       )}
 
       {/* === Подтверждение отмены изменений === */}

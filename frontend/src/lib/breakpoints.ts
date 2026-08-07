@@ -31,6 +31,24 @@ export function useIsMobile(): boolean {
   return m;
 }
 
+// Основной указатель — палец или стилус, наведения нет. Отдельно от ширины: планшет
+// бывает шире ноутбука, а узкая панель на десктопе остаётся мышиной. Нужен там, где
+// действие показывается по наведению: на таком устройстве состояния hover не бывает
+// вовсе, и кнопка просто недостижима.
+export const COARSE_QUERY = '(pointer: coarse)';
+export function useIsTouch(): boolean {
+  const [t, setT] = useState(() =>
+    typeof window !== 'undefined' ? window.matchMedia(COARSE_QUERY).matches : false);
+  useEffect(() => {
+    const mq = window.matchMedia(COARSE_QUERY);
+    const h = (e: MediaQueryListEvent) => setT(e.matches);
+    setT(mq.matches);
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, []);
+  return t;
+}
+
 // Текущая ширина окна — для мест, где нужен не только флаг, но и само значение
 // (например, отдельный порог планшета).
 export function useWindowWidth(): number {

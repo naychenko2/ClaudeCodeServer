@@ -25,6 +25,8 @@ import { DocsCreateDialog } from './DocsCreateDialog';
 import { DocsRenameDialog } from './DocsRenameDialog';
 import { DocsMoveDialog } from './DocsMoveDialog';
 import { useRequestPanelFill } from './panelFill';
+import { useIsTouch } from '../../lib/breakpoints';
+import { useLongPress, type LongPressPoint } from '../../hooks/useLongPress';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
@@ -231,10 +233,13 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, active = false, onTogglePin, onContextMenu }: {
+function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, active = false, onTogglePin, onContextMenu, press, pressing = false }: {
   folder: string;
   // Действия раздела правым кликом — те же, что у строки документа (переименование)
   onContextMenu?: (e: React.MouseEvent) => void;
+  // На тач-раскладке правого клика нет — те же действия приходят долгим нажатием
+  press?: React.DOMAttributes<HTMLDivElement>;
+  pressing?: boolean;
   // Подпись группы: у раздела это заголовок его страницы («Расширения»), у обычной папки —
   // её путь (значение по умолчанию). Считает панель: она знает, есть ли у папки пара
   title?: string;
@@ -316,10 +321,12 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
       onContextMenu={onContextMenu}
       onMouseEnter={() => setRowHover(true)}
       onMouseLeave={() => setRowHover(false)}
+      {...press}
       style={{
         position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
         background: C.bgWhite, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
         display: 'flex', alignItems: 'center',
+        opacity: pressing ? 0.6 : 1, transition: 'opacity 0.1s',
       }}>
       <button
         onClick={onToggle}
@@ -481,7 +488,7 @@ function FolderRow({ label, parent, count, current, onJump }: {
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
 // в строке нет места, а место иконки всё равно занято состоянием документа
-function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, onExpand, onTogglePin, onContextMenu, dropInto }: {
+function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, onExpand, onTogglePin, onContextMenu, dropInto, press, pressing = false }: {
   doc: DocEntry;
   selected: boolean;
   home: boolean;
@@ -505,6 +512,10 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
   // Рамкой, а не заливкой: заливка тут уже занята выделением и наведением, и третий
   // фон на том же месте читался бы как «выбрано», а не «сюда упадёт»
   dropInto?: boolean;
+  // Тач-раскладка: действия строки приходят долгим нажатием, а обработчики удержания —
+  // готовыми: таймер один на список, не на строку
+  press?: React.DOMAttributes<HTMLDivElement>;
+  pressing?: boolean;
 }) {
   const [hover, setHover] = useState(false);
   const [pinHover, setPinHover] = useState(false);
@@ -521,6 +532,7 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
       onContextMenu={onContextMenu}
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => { setHover(false); setPinHover(false); }}
+      {...press}
       style={{
         display: 'flex', alignItems: 'center', borderRadius: R.md,
         // Наведение подсвечивает открываемую строку: документ откроется по клику,
@@ -540,6 +552,8 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
           : selected ? `inset 2px 0 0 ${C.accent}`
           : undefined,
         minHeight: ROW_H, paddingLeft: SP.sm + (indent ?? 0),
+        // Отклик на удержание: строка притухает, пока палец держат
+        opacity: pressing ? 0.6 : 1, transition: 'opacity 0.1s',
       }}
     >
       <button
@@ -632,7 +646,12 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
 // Перетаскиваемая строка документа: у закреплённых так задаётся их собственный порядок
 // (живёт в localStorage), в группе — порядок страниц в .order репозитория. Жест и пороги
 // общие с доской задач и деревом чатов (lib/dnd), поэтому клик по строке от
-// перетаскивания отличается сдвигом, а не отдельной ручкой
+// перетаскивания отличается сдвигом, а не отдельной ручкой.
+//
+// На тач-раскладке перетаскивание строк выключено (disabled={touch}): пальцем оно
+// начинается тем же удержанием, которым открываются действия строки, а два действия
+// на один жест не повесить. Выбрано меню — переименовать и удалить нужно откуда
+// угодно, а порядок документов меняют редко и обычно за компьютером
 function SortableRow({ doc, disabled, children }: { doc: DocEntry; disabled?: boolean; children: ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: doc.path, disabled });
@@ -694,6 +713,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // на диске — надо ли перечитывать индекс (isDocPath ниже)
   const [scopeInfo, setScopeInfo] = useState<DocsScopeInfo | null>(null);
   const [scopeOpen, setScopeOpen] = useState(false);
+  // Тач-раскладка: строки выше, а действия строки (переименовать, удалить) приходят
+  // долгим нажатием — правого клика на телефоне и планшете нет вовсе
+  const touch = useIsTouch();
+  const { pressingKey, pressProps } = useLongPress(touch);
   // Действия строки — правым кликом по документу или по подписи раздела, как в «Файлах».
   // Держим и сам документ, и точку клика: меню рисуется по курсору
   const [rowMenu, setRowMenu] = useState<{ doc: DocEntry; rect: DOMRect } | null>(null);
@@ -1549,6 +1572,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     e.preventDefault();
     setRowMenu({ doc, rect: new DOMRect(e.clientX, e.clientY, 0, 0) });
   };
+  // То же меню на тач-раскладке: правого клика там нет, зато есть удержание строки.
+  // Якорем служит точка касания — меню встаёт у пальца, как у курсора на мыши
+  const openRowMenuAt = (doc: DocEntry, point: LongPressPoint) =>
+    setRowMenu({ doc, rect: new DOMRect(point.x, point.y, 0, 0) });
 
   // Переименование прошло: индекс приезжает с ответом, а по карте переезда чиним всё,
   // что помнит СТАРЫЕ пути, — закреплённые, открытый документ и файл в центре. Иначе
@@ -1643,7 +1670,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             const { title, subtitle } = groupTitle(folder);
             return (
               <FolderRow
-                key={folder}
+                  key={folder}
                 label={title}
                 parent={subtitle}
                 count={folderCountMap.get(folder) ?? 0}
@@ -1989,7 +2016,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                 >
                 <SortableContext items={sections.map(s => s.doc.path)} strategy={verticalListSortingStrategy}>
                 {sections.map(({ doc: d, folder, depth, count }) => (
-                  <SortableRow key={d.path} doc={d}>
+                  <SortableRow key={d.path} doc={d} disabled={touch}>
                   <DocRow
                     doc={d}
                     dropInto={nestTarget === d.path}
@@ -2007,6 +2034,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     onExpand={() => handleRowDoubleClick(d.path)}
                     onTogglePin={() => togglePin(d.path)}
                     onContextMenu={e => openRowMenu(d, e)}
+                    pressing={pressingKey === d.path}
+                    press={pressProps(d.path, p => openRowMenuAt(d, p))}
                   />
                   </SortableRow>
                 ))}
@@ -2078,6 +2107,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         // Правый клик по подписи раздела — те же действия, что у строки
                         // документа: переименование раздела начинается с его страницы
                         onContextMenu={page ? e => openRowMenu(page, e) : undefined}
+                        pressing={!!page && pressingKey === page.path}
+                        press={page ? pressProps(page.path, p => openRowMenuAt(page, p)) : undefined}
                         pagePath={page?.path}
                         pinned={!!page && pinned.has(page.path)}
                         // Строкой страница раздела в дереве не рисуется — выделение
@@ -2108,7 +2139,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         {docs.map(d => (
                           // В свёрнутой группе тащить нечего — её строки не видны; у
                           // не-markdown порядок задаёт индекс, и .order его не описывает
-                          <SortableRow key={d.path} doc={d} disabled={isCollapsed || !isMarkdown(d.path)}>
+                          <SortableRow key={d.path} doc={d} disabled={touch || isCollapsed || !isMarkdown(d.path)}>
                             <DocRow
                               doc={d}
                               selected={isShown(d.path)}
@@ -2118,6 +2149,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               onExpand={() => handleRowDoubleClick(d.path)}
                               onTogglePin={() => togglePin(d.path)}
                               onContextMenu={e => openRowMenu(d, e)}
+                    pressing={pressingKey === d.path}
+                    press={pressProps(d.path, p => openRowMenuAt(d, p))}
                             />
                           </SortableRow>
                         ))}
@@ -2164,7 +2197,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     >
                       <SortableContext items={pinnedDocs.map(d => d.path)} strategy={verticalListSortingStrategy}>
                         {pinnedDocs.map(d => (
-                          <SortableRow key={d.path} doc={d}>
+                          <SortableRow key={d.path} doc={d} disabled={touch}>
                             <DocRow
                               doc={d}
                               selected={isShown(d.path)}
@@ -2174,6 +2207,8 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               onExpand={() => handleRowDoubleClick(d.path)}
                               onTogglePin={() => togglePin(d.path)}
                               onContextMenu={e => openRowMenu(d, e)}
+                    pressing={pressingKey === d.path}
+                    press={pressProps(d.path, p => openRowMenuAt(d, p))}
                             />
                           </SortableRow>
                         ))}

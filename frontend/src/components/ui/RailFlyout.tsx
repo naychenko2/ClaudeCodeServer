@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { LucideIcon } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW, Z } from '../../lib/design';
@@ -48,11 +48,14 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
   children: ReactNode;   // сама кнопка рельсы
 }) {
   const hostRef = useRef<HTMLSpanElement>(null);
+  const flyoutRef = useRef<HTMLDivElement>(null);
   // Курсор ушёл с кнопки, но мог пойти к действию — держим плашку ещё мгновение.
   // Плашке БЕЗ действия тянуться незачем: она ничего не предлагает нажать.
   const hasAction = !!action;
   const [lingering, setLingering] = useState(false);
   const [onFlyout, setOnFlyout] = useState(false);
+  // Сторож погасил плашку сам, вопреки состоянию наведения (см. эффект ниже)
+  const [killed, setKilled] = useState(false);
   // Вертикальный центр кнопки в координатах окна — по нему плашка встаёт напротив.
   // По горизонтали её место задаёт кромка рельсы (railWidth), а не кнопка.
   const [top, setTop] = useState(0);
@@ -66,7 +69,41 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
 
   // Пока курсор на самой плашке, она живёт независимо от таймера — иначе исчезала
   // бы прямо под ним, на полпути к кнопке
-  const shown = open || onFlyout || lingering;
+  const wanted = open || onFlyout || lingering;
+  const shown = wanted && !killed;
+
+  // Сторож на случай, когда ухода курсора не случилось вовсе. Браузер шлёт
+  // mouseleave только при ДВИЖЕНИИ мыши, а рельса переставляет себя сама: клик по
+  // иконке открыл панель — кнопка уехала из-под неподвижного курсора; действие в
+  // плашке открыло модалку — плашку накрыл оверлей. Ухода нет, hover у вызывающего
+  // залипает, и язычок висит на экране до следующего осознанного наведения.
+  // Поэтому сверяем положение курсора с реальностью и гасим сами; вернулся курсор
+  // на кнопку — снимаем запрет (залипшее у вызывающего состояние он сам не починит).
+  useEffect(() => {
+    if (!wanted) { setKilled(false); return; }
+    let kill: number | null = null;
+    const stopKill = () => { if (kill != null) { clearTimeout(kill); kill = null; } };
+    const inside = (t: EventTarget | null) => t instanceof Node
+      && (!!hostRef.current?.contains(t) || !!flyoutRef.current?.contains(t));
+    // Курсор больше не наш (Alt+Tab, другое приложение) или содержимое уехало
+    // прокруткой — держать плашку не за что, и ждать движения мыши незачем.
+    const gone = () => { stopKill(); setOnFlyout(false); setLingering(false); setKilled(true); };
+    const onMove = (e: MouseEvent) => {
+      if (inside(e.target)) { stopKill(); setKilled(false); return; }
+      // Пауза та же, что у обычного гашения: путь от кнопки к действию идёт над
+      // полем капсулы, и мгновенный сторож рубил бы плашку на полпути.
+      if (kill == null) kill = window.setTimeout(() => { kill = null; gone(); }, HIDE_DELAY);
+    };
+    document.addEventListener('mousemove', onMove);
+    window.addEventListener('blur', gone);
+    window.addEventListener('scroll', gone, true);
+    return () => {
+      stopKill();
+      document.removeEventListener('mousemove', onMove);
+      window.removeEventListener('blur', gone);
+      window.removeEventListener('scroll', gone, true);
+    };
+  }, [wanted]);
 
   // Кнопка-действие стоит на стороне, обращённой К ЦЕНТРУ окна: плашка правой
   // рельсы растёт влево, и действие в её хвосте оказалось бы зажатым между текстом
@@ -74,19 +111,32 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
   // куда идёт курсор. У левой рельсы центр справа, и хвост как раз туда и смотрит.
   const actionFirst = side === 'right';
 
-  useLayoutEffect(() => {
-    if (!shown) return;
+  const measure = useCallback(() => {
     const el = hostRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
     setTop(r.top + r.height / 2);
-  }, [shown, label]);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!shown) return;
+    measure();
+  }, [shown, label, measure]);
+
+  // Окно меняет размер при живой плашке — кнопка переезжает, а плашка осталась бы
+  // на прежней высоте, оторванной от своей иконки.
+  useEffect(() => {
+    if (!shown) return;
+    window.addEventListener('resize', measure);
+    return () => window.removeEventListener('resize', measure);
+  }, [shown, measure]);
 
   return (
     <>
       <span ref={hostRef} style={{ display: 'flex' }}>{children}</span>
       {shown && createPortal(
         <div
+          ref={flyoutRef}
           onMouseEnter={() => setOnFlyout(true)}
           onMouseLeave={() => { setOnFlyout(false); setLingering(false); }}
           style={{

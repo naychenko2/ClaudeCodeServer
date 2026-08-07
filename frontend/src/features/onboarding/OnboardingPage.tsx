@@ -7,8 +7,8 @@
 // Гейт снимается ПО КОНЦУ ХОДА (result после onboarding_completed) или кнопкой
 // «Перейти в систему» — не размонтируем чат посреди стрима и приветствия персоны.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { ArrowRight, RotateCcw, Sparkles, UserRound } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowRight, RotateCcw, Sparkles, UserRound, Users } from 'lucide-react';
 import type { Persona, Project, Session } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, R, SP, Z } from '../../lib/design';
@@ -20,7 +20,7 @@ import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
 import { refreshMe } from '../../lib/defaultPersona';
-import { bumpPersonas, personaLabel } from '../../lib/personas';
+import { bumpPersonas, ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 
 // Транскрипт сессии → текстовый промпт для quick-create (fallback «из разговора»).
@@ -96,6 +96,20 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
   // Fallback «Создать персону из разговора»: черновик на подтверждении
   const [draft, setDraft] = useState<Persona | null>(null);
   const [drafting, setDrafting] = useState(false);
+  // Страховка «Выбрать из существующих»: готовая персона зоны вместо интервью
+  const [pickOpen, setPickOpen] = useState(false);
+  const [pickingId, setPickingId] = useState<string | null>(null);
+
+  // Кандидаты зоны гейта: личный — глобальные персоны, проектный — персоны проекта.
+  // Кнопка выбора показывается, только когда парк не пуст — при пустом она бессмысленна
+  const allPersonas = usePersonas();
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
+  const candidates = useMemo(
+    () => allPersonas.filter(p => kind === 'user'
+      ? p.scope === 'global'
+      : p.scope === 'project' && p.projectId === project?.id),
+    [allPersonas, kind, project?.id],
+  );
 
   const load = useCallback(() => {
     setError(null);
@@ -161,6 +175,23 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
     }
   };
 
+  // Выбор существующей персоны: назначаем дефолтом и сразу выходим из гейта.
+  // Права/профиль дефолта персона не получает — это гарантирует бэкенд
+  // (OnboardingCreatedPersonaId сессии остаётся пустым), фронт ничего не досевает
+  const pickExisting = async (p: Persona) => {
+    if (pickingId) return;
+    setPickingId(p.id);
+    try {
+      await api.personas.makeDefault(p.id);
+      await refreshMe();
+      bumpPersonas();
+      onDone();
+    } catch (e) {
+      showToast('Онбординг', e instanceof Error ? e.message : 'Не удалось назначить персону по умолчанию');
+      setPickingId(null);
+    }
+  };
+
   // Подтверждение черновика: назначаем дефолтом REST-ом и выходим из гейта
   const confirmDraft = async () => {
     if (!draft) return;
@@ -191,6 +222,9 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
       {/* Шапка гейта: что происходит и зачем; навигации и «Пропустить» нет намеренно */}
       <div style={{
         flex: 'none', display: 'flex', alignItems: 'center', gap: SP.md,
+        // На узком экране три кнопки-страховки не влезают в ряд с заголовком —
+        // переносим их на вторую строку вместо overflow
+        flexWrap: 'wrap', rowGap: SP.sm,
         padding: isMobile ? `${SP.md}px ${SP.lg}px` : `${SP.lg}px ${SP.xl}px`,
         borderBottom: `1px solid ${C.border}`, position: 'relative',
       }}>
@@ -211,6 +245,14 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
         {/* Страховки от «незавершаемого» интервью */}
         {!completed && session && (
           <>
+            {candidates.length > 0 && (
+              <Button variant="ghost" size="sm"
+                leftIcon={<Users size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                title="Не проходить интервью — назначить дефолтом одну из уже существующих персон"
+                onClick={() => setPickOpen(true)}>
+                {isMobile ? 'Выбрать' : 'Выбрать из существующих'}
+              </Button>
+            )}
             <Button variant="ghost" size="sm" loading={drafting}
               leftIcon={<UserRound size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               title="Создать персону по уже состоявшемуся разговору, не дожидаясь финала интервью"
@@ -268,6 +310,53 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
           onConfirm={restart}
           onCancel={() => setRestartConfirm(false)}
         />
+      )}
+
+      {/* Выбор существующей персоны зоны — детерминированная развилка вместо интервью */}
+      {pickOpen && (
+        <Modal
+          title={kind === 'user' ? 'Кто станет основным собеседником?' : 'Кто будет руководителем проекта?'}
+          subtitle={kind === 'user'
+            ? 'Новые чаты будут начинаться с ним. Остальные помощники останутся на месте — их можно позвать в любой момент.'
+            : 'Он ведёт чаты проекта и знает контекст целиком. Остальная команда остаётся на месте.'}
+          onClose={() => { if (!pickingId) setPickOpen(false); }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxHeight: 320, overflowY: 'auto' }}>
+            {candidates.map(p => {
+              const busy = pickingId === p.id;
+              return (
+                <button
+                  key={p.id}
+                  disabled={!!pickingId}
+                  onClick={() => void pickExisting(p)}
+                  onMouseEnter={e => { if (!pickingId) e.currentTarget.style.background = C.accentLight; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left',
+                    padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg, fontFamily: FONT.sans,
+                    background: 'transparent', border: `1px solid ${C.border}`,
+                    cursor: pickingId ? 'default' : 'pointer',
+                    opacity: pickingId && !busy ? 0.55 : 1,
+                    transition: 'background 0.15s, opacity 0.15s',
+                  }}
+                >
+                  <PersonaAvatar persona={p} size={32} />
+                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
+                    <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {personaLabel(p)}
+                    </span>
+                    {p.description && (
+                      <span style={{ fontSize: FS.xs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {p.description}
+                      </span>
+                    )}
+                  </span>
+                  {busy && <div className="tool-spinner" style={{ width: ICON_SIZE.sm, height: ICON_SIZE.sm, flexShrink: 0 }} />}
+                </button>
+              );
+            })}
+          </div>
+        </Modal>
       )}
 
       {/* Подтверждение персоны, созданной из разговора */}

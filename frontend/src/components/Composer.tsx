@@ -89,6 +89,9 @@ export interface ComposerProps {
   onEnableTeamImplement?: (opts: { autoWaves: boolean; executorPersonaIds: string[] }) => void | Promise<void>;
   // Чат внутри проекта: вне проекта у режима нет команды по умолчанию
   isProjectChat?: boolean;
+  // Онбординг-интервью (Session.onboardingKind): команды в чате ещё нет, поэтому
+  // раскрывашка «Обсудить с командой» не показывается вовсе
+  onboarding?: boolean;
   // Отдельное git worktree чата: имя ветки (null — чат в основном дереве проекта).
   // Тумблер виден при заданном onToggleWorktree (только проектный чат с git).
   // Само имя ветки здесь НЕ показываем — оно живёт в git-баре над композером
@@ -371,6 +374,7 @@ export function Composer({
   onStopTeamImplement,
   onEnableTeamImplement,
   isProjectChat = false,
+  onboarding = false,
   worktreeBranch = null,
   onToggleWorktree,
   chatContext,
@@ -478,7 +482,7 @@ export function Composer({
   const [teamOpen, setTeamOpen] = useState(false);
   const [teamMech, setTeamMech] = useState<TeamMechanicId | null>(null);
   const [teamSettings, setTeamSettings] = useState<TeamMechanicSettings>(DEFAULT_TEAM_SETTINGS);
-  const canDiscuss = !!sessionId;
+  const canDiscuss = !!sessionId && !onboarding;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const modeRef = useRef<HTMLDivElement>(null);
   // Замеры полосы контролов: по ним решается, сколько кнопок влезает в одну строку
@@ -519,13 +523,13 @@ export function Composer({
   // Автозапуск «Обсудить с командой» — чат открыт через «Созвать команду» из центра
   // команды: раскрываем панель механик
   useEffect(() => {
-    if (!sessionId) return;
+    if (!sessionId || !canDiscuss) return;
     if (sessionStorage.getItem('cc_auto_discuss') === sessionId) {
       sessionStorage.removeItem('cc_auto_discuss');
       // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое открытие «Команды» по флагу из sessionStorage
       setTeamOpen(true);
     }
-  }, [sessionId]);
+  }, [sessionId, canDiscuss]);
 
   // Закрытие меню режимов (и каллаута лока, Э8) по клику вне него
   useEffect(() => {

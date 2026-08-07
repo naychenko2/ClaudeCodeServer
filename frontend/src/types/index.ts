@@ -515,6 +515,10 @@ export interface Session {
   // чата не попадают в историю решений и не уходят в репозиторий. Только у проектных
   // сессий. Меняется через PUT sessions/{sid} (поле excludeFromDossiers)
   excludeFromDossiers?: boolean;
+  // Онбординг-сессия (фича default-personas-onboarding): "user" — гейт первого входа,
+  // "project" — гейт проекта; отсутствует у обычных чатов. По признаку фронт прячет
+  // командные механики («Обсудить с командой») — команды в интервью ещё нет
+  onboardingKind?: 'user' | 'project' | null;
 }
 
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта

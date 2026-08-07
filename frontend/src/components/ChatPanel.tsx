@@ -1805,6 +1805,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
             onStopTeamImplement={teamImplementState ? handleStopTeamImplement : undefined}
             onEnableTeamImplement={handleEnableTeamImplement}
             isProjectChat={!!project}
+            // Онбординг-интервью: команды ещё нет — «Обсудить с командой» скрываем
+            onboarding={!!session.onboardingKind}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
             chatContext={chatContext}

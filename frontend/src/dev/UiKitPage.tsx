@@ -35,7 +35,7 @@ import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
-  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot,
+  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
@@ -79,6 +79,10 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
 
 // Оглавление витрины: id секции (для якоря) + короткий лейбл в кнопке.
 // Порядок соответствует основному flow ниже. При добавлении новой секции —
+// Демо-файлы для FileTypeTile: код, разметка, документ, картинка и незнакомый тип
+// (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
+const FILE_TILE_SAMPLES = ['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
+
 // добавь её сюда и повесь rootProps={{ id }} на её Island.
 const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-toggles',    label: 'Переключатели'     },
@@ -356,6 +360,20 @@ function TogglesSection() {
         </SubBlock>
       </div>
     </Island>
+
+        {/* FileTypeTile: плитка типа файла — одна на все списки файлов продукта
+            («Файлы», «Документы», «Изменения», шапка просмотрщика). Габарит и
+            палитра живут внутри примитива, снаружи задаётся только имя файла */}
+        <SubBlock label="FileTypeTile — тип файла перед именем">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+            {FILE_TILE_SAMPLES.map((name) => (
+              <div key={name} style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
+                <FileTypeTile name={name} />
+                <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{name}</span>
+              </div>
+            ))}
+          </div>
+        </SubBlock>
   );
 }
 

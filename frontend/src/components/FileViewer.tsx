@@ -42,7 +42,6 @@ import { NoteConnections } from '../features/notes/NoteConnections';
 import { NoteView } from '../features/notes/NoteView';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
-import { getExtMeta } from './FileExplorer';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
@@ -51,7 +50,7 @@ import { C, FONT, FS, MODAL_W, SHADOW, SP, TB } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch } from './Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
-import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
+import { BackButton, Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
@@ -1064,9 +1063,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const dotAt = fileName.lastIndexOf('.');
   const nameBase = dotAt > 0 ? fileName.slice(0, dotAt) : fileName;
   const nameExt = dotAt > 0 ? fileName.slice(dotAt) : '';
-  // Плитка расширения перед именем — как в списке файлов (getExtMeta: фон/цвет/лейбл)
-  const extMeta = getExtMeta(fileName);
-
   // --- Вкладки (включая «Просмотр | Код» для HTML) ---
   const htmlSplit = isHtml && !editing && !isOfficeFile && !fileContent?.isBinary;
   const tabValue: TabKey = htmlSplit && tab === 'file' && htmlTab === 'code' ? 'code' : tab;
@@ -1429,12 +1425,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         </div>
 
         {/* Плитка расширения перед именем — как в списке файлов */}
-        <span style={{
-          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-          background: extMeta.bg, color: extMeta.fg,
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 7.5, fontWeight: 700,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '-0.02em',
-        }}>{extMeta.label}</span>
+        <FileTypeTile name={fileName} />
 
         {/* Имя файла — единственный гибкий элемент строки. Расширение отдельным span'ом:
             ellipsis режет хвост, а по нему и узнают файл. title — полный путь. */}

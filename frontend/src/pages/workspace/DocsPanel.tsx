@@ -19,7 +19,7 @@ import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, ConfirmDialog, EmptyState, IconButton, IconSegmented, Menu, MenuItem, MenuSep, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
+import { Button, ConfirmDialog, EmptyState, FileTypeTile, IconButton, IconSegmented, Menu, MenuItem, MenuSep, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
 import { DocsScopeDialog } from './DocsScopeDialog';
 import { DocsCreateDialog } from './DocsCreateDialog';
 import { DocsRenameDialog } from './DocsRenameDialog';
@@ -27,7 +27,6 @@ import { DocsMoveDialog } from './DocsMoveDialog';
 import { useRequestPanelFill } from './panelFill';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { ListDateDivider, LIST_FLASH_CLASS, LIST_FLASH_MS } from '../../components/ListDateDivider';
-import { getExtMeta as extMeta } from '../../components/FileExplorer';
 import { useHeadings, scrollToHeading } from '../../hooks/useHeadings';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../../lib/docsLinks';
 // Цитата раздела в композер: тем же каналом, что «Про файл …» в FileViewer и затравки
@@ -223,16 +222,7 @@ function stripLeadingEmoji(title: string): string {
 function DocBadge({ path, home }: { path: string; home?: boolean }) {
   if (home)
     return <Home size={13} strokeWidth={2.2} style={{ flexShrink: 0, color: C.accent }} />;
-  const m = extMeta(path);
-  return (
-    <span style={{
-      width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-      background: m.bg, color: m.fg,
-      fontFamily: FONT.mono, fontSize: 7.5, fontWeight: 700,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      letterSpacing: '-0.02em',
-    }}>{m.label}</span>
-  );
+  return <FileTypeTile name={path} />;
 }
 
 // Подпись папки в списке документов: липкая, чтобы при прокрутке было видно, в какой

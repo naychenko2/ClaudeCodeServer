@@ -28,7 +28,7 @@ export const RAW_COLOR_ALLOWED = [
   'src/lib/design.ts',                    // GROUP_COLORS
   'src/lib/tasks.ts',                     // палитра проектов (main/soft/softDark)
   'src/components/AgentSelector.tsx',     // AGENT_COLORS
-  'src/components/FileExplorer.tsx',      // EXT_META — бейджи расширений
+  'src/components/ui/FileTypeTile.tsx',   // EXT_META — палитра типов файлов
   'src/components/Composer.tsx',          // fileColor() — цвета языков во вложениях
   // Canvas и SVG-маски
   'src/components/ui/CanvasBackdrop.tsx',        // stroke в SVG-тайле маски (значима только альфа)

@@ -35,8 +35,7 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
-import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
-import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
@@ -148,53 +147,6 @@ const splitPath = (p: string): [string, string] => {
   const i = norm.lastIndexOf('/');
   return i < 0 ? ['', norm] : [norm.slice(0, i), norm.slice(i + 1)];
 };
-
-const EXT_META: Record<string, { bg: string; fg: string; label: string }> = {
-  ts:   { bg: '#E6EEF5', fg: '#3E7CA6', label: 'ts' },
-  tsx:  { bg: '#E6EEF5', fg: '#3E7CA6', label: 'tsx' },
-  js:   { bg: '#FBF3D5', fg: '#B5830A', label: 'js' },
-  jsx:  { bg: '#FBF3D5', fg: '#B5830A', label: 'jsx' },
-  cs:   { bg: '#F0E6F5', fg: '#8E4A82', label: 'cs' },
-  py:   { bg: '#E7EFF5', fg: '#3E7CA6', label: 'py' },
-  json: { bg: '#FBEBE0', fg: '#C2693B', label: 'json' },
-  md:   { bg: '#EFEAE0', fg: '#8A8072', label: 'md' },
-  txt:  { bg: '#EFEAE0', fg: '#9A8F7E', label: 'txt' },
-  html: { bg: '#FBEBE0', fg: '#C2693B', label: 'html' },
-  css:  { bg: '#E6EEF5', fg: '#3E7CA6', label: 'css' },
-  png:  { bg: '#F2E6F0', fg: '#8E4A82', label: 'img' },
-  jpg:  { bg: '#F2E6F0', fg: '#8E4A82', label: 'img' },
-  jpeg: { bg: '#F2E6F0', fg: '#8E4A82', label: 'img' },
-  gif:  { bg: '#F2E6F0', fg: '#8E4A82', label: 'img' },
-  webp: { bg: '#F2E6F0', fg: '#8E4A82', label: 'img' },
-  svg:  { bg: '#F2E6F0', fg: '#8E4A82', label: 'svg' },
-  // Документы и медиа: у них расширение говорит больше, чем имя (спека, схема, запись)
-  pdf:  { bg: '#F7E3E0', fg: '#B04A3E', label: 'pdf' },
-  docx: { bg: '#E4EAF6', fg: '#3B5BA5', label: 'doc' },
-  xlsx: { bg: '#E3F0E6', fg: '#3E7A52', label: 'xls' },
-  pptx: { bg: '#F9E7DC', fg: '#C2693B', label: 'ppt' },
-  vsdx: { bg: '#E4EAF6', fg: '#3B5BA5', label: 'vsd' },
-  drawio: { bg: '#FBF3D5', fg: '#B5830A', label: 'dio' },
-  mp3:  { bg: '#EDE6F5', fg: '#6E58A6', label: 'mp3' },
-  wav:  { bg: '#EDE6F5', fg: '#6E58A6', label: 'wav' },
-  mp4:  { bg: '#E6EEF5', fg: '#3E7CA6', label: 'mp4' },
-};
-
-// Светлый hex → полупрозрачный rgba (для тёмного тонированного фона плитки)
-function hexToRgba(hex: string, a: number): string {
-  const h = hex.replace('#', '');
-  const r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${a})`;
-}
-
-// Экспорт — переиспользуется в GitChangesRail (тег расширения перед именем файла)
-export function getExtMeta(name: string) {
-  const ext = name.split('.').pop()?.toLowerCase() ?? '';
-  const m = EXT_META[ext] ?? { bg: '#EFEAE0', fg: '#9A8F7E', label: ext.slice(0, 3) || '•' };
-  // В тёмной теме светлый пастельный фон плитки заменяем на тёмный тонированный
-  // того же оттенка (rgba от fg поверх тёмного фона), буква остаётся цветной
-  if (getEffectiveTheme() === 'dark') return { ...m, bg: hexToRgba(m.fg, 0.18) };
-  return m;
-}
 
 // Папка — нейтральной иконкой, как в «Документации»: акцент в дереве оставлен
 // смысловым отметкам (активный файл, заметки, база знаний), а не каждой папке
@@ -460,7 +412,6 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
     return () => cancelAnimationFrame(raf);
   }, [inlineRename]);
   const notesRoot = isNotesRoot(entry);
-  const em = entry.isDirectory ? null : getExtMeta(entry.name);
   const parentDir = p.showPath ? normPath(entry.path).split('/').slice(0, -1).join('/') : '';
 
   const rowBg = p.isDropTarget || p.active ? C.accentMuted
@@ -554,14 +505,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
           {notesRoot ? <NotesFolderIcon /> : <FolderIcon />}
         </span>
       ) : (
-        <span style={{
-          width: 16, height: 16, borderRadius: 4,
-          background: em!.bg, color: em!.fg,
-          fontFamily: "'JetBrains Mono', monospace",
-          fontSize: 7.5, fontWeight: 700,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          flexShrink: 0, letterSpacing: '-0.02em',
-        }}>{em!.label}</span>
+        <FileTypeTile name={entry.name} />
       )}
       <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1, paddingTop: isMobile ? 3 : 0 }}>
         {/* Inline-редактирование только на десктопе; мобила/планшет → Modal */}
@@ -674,7 +618,6 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
 export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat }: Props) {
   const online = useOnline();
   const hasPanelHeader = useHasPanelHeader();
-  useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
   const marks = useSyncMarks(project.id);
   const initial = _explorerStore.get(project.id);
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());

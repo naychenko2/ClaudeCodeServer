@@ -35,6 +35,7 @@ export { EmptyState } from './EmptyState';
 export { CanvasBackdrop } from './CanvasBackdrop';
 export { PageCanvas } from './PageCanvas';
 export { LoadingScreen } from './LoadingScreen';
+export { FileTypeTile } from './FileTypeTile';
 export { Dot } from './Dot';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';

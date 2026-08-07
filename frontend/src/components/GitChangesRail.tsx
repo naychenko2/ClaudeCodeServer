@@ -27,8 +27,7 @@ import { ListDateDivider } from './ListDateDivider';
 import { EmptyState } from './EmptyState';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
-import { getExtMeta } from './FileExplorer';
-import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, FileTypeTile, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
@@ -474,16 +473,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </span>
         )}
         {/* Без чекбоксов — тег расширения (как в панели «Файлы») */}
-        {!(isWorking && selectMode) && (() => {
-          const em = getExtMeta(name);
-          return (
-            <span style={{
-              width: 20, height: 20, borderRadius: 5, flexShrink: 0,
-              background: em.bg, color: em.fg, fontFamily: FONT.mono, fontSize: 8, fontWeight: 700,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '-0.02em',
-            }}>{em.label}</span>
-          );
-        })()}
+        {!(isWorking && selectMode) && <FileTypeTile name={name} />}
         {/* Имя файла — статус кодируется цветом */}
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <span title={f.path} style={{

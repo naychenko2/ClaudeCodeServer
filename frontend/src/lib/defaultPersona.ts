@@ -53,7 +53,17 @@ export function clearMe(): void {
 }
 
 export async function refreshMe(): Promise<void> {
-  try { setMeFromServer(await api.auth.me()); } catch { /* офлайн — оставляем прежнее */ }
+  try { setMeFromServer(await api.auth.me()); }
+  catch (e) {
+    // 401 — протухшая сессия, а не офлайн: глотать нельзя, иначе экран залипнет в
+    // прежнем состоянии. Уводим на логин (транспорт уже послал cc-unauthorized;
+    // повтор безвреден — обработчик в App идемпотентен).
+    if ((e as { status?: number } | null)?.status === 401) {
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
+      return;
+    }
+    // офлайн/сетевой сбой — оставляем прежнее состояние
+  }
 }
 
 export function getMeSnapshot(): MeState { return _me; }

@@ -245,7 +245,11 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
         window.dispatchEvent(new Event('cc-unauthorized'));
       }
       const err = await res.json().catch(() => ({ error: 'Неверный API-ключ' }));
-      throw new Error(err.error ?? 'Неверный API-ключ');
+      // status прикрепляем, как в ветке !res.ok ниже, — потребители (refreshMe)
+      // отличают протухшую сессию от сетевого сбоя: 401 глотать нельзя
+      const authErr = new Error(err.error ?? 'Неверный API-ключ') as Error & { status?: number };
+      authErr.status = 401;
+      throw authErr;
     }
 
     if (!res.ok) {

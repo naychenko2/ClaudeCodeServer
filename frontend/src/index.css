@@ -263,6 +263,19 @@ body {
 /* Второе кольцо — со сдвигом на полпериода, чтобы пульс был непрерывным */
 .cc-echo-ring--2 { animation-delay: 1.25s; }
 
+/* Мобила: в узком жёлобе ленты полный размах колец режется клипом области прокрутки
+   (overflow-x: hidden), поэтому в ленте (.cc-echo-ring--gutter, WaitingIndicator) на
+   мобиле кольца расходятся мельче. На плавающей кнопке (AiLauncher) мелкий размах не
+   нужен и вреден: круг 36px даст пульс всего ~5px — нечитаемый; кнопка position: fixed,
+   скролла не создаёт, и места в углу экрана хватает на полный размах. */
+@keyframes cc-echo-ring-sm {
+  0%   { transform: scale(1);   opacity: 0.5; }
+  100% { transform: scale(1.3); opacity: 0; }
+}
+@media (max-width: 767px) {
+  .cc-echo-ring--gutter { animation-name: cc-echo-ring-sm; }
+}
+
 /* === Модальные окна и мобильные шторки === */
 @keyframes cc-overlay-in {
   from { opacity: 0; }
@@ -453,8 +466,11 @@ body {
   .cc-fab-strong { animation: none; box-shadow: 0 4px 18px rgba(217, 119, 87, 0.6); }
 }
 
-/* Кнопка AI-хаба с логотипом «AI Home» (домик с трубой): три настроения по режиму хаба.
-   F · «есть идея» — логотип коротко подпрыгивает; I · «работа» — логотип пыхтит + дым из трубы. */
+/* Кнопка AI-хаба: лицо — аватар персоны, настроение задаёт AiLauncher.
+   «Есть идея» (strong) — 3 подскока (cc-fab-hop) + кольца «Эхо» акцентного цвета.
+   «Работа» (aiBusy) — кольца «Эхо» (те же, что в ленте) + мягкое дыхание лица
+   (cc-fab-breathe) вместо прежнего пыхтения домика с дымом из трубы.
+   Покой — лёгкое приглушение (opacity ~0.85, без grayscale — задано в AiLauncher). */
 @keyframes cc-fab-hop {
   0%, 100% { transform: translateY(0); }
   30%      { transform: translateY(-7px); }
@@ -464,19 +480,15 @@ body {
 }
 /* 3 прыжка и замирает; перезапуск на новую подсказку — ре-триггером класса в AiLauncher */
 .cc-fab-hop { animation: cc-fab-hop 1.6s ease-in-out 3; }
-@keyframes cc-fab-huff {
+/* Дыхание лица в режиме «работа»: мягкое расширение-сжатие вместо пыхтения домика.
+   Неглубокое — лицо «живёт», но не дёргается; origin по центру круга. */
+@keyframes cc-fab-breathe {
   0%, 100% { transform: scale(1); }
-  50%      { transform: scale(.95) translateY(1px); }
+  50%      { transform: scale(1.04); }
 }
-.cc-fab-huff { animation: cc-fab-huff .5s ease-in-out infinite; transform-origin: 50% 82%; }
-/* Дым из трубы FAB — переопределяем позицию базового .cc-smoke под логотип, дым светлый и частый */
-.cc-fab-smoke { top: 20%; left: 60%; }
-.cc-fab-smoke i { background: var(--c-fab-smoke); animation-duration: 1.5s; }
-.cc-fab-smoke i:nth-child(2) { animation-delay: .37s; }
-.cc-fab-smoke i:nth-child(3) { animation-delay: .75s; }
-.cc-fab-smoke i:nth-child(4) { animation-delay: 1.12s; }
+.cc-fab-breathe { animation: cc-fab-breathe 2.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .cc-fab-hop, .cc-fab-huff { animation: none; }
+  .cc-fab-hop, .cc-fab-breathe { animation: none; }
 }
 
 /* Скелетон загрузки (аналитика токенов и др.): мягкое мерцание подложки */

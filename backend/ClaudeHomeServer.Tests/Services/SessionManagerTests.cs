@@ -1,4 +1,4 @@
-﻿using System.Reflection;
+using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Hubs;
@@ -38,10 +38,22 @@ public class SessionManagerTests : IDisposable
     private readonly Mock<IClientProxy> _clientProxy;
     private readonly List<ServerMessage> _sentMessages = new();
     // Broadcast'ы из фоновых задач (OnMessageAsync запускает HandleTeamTurnEnd fire-and-forget)
-    // пишут в _sentMessages параллельно с чтением из WaitForEscalationCardsAsync — синхронизируем
-    // запись и намеренно параллельное чтение, иначе Add попадает в момент перечисления ToList()
+    // пишут в _sentMessages параллельно с чтением из проверок теста — синхронизируем
+    // запись и чтение, иначе Add попадает в момент перечисления ToList()
     // («Collection was modified», плавуче на слабом CI-раннере).
     private readonly object _sentMessagesLock = new();
+
+    // ЕДИНСТВЕННЫЙ способ читать отправленные сообщения в тестах: снимок под локом.
+    // Голое `_sentMessages.OfType<…>()` в проверке — гонка с фоновым разбором конца хода.
+    private List<T> Sent<T>()
+    {
+        lock (_sentMessagesLock) return _sentMessages.OfType<T>().ToList();
+    }
+
+    private void ClearSent()
+    {
+        lock (_sentMessagesLock) _sentMessages.Clear();
+    }
 
     public SessionManagerTests()
     {
@@ -1200,7 +1212,7 @@ public class SessionManagerTests : IDisposable
         await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null, TimeSpan.FromSeconds(2));
 
         _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
-        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
         msg.Reason.Should().Be("limit");
         msg.Text.Should().Contain("3 ходов");
     }
@@ -1220,7 +1232,7 @@ public class SessionManagerTests : IDisposable
         await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null, TimeSpan.FromSeconds(2));
 
         _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
-        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
         msg.Reason.Should().Be("error");
         msg.Text.Should().Be("Цикл остановлен: ход завершился ошибкой.");
     }
@@ -1252,7 +1264,7 @@ public class SessionManagerTests : IDisposable
 
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull();
         _sut.GetById(session.Id)!.WorkLoop!.Phase.Should().Be("verifying");
-        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty();
+        Sent<WorkLoopStoppedMessage>().Should().BeEmpty();
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
         adapter.Verify(a => a.SendMessageAsync(
             It.Is<string>(t => t.Contains("ВЕРИФИКАЦИЯ")), It.IsAny<IReadOnlyList<string>>(),
@@ -1267,7 +1279,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.SetWorkLoopAsync(session.Id, enabled: false, userId: TestUserId, manual: true);
 
-        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        var msg = Sent<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
         msg.Reason.Should().Be("manual");
         msg.Text.Should().Be("Цикл остановлен вами. Текущий ход продолжает работу.");
     }
@@ -1279,7 +1291,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId, manual: true);
 
-        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty("это включение, а не остановка");
+        Sent<WorkLoopStoppedMessage>().Should().BeEmpty("это включение, а не остановка");
     }
 
     // --- Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате ---
@@ -1505,7 +1517,7 @@ public class SessionManagerTests : IDisposable
         // Поля «израсходовано» стартуют с нуля
         ti.Budget.TasksUsed.Should().Be(0);
         // Рассылка WS-события режима
-        var msg = _sentMessages.OfType<TeamImplementMessage>().Single();
+        var msg = Sent<TeamImplementMessage>().Single();
         msg.Type.Should().Be("team_implement");
         msg.Active.Should().BeTrue();
         msg.Stage.Should().Be("interview");
@@ -1548,7 +1560,7 @@ public class SessionManagerTests : IDisposable
         updated!.TeamImplement.Should().BeNull();
         _sut.GetById(session.Id)!.TeamImplement.Should().BeNull();
         // Последнее WS-событие — режим выключен
-        _sentMessages.OfType<TeamImplementMessage>().Last().Active.Should().BeFalse();
+        Sent<TeamImplementMessage>().Last().Active.Should().BeFalse();
     }
 
     // Э7-фикс (Major №1): CoordinatorWriteGuard проверяет команду Bash/PowerShell в момент
@@ -1609,7 +1621,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.SetTeamImplementAsync(session.Id, enabled: false, userId: TestUserId);
 
-        var note = _sentMessages.OfType<GuestTextMessage>().Should().ContainSingle().Subject;
+        var note = Sent<GuestTextMessage>().Should().ContainSingle().Subject;
         note.Text.Should().Contain("волны 1");
         note.Text.Should().Contain("выключен");
     }
@@ -1622,7 +1634,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.SetTeamImplementAsync(session.Id, enabled: false, userId: TestUserId);
 
-        _sentMessages.OfType<GuestTextMessage>().Should().BeEmpty(
+        Sent<GuestTextMessage>().Should().BeEmpty(
             "без незакрытой волны обрывать нечего — лишняя карточка была бы шумом");
     }
 
@@ -1769,7 +1781,7 @@ public class SessionManagerTests : IDisposable
         plan.WaveCount.Should().Be(2);
 
         // Карточка ушла в ленту WS-событием
-        var card = _sentMessages.OfType<TeamPlanMessage>().Single();
+        var card = Sent<TeamPlanMessage>().Single();
         card.Type.Should().Be("team_plan");
         card.PlanId.Should().Be(plan.Id);
         card.Resolved.Should().BeFalse("план ждёт подтверждения человека");
@@ -1815,7 +1827,7 @@ public class SessionManagerTests : IDisposable
             .And.Contain("Серверная часть — его зона").And.Contain("`backend/Controllers/TasksController.cs`");
 
         // Путь в карточке совпадает с записанным файлом — контракт для фронта
-        var card = _sentMessages.OfType<TeamPlanMessage>().Single();
+        var card = Sent<TeamPlanMessage>().Single();
         card.Plan.PlanFilePath.Should().Be(plan.PlanFilePath);
     }
 
@@ -1839,7 +1851,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "<team:work>переделать экспорт на XLSX</team>", failed: false);
 
-        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var card = Sent<TeamPlanMessage>().Last();
         card.Plan.Version.Should().Be(2, "план vN после уточнений");
         var v2Path = card.Plan.PlanFilePath;
         v2Path.Should().NotBeNull().And.EndWith("plan-v2.md").And.NotBe(v1Path,
@@ -1872,7 +1884,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "<team:work>добавить экспорт в CSV</team>", failed: false);
 
-        var plan1 = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var plan1 = Sent<TeamPlanMessage>().Last();
         plan1.Plan.PlanFilePath.Should().NotBeNull().And.EndWith("iter1/plan-v1.md");
         await _sut.RespondTeamPlanAsync(session.Id, plan1.PlanId, TeamPlanDecision.Run, userId: TestUserId);
 
@@ -1891,7 +1903,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "Понял, беру в работу.\n<team:work>добавить выгрузку в XLSX</team>", failed: false);
 
-        var plan2 = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var plan2 = Sent<TeamPlanMessage>().Last();
         var path1 = plan1.Plan.PlanFilePath!;
         var path2 = plan2.Plan.PlanFilePath;
 
@@ -1935,7 +1947,7 @@ public class SessionManagerTests : IDisposable
         reason.Should().BeNull();
         plan.Should().NotBeNull();
         plan!.PlanFilePath.Should().BeNull("вне проекта писать план некуда — практика при этом работает как раньше");
-        _sentMessages.OfType<TeamPlanMessage>().Single().Plan.PlanFilePath.Should().BeNull();
+        Sent<TeamPlanMessage>().Single().Plan.PlanFilePath.Should().BeNull();
     }
 
     [Fact]
@@ -1953,7 +1965,7 @@ public class SessionManagerTests : IDisposable
         reason.Should().BeNull("ошибка записи файла плана не должна ронять публикацию карточки");
         plan.Should().NotBeNull();
         plan!.PlanFilePath.Should().BeNull("запись не удалась — ссылки в карточке нет, а не отказ публикации");
-        _sentMessages.OfType<TeamPlanMessage>().Should().ContainSingle();
+        Sent<TeamPlanMessage>().Should().ContainSingle();
     }
 
     // B2 приёмки: отказ обязан приходить ДО интервью, а не после потраченного хода
@@ -1970,7 +1982,7 @@ public class SessionManagerTests : IDisposable
         ex.Code.Should().Be(TeamImplementSetupException.NoCoordinator, "фронт различает отказ машинно");
         ex.Message.Should().Contain("координатора");
         _sut.GetById(session.Id)!.TeamImplement.Should().BeNull("режим не включился");
-        _sentMessages.OfType<TeamImplementMessage>().Should().BeEmpty("WS-события режима не было");
+        Sent<TeamImplementMessage>().Should().BeEmpty("WS-события режима не было");
     }
 
     // Симметричный случай спеки: состава исполнителей нет (в команде только сам координатор,
@@ -2038,7 +2050,7 @@ public class SessionManagerTests : IDisposable
         updated!.Subtasks[0].ExecutorPersonaId.Should().Be(frontend.Id, "исполнитель сменён вручную");
         updated.Subtasks[0].ExecutorRationale.Should().Contain("вручную");
         updated.Approved.Should().BeNull("карточка ещё не решена");
-        var last = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var last = Sent<TeamPlanMessage>().Last();
         last.Resolved.Should().BeFalse();
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
     }
@@ -2068,7 +2080,7 @@ public class SessionManagerTests : IDisposable
             userId: TestUserId);
 
         updated!.Approved.Should().BeTrue();
-        var last = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var last = Sent<TeamPlanMessage>().Last();
         last.Resolved.Should().BeTrue();
         last.Approved.Should().BeTrue();
         var ti = _sut.GetById(session.Id)!.TeamImplement!;
@@ -2691,7 +2703,7 @@ public class SessionManagerTests : IDisposable
         };
         await _sut.PublishTeamEscalationAsync(session.Id, escalation);
 
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Single();
+        var card = Sent<TeamEscalationMessage>().Single();
         card.Type.Should().Be("team_escalation");
         card.Kind.Should().Be("blocker");
         card.Resolved.Should().BeFalse();
@@ -2727,7 +2739,7 @@ public class SessionManagerTests : IDisposable
         };
         await _sut.PublishTeamEscalationAsync(session.Id, newCard);
 
-        var cards = _sentMessages.OfType<TeamEscalationMessage>().ToList();
+        var cards = Sent<TeamEscalationMessage>().ToList();
         cards.Single(c => c.Title == "Первая остановка").PersonaId.Should().Be(originalCoordinatorId,
             "старая карточка не должна переписываться на нового координатора задним числом");
         cards.Single(c => c.Title == "Вторая остановка").PersonaId.Should().Be(backend.Id,
@@ -2752,12 +2764,12 @@ public class SessionManagerTests : IDisposable
             "доступ выдал, продолжай", TestUserId);
 
         ok.Should().BeTrue();
-        var last = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var last = Sent<TeamEscalationMessage>().Last();
         last.Resolved.Should().BeTrue();
         last.ChosenActionId.Should().Be("answer");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave);
         // Служебный ход координатору — с подписью плашки механики вместо пузыря «Автоматически»
-        _sentMessages.OfType<UserMessageMessage>().Last().StaffNote
+        Sent<UserMessageMessage>().Last().StaffNote
             .Should().Be("Ответ на карточку передан координатору");
     }
 
@@ -2771,7 +2783,7 @@ public class SessionManagerTests : IDisposable
     {
         var (session, _, _) = await MakeInterviewStabAsync("ti-stall-answer");
         await _sut.HandleTeamTurnEndAsync(session.Id, "Хорошо, посмотрю что тут можно сделать.", failed: false);
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("productDecision");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
 
@@ -2805,7 +2817,7 @@ public class SessionManagerTests : IDisposable
             "доступ выдал вручную, продолжай без кнопки", TestUserId);
 
         ok.Should().BeTrue();
-        _sentMessages.OfType<UserMessageMessage>().Last().Text
+        Sent<UserMessageMessage>().Last().Text
             .Should().Contain("доступ выдал вручную, продолжай без кнопки");
     }
 
@@ -2930,7 +2942,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id, "итог: всё готово", failed: false);
         _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Checking;
         await _sut.HandleTeamTurnEndAsync(session.Id, "Итерация завершена: 2 задачи, проверка пройдена", failed: false);
-        _sentMessages.Clear();
+        ClearSent();
         return (session, backend, frontend);
     }
 
@@ -2953,7 +2965,7 @@ public class SessionManagerTests : IDisposable
         var ti = _sut.GetById(session.Id)!.TeamImplement!;
         ti.Should().NotBeNull("режим не выключается вместе с планом — выключает его только человек");
         ti.Stage.Should().Be(TeamImplementStage.Idle);
-        _sentMessages.OfType<TeamImplementMessage>().Last().Stage.Should().Be("idle",
+        Sent<TeamImplementMessage>().Last().Stage.Should().Be("idle",
             "стадия ожидания уходит на провод — по ней рисуется бейдж «ждёт задачу»");
     }
 
@@ -2970,7 +2982,7 @@ public class SessionManagerTests : IDisposable
             "упавший ход итог не подвёл — «итерация завершена» было бы враньём");
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
             "и застревать в «проверке» навсегда нельзя — выход только через человека");
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("checkFailed");
         card.Actions.Select(a => a.Id).Should().Contain(["keepFixing", "finishWithIssues"]);
     }
@@ -2985,7 +2997,7 @@ public class SessionManagerTests : IDisposable
         var (session, _, _) = await MakeTeamStabAsync("ti-keepfixing");
         _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Checking;
         await _sut.HandleTeamTurnEndAsync(session.Id, "", failed: true);
-        var firstCard = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var firstCard = Sent<TeamEscalationMessage>().Last();
         firstCard.Kind.Should().Be("checkFailed");
 
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, firstCard.EscalationId, "keepFixing",
@@ -3000,7 +3012,7 @@ public class SessionManagerTests : IDisposable
         // сработать снова, а не молчать
         await _sut.HandleTeamTurnEndAsync(session.Id, "", failed: true);
 
-        var secondCard = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var secondCard = Sent<TeamEscalationMessage>().Last();
         secondCard.Kind.Should().Be("checkFailed",
             "упавший ход после «Чинить дальше» обязан снова дать карточку, а не молчать");
     }
@@ -3019,7 +3031,7 @@ public class SessionManagerTests : IDisposable
         var ti = _sut.GetById(session.Id)!.TeamImplement!;
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
             "молчаливый тупик закрывается карточкой, а не бесконечным «планированием»");
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("productDecision");
     }
 
@@ -3038,7 +3050,7 @@ public class SessionManagerTests : IDisposable
         var ti = _sut.GetById(session.Id)!.TeamImplement!;
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
             "молчаливый тупик в интервью закрывается карточкой, а не бесконечным «интервью»");
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("productDecision");
     }
 
@@ -3057,7 +3069,7 @@ public class SessionManagerTests : IDisposable
 
         var ti = _sut.GetById(session.Id)!.TeamImplement!;
         ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("productDecision");
         card.Title.Should().Be("Ход прервался");
         card.Title.Should().NotBe("Координатор не понял вводную",
@@ -3075,7 +3087,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "", failed: true);
 
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Title.Should().Be("Ход прервался");
         card.Title.Should().NotBe("Уточнения так и не пришли");
     }
@@ -3106,12 +3118,9 @@ public class SessionManagerTests : IDisposable
     private async Task<IReadOnlyList<TeamEscalationMessage>> WaitForEscalationCardsAsync(
         string sessionId, int minCount, TimeSpan? timeout = null)
     {
-        List<TeamEscalationMessage> Snapshot()
-        {
-            lock (_sentMessagesLock)
-                return _sentMessages.OfType<TeamEscalationMessage>()
-                    .Where(m => m.SessionId == sessionId && !m.Resolved).ToList();
-        }
+        List<TeamEscalationMessage> Snapshot() =>
+            Sent<TeamEscalationMessage>()
+                .Where(m => m.SessionId == sessionId && !m.Resolved).ToList();
 
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
         while (DateTime.UtcNow < deadline)
@@ -3142,7 +3151,7 @@ public class SessionManagerTests : IDisposable
 
         team.Stage.Should().Be(TeamImplementStage.Planning,
             "после хотя бы одной волны разговор без маркера — легитимный ответ, не тупик");
-        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty();
+        Sent<TeamEscalationMessage>().Should().BeEmpty();
     }
 
     [Theory]
@@ -3276,7 +3285,7 @@ public class SessionManagerTests : IDisposable
         foreach (var chunk in chunks)
             await InvokeOnMessageAsync(session.Id, acc, new TextDeltaMessage(chunk), TestRunId);
 
-        var deltas = _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text).ToList();
+        var deltas = Sent<TextDeltaMessage>().Select(m => m.Text).ToList();
         deltas.Should().NotBeEmpty();
         foreach (var d in deltas)
         {
@@ -3300,14 +3309,14 @@ public class SessionManagerTests : IDisposable
 
         await InvokeOnMessageAsync(session.Id, acc,
             new TextDeltaMessage("Собираю план, минуту <team:wo"), TestRunId);
-        _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text)
+        Sent<TextDeltaMessage>().Select(m => m.Text)
             .Should().ContainSingle().Which.Should().Be("Собираю план, минуту ",
                 "хвост «<team:wo» ещё может дорасти до маркера следующей дельтой, поэтому придержан");
 
         await InvokeOnMessageAsync(session.Id, acc,
             new ErrorMessage("Сервер был перезапущен во время хода — ход прерван"), TestRunId);
 
-        var all = _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text).ToList();
+        var all = Sent<TextDeltaMessage>().Select(m => m.Text).ToList();
         string.Concat(all).Should().Be("Собираю план, минуту <team:wo",
             "придержанный хвост дальше ничем не резолвится — конец хода обязан довесить его как есть");
     }
@@ -3408,14 +3417,14 @@ public class SessionManagerTests : IDisposable
             "Понял, беру в работу.\n<team:work>добавить выгрузку в XLSX</team>", failed: false);
 
         // Карточка состава опубликована, но клика не ждёт — работа уже роздана
-        var planCard = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var planCard = Sent<TeamPlanMessage>().Last();
         planCard.Resolved.Should().BeTrue("добавочный план подтверждения не ждёт");
         planCard.Approved.Should().BeTrue();
         handed.Should().NotBeNull("волна раздана тем же путём, что и по кнопке «Запустить»");
         handed!.Subtasks.Should().ContainSingle().Which.ExecutorPersonaId.Should().Be(backend.Id);
 
         // Информационная карточка с единственной кнопкой «Остановить»
-        var info = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var info = Sent<TeamEscalationMessage>().Last();
         info.Kind.Should().Be("waveAdded");
         info.Resolved.Should().BeFalse();
         info.Actions.Select(a => a.Id).Should().Equal("stop");
@@ -3439,7 +3448,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить выгрузку в XLSX</team>", failed: false);
 
-        _sentMessages.OfType<TeamPlanMessage>().Last().Resolved.Should().BeFalse();
+        Sent<TeamPlanMessage>().Last().Resolved.Should().BeFalse();
         started.Should().BeFalse("без авто-волн работа ждёт кнопки «Запустить»");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
     }
@@ -3454,7 +3463,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "Киру выбрал планировщик: фронтовая часть — её зона.", failed: false);
 
-        _sentMessages.OfType<TeamPlanMessage>().Should().BeEmpty("вопрос не создаёт плана и задач");
+        Sent<TeamPlanMessage>().Should().BeEmpty("вопрос не создаёт плана и задач");
         started.Should().BeFalse();
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Idle);
     }
@@ -3468,7 +3477,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>ещё одна фича</team>", failed: false);
 
-        _sentMessages.OfType<TeamPlanMessage>().Should().BeEmpty(
+        Sent<TeamPlanMessage>().Should().BeEmpty(
             "вторая волна поверх идущей не разворачивается — сначала доигрывает текущая");
     }
 
@@ -3480,7 +3489,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>сделай хорошо</team>", failed: false);
 
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("productDecision");
         card.Title.Should().Contain("не построился");
         card.Details.Should().Contain("Уточните задачу");
@@ -3494,7 +3503,7 @@ public class SessionManagerTests : IDisposable
         _sut.TeamWaveStarter = (_, _) => Task.CompletedTask;
         SetTeamTurnFromHuman(GetEntry(session.Id), true);
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить XLSX</team>", failed: false);
-        var info = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var info = Sent<TeamEscalationMessage>().Last();
 
         var ok = await _sut.RespondTeamEscalationAsync(session.Id, info.EscalationId, "stop", userId: TestUserId);
 
@@ -3530,7 +3539,7 @@ public class SessionManagerTests : IDisposable
         after.TeamImplement.SavedMode.Should().Be(ClaudeMode.Auto,
             "режим человека запомнен и вернётся после согласования плана");
         after.TeamImplement.InterviewRounds.Should().Be(0, "вопросов ещё не задавали");
-        var ws = _sentMessages.OfType<TeamImplementMessage>().Last();
+        var ws = Sent<TeamImplementMessage>().Last();
         ws.Stage.Should().Be("interview");
         ws.ModeLocked.Should().BeTrue("селектор режима в композере заблокирован");
     }
@@ -3569,7 +3578,7 @@ public class SessionManagerTests : IDisposable
         var ti = _sut.GetById(session.Id)!.TeamImplement!;
         ti.InterviewRounds.Should().Be(0, "координатор не задал ни одного вопроса");
         ti.Stage.Should().Be(TeamImplementStage.Confirming, "план построен и ждёт подтверждения человека");
-        _sentMessages.OfType<TeamPlanMessage>().Should().ContainSingle();
+        Sent<TeamPlanMessage>().Should().ContainSingle();
     }
 
     [Fact]
@@ -3593,7 +3602,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "Вопросов нет — постановка ясна.\n<team:work>экспорт задач в CSV</team>", failed: false);
 
-        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var card = Sent<TeamPlanMessage>().Last();
         card.Plan.Version.Should().Be(1);
         card.Resolved.Should().BeFalse("первоначальный план итерации ждёт подтверждения всегда");
         card.Plan.PlannerPersonaId.Should().NotBeNull(
@@ -3612,7 +3621,7 @@ public class SessionManagerTests : IDisposable
         SetPlannerAnswer(backend, frontend);
         _sut.TeamWaveStarter = (_, _) => Task.CompletedTask;
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт</team>", failed: false);
-        var planId = _sentMessages.OfType<TeamPlanMessage>().Last().PlanId;
+        var planId = Sent<TeamPlanMessage>().Last().PlanId;
 
         await _sut.RespondTeamPlanAsync(session.Id, planId, TeamPlanDecision.Run, userId: TestUserId);
 
@@ -3621,7 +3630,7 @@ public class SessionManagerTests : IDisposable
         after.TeamImplement!.SavedMode.Should().BeNull();
         after.TeamImplement.ApprovedPlanVersion.Should().Be(1, "работа разрешена этой версии плана");
         after.TeamImplement.Stage.Should().Be(TeamImplementStage.Wave);
-        _sentMessages.OfType<TeamImplementMessage>().Last().ModeLocked.Should().BeFalse(
+        Sent<TeamImplementMessage>().Last().ModeLocked.Should().BeFalse(
             "селектор режима снова разблокирован");
     }
 
@@ -3670,7 +3679,7 @@ public class SessionManagerTests : IDisposable
         after.TeamImplement.WaveStartedAt.Should().BeNull("в интервью таймаут волны не тикает");
         after.Mode.Should().Be(ClaudeMode.Plan, "перепланирование тоже идёт в план-режиме");
 
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("needsClarification");
         card.Title.Should().Be("Нужны уточнения — волны на паузе");
         card.Actions.Should().BeEmpty("ответы придут ASK-карточками, кнопок у этой карточки нет");
@@ -3699,7 +3708,7 @@ public class SessionManagerTests : IDisposable
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "<team:work>переделать экспорт на XLSX</team>", failed: false);
 
-        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var card = Sent<TeamPlanMessage>().Last();
         card.Plan.Version.Should().Be(2, "план vN после уточнений");
         card.Resolved.Should().BeFalse("новая версия плана требует подтверждения и при авто-волнах");
         card.Plan.Assumptions.Should().ContainSingle().Which.Should().Contain("XLSX");
@@ -3740,7 +3749,7 @@ public class SessionManagerTests : IDisposable
         after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave, "добавочная волна пошла сразу");
         after.TeamImplement.SavedMode.Should().BeNull("режим человека возвращён");
         after.Mode.Should().Be(ClaudeMode.Auto);
-        _sentMessages.OfType<TeamImplementMessage>().Last().ModeLocked.Should().BeFalse(
+        Sent<TeamImplementMessage>().Last().ModeLocked.Should().BeFalse(
             "селектор режима разблокирован");
     }
 
@@ -3818,7 +3827,7 @@ public class SessionManagerTests : IDisposable
         var (session, backend, frontend) = await MakeInterviewStabAsync("ti-stale-card");
         SetPlannerAnswer(backend, frontend);
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт</team>", failed: false);
-        var stale = _sentMessages.OfType<TeamPlanMessage>().Last().PlanId;
+        var stale = Sent<TeamPlanMessage>().Last().PlanId;
         // Координатор задал вопрос поверх карточки v1 → интервью → план v2
         await _sut.OnStabAskQuestionAsync(session.Id);
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт, но в XLSX</team>", failed: false);
@@ -3836,10 +3845,10 @@ public class SessionManagerTests : IDisposable
         after.TeamImplement.ApprovedPlanVersion.Should().Be(0, "старая версия не стала подтверждённой");
         after.Mode.Should().Be(ClaudeMode.Plan, "план-режим не снят посреди перепланирования");
         // Молчаливого отказа не бывает: карточка погашена, человеку объяснили, где свежая
-        var card = _sentMessages.OfType<TeamPlanMessage>().Last(m => m.PlanId == stale);
+        var card = Sent<TeamPlanMessage>().Last(m => m.PlanId == stale);
         card.Resolved.Should().BeTrue();
         card.Approved.Should().BeFalse();
-        _sentMessages.OfType<GuestTextMessage>().Last().Text.Should().Contain("устарела");
+        Sent<GuestTextMessage>().Last().Text.Should().Contain("устарела");
     }
 
     // M9: интервью из волны приходит с WaveNumber > 0 — гард молчаливого тупика обязан
@@ -3856,7 +3865,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "Подожду ваших уточнений.", failed: false);
 
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        var card = Sent<TeamEscalationMessage>().Last();
         card.Title.Should().Be("Уточнения так и не пришли");
         card.Details.Should().Contain("Подожду ваших уточнений");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
@@ -3870,7 +3879,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "Уточните два момента.", failed: false, asked: true);
 
-        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+        Sent<TeamEscalationMessage>().Should().BeEmpty(
             "ход закончился вопросами человеку — интервью работает, а не стоит");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Interview);
     }
@@ -4018,7 +4027,7 @@ public class SessionManagerTests : IDisposable
         // Координатор честно ответил без маркера — это легальный ответ, а не тупик
         await _sut.HandleTeamTurnEndAsync(session.Id, "Сделали экспорт в CSV за 2 задачи.", failed: false);
 
-        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+        Sent<TeamEscalationMessage>().Should().BeEmpty(
             "ложной эскалации «Координатор не понял вводную» быть не должно");
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Idle);
     }
@@ -4039,7 +4048,7 @@ public class SessionManagerTests : IDisposable
             "свежая «итерация» возвращается в ожидание первой вводной");
         after.Mode.Should().Be(ClaudeMode.Auto, "режим человека возвращён");
         after.TeamImplement.SavedMode.Should().BeNull();
-        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty("ложной эскалации нет");
+        Sent<TeamEscalationMessage>().Should().BeEmpty("ложной эскалации нет");
     }
 
     // M6: маркер разговора из clarify-интервью (тупик в волне) снимает паузу — волна
@@ -4064,7 +4073,7 @@ public class SessionManagerTests : IDisposable
         after.TeamImplement.Replanning.Should().BeFalse("интервью закончилось без нового плана");
         after.TeamImplement.WaveStartedAt.Should().NotBeNull("сторож волны взведён заново");
         after.Mode.Should().Be(ClaudeMode.Auto);
-        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty();
+        Sent<TeamEscalationMessage>().Should().BeEmpty();
     }
 
     // M6: у модели обязан быть легальный путь ответа на каждой стадии, где его ждёт
@@ -4093,7 +4102,7 @@ public class SessionManagerTests : IDisposable
 
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить выгрузку в XLSX</team>", failed: false);
 
-        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var card = Sent<TeamPlanMessage>().Last();
         card.Resolved.Should().BeFalse("авто-подтверждение опирается на вводную ЧЕЛОВЕКА");
         card.Approved.Should().NotBeTrue();
         started.Should().BeFalse("волна без согласования человека не стартует");
@@ -4238,7 +4247,7 @@ public class SessionManagerTests : IDisposable
         budget.WakeupsUsed.Should().Be(budget.MaxWakeups, "отказ ничего не расходует");
         // Ход координатора не поднимаем, но человек обязан узнать: застрявший исполнитель
         // без карточки — то самое молчаливое зависание, которого в режиме быть не должно
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Single();
+        var card = Sent<TeamEscalationMessage>().Single();
         card.Kind.Should().Be("budgetExhausted");
         card.Details.Should().Contain("снова застрял");
     }
@@ -4258,7 +4267,7 @@ public class SessionManagerTests : IDisposable
         await _sut.ReportBlockerAsync(child.Id, "первый застрял", TestUserId);
         await _sut.ReportBlockerAsync(child.Id, "второй застрял", TestUserId);
 
-        _sentMessages.OfType<TeamEscalationMessage>().Should().ContainSingle(
+        Sent<TeamEscalationMessage>().Should().ContainSingle(
             "карточка на остановку одна, сколько бы докладов ни пришло следом");
         (await _sut.GetHistoryAsync(stab.Id)).OfType<Protocol.StoredUserMessage>().Should()
             .Contain(m => m.Text.Contains("второй застрял"), "доклады не теряются");
@@ -4272,13 +4281,13 @@ public class SessionManagerTests : IDisposable
         var child = await _sut.CreateAsync(stab.ProjectId!, ClaudeMode.Auto, name: "Задача: эндпоинт");
         _sut.SetParent(child.Id, stab.Id, TestUserId);
         await _sut.StopTeamImplementAsync(stab.Id, TestUserId);
-        _sentMessages.Clear();
+        ClearSent();
 
         await _sut.ReportBlockerAsync(child.Id, "застрял", TestUserId);
 
         _sut.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
             "практика остановлена человеком — агент не поднимает её обратно");
-        _sentMessages.OfType<TeamEscalationMessage>().Single().Kind.Should().Be("stopped");
+        Sent<TeamEscalationMessage>().Single().Kind.Should().Be("stopped");
     }
 
     [Fact]
@@ -4333,7 +4342,7 @@ public class SessionManagerTests : IDisposable
         var r = await _sut.ReportBlockerAsync(child.Id, "застрял на конфликте", TestUserId);
 
         r.Should().BeOneOf(SessionManager.ReportUpResult.Delivered, SessionManager.ReportUpResult.Queued);
-        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+        Sent<TeamEscalationMessage>().Should().BeEmpty(
             "карточка остановки — часть режима практики, обычному чату она не нужна");
     }
 
@@ -4773,17 +4782,17 @@ public class SessionManagerTests : IDisposable
         var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
         while (DateTime.UtcNow < deadline)
         {
-            var current = _sentMessages.OfType<ComposerRestoreMessage>().ToList();
+            var current = Sent<ComposerRestoreMessage>().ToList();
             if (current.Count >= count)
             {
                 await Task.Delay(50);
-                var after = _sentMessages.OfType<ComposerRestoreMessage>().ToList();
+                var after = Sent<ComposerRestoreMessage>().ToList();
                 if (after.Count == current.Count)
                     return after;
             }
             await Task.Delay(50);
         }
-        return _sentMessages.OfType<ComposerRestoreMessage>().ToList();
+        return Sent<ComposerRestoreMessage>().ToList();
     }
 
     // --- Привязка чата к УЖЕ существующему дереву (чат-исполнитель задачи с worktree) ---

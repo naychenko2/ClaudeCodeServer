@@ -506,6 +506,10 @@ export interface Session {
   // Общие теги чата (имена из Project.tagRegistry; тег без записи в реестре возможен —
   // показывается секцией-сиротой). Меняется через PUT sessions/{sid} (поле tags)
   tags?: string[];
+  // Opt-out «не сохранять решения из этого чата» (ADR-004 §6): true — записи из этого
+  // чата не попадают в историю решений и не уходят в репозиторий. Только у проектных
+  // сессий. Меняется через PUT sessions/{sid} (поле excludeFromDossiers)
+  excludeFromDossiers?: boolean;
 }
 
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта

@@ -11,7 +11,7 @@
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  AlertTriangle, Ban, Bot, ChevronDown, ChevronRight, ClipboardList, File as FileIcon, GitCompare, Info,
+  AlertTriangle, Ban, Bot, ChevronDown, ChevronRight, ClipboardList, File as FileIcon, GitCompare, History, Info,
   Lightbulb, MessageCircle, Search, X,
 } from 'lucide-react';
 import type { DossierEntry, Persona } from '../../types';
@@ -31,6 +31,9 @@ interface Props {
   // Файл, открытый в центре сейчас — панель фильтрует по нему, пока пользователь
   // не снимет фильтр сам (крестик на чипе)
   activeFilePath?: string | null;
+  // Текущий чат помечен «не сохранять решения» (opt-out): панель, открытая из него,
+  // показывает нейтральную заметку-объяснение, почему записей нет / не будет
+  chatExcludedFromDossiers?: boolean;
   onOpenChat: (sessionId: string) => void;
   onOpenTask: (taskId: string) => void;
   onOpenCommit: (sha: string, filePath?: string) => void;
@@ -274,9 +277,25 @@ const chipStyle: CSSProperties = {
   fontFamily: FONT.mono,
 };
 
-export function DossierHistoryPanel({ project, auth, activeFilePath, onOpenChat, onOpenTask, onOpenCommit }: Props) {
+export function DossierHistoryPanel({ project, auth, activeFilePath, chatExcludedFromDossiers, onOpenChat, onOpenTask, onOpenCommit }: Props) {
   const flagOn = useFeature(FLAGS.changeDossiers);
   const [showFlags, setShowFlags] = useState(false);
+
+  // Заметка-объяснение для чата-исключения: первым блоком тела панели, спокойным
+  // нейтральным тоном (не warning) — это выбранный человеком режим, а не неполадка.
+  // Текст — из макета docs/mockups/chat-decisions-optout-v1.html (раздел 4)
+  const exclusionNote = chatExcludedFromDossiers ? (
+    <div style={{
+      margin: `${SP.sm}px ${SP.md}px 0`, padding: `${SP.sm}px`,
+      background: C.bgCard, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+      display: 'flex', gap: SP.sm, alignItems: 'flex-start', flexShrink: 0,
+    }}>
+      <History size={14} strokeWidth={ICON_STROKE} style={{ color: C.accent, marginTop: 1, flexShrink: 0 }} />
+      <span style={{ fontSize: 11.5, color: C.textSecondary, lineHeight: 1.45 }}>
+        Решения из этого чата не сохраняются. Изменить можно в шапке чата — кнопка с иконкой истории.
+      </span>
+    </div>
+  ) : null;
 
   // Фильтр «файл»: идёт за открытым в центре, пока пользователь не снимет его сам
   // крестиком — тогда список показывает весь проект, пока не откроют другой файл.
@@ -437,6 +456,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, onOpenChat,
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {subheader}
+        {exclusionNote}
         <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px` }}>
           <SkeletonCard /><SkeletonCard /><SkeletonCard />
         </div>
@@ -448,6 +468,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, onOpenChat,
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {subheader}
+        {exclusionNote}
         <EmptyState
           compact
           icon={<AlertTriangle size={20} strokeWidth={ICON_STROKE} />}
@@ -463,6 +484,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, onOpenChat,
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {subheader}
+        {exclusionNote}
         {fileFilter ? (
           <EmptyState
             compact
@@ -488,6 +510,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, onOpenChat,
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         {subheader}
+        {exclusionNote}
         <EmptyState
           compact
           icon={<Search size={20} strokeWidth={ICON_STROKE} />}
@@ -502,6 +525,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, onOpenChat,
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {subheader}
+      {exclusionNote}
       <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px ${SP.lg}px` }}>
         {recent.map(entry => (
           <DossierCard

@@ -454,8 +454,9 @@ function FolderRow({ label, parent, count, current, onJump }: {
         ...rowStyle, minHeight: ROW_H,
         // Текущая папка — тем же выделением, что выбранный документ (список постоянно
         // на виду, одной жирности мало); наведение мягче, чтобы эти два состояния
-        // не спорили между собой
-        background: current ? C.bgSelected : hover ? C.bgInset : 'transparent',
+        // не спорили между собой. Полоски слева тут нет: это список переходов в
+        // поповере, а не строка дерева — заливки хватает
+        background: current ? C.accentMuted : hover ? C.bgSelected : 'transparent',
         color: current || hover ? C.textHeading : C.textSecondary,
         fontWeight: current ? 600 : 400,
       }}
@@ -523,14 +524,21 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
       style={{
         display: 'flex', alignItems: 'center', borderRadius: R.md,
         // Наведение подсвечивает открываемую строку: документ откроется по клику,
-        // и подложка под курсором это обещает. Выбранное сильнее — своя заливка.
-        // Овал общий и у строки на две мишени: половины делит не отдельная подложка,
-        // а тонкий просвет цвета полотна (ниже) — так строка остаётся одной строкой
-        background: selected ? C.bgSelected : hover ? C.bgInset : 'transparent',
+        // и подложка под курсором это обещает. Выбранное — тем же способом, что
+        // открытый файл в дереве «Файлов»: тёплая заливка плюс полоска у левого края.
+        // Нейтральной подложкой оно не отличалось от наведения вовсе — bgSelected и
+        // bgInset в светлой теме расходятся на пару единиц.
+        // У строки на две мишени общей подложки под курсором нет: красится ровно та
+        // половина, куда попадёт клик (ниже), иначе одна заливка обещала бы одно
+        // действие на всю ширину
+        background: selected ? C.accentMuted : hover && !split ? C.bgSelected : 'transparent',
         overflow: 'hidden',
         // Рамка цели вложения рисуется ВНУТРЬ (inset), иначе строка подпрыгивает
-        // на пиксель и весь список дёргается под курсором
-        boxShadow: dropInto ? `inset 0 0 0 1.5px ${C.accent}` : undefined,
+        // на пиксель и весь список дёргается под курсором. Пока строка — цель
+        // перетаскивания, рамка важнее полоски выбранного: боксшэдоу у них общий
+        boxShadow: dropInto ? `inset 0 0 0 1.5px ${C.accent}`
+          : selected ? `inset 2px 0 0 ${C.accent}`
+          : undefined,
         minHeight: ROW_H, paddingLeft: SP.sm + (indent ?? 0),
       }}
     >

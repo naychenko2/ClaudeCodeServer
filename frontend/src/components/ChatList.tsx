@@ -3,7 +3,7 @@ import { FilterX, MessageCircle, Plus } from 'lucide-react';
 import type { Session } from '../types';
 import { api } from '../lib/api';
 import { useOnline } from '../hooks/useOnline';
-import { C, FS, ISLAND, MODAL_W } from '../lib/design';
+import { C, ISLAND, MODAL_W } from '../lib/design';
 import { Modal, ModalActions, Button, PanelShell, useHasPanelHeader } from './ui';
 import { groupChats, sortChatsFlat } from '../lib/chatGroups';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -15,7 +15,7 @@ import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFil
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
-import { ChatTreeRow } from './ChatTreeRow';
+import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
 
@@ -139,10 +139,12 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
     ? sortChatsFlat(filteredChats, sortOrder)
     : null;
 
-  const renderCard = (chat: Session) => (
+  // leadingInset — место под контрол ветки в дереве (в плоском списке 0)
+  const renderCard = (chat: Session, leadingInset = 0) => (
     <ChatCard
       key={chat.id}
       session={chat}
+      leadingInset={leadingInset}
       isActive={chat.id === activeId}
       isMobile={isMobile}
       fallbackName="Новый чат"
@@ -154,6 +156,7 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       onDelete={() => setDeleteTarget(chat)}
       onTogglePin={() => togglePin(chat)}
       onRename={online ? name => renameChat(chat, name) : undefined}
+      onEdited={onEdited}
     />
   );
 
@@ -214,45 +217,40 @@ export function ChatList({ chats, activeId, onSelect, onNew, creating, onEdited,
       )}
       {treeSegments ? (
         <ChatGroupingDnd chats={chats} isMobile={isMobile} onEdited={onEdited}>
-          {tree!.linkCount === 0 && tree!.rows.length > 0 && (
-            <div style={{ padding: '10px 8px', fontSize: FS.sm, color: C.textMuted }}>
-              ⋔ Пока нет вложенных чатов — перетащите чат на другой, чтобы вложить.
-              Здесь же появятся исполнители делегированных задач.
-            </div>
-          )}
           {groupBy === 'none' ? (
-            treeSegments.map(({ seg }) => seg.map(row => (
-              <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                {renderCard(row.chat)}
-              </ChatTreeRow>
+            treeSegments.map(({ seg }) => nestTreeRows(seg).map(node => (
+              <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
             )))
           ) : (
             dayGroups.map(g => (
-              <div key={g.title} style={{ marginBottom: 6 }}>
+              <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
                 <ListDateDivider title={g.title} />
-                {g.items.map(root => segByRootId!.get(root.id)?.map(row => (
-                  <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                    {renderCard(row.chat)}
-                  </ChatTreeRow>
+                {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                  <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                 )))}
               </div>
             ))
           )}
         </ChatGroupingDnd>
       ) : flatList ? (
-        flatList.map(renderCard)
+        flatList.map(c => renderCard(c))
       ) : dayGroups.map(g => (
-        <div key={g.title} style={{ marginBottom: 6 }}>
+        // display:flow-root — иначе marginBottom последней карточки схлопывался бы
+        // с отступом группы, и высота списка отличалась бы от режима «Иерархия» на
+        // 5px за каждую группу: там последняя строка — flex-контейнер (ChatTreeRow),
+        // её margin наружу не выходит. Панель растёт по контенту, и переключение
+        // иерархии дёргало её на эту разницу
+        <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
           <ListDateDivider title={g.title} />
-          {g.items.map(renderCard)}
+          {g.items.map(c => renderCard(c))}
         </div>
       ))}
     </>
   );
 
   // Модалка удаления — общая для обоих режимов. Прочие свойства чата правятся не
-  // отсюда: имя — пунктом «Переименовать» в карточке, модель и усилие — в композере,
-  // срок жизни — кнопкой-часами в шапке открытого чата
+  // отсюда: имя — пунктом «Переименовать» в карточке, модель и усилие — в композере
+  // (срок хранения и уведомления есть в меню карточки — пункты рисует сам ChatCard)
   const dialogs = (
     <>
       {deleteTarget && (

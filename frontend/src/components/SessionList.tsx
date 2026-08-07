@@ -4,7 +4,7 @@ import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { C, FS, GROUP_COLORS, MODAL_W, R } from '../lib/design';
+import { C, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
 import { ChatFilterResetActions } from './FilterBar';
@@ -14,7 +14,7 @@ import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFil
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
-import { ChatTreeRow } from './ChatTreeRow';
+import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
 import { ChatGroupingDnd } from './ChatGroupingDnd';
 import { ListDateDivider } from './ListDateDivider';
 import { groupChats, groupByTags, sortChatsFlat, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
@@ -357,11 +357,13 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     ? sortChatsFlat(filteredSessions, sortOrder)
     : null;
 
-  const renderCard = (s: Session) => {
+  // leadingInset — место под контрол ветки в дереве (в плоском списке 0)
+  const renderCard = (s: Session, leadingInset = 0) => {
     const card = (
       <ChatCard
         key={s.id}
         session={s}
+        leadingInset={leadingInset}
         isActive={activeSession?.id === s.id}
         isMobile={isMobile}
         fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
@@ -376,6 +378,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
         onRename={online ? name => renameSession(s, name) : undefined}
         onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
+        onEdited={handleSessionUpdated}
       />
     );
     // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
@@ -494,55 +497,50 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         )}
         {treeSegments ? (
           <ChatGroupingDnd chats={sessions} isMobile={isMobile} onEdited={handleSessionUpdated}>
-            {tree!.linkCount === 0 && tree!.rows.length > 0 && (
-              <div style={{ padding: '10px 8px', fontSize: FS.sm, color: C.textMuted }}>
-                ⋔ Пока нет вложенных чатов — перетащите чат на другой, чтобы вложить.
-                Здесь же появятся исполнители делегированных задач.
-              </div>
-            )}
             {tagGroups ? (
               tagGroups.map(g => (
-                <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6 }}>
+                <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6, display: 'flow-root' }}>
                   {renderTagSectionHeader(g)}
-                  {g.items.map(root => segByRootId!.get(root.id)?.map(row => (
-                    <ChatTreeRow key={`${g.tag ?? '__untagged__'}:${row.chat.id}`} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                      {renderCard(row.chat)}
-                    </ChatTreeRow>
+                  {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                    // Корень с несколькими тегами дублируется в каждой своей секции —
+                    // key несёт тег, иначе React сочтёт ветки одним узлом между секциями
+                    <ChatTreeBranch key={`${g.tag ?? '__untagged__'}:${node.row.chat.id}`} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                   )))}
                 </div>
               ))
             ) : groupBy === 'none' ? (
-              treeSegments.map(({ seg }) => seg.map(row => (
-                <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                  {renderCard(row.chat)}
-                </ChatTreeRow>
+              treeSegments.map(({ seg }) => nestTreeRows(seg).map(node => (
+                <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
               )))
             ) : (
               dayGroups.map(g => (
-                <div key={g.title} style={{ marginBottom: 6 }}>
+                <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
                   <ListDateDivider title={g.title} />
-                  {g.items.map(root => segByRootId!.get(root.id)?.map(row => (
-                    <ChatTreeRow key={row.chat.id} row={row} isMobile={isMobile} onToggleCollapse={toggleCollapse}>
-                      {renderCard(row.chat)}
-                    </ChatTreeRow>
+                  {g.items.map(root => nestTreeRows(segByRootId!.get(root.id) ?? []).map(node => (
+                    <ChatTreeBranch key={node.row.chat.id} node={node} isMobile={isMobile} onToggleCollapse={toggleCollapse} renderCard={renderCard} />
                   )))}
                 </div>
               ))
             )}
           </ChatGroupingDnd>
         ) : tagGroups ? (
+          // display:flow-root у секций — иначе marginBottom последней карточки
+          // схлопывался бы с отступом секции, и высота плоского списка отличалась
+          // бы от «Иерархии» на 5px за каждую секцию (там последняя строка —
+          // flex-контейнер ChatTreeRow, её margin наружу не выходит). Панель
+          // растёт по контенту, и переключение иерархии дёргало её на эту разницу
           tagGroups.map(g => (
-            <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6 }}>
+            <div key={g.tag ?? '__untagged__'} style={{ marginBottom: 6, display: 'flow-root' }}>
               {renderTagSectionHeader(g)}
-              {g.items.map(renderCard)}
+              {g.items.map(c => renderCard(c))}
             </div>
           ))
         ) : flatList ? (
-          flatList.map(renderCard)
+          flatList.map(c => renderCard(c))
         ) : dayGroups.map(g => (
-          <div key={g.title} style={{ marginBottom: 6 }}>
+          <div key={g.title} style={{ marginBottom: 6, display: 'flow-root' }}>
             <ListDateDivider title={g.title} />
-            {g.items.map(renderCard)}
+            {g.items.map(c => renderCard(c))}
           </div>
         ))}
       </div>

@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Cpu, Coins, Palette, Activity, Plug } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, Palette, Activity, Plug } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -47,23 +47,21 @@ interface Props {
   // «Знания» (настройка баз знаний Dify) — раздел убран из хаб-таббара, вызов в меню аватара.
   // undefined — пункт не показывать
   onOpenKnowledge?: () => void;
-  // «Использование» (лимиты подписок Claude, баланс провайдеров) — вызов из меню аватара
-  onShowUsage?: () => void;
+  // «Модели и расход» — единый раздел вместо прежних «Использование» и «Поставщики моделей»
+  // (редизайн models-spend, этап 1). undefined — пункт не показывать
+  onShowModelsSpend?: () => void;
   // «Аналитика токенов» (расход по ходам/моделям/проектам) — раздел-таб без вкладки,
-  // вызов из меню аватара рядом с «Использованием». undefined — пункт не показывать
+  // вызов из меню аватара. undefined — пункт не показывать
   onOpenSpend?: () => void;
   // «Телеметрия» (встроенный SigNoz UI) — раздел-таб без вкладки, только для админов.
   // HubHeader передаёт колбэк лишь админу, поэтому здесь достаточно проверки на undefined.
   onOpenTelemetry?: () => void;
-  // «Поставщики моделей» (настройка слотов и фоновых ИИ-действий) — доступно всем,
-  // но режим диалога зависит от роли (admin видит уровни 1 и 3 + чужие профили).
-  onShowBackgroundTasks?: () => void;
   // «MCP-серверы» (личный реестр внешних инструментов) — соседний пункт; за фич-флагом
   // mcp-registry, поэтому HubHeader передаёт колбэк только при включённом флаге
   onShowMcpServers?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowUsage, onOpenSpend, onOpenTelemetry, onShowBackgroundTasks, onShowMcpServers }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowModelsSpend, onOpenSpend, onOpenTelemetry, onShowMcpServers }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -143,13 +141,13 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               Знания
             </button>
           )}
-          {onShowUsage && (
+          {onShowModelsSpend && (
             <button
-              onClick={() => { setOpen(false); onShowUsage(); }}
+              onClick={() => { setOpen(false); onShowModelsSpend(); }}
               style={dropdownItem}
             >
               <Gauge size={ICON_SIZE.xs} strokeWidth={2} />
-              Использование
+              Модели и расход
             </button>
           )}
           {onOpenSpend && (
@@ -178,15 +176,6 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             >
               <Users size={ICON_SIZE.xs} strokeWidth={2} />
               Пользователи
-            </button>
-          )}
-          {onShowBackgroundTasks && (
-            <button
-              onClick={() => { setOpen(false); onShowBackgroundTasks(); }}
-              style={dropdownItem}
-            >
-              <Cpu size={ICON_SIZE.xs} strokeWidth={2} />
-              Поставщики моделей
             </button>
           )}
           {onShowMcpServers && (

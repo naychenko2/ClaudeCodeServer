@@ -12,7 +12,9 @@ import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
-import { UsageScreen } from './UsageScreen';
+import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
+// Прежний раздел «Поставщики моделей»: из меню убран (его заменил «Модели и расход»),
+// но остаётся точкой приземления диплинка «Собрать цепочку…» до задачи наполнения вкладок
 import { ModelProvidersTabsModal } from '../features/modelProviders/ModelProvidersTabsModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { useFeature, FLAGS } from '../lib/featureFlags';
@@ -60,7 +62,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
-  const [showUsage, setShowUsage] = useState(false);
+  const [showModelsSpend, setShowModelsSpend] = useState(false);
+  // Открывается только диплинком «Собрать цепочку…» (subscribeModelProvidersNav) —
+  // пункта в меню аватара у него больше нет
   const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const mcpRegistry = useFeature(FLAGS.mcpRegistry);
@@ -296,8 +300,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onLogout={onLogout}
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
-          onShowUsage={() => setShowUsage(true)}
-          onShowBackgroundTasks={() => setShowBackgroundTasks(true)}
+          onShowModelsSpend={() => setShowModelsSpend(true)}
           // «MCP-серверы» — за фич-флагом mcp-registry: без флага пункта в меню нет
           onShowMcpServers={mcpRegistry ? () => setShowMcpServers(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
@@ -318,7 +321,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
-      {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
+      {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {showBackgroundTasks && <ModelProvidersTabsModal isAdmin={isAdmin} onClose={() => setShowBackgroundTasks(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
     </div>

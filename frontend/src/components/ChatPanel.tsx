@@ -140,6 +140,23 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
   return null;
 }
 
+// Стабильный кеш-объект хода по ссылке result-элемента. result приходит один раз
+// в конце хода и при последующих стрим-дельтах не пересоздаётся, значит запись
+// создаётся единожды и переживает любой пересчёт turnMeta. Иначе новая ссылка
+// {read,creation} на каждую дельту пробивала React.memo у всех карточек хода.
+function memoizedCacheEntry(
+  map: WeakMap<ChatItem, { read: number; creation: number }>,
+  result: ChatItem,
+  read: number,
+  creation: number,
+): { read: number; creation: number } {
+  const cached = map.get(result);
+  if (cached) return cached;
+  const entry = { read, creation };
+  map.set(result, entry);
+  return entry;
+}
+
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
@@ -976,6 +993,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // приходит только в result в конце хода. Оба разносим по ходу одним проходом:
   // сообщение человека открывает ход, result его закрывает. ChatItemView списка items
   // не видит, поэтому считаем здесь и отдаём пропами.
+  // ref-хранилище кеш-объектов хода по ссылке result-элемента — переживает пересчёт
+  // turnMeta на каждой стрим-дельте, сохраняя стабильные ссылки для React.memo
+  const cacheByResultRef = useRef<WeakMap<ChatItem, { read: number; creation: number }>>(new WeakMap());
+
   const turnMeta = useMemo(() => {
     const snapshots: (string | undefined)[] = new Array(items.length);
     const contextTokens: (number | undefined)[] = new Array(items.length);
@@ -986,7 +1007,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       if (it.kind === 'user_message') currentSnapshot = it.promptSnapshotId;
       snapshots[i] = currentSnapshot;
     }
-    // Кэш промптов из usage того же result — единственные точные числа про кэш
+    // Кэш промптов из usage того же result — единственные точные числа про кэш.
+    // Объект берём из WeakMap по ссылке result: он не пересоздаётся на дельту,
+    // иначе React.memo на ChatItemView пробивался бы у всех карточек хода.
+    const cacheByResult = cacheByResultRef.current;
     const cache: ({ read: number; creation: number } | undefined)[] = new Array(items.length);
     let currentTokens: number | undefined;
     let currentCache: { read: number; creation: number } | undefined;
@@ -995,7 +1019,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       if (it.kind === 'result') {
         currentTokens = it.contextTokens;
         currentCache = it.usage
-          ? { read: it.usage.cacheReadTokens, creation: it.usage.cacheCreationTokens }
+          ? memoizedCacheEntry(cacheByResult, it, it.usage.cacheReadTokens, it.usage.cacheCreationTokens)
           : undefined;
       }
       contextTokens[i] = currentTokens;

@@ -14,6 +14,7 @@ export const FLAGS = {
   aiLocalSuggest: 'ai-local-suggest',
   linkReader: 'link-reader',
   mcpRegistry: 'mcp-registry',
+  changeDossiers: 'change-dossiers',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

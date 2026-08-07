@@ -283,6 +283,9 @@ public class Session
     public string Provider { get; set; } = "claude";
     // Временный чат: авто-удаление через N минут после последней активности (UpdatedAt). null — обычный
     public int? ExpiresAfterMinutes { get; set; }
+    // Opt-out «Истории решений» (ADR-004 §6): true — паспорта изменений из этого чата не снимаются.
+    // Уважается только на захвате; уже снятые паспорта не удаляются (решение ADR «ничего не удаляем»).
+    public bool ExcludeFromDossiers { get; set; }
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
     // Режим «Командная реализация»: не null — чат работает как

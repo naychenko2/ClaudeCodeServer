@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, FalImageService falImage, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, FalImageService falImage, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -300,6 +300,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // Память команды проекта: локальные сторы + Dify-датасет (best-effort — уборка не должна ронять удаление)
         try { await teamMemory.DeleteProjectTeamMemoryAsync(UserId, id); }
         catch { /* удаление проекта не зависит от уборки памяти команды */ }
+        // Паспорта изменений проекта: локальный стор + Dify-датасет (best-effort, тот же образец)
+        try { await dossiers.DeleteProjectDossiersAsync(UserId, id); }
+        catch { /* удаление проекта не зависит от уборки паспортов */ }
 
         // Worktree чатов проекта: сессии при удалении проекта НЕ удаляются (осознанно),
         // но их деревья без проекта — мусор на диске и записи в .git/worktrees главной репы.

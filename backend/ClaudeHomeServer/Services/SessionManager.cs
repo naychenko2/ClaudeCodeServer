@@ -506,6 +506,21 @@ public class SessionManager : IDisposable
         return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
     }
 
+    // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004, «Паспорта изменений»): только
+    // проектные сессии владельца с включённым флагом change-dossiers — без него DossierCaptureService
+    // всё равно не захватит коммит, и лишняя строка в промпте не нужна.
+    private string? BuildDossierTrailerHint(string? ownerId, Session session)
+    {
+        if (ownerId is null || session.ProjectId is null) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiers)) return null;
+        var taskLine = session.TaskId is null ? "" : $"\nCCS-Task: {session.TaskId}";
+        return "Если делаешь `git commit` в этом проекте — добавь в сообщение коммита трейлер " +
+            $"отдельной строкой (рядом с Co-Authored-By):\nCCS-Session: {session.Id}{taskLine}\n" +
+            "Он привязывает коммит к этому чату/задаче для фичи «История решений» (паспорт изменения " +
+            "с выжимкой «зачем/решения/отказы/грабли») — без него автоматическая выжимка не соберётся. " +
+            "Не убирай и не меняй значение при amend/squash.";
+    }
+
     // Контекст MCP-сервера памяти персоны (тот же сервисный токен владельца, что и tasks/notes).
     // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
     // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
@@ -751,6 +766,17 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.ExpiresAfterMinutes = minutes;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Opt-out «Истории решений» (ADR-004 §6): тумблер «Не сохранять решения из этого чата».
+    // Персистится в sessions.json; DossierCaptureService проверяет его при захвате коммита.
+    public Session? SetExcludeFromDossiers(string sessionId, bool value)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.ExcludeFromDossiers = value;
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
@@ -2089,7 +2115,8 @@ public class SessionManager : IDisposable
             PromptSnapshotSink: PromptSinkFor(session.Id),
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
-            ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona)));
+            ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
+            DossierTrailerHint: BuildDossierTrailerHint(ownerId, session)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -2905,6 +2932,7 @@ public class SessionManager : IDisposable
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona));
+                // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
         {
@@ -2938,7 +2966,8 @@ public class SessionManager : IDisposable
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
-                ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona));
+                ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
+                DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

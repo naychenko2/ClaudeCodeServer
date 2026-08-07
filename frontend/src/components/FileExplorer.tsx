@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -52,6 +52,10 @@ interface Props {
   indexingFolders?: Set<string>;
   onAttachToChat?: (path: string) => void;
   onRemoveFromKnowledge?: (relativePath: string) => void;
+  // «История решений» (change-dossiers): открыть панель, отфильтрованную по этому
+  // файлу. Пункт контекстного меню, а не хайлайт-иконка строки — быстрых действий
+  // в строке уже ровно два (см. комментарий у кластера иконок ниже), третьему тут не место
+  onOpenDossiers?: (path: string) => void;
 }
 
 // Персистентное состояние дерева на уровне модуля — переживает размонтирование
@@ -360,6 +364,9 @@ function MI_Rename() {
 }
 function MI_Move() {
   return <ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
+}
+function MI_Dossiers() {
+  return <Lightbulb size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 }
 function MI_Trash() {
   return <Trash2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
@@ -671,7 +678,7 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
   );
 });
 
-export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat }: Props) {
+export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = false, alwaysShowIcons = false, onAddToKnowledge, onAddFolderToKnowledge, onRemoveFromKnowledge, indexedFileNames, indexingFiles, indexingFolders, onAttachToChat, onOpenDossiers }: Props) {
   const online = useOnline();
   const hasPanelHeader = useHasPanelHeader();
   useThemeMode();  // перерисовка дерева при смене темы (плитки типов файлов)
@@ -1888,6 +1895,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         add(canToggleOffline,
           <MenuItem key="offline" icon={<MI_Cloud />} label={sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн'}
             onClick={() => { close(); toggleSyncMark(project.id, entry); }} />);
+        add(!entry.isDirectory && onOpenDossiers,
+          <MenuItem key="dossiers" icon={<MI_Dossiers />} label="История решений" onClick={() => { close(); onOpenDossiers!(entry.path); }} />);
 
         // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
         if (!isNotesRoot(entry) && online) {

@@ -147,6 +147,11 @@ builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
+// Паспорта изменений (ADR-004, этап 1): редактор секретов + стор + hosted-захват коммитов
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
+AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Специальности и пресеты правил: стор настроек специальностей и пресетов правил
 // выбора модели (глобальные + per-owner) + применение шаблонов прав

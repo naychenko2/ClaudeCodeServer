@@ -14,12 +14,14 @@ public sealed class UserKnowledgeCascade
     private readonly PersonaManager _personas;
     private readonly PersonaMemoryService _personaMemory;
     private readonly TeamMemoryService _teamMemory;
+    private readonly Dossiers.DossierStore _dossiers;
     private readonly NotesKnowledgeService _notesKb;
     private readonly ILogger<UserKnowledgeCascade> _logger;
 
     public UserKnowledgeCascade(KnowledgeService knowledge, WorkspaceKnowledgeStore wkStore,
         ProjectManager projects, PersonaManager personas, PersonaMemoryService personaMemory,
-        TeamMemoryService teamMemory, NotesKnowledgeService notesKb, ILogger<UserKnowledgeCascade> logger)
+        TeamMemoryService teamMemory, Dossiers.DossierStore dossiers, NotesKnowledgeService notesKb,
+        ILogger<UserKnowledgeCascade> logger)
     {
         _knowledge = knowledge;
         _wkStore = wkStore;
@@ -27,6 +29,7 @@ public sealed class UserKnowledgeCascade
         _personas = personas;
         _personaMemory = personaMemory;
         _teamMemory = teamMemory;
+        _dossiers = dossiers;
         _notesKb = notesKb;
         _logger = logger;
     }
@@ -41,9 +44,10 @@ public sealed class UserKnowledgeCascade
             _personas.Delete(persona.Id, userId);
         }
 
-        // Локальные сторы: индекс заметок, память команд, базы знаний проектов
+        // Локальные сторы: индекс заметок, память команд, паспорта изменений, базы знаний проектов
         _notesKb.DeleteUser(userId);
         _teamMemory.DeleteOwnerTeamMemory(userId);
+        _dossiers.DeleteOwnerDossiers(userId);
         foreach (var p in _projects.GetByOwner(userId))
         {
             // Папку может делить проект другого владельца — тогда запись знаний не трогаем

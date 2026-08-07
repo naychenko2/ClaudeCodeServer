@@ -1,12 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Cpu, Zap, Hourglass, Tag as TagIcon, ChevronDown } from 'lucide-react';
+import { Cpu, Zap, Hourglass, History, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import type { Session, Project, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE } from '../../lib/models';
 import { effortsForProvider, effortLabel } from '../../lib/effort';
 import { expiryOptionLabel } from '../../lib/expiry';
 import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ExpiryPicker } from './ExpiryPicker';
+import { DossierOptOutRow } from './DossierOptOutRow';
 import { ModelPicker } from '../ModelPicker';
 import { SegmentedControl } from '../ui';
 import { TagPickerBody } from '../TagChip';
@@ -17,7 +19,7 @@ import { C, R, FONT, SHADOW, GROUP_COLORS } from '../../lib/design';
 // пишутся в сессию (провайдер ещё не «начат» — смена модели/провайдера разрешена). Инлайн-карточка
 // вместо плавающего поповера — надёжнее на мобильном, а в пустом чате места по вертикали хватает.
 
-type Panel = 'model' | 'effort' | 'expiry' | 'tags' | null;
+type Panel = 'model' | 'effort' | 'expiry' | 'dossiers' | 'tags' | null;
 
 // Иконка «чип» (модель)
 const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
@@ -25,6 +27,8 @@ const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 const IconEffort = <Zap size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «песочные часы» (время жизни временного чата)
 const IconExpiry = <Hourglass size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
+// Иконка «история» (opt-out «не сохранять решения из этого чата»)
+const IconDossiers = <History size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «тег»
 const IconTags = <TagIcon size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 
@@ -47,6 +51,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   const modelName = useModelLabel(session.model);
   const [panel, setPanel] = useState<Panel>(null);
   const [saving, setSaving] = useState(false);
+  const dossiersFlag = useFeature(FLAGS.changeDossiers);
 
   // Реестр тегов — optimistic state поверх project.tagRegistry (тот же паттерн, что в
   // SessionList): создание тега здесь видно сразу, не дожидаясь обновления project сверху.
@@ -145,6 +150,8 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
         {pill('model', IconModel, 'Модель', modelName)}
         {caps.supportsEffort && pill('effort', IconEffort, 'Усилие', effortLabel(session.effort))}
         {pill('expiry', IconExpiry, 'Время жизни', expiryOptionLabel(session.expiresAfterMinutes))}
+        {/* История решений — только у проектных чатов (личные в неё не пишутся) и за флагом */}
+        {project && dossiersFlag && pill('dossiers', IconDossiers, 'История решений', session.excludeFromDossiers ? 'Не сохраняются' : 'Сохраняются')}
         {/* Теги — только у проектных чатов (реестр тегов per-project) */}
         {project && pill('tags', IconTags, 'Теги', session.tags?.length ? session.tags.join(', ') : 'Без тегов')}
       </div>
@@ -178,6 +185,8 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
               onToggle={toggleTag}
               onCreate={createTag}
             />
+          ) : panel === 'dossiers' ? (
+            <DossierOptOutRow value={!!session.excludeFromDossiers} onChange={v => persist({ excludeFromDossiers: v })} />
           ) : (
             <ExpiryPicker value={session.expiresAfterMinutes} onChange={pickExpiry} />
           )}

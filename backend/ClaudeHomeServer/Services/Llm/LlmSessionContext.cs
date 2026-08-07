@@ -208,4 +208,9 @@ public sealed record LlmSessionContext(
     // применяется без пересоздания адаптера, как у PersonaAgentsProvider). Решение
     // принимается только по owner/project/persona — от свойств хода состав не зависит.
     // null — фича выключена, нет владельца или реестр пуст.
-    Func<ExternalMcpContext?>? ExternalMcpProvider = null);
+    Func<ExternalMcpContext?>? ExternalMcpProvider = null,
+    // Подсказка про трейлер CCS-Session/CCS-Task в системный промпт (ADR-004, «Паспорта
+    // изменений»): null — флаг change-dossiers выключен или чат вне проекта. Вычисляется
+    // при построении контекста (не Func — как WorkspaceMcp/NotificationsMcp, тоже не
+    // живёт мид-сессию без пересоздания адаптера).
+    string? DossierTrailerHint = null);

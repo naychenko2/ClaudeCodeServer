@@ -8,6 +8,7 @@ import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { usePresets, presetIdOf } from '../lib/presets';
 import { C, FONT, FS, R, SHADOW, Z } from '../lib/design';
 import type { ModelOption } from '../lib/models';
+import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
 
 const PANEL_W = 320;
 const PANEL_MAX_H = 340;
@@ -20,7 +21,7 @@ const PANEL_MAX_H = 340;
 export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle,
-  showTiers = true, showPresets = false,
+  showTiers = true, showPresets = false, presetCreation,
 }: {
   route: string;
   label: string;
@@ -40,14 +41,29 @@ export function RoutePicker({
   // Показывать группу «Пресеты» (пресет — третий вариант выбора). В шаге цепочки
   // не предлагаем: пресет в пресет не вкладывается (бэкенд отклоняет 400)
   showPresets?: boolean;
+  // Доступ к слоям специальностей — включает inline-сборку цепочки в группе «Пресеты»
+  // (кнопка «Собрать цепочку…» правит черновик на месте вместо перехода в раздел).
+  // Передаётся только там, где эти слои уже подняты в состояние (вкладки раздела
+  // «Модели и расход»); без него — прежнее поведение (открыть раздел через nav-событие).
+  presetCreation?: {
+    settings: SpecialtySettingsResponse | null;
+    savingScope: 'global' | 'owner' | null;
+    onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  };
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
+  // Пока в группе «Пресеты» раскрыт inline-редактор цепочки — прячем соседние блоки
+  // панели (карточки уровней/локали, ModelPicker): клик по ним звал бы pick() → setOpen(false)
+  // и убивал бы несохранённый черновик без предупреждения (дефект ревью designer)
+  const [presetEditing, setPresetEditing] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const presets = usePresets();
   const activeTier = routeTier(route);
   const interactive = !busy && !readOnly;
+
+  useEffect(() => { if (!open) setPresetEditing(false); }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -96,7 +112,7 @@ export function RoutePicker({
         boxShadow: SHADOW.dropdown, padding: 8, zIndex: Z.dropdown,
       }}
     >
-      {showTiers && TIER_ORDER.map(t => (
+      {!presetEditing && showTiers && TIER_ORDER.map(t => (
         <QuickOptionCard
           key={t}
           title={TIERS[t].title}
@@ -105,7 +121,7 @@ export function RoutePicker({
           onClick={() => pick(TIERS[t].route)}
         />
       ))}
-      {allowLocal && (
+      {!presetEditing && allowLocal && (
         <QuickOptionCard
           title="Локальная модель"
           subtitle={ollamaModel ? `Ollama · ${ollamaModel}` : 'не настроена'}
@@ -114,22 +130,27 @@ export function RoutePicker({
         />
       )}
       {showPresets && (
-        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }} />
+        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }}
+          creation={presetCreation ? { models, ...presetCreation } : undefined}
+          onEditingChange={setPresetEditing}
+        />
       )}
-      {!showPresets && presets.length > 0 && (
+      {!presetEditing && !showPresets && presets.length > 0 && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
           Пресет в пресет не вкладывается — выпишите шаги подряд.
         </div>
       )}
-      <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />
-      <ModelPicker
-        value={pickerValue}
-        options={models}
-        onChange={pick}
-        collapsible={false}
-        includeDirect={allowLocal}
-        hideDefault
-      />
+      {!presetEditing && <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />}
+      {!presetEditing && (
+        <ModelPicker
+          value={pickerValue}
+          options={models}
+          onChange={pick}
+          collapsible={false}
+          includeDirect={allowLocal}
+          hideDefault
+        />
+      )}
     </div>
   ) : null;
 

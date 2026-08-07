@@ -163,7 +163,15 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
             />
           )}
           {tab === 'apply' && (
-            <ApplyTab isAdmin={isAdmin} data={data} models={models} tierModels={tierModels} />
+            <ApplyTab
+              isAdmin={isAdmin}
+              data={data}
+              models={models}
+              tierModels={tierModels}
+              settings={settings}
+              savingScope={savingScope}
+              onSaveLayer={handleSaveLayer}
+            />
           )}
         </div>
       </div>

@@ -2383,11 +2383,16 @@ export interface McpServer {
 }
 
 // Наблюдаемый сервер вне личного реестра: записи в реестре нет, есть только наблюдение
-// статуса. builtin=true — настоящая часть AI Home (tasks, notes, wsp…); false — подключён
-// помимо реестра (dify/fal-ai/glif, глобальный .mcp.json/~/.claude.json)
+// статуса. group — кто подключил сервер и кто им управляет: product — сервисы AI Home
+// (tasks, notes, wsp…), integration — интеграции с внешними системами (dify/fal-ai/glif),
+// persona-memory — выделенная память персоны-консультанта (pmem_<handle>),
+// external — наследство CLI из глобального .mcp.json/~/.claude.json и плагинов.
+// Незнакомое значение фронт показывает как external — сервер подключён, скрывать его нельзя
+export type McpBuiltinGroup = 'product' | 'integration' | 'persona-memory' | 'external';
+
 export interface McpBuiltinServer {
   key: string;
-  builtin: boolean;
+  group: McpBuiltinGroup;
   status: McpServerStatus | null;
 }
 

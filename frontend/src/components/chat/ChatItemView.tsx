@@ -1592,11 +1592,22 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         <div style={{
           background: C.dangerBg, borderRadius: 8, padding: '8px 12px',
           fontSize: 13, color: C.dangerText, border: `1px solid ${C.dangerBorder}`,
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+          // flex-start, не center: при многострочной ошибке кнопка «Повторить»
+          // держится у первой строки, а не уезжает в вертикальный центр блока
+          display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10,
         }}>
           <span style={{ display: 'flex', alignItems: 'flex-start', gap: 6, minWidth: 0 }}>
+            {/* marginTop:1 — оптическая подгонка иконки 13px к первой строке текста
+                13px; в шкале SP значения 1 нет, поэтому сырым числом с пояснением */}
             <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }} />
-            <span style={{ whiteSpace: 'pre-wrap', overflowWrap: 'break-word' }}>{item.text}</span>
+            <span style={{
+              whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+              // Потолок со скроллом: сырая многострочная ошибка (JSON/HTML от сломанного
+              // прокси) не растягивает ленту. 180 ≈ 10 строк — та же высота, что у detail-
+              // блока PermissionRequestView; аккуратный текст фолбэка (заголовок +
+              // поставщики + подсказка) в лимит помещается целиком, без скролла
+              maxHeight: 180, overflow: 'auto',
+            }}>{item.text}</span>
           </span>
           {item.canRetry && online && (
             <button

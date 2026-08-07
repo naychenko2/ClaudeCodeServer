@@ -41,6 +41,7 @@ const COMMIT_SUMMARY_MAX = 72;
 const ROW_H = 22;
 const ROW_H_TWO_LINE = 34;
 const INDENT = 12;   // отступ на уровень вложенности
+const EXPAND_MS = 180;   // сворачивание группы дня — та же длительность, что в «Документах»
 const VIEW_KEY = 'cc_git_changes_view';
 const SCOPE_H_KEY = 'cc_git_scope_h';   // высота стека коммитов зоны скоупов (ресайз)
 const SCOPE_H_DEFAULT = 4 * 34;         // по умолчанию видно ~4 скоупа
@@ -175,6 +176,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const [viewMode, setViewMode] = useState<'list' | 'tree'>(
     () => (localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'tree'));
   const [collapsedDirs, setCollapsedDirs] = useState<Set<string>>(new Set());
+  // Свёрнутые дни в истории ветки (ключ — подпись группы). Не персистим: история
+  // длинная, и свёрнутое вчера сегодня уже про другой день
+  const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set());
   const [selectMode, setSelectMode] = useState(false);                 // режим выбора файлов (чекбоксы)
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set()); // снятые файлы (в режиме выбора)
   const [summary, setSummary] = useState('');
@@ -236,6 +240,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const setView = (v: 'list' | 'tree') => { setViewMode(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* квота */ } };
   const toggleDir = (p: string) =>
     setCollapsedDirs(prev => { const n = new Set(prev); n.has(p) ? n.delete(p) : n.add(p); return n; });
+  const toggleDay = (title: string) =>
+    setCollapsedDays(prev => { const n = new Set(prev); n.has(title) ? n.delete(title) : n.add(title); return n; });
 
   const workingFiles = useMemo(
     () => status ? mergeWorking(status.staged, status.unstaged, status.untracked) : [],
@@ -573,8 +579,15 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         onMouseEnter={() => setHoveredRow(rowKey)}
         onMouseLeave={() => setHoveredRow(null)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 7, minHeight: 32, padding: '4px 8px',
-          borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent',
+          // Геометрия и выделение — как у строки документа в «Документах» и файла в
+          // «Файлах»: та же высота ROW_H, тот же отступ и скругление, открытый коммит
+          // выделяется тёплой заливкой с полоской у левого края, наведение — нейтральной
+          display: 'flex', alignItems: 'center', gap: 5, height: ROW_H,
+          padding: `1px ${SP.sm}px`, borderRadius: R.md, boxSizing: 'border-box',
+          cursor: 'pointer',
+          background: active ? C.accentMuted : hovered ? C.bgSelected : 'transparent',
+          boxShadow: active ? `inset 2px 0 0 ${C.accent}` : undefined,
+          transition: 'background 0.1s, box-shadow 0.1s',
         }}
       >
         {/* Автор — иконкой-ролью, как в «Что нового»: кто сделал, видно на глаз
@@ -584,8 +597,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           const who = authorName(c.author, c.email);
           return <span title={who} style={{ fontSize: 12, lineHeight: 1, flexShrink: 0 }}>{authorEmoji(who)}</span>;
         })()}
-        <span title={c.subject} style={{ flex: 1, minWidth: 0, fontSize: 12, color: active ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.subject}</span>
-        <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: active ? C.accent : C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
+        {/* Заголовок — гарнитурой и цветом строки документа: выделяется только
+            открытое (тёмный + 600), остальное вторичным */}
+        <span title={c.subject} style={{
+          flex: 1, minWidth: 0,
+          fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35,
+          fontWeight: active ? 600 : 400,
+          color: active ? C.textHeading : C.textSecondary,
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+        }}>{c.subject}</span>
+        {/* Хвост строки — короткий хеш, приглушённым, как счётчик документов у раздела */}
+        <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
       </div>
     );
   };
@@ -779,12 +801,57 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
                 {st.logLoaded ? 'Нет опубликованных коммитов' : 'Загрузка…'}
               </div>
-            ) : commitDays.map(g => (
-              <div key={g.title}>
-                <ListDateDivider title={g.title} />
-                {g.items.map(renderCommitRow)}
-              </div>
-            ))
+            ) : commitDays.map(g => {
+              const dayCollapsed = collapsedDays.has(g.title);
+              return (
+                <div key={g.title}>
+                  {/* Разделитель дня сворачивает свою группу — как подпись папки в
+                      «Документах». Кликом по подписи И по линиям: onClick вешается на
+                      весь разделитель, а не на текст, поэтому попасть легко.
+                      align/линии оставлены прежними (по центру, две черты) */}
+                  <ListDateDivider
+                    title={g.title}
+                    onClick={() => toggleDay(g.title)}
+                    titleAttr={`${g.title} — ${dayCollapsed ? 'показать' : 'скрыть'} коммиты`}
+                    leading={
+                      // Ширина как у иконки автора в строке коммита — шеврон встаёт
+                      // с ними в одну колонку, левый край читается одной линией
+                      <span style={{ width: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                        <ChevronRight
+                          size={12} strokeWidth={2.4}
+                          style={{
+                            color: C.textMuted,
+                            // Поворотом, а не второй иконкой: состояние читается как
+                            // продолжение движения, подпись не дёргается при смене
+                            transform: dayCollapsed ? 'none' : 'rotate(90deg)',
+                            transition: 'transform .15s ease',
+                          }}
+                        />
+                      </span>
+                    }
+                    trailing={dayCollapsed
+                      ? <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted }}>{g.items.length}</span>
+                      : undefined}
+                  />
+                  {/* Плавное сворачивание — тем же приёмом, что группы в «Документах»:
+                      grid-строка едет 0fr↔1fr, содержимое режется overflow. visibility
+                      гасится ПОСЛЕ анимации — иначе скрытые строки остаются в порядке
+                      обхода табом */}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateRows: dayCollapsed ? '0fr' : '1fr',
+                    transition: dayCollapsed
+                      ? `grid-template-rows ${EXPAND_MS}ms ease, visibility 0s linear ${EXPAND_MS}ms`
+                      : `grid-template-rows ${EXPAND_MS}ms ease`,
+                    visibility: dayCollapsed ? 'hidden' : 'visible',
+                  }}>
+                    <div style={{ overflow: 'hidden', minHeight: 0 }}>
+                      {g.items.map(renderCommitRow)}
+                    </div>
+                  </div>
+                </div>
+              );
+            })
           ) : rows.length === 0 ? (
             <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
               {isWorking ? 'Рабочее дерево чистое' : 'Нет файлов'}

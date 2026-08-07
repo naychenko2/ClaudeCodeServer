@@ -67,7 +67,11 @@ export function ListDateDivider({
 }) {
   const [hover, setHover] = useState(false);
   const lineColor = flash ? C.accent : C.divider;
-  const line = { flex: 1, height: 1, background: lineColor };
+  // Линия рисуется границей, а не блоком высотой 1: блок центрируется по дробной
+  // координате (высота строки нечётная), браузер размазывает его на два пикселя, и
+  // черта то тонкая, то толстая — заметнее всего при сворачивании, когда высота
+  // разделителя меняется. Граница же всегда ложится на целый пиксель
+  const line = { flex: 1, height: 0, borderTop: `1px solid ${lineColor}` };
   const body = (
     <>
       {leading}

@@ -1,7 +1,7 @@
 // Карточка квотного провайдера (.qcard в полосе «Квоты подписок»). Состояния:
 // загрузка/ошибка/недоступно/готово. На поверхности — percent-окна и здоровье FreeLLM;
 // count-окна (сессии), тренд и кабинет — в раскрытии (моментальный снимок, не расход).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { ChevronRight, ExternalLink, RotateCw } from 'lucide-react';
 import type { ProviderBalanceInfo } from '../../types';
@@ -19,6 +19,9 @@ export interface ProviderCardData {
   snapshots: { timestamp: string; balance: number; currency: string }[];
   state: 'loading' | 'error' | 'ready' | 'unavailable';
   isFree: boolean;
+  // Момент следующей авто-попытки (Date.now()) — карточка ошибки ведёт по нему отсчёт
+  // «повтор через N сек». null/undefined — авто-ретрая нет, просто «не удалось получить».
+  retryAt?: number | null;
   cabinetUrl?: string;
   onRetry: () => void;
 }
@@ -98,7 +101,17 @@ function Freshness({ asOf }: { asOf?: string | null }) {
 
 export function ProviderCard({ data }: { data: ProviderCardData }) {
   const [open, setOpen] = useState(false);
-  const { name, color, balance, state, isFree, onRetry } = data;
+  const { name, color, balance, state, isFree, retryAt, onRetry } = data;
+
+  // Обратный отсчёт до авто-ретрая: тикает ежесекундно, только пока карточка в ошибке
+  // и известен момент следующей попытки. Хуки безусловные (нельзя ставить в ветке), но
+  // вне error-состояния таймер не заводится — лишних ре-рендеров нет.
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (state !== 'error' || !retryAt) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [state, retryAt]);
 
   // --- Загрузка: скелет (данные приходят разными запросами, мигающий текст мешал бы) ---
   if (state === 'loading') {
@@ -116,8 +129,10 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
     );
   }
 
-  // --- Ошибка: «не удалось получить, повторим через минуту» + повтор ---
+  // --- Ошибка: «не удалось получить» + обратный отсчёт до авто-ретрая + ручной повтор ---
   if (state === 'error') {
+    // Сколько секунд до очередной авто-попытки. null — авто-ретрая на вкладке нет.
+    const remaining = retryAt ? Math.max(0, Math.ceil((retryAt - now) / 1000)) : null;
     return (
       <div style={{ ...cardBase, cursor: 'default' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
@@ -128,7 +143,13 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
             <RotateCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
         </div>
-        <div style={{ marginTop: 6, fontSize: FS.xs, color: C.textMuted }}>не удалось получить, повторим через минуту</div>
+        <div style={{ marginTop: 6, fontSize: FS.xs, color: C.textMuted }}>
+          {remaining == null
+            ? 'не удалось получить данные'
+            : remaining > 0
+              ? `не удалось получить · повтор через ${remaining} сек`
+              : 'повторяем…'}
+        </div>
       </div>
     );
   }

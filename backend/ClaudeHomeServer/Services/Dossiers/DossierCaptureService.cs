@@ -178,30 +178,38 @@ public sealed class DossierCaptureService : BackgroundService
         // Идемпотентность (§4, §7): коммит уже представлен записью (сам или через supersededSha)
         if (_store.FindByAnyCommitSha(ownerId, project.Id, commit.Sha) is not null) return;
 
-        // Переякорение squash (§7): ОБА условия — старый sha недостижим от HEAD этого дерева
-        // И subject старого коммита есть в новом сообщении. Совпадение трейлера само по себе
-        // ничего не значит — он не уникален per-коммит (тот же чат коммитит регулярно).
-        var reanchored = false;
-        foreach (var d in _store.List(ownerId, project.Id))
+        // Переякорение squash (§7): среди прежних досье ищем одно, чей subject присутствует в новом
+        // сообщении ОТДЕЛЬНОЙ строкой (не произвольной подстрокой — иначе «fix bug» ложно матчит
+        // «fix bug in x/y»), И чей sha недостижим от HEAD этого дерева. Переякоряется РОВНО ОДНО —
+        // с самым длинным (специфичным) subject: несколько похожих subject'ов при squash не должны
+        // дать несколько записей на одном commitSha (инвариант ADR-004 §4 «один коммит — один паспорт»).
+        // Совпадение трейлера само по себе ничего не значит — он не уникален per-коммит.
+        var existing = _store.List(ownerId, project.Id);
+        var bestSubject = PickReanchorSubject(existing.Select(d => d.CommitSubject).ToList(), fullMessage);
+        if (bestSubject is not null)
         {
-            // Дешёвые гард-проверки до git-вызова: subject пуст или не упоминается — не переякориваем
-            var subjectMatch = !string.IsNullOrEmpty(d.CommitSubject)
-                && fullMessage.Contains(d.CommitSubject, StringComparison.Ordinal);
-            if (!subjectMatch) continue;
-            // §7: ОБА условия вместе (ShouldReanchor) — subject старого в новом И старый sha недостижим.
-            if (!ShouldReanchor(subjectMatch, await IsReachableAsync(ownerId, root, d.CommitSha))) continue;
-
-            d.SupersededSha.Add(d.CommitSha);
-            d.CommitSha = commit.Sha;
-            d.CommitSubject = commit.Subject;
-            d.CommittedAt = commit.Date;
-            var (rFiles, rSymbols) = await AnchorAsync(root, commit.Sha, ownerId);
-            d.Files = rFiles;
-            d.Symbols = rSymbols;
-            _store.Reanchor(d);
-            reanchored = true;
+            ChangeDossier? target = null;
+            foreach (var d in existing)
+            {
+                if (!string.Equals(d.CommitSubject, bestSubject, StringComparison.Ordinal)) continue;
+                // §7: ОБА условия вместе — subject (уже сматчен в PickReanchorSubject) И sha недостижим.
+                if (!ShouldReanchor(subjectMatch: true, await IsReachableAsync(ownerId, root, d.CommitSha))) continue;
+                target = d;
+                break;   // переякоряем первое подходящее досье с самым специфичным subject
+            }
+            if (target is not null)
+            {
+                target.SupersededSha.Add(target.CommitSha);
+                target.CommitSha = commit.Sha;
+                target.CommitSubject = commit.Subject;
+                target.CommittedAt = commit.Date;
+                var (rFiles, rSymbols) = await AnchorAsync(root, commit.Sha, ownerId);
+                target.Files = rFiles;
+                target.Symbols = rSymbols;
+                _store.Reanchor(target);
+                return;   // переякорение поглотило коммит — новый паспорт не создаём
+            }
         }
-        if (reanchored) return;
 
         await CaptureNewAsync(project, root, ownerId, session, taskId, commit);
     }
@@ -294,6 +302,26 @@ public sealed class DossierCaptureService : BackgroundService
     // мало (git commit --amend без переписи предков, ручной повтор сообщения). subjectMatch уже
     // вычислен вызывающим (дёшево), oldReachable — результат git merge-base --is-ancestor.
     internal static bool ShouldReanchor(bool subjectMatch, bool oldReachable) => subjectMatch && !oldReachable;
+
+    // §7: среди прежних subject'ов выбираем один для переякорения — присутствующий в новом
+    // сообщении ОТДЕЛЬНОЙ строкой (squash выкладывает заголовки исходных коммитов строками), а не
+    // произвольной подстрокой (иначе «fix bug» ложно матчит «fix bug in x/y»), и самый длинный
+    // (специфичный). null — ни один не матчится. Reachable-фильтр остаётся на вызывающем: здесь
+    // только чистая текстовая логика выбора, тестируемая без git/стора.
+    internal static string? PickReanchorSubject(IReadOnlyList<string> oldSubjects, string fullMessage)
+    {
+        var lines = new HashSet<string>(
+            fullMessage.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0),
+            StringComparer.Ordinal);
+        string? best = null;
+        foreach (var s in oldSubjects)
+        {
+            if (string.IsNullOrWhiteSpace(s)) continue;
+            if (!lines.Contains(s.Trim())) continue;
+            if (best is null || s.Length > best.Length) best = s;
+        }
+        return best;
+    }
 
     private async Task<string> GetDiffStatAsync(string ownerId, string root, string sha)
     {

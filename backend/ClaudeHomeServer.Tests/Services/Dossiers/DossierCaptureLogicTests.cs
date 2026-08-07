@@ -77,4 +77,49 @@ public class DossierCaptureLogicTests
     {
         DossierCaptureService.ShouldReanchor(subjectMatch: false, oldReachable: true).Should().BeFalse();
     }
+
+    // §7 + MAJOR-фикс ревью: несколько похожих subject'ов при squash не должны дать несколько
+    // записей на одном commitSha (инвариант «один коммит — один паспорт»). Subject матчится как
+    // ОТДЕЛЬНАЯ строка тела (не подстрока), и среди сматченных выбирается один — самый длинный
+    // (специфичный). На нём ProcessCommit и переякоривает ровно одно досье (break/return).
+    [Fact]
+    public void Переякорение_НесколькоПохожихSubject_ВыбираетСамоеУзкое()
+    {
+        // Все три subject-а после squash выложены в теле отдельными строками — line-match всех
+        // трёх, но переякорение уходит на самый специфичный (длиннейший).
+        var msg = "squash: fix bug in x/y\n\nfix bug\nfix bug in x\nfix bug in x/y";
+
+        var best = DossierCaptureService.PickReanchorSubject(
+            ["fix bug", "fix bug in x", "fix bug in x/y"], msg);
+
+        best.Should().Be("fix bug in x/y");
+    }
+
+    // Сердце MAJOR-фикса: Contains без границ ловил бы «fix bug» внутри «fix bug in x/y». Line-match
+    // (отдельная строка) эту ложную подстроку отбрасывает — subject, присутствующий только как часть
+    // более длинной строки, не матчится.
+    [Fact]
+    public void Переякорение_SubjectТолькоПодстрока_НеМатчится()
+    {
+        var msg = "fix bug in x/y\n\nтут тело без нужной строки";
+
+        DossierCaptureService.PickReanchorSubject(["fix bug"], msg).Should().BeNull(
+            "«fix bug» присутствует лишь внутри «fix bug in x/y», не отдельной строкой");
+        DossierCaptureService.PickReanchorSubject(["fix bug in x"], msg).Should().BeNull();
+    }
+
+    [Fact]
+    public void Переякорение_ОдинSubjectСтрокой_Матчится()
+    {
+        var msg = "новый коммит\n\nfix bug\nчто-то ещё";
+
+        DossierCaptureService.PickReanchorSubject(["fix bug"], msg).Should().Be("fix bug");
+    }
+
+    [Fact]
+    public void Переякорение_ПустойСписокИлиСообщение_Null()
+    {
+        DossierCaptureService.PickReanchorSubject([], "любое сообщение").Should().BeNull();
+        DossierCaptureService.PickReanchorSubject(["fix bug"], "").Should().BeNull();
+    }
 }

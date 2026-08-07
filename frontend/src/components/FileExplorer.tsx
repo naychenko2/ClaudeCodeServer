@@ -35,7 +35,7 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
-import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
@@ -575,12 +575,8 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
           borderRadius: '0 8px 8px 0',
         } : {}),
       }}>
-        {entry.isModified && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: C.accent, background: C.accentLight, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>M</span>
-        )}
-        {entry.isNew && (
-          <span style={{ fontSize: 9, fontWeight: 700, color: C.successText, background: C.successBg, width: 16, height: 16, borderRadius: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>+</span>
-        )}
+        {entry.isModified && <FileStatusBadge status="M" />}
+        {entry.isNew && <FileStatusBadge status="A" />}
         {/* Индикатор базы знаний: спиннер во время индексации, книга — когда файл в ней.
             Управление (добавить/убрать) — в контекстном меню */}
         {!entry.isDirectory && p.indexing && (

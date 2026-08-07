@@ -35,7 +35,7 @@ import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
-  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile,
+  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
@@ -51,6 +51,7 @@ import type {
   IconButtonSize, IconButtonTone, IconButtonVariant,
 } from '../components/ui';
 
+  FileStatus,
 import { ColorsSection } from './ColorsSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
@@ -77,14 +78,22 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
   { color: C.textMuted,    label: 'textMuted'    },
 ];
 
-// Оглавление витрины: id секции (для якоря) + короткий лейбл в кнопке.
-// Порядок соответствует основному flow ниже. При добавлении новой секции —
 // Демо-файлы для FileTypeTile: код, разметка, документ, картинка и незнакомый тип
 // (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
 const FILE_TILE_SAMPLES = ['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
 
 // добавь её сюда и повесь rootProps={{ id }} на её Island.
 const TOC_SECTIONS: { id: string; label: string }[] = [
+// Состояния файла для FileStatusBadge — коды git, как их отдаёт статус репозитория
+const FILE_STATUS_SAMPLES: { status: FileStatus; label: string }[] = [
+  { status: 'M', label: 'изменён'       },
+  { status: 'A', label: 'новый'         },
+  { status: 'D', label: 'удалён'        },
+  { status: 'R', label: 'переименован'  },
+];
+
+// Оглавление витрины: id секции (для якоря) + короткий лейбл в кнопке.
+// Порядок соответствует основному flow ниже. При добавлении новой секции —
   { id: 'sec-toggles',    label: 'Переключатели'     },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -358,8 +367,6 @@ function TogglesSection() {
             </div>
           </div>
         </SubBlock>
-      </div>
-    </Island>
 
         {/* FileTypeTile: плитка типа файла — одна на все списки файлов продукта
             («Файлы», «Документы», «Изменения», шапка просмотрщика). Габарит и
@@ -376,6 +383,22 @@ function TogglesSection() {
         </SubBlock>
   );
 }
+
+        {/* FileStatusBadge: состояние файла — общий значок дерева «Файлов» и панели
+            «Изменения». Цветом имени состояние не кодируется нигде: цвет там занят
+            другими смыслами (заметки, база знаний) */}
+        <SubBlock label="FileStatusBadge — состояние файла после имени">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+            {FILE_STATUS_SAMPLES.map((s) => (
+              <div key={s.status} style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
+                <FileStatusBadge status={s.status} />
+                <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{s.label}</span>
+              </div>
+            ))}
+          </div>
+        </SubBlock>
+      </div>
+    </Island>
 
 // === Секция «Примитивы — оверлеи и меню» ==========================
 // Modal / ConfirmDialog / Menu+MenuItem / BackButton / WaitingIndicator.

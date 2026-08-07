@@ -245,8 +245,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         // Учёт попыток «модель × подписка»: пара не пробуется дважды за ход (ADR §4)
         var attempted = new HashSet<(string Model, string Key)>();
-        // След перепробованных пар — в финальную ошибку (виден в ленте/карточке задачи)
-        var trace = new List<string>();
+        // След перепробованных пар — в финальную ошибку (виден в ленте/карточке задачи).
+        // Хранится структурой: для ленты берём поставщика и причину, для лога — модель и ключ.
+        var trace = new List<AttemptTrace>();
         var substitutions = 0;
         AttemptEnd? lastEnd = null;
 
@@ -257,18 +258,23 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var hasChain = chain.Count > 1;
         var chainIndex = 0;
 
+        // Фактическая пара текущей попытки «модель × ключ». Берётся из шага цепочки или
+        // эффективной модели на СТАРТЕ и далее обновляется применённой подменой (next), а не
+        // пересчитывается из _effectiveModel() каждую итерацию. _effectiveModel() — НАМЕРЕНИЕ
+        // хода (слот/назначение места); оно не отражает подмену на эквивалент стороннего
+        // провайдера. Считай от него — и в attempted ляжет намерение (напр. «opus»), а
+        // проверка зацикливания пойдёт по эквиваленту — пары разойдутся, и одна мёртвая пара
+        // повторится до потолка (инцидент 2026-08-07).
+        var currentModel = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
+        var currentKey = ProviderKeyFor(currentModel);
+
         try
         {
             while (!_cts.IsCancellationRequested)
             {
                 if (_userInterrupted) { await SettleAsync(turn); return; }
 
-                // Модель попытки: шаг цепочки (если есть) иначе эффективная модель сессии.
-                // После подмены Info.Model синхронизируем с шагом цепочки (ApplyTarget), чтобы
-                // следующий процесс стартовал на нужной модели.
-                var model = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
-                var key = ProviderKeyFor(model);
-                attempted.Add((model, key));
+                attempted.Add((currentModel, currentKey));
 
                 TaskCompletionSource<AttemptEnd> attemptTcs;
                 lock (turn.Sync)
@@ -300,14 +306,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
                 if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
 
-                trace.Add(TraceLine(model, key, cls));
+                trace.Add(new AttemptTrace(currentModel, currentKey, cls));
                 if (substitutions >= EffectiveMaxSubstitutions())
                 {
                     await FailExhaustedAsync(turn, trace, substitutions, end);
                     return;
                 }
 
-                var next = ResolveNextTarget(cls, end, attempted, model, key, chain, hasChain, ref chainIndex);
+                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, hasChain, ref chainIndex);
                 if (next is null) { await FailExhaustedAsync(turn, trace, substitutions, end); return; }
 
                 // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
@@ -324,22 +330,32 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // процесс запустится уже на новой паре
                 if (end.Kind == AttemptEndKind.RateLimited) _inner.Interrupt();
 
-                // Подмена помечается в ленте существующим provider_switched (Auto=true).
-                // Label=null — переключил SessionManager.TryPoolFailover, маркер уже был.
-                // Reason — wire-имя класса ошибки, чтобы фронт показал каноническую
-                // формулировку подсказки вместо сырого текста Label
+                // Подмена помечается в ленте существующим provider_switched (Auto=true). Маркер —
+                // ТОЛЬКО при смене ТИПА поставщика (сторонний провайдер / шаг цепочки): переход
+                // между аккаунтами ОДНОГО пула Claude проходит тихо (Label=null), пользователь
+                // видит ровно один ход без служебных переключений. Reason — wire-имя класса
+                // ошибки, чтобы фронт показал каноническую формулировку подсказки.
                 if (next.Label is not null)
                 {
                     var reason = TurnErrorClassifier.WireName(cls);
                     await _downstream(new ProviderSwitchedMessage(next.Key, next.Model, next.Label, Auto: true, Reason: reason));
-                    LogInfo($"Подмена: {TraceLine(model, key, cls)} → «{KeyLabel(next.Key)}» / «{next.Model ?? model}» (причина {reason ?? "неизвестно"})");
+                    LogInfo($"Подмена: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» / «{next.Model ?? currentModel}» (причина {reason ?? "неизвестно"})");
                 }
                 else
                 {
-                    LogInfo($"Подмена без маркера: {TraceLine(model, key, cls)} → «{KeyLabel(next.Key)}» (маркер уже был от SessionManager)");
+                    // Тихая подмена (смена подписки того же пула): в ленту не идёт, для разбора
+                    // пишем конкретную причину — LogDetail ротации, иначе общий текст
+                    LogInfo(next.LogDetail
+                        ?? $"Подмена без маркера: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» (маркер уже был от SessionManager)");
                 }
 
                 ApplyTarget(next);
+                // Фактическая пара следующей попытки: смена провайдера несёт эквивалент
+                // (next.Model), смена подписки того же пула — модель не меняется; ключ — всегда
+                // next.Key. Согласовано с ApplyTarget (Info.Model/Provider), но не зависит от
+                // _effectiveModel() — поэтому именно эта пара попадает в attempted и в след.
+                currentModel = next.Model ?? currentModel;
+                currentKey = next.Key;
                 substitutions++;
             }
         }
@@ -412,9 +428,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (attempted.Contains((model, candidate))) continue;
                 var dstRoot = ResolveRootFor(candidate);
                 if (!TryMigrateTranscript(dstRoot)) continue;
+                // Смена подписки того же пула Claude — тихо: маркер в ленте только при
+                // переходе на ДРУГОЙ тип поставщика. Причина сохраняется в LogDetail для
+                // разбора (какая подписка на какую сменилась), наружу не идёт.
                 return new FallbackTarget(candidate, null,
-                    Label: $"Автофолбэк: подписка «{KeyLabel(currentKey)}» → «{KeyLabel(candidate)}»",
-                    ProfileRoot: dstRoot, IsProviderSwitch: false);
+                    Label: null,
+                    ProfileRoot: dstRoot, IsProviderSwitch: false,
+                    LogDetail: $"Автофолбэк: подписка «{KeyLabel(currentKey)}» → «{KeyLabel(candidate)}»");
             }
         }
 
@@ -589,18 +609,29 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return string.IsNullOrEmpty(parent) ? null : Path.Combine(parent, folder);
     }
 
-    // Финал при исчерпании цепочки: след пар + последняя причина — в ленту, финальный
-    // result — ошибочный (у задачи исполнителя существующий путь пометит сбой и уведомит
-    // постановщика; в исходный статус задача не возвращается)
-    private async Task FailExhaustedAsync(FallbackTurn turn, IReadOnlyList<string> trace,
+    // Финал при исчерпании цепочки: человекочитаемый текст в ленту, финальный result —
+    // ошибочный (у задачи исполнителя существующий путь пометит сбой и уведомит
+    // постановщика; в исходный статус задача не возвращается). Счётчик подмен, потолок,
+    // модель/ключ и текст последней ошибки — в LogInfo для разбора, человеку они не нужны.
+    private async Task FailExhaustedAsync(FallbackTurn turn, IReadOnlyList<AttemptTrace> trace,
         int substitutions, AttemptEnd lastEnd)
     {
+        // Три блока: заголовок, по строке на попытку (поставщик и причина), подсказка.
+        // Блоки разделены пустой строкой, строки попыток — \n: ChatItemView рендерит
+        // переносы в error-сообщениях (white-space: pre-wrap), так что обходной
+        // разделитель « · » больше не нужен. Служебные термины и ключи сюда не попадают.
+        var attempts = string.Join("\n", trace.Select(t => $"{ProviderLabel(t.Key)} — {UserClassLabel(t.Class)}"));
+        await _downstream(new ErrorMessage(
+            "Ни одна из доступных моделей не ответила.\n\n"
+            + attempts + "\n\n"
+            + "Попробуйте позже или выберите другую модель в настройках чата."));
+
         var reason = string.IsNullOrEmpty(lastEnd.Result?.ApiErrorStatus)
             ? lastEnd.ErrorText ?? "поток прерван"
             : lastEnd.Result!.ApiErrorStatus!;
-        await _downstream(new ErrorMessage(
-            $"Фолбэк моделей исчерпан (подмен: {substitutions}, потолок {EffectiveMaxSubstitutions()}). "
-            + $"Пробованные пары: {string.Join("; ", trace)}. Последняя ошибка: {Truncate(reason, 300)}"));
+        LogInfo($"Исчерпание фолбэка: подмен {substitutions}, потолок {EffectiveMaxSubstitutions()}. "
+            + $"Пары: {string.Join("; ", trace.Select(t => TraceLine(t.Model, t.Key, t.Class)))}. "
+            + $"Последняя ошибка: {Truncate(reason, 300)}");
 
         List<ServerMessage> held;
         lock (turn.Sync)
@@ -641,6 +672,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private static string TraceLine(string model, string key, FallbackErrorClass cls) =>
         $"{(string.IsNullOrEmpty(model) ? "модель по умолчанию" : $"модель «{model}»")} × «{KeyLabel(key)}» — {ClassLabel(cls)}";
 
+    // Технические метки классов — в лог (для разбора), не в ленту. С человеческими
+    // формулировками для пользователя см. UserClassLabel.
     private static string ClassLabel(FallbackErrorClass cls) => cls switch
     {
         FallbackErrorClass.RateLimit => "лимит запросов",
@@ -650,8 +683,33 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _ => "ошибка",
     };
 
+    // Человекочитаемые причины для ленты (постановка задачи). Wire-имена классов и
+    // технические метки (ClassLabel/WireName) не трогаем — они для разбора и фронта.
+    private static string UserClassLabel(FallbackErrorClass cls) => cls switch
+    {
+        FallbackErrorClass.RateLimit => "слишком много запросов",
+        FallbackErrorClass.UsageLimit => "закончился лимит",
+        FallbackErrorClass.ProviderError => "поставщик вернул ошибку",
+        FallbackErrorClass.Unreachable => "сервис не отвечает",
+        _ => "не удалось выполнить",
+    };
+
     private static string KeyLabel(string key) =>
         key == ClaudeSubscriptionPool.PrimaryKey ? "claude" : key;
+
+    // Имя поставщика для пользовательского текста: DisplayName подписки пула, затем
+    // DisplayName провайдера, иначе — ключ (через KeyLabel). Ключ сырым — только когда
+    // имени нет вовсе (нет ни подписки, ни провайдера, либо пустой DisplayName).
+    private string ProviderLabel(string key)
+    {
+        var sub = _pool.All.FirstOrDefault(s => s.Key == key);
+        if (sub is not null && !string.IsNullOrWhiteSpace(sub.DisplayName))
+            return sub.DisplayName;
+        var provider = _providers?.GetByKey(key);
+        if (provider is not null && !string.IsNullOrWhiteSpace(provider.DisplayName))
+            return provider.DisplayName;
+        return KeyLabel(key);
+    }
 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "…";
@@ -665,8 +723,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         string? ErrorText,
         string? RateLimitResetsAt);
 
+    // След одной попытки для финального сообщения: модель и ключ — в лог (через
+    // TraceLine), поставщик (ProviderLabel) и причина (UserClassLabel) — в ленту.
+    private sealed record AttemptTrace(string Model, string Key, FallbackErrorClass Class);
+
     private sealed record FallbackTarget(
-        string Key, string? Model, string? Label, string? ProfileRoot, bool IsProviderSwitch);
+        string Key, string? Model, string? Label, string? ProfileRoot, bool IsProviderSwitch,
+        // Текст тихой подмены (смена подписки того же пула, Label=null) для LogInfo: в ленту
+        // не идёт, но нужен для разбора — какая подписка на какую сменилась.
+        string? LogDetail = null);
 
     // Состояние хода под фолбэком: задержанные терминальные сообщения, исход текущей
     // попытки и флаг «оркестрация завершена» (после него события идут насквозь)

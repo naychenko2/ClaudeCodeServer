@@ -6,6 +6,7 @@ import { IconButton, Menu, MenuItem } from '../../components/ui';
 import { MoreVertical, Folder, SquarePen, Trash2, Pin, PinOff } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { isPinned, togglePin } from '../../lib/pinnedProjects';
+import { useUserScrollGate } from '../../lib/userScrollGate';
 
 interface Props {
   project: Project;
@@ -25,20 +26,24 @@ export function ProjectActionsMenu({ project: p, color = C.textMuted, onMove, on
   // попадает почти любая карточка. Anchor-режим рисует меню порталом по rect и сам
   // разворачивает его вверх, когда снизу места нет (как в карточке чата).
   const [menu, setMenu] = useState<DOMRect | null>(null);
+  const isUserScroll = useUserScrollGate();
   // Меню нарисовано fixed по rect кнопки и при скролле списка осталось бы висеть
   // на месте, оторвавшись от своей карточки: закрываем его вместе с прокруткой
-  // (и по Esc) — контракт anchor-режима Menu отдаёт это вызывающей стороне.
+  // (и по Esc) — контракт anchor-режима Menu отдаёт это вызывающей стороне. Гейт
+  // «только пользовательский скролл»: программный прижим ленты чата (активность Claude)
+  // тоже порождает scroll, но меню, с которым работает человек, схлопывать не должен.
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMenu(null); };
-    window.addEventListener('scroll', close, true);
+    const onScroll = () => { if (isUserScroll()) close(); };
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('keydown', onKey);
     return () => {
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
       window.removeEventListener('keydown', onKey);
     };
-  }, [menu]);
+  }, [menu, isUserScroll]);
   const pinned = isPinned(p.id);
   return (
     <div style={{ position: 'relative', flexShrink: 0 }} onClick={e => e.stopPropagation()}>

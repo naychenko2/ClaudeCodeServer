@@ -16,6 +16,7 @@ import {
 } from '../../lib/tasks';
 import type { Task, TaskPriority, TaskStatus } from '../../types';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useUserScrollGate } from '../../lib/userScrollGate';
 
 // === Состояние фильтров ===
 
@@ -129,6 +130,7 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
   // Рамка триггера на момент открытия — поповер живёт в портале и позиционируется
   // по ней (см. ниже, почему не absolute)
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const isUserScroll = useUserScrollGate();
   const count = countActiveFilterGroups(filters);
   const active = count > 0;
 
@@ -149,8 +151,11 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
     // Прокрутка страницы/панели уводит карточку от кнопки — проще закрыть, чем
     // догонять. Но прокрутка ВНУТРИ самой карточки (список фильтров длиннее
-    // экрана) — обычная работа с ней, а не уход: её пропускаем.
+    // экрана) — обычная работа с ней, а не уход: её пропускаем. Гейт «только
+    // пользовательский скролл»: программный прижим ленты чата (активность Claude)
+    // поповер не закрывает.
     const onScroll = (e: Event) => {
+      if (!isUserScroll()) return;
       if (popRef.current?.contains(e.target as Node)) return;
       setOpen(false);
     };
@@ -165,7 +170,7 @@ export function TasksListFilterButton({ variant, filters, onFilters, total, foun
       window.removeEventListener('resize', onResize);
       window.removeEventListener('scroll', onScroll, true);
     };
-  }, [open]);
+  }, [open, isUserScroll]);
 
   const badge: CSSProperties = variant === 'icon'
     ? { top: -4, right: -5, minWidth: 14, height: 14, border: `1.5px solid ${C.bgMain}` }

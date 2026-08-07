@@ -12,6 +12,7 @@ import type { HubTabValue } from './HubTabs';
 import { Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { AUTHOR_EMOJI, authorEmoji } from '../lib/authorEmoji';
+import { useUserScrollGate } from '../lib/userScrollGate';
 
 // Продуктовая история — «что мы делали и чем это полезно», по всем проектам.
 // Одноколоночная лента по дням (Сегодня / Вчера / дата), карточки: что нового +
@@ -512,16 +513,20 @@ function HeroCard({ item }: { item: ChangelogItem }) {
 export function ScoreBadge({ badge, reason }: { badge: { label: string; bg: string; color: string }; reason: string }) {
   const ref = useRef<HTMLSpanElement>(null);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
+  const isUserScroll = useUserScrollGate();
   // Пузырь позиционируется по зафиксированному rect (fixed). Если прокрутить/изменить
   // размер, пока он открыт, он «отклеится» от бейджа — закрываем его на scroll/resize
-  // (также страхует от залипания на тач-устройствах, где нет mouseleave).
+  // (также страхует от залипания на тач-устройствах, где нет mouseleave). По скроллу —
+  // только пользовательскому: программный прижим ленты чата (активность Claude) не должен
+  // схлопывать пузырь.
   useEffect(() => {
     if (!anchor) return;
     const close = () => setAnchor(null);
-    window.addEventListener('scroll', close, true);
+    const onScroll = () => { if (isUserScroll()) close(); };
+    window.addEventListener('scroll', onScroll, true);
     window.addEventListener('resize', close);
-    return () => { window.removeEventListener('scroll', close, true); window.removeEventListener('resize', close); };
-  }, [anchor]);
+    return () => { window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', close); };
+  }, [anchor, isUserScroll]);
   return (
     <span
       ref={ref}

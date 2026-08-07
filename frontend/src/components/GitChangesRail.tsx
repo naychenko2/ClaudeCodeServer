@@ -9,13 +9,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
-  Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Wand2, FolderClosed,
+  Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Wand2, Folder,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
   Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink,
 } from 'lucide-react';
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../types';
 import { api } from '../lib/api';
-import { C, R, FONT, MODAL_W } from '../lib/design';
+import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import {
   useGitState, ensureGit, loadUnpushedLog, loadGitLog, loadGitRemote, loadGitBranches, loadGitStash,
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
@@ -31,6 +31,14 @@ import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, Men
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
+// Геометрия строки файла — общая с деревом «Файлов» (FileExplorer) и «Документами»:
+// панели стоят рядом в одной рельсе, и своя высота строки читалась бы как другой
+// масштаб интерфейса. Высота ЖЁСТКАЯ: кнопка отката выше строки, и на minHeight
+// список дёргался бы под курсором. Строка списка двухэтажная (имя + путь) — там свой
+// минимум, тоже как в «Файлах»
+const ROW_H = 22;
+const ROW_H_TWO_LINE = 34;
+const INDENT = 12;   // отступ на уровень вложенности
 const VIEW_KEY = 'cc_git_changes_view';
 const SCOPE_H_KEY = 'cc_git_scope_h';   // высота стека коммитов зоны скоупов (ресайз)
 const SCOPE_H_DEFAULT = 4 * 34;         // по умолчанию видно ~4 скоупа
@@ -450,12 +458,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         onMouseEnter={() => setHoveredRow(rowKey)}
         onMouseLeave={() => setHoveredRow(null)}
         style={{
-          // Список (showParent) — двухстрочная строка (имя + путь): даём высоту и
-          // вертикальные отступы, чтобы не было тесно. Дерево — одна строка, как было.
-          display: 'flex', alignItems: 'center', gap: 7, position: 'relative',
-          minHeight: showParent ? 42 : 30, padding: showParent ? '6px 6px' : '0 6px', paddingLeft: 8 + depth * 14,
-          borderRadius: 8, cursor: 'pointer',
-          background: isActiveFile ? C.accentLight : hovered ? C.bgSelected : 'transparent', transition: 'background 0.1s',
+          // Список (showParent) — двухэтажная строка (имя + путь), дерево — одна строка.
+          // Размеры и отступы — общие с деревом «Файлов» (см. ROW_H выше)
+          display: 'flex', alignItems: 'center', gap: 5, position: 'relative',
+          ...(showParent ? { minHeight: ROW_H_TWO_LINE } : { height: ROW_H }),
+          padding: `1px ${SP.sm}px`, paddingLeft: SP.sm + depth * INDENT,
+          borderRadius: R.md, cursor: 'pointer', boxSizing: 'border-box',
+          // Открытый файл выделяется как в «Файлах» и «Документах»: тёплая заливка плюс
+          // полоска у левого края. Наведение — нейтральной подложкой
+          background: isActiveFile ? C.accentMuted : hovered ? C.bgSelected : 'transparent',
+          boxShadow: isActiveFile ? `inset 2px 0 0 ${C.accent}` : undefined,
+          transition: 'background 0.1s, box-shadow 0.1s',
         }}
       >
         {isWorking && selectMode && (
@@ -474,10 +487,13 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         )}
         {/* Без чекбоксов — тег расширения (как в панели «Файлы») */}
         {!(isWorking && selectMode) && <FileTypeTile name={name} />}
-        {/* Имя файла — статус кодируется цветом */}
+        {/* Имя файла — статус кодируется цветом. Гарнитура и размер — как в строке
+            «Файлов» и «Документов»: панели стоят рядом, и свой шрифт читался бы
+            как другой раздел */}
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <span title={f.path} style={{
-            fontFamily: FONT.mono, fontSize: 12.5, fontWeight: 500, color: nameColor(f.status),
+            fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35,
+            fontWeight: isActiveFile ? 600 : 400, color: nameColor(f.status),
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>{name}</span>
           {showParent && parent && (
@@ -542,16 +558,26 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
       const collapsed = collapsedDirs.has(n.path);
       return (
         <div key={`d:${n.path}`}>
+          {/* Строка папки — как в дереве «Файлов»: та же высота и отступ уровня, тот же
+              шеврон с поворотом (два разных глифа дёргали строку при раскрытии),
+              нейтральная иконка папки и подпись обычным шрифтом */}
           <div
             onClick={() => toggleDir(n.path)}
             style={{
-              display: 'flex', alignItems: 'center', gap: 5, minHeight: 26, cursor: 'pointer',
-              padding: '3px 6px', paddingLeft: 8 + depth * 14, userSelect: 'none',
+              display: 'flex', alignItems: 'center', gap: 5, height: ROW_H, cursor: 'pointer',
+              padding: `1px ${SP.sm}px`, paddingLeft: SP.sm + depth * INDENT,
+              boxSizing: 'border-box', userSelect: 'none',
             }}
           >
-            {collapsed ? <ChevronRight size={13} color={C.textMuted} /> : <ChevronDown size={13} color={C.textMuted} />}
-            <FolderClosed size={14} color={C.textSecondary} strokeWidth={ICON_STROKE} />
-            <span style={{ fontFamily: FONT.mono, fontSize: 11.5, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{n.name}</span>
+            <span style={{ width: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted }}>
+              <ChevronRight size={11} strokeWidth={ICON_STROKE}
+                style={{ transform: collapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease' }} />
+            </span>
+            <Folder size={14} color={C.textSecondary} strokeWidth={ICON_STROKE} />
+            <span style={{
+              fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35, fontWeight: 600, color: C.textSecondary,
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>{n.name}</span>
           </div>
           {!collapsed && renderTree(n.children, depth + 1)}
         </div>

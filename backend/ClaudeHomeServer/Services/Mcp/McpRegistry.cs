@@ -29,6 +29,27 @@ public class McpRegistry
     // Префикс серверов памяти персон-консультантов (pmem_<handle>)
     public const string ConsultantMemoryPrefix = "pmem_";
 
+    /// <summary>
+    /// Ключи интеграций продукта с внешними сервисами: они тоже встроенные (часть
+    /// ReservedKeys), но ходят во внешний мир — на экране помечаются отдельно.
+    /// </summary>
+    public static readonly string[] IntegrationKeys = ["dify", "fal-ai", "glif"];
+
+    /// <summary>
+    /// Группа сервера на экране «MCP-серверы» — см. <see cref="McpBuiltinGroups"/>.
+    /// Незнакомый ключ — «подключено вне продукта».
+    /// </summary>
+    public static string BuiltinGroupOf(string key)
+    {
+        if (key.StartsWith(ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase))
+            return McpBuiltinGroups.PersonaMemory;
+        if (IntegrationKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            return McpBuiltinGroups.Integration;
+        if (ReservedKeys.Contains(key, StringComparer.OrdinalIgnoreCase))
+            return McpBuiltinGroups.Product;
+        return McpBuiltinGroups.External;
+    }
+
     private static readonly Regex KeyPattern = new("^[a-z0-9][a-z0-9_-]{0,39}$", RegexOptions.Compiled);
 
     private readonly string _filePath;

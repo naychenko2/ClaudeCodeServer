@@ -15,7 +15,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/mcp/servers")]
 public class McpServersController(McpRegistry registry, McpSecretStore secrets,
-    PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe) : ControllerBase
+    PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe,
+    PersonaManager personas) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -28,26 +29,33 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             .Select(r => McpServerMapper.ToDto(r, observed.GetValueOrDefault(r.Key))));
     }
 
-    // Встроенные серверы продукта (tasks, notes, wsp…) и всё, что подключено помимо
-    // реестра (dify/fal-ai/glif, серверы из глобального .mcp.json/~/.claude.json): в
-    // реестре их нет, но наблюдения из system/init по ним копятся в том же сторе. Экран
-    // показывает их плитками — только статус, без правки и удаления. Флаг builtin отличает
-    // настоящую часть AI Home (ReservedKeys + pmem_*) от стороннего — фронт разносит их
-    // по разным группам, второй группе нельзя врать «это продукт». Ключи записей реестра
-    // отсюда убраны: их отдаёт List.
+    // Всё, что подключено помимо личного реестра: сервисы продукта (tasks, notes, wsp…),
+    // интеграции с внешними системами (dify/fal-ai/glif), выделенные серверы памяти персон
+    // (pmem_*) и наследие CLI из глобального .mcp.json/~/.claude.json и плагинов. В реестре
+    // их нет, но наблюдения из system/init по ним копятся в том же сторе. Экран показывает
+    // их плитками — только статус, без правки и удаления; поле group разносит плитки по
+    // группам (см. McpBuiltinGroups). Ключи записей реестра отсюда убраны: их отдаёт List.
     [HttpGet("builtin")]
     public IActionResult Builtin()
     {
         var own = registry.GetByOwner(UserId)
             .Select(r => r.Key).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // Живые серверы памяти персон: pmem_<handle> попадает в конфиг хода только персоне
+        // с включённой памятью. Наблюдение по удалённой или выключенной персоне — хвост,
+        // который больше никогда не обновится; убираем его из выдачи, сам стор не трогая.
+        var livePmem = personas.GetByOwner(UserId)
+            .Where(p => p.MemoryEnabled)
+            .Select(p => PersonaConsultantToolset.PmemServerKey(p.Handle))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         return Ok(statuses.GetByOwner(UserId)
             .Where(kv => !own.Contains(kv.Key))
+            .Where(kv => !kv.Key.StartsWith(McpRegistry.ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase)
+                || livePmem.Contains(kv.Key))
             .OrderBy(kv => kv.Key, StringComparer.Ordinal)
             .Select(kv => new
             {
                 key = kv.Key,
-                builtin = McpRegistry.ReservedKeys.Contains(kv.Key, StringComparer.OrdinalIgnoreCase)
-                    || kv.Key.StartsWith(McpRegistry.ConsultantMemoryPrefix, StringComparison.OrdinalIgnoreCase),
+                group = McpRegistry.BuiltinGroupOf(kv.Key),
                 status = new McpServerStatusDto(kv.Value.Status, kv.Value.ObservedAt,
                     kv.Value.Source.ToString().ToLowerInvariant(), kv.Value.SessionId, kv.Value.Error),
             }));

@@ -900,16 +900,13 @@ const windowWidth = useWindowWidth();
     return () => { cancelled = true; };
   }, [onboardingOn, project.id]);
   // Завершение онбординга: гейт снимает сам ProjectOnboardingGate (по концу хода или
-  // кнопке), здесь освежаем дефолт проекта — новые чаты сразу пойдут от руководителя
+  // кнопке). Свежий дефолт проекта перечитывать здесь НЕ нужно: App по broadcast
+  // personas_changed action='default' перечитывает открытый проект (единая точка),
+  // а эффект выше синкает prop в projectDefaultId — свой fetch был бы вторым
+  // перечитыванием на то же событие и гонкой setState по размонтированию.
   const handleProjectOnboardingDone = useCallback(() => {
     setProjectGate(false);
-    api.projects.list()
-      .then(list => {
-        const fresh = list.find(p => p.id === project.id);
-        if (fresh) setProjectDefaultId(fresh.defaultPersonaId ?? null);
-      })
-      .catch(() => {});
-  }, [project.id]);
+  }, []);
 
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;

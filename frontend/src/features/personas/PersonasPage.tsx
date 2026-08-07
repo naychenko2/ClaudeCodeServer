@@ -337,6 +337,11 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
   const me = useMe();
   const isDefault = onboardingOn && !isProjectScope && me.defaultPersonaId === persona.id;
+  // Кандидат ждёт подтверждения: смена СУЩЕСТВУЮЩЕГО дефолта — только через диалог
+  // (защита от случайного клика мимо пункта меню); первое назначение — сразу.
+  const [confirmDefault, setConfirmDefault] = useState(false);
+  const allPersonas = usePersonas();
+  const currentDefault = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
   const makeDefault = async () => {
     try {
       await api.personas.makeDefault(persona.id);
@@ -345,6 +350,10 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
     } catch (e) {
       showToast('Персоны', e instanceof Error ? e.message : 'Не удалось назначить персону по умолчанию.');
     }
+  };
+  const requestMakeDefault = () => {
+    if (me.defaultPersonaId && me.defaultPersonaId !== persona.id) setConfirmDefault(true);
+    else void makeDefault();
   };
 
   const content = view === 'memory'
@@ -400,7 +409,7 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         onTalk={onTalk}
         onDelete={onDelete}
         isDefault={isDefault}
-        onMakeDefault={onboardingOn && !isProjectScope ? () => void makeDefault() : undefined}
+        onMakeDefault={onboardingOn && !isProjectScope ? requestMakeDefault : undefined}
         onSave={() => void formRef.current?.save()}
         onBack={onBack}
         isMobile={isMobile}
@@ -424,6 +433,15 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
           confirmVariant="danger"
           onConfirm={() => { const act = confirmDiscard; setConfirmDiscard(null); act?.(); }}
           onCancel={() => setConfirmDiscard(null)}
+        />
+      )}
+      {confirmDefault && (
+        <ConfirmDialog
+          title="Сменить основного собеседника?"
+          subtitle={<>Сейчас это <b>{currentDefault ? personaLabel(currentDefault) : '—'}</b>. Новые чаты начнёт <b>{personaLabel(persona)}</b> — прежняя останется на месте, её можно позвать в любой момент.</>}
+          confirmLabel="Сменить"
+          onConfirm={() => { setConfirmDefault(false); void makeDefault(); }}
+          onCancel={() => setConfirmDefault(false)}
         />
       )}
     </div>

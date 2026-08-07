@@ -130,6 +130,10 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   const [projectDefaultId, setProjectDefaultId] = useState<string | null>(project.defaultPersonaId ?? null);
   useEffect(() => { setProjectDefaultId(project.defaultPersonaId ?? null); }, [project.id, project.defaultPersonaId]);
   const isDefault = onboardingOn && !!persona && projectDefaultId === persona.id;
+  // Кандидат на руководителя, ждущий подтверждения: смена СУЩЕСТВУЮЩЕГО дефолта —
+  // только через диалог (страховка от случайного клика); первое назначение — сразу.
+  const [confirmLead, setConfirmLead] = useState<Persona | null>(null);
+  const currentLead = projectDefaultId ? personas.find(p => p.id === projectDefaultId) : undefined;
   const makeDefault = async (p: Persona) => {
     try {
       await api.personas.makeDefault(p.id);
@@ -138,6 +142,10 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
     } catch (e) {
       showToast('Персоны', e instanceof Error ? e.message : 'Не удалось назначить руководителя проекта.');
     }
+  };
+  const requestMakeDefault = (p: Persona) => {
+    if (projectDefaultId && projectDefaultId !== p.id) setConfirmLead(p);
+    else void makeDefault(p);
   };
 
   // Создание — пошаговый мастер целиком (тулбар внутри компонента).
@@ -175,7 +183,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           onTalk={() => talk(persona)}
           onDelete={() => onDelete(persona)}
           isDefault={isDefault}
-          onMakeDefault={onboardingOn ? () => void makeDefault(persona) : undefined}
+          onMakeDefault={onboardingOn ? () => requestMakeDefault(persona) : undefined}
           onSave={() => void formRef.current?.save()}
           onBack={onBack}
           onClose={onClose}
@@ -257,6 +265,15 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           confirmVariant="danger"
           onConfirm={() => { const act = confirmDiscard; setConfirmDiscard(null); act?.(); }}
           onCancel={() => setConfirmDiscard(null)}
+        />
+      )}
+      {confirmLead && (
+        <ConfirmDialog
+          title="Сменить руководителя проекта?"
+          subtitle={<>Сейчас проект ведёт <b>{currentLead ? personaTitleLines(currentLead).primary : '—'}</b>. Руководителем станет <b>{personaTitleLines(confirmLead).primary}</b> — прежняя останется в команде проекта.</>}
+          confirmLabel="Сменить"
+          onConfirm={() => { const p = confirmLead; setConfirmLead(null); void makeDefault(p); }}
+          onCancel={() => setConfirmLead(null)}
         />
       )}
     </div>

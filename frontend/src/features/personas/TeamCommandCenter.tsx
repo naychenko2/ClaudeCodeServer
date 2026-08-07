@@ -17,7 +17,7 @@ import { C, FONT, R, SHADOW } from '../../lib/design';
 import { PersonaAvatar } from './PersonaAvatar';
 import { SPECIALTY_LABEL } from './automationMeta';
 import { TeamMemoryPanel } from './TeamMemoryPanel';
-import { Modal, IconButton, Button, Menu, MenuItem, WaitingIndicator } from '../../components/ui';
+import { Modal, IconButton, Button, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { Toolbar, PillSwitch, tbBtnPrimary } from '../../components/Toolbar';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
@@ -76,6 +76,13 @@ export function TeamCommandCenter({
       showToast('Команда', e instanceof Error ? e.message : 'Не удалось назначить руководителя проекта.');
     }
   };
+  // Смена СУЩЕСТВУЮЩЕГО руководителя — только через подтверждение (страховка от
+  // случайного клика мимо пункта меню); первое назначение — сразу, без диалога.
+  const [confirmLead, setConfirmLead] = useState<Persona | null>(null);
+  const requestMakeLead = async (p: Persona) => {
+    if (leadId && leadId !== p.id) { setConfirmLead(p); return; }
+    await makeLead(p);
+  };
 
   const refresh = async () => {
     try { setEvents((await api.projects.events(project.id, { limit })) as unknown as EventRow[] ?? []); }
@@ -117,6 +124,8 @@ export function TeamCommandCenter({
   }, [events]);
 
   const personaById = (id: string) => team.find(p => p.id === id);
+  // Текущий руководитель для текста диалога подтверждения смены
+  const currentLead = leadId ? personaById(leadId) : undefined;
   // Ошибку (в т.ч. 400 «длиннее 1000 символов») пробрасываем дальше — MemoryPanel
   // показывает e.message рядом с полем и не чистит набранный текст при провале.
   const addMem = async (text: string, type: TeamMemoryType) => {
@@ -204,7 +213,7 @@ export function TeamCommandCenter({
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
               onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe}
-              leadId={onboardingOn ? leadId : null} onMakeLead={onboardingOn ? makeLead : undefined} />
+              leadId={onboardingOn ? leadId : null} onMakeLead={onboardingOn ? requestMakeLead : undefined} />
           )}
           {tab === 'memory' && (
             <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />
@@ -215,6 +224,16 @@ export function TeamCommandCenter({
           )}
         </div>
       </div>
+
+      {confirmLead && (
+        <ConfirmDialog
+          title="Сменить руководителя проекта?"
+          subtitle={<>Сейчас проект ведёт <b>{currentLead ? personaLabel(currentLead) : '—'}</b>. Руководителем станет <b>{personaLabel(confirmLead)}</b> — прежняя останется в команде проекта.</>}
+          confirmLabel="Сменить"
+          onConfirm={() => { const p = confirmLead; setConfirmLead(null); void makeLead(p); }}
+          onCancel={() => setConfirmLead(null)}
+        />
+      )}
 
       {pickerOpen && <GroupChatPicker team={team} onClose={() => setPickerOpen(false)} onCreated={s => { setPickerOpen(false); onOpenSession(s); }} />}
       {newTaskOpen && <NewTaskDialog defaultProjectId={project.id} onCreated={() => setNewTaskOpen(false)} onClose={() => setNewTaskOpen(false)} />}

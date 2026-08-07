@@ -12,6 +12,7 @@ import { useSessionPanels } from './workspace/useSessionPanels';
 import { SESSION_KEYS } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
+import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
@@ -337,6 +338,9 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     window.addEventListener('open-fal-stats', open);
     return () => window.removeEventListener('open-fal-stats', open);
   }, []);
+  // Диплинк «Собрать цепочку…» из PresetOptions (RoutePicker/PersonaForm) — может
+  // сработать в контексте проекта, где HubHeader не смонтирован (см. HubHeader.tsx)
+  useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
   // Открыть только что созданную сессию этого проекта (групповой чат из ChatPanel):
   // проект уже открыт, событие приходит без ремоунта страницы
   useEffect(() => {

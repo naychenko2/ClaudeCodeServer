@@ -27,7 +27,7 @@ import { ListDateDivider } from './ListDateDivider';
 import { EmptyState } from './EmptyState';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
-import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, FileTypeTile, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, FileTypeTile, FileStatusBadge, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
@@ -82,16 +82,6 @@ interface RowFile {
   staged: boolean;  // есть ли в индексе (для приведения индекса при выборочном коммите)
   added: number | null;
   deleted: number | null;
-}
-
-// Цвет имени файла по статусу (вместо квадратного бейджа — как просил дизайн)
-function nameColor(status: string): string {
-  switch (status) {
-    case 'A': case '?': return C.successText;
-    case 'D': return C.danger;
-    case 'R': return C.info;
-    default: return C.textHeading;
-  }
 }
 
 // Объединить staged+unstaged+untracked в единый набор по пути (файл может быть в двух группах)
@@ -487,13 +477,16 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         )}
         {/* Без чекбоксов — тег расширения (как в панели «Файлы») */}
         {!(isWorking && selectMode) && <FileTypeTile name={name} />}
-        {/* Имя файла — статус кодируется цветом. Гарнитура и размер — как в строке
-            «Файлов» и «Документов»: панели стоят рядом, и свой шрифт читался бы
-            как другой раздел */}
+        {/* Имя файла. Гарнитура, размер и цвет — как в строке «Файлов» и «Документов»:
+            панели стоят рядом, и свой шрифт читался бы как другой раздел. Состояние
+            файла цветом имени больше не кодируется — оно говорится значком справа,
+            тем же, что в дереве: зелёное имя значило «новый файл» здесь и «файл в
+            базе знаний» там */}
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <span title={f.path} style={{
             fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35,
-            fontWeight: isActiveFile ? 600 : 400, color: nameColor(f.status),
+            fontWeight: isActiveFile ? 600 : 400,
+            color: isActiveFile ? C.textHeading : C.textSecondary,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>{name}</span>
           {showParent && parent && (
@@ -503,6 +496,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             }}>{parent}</span>
           )}
         </span>
+        {/* Состояние файла — тем же значком, что в дереве «Файлов». Стоит перед
+            счётчиком строк: тот прячется под кнопкой отката при наведении, а значок
+            остаётся на виду */}
+        <FileStatusBadge status={f.status} />
         {/* numstat +N/−M — скрываем под кнопкой отмены при ховере (та absolute поверх) */}
         {(f.added != null || f.deleted != null) && (
           <span style={{ display: 'flex', gap: 5, flexShrink: 0, fontFamily: FONT.mono, fontSize: 10.5, opacity: isWorking && hovered ? 0 : 1 }}>

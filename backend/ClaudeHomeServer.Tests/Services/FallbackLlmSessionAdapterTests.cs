@@ -281,8 +281,10 @@ public class FallbackLlmSessionAdapterTests
         final.Subtype.Should().Be("error");
         var error = Downstream().OfType<ErrorMessage>().Should().ContainSingle().Subject;
         error.Text.Should().Contain("Ни одна из доступных моделей не ответила");
-        // У подписок пула без DisplayName в ленте остаётся ключ (имя пустое → ключ)
-        error.Text.Should().Contain("acc-a").And.Contain("acc-b");
+        // У подписок пула без DisplayName имя пустое — фолбэк «Аккаунт Claude», сырые
+        // ключи acc-a/acc-b в пользовательский текст не попадают
+        error.Text.Should().Contain("Аккаунт Claude");
+        error.Text.Should().NotContain("acc-a").And.NotContain("acc-b");
         error.Text.Should().Contain("слишком много запросов", "429 → RateLimit → человекочитаемая причина");
         error.Text.Should().Contain("Попробуйте позже или выберите другую модель в настройках чата.");
     }
@@ -647,10 +649,11 @@ public class FallbackLlmSessionAdapterTests
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
-        // Один провайдер-переключатель в ленте: ротация по Label=null (адаптер)
-        // или без маркера вовсе (только ApplyTarget). SessionManager'овский фейловер
-        // тут не идёт — мы не SessionManager. Главное — нет дубля.
-        Downstream().OfType<ProviderSwitchedMessage>().Should().HaveCountLessThanOrEqualTo(1);
+        // Уровень 1 (ротация подписок того же пула) — ТИХИЙ: ProviderSwitchedMessage не
+        // шлётся вовсе, сессионный фейловер тут не идёт (мы не SessionManager). Маркеров
+        // в ленте быть не должно — поэтому BeEmpty, а не «не больше одного»: иначе assertion
+        // прошёл бы, даже если маркеры снова начнут слать.
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
 
     // Инцидент 2026-08-07: модель попытки бралась из _effectiveModel() — НАМЕРЕНИЯ хода,
@@ -687,6 +690,46 @@ public class FallbackLlmSessionAdapterTests
         // Три уникальные пары: claude-1 → alibabacloud → deepseek, дальше повторяться некому,
         // оркестрация завершается исчерпанием. Без фикса цикл долбил бы потолок 4 подмены
         // повторами одной пары (5 попыток), а не останавливался на трёх.
+        inner.Attempts.Should().HaveCount(3);
+        inner.Attempts.Select(a => (a.Provider, a.Model!)).Should().BeEquivalentTo(new[]
+        {
+            ("claude-1", "opus"), ("alibabacloud", "qwen-max"), ("deepseek", "deepseek-v4-flash"),
+        }, "фактическая пара «модель × подписка» не повторяется: в попытку идёт эквивалент, не opus");
+    }
+
+    // Тот же инцидент 2026-08-07, но через ПРОДОВЫЙ вход: ClaudeSession.EffectiveTurnChain
+    // всегда отдаёт минимум один элемент, поэтому модель попытки бралась из замороженной
+    // chain[0] (условие было chain.Count > 0), а не из _effectiveModel(). Вариант с chain:null
+    // эту ветку не задействует — а именно её «упростит» будущий исполнитель, вернув пересчёт
+    // из цепочки. Ожидание то же: 3 попытки, пары уникальны. На коде до фикса da952f0d падает
+    // пятью попытками — это и доказывает, что тест охраняет именно продовый сценарий.
+    [Fact]
+    public async Task ЭквивалентПровайдера_ФактическаяПараНеПовторяется_ЦепочкаОднойМодели()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
+            ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
+            ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
+            ["LlmProviders:alibabacloud:TierStrong"] = "qwen-max",
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-flash",
+            ["LlmProviders:deepseek:TierStrong"] = "deepseek-v4-flash",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("claude-1");
+        // chain: ["opus"] имитирует продовый EffectiveTurnChain (минимум один элемент) —
+        // модель попытки идёт из chain[0], а не из _effectiveModel().
+        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude-1",
+            chain: ["opus"], effectiveModel: () => "opus", turnTier: ModelTier.Strong, modelFallbackMax: 4);
+        // Все попытки — обрыв (Unreachable), как в инциденте
+        for (var i = 0; i < 6; i++)
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
         inner.Attempts.Should().HaveCount(3);
         inner.Attempts.Select(a => (a.Provider, a.Model!)).Should().BeEquivalentTo(new[]
         {
@@ -785,16 +828,20 @@ public class FallbackLlmSessionAdapterTests
         blocks[0].Should().StartWith("Ни одна из доступных моделей не ответила");
         var attemptLines = blocks[1].Split('\n');
         attemptLines.Should().HaveCount(2, "по строке на попытку");
-        attemptLines[0].Should().Contain("acc-a");
-        attemptLines[1].Should().Contain("acc-b");
+        // Подписки пула без DisplayName → фолбэк «Аккаунт Claude» в каждой строке попытки;
+        // сырых ключей acc-a/acc-b в пользовательском тексте нет
+        attemptLines[0].Should().Contain("Аккаунт Claude");
+        attemptLines[1].Should().Contain("Аккаунт Claude");
+        error.Text.Should().NotContain("acc-a").And.NotContain("acc-b");
         blocks[2].Should().StartWith("Попробуйте позже");
         // Обходного разделителя « · » в сообщении больше нет
         error.Text.Should().NotContain(" · ");
     }
 
     // Имя поставщика вместо ключа: подписка с DisplayName показывается именем (ключ
-    // acc-a не виден), без DisplayName — ключом (acc-b). DisplayName провайдера тоже
-    // подставляется. Проверка постановки «Имя поставщика вместо ключа».
+    // acc-a не виден), без DisplayName — нейтральным фолбэком «Аккаунт Claude» (сырой
+    // ключ acc-b в текст не попадает). DisplayName провайдера тоже подставляется.
+    // Проверка постановки «Имя поставщика вместо ключа».
     [Fact]
     public async Task Исчерпание_ИмяПоставщикаВместоКлюча()
     {
@@ -812,8 +859,9 @@ public class FallbackLlmSessionAdapterTests
         // Подписка с DisplayName → имя, ключа acc-a в ленте нет
         error.Text.Should().Contain("Claude 2 (Max)");
         error.Text.Should().NotContain("acc-a");
-        // Подписка без DisplayName → ключ
-        error.Text.Should().Contain("acc-b");
+        // Подписка без DisplayName → фолбэк «Аккаунт Claude», сырой ключ acc-b не виден
+        error.Text.Should().Contain("Аккаунт Claude");
+        error.Text.Should().NotContain("acc-b");
         // Провайдер с DisplayName → имя
         error.Text.Should().Contain("DeepSeek");
         // Человекочитаемые причины: 429 → RateLimit → «слишком много запросов»,

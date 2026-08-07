@@ -434,7 +434,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 return new FallbackTarget(candidate, null,
                     Label: null,
                     ProfileRoot: dstRoot, IsProviderSwitch: false,
-                    LogDetail: $"Автофолбэк: подписка «{KeyLabel(currentKey)}» → «{KeyLabel(candidate)}»");
+                    // Причина ротации — в LogInfo для разбора (какой класс ошибки погнал
+                    // смену аккаунта: 429, 5xx, обрыв): это единственный след тихой подмены.
+                    LogDetail: $"Автофолбэк: {TraceLine(model, currentKey, cls)} → подписка «{KeyLabel(candidate)}»");
             }
         }
 
@@ -698,13 +700,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         key == ClaudeSubscriptionPool.PrimaryKey ? "claude" : key;
 
     // Имя поставщика для пользовательского текста: DisplayName подписки пула, затем
-    // DisplayName провайдера, иначе — ключ (через KeyLabel). Ключ сырым — только когда
-    // имени нет вовсе (нет ни подписки, ни провайдера, либо пустой DisplayName).
+    // DisplayName провайдера, иначе — ключ (через KeyLabel). Подписка пула без DisplayName —
+    // фолбэк «Аккаунт Claude»: имя подписки задаётся только локально (appsettings.Local.json,
+    // у большинства машин пусто), сырой ключ («acc-2») в текст пользователю не показываем.
+    // У сторонних провайдеров DisplayName есть всегда (appsettings.json) — они сюда не доходят.
     private string ProviderLabel(string key)
     {
         var sub = _pool.All.FirstOrDefault(s => s.Key == key);
-        if (sub is not null && !string.IsNullOrWhiteSpace(sub.DisplayName))
-            return sub.DisplayName;
+        if (sub is not null)
+            return !string.IsNullOrWhiteSpace(sub.DisplayName) ? sub.DisplayName : "Аккаунт Claude";
         var provider = _providers?.GetByKey(key);
         if (provider is not null && !string.IsNullOrWhiteSpace(provider.DisplayName))
             return provider.DisplayName;

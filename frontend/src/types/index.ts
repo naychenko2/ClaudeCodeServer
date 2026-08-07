@@ -35,6 +35,9 @@ export interface Project {
   // Ключи серверов личного MCP-реестра, ВЫКЛЮЧЕННЫХ в этом проекте (deny-list):
   // сервер едет в ход везде, пока его не выключили здесь. Пусто/нет — выключенных нет
   mcpServersOff?: string[] | null;
+  // Ключи серверов личного MCP-реестра, ВКЛЮЧЁННЫХ в этом проекте (allow-list, флаг
+  // mcp-allowlist): сервер едет в ход только там, где явно включён. Пусто/нет — не включён никто
+  mcpServersOn?: string[] | null;
   // Персона-«руководитель проекта» (фича default-personas-onboarding): дефолт для новых
   // чатов проекта; null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
   defaultPersonaId?: string | null;
@@ -2398,6 +2401,8 @@ export interface McpServer {
   enabled: boolean;
   alwaysLoad: boolean;
   allowReadOnlyPersonas: boolean;
+  // Доезжать ли в чаты вне проектов при allow-модели (флаг mcp-allowlist); deny-ветка не читает
+  allowOutsideProjects: boolean;
   source: string;               // manual | legacymcpconfig | legacyuserscope
   authVersion: number;
   createdAt: string;
@@ -2440,6 +2445,7 @@ export interface McpServerUpsert {
   enabled?: boolean;
   alwaysLoad?: boolean;
   allowReadOnlyPersonas?: boolean;
+  allowOutsideProjects?: boolean;
 }
 
 export interface McpProbeResult {

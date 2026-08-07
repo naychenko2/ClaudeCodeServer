@@ -13,6 +13,7 @@ import {
   PRIORITY_LABEL, STATUS_LABEL, updateTask, useTasks,
 } from '../../lib/tasks';
 import { AssigneeBadge, DueChip, LabelChip, PriorityFlag, SubtaskCheck } from './bits';
+import { useUserScrollGate } from '../../lib/userScrollGate';
 
 const WIDTH = 340;
 const STATUSES: TaskStatus[] = ['todo', 'inProgress', 'done'];
@@ -34,6 +35,7 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
   const task = tasks.find(t => t.id === anchor.taskId) ?? null;
   const ref = useRef<HTMLDivElement>(null);
   const [top, setTop] = useState(anchor.rect.top);
+  const isUserScroll = useUserScrollGate();
 
   // Вертикальный клэмп по фактической высоте после рендера
   useLayoutEffect(() => {
@@ -41,14 +43,16 @@ export function HoverCard({ anchor, onKeepAlive, onLeave, onClose }: {
     setTop(Math.max(12, Math.min(anchor.rect.top, window.innerHeight - h - 12)));
   }, [anchor, task?.subtasks.length, task?.description]);
 
-  // Скролл вне тултипа уводит якорь — закрываем
+  // Скролл вне тултипа уводит якорь — закрываем. Только пользовательский скролл:
+  // программный прижим ленты чата при активности Claude тултип не закрывает.
   useEffect(() => {
     const onScroll = (e: Event) => {
+      if (!isUserScroll()) return;
       if (!(e.target instanceof HTMLElement) || !ref.current?.contains(e.target)) onClose();
     };
     window.addEventListener('scroll', onScroll, true);
     return () => window.removeEventListener('scroll', onScroll, true);
-  }, [onClose]);
+  }, [onClose, isUserScroll]);
 
   if (!task) return null;
 

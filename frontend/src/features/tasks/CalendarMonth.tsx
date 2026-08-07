@@ -12,6 +12,7 @@ import { NO_PROJECT_LABEL, projectColor, todayIso, toIsoDate } from '../../lib/t
 import { TaskCard } from './TaskCard';
 import { RepeatIcon } from './bits';
 import { useTaskHover } from './useTaskHover';
+import { useUserScrollGate } from '../../lib/userScrollGate';
 
 interface Props {
   tasks: Task[];
@@ -81,14 +82,18 @@ function DayOverflowPopover({ iso, rect, tasks, onOpenTask, onClose }: {
   onClose: () => void;
 }) {
   const [hovered, setHovered] = useState<string | null>(null);
+  const isUserScroll = useUserScrollGate();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     const onDown = (e: PointerEvent) => {
       if (!(e.target as HTMLElement).closest('[data-day-popover]')) onClose();
     };
-    // Скролл страницы уводит якорную ячейку — закрываем; скролл внутри поповера не считается
+    // Скролл страницы уводит якорную ячейку — закрываем; скролл внутри поповера не считается.
+    // Гейт «только пользовательский скролл»: программный прижим ленты чата (активность
+    // Claude) — не наш скролл, поповер не закрываем.
     const onScroll = (e: Event) => {
+      if (!isUserScroll()) return;
       if (!(e.target instanceof HTMLElement) || !e.target.closest('[data-day-popover]')) onClose();
     };
     window.addEventListener('keydown', onKey);
@@ -101,7 +106,7 @@ function DayOverflowPopover({ iso, rect, tasks, onOpenTask, onClose }: {
       window.removeEventListener('resize', onClose);
       window.removeEventListener('scroll', onScroll, true);
     };
-  }, [onClose]);
+  }, [onClose, isUserScroll]);
 
   const width = window.innerWidth < 1024 ? 260 : 280;
   const left = Math.max(12, Math.min(rect.left, window.innerWidth - width - 12));
@@ -181,23 +186,26 @@ export function CalendarMonth({ tasks, projectsById, navDate, onNavigate, onOpen
   // Длинное нажатие по дню (мобила): таймер + флаг, гасящий последующий click
   const longPress = useRef<{ timer: ReturnType<typeof setTimeout> | null; fired: boolean }>({ timer: null, fired: false });
   const hover = useTaskHover();
+  const isUserScroll = useUserScrollGate();
   const nameOf = (t: Task) =>
     t.projectId ? projectsById.get(t.projectId)?.name ?? '' : NO_PROJECT_LABEL;
 
-  // Закрытие контекстного меню: клик мимо, Esc, скролл
+  // Закрытие контекстного меню: клик мимо, Esc, скролл (только пользовательский —
+  // программный прижим ленты чата при активности Claude меню не закрывает)
   useEffect(() => {
     if (!ctxMenu) return;
     const close = () => setCtxMenu(null);
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const onScroll = () => { if (isUserScroll()) close(); };
     document.addEventListener('pointerdown', close);
     window.addEventListener('keydown', onKey);
-    window.addEventListener('scroll', close, true);
+    window.addEventListener('scroll', onScroll, true);
     return () => {
       document.removeEventListener('pointerdown', close);
       window.removeEventListener('keydown', onKey);
-      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('scroll', onScroll, true);
     };
-  }, [ctxMenu]);
+  }, [ctxMenu, isUserScroll]);
 
   const startLongPress = (iso: string) => {
     if (!onQuickCreate) return;

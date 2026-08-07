@@ -8,6 +8,7 @@ import { C, R, FONT, FS, SP } from '../lib/design';
 import { Button, Menu, TextField } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { tagColor } from '../lib/tagRegistry';
+import { useUserScrollGate } from '../lib/userScrollGate';
 
 // Тонированный фон чипа: прозрачность цвета тега. Цвет приходит ДАННЫМИ из реестра
 // (палитра-данных GROUP_COLORS) — не тема, поэтому не через C.*; тёмная тема делит
@@ -148,17 +149,20 @@ export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, 
   onCreate: (name: string) => void;
   onClose: () => void;
 }) {
+  const isUserScroll = useUserScrollGate();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
-    // capture: ловим скролл скролл-контейнера списка (он не всплывает до window)
-    const onScroll = () => onClose();
+    // capture: ловим скролл скролл-контейнера списка (он не всплывает до window).
+    // Гейт «только пользовательский скролл»: программный прижим ленты чата при активности
+    // Claude тоже порождает scroll, но не должен схлопывать меню, с которым работает человек.
+    const onScroll = () => { if (isUserScroll()) onClose(); };
     document.addEventListener('keydown', onKey);
     document.addEventListener('scroll', onScroll, true);
     return () => {
       document.removeEventListener('keydown', onKey);
       document.removeEventListener('scroll', onScroll, true);
     };
-  }, [onClose]);
+  }, [onClose, isUserScroll]);
 
   return (
     <Menu onClose={onClose} anchor={anchor} maxHeight={MENU_MAX_H} minWidth={MENU_W}>

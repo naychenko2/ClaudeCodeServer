@@ -101,9 +101,14 @@ export function AiLauncher() {
   const obstacleOverlap = useFabObstacleOverlap(fabRef, !open && !isMobile);
   // Компактный круг: на стене всегда, в остальных местах — когда снизу подпёрло
   const fabSmall = wallMode || obstacleOverlap;
-  // Лицо AI-хаба (фича default-personas-onboarding): аватар релевантной персоны
-  // (чат → проект → личная дефолт-персона); null — нейтральный логотип, как раньше
-  const facePersona = useContextPersona();
+  // Лицо AI-хаба (фича default-personas-onboarding): «хозяин контекста», а НЕ собеседник
+  // текущего чата. personaId: null осознанно пропускает уровень «персона чата» в резолвере
+  // (contextPersona.ts): в проекте кнопка/палитра носят лицо дефолт-персоны проекта (даже
+  // если открыт чат с другой персоной), вне проекта — личной дефолт-персоны владельца;
+  // null на обоих уровнях — нейтральный логотип. Та же переменная питает и лицо кнопки,
+  // и лицо в шапке палитры (searchRow) — они всегда совпадают. (WaitingIndicator в ленте
+  // зовёт useContextPersona() без аргументов — там персона чата правильна.)
+  const facePersona = useContextPersona({ personaId: null });
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
 
   // Git-статус текущего проекта — чтобы git-действия (разбор коммитов, ревью diff, история

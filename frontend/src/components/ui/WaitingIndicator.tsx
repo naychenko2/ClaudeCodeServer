@@ -5,6 +5,15 @@ import aiHome from '../../assets/ai-home.png';
 import { useContextPersona } from '../../lib/contextPersona';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
+// Высота бокса лица индикатора. Аватар — 28px; сверху и снизу резерв по 14px, чтобы
+// максимальный размах колец «Эхо» (scale 1.85 от 28 ≈ +12px во все стороны) лежал
+// ВНУТРИ бокса, а не торчал наружу. Торчащие transform'ом кольца входят в scrollable
+// overflow контейнера ленты → scrollHeight пульсирует в такт анимации → лента дрожит.
+// С резервом visual overflow бокса нулевой, scrollHeight стабилен. Подтверждено стендом
+// (.cc-attachments/jitter-verify): при резерве 0 ΔscrollHeight=9px, при ≥12 — Δ=0.
+const ECHO_FACE_W = 28;
+const ECHO_FACE_H = 56;
+
 // Живой индикатор ожидания: значок-логотип «AI Home» с расходящимися кольцами «Эхо»
 // вокруг аватара персоны (или логотипа, если персоны нет) + «печатная машинка» по синонимам.
 // Текст печатается посимвольно с курсором, в конце дописывается «…», держит паузу,
@@ -61,34 +70,42 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
     return () => clearTimeout(timer);
   }, [reduced, awaitingResponse]);
 
-  // Обёртка лица: 28px-аватар + два расходящихся кольца «Эхо» поверх (z-index ниже текста,
-  // pointer-events: none — не перехватывают клики по ленте). CSS-переменная --cc-echo-color
-  // задаёт цвет border колец — так одна анимация работает для smoke и plan режимов.
+  // Обёртка лица: внешний бокс с вертикальным резервом (ECHO_FACE_H), внутри — аватар
+  // 28px по центру с двумя кольцами «Эхо» поверх. Резерв вмещает размах колец, чтобы они
+  // не торчали за бокс (см. ECHO_FACE_H). --cc-echo-color на аватар-обёртке задаёт цвет
+  // border колец — так одна анимация работает для smoke и plan режимов.
   const faceBox = (inner: React.ReactNode) => (
     <span
       style={{
-        position: 'relative', width: 28, height: 28, flexShrink: 0,
-        display: 'inline-block',
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        ['--cc-echo-color' as any]: ringColor,
+        position: 'relative', width: ECHO_FACE_W, height: ECHO_FACE_H, flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
-      {inner}
-      {!reduced && (
-        <>
-          <span className="cc-echo-ring cc-echo-ring--gutter" />
-          <span className="cc-echo-ring cc-echo-ring--2 cc-echo-ring--gutter" />
-        </>
-      )}
+      <span
+        style={{
+          position: 'relative', width: ECHO_FACE_W, height: ECHO_FACE_W, display: 'block',
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          ['--cc-echo-color' as any]: ringColor,
+        }}
+      >
+        {inner}
+        {!reduced && (
+          <>
+            <span className="cc-echo-ring cc-echo-ring--gutter" />
+            <span className="cc-echo-ring cc-echo-ring--2 cc-echo-ring--gutter" />
+          </>
+        )}
+      </span>
     </span>
   );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      {/* minHeight = аватар (28): строка НЕ меняет высоту ни при смене глагола, ни в
-          пустой фазе печати. Иначе ResizeObserver на contentRef прижимает ленту
-          (scrollTop = scrollHeight) на каждом переносе/цикле — чат подпрыгивает. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 28 }}>
+      {/* minHeight = бокс лица (ECHO_FACE_H): строка НЕ меняет высоту ни при смене глагола,
+          ни в пустой фазе печати. Сам бокс уже вмещает весь размах колец, так что visual
+          overflow нулевой — ResizeObserver на contentRef не дёргается, scrollHeight ленты
+          стабилен. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: ECHO_FACE_H }}>
         {/* Лицо: аватар релевантной персоны (фича default-personas-onboarding),
             fallback — логотип «AI Home» маской (тонируется под тему/режим) */}
         {facePersona ? faceBox(

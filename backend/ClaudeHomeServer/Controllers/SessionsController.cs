@@ -98,6 +98,20 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }
+
+    // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки
+    // тем» в разделе проекта). Возвращает счётчики для тоста.
+    [HttpPost("icon-batch")]
+    public async Task<IActionResult> IconBatch(string projectId, CancellationToken ct)
+    {
+        if (!OwnsProject(projectId)) return NotFound();
+        try
+        {
+            var result = await sessions.SetChatIconsAsync(UserId, ct, projectId);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
 }
 
 public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null);

@@ -857,6 +857,9 @@ export const api = {
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
+    // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки тем»)
+    iconBatch: (projectId: string) =>
+      request<{ processed: number; skipped: number }>(`/projects/${encodeURIComponent(projectId)}/sessions/icon-batch`, { method: 'POST' }),
     create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
@@ -940,9 +943,6 @@ export const api = {
     // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
     retitle: (id: string) =>
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
-    // Подобрать значки-иконки всем чатам без них (действие AI-палитры chat.emojiAll)
-    iconBatch: () =>
-      request<{ processed: number; skipped: number }>('/chats/icon-batch', { method: 'POST' }),
     // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     createGroup: (personaIds: string[], mode = 'auto', name?: string) =>

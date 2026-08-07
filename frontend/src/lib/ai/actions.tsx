@@ -291,19 +291,21 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('chat.retitle'),
   },
   {
-    // Определить тему всем чатам без неё — batch-прогон (по образцу note.annotationsAll).
-    // Не требует открытого чата: действует по всем сессиям владельца сразу.
-    // Id действия исторический (значок был эмодзи) — переименование ключа ломало бы
+    // Проставить значки тем чатам текущего проекта без них — batch-прогон. Живёт в разделе
+    // проекта, а не чата: действует сразу по всем сессиям проекта, а не по одному открытому
+    // чату. Id действия исторический (значок был эмодзи) — переименование ключа ломало бы
     // сохранённые подсказки, как с preview/«Сервисы»
-    id: 'chat.emojiAll', title: 'Проставить значки тем', hint: 'определить тему каждого чата без неё',
-    section: 'chat', sectionLabel: 'Чат', icon: IcTopic,
-    when: c => c.online,
-    run: async () => {
+    id: 'chat.emojiAll', title: 'Проставить значки тем', hint: 'значок каждому чату проекта без него',
+    section: 'project', sectionLabel: 'Проект', icon: IcTopic,
+    when: c => projectOpen(c) && c.online, contextual: projectOpen,
+    run: async c => {
+      const projectId = c.nav?.project?.id;
+      if (!projectId) return;
       try {
-        const r = await api.chats.iconBatch();
+        const r = await api.sessions.iconBatch(projectId);
         showToast('Значки тем', r.processed > 0
           ? `Проставлено ${r.processed}, пропущено ${r.skipped}`
-          : 'Нечего проставлять — у всех чатов значок уже есть или в них нет переписки',
+          : 'Нечего проставлять — у всех чатов проекта значок уже есть или нет переписки',
           'claude');
       } catch (e) {
         showToast('Значки тем', e instanceof Error ? e.message : 'Сервер недоступен', 'info');

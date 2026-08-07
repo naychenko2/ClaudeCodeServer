@@ -3000,7 +3000,15 @@ public class SessionManager : IDisposable
         var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
             ownerId: userId, jsonFormat: Llm.TitleExtraction.SchemaIcon, ct: ct);
         var iconName = Llm.TitleExtraction.ExtractIconName(raw);
-        if (iconName is null) return null;
+        if (iconName is null)
+        {
+            // Диагностика: модель не дала валидное PascalCase-имя. Логируем сырой ответ,
+            // чтобы понять — пустой {} (отступила), не-PascalCase (опечатка/пробел) или мусор.
+            // Обрезаем: модели иногда шлют длинные рассуждения вслух
+            _log.LogInformation("Значок чата {Session} («{Name}»): модель не дала имя. Ответ: {Raw}",
+                sessionId, session.Name, raw is null ? "<null>" : (raw.Length > 300 ? raw[..300] + "…" : raw));
+            return null;
+        }
 
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         // Повторная проверка: пока модель думала, значок мог поставить авто-заголовок нового
@@ -3018,14 +3026,15 @@ public class SessionManager : IDisposable
     // (значок уже стоит, нет переписки, модель не дала имя). Идёт в тост палитры.
     public sealed record IconBatchResult(int Processed, int Skipped);
 
-    // Подобрать значки ВСЕМ своим чатам без него. Действие AI-палитры «Проставить значки тем» —
-    // разовый проход по чатам владельца. Чаты со значком отсеиваются ДО вызова модели (экономия
-    // вызовов), поэтому в processed попадают только реально размеченные этим прогоном.
-    // Каждый оставшийся чат — отдельный вызов модели: на десятках чатов это десятки секунд.
-    public async Task<IconBatchResult> SetChatIconsAsync(string userId, CancellationToken ct)
+    // Подобрать значки чатам без него в рамках проекта (projectId) или, если проект не задан,
+    // по всем чатам владельца. Действие AI-палитры «Проставить значки тем» в разделе проекта —
+    // разовый проход. Чаты со значком отсеиваются ДО вызова модели (экономия вызовов), поэтому
+    // в processed попадают только реально размеченные этим прогоном. Каждый оставшийся чат —
+    // отдельный вызов модели: на десятках чатов это десятки секунд.
+    public async Task<IconBatchResult> SetChatIconsAsync(string userId, CancellationToken ct, string? projectId = null)
     {
         var all = _sessions.Values
-            .Where(e => ResolveOwnerId(e.Info) == userId)
+            .Where(e => ResolveOwnerId(e.Info) == userId && (projectId is null || e.Info.ProjectId == projectId))
             .Select(e => e.Info)
             .ToList();
         // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём

@@ -1020,8 +1020,28 @@ public class SessionManager : IDisposable
         }
         else
         {
-            // Цель: сторонний провайдер — его ключ; родной Claude — доступный аккаунт пула
-            targetKey = target?.Key ?? _subscriptionPool.Pick(newModel);
+            // Цель: сторонний провайдер — его ключ; родной Claude — доступный аккаунт пула.
+            if (target is null)
+            {
+                // null от ResolveByModel = родной Claude (подписка, без env-оверрайдов). Но тот же
+                // null получается и для неизвестной модели: её id не нашёлся ни в Models, ни по
+                // префиксу ни одного провайдера — фронт и реестр рассинхронизированы (каталог
+                // /api/models отдал id, которого текущий LlmProviderRegistry не знает). Молчаливый
+                // фолбэк на Pick давал ложное «Чат уже на этом провайдере» (Pick выбирал тот же
+                // аккаунт пула, что текущий). Если чат сейчас на подписке и модель РЕАЛЬНО другая —
+                // это не смена аккаунта, а неизвестная модель, говорим правду. Совпадает с текущей
+                // моделью — значит и правда та же подписка, корректное «уже на провайдере» ниже.
+                var currentIsSubscription = _subscriptionPool.All.Any(s => s.Key == currentKey);
+                if (currentIsSubscription
+                    && !string.Equals(newModel, entry.Info.Model, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"Модель «{newModel}» не найдена среди настроенных провайдеров");
+                targetKey = _subscriptionPool.Pick(newModel);
+            }
+            else
+            {
+                targetKey = target.Key;
+            }
         }
 
         if (string.Equals(targetKey, currentKey, StringComparison.OrdinalIgnoreCase))

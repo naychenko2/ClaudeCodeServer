@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Minus, Pin, Plus, Search } from 'lucide-react';
+import { ArrowDownToLine, Pin, Plus, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
 import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
@@ -112,11 +112,13 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
         hoverSuppressed={dragActive}
         onClick={() => onClick(p)}
         // Действие живёт в подписи, а не отдельной кнопкой рельсы: убирают ОДИН
-        // проект, и целятся при этом в его иконку. Пока иконку тащат, подписи нет
-        // вовсе — значит и кнопка не мешает дропу.
+        // проект, и целятся при этом в его иконку. Знак — тот же, что у иконок рельсы
+        // панелей (ArrowDownToLine / item.onTuck): стрелка ВНИЗ к черте, иконка
+        // уезжает в конец столбца — под лупу. Пока иконку тащат, подписи нет вовсе —
+        // значит и кнопка не мешает дропу.
         action={onHide && !dragActive ? {
-          Icon: Minus,
-          title: 'Убрать из дока (проект останется в поиске)',
+          Icon: ArrowDownToLine,
+          title: 'Убрать из дока',
           onClick: () => onHide(p),
         } : undefined}
       >

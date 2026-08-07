@@ -113,6 +113,49 @@ public class SecretRedactorTests
         redacted.Should().Contain("[REDACTED:secret]");
     }
 
+    // Over-redaction (ревью Глеба): присваивающий паттерн маскировал очевидные заглушки —
+    // пустые кавычки, null/true/false, маску *** и уже-замаскированное. Это визуальный мусор
+    // без пользы для защиты. Реальный секрет при этом режется по-прежнему — fail-closed.
+
+    [Theory]
+    [InlineData("password = \"\"")]
+    [InlineData("token: null")]
+    [InlineData("secret = true")]
+    [InlineData("api_key = false")]
+    [InlineData("token = undefined")]
+    [InlineData("password: <your-key>")]
+    [InlineData("secret = ***")]
+    public void Присваивание_ОчевиднаяЗаглушка_НеРежется(string line)
+    {
+        SecretRedactor.Redact(line).Should().Be(line,
+            "пустое/null/булев/маска/плейсхолдер — не секрет, маска здесь только мусорит");
+    }
+
+    [Fact]
+    public void Присваивание_УжеЗамаскированноеЗначение_НеДёргаетсяПовторно()
+    {
+        // KnownPrefix уже превратил токен в [REDACTED:token]; присваивающий проход не должен
+        // пере-редactить его в [REDACTED:secret], теряя более точную метку
+        var text = "api_key: sk-ant-api03-" + new string('a', 30);
+
+        var redacted = SecretRedactor.Redact(text);
+
+        redacted.Should().Contain("[REDACTED:token]");
+        redacted.Should().NotContain("[REDACTED:secret]");
+    }
+
+    [Fact]
+    public void Присваивание_РеальныйТокен_ВсёЕщеРежется_FailClosed()
+    {
+        // Гарантия защиты не ослаблена: непрозрачное значение-кандидат маскируется как раньше
+        var text = "password = raw-deploy-key-9f8e7d6c5b";
+
+        var redacted = SecretRedactor.Redact(text);
+
+        redacted.Should().NotContain("raw-deploy-key-9f8e7d6c5b");
+        redacted.Should().Contain("[REDACTED:secret]");
+    }
+
     [Fact]
     public void ПорядокПрименения_ТочноеЗначениеПерекрываетКороткийRegexШум()
     {

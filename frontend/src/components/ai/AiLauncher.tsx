@@ -480,15 +480,18 @@ export function AiLauncher() {
               Покой — лёгкое приглушение (opacity 0.85, без grayscale); идея — подскок
               (cc-fab-hop на кнопке) + кольца; работа — кольца + дыхание (cc-fab-breathe). */}
           {/* Кольца «Эхо»: «идея» (strong) и «работа» (aiBusy). Тот же приём, что в ленте
-              чата — .cc-echo-ring с --cc-echo-color. pointer-events: none в самом классе;
-              overflow у кнопки visible, ничто выше по дереву её не клипует. Лежат ПОД
-              аватаром: в покое (scale 1) контур скрыт за кругом лица, при расширении
-              выходит за края и читается как пульс. */}
+              чата — .cc-echo-ring с --cc-echo-color. Цвет разводит состояния: «работа» —
+              нейтральный дымок (C.smoke, те же кольца, что в ленте чата), «идея» — акцент
+              (C.accent). Если оба состояния сразу — приоритет у работы: персона занята,
+              звать не время, оранжевый пульс был бы зазыванием. pointer-events: none в
+              самом классе; overflow у кнопки visible, ничто выше по дереву её не клипует.
+              Лежат ПОД аватаром: в покое (scale 1) контур скрыт за кругом лица, при
+              расширении выходит за края и читается как пульс. */}
           {(fabStrong || aiBusy) && !reduced && (
             <span
               aria-hidden
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              style={{ position: 'absolute', inset: 0, ['--cc-echo-color' as any]: C.accent }}
+              style={{ position: 'absolute', inset: 0, ['--cc-echo-color' as any]: aiBusy ? C.smoke : C.accent }}
             >
               <span className="cc-echo-ring" />
               <span className="cc-echo-ring cc-echo-ring--2" />

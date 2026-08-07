@@ -263,16 +263,17 @@ body {
 /* Второе кольцо — со сдвигом на полпериода, чтобы пульс был непрерывным */
 .cc-echo-ring--2 { animation-delay: 1.25s; }
 
-/* Мобила: левый жёлоб ленты у́же, поэтому кольца расходятся мельче — иначе их
-   левая половина режется клипом области прокрутки (overflow-x: hidden). Десктопу
-   места в жёлобе хватает на полный размах. Тот же приём, что и у .cc-echo-ring —
-   переиспользуется и в ленте (WaitingIndicator), и на плавающей кнопке (AiLauncher). */
+/* Мобила: в узком жёлобе ленты полный размах колец режется клипом области прокрутки
+   (overflow-x: hidden), поэтому в ленте (.cc-echo-ring--gutter, WaitingIndicator) на
+   мобиле кольца расходятся мельче. На плавающей кнопке (AiLauncher) мелкий размах не
+   нужен и вреден: круг 36px даст пульс всего ~5px — нечитаемый; кнопка position: fixed,
+   скролла не создаёт, и места в углу экрана хватает на полный размах. */
 @keyframes cc-echo-ring-sm {
   0%   { transform: scale(1);   opacity: 0.5; }
   100% { transform: scale(1.3); opacity: 0; }
 }
 @media (max-width: 767px) {
-  .cc-echo-ring { animation-name: cc-echo-ring-sm; }
+  .cc-echo-ring--gutter { animation-name: cc-echo-ring-sm; }
 }
 
 /* === Модальные окна и мобильные шторки === */

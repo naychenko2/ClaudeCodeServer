@@ -76,8 +76,8 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
       {inner}
       {!reduced && (
         <>
-          <span className="cc-echo-ring" />
-          <span className="cc-echo-ring cc-echo-ring--2" />
+          <span className="cc-echo-ring cc-echo-ring--gutter" />
+          <span className="cc-echo-ring cc-echo-ring--2 cc-echo-ring--gutter" />
         </>
       )}
     </span>
@@ -129,7 +129,7 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
       {hint && (
         <span style={{
           fontSize: 11.5, color: C.textMuted, marginLeft: 38, fontFamily: 'inherit',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+          maxWidth: '100%',
         }}>
           {hint}
         </span>

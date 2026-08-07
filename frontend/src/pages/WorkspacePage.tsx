@@ -15,6 +15,8 @@ import { UsageScreen } from '../components/UsageScreen';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
+import { markChatRead } from '../lib/chatReadState';
+import { refreshProjectActivity } from '../lib/projectActivity';
 import { C, FONT } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
@@ -834,6 +836,11 @@ const windowWidth = useWindowWidth();
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
+    // Открытый чат — прочитанный. Отмечаем и при autoSelect (восстановление чата
+    // после перезагрузки): он тоже показан на экране. Без этого в проектных
+    // списках метка непрочитанности не гасла никогда — markChatRead звался
+    // только в глобальном ChatsPage
+    markChatRead(session.id);
     if (!autoSelect) {
       // явный выбор — закрываем файл, просмотр коммита, открытую задачу и граф, показываем чат во весь экран
       setOpenFile(null);
@@ -856,6 +863,14 @@ const windowWidth = useWindowWidth();
   const handleSessionUpdated = (updated: Session) => {
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
+
+  // Пока чат открыт, приходящие в него сообщения не копят непрочитанность —
+  // следим за updatedAt, а не только за сменой чата (приём из ChatsPage)
+  const activeSessionId = activeSession?.id;
+  const activeSessionUpdatedAt = activeSession?.updatedAt;
+  useEffect(() => {
+    if (activeSessionId) markChatRead(activeSessionId);
+  }, [activeSessionId, activeSessionUpdatedAt]);
 
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;
@@ -932,12 +947,21 @@ const windowWidth = useWindowWidth();
   // Обновляем статус activeSession при status_changed — иначе session.status в ChatPanel frozen
   useEffect(() => {
     return onMessage(msg => {
-      if (msg.type !== 'status_changed') return;
-      setActiveSession(prev =>
-        prev?.id === msg.sessionId
-          ? { ...prev, status: msg.status as Session['status'] }
-          : prev
-      );
+      if (msg.type === 'status_changed') {
+        setActiveSession(prev =>
+          prev?.id === msg.sessionId
+            ? { ...prev, status: msg.status as Session['status'] }
+            : prev
+        );
+      }
+      // Статусы и сообщения проектных чатов не доходят до агрегата точек (он в
+      // user-группе, те — в session/project). Мы в project-группе и видим события —
+      // пнём точку, иначе она догонит только поллингом через 15с. status_changed —
+      // смена состояния (waiting/working/...), user_message/exited — новый ход, а
+      // значит возможный unread у непрочитанного чата проекта
+      if (msg.type === 'status_changed' || msg.type === 'user_message' || msg.type === 'exited') {
+        refreshProjectActivity();
+      }
     });
   }, []);
 

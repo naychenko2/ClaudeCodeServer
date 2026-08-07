@@ -6,16 +6,18 @@ import { api } from '../../lib/api';
 import { projectColor } from '../../lib/tasks';
 import { projectInitials } from './projectUtil';
 
-// Контурные режимы иконки: приглушённый (проект не в фокусе) и контрастный
-// (выбранный проект). Экспортируется, чтобы вызывающий не пересказывал строки.
-export type ProjectIconOutline = 'muted' | 'strong';
-
 // Единая иконка проекта (по образцу PersonaAvatar, но КВАДРАТНАЯ со скруглением —
 // чтобы отличаться от круглых персон). kind==='image' и есть картинка — рендерим <img>
 // (с фолбэком на инициалы при ошибке). Иначе — две буквы на цветном фоне.
 // Цвет: icon.color из палитры AGENT_COLORS; если не задан — детерминированный
-// projectColor(id), чтобы старые проекты без иконки не «побелели».
-export function ProjectIcon({ project, size = 40, radius, outline, imageUrl: imageUrlOverride }: { project: Project; size?: number; radius?: number; outline?: ProjectIconOutline; imageUrl?: string | null }) {
+// projectColor(id), чтобы старые проекты без иконки не «поблели».
+//
+// muted=true — приглушённый режим спящего дока: проект НЕ в фокусе, иконка
+// обесцвечивается (картинка — grayscale с прозрачностью, плашка — бледный контур
+// с инициалами). Активный проект приглушённым НЕ бывает — он всегда цветной, а
+// выбор док отмечает кольцом кнопки (RailIconButton); на фоне спящих он и читается
+// как выбранный. Цвет возвращается к остальным при наведении курсора на рельсу.
+export function ProjectIcon({ project, size = 40, radius, muted, imageUrl: imageUrlOverride }: { project: Project; size?: number; radius?: number; muted?: boolean; imageUrl?: string | null }) {
   const [hasError, setHasError] = useState(false);
   // imageUrlOverride — локальный objectURL для превью ещё не сохранённой картинки (диалог создания).
   const imageUrl = imageUrlOverride ?? (project.icon?.kind === 'image' ? api.projects.iconUrl(project) : null);
@@ -28,32 +30,10 @@ export function ProjectIcon({ project, size = 40, radius, outline, imageUrl: ima
     width: size, height: size, borderRadius: br, flexShrink: 0, userSelect: 'none',
   };
 
-  // Контурный режим: рамка и инициалы вместо заливки, и это ЕДИНЫЙ вид для всех,
-  // включая проекты с картинкой — иначе в ряду тонких контуров фото оставалось бы
-  // тяжёлым пятном, ровно тем шумом, от которого контур и избавляет.
-  //   muted  — «не в фокусе»: бледная рамка, приглушённые буквы;
-  //   strong — выбранный проект: акцентная рамка и текст (акцент в системе и значит
-  //            «активное»), но по-прежнему без заливки и картинки, чтобы вес держал
-  //            весь ряд, а не одна иконка.
-  if (outline) {
-    const strong = outline === 'strong';
-    return (
-      <div
-        aria-hidden
-        style={{
-          ...base,
-          border: `1px solid ${strong ? C.accent : C.border}`, boxSizing: 'border-box',
-          color: strong ? C.accent : C.textMuted,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          fontFamily: FONT.sans, fontWeight: strong ? 700 : 600, fontSize: Math.round(size * 0.34),
-          lineHeight: 1,
-        }}
-      >
-        {projectInitials(project.name)}
-      </div>
-    );
-  }
-
+  // Картинка сильнее контура: у кого иконка есть, того узнают по ней мгновенно, а две
+  // буквы пришлось бы читать. Поэтому в покое рельсы картинка остаётся картинкой, но
+  // ОБЕСЦВЕЧЕННОЙ — форму сохраняет, а цветным пятном в спящем ряду не висит. Цвет
+  // возвращается вместе с пробуждением ряда (muted снят) или у активного (muted=false).
   if (imageUrl && !hasError) {
     return (
       <img
@@ -62,8 +42,33 @@ export function ProjectIcon({ project, size = 40, radius, outline, imageUrl: ima
         aria-hidden
         draggable={false}
         onError={() => setHasError(true)}
-        style={{ ...base, objectFit: 'cover', display: 'block' }}
+        style={{
+          ...base, objectFit: 'cover', display: 'block',
+          transition: 'filter 0.15s, opacity 0.15s',
+          ...(muted ? { filter: 'grayscale(1)', opacity: 0.7 } : null),
+        }}
       />
+    );
+  }
+
+  // Приглушённый режим для проектов без картинки: бледная рамка и инициалы вместо
+  // цветной плашки. Спящий ряд держит вес, а не пестрит цветными квадратами — выбор
+  // при этом метится кольцом кнопки, а не заливкой этой иконки.
+  if (muted) {
+    return (
+      <div
+        aria-hidden
+        style={{
+          ...base,
+          border: `1px solid ${C.border}`, boxSizing: 'border-box',
+          color: C.textMuted,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontFamily: FONT.sans, fontWeight: 600, fontSize: Math.round(size * 0.34),
+          lineHeight: 1,
+        }}
+      >
+        {projectInitials(project.name)}
+      </div>
     );
   }
 

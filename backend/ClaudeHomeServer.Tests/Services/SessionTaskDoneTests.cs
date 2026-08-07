@@ -83,7 +83,9 @@ public class SessionTaskDoneTests
         var dto = new HomeSessionDto(
             Id: "s1", ProjectId: "p", ProjectName: "P", Name: "n",
             Status: SessionStatus.Finished, LastMessage: null, PersonaId: null,
-            TaskId: "t-done", TaskDone: true, MessageCount: 0, UpdatedAt: DateTime.UtcNow);
+            TaskId: "t-done", TaskDone: true, MessageCount: 0, UpdatedAt: DateTime.UtcNow,
+            Origin: ChatOrigin.Manual, IsPinned: false, Tags: [], Participants: null,
+            ExpiresAfterMinutes: null);
         var json = JsonSerializer.Serialize(dto, WireOpts);
         json.Should().Contain("\"taskDone\":true",
             "глобальный summary /api/home/summary — projection, поле проброшено явно");

@@ -492,8 +492,17 @@ export interface HomeSessionInfo {
   lastMessage?: string | null;
   personaId?: string | null;
   taskId?: string | null;
+  taskDone?: boolean;
   messageCount: number;
   updatedAt: string;
+  // Поля фильтрации: точка активности проекта считает unread только по чатам,
+  // видимым в фильтре этого проекта (matchChatFilter). Без них скрытое фильтром
+  // неприбытие светилось бы в рельсе зря
+  origin: Session['origin'];
+  isPinned?: boolean;
+  tags?: string[];
+  participants?: string[] | null;
+  expiresAfterMinutes?: number | null;
 }
 
 export interface HomeSummaryResponse {

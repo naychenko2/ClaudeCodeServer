@@ -365,7 +365,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
 
   const onServiceStarted = useCallback(() => setToolsTab('preview'), []);
   const {
-    services: previewServices, activePreviewId, setActivePreviewId,
+    services: previewServices, activePreviewId, setActivePreviewId, activate: activatePreview,
     refresh: refreshServices, start: startService, stop: stopService,
   } = useProjectServices(project.id, { onStarted: onServiceStarted });
 
@@ -1129,18 +1129,11 @@ const windowWidth = useWindowWidth();
   // Инструменты (терминал/preview): выбор в сайдбаре → на мобиле уходим в контент;
   // «назад» в шапке контента вернёт к сайдбару инструментов (двухуровневая навигация).
   const handleSelectTerminal = (id: string | null) => { setActiveTerminalId(id); if (isMobile && id) setMobileView('chat'); };
-  const handleSelectPreview = (id: string | null) => {
-    setActivePreviewId(id);
+  const handleSelectPreview = async (id: string | null) => {
     setToolsTab('preview');
+    // activate сам назначает сервис активным на бэкенде и лишь потом открывает окно
+    await activatePreview(id);
     if (isMobile && id) setMobileView('chat');
-    if (!id) return;
-    // Внешний сервис (поднят вне продукта) наш реестр не знает — у него свой эндпоинт,
-    // где порт берётся из конфигурации сервиса
-    const external = previewServices.find(s => s.id === id)?.status === 'external';
-    const call = external
-      ? api.projects.previewActiveExternal(project.id, id)
-      : api.projects.previewActive(project.id, id);
-    void call.catch(() => {});
   };
 
   const handleToggleFileFullscreen = () => setFileFullscreen(v => !v);
@@ -1456,7 +1449,7 @@ const windowWidth = useWindowWidth();
             // видна в подсказке сразу, без перезагрузки страницы
             skills: <SkillsPanel projectId={project.id} onChanged={setSkillsData} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
-            preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
+            preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
           }}
         />
       </div>

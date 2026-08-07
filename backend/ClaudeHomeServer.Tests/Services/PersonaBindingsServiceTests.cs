@@ -241,6 +241,36 @@ public class PersonaBindingsServiceTests : IDisposable
             _sut.SectionEnabled(_userId, persona, key).Should().BeFalse($"ключ {key}");
     }
 
+    // --- ToolKeyAvailable (ключ строкой снаружи: подбор персоны под действие AI-хаба) ---
+
+    [Fact]
+    public void ToolKeyAvailable_РешаетТемЖеГейтом_ЧтоИКлючСам()
+    {
+        // Библиотекарь получает kb пресетом, а notes-annotations — нет: разбор комментариев
+        // не должен достаться персоне, у которой этих инструментов не будет.
+        var librarian = MakePersona(specialty: PersonaSpecialty.Librarian);
+        _sut.ToolKeyAvailable(_userId, librarian, "kb").Should().BeTrue();
+        _sut.ToolKeyAvailable(_userId, librarian, "notes-annotations").Should().BeFalse();
+
+        // Явная привязка включает секцию (тот же путь, что у SectionEnabled)
+        var withBinding = MakePersona(bindings: [ToolBinding("notes-annotations", PersonaBindingMode.Auto)]);
+        _sut.ToolKeyAvailable(_userId, withBinding, "notes-annotations").Should().BeTrue();
+
+        // Рубильник сервера идёт через ServerToolEnabled: суженный Tools его не гасит, Off — гасит
+        var narrowTools = MakePersona(tools: ["tasks"]);
+        _sut.ToolKeyAvailable(_userId, narrowTools, "widgets").Should().BeTrue();
+        _sut.ToolKeyAvailable(_userId, MakePersona(bindings: [ToolBinding("widgets", PersonaBindingMode.Off)]), "widgets")
+            .Should().BeFalse();
+
+        // Обычная возможность (не рубильник и не надстройка) — семантика Persona.Tools
+        _sut.ToolKeyAvailable(_userId, narrowTools, "tasks").Should().BeTrue();
+        _sut.ToolKeyAvailable(_userId, narrowTools, "notes").Should().BeFalse();
+
+        // Не персонный чат получает всё
+        foreach (var key in new[] { "notes-annotations", "widgets", "notes" })
+            _sut.ToolKeyAvailable(_userId, null, key).Should().BeTrue($"ключ {key}");
+    }
+
     [Fact]
     public void SectionEnabled_ПривязкаПриоритетнееПресета()
     {

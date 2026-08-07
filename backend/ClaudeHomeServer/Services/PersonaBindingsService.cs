@@ -161,6 +161,15 @@ public class PersonaBindingsService
             ? SectionSource.Preset : SectionSource.Off;
     }
 
+    // Доступен ли персоне ключ инструментов — каким бы способом он ни гейтился. Нужно там,
+    // где ключ приходит строкой снаружи (подбор персоны под действие AI-хаба) и вызывающий
+    // не обязан знать, рубильник это сервера, секция-надстройка под пресетом или обычная
+    // возможность. Персона без ключа не должна выигрывать подбор: инструмента у неё не будет.
+    public bool ToolKeyAvailable(string? ownerId, Persona? persona, string key) =>
+        ServerKeys.Contains(key) ? ServerToolEnabled(ownerId, persona, key)
+        : PresetKeys.Contains(key) ? SectionEnabled(ownerId, persona, key)
+        : EffectiveToolEnabled(ownerId, persona, key);
+
     // Сервер уведомлений: за 14 дней наблюдений его звали единицы ходов, а инструменты висели
     // у всех персон подряд. Дефолт сузили до тех, кому уведомления нужны по роли — персон
     // с модулем автоматизации (они настраивают проактивность и сами шлют человеку карточки);

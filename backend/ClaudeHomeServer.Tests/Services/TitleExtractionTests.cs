@@ -71,4 +71,16 @@ public class TitleExtractionTests
         // Модель уже поставила значок в сам заголовок — второй не клеим
         Assert.Equal("🚀 Деплой", TitleExtraction.WithEmoji("🚀 Деплой", "🐛"));
     }
+
+    // Проверка «уже со значком» — для batch-прогона: чаты со значком пропускаем
+    [Fact]
+    public void HasEmoji_DetectsLeadingEmoji()
+    {
+        Assert.True(TitleExtraction.HasEmoji("🐛 Правка авторизации"));
+        Assert.True(TitleExtraction.HasEmoji("🚀 Деплой"));
+        Assert.False(TitleExtraction.HasEmoji("Правка авторизации"));
+        Assert.False(TitleExtraction.HasEmoji("→ стрелка не значок"));
+        Assert.False(TitleExtraction.HasEmoji(""));
+        Assert.False(TitleExtraction.HasEmoji(null));
+    }
 }

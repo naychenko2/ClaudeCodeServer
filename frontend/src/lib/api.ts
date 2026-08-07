@@ -940,6 +940,9 @@ export const api = {
     // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
     retitle: (id: string) =>
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),
+    // Проставить значки темы всем чатам без них (действие AI-палитры chat.emojiAll)
+    emojiBatch: () =>
+      request<{ processed: number; skipped: number }>('/chats/emoji-batch', { method: 'POST' }),
     // Групповой чат персон (флаг persona-group-chats): 2-4 участника, первый — ведущая.
     // Зона — по ведущей: проектная персона → сессия её проекта, глобальная → чат вне проекта.
     createGroup: (personaIds: string[], mode = 'auto', name?: string) =>

@@ -275,6 +275,20 @@ public class ChatsController(SessionManager sessions, FileService files, ILogger
         catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
     }
 
+    // Проставить значки темы всем чатам владельца без них (действие AI-палитры
+    // «Проставить значки тем»). Идёт по всем чатам, не только вне проекта: значки нужны
+    // и в проектных сессиях. Возвращает счётчики для тоста.
+    [HttpPost("emoji-batch")]
+    public async Task<IActionResult> EmojiBatch(CancellationToken ct)
+    {
+        try
+        {
+            var result = await sessions.SetChatEmojisAsync(UserId, ct);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
+
     [HttpDelete("{id}")]
     // Секция destructive: на делегированном ходу агент не удаляет чаты (см. FilesController.Delete)
     [DenyOnDelegatedTurn("Удаление чата")]

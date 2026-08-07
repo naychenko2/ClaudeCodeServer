@@ -11,6 +11,7 @@ import {
   GitBranch, GitCompare, FileClock, MessageCircleQuestion, BookPlus, ListChecks, MessagesSquare,
   CalendarClock, CalendarX2, Users, Columns3,
   ShieldCheck, Copy, Zap, Network, UserPlus, LayoutDashboard, RotateCcw, ListPlus, PenLine,
+  Sticker,
 } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import type { NavSnapshot } from '../nav';
@@ -98,6 +99,7 @@ const IcOverview = <LayoutDashboard {...ico} />;
 const IcResume = <RotateCcw {...ico} />;
 const IcCapture = <ListPlus {...ico} />;
 const IcRetitle = <PenLine {...ico} />;
+const IcEmoji = <Sticker {...ico} />;
 const IcToc = <List {...ico} />;
 const IcTranslate = <Sparkles {...ico} />;
 const IcWall = <Columns3 {...ico} />;
@@ -287,6 +289,24 @@ export const AI_ACTIONS: AiAction[] = [
     section: 'chat', sectionLabel: 'Чат', icon: IcRetitle,
     when: c => chatOpen(c) && c.chat.hasMessages && c.online, contextual: chatOpen,
     run: () => dispatchAiRun('chat.retitle'),
+  },
+  {
+    // Проставить значок темы всем чатам без него — batch-прогон (по образцу note.annotationsAll).
+    // Не требует открытого чата: действует по всем сессиям владельца сразу.
+    id: 'chat.emojiAll', title: 'Проставить значки тем', hint: 'эмодзи-маркер всем чатам без него',
+    section: 'chat', sectionLabel: 'Чат', icon: IcEmoji,
+    when: c => c.online,
+    run: async () => {
+      try {
+        const r = await api.chats.emojiBatch();
+        showToast('Значки тем', r.processed > 0
+          ? `Проставлено ${r.processed}, пропущено ${r.skipped}`
+          : 'Нечего проставлять — все чаты уже со значком или без переписки',
+          'claude');
+      } catch (e) {
+        showToast('Значки тем', e instanceof Error ? e.message : 'Сервер недоступен', 'info');
+      }
+    },
   },
   {
     // Интерактивный HTML-виджет в ленте чата: промпт подстраивается под открытый

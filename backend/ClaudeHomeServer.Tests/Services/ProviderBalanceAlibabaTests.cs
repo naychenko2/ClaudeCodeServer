@@ -176,4 +176,54 @@ public class ProviderBalanceAlibabaTests
         Parse("""{"data":{"DataV2":{}}}""").Should().BeNull();
         Parse("""{}""").Should().BeNull();
     }
+
+    [Fact]
+    public void ОтветBadRequest_БезDataV2_Null()
+    {
+        // Фикстура «A» из бага: шлюз отвергает тело без cornerstoneParam — отвечает 200 с
+        // success:false и errorCode «Bad Request», обёртки DataV2 нет → квоты нет
+        const string json = """
+            {"code":"200","data":{"success":false,"errorCode":"Bad Request","errorMsg":"Bad Request"}}
+            """;
+        Parse(json).Should().BeNull();
+    }
+
+    [Fact]
+    public void ТелоЗапроса_СодержитНепустойCornerstoneParam()
+    {
+        // BuildAlibabaParams собирает form-поле params: {Api, V, Data:{cornerstoneParam}}.
+        // cornerstoneParam — обязательный конверт шлюза (без него 200 Bad Request), фиксируем его состав
+        var csp = JsonDocument.Parse(ProviderBalanceService.BuildAlibabaParams()).RootElement
+            .GetProperty("Data").GetProperty("cornerstoneParam");
+
+        csp.ValueKind.Should().Be(JsonValueKind.Object);
+        csp.GetProperty("protocol").GetString().Should().Be("V2");
+        csp.GetProperty("console").GetString().Should().Be("ONE_CONSOLE");
+        csp.GetProperty("productCode").GetString().Should().Be("p_efm");
+        csp.GetProperty("domain").GetString().Should().Be("modelstudio.console.alibabacloud.com");
+        // consoleSite дословно с опечаткой шлюза (ALBABACLOUD) — иначе Bad Request
+        csp.GetProperty("consoleSite").GetString().Should().Be("MODELSTUDIO_ALBABACLOUD");
+        csp.GetProperty("xsp_lang").GetString().Should().Be("en-US");
+        csp.EnumerateObject().Should().HaveCount(6); // непустой конверт, ровно нужные поля
+    }
+
+    [Fact]
+    public void ПричинаОтказаШлюза_BadRequest_ИзТела()
+    {
+        // Фикстура «A»: success:false, errorCode/errorMsg лежат в data, обёртки DataV2 нет →
+        // достаём «Bad Request: Bad Request» для нейтрального сообщения в лог (не «cookie протух»)
+        const string json = """
+            {"code":"200","data":{"success":false,"errorCode":"Bad Request","errorMsg":"Bad Request"}}
+            """;
+        ProviderBalanceService.AlibabaDeclineReason(JsonDocument.Parse(json).RootElement)
+            .Should().Be("Bad Request: Bad Request");
+    }
+
+    [Fact]
+    public void ПричинаОтказаШлюза_НетErrorCode_Null()
+    {
+        // Нет ни errorCode, ни DataV2 — явной причины в теле нет, лог скажет нейтрально «ответ без квоты»
+        ProviderBalanceService.AlibabaDeclineReason(JsonDocument.Parse("""{"code":"200","data":{}}""").RootElement)
+            .Should().BeNull();
+    }
 }

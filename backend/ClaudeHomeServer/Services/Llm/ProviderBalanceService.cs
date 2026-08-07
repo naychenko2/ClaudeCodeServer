@@ -455,6 +455,42 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     // сессию 302 на err.taobao.com, и следование даст HTML. Разбор — ParseAlibabaUsage (фиксируется тестами)
     private const string AlibabaUsageApi = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage";
 
+    // Конверт консольного шлюза bailian (cornerstoneParam внутри Data) — НЕ браузерная телеметрия:
+    // шлюз считает его обязательным и без него отвечает 200 {"success":false,"errorCode":"Bad Request"}
+    // без обёртки DataV2, из-за чего ParseAlibabaUsage не находит квоту и плашка пропадает. Значения
+    // подсняты с живого запроса 07.08.2026; лишние браузерные поля (feTraceId/feURL/switchAgent/
+    // userNickName) шлюзу не нужны. consoleSite «MODELSTUDIO_ALBABACLOUD» — дословно так, с опечаткой
+    // в самом шлюзе (не ALIBABACLOUD), иначе снова Bad Request
+    private const string AlibabaCornerstoneProtocol = "V2";
+    private const string AlibabaCornerstoneConsole = "ONE_CONSOLE";
+    private const string AlibabaCornerstoneProductCode = "p_efm";
+    private const string AlibabaCornerstoneDomain = "modelstudio.console.alibabacloud.com";
+    private const string AlibabaCornerstoneConsoleSite = "MODELSTUDIO_ALBABACLOUD";
+    private const string AlibabaCornerstoneLang = "en-US";
+
+    // Тело form-поля params запроса квоты Alibaba: {Api, V, Data:{cornerstoneParam}}. Собираем через
+    // JsonSerializer, а не конкатенацию строк: внутри Data вложенный объект, и ручная склейка
+    // экранирования — рассадник ошибок (прежний payload склеивался руками и терял cornerstoneParam).
+    // Имена свойств анонимного типа задаём уже в нужном регистре — JsonSerializer без политик имен
+    // пишет их как есть (PascalCase для Api/V/Data, camelCase/snake для полей шлюза). internal — под тестами
+    internal static string BuildAlibabaParams() => JsonSerializer.Serialize(new
+    {
+        Api = AlibabaUsageApi,
+        V = "1.0",
+        Data = new
+        {
+            cornerstoneParam = new
+            {
+                protocol = AlibabaCornerstoneProtocol,
+                console = AlibabaCornerstoneConsole,
+                productCode = AlibabaCornerstoneProductCode,
+                domain = AlibabaCornerstoneDomain,
+                consoleSite = AlibabaCornerstoneConsoleSite,
+                xsp_lang = AlibabaCornerstoneLang,
+            }
+        }
+    });
+
     private async Task<ProviderBalance?> FetchAlibabaAsync(LlmProviderConfig p, CancellationToken ct)
     {
         // Cookie консоли — отдельный секрет; без него квоту не прочитать (ApiKey здесь ни при чём).
@@ -470,36 +506,38 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             req.Headers.TryAddWithoutValidation("Cookie", p.ConsoleCookie);
             req.Headers.TryAddWithoutValidation("Origin", "https://modelstudio.console.alibabacloud.com");
             req.Headers.TryAddWithoutValidation("Referer", "https://modelstudio.console.alibabacloud.com/ap-southeast-1");
-            // params — JSON-объект запроса (Api/V/Data); region — ап-саут-ист (Сингапур, Coding Plan intl)
-            var payload = "{\"Api\":\"" + AlibabaUsageApi + "\",\"V\":\"1.0\",\"Data\":{}}";
+            // params — JSON-объект запроса (Api/V/Data + обязательный cornerstoneParam); region —
+            // ап-саут-ист (Сингапур, Coding Plan intl)
             req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                ["params"] = payload,
+                ["params"] = BuildAlibabaParams(),
                 ["region"] = "ap-southeast-1",
             });
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
             using var resp = await client.SendAsync(req, timeoutCts.Token);
-            // 302/4xx/5xx — протухшая сессия (шлюз редиректит на err.taobao.com) или сбой шлюза:
-            // для пользователя это «квота недоступна», а не ошибка продукта
             if (!resp.IsSuccessStatusCode)
             {
-                LogAlibabaExpiry($"HTTP {(int)resp.StatusCode}");
+                // 302/401/403 — протухшая сессия (шлюз редиректит на err.taobao.com): пользователю про
+                // cookie; прочие коды (5xx и т.п.) — сбой шлюза, к cookie отношения не имеют
+                var code = (int)resp.StatusCode;
+                LogAlibabaExpiry($"HTTP {code}", authFailure: code is 302 or 401 or 403);
                 return null;
             }
             var body = await resp.Content.ReadAsStringAsync(timeoutCts.Token);
             // Явный отказ авторизации в теле (200 OK) — cookie протух/не тот аккаунт
             if (body.Contains("BailianGateway.Workspace.NotAuthorised", StringComparison.Ordinal))
             {
-                LogAlibabaExpiry("NotAuthorised");
+                LogAlibabaExpiry("NotAuthorised", authFailure: true);
                 return null;
             }
             using var doc = JsonDocument.Parse(body);
             var parsed = ParseAlibabaUsage(doc.RootElement);
             if (parsed is null)
-                // code != SUCCESS / нет per1WeekPercentage / сломана обёртка — почти всегда то же
-                // протухание; логируем как деградацию одной строкой, не роняя консоль
-                LogAlibabaExpiry("ответ без квоты");
+                // code != SUCCESS / нет per1WeekPercentage / сломана обёртка / success:false (напр.
+                // Bad Request) — НЕ обязательно протухание cookie. Достаём из тела явную причину
+                // (errorCode/errorMsg), иначе нейтрально «ответ без квоты»
+                LogAlibabaExpiry(AlibabaDeclineReason(doc.RootElement) ?? "ответ без квоты", authFailure: false);
             return parsed;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -541,6 +579,32 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             Windows: [window], TrackHistory: true);
     }
 
+    // Причина отказа шлюза из тела ответа Alibaba (HTTP 200, но квоты нет): errorCode/errorMsg лежат
+    // прямо в data (фикстура «Bad Request»: success:false, обёртки DataV2 нет) либо глубже в
+    // data.DataV2.data. null — явной причины в теле нет (просто нет квоты). internal — под тестами:
+    // живой запрос требует cookie, отказ фиксируем фикстурой
+    internal static string? AlibabaDeclineReason(JsonElement root)
+    {
+        var data = root.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : root;
+        if (data.TryGetProperty("errorCode", out var ec) && ec.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(ec.GetString()))
+        {
+            var code = ec.GetString();
+            var msg = data.TryGetProperty("errorMsg", out var em) && em.ValueKind == JsonValueKind.String
+                ? em.GetString() : null;
+            return string.IsNullOrWhiteSpace(msg) ? code : $"{code}: {msg}";
+        }
+        // Глубже: data.DataV2.data.errorCode — внутренний отказ шлюза при живой обёртке
+        if (data.TryGetProperty("DataV2", out var v2) && v2.ValueKind == JsonValueKind.Object
+            && v2.TryGetProperty("data", out var inner) && inner.ValueKind == JsonValueKind.Object
+            && inner.TryGetProperty("errorCode", out var iec) && iec.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(iec.GetString()))
+        {
+            return iec.GetString();
+        }
+        return null;
+    }
+
     // Протухание cookie консоли Alibaba — штатная деградация, не ошибка продукта. Логируем одной
     // строкой не чаще раза в 5 мин (по образцу QuietHttpLogger): кэш + FailureBackoff и так гасят
     // частоту, но несколько заходов на экран подряд без троттлера давали бы дубли. Скрытие плашки
@@ -549,7 +613,11 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     private static readonly object _alibabaExpiryGate = new();
     private static DateTime? _alibabaExpiryLastReport;
 
-    private static void LogAlibabaExpiry(string reason)
+    // authFailure = true — причина в авторизации (протухшая/чужая сессия: NotAuthorised, 302/401/403):
+    // говорим про cookie. Иначе (success:false, Bad Request, нет обёртки, 5xx) — нейтрально про шлюз:
+    // cookie тут ни при чём, и подсказка «обновите cookie» увела бы диагностику в сторону (как на
+    // исходном баге с отсутствующим cornerstoneParam). Троттлинг раз в 5 мин (по образцу QuietHttpLogger)
+    private static void LogAlibabaExpiry(string reason, bool authFailure)
     {
         var now = DateTime.UtcNow;
         lock (_alibabaExpiryGate)
@@ -557,9 +625,14 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             if (_alibabaExpiryLastReport is { } last && now - last < AlibabaExpiryReportInterval) return;
             _alibabaExpiryLastReport = now;
         }
-        Console.Error.WriteLine(
-            $"[ProviderBalance] Alibaba: cookie консоли протух или квота недоступна ({reason}). " +
-            "Плашка скрыта до обновления ConsoleCookie в appsettings.Local.json.");
+        if (authFailure)
+            Console.Error.WriteLine(
+                $"[ProviderBalance] Alibaba: cookie консоли протух или сессия не авторизована ({reason}). " +
+                "Плашка скрыта до обновления ConsoleCookie в appsettings.Local.json.");
+        else
+            Console.Error.WriteLine(
+                $"[ProviderBalance] Alibaba: шлюз не отдал квоту ({reason}). " +
+                "Плашка скрыта; обычно это временный сбой шлюза или изменение формата ответа.");
     }
 
     // Формат Kimi for Coding (подписка kimi.com, недокументированный эндпоинт):

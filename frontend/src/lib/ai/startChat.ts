@@ -13,6 +13,9 @@
 import type { AiActionCtx } from './actions';
 import { api } from '../api';
 import { showToast } from '../toast';
+import { getNav } from '../nav';
+import { getFlag } from '../featureFlags';
+import { getChatContext } from './chatContext';
 
 const PENDING_KEY = 'cc_pending_chat_prompt';
 
@@ -24,7 +27,22 @@ export function prefillComposer(text: string): void {
   window.dispatchEvent(new Event('cc-compose-prefill'));
 }
 
-export async function startChatWithPrompt(text: string, ctx: AiActionCtx): Promise<void> {
+// Затравка из места, где AiActionCtx неоткуда взять: панель комментариев живёт и в файлах
+// проекта, и в заметках, а полный контекст собирает только AI-хаб. Из него здесь нужны
+// ровно два поля — nav (в каком проекте открывать чат) и признак смонтированного композера;
+// оба доступны теми же снимками, что и в AiLauncher.buildCtx.
+export function startChatFromPanel(text: string, opts?: { requiredTool?: string }): Promise<void> {
+  return startChatWithPrompt(text, {
+    nav: getNav(), online: true, flag: getFlag, caps: { semantic: false }, chat: getChatContext(),
+  }, opts);
+}
+
+// requiredTool — ключ инструментов, без которого действие не выполнить (напр. notes-annotations
+// у разбора комментариев). Подбор персоны его учитывает: без ключа персона в выбор не идёт,
+// а пустой остаток даёт обычный чат — у него инструменты есть все.
+export async function startChatWithPrompt(
+  text: string, ctx: AiActionCtx, opts?: { requiredTool?: string },
+): Promise<void> {
   // Проект берём только на его экране — глобальные действия всегда идут в чат вне проекта
   const project = ctx.nav?.screen === 'project' ? ctx.nav.project : undefined;
   sessionStorage.setItem(PENDING_KEY, text);
@@ -38,7 +56,7 @@ export async function startChatWithPrompt(text: string, ctx: AiActionCtx): Promi
     // Подбираем максимально релевантную персону под задачу (best-effort: ошибка/нет персоны —
     // создаём обычный чат, как раньше). Так чат-действие сразу ведёт нужный специалист.
     let personaId: string | null = null;
-    try { personaId = (await api.personas.match(text, project?.id)).personaId; } catch { /* без персоны */ }
+    try { personaId = (await api.personas.match(text, project?.id, opts?.requiredTool)).personaId; } catch { /* без персоны */ }
     if (project) {
       // Чат В ПРОЕКТЕ: создаём сессию (от лица персоны, если подобрана) и открываем каналом диплинка.
       const s = personaId

@@ -590,9 +590,11 @@ export const api = {
     createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string; projectId?: string }) =>
       request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
     // Подобрать максимально релевантную персону под задачу (для чат-действий AI-хаба). null — нет подходящей.
-    match: (task: string, projectId?: string | null) =>
+    // requiredTool — ключ инструментов, без которого действие не выполнить: персоны без него
+    // в подборе не участвуют (иначе ответят «инструмент недоступен»).
+    match: (task: string, projectId?: string | null, requiredTool?: string) =>
       request<{ personaId: string | null }>('/personas/match', {
-        method: 'POST', body: JSON.stringify({ task, projectId: projectId ?? null }),
+        method: 'POST', body: JSON.stringify({ task, projectId: projectId ?? null, requiredTool: requiredTool ?? null }),
       }),
 
     // Пантеон OmO: каталог ролей-специалистов с бэкенда + идемпотентное подключение

@@ -7,6 +7,7 @@ import { useSyncExternalStore } from 'react';
 import type { Me, Project, Session } from '../types';
 import { api } from './api';
 import { getFlag, FLAGS } from './featureFlags';
+import { OfflineError, RequestTimeoutError } from './offline';
 import { onMessage } from './signalr';
 
 interface MeState {
@@ -52,17 +53,43 @@ export function clearMe(): void {
   emit();
 }
 
+// Явный таймаут /auth/me: дефолтного транспортного (30с) для освежения дефолт-персоны
+// многовато — лёгкий запрос должен падать быстро, чтобы фолбэк к прежнему состоянию
+// (и, при сетевом сбое, одна повторная попытка) не висел полминуты.
+const ME_TIMEOUT_MS = 10_000;
+const ME_RETRY_DELAY_MS = 1500;
+
+function isAuthError(e: unknown): boolean {
+  return (e as { status?: number } | null)?.status === 401;
+}
+// Сетевой сбой: сервер не ответил (OfflineError) либо упёрся в наш таймаут
+// (RequestTimeoutError). Только такие претендуют на повтор — 401 и HTTP-ошибки нет.
+function isNetworkFailure(e: unknown): boolean {
+  return e instanceof OfflineError || e instanceof RequestTimeoutError;
+}
+function dispatchUnauthorized(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
+}
+
 export async function refreshMe(): Promise<void> {
-  try { setMeFromServer(await api.auth.me()); }
+  try { setMeFromServer(await api.auth.me({ timeoutMs: ME_TIMEOUT_MS })); }
   catch (e) {
     // 401 — протухшая сессия, а не офлайн: глотать нельзя, иначе экран залипнет в
     // прежнем состоянии. Уводим на логин (транспорт уже послал cc-unauthorized;
     // повтор безвреден — обработчик в App идемпотентен).
-    if ((e as { status?: number } | null)?.status === 401) {
-      if (typeof window !== 'undefined') window.dispatchEvent(new Event('cc-unauthorized'));
+    if (isAuthError(e)) { dispatchUnauthorized(); return; }
+    // Сетевой сбой — одна повторная попытка после короткой паузы (сервер мог моргнуть);
+    // прежнее состояние остаётся, если и она не вытянула.
+    if (isNetworkFailure(e)) {
+      await new Promise<void>(r => setTimeout(r, ME_RETRY_DELAY_MS));
+      try { setMeFromServer(await api.auth.me({ timeoutMs: ME_TIMEOUT_MS })); }
+      catch (e2) {
+        if (isAuthError(e2)) dispatchUnauthorized();
+        // повтор тоже упал по сети — оставляем прежнее состояние
+      }
       return;
     }
-    // офлайн/сетевой сбой — оставляем прежнее состояние
+    // прочая HTTP-ошибка (5xx и т.п.) — прежнее состояние остаётся
   }
 }
 

@@ -66,7 +66,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ username, password }),
       }),
-    me: () => request<Me>('/auth/me'),
+    me: (opts?: { timeoutMs?: number }) => request<Me>('/auth/me', opts),
     // Возвращает свежий токен: смена пароля отзывает все прежние, включая текущий
     changePassword: (currentPassword: string, newPassword: string) =>
       request<{ token: string; expiresAt: string }>('/auth/password', {

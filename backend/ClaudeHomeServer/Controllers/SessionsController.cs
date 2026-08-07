@@ -77,14 +77,34 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         catch (KeyNotFoundException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // GET /api/projects/{id}/sessions/{sid}/history — история чата.
+    // Без параметров пагинации отдаёт ПОЛНЫЙ плоский массив (прежний контракт — старые клиенты
+    // не ломаются). С limit и/или before включает постраничный режим и возвращает объект
+    // { messages, hasMore, cursor }: это режет длинную историю (5+ МБ целиком) до ~100
+    // сообщений хвоста, а более ранние догружаются по курсору кнопкой «Показать ранее».
     [HttpGet("{sessionId}/history")]
-    public async Task<IActionResult> GetHistory(string projectId, string sessionId)
+    public async Task<IActionResult> GetHistory(
+        string projectId, string sessionId,
+        [FromQuery] int? limit = null,
+        [FromQuery] int? before = null)
     {
         if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
+
         var history = await sessions.GetHistoryAsync(sessionId);
-        return Ok(history);
+
+        // Ни одного параметра пагинации — прежний контракт: полный список как плоский массив
+        if (limit is null && before is null)
+            return Ok(history);
+
+        // before — индекс, ДО которого (эксклюзивно) отдать сообщения. Несуществующий индекс
+        // (за пределами истории или отрицательный) — 400, как требует инвариант задачи
+        if (before is not null && !ChatHistoryPaginator.IsCursorValid(history.Count, before.Value))
+            return BadRequest(new { error = "Курсор before указывает за пределы истории" });
+
+        var page = ChatHistoryPaginator.Slice(history, limit, before);
+        return Ok(page);
     }
 
     [HttpDelete("{sessionId}")]

@@ -1,18 +1,23 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
 public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
 {
     private readonly HttpClient _client;
+    private readonly TestWebApplicationFactory _factory;
     private readonly string _tempDir;
 
     public SessionsControllerTests(TestWebApplicationFactory factory)
     {
+        _factory = factory;
         _client = factory.CreateAuthenticatedClient();
         _tempDir = Path.Combine(factory.TempDir, "session_tests");
         Directory.CreateDirectory(_tempDir);
@@ -171,5 +176,90 @@ public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.Created);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("name").GetString().Should().Be("Тестовый чат");
+    }
+
+    // Посев истории напрямую через ChatHistoryService ДО создания сессии: StartNewSessionAsync
+    // при resumeSessionId грузит существующий history.json в аккумулятор, и GetHistoryAsync
+    // отдаёт его — без реального запуска хода и claude.exe. csid валиден по IsSafeSessionId.
+    private async Task<string> SeedHistoryAndCreateSessionAsync(string projectId, int messageCount)
+    {
+        var csid = "history-" + Guid.NewGuid().ToString("N")[..16];
+        using var scope = _factory.Services.CreateScope();
+        var historySvc = scope.ServiceProvider.GetRequiredService<ChatHistoryService>();
+        var messages = Enumerable.Range(0, messageCount)
+            .Select(i => (StoredMessage)new StoredTextMessage($"msg-{i}"))
+            .ToList();
+        await historySvc.SaveAsync(csid, messages);
+
+        var createResponse = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new
+        {
+            mode = "auto",
+            resumeSessionId = csid
+        });
+        createResponse.EnsureSuccessStatusCode();
+        var body = JsonSerializer.Deserialize<JsonElement>(await createResponse.Content.ReadAsStringAsync());
+        return body.GetProperty("id").GetString()!;
+    }
+
+    [Fact]
+    public async Task GetHistory_WithoutParams_ReturnsFlatArray_BackwardCompat()
+    {
+        var projectId = await CreateProjectAsync();
+        var sessionId = await SeedHistoryAndCreateSessionAsync(projectId, messageCount: 150);
+
+        // Старый контракт: без параметров — полный плоский массив (не объект с messages/hasMore)
+        var response = await _client.GetAsync($"/api/projects/{projectId}/sessions/{sessionId}/history");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.ValueKind.Should().Be(JsonValueKind.Array, "без параметров пагинации — прежний плоский контракт");
+        body.GetArrayLength().Should().Be(150);
+    }
+
+    [Fact]
+    public async Task GetHistory_WithLimit_ReturnsTailPageWithCursor()
+    {
+        var projectId = await CreateProjectAsync();
+        var sessionId = await SeedHistoryAndCreateSessionAsync(projectId, messageCount: 150);
+
+        var response = await _client.GetAsync($"/api/projects/{projectId}/sessions/{sessionId}/history?limit=100");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.ValueKind.Should().Be(JsonValueKind.Object, "с limit — постраничный объект");
+        body.GetProperty("messages").GetArrayLength().Should().Be(100);
+        body.GetProperty("hasMore").GetBoolean().Should().BeTrue();
+        body.GetProperty("cursor").GetInt32().Should().Be(50);
+    }
+
+    [Fact]
+    public async Task GetHistory_WithBefore_LoadsEarlierBatchToStart()
+    {
+        var projectId = await CreateProjectAsync();
+        var sessionId = await SeedHistoryAndCreateSessionAsync(projectId, messageCount: 150);
+
+        // Догрузка по курсору 50 из хвоста → последние перед ним 100 сообщений [0..49] здесь,
+        // т.к. до курсора всего 50. Это финальная пачка: hasMore=false, cursor=null.
+        var response = await _client.GetAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history?limit=100&before=50");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("messages").GetArrayLength().Should().Be(50);
+        body.GetProperty("hasMore").GetBoolean().Should().BeFalse();
+        body.GetProperty("cursor").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task GetHistory_InvalidBefore_Returns400()
+    {
+        var projectId = await CreateProjectAsync();
+        var sessionId = await SeedHistoryAndCreateSessionAsync(projectId, messageCount: 10);
+
+        // before за пределами истории — 400 (несуществующий индекс)
+        var response = await _client.GetAsync(
+            $"/api/projects/{projectId}/sessions/{sessionId}/history?before=999");
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 }

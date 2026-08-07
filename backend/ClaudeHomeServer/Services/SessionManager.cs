@@ -2887,12 +2887,13 @@ public class SessionManager : IDisposable
         {
             var prompt =
                 "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) для чата " +
-                "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHint + "\n\n" +
+                "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHintWithEmoji + "\n\n" +
                 (firstMessage.Length > 1500 ? firstMessage[..1500] : firstMessage);
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
-                ownerId: ownerId, jsonFormat: Llm.TitleExtraction.Schema);
+                ownerId: ownerId, jsonFormat: Llm.TitleExtraction.SchemaWithEmoji);
             var line = Llm.TitleExtraction.Extract(raw);
             if (line is null || line.Length > 80) return;
+            line = Llm.TitleExtraction.WithEmoji(line, Llm.TitleExtraction.ExtractEmoji(raw));
 
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
             // Пользователь мог переименовать вручную, пока модель думала — тогда не трогаем

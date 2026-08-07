@@ -895,6 +895,9 @@ export interface ProviderBalanceInfo {
   asOf?: string;
   resetsAt?: string | null;
   windows?: ProviderQuotaWindow[] | null;
+  // Доп. сведения в раскрытую карточку (напр. «В том числе подарочных: $5», расход по периодам,
+  // уровень подписки, сводка за 24ч у FreeLLM) — null/отсутствует: показать нечего
+  note?: string | null;
 }
 
 // Снимок использования окна во времени (история с бэка, data/usage.json) — для экрана usage и тренда

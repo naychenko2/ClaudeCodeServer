@@ -781,6 +781,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
         cabinetUrl: CABINET_URL[key],
         trend: hist,
         trendLabel: 'Расход окна во времени',
+        balanceNote: bal.note ?? undefined,
         onRetry: () => loadProvider(key),
       });
       // Источник с квотой И деньгами показывается в обеих полосах: в «Деньгах» — сумма,
@@ -792,6 +793,7 @@ export function UsageScreen({ onClose }: { onClose: () => void }) {
       key, name, color: sourceColor(key), unit: 'usd',
       amount: isNaN(num) ? null : num,
       lowAt: LOW_MONEY,
+      note: bal.note ?? undefined,
       asOf: bal.asOf ?? null,
       history: (data.snapshots ?? []).length
         ? data.snapshots.map(s => ({ t: new Date(s.timestamp).getTime(), u: s.balance / Math.max(...data.snapshots.map(x => x.balance), num || 0.0001) }))

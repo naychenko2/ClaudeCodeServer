@@ -3,6 +3,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Prompts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -39,21 +40,33 @@ public class OnboardingController(SessionManager sessions, UserStore users,
     {
         var gate = LockFor("user:" + UserId);
         await gate.WaitAsync();
+        Session? chat = null;
+        var created = false;
+        IActionResult? earlyReturn = null;
         try
         {
             var me = users.GetById(UserId);
-            if (me is null) return Unauthorized();
-
-            if (me.OnboardingSessionId is { } sid && sessions.GetOwned(sid, UserId) is { } existing)
-                return Ok(existing);
-
-            var chat = await sessions.CreateChatAsync(UserId, ClaudeMode.Auto,
-                name: "Настройка системы", onboardingKind: OnboardingKinds.User);
-            users.SetOnboardingSession(UserId, chat.Id);
-            return Ok(chat);
+            if (me is null)
+                earlyReturn = Unauthorized();
+            // Резюм: живая сессия возвращается как есть — kickoff не запускаем (история
+            // уже есть, повторная затравка задублировала бы первую реплику мастера)
+            else if (me.OnboardingSessionId is { } sid && sessions.GetOwned(sid, UserId) is { } existing)
+                chat = existing;
+            else
+            {
+                chat = await sessions.CreateChatAsync(UserId, ClaudeMode.Auto,
+                    name: "Настройка системы", onboardingKind: OnboardingKinds.User);
+                users.SetOnboardingSession(UserId, chat.Id);
+                created = true;
+            }
         }
-        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { earlyReturn = BadRequest(new { error = ex.Message }); }
         finally { gate.Release(); }
+
+        if (earlyReturn is not null) return earlyReturn;
+        if (created)
+            await KickoffFirstTurnAsync(chat!.Id);
+        return Ok(chat);
     }
 
     // Старт (или резюм) онбординга проекта: проектная сессия с личной дефолт-персоной
@@ -67,27 +80,60 @@ public class OnboardingController(SessionManager sessions, UserStore users,
 
         var gate = LockFor("project:" + projectId);
         await gate.WaitAsync();
+        Session? session = null;
+        var created = false;
+        IActionResult? earlyReturn = null;
         try
         {
             // Перечитываем проект под локом: параллельный start мог уже записать сессию
             project = projects.GetById(projectId);
-            if (project is null) return NotFound();
-            if (project.OnboardingSessionId is { } sid && sessions.GetOwned(sid, UserId) is { } existing)
-                return Ok(existing);
-
-            // Ведёт личная дефолт-персона; сирота (персона удалена) — как отсутствие дефолта
-            var defaultId = users.GetById(UserId)?.DefaultPersonaId;
-            var defaultPersona = defaultId is null ? null : personas.Get(defaultId, UserId);
-            if (defaultPersona is null)
-                return BadRequest(new { error = "Сначала пройдите личный онбординг: у вас ещё нет дефолт-персоны" });
-
-            var session = await sessions.CreateAsync(projectId, ClaudeMode.Auto,
-                name: "Знакомство с проектом", personaId: defaultPersona.Id,
-                onboardingKind: OnboardingKinds.Project);
-            projects.SetOnboardingSession(projectId, session.Id);
-            return Ok(session);
+            if (project is null)
+                earlyReturn = NotFound();
+            // Резюм: живая сессия возвращается как есть — kickoff не запускаем
+            else if (project.OnboardingSessionId is { } sid && sessions.GetOwned(sid, UserId) is { } existing)
+                session = existing;
+            else
+            {
+                // Ведёт личная дефолт-персона; сирота (персона удалена) — как отсутствие дефолта
+                var defaultId = users.GetById(UserId)?.DefaultPersonaId;
+                var defaultPersona = defaultId is null ? null : personas.Get(defaultId, UserId);
+                if (defaultPersona is null)
+                    earlyReturn = BadRequest(new { error = "Сначала пройдите личный онбординг: у вас ещё нет дефолт-персоны" });
+                else
+                {
+                    session = await sessions.CreateAsync(projectId, ClaudeMode.Auto,
+                        name: "Знакомство с проектом", personaId: defaultPersona.Id,
+                        onboardingKind: OnboardingKinds.Project);
+                    projects.SetOnboardingSession(projectId, session.Id);
+                    created = true;
+                }
+            }
         }
-        catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (InvalidOperationException ex) { earlyReturn = BadRequest(new { error = ex.Message }); }
         finally { gate.Release(); }
+
+        if (earlyReturn is not null) return earlyReturn;
+        if (created)
+            await KickoffFirstTurnAsync(session!.Id);
+        return Ok(session);
+    }
+
+    // Первый ход собеседника (Мастер настройки / дефолт-персона) для СВЕЖЕСОЗДАННОЙ
+    // онбординг-сессии — иначе гейт открывается «немым». Серверная директива (не баллон
+    // пользователя): ответ стримится в ленту. Вызывается ВНЕ per-ключевого семафора —
+    // повторный start (вторая вкладка) не ждёт старта процесса собеседника, а сразу
+    // получает уже созданную сессию. Сбой kickoff не должен рушить start: сессия уже
+    // создана и зафиксирована, при повторном открытии гейта вернётся как резюм.
+    private async Task KickoffFirstTurnAsync(string sessionId)
+    {
+        try
+        {
+            await sessions.SendMessageAsync(sessionId, OnboardingPrompts.KickoffDirective, [],
+                systemDirective: true);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[Onboarding] Сбой kickoff сессии {sessionId}: {ex.Message}");
+        }
     }
 }

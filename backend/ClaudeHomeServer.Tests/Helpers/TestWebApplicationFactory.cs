@@ -39,6 +39,11 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
 
     public string TempDir { get; } = Path.Combine(Path.GetTempPath(), "ccs_tests_" + Guid.NewGuid().ToString("N"));
 
+    // Стаб LLM-адаптеров: подменяет реальную LlmSessionAdapterFactory, чтобы сервер-
+    // инициированные ходы (kickoff онбординга) не запускали claude.exe в интеграционных
+    // тестах. Хранит созданные адаптеры по sessionId — тесты проверяют факт первого хода.
+    internal FakeLlmSessionAdapterFactory LlmAdapters { get; } = new();
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Создаём users.json до старта хоста — UserStore прочитает его при инициализации
@@ -98,6 +103,11 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
                 var scheme = opts.Schemes.FirstOrDefault(s => s.Name == NegotiateDefaults.AuthenticationScheme);
                 if (scheme is not null) scheme.HandlerType = typeof(NoOpNegotiateHandler);
             });
+
+            // LLM-адаптер → стаб: сервер-инициированные ходы (kickoff онбординга) не запускают
+            // реальный claude.exe в интеграционных тестах. Регистрация перезаписывает боевой
+            // синглтон LlmSessionAdapterFactory из Program.cs (последняя побеждает).
+            services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(LlmAdapters);
         });
     }
 

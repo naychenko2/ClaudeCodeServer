@@ -1,0 +1,1258 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Модели и использование — финальная версия</title>
+<style>
+  /* Токены — точная копия frontend/src/lib/theme.css (обе темы), макет самодостаточен */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-accent-soft:  #E8A990;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-dashed:       #D0C6B4;
+    --c-track:        #D8CFBE;
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+    --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+    /* Палитра источников — GROUP_COLORS из design.ts (цвет точки провайдера) */
+    --grp-0: #D97757; --grp-1: #5E8B4E; --grp-2: #3E7CA6; --grp-3: #C9923E;
+    --grp-4: #8A6FB8; --grp-5: #4E9A8F; --grp-6: #B4452F;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-accent-soft:  #9A5E48;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-dashed:       #4A443B;
+    --c-track:        #453F37;
+    --c-success:      #7CB86A;
+    --c-success-bg:   #232E20;
+    --c-success-text: #8FCB79;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --c-overlay: rgba(0, 0, 0, 0.62);
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+    --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
+    --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px; /* FS.base */
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; /* FS.h1 */ color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 20px; max-width: 820px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; /* FS.h2 */ color: var(--c-text-heading);
+    margin: 44px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 820px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+
+  /* Переключатель темы (только для макета) */
+  .themebar { position: sticky; top: 0; z-index: 30; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-white); color: var(--c-text-secondary);
+  }
+  .tbtn.on { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+
+  /* Сцена: оверлей + модалка. Фон модалки — C.bgMain (как в ui/Modal.tsx!), ширина MODAL_W.wide = 720,
+     радиус R.modal = 20, внутренние отступы 28 — как у штатной модалки */
+  .scene { background: var(--c-overlay); border-radius: 24px; padding: 40px 24px; display: flex; justify-content: center; }
+  .modal {
+    width: 720px; max-width: 100%; background: var(--c-bg-main); border-radius: 20px;
+    box-shadow: var(--shadow-modal); overflow: hidden; display: flex; flex-direction: column;
+    max-height: 86vh;
+  }
+  .m-head { padding: 26px 28px 0; }
+  .m-title {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; /* FS.h2, как в Modal */
+    font-weight: 500; letter-spacing: -0.01em; line-height: 1.25; color: var(--c-text-heading);
+  }
+  .m-sub { font-size: 13px; color: var(--c-text-secondary); margin-top: 5px; line-height: 1.5; }
+  .m-close {
+    float: right; width: 32px; height: 32px; border-radius: 8px; border: none; cursor: pointer;
+    background: transparent; color: var(--c-text-muted); font-size: 16px;
+  }
+  .m-close:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+
+  /* Вкладки */
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--c-border-light); overflow-x: auto; padding: 12px 20px 0; flex-shrink: 0; }
+  .tab {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    color: var(--c-text-secondary); background: transparent; border: none;
+    border-bottom: 2px solid transparent; padding: 10px 12px;
+  }
+  .tab.on { color: var(--c-accent); border-bottom-color: var(--c-accent); }
+  .tab .n { font-size: 11px; font-weight: 700; margin-left: 4px; color: var(--c-text-muted); }
+  .tab.on .n { color: var(--c-accent); }
+  .pane { display: none; padding: 16px 28px 28px; overflow-y: auto; }
+  .pane.on { display: block; }
+
+  /* Общие атомы — размеры из FS/SP/R */
+  .lvl { font-size: 11px; /* FS.xs */ font-weight: 700; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 14px 2px 8px; }
+  .hint { font-size: 11px; color: var(--c-text-muted); line-height: 1.45; padding: 0 2px; }
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; /* R.xl */ }
+  .btn {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 12px; /* R.xl */
+    padding: 7px 12px; border: 1px solid var(--c-border); background: var(--c-bg-white); color: var(--c-text-primary);
+  }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.ghost-filled { background: var(--c-bg-card); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .btn:disabled:hover { background: var(--c-bg-card); }
+  .btn.sm { font-size: 12px; padding: 5px 10px; }
+  .badge { font-size: 11px; /* FS.xs */ font-weight: 700; padding: 2px 7px; border-radius: 999px; /* R.max */ white-space: nowrap; }
+  .badge.free { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.all { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  a.lnk { color: var(--c-accent); font-size: 11px; font-weight: 600; text-decoration: none; }
+  a.lnk:hover { text-decoration: underline; }
+
+  /* Строки-списки */
+  .rows { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 10px; /* R.lg */ overflow: hidden; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--c-border-light); }
+  .row:first-child { border-top: none; }
+  .row:hover { background: var(--c-bg-selected); }
+
+  /* Полосы «Использования»: липкий заголовок полосы (фон — bgMain, как LaneHead в UsageScreen) */
+  .lanehead {
+    position: sticky; top: -16px; z-index: 1; background: var(--c-bg-main);
+    display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+    padding: 16px 0 8px; margin-bottom: 4px;
+  }
+  .lanehead .t { font-family: 'PT Serif', Georgia, serif; font-size: 16px; /* FS.lg */ font-weight: 700; color: var(--c-text-heading); }
+
+  /* Строка квоты (раскрывашка) */
+  .qrow { border-bottom: 1px solid var(--c-border-light); }
+  .qrow:last-child { border-bottom: none; }
+  .qhead {
+    display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; /* тач-цель */
+    padding: 8px 0; border: none; background: none; cursor: pointer; text-align: left; font: inherit;
+  }
+  .qhead .name { font-size: 13px; font-weight: 600; color: var(--c-text-heading); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qhead .worst { flex: 1; min-width: 0; font-size: 11px; color: var(--c-text-muted); }
+  .qhead .worst b { font-family: 'JetBrains Mono', monospace; }
+  .qhead .car { color: var(--c-text-muted); font-size: 12px; flex-shrink: 0; transition: transform .15s; }
+  .qhead .car.up { transform: rotate(90deg); }
+  .fresh { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 11px; color: var(--c-text-muted); white-space: nowrap; }
+  .fresh.stale { color: var(--c-warning-text); }
+  /* Мини-бегунки окон прямо в свёрнутой строке квоты (приём из черновика A):
+     статус виден до клика, детали — при раскрытии */
+  .qbars { display: flex; flex-direction: column; gap: 5px; width: 190px; flex-shrink: 0; }
+  .qbars .qb { display: flex; align-items: center; gap: 8px; }
+  .qbars .qb .l { width: 46px; flex-shrink: 0; font-size: 11px; color: var(--c-text-muted); }
+  .qbars .qb .bar { flex: 1; }
+  .qbars .qb .v { width: 34px; flex-shrink: 0; text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 11px; font-weight: 700; }
+  .qhead .nblock { min-width: 0; flex: 1; }
+  .qhead .nblock .sub { display: block; font-size: 11px; color: var(--c-text-muted); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .qdetail { padding: 2px 0 12px; }
+  .qdetail .extra { margin-top: 12px; border-top: 1px dashed var(--c-border); padding-top: 12px; }
+
+  /* Чип окна квоты (WindowChip) */
+  .wchip {
+    flex: 1 1 156px; min-width: 148px; max-width: 320px;
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 10px; /* R.lg */
+    padding: 7px 10px;
+  }
+  .wchip .lbl { font-size: 11px; color: var(--c-text-secondary); }
+  .wchip .val { font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 700; }
+  .wchip .reset { font-size: 11px; color: var(--c-text-muted); margin-top: 4px; }
+
+  /* Шкала расхода */
+  .bar { display: block; height: 6px; border-radius: 3px; background: var(--c-track); overflow: hidden; }
+  .bar > span { display: block; height: 100%; }
+  .b-ok { background: var(--c-success); } .b-warn { background: var(--c-warning); } .b-bad { background: var(--c-danger); }
+
+  /* Плашки детали строки квоты */
+  .rotbadge, .tierpill {
+    display: inline-flex; align-items: center; gap: 7px; padding: 5px 11px; border-radius: 8px; /* R.md */
+    background: var(--c-bg-white); border: 1px solid var(--c-border); margin: 0 8px 8px 0;
+    font-size: 12px;
+  }
+  .rotbadge b { color: var(--c-text-heading); }
+  .rotbadge span { color: var(--c-text-muted); }
+  .tierpill { font-weight: 600; color: var(--c-text-heading); }
+
+  /* Плитка денег (MoneyTile) */
+  .mtile {
+    flex: 1 1 200px; min-width: 180px; max-width: 360px;
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; /* R.xl */
+    padding: 12px 14px;
+  }
+  .mtile.low { background: var(--c-danger-bg); border-color: var(--c-danger-border); }
+  .mtile .sum { font-family: 'JetBrains Mono', monospace; font-size: 22px; /* FS.h2 */ font-weight: 700; color: var(--c-text-heading); line-height: 1.15; }
+  .mtile.low .sum { color: var(--c-danger-text); }
+  .mtile .cur { color: var(--c-text-muted); font-weight: 500; }
+  .mtile .cap { font-size: 11px; color: var(--c-text-muted); margin-top: 2px; }
+  .mtile .spend { font-size: 12px; color: var(--c-text-secondary); margin-top: 8px; }
+  .mtile .spend span { font-size: 11px; color: var(--c-text-muted); }
+
+  /* Спарклайн — как Sparkline в UsageScreen: полилиния, цвет textMuted */
+  .spark { display: block; width: 100%; height: 30px; margin-top: 8px; }
+  .spark polyline { fill: none; stroke: var(--c-text-muted); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+
+  /* Таблица слотов и матрица специальностей (вариант C) */
+  .matrix-wrap { border: 1px solid var(--c-border); border-radius: 12px; overflow-y: auto; background: var(--c-bg-white); }
+  .matrix { width: 100%; border-collapse: separate; border-spacing: 0; }
+  .matrix th {
+    font-size: 11px; font-weight: 700; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .05em;
+    text-align: left; padding: 8px 10px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border);
+    position: sticky; top: 0; z-index: 2; /* шапка липнет при прокрутке длинного списка специальностей */
+  }
+  .matrix td { padding: 6px 10px; border-bottom: 1px solid var(--c-border-light); vertical-align: middle; background: var(--c-bg-white); }
+  .matrix tr:last-child td { border-bottom: none; }
+  .matrix tbody tr:hover td { background: var(--c-bg-selected); }
+  .matrix .cell-name { font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+  .matrix .cell-hint { font-size: 11px; color: var(--c-text-muted); }
+  select.cell {
+    font: inherit; font-size: 12px; width: 100%; cursor: pointer;
+    padding: 5px 6px; border-radius: 8px; /* R.md */ border: 1px solid var(--c-border);
+    background: var(--c-bg-white); color: var(--c-text-primary);
+  }
+  select.cell:hover { border-color: var(--c-accent-muted); }
+  select.cell:focus { outline: none; border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  select.cell.empty { color: var(--c-text-muted); border-style: dashed; border-color: var(--c-dashed); }
+  select.cell.broken { color: var(--c-warning-text); border-style: dashed; border-color: var(--c-warning); }
+
+  /* Компактный триггер-модель (паттерн ActionRow из «Применения») */
+  .pick {
+    font: inherit; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    max-width: 230px; padding: 4px 8px 4px 9px; border-radius: 8px;
+    color: var(--c-text-secondary); background: var(--c-bg-white); border: 1px solid var(--c-border);
+  }
+  .pick:hover { border-color: var(--c-accent-muted); }
+  .pick .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick .car { color: var(--c-text-muted); }
+  .pick.empty { color: var(--c-text-muted); }
+
+  /* Сегмент-переключатель (SegmentedControl) */
+  .seg { display: inline-flex; gap: 2px; background: var(--c-bg-selected); border-radius: 9px; /* R.pill */ padding: 2px; }
+  .seg button {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
+    padding: 5px 11px; background: transparent; color: var(--c-text-secondary);
+  }
+  .seg button.on { background: var(--c-bg-white); color: var(--c-text-heading); box-shadow: var(--shadow-card); }
+
+  /* Пресет-строка (свёрнута по умолчанию) */
+  .preset { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px; overflow: hidden; }
+  .preset + .preset { margin-top: 8px; }
+  .preset-head { display: flex; align-items: center; gap: 10px; padding: 10px 13px; cursor: pointer; }
+  .preset-head:hover { background: var(--c-bg-selected); }
+  .preset-body { padding: 4px 13px 13px; border-top: 1px solid var(--c-border-light); display: flex; flex-direction: column; gap: 8px; }
+  .car { color: var(--c-text-muted); font-size: 12px; flex-shrink: 0; transition: transform .15s; }
+  .car.up { transform: rotate(180deg); }
+  .chain { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 11px; color: var(--c-text-muted); }
+  .chain .step { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 6px; /* R.sm */ padding: 2px 7px; color: var(--c-text-secondary); font-weight: 600; }
+  .iconbtn {
+    width: 26px; height: 26px; border-radius: 8px; border: none; cursor: pointer; flex-shrink: 0;
+    background: transparent; color: var(--c-text-muted); font-size: 13px; line-height: 1;
+  }
+  .iconbtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+
+  /* Мобильный фрейм */
+  .phones { display: flex; gap: 24px; flex-wrap: wrap; }
+  .phone { width: 375px; background: var(--c-bg-panel); border: 1px solid var(--c-border); border-radius: 28px; overflow: hidden; box-shadow: var(--shadow-island); }
+  .sheet { background: var(--c-bg-main); /* шторка — тот же bgMain, что и модалка */ border-radius: 22px 22px 0 0; /* R.sheet */ margin-top: 40px; box-shadow: var(--shadow-sheet); min-height: 460px; }
+  .sheet .grab { width: 38px; height: 4px; border-radius: 2px; background: var(--c-track); margin: 10px auto 0; }
+
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 1100px) { .cmp { grid-template-columns: 1fr; } }
+  .tag { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--c-text-muted); margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <strong style="font-size:12px; color:var(--c-text-muted)">Тема:</strong>
+    <button class="tbtn on" data-theme-btn="light">Светлая</button>
+    <button class="tbtn" data-theme-btn="dark">Тёмная</button>
+  </div>
+
+  <h1 class="doc">Раздел «Модели и использование» — финал</h1>
+  <p class="lead">
+    Гибрид выбранных частей: <b>Использование — A</b>, но с полным содержимым нынешнего окна
+    (строка-вывод, чипы окон, тренды-спарклайны, «Наш расход», «Все провайдеры»),
+    <b>Модели по умолчанию — C</b> (таблица слотов с «Где используется»), <b>Специальности — C</b>
+    (матрица, все 12 специальностей видны сразу — липкая шапка и прокрутка вместо «показать ещё»),
+    <b>Пресеты — A</b>, <b>Применение — A</b> со слитой кнопкой «Экономно · бесплатные и локальные».
+    Фон модалки — <code class="tok">C.bgMain</code> (как в <code class="tok">ui/Modal.tsx</code>),
+    внутренние карточки — <code class="tok">C.bgWhite</code>/<code class="tok">C.bgCard</code>.
+  </p>
+
+  <!-- ============================ ДЕСКТОП ============================ -->
+  <h2 class="sec">1. Модалка целиком (MODAL_W.wide = 720px, кликабельна)</h2>
+  <p class="note">
+    Пять вкладок вместо шести: «В чате» удалена, «Провайдеры» поглощены «Использованием».
+    В меню аватара — один пункт «Модели и использование» вместо двух.
+  </p>
+
+  <div class="scene">
+    <div class="modal" id="dlg">
+      <div class="m-head">
+        <button class="m-close" title="Закрыть">✕</button>
+        <div class="m-title">Модели и использование</div>
+        <div class="m-sub">Квоты и балансы, какая модель за что отвечает и что происходит, когда выбранная недоступна.</div>
+      </div>
+      <div class="tabs" id="tabs">
+        <button class="tab on" data-tab="usage">Использование</button>
+        <button class="tab" data-tab="slots">Модели по умолчанию</button>
+        <button class="tab" data-tab="specs">Специальности<span class="n">12</span></button>
+        <button class="tab" data-tab="presets">Пресеты<span class="n">3</span></button>
+        <button class="tab" data-tab="apply">Применение</button>
+      </div>
+
+      <!-- ====== Вкладка: Использование (вариант A + всё содержимое нынешнего окна) ====== -->
+      <div class="pane on" data-pane="usage">
+
+        <!-- строка-вывод: что упрётся в потолок первым (как в UsageScreen) -->
+        <div style="font-size:12px;color:var(--c-text-secondary);line-height:1.5;margin-bottom:2px">
+          Ближе всего к пределу: <b style="color:var(--c-text-heading)">GLM</b> · 5 часов — израсходовано
+          <span class="mono" style="font-weight:700;color:var(--c-warning-text)">88%</span>, сброс через 3 ч
+        </div>
+
+        <!-- Полоса 1: Квоты подписок -->
+        <div class="lanehead"><span class="t">Квоты подписок · израсходовано</span></div>
+
+        <div class="qrow">
+          <button class="qhead" data-qrow>
+            <span class="dot" style="background:var(--grp-0);width:9px;height:9px"></span>
+            <span class="nblock">
+              <span class="name">Claude</span>
+              <span class="sub">5-часовое окно · сброс в 18:40</span>
+            </span>
+            <span class="qbars">
+              <span class="qb"><span class="l">окно</span><span class="bar"><span class="b-ok" style="width:62%"></span></span><span class="v" style="color:var(--c-text-heading)">62%</span></span>
+              <span class="qb"><span class="l">неделя</span><span class="bar"><span class="b-ok" style="width:31%"></span></span><span class="v" style="color:var(--c-text-heading)">31%</span></span>
+            </span>
+            <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>12 мин назад</span>
+            <span class="car up">▸</span>
+          </button>
+          <div class="qdetail">
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <div class="wchip">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px">
+                  <span class="lbl">5-часовое окно</span><span class="val" style="color:var(--c-text-heading)">62%</span>
+                </div>
+                <span class="bar"><span class="b-ok" style="width:62%"></span></span>
+                <div class="reset">сброс в 18:40</div>
+              </div>
+              <div class="wchip">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px">
+                  <span class="lbl">Неделя</span><span class="val" style="color:var(--c-text-heading)">31%</span>
+                </div>
+                <span class="bar"><span class="b-ok" style="width:31%"></span></span>
+                <div class="reset">сброс в чт, 12:00</div>
+              </div>
+            </div>
+            <div class="extra">
+              <span class="rotbadge"><span class="dot" style="background:var(--c-success);width:7px;height:7px"></span><b>Новые чаты идут сюда</b><span>в ротации, свободна</span></span>
+              <span class="tierpill">Тариф: Max</span>
+              <div class="hint" style="padding:0;margin-bottom:4px">Тренд · 5-часовое окно</div>
+              <svg class="spark" viewBox="0 0 560 30" preserveAspectRatio="none">
+                <polyline points="3,27 70,25 140,26 210,22 280,20 350,16 420,14 490,11 557,10" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="qrow">
+          <button class="qhead" data-qrow>
+            <span class="dot" style="background:var(--grp-0);width:9px;height:9px"></span>
+            <span class="nblock">
+              <span class="name">GLM</span>
+              <span class="sub">5-часовое окно · сброс через 3 ч</span>
+            </span>
+            <span class="qbars">
+              <span class="qb"><span class="l">5 ч</span><span class="bar"><span class="b-warn" style="width:88%"></span></span><span class="v" style="color:var(--c-warning-text)">88%</span></span>
+            </span>
+            <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>4 мин назад</span>
+            <span class="car">▸</span>
+          </button>
+          <div class="qdetail" hidden>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <div class="wchip">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px">
+                  <span class="lbl">5 часов</span><span class="val" style="color:var(--c-warning-text)">88%</span>
+                </div>
+                <span class="bar"><span class="b-warn" style="width:88%"></span></span>
+                <div class="reset">сброс через 3 ч</div>
+              </div>
+            </div>
+            <div class="extra">
+              <div class="hint" style="padding:0;margin-bottom:4px">Расход окна во времени</div>
+              <svg class="spark" viewBox="0 0 560 30" preserveAspectRatio="none">
+                <polyline points="3,24 90,22 180,18 270,15 360,10 460,6 557,4" />
+              </svg>
+              <a class="lnk" href="#" style="display:inline-block;margin-top:8px">кабинет GLM ↗</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="qrow">
+          <button class="qhead" data-qrow>
+            <span class="dot" style="background:var(--grp-3);width:9px;height:9px"></span>
+            <span class="nblock">
+              <span class="name">Free LLM <span class="badge free" style="margin-left:4px">бесплатный</span></span>
+              <span class="sub">лимит запросов · сброс в 00:00</span>
+            </span>
+            <span class="qbars">
+              <span class="qb"><span class="l">день</span><span class="bar"><span class="b-ok" style="width:12%"></span></span><span class="v" style="color:var(--c-text-heading)">12%</span></span>
+            </span>
+            <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>12 мин назад</span>
+            <span class="car">▸</span>
+          </button>
+          <div class="qdetail" hidden>
+            <div style="display:flex;flex-wrap:wrap;gap:8px">
+              <div class="wchip">
+                <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px">
+                  <span class="lbl">День</span><span class="val" style="color:var(--c-text-heading)">12%</span>
+                </div>
+                <span class="bar"><span class="b-ok" style="width:12%"></span></span>
+                <div class="reset">сброс в 00:00</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="qrow">
+          <div class="qhead" style="cursor:default">
+            <span class="dot" style="background:var(--grp-6);width:9px;height:9px"></span>
+            <span class="name">Alibaba Cloud</span>
+            <span class="worst">квота недоступна — провайдер не отдал данные, расход виден в «Нашем расходе»</span>
+          </div>
+        </div>
+
+        <!-- Полоса 2: Деньги -->
+        <div class="lanehead"><span class="t">Деньги</span></div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <div class="mtile">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span class="dot" style="background:var(--grp-5);width:9px;height:9px"></span>
+              <span style="flex:1;font-size:13px;font-weight:600;color:var(--c-text-heading)">DeepSeek</span>
+              <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>7 мин назад</span>
+            </div>
+            <div class="sum"><span class="cur">$</span>4.12</div>
+            <div class="cap">баланс</div>
+            <div class="spend">$1.86 <span>расход за 7 дней</span></div>
+            <svg class="spark" style="height:26px" viewBox="0 0 560 26" preserveAspectRatio="none">
+              <polyline points="3,5 90,7 180,9 270,11 360,14 460,18 557,21" />
+            </svg>
+            <a class="lnk" href="#" style="display:inline-block;margin-top:8px">пополнить ↗</a>
+          </div>
+          <div class="mtile low">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span class="dot" style="background:var(--grp-2);width:9px;height:9px"></span>
+              <span style="flex:1;font-size:13px;font-weight:600;color:var(--c-text-heading)">OpenRouter</span>
+              <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>7 мин назад</span>
+            </div>
+            <div class="sum"><span class="cur">$</span>0.83</div>
+            <div class="cap">баланс</div>
+            <a class="lnk" href="#" style="display:inline-block;margin-top:8px">пополнить ↗</a>
+          </div>
+          <div class="mtile">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span class="dot" style="background:var(--grp-2);width:9px;height:9px"></span>
+              <span style="flex:1;font-size:13px;font-weight:600;color:var(--c-text-heading)">fal.ai</span>
+              <span class="fresh stale"><span class="dot" style="background:var(--c-warning)"></span>на 14:20</span>
+            </div>
+            <div class="sum"><span class="cur">$</span>12.40</div>
+            <div class="cap">баланс</div>
+            <div class="spend">$3.10 <span>расход за 7 дней</span></div>
+            <a class="lnk" href="#" style="display:inline-block;margin-top:8px">пополнить ↗</a>
+          </div>
+        </div>
+        <div style="margin-top:16px">
+          <div style="display:flex;flex-direction:column;gap:2px;margin-bottom:8px">
+            <span style="font-size:12px;font-weight:600;color:var(--c-text-secondary);text-transform:uppercase;letter-spacing:.05em">Кредиты</span>
+            <span class="hint" style="padding:0">не деньги, курс — в кабинете</span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <div class="mtile">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                <span class="dot" style="background:var(--grp-4);width:9px;height:9px"></span>
+                <span style="flex:1;font-size:13px;font-weight:600;color:var(--c-text-heading)">glif</span>
+                <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>только что</span>
+              </div>
+              <div class="sum">1 250<span class="cur" style="font-size:12px"> кр.</span></div>
+              <div class="cap">баланс</div>
+              <div class="spend">210 кр. <span>расход за 7 дней</span></div>
+              <a class="lnk" href="#" style="display:inline-block;margin-top:8px">кабинет ↗</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Полоса 3: Наш расход -->
+        <div class="lanehead">
+          <span class="t">Наш расход</span>
+          <span style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="seg" id="periodseg"><button>День</button><button class="on">Неделя</button><button>Месяц</button></span>
+            <a class="lnk" href="#">Подробная аналитика →</a>
+          </span>
+        </div>
+        <div style="display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;gap:12px;min-height:44px;padding:8px 0;border-bottom:1px solid var(--c-border-light)">
+            <span class="dot" style="background:var(--grp-0);width:9px;height:9px"></span>
+            <span style="flex:0 0 130px;font-size:13px;color:var(--c-text-heading)">Zhipu GLM</span>
+            <span style="flex:1;min-width:40px;height:7px;background:var(--c-track);border-radius:4px;overflow:hidden"><span style="display:block;width:100%;height:100%;background:var(--c-text-muted)"></span></span>
+            <span style="flex-shrink:0;text-align:right;white-space:nowrap"><span class="mono" style="font-size:12px;font-weight:700;color:var(--c-text-heading)">1.2М</span> <span style="font-size:11px;color:var(--c-text-muted)">токенов · 84 хода</span></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;min-height:44px;padding:8px 0;border-bottom:1px solid var(--c-border-light)">
+            <span class="dot" style="background:var(--grp-2);width:9px;height:9px"></span>
+            <span style="flex:0 0 130px;font-size:13px;color:var(--c-text-heading)">Anthropic Claude</span>
+            <span style="flex:1;min-width:40px;height:7px;background:var(--c-track);border-radius:4px;overflow:hidden"><span style="display:block;width:45%;height:100%;background:var(--c-text-muted)"></span></span>
+            <span style="flex-shrink:0;text-align:right;white-space:nowrap"><span class="mono" style="font-size:12px;font-weight:700;color:var(--c-text-heading)">540К</span> <span style="font-size:11px;color:var(--c-text-muted)">токенов · 31 ход</span></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;min-height:44px;padding:8px 0;border-bottom:1px solid var(--c-border-light)">
+            <span class="dot" style="background:var(--grp-3);width:9px;height:9px"></span>
+            <span style="flex:0 0 130px;font-size:13px;color:var(--c-text-heading)">Free LLM</span>
+            <span style="flex:1;min-width:40px;height:7px;background:var(--c-track);border-radius:4px;overflow:hidden"><span style="display:block;width:20%;height:100%;background:var(--c-text-muted)"></span></span>
+            <span style="flex-shrink:0;text-align:right;white-space:nowrap"><span class="mono" style="font-size:12px;font-weight:700;color:var(--c-text-heading)">240К</span> <span style="font-size:11px;color:var(--c-text-muted)">токенов · 56 ходов</span></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;min-height:44px;padding:8px 0">
+            <span class="dot" style="background:var(--grp-5);width:9px;height:9px"></span>
+            <span style="flex:0 0 130px;font-size:13px;color:var(--c-text-heading)">Ollama</span>
+            <span style="flex:1;min-width:40px;height:7px;background:var(--c-track);border-radius:4px;overflow:hidden"><span style="display:block;width:12%;height:100%;background:var(--c-text-muted)"></span></span>
+            <span style="flex-shrink:0;text-align:right;white-space:nowrap"><span class="mono" style="font-size:12px;font-weight:700;color:var(--c-text-heading)">140К</span> <span style="font-size:11px;color:var(--c-text-muted)">токенов · 22 хода</span></span>
+          </div>
+        </div>
+
+        <!-- Полоса 4: Все провайдеры (поглощённая вкладка «Провайдеры») -->
+        <div class="lanehead"><span class="t">Все провайдеры</span></div>
+        <div class="rows">
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-success)"></span>Anthropic Claude</span>
+            <span class="hint" style="padding:0">3 модели</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-success)"></span>Zhipu GLM</span>
+            <span class="hint" style="padding:0">4 модели</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-success)"></span>Free LLM <span class="badge free">бесплатный</span></span>
+            <span class="hint" style="padding:0">2 модели</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-success)"></span>Ollama <span class="badge free">бесплатный · локально</span></span>
+            <span class="hint" style="padding:0">2 модели</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-text-muted)"></span>Kimi</span>
+            <span class="hint mono" style="padding:0">не настроен · LlmProviders:Kimi:ApiKey</span>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          «Бесплатный» — пометка провайдера в конфиге: такие модели не тратят ни деньги, ни квоты
+          подписок. Локальные (Ollama) считаются бесплатными всегда. Если у провайдера кончился
+          лимит на одной подписке, ответ продолжится на другой его подписке — и только потом
+          сменится модель.
+        </div>
+      </div>
+
+      <!-- ====== Вкладка: Модели по умолчанию (вариант C — таблица) ====== -->
+      <div class="pane" data-pane="slots">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div class="seg" id="ctxseg">
+            <button class="on">Общие · для всех</button><button>Андрей</button><button>Пользователь… ▾</button>
+          </div>
+          <span class="hint" id="ctxhint">Общие слоты — основа для всех; личный слот перекрывает общий, пустой — «как у всех».</span>
+        </div>
+
+        <div class="matrix-wrap" style="margin-top:12px">
+          <table class="matrix">
+            <thead>
+              <tr><th style="width:140px">Уровень</th><th>Модель</th><th style="width:200px">Где используется</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="cell-name">Сильная</div><div class="cell-hint">чаты, сложные задачи</div></td>
+                <td>
+                  <select class="cell">
+                    <option selected>GLM-4.7 · Zhipu</option>
+                    <option>Opus 5 · Anthropic</option>
+                    <option>Qwen3-32B · Free LLM · бесплатно</option>
+                    <option>qwen3:14b · Ollama · бесплатно</option>
+                    <option>🔗 Глубокая работа · пресет</option>
+                  </select>
+                </td>
+                <td class="cell-hint">3 места: новый чат, исполнитель задач, +1</td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Средняя</div><div class="cell-hint">сабагенты, тяжёлый фон</div></td>
+                <td>
+                  <select class="cell">
+                    <option selected>GLM-4.5-Air · Zhipu</option>
+                    <option>Sonnet 5 · Anthropic</option>
+                    <option>Llama-3.3-8B · Free LLM · бесплатно</option>
+                    <option>🔗 Экономная цепочка · пресет</option>
+                  </select>
+                </td>
+                <td class="cell-hint">5 мест: чат с персоной, сводки, +3</td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Слабая</div><div class="cell-hint">теги, заголовки, мелочь</div></td>
+                <td>
+                  <select class="cell">
+                    <option selected>GLM-4.5-Flash · Zhipu</option>
+                    <option>Haiku 4.5 · Anthropic</option>
+                    <option>Gemma-3-4B · Free LLM · бесплатно</option>
+                    <option>gemma3:4b · Ollama · бесплатно</option>
+                  </select>
+                </td>
+                <td class="cell-hint">8 мест: теги, заголовки, память, +5</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          Колонка «Где используется» — цена смены слота: видно, сколько мест поедут за ней.
+          Сменить весь набор разом — кнопки в «Применении» (редкое действие, ему не нужен селект
+          в этой таблице). Бесплатные модели помечены прямо в списке.
+        </div>
+      </div>
+
+      <!-- ====== Вкладка: Специальности (вариант C — матрица, все 12 видны сразу) ====== -->
+      <div class="pane" data-pane="specs">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div class="hint" style="max-width:400px;padding:0">Своя тройка моделей у специальности — работают все её персоны. Пустая ячейка наследуется: специальность → «любая» → уровень по умолчанию.</div>
+          <div class="seg" id="specscope">
+            <button class="on">Для всех</button><button>Только для меня</button>
+          </div>
+        </div>
+
+        <!-- Все специальности в одной прокручиваемой таблице с липкой шапкой — никакого «показать ещё» -->
+        <div class="matrix-wrap" style="margin-top:12px;max-height:432px">
+          <table class="matrix">
+            <thead>
+              <tr>
+                <th>Специальность</th>
+                <th style="width:132px">Сильная</th>
+                <th style="width:132px">Средняя</th>
+                <th style="width:132px">Слабая</th>
+                <th style="width:30px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="cell-name">Любая специальность</div><div class="cell-hint">если у своей нет настроек</div></td>
+                <td><select class="cell empty"><option>—</option><option>Opus 5</option><option>GLM-4.7</option></select></td>
+                <td><select class="cell empty"><option>—</option><option>Sonnet 5</option><option>GLM-4.5-Air</option></select></td>
+                <td><select class="cell"><option>GLM-4.5-Flash</option><option>—</option><option>Haiku 4.5</option></select></td>
+                <td></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Исполнитель (универсальный)</div><div class="cell-hint">работа с правками файлов</div></td>
+                <td><select class="cell"><option>Opus 5</option><option>—</option><option>GLM-4.7</option></select></td>
+                <td><select class="cell empty"><option>—</option><option>Sonnet 5</option></select></td>
+                <td><select class="cell empty"><option>—</option><option>Haiku 4.5</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Исполнитель (бэкенд)</div> <span class="badge all">новая</span><div class="cell-hint">серверный код, данные</div></td>
+                <td><select class="cell"><option>🔗 Глубокая работа</option><option>—</option><option>Opus 5</option></select></td>
+                <td><select class="cell"><option>Sonnet 5</option><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <!-- раскрытая деталь специальности (клик по ⚙) -->
+              <tr style="background:var(--c-bg-inset)">
+                <td colspan="5" style="padding:8px 12px;background:var(--c-bg-inset)">
+                  <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--c-text-secondary)">
+                    <span><b style="color:var(--c-text-heading)">Уровень по умолчанию:</b> средний ▾</span>
+                    <span><b style="color:var(--c-text-heading)">Доступ:</b> полный</span>
+                    <span><b style="color:var(--c-text-heading)">Инструменты:</b> задачи · заметки · веб</span>
+                    <span class="badge warn">правили вручную: 2 персоны</span>
+                  </div>
+                  <div class="hint" style="margin-top:6px">Шаблон подставляется один раз — в момент выбора специальности; дальше права живут в персоне.</div>
+                </td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Исполнитель (фронтенд)</div> <span class="badge all">новая</span><div class="cell-hint">интерфейс, вёрстка</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Аналитик</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell"><option>GLM-4.7</option><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Планировщик</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Ревьюер</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Секретарь</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell"><option>GLM-4.5-Flash</option><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Координатор</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Наставник</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Дизайнер</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Консультант</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Библиотекарь</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+              <tr>
+                <td><div class="cell-name">Тестировщик</div></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><select class="cell empty"><option>—</option></select></td>
+                <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="hint" style="margin-top:8px">Все 12 специальностей + «любая» в одной прокручиваемой таблице: шапка липнет, «показать ещё» не нужно. «⚙» раскрывает под строкой права, инструменты и уровень по умолчанию.</div>
+      </div>
+
+      <!-- ====== Вкладка: Пресеты (вариант A — свёрнутые строки) ====== -->
+      <div class="pane" data-pane="presets">
+        <div class="hint" style="margin-bottom:10px">Пресет — несколько моделей по порядку под одним именем: первая не ответила — отвечает следующая. По умолчанию все свёрнуты: имя, слой и вся цепочка видны одной строкой.</div>
+
+        <div class="preset">
+          <div class="preset-head" data-preset>
+            <span style="font-size:13px">🔗</span>
+            <div style="flex:1;min-width:0">
+              <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Экономная цепочка</span>
+              <span class="badge free" style="margin-left:6px">бесплатный старт</span>
+              <span class="chain" style="margin-left:8px">
+                <span class="step">Free LLM</span>→<span class="step">GLM-4.5-Flash</span>→<span class="step">Claude Haiku</span>
+              </span>
+            </div>
+            <span class="hint" style="padding:0;flex-shrink:0">3 шага</span>
+            <span class="car">▾</span>
+          </div>
+        </div>
+
+        <div class="preset">
+          <div class="preset-head" data-preset>
+            <span style="font-size:13px">🔗</span>
+            <div style="flex:1;min-width:0">
+              <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Глубокая работа</span>
+              <span class="badge all" style="margin-left:6px">для всех</span>
+              <span class="chain" style="margin-left:8px"><span class="step">Opus 5</span>→<span class="step">GLM-4.7</span></span>
+            </div>
+            <span class="hint" style="padding:0;flex-shrink:0">2 шага</span>
+            <span class="car">▾</span>
+          </div>
+        </div>
+
+        <!-- раскрытый пресет -->
+        <div class="preset" style="border-color:var(--c-accent)">
+          <div class="preset-head" data-preset>
+            <span style="font-size:13px">🔗</span>
+            <div style="flex:1;min-width:0">
+              <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Основной с запасом</span>
+              <span class="chain" style="margin-left:8px"><span class="step">GLM-4.7</span>→<span class="step">DeepSeek V3.2</span>→<span class="step">Ollama</span></span>
+            </div>
+            <span class="car up">▾</span>
+          </div>
+          <div class="preset-body">
+            <input value="Когда основная модель занята — уйти в DeepSeek, потом в локальную" style="font:inherit;font-size:12px;color:var(--c-text-secondary);background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;padding:6px 10px;width:100%" aria-label="Описание пресета" />
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--c-text-muted);width:14px;text-align:right">1.</span>
+              <button class="pick" style="flex:1;max-width:none"><span class="lbl">GLM-4.7 · Zhipu</span><span class="car">▾</span></button>
+              <button class="iconbtn" title="Выше">↑</button><button class="iconbtn" title="Ниже">↓</button><button class="iconbtn" title="Убрать шаг">✕</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--c-text-muted);width:14px;text-align:right">2.</span>
+              <button class="pick" style="flex:1;max-width:none"><span class="lbl">DeepSeek V3.2</span><span class="car">▾</span></button>
+              <button class="iconbtn" title="Выше">↑</button><button class="iconbtn" title="Ниже">↓</button><button class="iconbtn" title="Убрать шаг">✕</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--c-text-muted);width:14px;text-align:right">3.</span>
+              <button class="pick" style="flex:1;max-width:none"><span class="lbl">qwen3:14b · Ollama · бесплатно</span><span class="car">▾</span></button>
+              <button class="iconbtn" title="Выше">↑</button><button class="iconbtn" title="Ниже">↓</button><button class="iconbtn" title="Убрать шаг">✕</button>
+            </div>
+            <button class="btn sm" style="border-style:dashed;border-color:var(--c-dashed);color:var(--c-text-secondary);background:transparent">+ Добавить модель</button>
+            <div class="hint">За один ответ система успевает сменить модель дважды — дальше 3-го шага дело обычно не доходит. <a class="lnk" href="#">Изменить</a></div>
+            <div style="display:flex;gap:6px;justify-content:flex-end">
+              <button class="btn sm">Переименовать</button>
+              <button class="btn sm">Скопировать в мои</button>
+              <button class="btn sm" style="color:var(--c-danger-text)">Удалить</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn sm">＋ Новый личный пресет</button>
+          <button class="btn sm">＋ Новый общий пресет</button>
+        </div>
+      </div>
+
+      <!-- ====== Вкладка: Применение (вариант A, кнопки «Экономно»+«Локально» слиты) ====== -->
+      <div class="pane" data-pane="apply">
+        <div class="lvl" style="margin-top:2px">Быстрая настройка</div>
+        <div class="card" style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn primary sm" style="flex:1;min-width:150px">Назначить автоматически</button>
+            <button class="btn ghost-filled sm" style="flex:1;min-width:150px">Экономно · бесплатные и локальные</button>
+          </div>
+          <div class="hint" style="padding:0">
+            «Автоматически» проставляет всем местам уровень по сложности. «Экономно» — то же, но
+            только среди <b>бесплатных</b> моделей: провайдеров с пометкой «бесплатный» (сейчас
+            Free LLM) <b>и локальных</b> (Ollama) — локальные тоже ничего не стоят. Сложным местам —
+            лучшая бесплатная, простым — самая лёгкая. Кнопка скрыта, если нет ни одного
+            бесплатного провайдера и не настроена Ollama.
+          </div>
+        </div>
+
+        <div class="lvl">Чаты и персоны</div>
+        <div class="rows">
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Новый чат</span><button class="pick"><span class="lbl">Средняя · GLM-4.5-Air</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Чат с персоной</span><button class="pick"><span class="lbl">Средняя · GLM-4.5-Air</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Исполнитель задач</span><button class="pick"><span class="lbl">Сильная · GLM-4.7</span><span class="car">▾</span></button></div>
+        </div>
+        <div class="lvl">Фоновые действия</div>
+        <div class="rows">
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Теги чата</span><button class="pick"><span class="lbl">Слабая · GLM-4.5-Flash</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">⚡ Сводка изменений</span><button class="pick"><span class="lbl">Средняя · GLM-4.5-Air</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Заголовок чата</span><button class="pick"><span class="lbl">🔗 Экономная цепочка · 3 шага</span><span class="car">▾</span></button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ КЛЮЧЕВЫЕ РЕШЕНИЯ ============================ -->
+  <h2 class="sec">2. Ключевые решения финала</h2>
+  <div class="cmp">
+    <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+      <b style="color:var(--c-text-heading)">Фон — как у штатной модалки.</b>
+      Карточка окна — <code class="tok">C.bgMain</code> (тёплый кремовый в светлой теме), ровно как
+      <code class="tok">ui/Modal.tsx</code>; белый (<code class="tok">C.bgWhite</code>) остаётся только у
+      контентных поверхностей внутри: чипы окон, таблицы, строки, пилюли. Так окно сливается с
+      приложением, а данные читаются на белых «листах». Заголовок — PT Serif 22, вес 500, как
+      у всех модалок. Заголовки полос «Использования» липкие, с фоном bgMain — как LaneHead
+      в нынешнем окне.
+    </div>
+    <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+      <b style="color:var(--c-text-heading)">«Использование» — без потерь, статус до клика.</b>
+      Свёрнутая строка провайдера уже несёт мини-бегунки окон с подписями и процентами (приём
+      из черновика A) — «на чём я еду» видно без единого клика; раскрытие даёт детали: чипы окон
+      со сбросами, бейдж роутинга и тариф, тренд-спарклайн, ссылку в кабинет. Дальше — всё
+      нынешнее окно: строка-вывод «Ближе всего к пределу», плитки денег с историей и
+      «пополнить ↗», группа «Кредиты», полоса «Наш расход» с периодом и аналитикой,
+      неподключённые провайдеры с ключом конфига (в полосе «Все провайдеры»). Новинка слияния —
+      бейдж «бесплатный».
+    </div>
+    <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+      <b style="color:var(--c-text-heading)">Таблица слотов вместо чипсов (из C).</b>
+      Полоса пилюль-провайдеров ушла: три слота — три строки таблицы, модель меняется инлайн-селектом
+      в один клик, колонка «Где используется» честно показывает, сколько мест сменится следом.
+      «Сменить всё разом» живёт в «Применении» — редкое действие, ему не нужен селект в таблице.
+    </div>
+    <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+      <b style="color:var(--c-text-heading)">Специальности — все сразу, с прокруткой.</b>
+      Все 12 специальностей (+ «любая») видны в одной таблице: шапка липнет, список прокручивается
+      внутри окна. Никакого «показать ещё» — обзор полный, правка в один клик по ячейке.
+    </div>
+    <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+      <b style="color:var(--c-text-heading)">«Экономно» = бесплатные + локальные.</b>
+      Две кнопки слились в одну: с точки зрения кошелька Ollama и Free LLM — одно и то же.
+      Сложным местам — лучшая бесплатная (облачный «бесплатный» приоритетнее локали, если сильнее),
+      простым — самая лёгкая. Видимость: есть хотя бы один «бесплатный» провайдер ИЛИ Ollama.
+    </div>
+  </div>
+
+  <!-- ============================ МОБИЛА ============================ -->
+  <h2 class="sec">3. Мобильная раскладка (шторка, 375px)</h2>
+  <p class="note">На телефоне раздел — шторка на <code class="tok">C.bgMain</code>: вкладки скроллятся горизонтально, таблица слотов и матрица специальностей складываются в карточки — селекты в столбик во всю ширину, tap-цели от 40px. Специальности — тоже все 12, прокрутка внутри шторки.</p>
+  <div class="phones">
+    <div class="phone">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div style="padding:12px 14px 0">
+          <div class="m-title" style="font-size:21px">Модели и использование</div>
+        </div>
+        <div class="tabs" style="padding:10px 10px 0">
+          <button class="tab on">Использование</button>
+          <button class="tab">Модели</button>
+          <button class="tab">Специальности</button>
+          <button class="tab">Пресеты</button>
+          <button class="tab">Применение</button>
+        </div>
+        <div style="padding:12px 14px 16px">
+          <div class="lanehead" style="top:0;padding-top:4px"><span class="t" style="font-size:15px">Квоты подписок · израсходовано</span></div>
+          <div class="qrow" style="border-top:none">
+            <div class="qhead" style="cursor:default">
+              <span class="dot" style="background:var(--grp-0);width:9px;height:9px"></span>
+              <span class="nblock">
+                <span class="name">Claude</span>
+                <span class="qbars" style="width:100%;margin-top:5px">
+                  <span class="qb"><span class="l">окно</span><span class="bar"><span class="b-ok" style="width:62%"></span></span><span class="v" style="color:var(--c-text-heading)">62%</span></span>
+                  <span class="qb"><span class="l">неделя</span><span class="bar"><span class="b-ok" style="width:31%"></span></span><span class="v" style="color:var(--c-text-heading)">31%</span></span>
+                </span>
+              </span>
+              <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>12 мин</span>
+            </div>
+          </div>
+          <div class="qrow">
+            <div class="qhead" style="cursor:default">
+              <span class="dot" style="background:var(--grp-0);width:9px;height:9px"></span>
+              <span class="nblock">
+                <span class="name">GLM</span>
+                <span class="qbars" style="width:100%;margin-top:5px">
+                  <span class="qb"><span class="l">5 ч</span><span class="bar"><span class="b-warn" style="width:88%"></span></span><span class="v" style="color:var(--c-warning-text)">88%</span></span>
+                </span>
+              </span>
+              <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>4 мин</span>
+            </div>
+          </div>
+          <div class="lanehead" style="top:0"><span class="t" style="font-size:15px">Деньги</span></div>
+          <div class="mtile" style="max-width:none">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+              <span class="dot" style="background:var(--grp-5);width:9px;height:9px"></span>
+              <span style="flex:1;font-size:13px;font-weight:600;color:var(--c-text-heading)">DeepSeek</span>
+              <span class="fresh"><span class="dot" style="background:var(--c-success)"></span>7 мин</span>
+            </div>
+            <div class="sum"><span class="cur">$</span>4.12</div>
+            <div class="cap">баланс</div>
+            <svg class="spark" style="height:26px" viewBox="0 0 560 26" preserveAspectRatio="none">
+              <polyline points="3,5 90,7 180,9 270,11 360,14 460,18 557,21" />
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div style="padding:12px 14px 0">
+          <div class="m-title" style="font-size:21px">Специальности</div>
+        </div>
+        <div style="padding:12px 14px 16px">
+          <div class="seg" style="width:100%"><button class="on" style="flex:1">Для всех</button><button style="flex:1">Только для меня</button></div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;max-height:400px;overflow-y:auto">
+            <div class="card" style="padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Исполнитель (бэкенд)</span>
+                <button class="iconbtn">⚙</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Сильная</span><select class="cell" style="flex:1;padding:8px"><option>🔗 Глубокая работа</option><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Средняя</span><select class="cell" style="flex:1;padding:8px"><option>Sonnet 5</option><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Слабая</span><select class="cell empty" style="flex:1;padding:8px"><option>—</option></select></div>
+              </div>
+            </div>
+            <div class="card" style="padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Аналитик</span>
+                <button class="iconbtn">⚙</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Сильная</span><select class="cell empty" style="flex:1;padding:8px"><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Средняя</span><select class="cell" style="flex:1;padding:8px"><option>GLM-4.7</option><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Слабая</span><select class="cell empty" style="flex:1;padding:8px"><option>—</option></select></div>
+              </div>
+            </div>
+            <div class="hint" style="text-align:center;padding:4px 0">…и ещё 10 — прокрутка внутри шторки</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ СОСТОЯНИЯ ============================ -->
+  <h2 class="sec">4. Состояния</h2>
+  <div class="cmp">
+    <div>
+      <div class="tag">Использование: ни один провайдер не подключён</div>
+      <div class="card" style="padding:18px 14px;text-align:center">
+        <div style="font-size:22px;margin-bottom:6px;color:var(--c-text-muted)">◔</div>
+        <div style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Ни один провайдер не подключён</div>
+        <div style="font-size:12px;color:var(--c-text-secondary);line-height:1.5;max-width:340px;margin:4px auto 0">
+          Добавьте API-ключ в appsettings.Local.json — баланс, квоты и расход появятся здесь.
+        </div>
+      </div>
+      <div class="tag" style="margin-top:14px">Данные протухли (&gt;30 мин)</div>
+      <div class="qrow" style="border-bottom:none">
+        <div class="qhead" style="cursor:default">
+          <span class="dot" style="background:var(--grp-0);width:9px;height:9px"></span>
+          <span class="name">Claude</span>
+          <span class="worst"><b style="color:var(--c-text-heading)">62%</b> 5-часовое окно</span>
+          <span class="fresh stale"><span class="dot" style="background:var(--c-warning)"></span>на 14:20</span>
+        </div>
+        <div style="padding:0 0 10px 17px"><span class="bar" style="opacity:.4;max-width:220px"><span class="b-ok" style="width:62%"></span></span>
+          <div class="hint" style="margin-top:4px">Гасится только шкала — текст остаётся читаемым.</div>
+        </div>
+      </div>
+      <div class="tag" style="margin-top:14px">Окно исчерпано (100%)</div>
+      <div class="wchip" style="max-width:280px">
+        <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:5px">
+          <span class="lbl">5-часовое окно
+            <span style="margin-left:5px;padding:1px 6px;border-radius:6px;background:var(--c-danger);color:var(--c-on-accent);font-size:11px;font-weight:600">Исчерпано</span>
+          </span>
+          <span class="val" style="color:var(--c-danger-text)">100%</span>
+        </div>
+        <span class="bar"><span class="b-bad" style="width:100%"></span></span>
+        <div class="reset mono" style="font-weight:700;color:var(--c-danger-text)">сброс в 18:40</div>
+      </div>
+      <div class="tag" style="margin-top:14px">Пресеты: пусто</div>
+      <div class="card" style="padding:18px 14px;text-align:center">
+        <div style="font-size:12px;color:var(--c-text-secondary);line-height:1.5;max-width:340px;margin:0 auto 10px">
+          Пресетов пока нет. Соберите первый: несколько моделей по порядку под своим именем —
+          и выбирайте это имя вместо модели в любом месте.
+        </div>
+        <button class="btn primary sm">Создать пресет</button>
+      </div>
+      <div class="tag" style="margin-top:14px">Слот не задан (не-админ, «как у всех»)</div>
+      <div class="matrix-wrap">
+        <table class="matrix">
+          <tbody>
+            <tr>
+              <td style="width:140px"><div class="cell-name">Сильная</div><div class="cell-hint">чаты, сложные задачи</div></td>
+              <td><select class="cell empty"><option>Как у всех · GLM-4.7</option><option>Выбрать свою…</option></select></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="tag">Ошибка загрузки источника (повтор через минуту)</div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:11px;color:var(--c-text-muted);padding:8px 2px">
+        <span class="mono" style="font-size:13px">—</span>
+        <span>не удалось получить, повторим через минуту</span>
+        <button class="iconbtn" title="Повторить сейчас">⟳</button>
+      </div>
+      <div class="tag" style="margin-top:14px">Ошибка сохранения</div>
+      <div style="padding:7px 10px;border-radius:6px;font-size:12px;color:var(--c-danger-text);background:var(--c-danger-bg);border:1px solid var(--c-danger-border)">
+        Не удалось сохранить — сервер не ответил. Значение возвращено к прежнему.
+      </div>
+      <div class="tag" style="margin-top:14px">Тяжёлая модель в слабом слоте</div>
+      <div style="padding:9px 11px;border-radius:8px;font-size:12px;line-height:1.5;color:var(--c-text-secondary);background:var(--c-bg-inset);border:1px solid var(--c-border)">
+        В слабый слот выбрана тяжёлая модель — на неё пойдут теги, заголовки чатов и сводки,
+        а это десятки вызовов в день. Дешевле поставить лёгкую или бесплатную.
+      </div>
+      <div class="tag" style="margin-top:14px">Битая ссылка на удалённый пресет</div>
+      <div class="matrix-wrap">
+        <table class="matrix">
+          <tbody>
+            <tr>
+              <td style="width:140px"><div class="cell-name">Средняя</div><div class="cell-hint">сабагенты, тяжёлый фон</div></td>
+              <td><select class="cell broken"><option>Пресет удалён — работает настройка по умолчанию</option><option>Выбрать другую…</option></select></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="tag" style="margin-top:14px">Нет бесплатных провайдеров и Ollama</div>
+      <div class="card" style="padding:10px 12px">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn primary sm" style="flex:1;min-width:150px">Назначить автоматически</button>
+          <button class="btn ghost-filled sm" style="flex:1;min-width:150px" disabled title="Ни один бесплатный провайдер не настроен и Ollama не подключена">Экономно · бесплатные и локальные</button>
+        </div>
+        <div class="hint" style="padding:0;margin-top:6px">Кнопка не активна: пометьте провайдера «бесплатным» в конфиге или настройте Ollama.</div>
+      </div>
+      <div class="tag" style="margin-top:14px">Общий пресет у не-админа (read-only)</div>
+      <div class="preset">
+        <div class="preset-head">
+          <span style="font-size:13px">🔗</span>
+          <div style="flex:1;min-width:0">
+            <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Глубокая работа</span>
+            <span class="badge all" style="margin-left:6px">для всех</span>
+          </div>
+          <button class="btn sm">Скопировать в мои</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ СПЕЦИФИКАЦИЯ ============================ -->
+  <h2 class="sec">5. Спецификация для реализации</h2>
+  <div class="card" style="padding:14px 16px;font-size:12px;color:var(--c-text-secondary);line-height:1.7;max-width:900px">
+    <b style="color:var(--c-text-heading)">Токены и каркас.</b> Карточка окна — существующий
+    <code class="tok">Modal</code> (фон <code class="tok">C.bgMain</code>, padding 28, заголовок PT Serif
+    <code class="tok">FS.h2</code> вес 500): макет от него не отличается, собственных стилей окна не нужно.
+    Контентные поверхности внутри — <code class="tok">C.bgWhite</code> (чипы окон, таблицы, строки) и
+    <code class="tok">C.bgCard</code> (плитки денег, карточки), заголовки полос липкие на bgMain.
+    Цвет точки провайдера — <code class="tok">GROUP_COLORS</code> по ключу источника (как
+    <code class="tok">sourceColor</code> в UsageScreen). Новых токенов не вводится.<br/>
+    <b style="color:var(--c-text-heading)">Использование — перенос без потерь.</b> Все блоки нынешнего
+    <code class="tok">UsageScreen.tsx</code> переезжают во вкладку как есть: строка-вывод,
+    <code class="tok">QuotaRow</code> + <code class="tok">WindowChip</code> + <code class="tok">Sparkline</code>,
+    <code class="tok">MoneyTile</code> (+ «Кредиты»), <code class="tok">SpendLane</code> с
+    <code class="tok">MiniSegment</code> и «Подробная аналитика →», состояния
+    «не удалось получить»/протухшие данные/«Исчерпано». В свёрнутую строку квоты добавляются
+    мини-бегунки окон (подпись + шкала + процент, шкала из существующего <code class="tok">C.track</code>/
+    <code class="tok">barTone</code>) — на мобиле они переносятся под имя провайдера.
+    «Не подключены» растворяется в полосе «Все провайдеры» (статус-точка, число моделей,
+    бейдж «бесплатный», ключ конфига у ненастроенных).<br/>
+    <b style="color:var(--c-text-heading)">Контролы.</b> Сегменты — <code class="tok">SegmentedControl</code>;
+    кнопки — <code class="tok">Button</code>; бейдж «бесплатный» — пара
+    <code class="tok">C.successBg</code>/<code class="tok">C.successText</code>; инлайн-селекты таблиц —
+    существующий <code class="tok">RoutePicker</code> в компактной обёртке ячейки (не нативный select:
+    пункт несёт пресет, провайдера и пометку «бесплатно»).<br/>
+    <b style="color:var(--c-text-heading)">Специальности.</b> Все 12 из <code class="tok">SpecialtyCatalog</code>
+    (+ «любая») в одной таблице: контейнер с <code class="tok">overflow-y: auto</code> и липкой шапкой —
+    без «показать ещё».<br/>
+    <b style="color:var(--c-text-heading)">Бэкенд (задача Денису).</b> Поле <code class="tok">IsFree</code> у провайдера
+    в <code class="tok">LlmProviders</code>, проброс в <code class="tok">/api/llm/info</code>; Ollama считается
+    бесплатной без флага. Стратегия «Экономно»: <code class="tok">applyPreset('tiers-free')</code> — заменяет
+    и поглощает <code class="tok">'tiers-local'</code>.<br/>
+    <b style="color:var(--c-text-heading)">Состояния.</b> Всё в §4: пустое «Использование», протухшие данные,
+    исчерпанное окно, «не удалось получить», пустые пресеты, слот «как у всех», ошибка сохранения,
+    тяжёлая модель в слабом слоте, битая ссылка на пресет, скрытая «Экономно», read-only общий пресет.
+    Мобила: таблицы → карточки, селекты во всю ширину, tap-цели ≥ 40px, обе темы — кнопка в шапке.
+  </div>
+
+</div>
+
+<script>
+  // Тема
+  document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+    document.body.dataset.theme = b.dataset.themeBtn === 'dark' ? 'dark' : '';
+    document.querySelectorAll('[data-theme-btn]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  // Вкладки
+  const tabs = document.getElementById('tabs');
+  tabs && tabs.addEventListener('click', e => {
+    const t = e.target.closest('.tab'); if (!t) return;
+    document.querySelectorAll('#dlg .tab').forEach(x => x.classList.toggle('on', x === t));
+    document.querySelectorAll('#dlg .pane').forEach(p => p.classList.toggle('on', p.dataset.pane === t.dataset.tab));
+  });
+  // Сегменты (контекст слотов, слой специальностей, период расхода)
+  ['ctxseg', 'specscope', 'periodseg'].forEach(id => {
+    const el = document.getElementById(id);
+    el && el.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      el.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+      if (id === 'ctxseg') {
+        const hint = document.getElementById('ctxhint');
+        if (hint) hint.textContent = b.textContent.startsWith('Общие')
+          ? 'Общие слоты — основа для всех; личный слот перекрывает общий, пустой — «как у всех».'
+          : 'Личные слоты перекрывают общие. Пустой слот — «как у всех».';
+      }
+    });
+  });
+  // Строки квот: раскрытие детали
+  document.querySelectorAll('[data-qrow]').forEach(h => h.addEventListener('click', () => {
+    const det = h.parentElement.querySelector('.qdetail');
+    const car = h.querySelector('.car');
+    if (det) { det.hidden = !det.hidden; car && car.classList.toggle('up', !det.hidden); }
+  }));
+  // Пресеты: сворачивание
+  document.querySelectorAll('[data-preset]').forEach(h => h.addEventListener('click', () => {
+    const body = h.parentElement.querySelector('.preset-body');
+    const car = h.querySelector('.car');
+    if (body) { body.hidden = !body.hidden; car && car.classList.toggle('up', !body.hidden); }
+  }));
+  // Пустая ячейка матрицы перестаёт быть «пустой» после выбора
+  document.querySelectorAll('select.cell').forEach(s => s.addEventListener('change', () => {
+    if (!s.classList.contains('broken')) s.classList.toggle('empty', s.value === '—' || s.value.startsWith('Как у всех'));
+  }));
+</script>
+</body>
+</html>

@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Модели и использование — вариант C «Матрица»</title>
+<style>
+  :root {
+    --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+    --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+    --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+    --c-on-accent:#FBF8F2; --c-on-dark:#FFFFFF;
+    --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+    --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-track:#D8CFBE;
+    --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+    --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+    --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+    --c-info:#3E7CA6; --c-overlay:rgba(42,37,31,.38);
+    --shadow-card:0 2px 8px rgba(60,50,35,.05);
+    --shadow-modal:0 12px 48px rgba(42,37,31,.22);
+    --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+    --shadow-island:0 1px 2px rgba(60,50,35,.06),0 6px 20px rgba(60,50,35,.10);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+    --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+    --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+    --c-on-accent:#201C18; --c-on-dark:#FFFFFF;
+    --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+    --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-track:#454037;
+    --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+    --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+    --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+    --c-info:#5FA0CC; --c-overlay:rgba(0,0,0,.55);
+    --shadow-card:0 2px 10px rgba(0,0,0,.35);
+    --shadow-modal:0 16px 56px rgba(0,0,0,.60);
+    --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+    --shadow-island:0 1px 2px rgba(0,0,0,.30),0 8px 24px rgba(0,0,0,.45);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px 64px; background:var(--c-bg-main); color:var(--c-text-primary);
+    font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:13px; }
+  .page { max-width:1240px; margin:0 auto; }
+  h1.doc { font-family:'PT Serif',Georgia,serif; font-size:28px; color:var(--c-text-heading); margin:0 0 6px; }
+  p.lead { color:var(--c-text-secondary); margin:0 0 20px; max-width:780px; line-height:1.6; }
+  h2.sec { font-family:'PT Serif',Georgia,serif; font-size:22px; color:var(--c-text-heading); margin:44px 0 6px; padding-top:20px; border-top:1px solid var(--c-border); }
+  p.note { color:var(--c-text-secondary); margin:0 0 16px; max-width:780px; line-height:1.6; }
+  .themebar { position:sticky; top:0; z-index:30; display:flex; gap:8px; align-items:center; background:var(--c-bg-main); padding:8px 0 14px; }
+  .tbtn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; padding:6px 12px; border-radius:999px; border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-secondary); }
+  .tbtn.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+  .variant-links { margin-left:auto; display:flex; gap:6px; }
+  .variant-links a { font-size:12px; color:var(--c-info); text-decoration:none; padding:6px 8px; border-radius:8px; }
+  .variant-links a.here { background:var(--c-bg-selected); color:var(--c-text-heading); font-weight:700; }
+
+  .scene { background:var(--c-overlay); border-radius:24px; padding:40px 24px; display:flex; justify-content:center; }
+  .modal { width:760px; max-width:100%; background:var(--c-bg-white); border-radius:20px; box-shadow:var(--shadow-modal); overflow:hidden; display:flex; flex-direction:column; max-height:84vh; }
+  .m-head { padding:18px 20px 0; }
+  .m-title { font-family:'PT Serif',Georgia,serif; font-size:18px; font-weight:700; color:var(--c-text-heading); }
+  .m-sub { font-size:12px; color:var(--c-text-muted); margin-top:3px; line-height:1.45; }
+  .m-close { float:right; width:32px; height:32px; border-radius:8px; border:none; cursor:pointer; background:transparent; color:var(--c-text-muted); font-size:16px; }
+  .tabs { display:flex; gap:2px; border-bottom:1px solid var(--c-border-light); overflow-x:auto; padding:12px 16px 0; flex-shrink:0; }
+  .tab { font:inherit; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; flex-shrink:0; color:var(--c-text-secondary); background:transparent; border:none; border-bottom:2px solid transparent; padding:10px 12px; }
+  .tab.on { color:var(--c-accent); border-bottom-color:var(--c-accent); }
+  .tab .n { font-size:10.5px; font-weight:700; margin-left:4px; color:var(--c-text-muted); }
+  .pane { display:none; padding:14px 20px 20px; overflow-y:auto; }
+  .pane.on { display:block; }
+
+  .lvl { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.07em; margin:14px 2px 8px; }
+  .hint { font-size:11px; color:var(--c-text-muted); line-height:1.45; padding:0 2px; }
+  .card { background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:12px; }
+  .btn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; border-radius:10px; padding:7px 12px; border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary); }
+  .btn.sm { font-size:12px; padding:5px 10px; }
+  .btn.primary { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+  .badge { font-size:10px; font-weight:700; padding:2px 7px; border-radius:999px; white-space:nowrap; }
+  .badge.free { background:var(--c-success-bg); color:var(--c-success-text); }
+  .badge.all { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+  .badge.warn { background:var(--c-warning-bg); color:var(--c-warning-text); }
+  .seg { display:inline-flex; gap:2px; background:var(--c-bg-selected); border-radius:9px; padding:2px; }
+  .seg button { font:inherit; font-size:12px; font-weight:600; cursor:pointer; border:none; border-radius:8px; padding:5px 11px; background:transparent; color:var(--c-text-secondary); }
+  .seg button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-card); }
+  .iconbtn { width:26px; height:26px; border-radius:8px; border:none; cursor:pointer; flex-shrink:0; background:transparent; color:var(--c-text-muted); font-size:13px; }
+  .iconbtn:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+
+  /* Матрица специальностей: настоящая таблица с нативными select */
+  .matrix { width:100%; border-collapse:separate; border-spacing:0; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+  .matrix th { font-size:10.5px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.05em; text-align:left; padding:8px 10px; background:var(--c-bg-inset); border-bottom:1px solid var(--c-border); }
+  .matrix td { padding:6px 10px; border-bottom:1px solid var(--c-border-light); vertical-align:middle; }
+  .matrix tr:last-child td { border-bottom:none; }
+  .matrix tbody tr:hover td { background:var(--c-bg-selected); }
+  .matrix .spec-name { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+  .matrix .spec-hint { font-size:10.5px; color:var(--c-text-muted); }
+  select.cell {
+    font:inherit; font-size:11.5px; width:100%; max-width:150px; cursor:pointer;
+    padding:4px 6px; border-radius:7px; border:1px solid var(--c-border);
+    background:var(--c-bg-white); color:var(--c-text-primary);
+  }
+  select.cell:hover { border-color:var(--c-accent-muted); }
+  select.cell:focus { outline:none; border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+  select.cell.empty { color:var(--c-text-muted); border-style:dashed; }
+
+  .pick { font:inherit; font-size:11px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; max-width:230px; padding:4px 8px 4px 9px; border-radius:8px; color:var(--c-text-secondary); background:var(--c-bg-white); border:1px solid var(--c-border); }
+  .pick .lbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .rows { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+  .row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 12px; border-top:1px solid var(--c-border-light); }
+  .row:first-child { border-top:none; }
+  .row:hover { background:var(--c-bg-selected); }
+  .bar { display:block; height:6px; border-radius:3px; background:var(--c-track); overflow:hidden; }
+  .bar > span { display:block; height:100%; }
+  .b-ok{background:var(--c-success)} .b-warn{background:var(--c-warning)}
+
+  .phones { display:flex; gap:24px; flex-wrap:wrap; }
+  .phone { width:375px; background:var(--c-bg-main); border:1px solid var(--c-border); border-radius:28px; overflow:hidden; box-shadow:var(--shadow-island); }
+  .sheet { background:var(--c-bg-white); border-radius:22px 22px 0 0; margin-top:40px; min-height:440px; }
+  .sheet .grab { width:36px; height:4px; border-radius:2px; background:var(--c-track); margin:8px auto 0; }
+  .cmp { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  @media (max-width:1100px){ .cmp{grid-template-columns:1fr;} }
+  .tag { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); margin-bottom:6px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <strong style="font-size:12px;color:var(--c-text-muted)">Тема:</strong>
+    <button class="tbtn on" data-theme-btn="light">Светлая</button>
+    <button class="tbtn" data-theme-btn="dark">Тёмная</button>
+    <div class="variant-links">
+      <a href="model-providers-a-compact.html">A · Компактные строки</a>
+      <a href="model-providers-b-profiles.html">B · Профили</a>
+      <a class="here" href="model-providers-c-matrix.html">C · Матрица</a>
+    </div>
+  </div>
+
+  <h1 class="doc">Раздел «Модели и использование» — вариант C</h1>
+  <p class="lead">
+    Вкладки «Использование» и «Применение» — как в варианте A. Отличаются два блока:
+    <b>«Специальности» — настоящая матрица с инлайн-селектами</b> (ноль кликов до настройки,
+    вся картина на одном экране) и <b>«Модели по умолчанию» — таблица слотов с колонкой
+    «где используется»</b>. Всё редактируется прямо в ячейках, без раскрывающихся панелей.
+    Селекты в таблице живые — выбирайте.
+  </p>
+
+  <h2 class="sec">1. Модалка: «Модели по умолчанию» и «Специальности» (кликабельны)</h2>
+
+  <div class="scene">
+    <div class="modal" id="dlg">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Модели и использование</div>
+        <div class="m-sub">Квоты и балансы, какая модель за что отвечает и что происходит, когда выбранная недоступна.</div>
+      </div>
+      <div class="tabs" id="tabs">
+        <button class="tab" data-tab="usage">Использование</button>
+        <button class="tab on" data-tab="slots">Модели по умолчанию</button>
+        <button class="tab" data-tab="specs">Специальности<span class="n">9</span></button>
+        <button class="tab" data-tab="presets">Пресеты<span class="n">3</span></button>
+        <button class="tab" data-tab="apply">Применение</button>
+      </div>
+
+      <div class="pane" data-pane="usage">
+        <div class="hint" style="padding:0">Как в варианте A: квоты подписок, балансы, провайдеры с бейджем «бесплатный».</div>
+      </div>
+
+      <!-- Слоты: таблица с колонкой «где используется» -->
+      <div class="pane on" data-pane="slots">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div class="seg" id="ctxseg">
+            <button class="on">Общие</button><button>Андрей</button><button>Пользователь… ▾</button>
+          </div>
+          <span class="hint">Личный слот перекрывает общий; пусто — «как у всех».</span>
+        </div>
+
+        <table class="matrix" style="margin-top:12px">
+          <thead>
+            <tr><th style="width:150px">Уровень</th><th>Модель</th><th style="width:190px">Где используется</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="spec-name">Сильная</div><div class="spec-hint">чаты, сложные задачи</div></td>
+              <td>
+                <select class="cell">
+                  <option selected>GLM-4.7 · Zhipu</option>
+                  <option>Opus 5 · Anthropic</option>
+                  <option>Qwen3-32B · Free LLM (бесплатно)</option>
+                  <option>🔗 Глубокая работа · пресет</option>
+                </select>
+              </td>
+              <td class="spec-hint">3 места: новый чат, исполнитель задач, +1</td>
+            </tr>
+            <tr>
+              <td><div class="spec-name">Средняя</div><div class="spec-hint">сабагенты, тяжёлый фон</div></td>
+              <td>
+                <select class="cell">
+                  <option selected>GLM-4.5-Air · Zhipu</option>
+                  <option>Sonnet 5 · Anthropic</option>
+                  <option>Llama-3.3-8B · Free LLM (бесплатно)</option>
+                </select>
+              </td>
+              <td class="spec-hint">5 мест: чат с персоной, сводки, +3</td>
+            </tr>
+            <tr>
+              <td><div class="spec-name">Слабая</div><div class="spec-hint">теги, заголовки, мелочь</div></td>
+              <td>
+                <select class="cell">
+                  <option selected>GLM-4.5-Flash · Zhipu</option>
+                  <option>Haiku 4.5 · Anthropic</option>
+                  <option>Gemma-3-4B · Free LLM (бесплатно)</option>
+                </select>
+              </td>
+              <td class="spec-hint">8 мест: теги, заголовки, память, +5</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="hint" style="margin-top:8px">Колонка «Где используется» — это цена смены слота: видно, сколько мест поедут за ней. Быстрый выбор всего набора одним действием — селект в шапке таблицы не нужен: смена провайдера целиком — редкое действие, оно живёт в «Применении».</div>
+      </div>
+
+      <!-- Специальности: матрица -->
+      <div class="pane" data-pane="specs">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div class="hint" style="max-width:400px;padding:0">Пустая ячейка — наследуется: специальность → «любая» → уровень по умолчанию.</div>
+          <div class="seg" id="specscope">
+            <button class="on">Для всех</button><button>Только для меня</button>
+          </div>
+        </div>
+
+        <table class="matrix" style="margin-top:12px">
+          <thead>
+            <tr>
+              <th>Специальность</th>
+              <th style="width:140px">Сильная</th>
+              <th style="width:140px">Средняя</th>
+              <th style="width:140px">Слабая</th>
+              <th style="width:30px"></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div class="spec-name">Любая специальность</div><div class="spec-hint">если у своей нет настроек</div></td>
+              <td><select class="cell empty"><option>—</option><option>Opus 5</option><option>GLM-4.7</option></select></td>
+              <td><select class="cell empty"><option>—</option><option>Sonnet 5</option><option>GLM-4.5-Air</option></select></td>
+              <td><select class="cell"><option>GLM-4.5-Flash</option><option>—</option><option>Haiku 4.5</option></select></td>
+              <td></td>
+            </tr>
+            <tr>
+              <td><div class="spec-name">Исполнитель</div><div class="spec-hint">работа с правками файлов</div></td>
+              <td><select class="cell"><option>Opus 5</option><option>—</option><option>GLM-4.7</option></select></td>
+              <td><select class="cell empty"><option>—</option><option>Sonnet 5</option></select></td>
+              <td><select class="cell empty"><option>—</option><option>Haiku 4.5</option></select></td>
+              <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию">⚙</button></td>
+            </tr>
+            <tr>
+              <td><div class="spec-name">Backend-исполнитель</div> <span class="badge all">новая</span><div class="spec-hint">серверный код, данные</div></td>
+              <td><select class="cell"><option>🔗 Глубокая работа</option><option>—</option><option>Opus 5</option></select></td>
+              <td><select class="cell"><option>Sonnet 5</option><option>—</option></select></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию">⚙</button></td>
+            </tr>
+            <tr>
+              <td><div class="spec-name">Frontend-исполнитель</div> <span class="badge all">новая</span><div class="spec-hint">интерфейс, вёрстка</div></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию">⚙</button></td>
+            </tr>
+            <tr>
+              <td><div class="spec-name">Аналитик</div></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><select class="cell"><option>GLM-4.7</option><option>—</option></select></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию">⚙</button></td>
+            </tr>
+            <tr>
+              <td><div class="spec-name">Ревьюер</div></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><select class="cell empty"><option>—</option></select></td>
+              <td><button class="iconbtn" title="Права, инструменты, уровень по умолчанию">⚙</button></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="hint" style="margin-top:8px">Ещё 3 без своих моделей — <a href="#" style="color:var(--c-info)">показать все</a>. «⚙» раскрывает под строкой права, инструменты и уровень по умолчанию (как строка-деталь в варианте A). Бесплатные модели в списках помечены «(бесплатно)».</div>
+      </div>
+
+      <div class="pane" data-pane="presets">
+        <div class="hint" style="padding:0">Свёрнутые строки с цепочкой одной строкой — как в варианте A (или мастер-деталь из B, на выбор; сам по себе вариант C про матрицы не меняет пресеты).</div>
+      </div>
+
+      <div class="pane" data-pane="apply">
+        <div class="hint" style="padding:0">Как в варианте A: «Назначить автоматически» / «Экономно · бесплатные модели» / «Локально · Ollama» + строки мест.</div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">2. За и против</h2>
+  <div class="cmp">
+    <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+      <b style="color:var(--c-text-heading)">За:</b> самый быстрый путь «посмотреть всё и поправить
+      три ячейки» — ноль раскрытий, таблицу видно всю. Колонка «Где используется» у слотов
+      честно показывает цену изменения. Нативные селекты — минимум нового кода.
+    </div>
+    <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+      <b style="color:var(--c-text-heading)">Против:</b> нативный select не вместит пресет +
+      модель + описание провайдера — только короткие подписи; пресеты с длинными именами
+      ужимаются. Таблица из 5 колонок на мобиле не живёт — там всё равно нужна карточная
+      раскладка из варианта A, то есть две реализации. «⚙»-детали снова прячут права.
+    </div>
+  </div>
+
+  <h2 class="sec">3. Мобильная раскладка</h2>
+  <p class="note">Матрица на 375px схлопывается в карточки: одна специальность — одна карточка, три селекта в столбик. Это фактически мобильная версия варианта A — что иллюстрирует главный минус C: десктоп и мобила расходятся в два разных компонента.</p>
+  <div class="phones">
+    <div class="phone">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div style="padding:12px 14px 0"><div class="m-title" style="font-size:16px">Специальности</div></div>
+        <div style="padding:12px 14px 16px">
+          <div class="seg" style="width:100%"><button class="on" style="flex:1">Для всех</button><button style="flex:1">Только для меня</button></div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+            <div class="card" style="padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Backend-исполнитель</span>
+                <button class="iconbtn">⚙</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Сильная</span><select class="cell" style="flex:1;max-width:none"><option>🔗 Глубокая работа</option><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Средняя</span><select class="cell" style="flex:1;max-width:none"><option>Sonnet 5</option><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Слабая</span><select class="cell empty" style="flex:1;max-width:none"><option>—</option></select></div>
+              </div>
+            </div>
+            <div class="card" style="padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Аналитик</span>
+                <button class="iconbtn">⚙</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Сильная</span><select class="cell empty" style="flex:1;max-width:none"><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Средняя</span><select class="cell" style="flex:1;max-width:none"><option>GLM-4.7</option><option>—</option></select></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Слабая</span><select class="cell empty" style="flex:1;max-width:none"><option>—</option></select></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+    document.body.dataset.theme = b.dataset.themeBtn === 'dark' ? 'dark' : '';
+    document.querySelectorAll('[data-theme-btn]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  const tabs = document.getElementById('tabs');
+  tabs && tabs.addEventListener('click', e => {
+    const t = e.target.closest('.tab'); if (!t) return;
+    document.querySelectorAll('#dlg .tab').forEach(x => x.classList.toggle('on', x === t));
+    document.querySelectorAll('#dlg .pane').forEach(p => p.classList.toggle('on', p.dataset.pane === t.dataset.tab));
+  });
+  [['ctxseg'],['specscope']].forEach(([id]) => {
+    const el = document.getElementById(id);
+    el && el.addEventListener('click', e => {
+      const b = e.target.closest('button'); if (!b) return;
+      el.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+    });
+  });
+  // Пустая ячейка перестаёт быть «пустой» после выбора
+  document.querySelectorAll('select.cell').forEach(s => s.addEventListener('change', () => {
+    s.classList.toggle('empty', s.value === '—');
+  }));
+</script>
+</body>
+</html>

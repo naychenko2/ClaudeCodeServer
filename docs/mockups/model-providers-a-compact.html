@@ -1,0 +1,864 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Модели и использование — вариант A «Компактные строки»</title>
+<style>
+  /* Токены — копия theme.css (обе темы), макет самодостаточен */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-dashed:       #C9BDA9;
+    --c-track:        #D8CFBE;
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --c-overlay: rgba(42, 37, 31, 0.38);
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 4px 20px rgba(60, 50, 35, 0.14);
+    --shadow-modal:    0 12px 48px rgba(42, 37, 31, 0.22);
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-dashed:       #4A443B;
+    --c-track:        #454037;
+    --c-success:      #7CB86A;
+    --c-success-bg:   #232E20;
+    --c-success-text: #8FCB79;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --c-overlay: rgba(0, 0, 0, 0.55);
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 4px 24px rgba(0, 0, 0, 0.50);
+    --shadow-modal:    0 16px 56px rgba(0, 0, 0, 0.60);
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 20px; max-width: 780px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading);
+    margin: 44px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 780px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+
+  /* Переключатель темы */
+  .themebar { position: sticky; top: 0; z-index: 30; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-white); color: var(--c-text-secondary);
+  }
+  .tbtn.on { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+  .variant-links { margin-left: auto; display: flex; gap: 6px; }
+  .variant-links a { font-size: 12px; color: var(--c-info); text-decoration: none; padding: 6px 8px; border-radius: 8px; }
+  .variant-links a.here { background: var(--c-bg-selected); color: var(--c-text-heading); font-weight: 700; }
+
+  /* Сцена: затемнение + модалка */
+  .scene { background: var(--c-overlay); border-radius: 24px; padding: 40px 24px; display: flex; justify-content: center; }
+  .modal {
+    width: 720px; max-width: 100%; background: var(--c-bg-white); border-radius: 20px;
+    box-shadow: var(--shadow-modal); overflow: hidden; display: flex; flex-direction: column;
+    max-height: 82vh;
+  }
+  .m-head { padding: 18px 20px 0; }
+  .m-title { font-family: 'PT Serif', Georgia, serif; font-size: 18px; font-weight: 700; color: var(--c-text-heading); }
+  .m-sub { font-size: 12px; color: var(--c-text-muted); margin-top: 3px; line-height: 1.45; }
+  .m-close {
+    float: right; width: 32px; height: 32px; border-radius: 8px; border: none; cursor: pointer;
+    background: transparent; color: var(--c-text-muted); font-size: 16px;
+  }
+  .m-close:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+
+  /* Вкладки */
+  .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--c-border-light); overflow-x: auto; padding: 12px 16px 0; flex-shrink: 0; }
+  .tab {
+    font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; white-space: nowrap; flex-shrink: 0;
+    color: var(--c-text-secondary); background: transparent; border: none;
+    border-bottom: 2px solid transparent; padding: 10px 12px;
+  }
+  .tab.on { color: var(--c-accent); border-bottom-color: var(--c-accent); }
+  .tab .n { font-size: 10.5px; font-weight: 700; margin-left: 4px; color: var(--c-text-muted); }
+  .tab.on .n { color: var(--c-accent); }
+  .pane { display: none; padding: 14px 20px 20px; overflow-y: auto; }
+  .pane.on { display: block; }
+
+  /* Общие атомы */
+  .lvl { font-size: 11px; font-weight: 700; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: 0.07em; margin: 14px 2px 8px; }
+  .hint { font-size: 11px; color: var(--c-text-muted); line-height: 1.45; padding: 0 2px; }
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px; }
+  .btn {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border-radius: 10px;
+    padding: 7px 12px; border: 1px solid var(--c-border); background: var(--c-bg-white); color: var(--c-text-primary);
+  }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn.primary { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+  .btn.primary:hover { filter: brightness(1.05); }
+  .btn.ghost-filled { background: var(--c-bg-card); }
+  .btn.sm { font-size: 12px; padding: 5px 10px; }
+  .badge { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; white-space: nowrap; }
+  .badge.free { background: var(--c-success-bg); color: var(--c-success-text); }
+  .badge.all { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .badge.warn { background: var(--c-warning-bg); color: var(--c-warning-text); }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; display: inline-block; }
+
+  /* Строка-таблица */
+  .rows { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 10px; overflow: hidden; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--c-border-light); }
+  .row:first-child { border-top: none; }
+  .row:hover { background: var(--c-bg-selected); }
+
+  /* Триггер выбора модели (как ActionRow) */
+  .pick {
+    font: inherit; font-size: 11px; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    max-width: 230px; padding: 4px 8px 4px 9px; border-radius: 8px;
+    color: var(--c-text-secondary); background: var(--c-bg-white); border: 1px solid var(--c-border);
+  }
+  .pick:hover { border-color: var(--c-accent-muted); }
+  .pick.open { border-color: var(--c-accent); box-shadow: var(--shadow-focus); }
+  .pick .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pick .car { color: var(--c-text-muted); transition: transform .15s; }
+  .pick.open .car { transform: rotate(180deg); }
+  .pick.empty { color: var(--c-text-muted); }
+
+  /* Панель выбора (раскрыта под строкой) */
+  .pickpanel {
+    margin: 6px 0 2px; background: var(--c-bg-white); border: 1px solid var(--c-border);
+    border-radius: 12px; box-shadow: var(--shadow-dropdown); padding: 8px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .opt {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    font: inherit; cursor: pointer; padding: 8px 10px; border-radius: 10px;
+    background: var(--c-bg-card); border: 1px solid var(--c-border);
+  }
+  .opt:hover { border-color: var(--c-accent-muted); }
+  .opt.on { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .opt .t { font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+  .opt .s { font-size: 11px; color: var(--c-text-muted); margin-top: 1px; }
+  .opt .mark { margin-left: auto; color: var(--c-accent); font-weight: 700; }
+
+  /* Сегмент-переключатель */
+  .seg { display: inline-flex; gap: 2px; background: var(--c-bg-selected); border-radius: 9px; padding: 2px; }
+  .seg button {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; border: none; border-radius: 8px;
+    padding: 5px 11px; background: transparent; color: var(--c-text-secondary);
+  }
+  .seg button.on { background: var(--c-bg-white); color: var(--c-text-heading); box-shadow: var(--shadow-card); }
+
+  /* Контекст-пилюли (общие/пользователь) */
+  .ctxpills { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+  .ctxpill {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 11px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-white); color: var(--c-text-secondary);
+  }
+  .ctxpill.on { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+  .ctxpill .ava { width: 16px; height: 16px; border-radius: 50%; background: var(--c-bg-selected); color: var(--c-text-secondary);
+    font-size: 9px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+  .ctxpill.on .ava { background: rgba(255,255,255,.25); color: var(--c-on-accent); }
+
+  /* Шкала расхода */
+  .bar { display: block; height: 6px; border-radius: 3px; background: var(--c-track); overflow: hidden; }
+  .bar > span { display: block; height: 100%; }
+  .b-ok { background: var(--c-success); } .b-warn { background: var(--c-warning); } .b-bad { background: var(--c-danger); }
+
+  /* Пресет-строка */
+  .preset { background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px; overflow: hidden; }
+  .preset + .preset { margin-top: 8px; }
+  .preset-head { display: flex; align-items: center; gap: 10px; padding: 10px 13px; cursor: pointer; }
+  .preset-head:hover { background: var(--c-bg-selected); }
+  .preset-body { padding: 4px 13px 13px; border-top: 1px solid var(--c-border-light); display: flex; flex-direction: column; gap: 8px; }
+  .car { color: var(--c-text-muted); font-size: 12px; flex-shrink: 0; transition: transform .15s; }
+  .car.up { transform: rotate(180deg); }
+  .chain { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; font-size: 11px; color: var(--c-text-muted); }
+  .chain .step { background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 7px; padding: 2px 7px; color: var(--c-text-secondary); font-weight: 600; }
+  .iconbtn {
+    width: 26px; height: 26px; border-radius: 8px; border: none; cursor: pointer; flex-shrink: 0;
+    background: transparent; color: var(--c-text-muted); font-size: 13px; line-height: 1;
+  }
+  .iconbtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+
+  /* Мобильный фрейм */
+  .phones { display: flex; gap: 24px; flex-wrap: wrap; }
+  .phone { width: 375px; background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 28px; overflow: hidden; box-shadow: var(--shadow-island); }
+  .sheet { background: var(--c-bg-white); border-radius: 22px 22px 0 0; margin-top: 40px; box-shadow: 0 -8px 40px rgba(23,19,15,.22); min-height: 480px; display: flex; flex-direction: column; }
+  .sheet .grab { width: 36px; height: 4px; border-radius: 2px; background: var(--c-track); margin: 8px auto 0; }
+
+  .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 1100px) { .cmp { grid-template-columns: 1fr; } }
+  .tag { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--c-text-muted); margin-bottom: 6px; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <strong style="font-size:12px; color:var(--c-text-muted)">Тема:</strong>
+    <button class="tbtn on" data-theme-btn="light">Светлая</button>
+    <button class="tbtn" data-theme-btn="dark">Тёмная</button>
+    <div class="variant-links">
+      <a class="here" href="model-providers-a-compact.html">A · Компактные строки</a>
+      <a href="model-providers-b-profiles.html">B · Профили</a>
+      <a href="model-providers-c-matrix.html">C · Матрица</a>
+    </div>
+  </div>
+
+  <h1 class="doc">Раздел «Модели и использование» — вариант A</h1>
+  <p class="lead">
+    Один раздел вместо двух окон: «Использование» вливается первой вкладкой и заменяет собой
+    «Провайдеры»; вкладка «В чате» удаляется. Весь раздел построен на <b>компактных строках</b>:
+    любой выбор модели — это триггер справа строки, панель выбора раскрывается под строкой и не
+    раздвигает экран. Кликайте вкладки, триггеры, пресеты — макет живой.
+  </p>
+
+  <!-- ============================ ДЕСКТОП ============================ -->
+  <h2 class="sec">1. Модалка целиком (720px, кликабельна)</h2>
+  <p class="note">
+    Пять вкладок вместо шести. Пункт меню аватара тоже один: «Модели и использование»
+    (старые «Использование» и «Поставщики моделей» сливаются).
+  </p>
+
+  <div class="scene">
+    <div class="modal" id="dlg">
+      <div class="m-head">
+        <button class="m-close" title="Закрыть">✕</button>
+        <div class="m-title">Модели и использование</div>
+        <div class="m-sub">Квоты и балансы, какая модель за что отвечает и что происходит, когда выбранная недоступна.</div>
+      </div>
+      <div class="tabs" id="tabs">
+        <button class="tab on" data-tab="usage">Использование</button>
+        <button class="tab" data-tab="slots">Модели по умолчанию</button>
+        <button class="tab" data-tab="specs">Специальности<span class="n">9</span></button>
+        <button class="tab" data-tab="presets">Пресеты<span class="n">3</span></button>
+        <button class="tab" data-tab="apply">Применение</button>
+      </div>
+
+      <!-- ====== Вкладка: Использование ====== -->
+      <div class="pane on" data-pane="usage">
+        <div class="lvl">Квоты подписок</div>
+        <div class="rows">
+          <div class="row">
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Claude <span style="font-weight:400;color:var(--c-text-muted)">· подписка</span></div>
+              <div class="hint" style="padding:0">5-часовое окно · сброс в 18:40</div>
+            </div>
+            <div style="width:170px;flex-shrink:0">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-text-secondary);margin-bottom:3px"><span>окно</span><span>62%</span></div>
+              <span class="bar"><span class="b-ok" style="width:62%"></span></span>
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-text-secondary);margin:5px 0 3px"><span>неделя</span><span>31%</span></div>
+              <span class="bar"><span class="b-ok" style="width:31%"></span></span>
+            </div>
+          </div>
+          <div class="row">
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--c-text-heading)">GLM <span style="font-weight:400;color:var(--c-text-muted)">· Coding Plan</span></div>
+              <div class="hint" style="padding:0">запросов осталось · сброс через 3 ч</div>
+            </div>
+            <div style="width:170px;flex-shrink:0">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-text-secondary);margin-bottom:3px"><span>5 ч</span><span>88%</span></div>
+              <span class="bar"><span class="b-warn" style="width:88%"></span></span>
+            </div>
+          </div>
+          <div class="row">
+            <div style="min-width:0">
+              <div style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Free LLM <span class="badge free" style="margin-left:5px">бесплатный</span></div>
+              <div class="hint" style="padding:0">лимит запросов · обновлено 12 мин назад</div>
+            </div>
+            <div style="width:170px;flex-shrink:0">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--c-text-secondary);margin-bottom:3px"><span>день</span><span>12%</span></div>
+              <span class="bar"><span class="b-ok" style="width:12%"></span></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="lvl">Балансы</div>
+        <div class="rows">
+          <div class="row">
+            <span style="font-size:13px;color:var(--c-text-secondary)">DeepSeek</span>
+            <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">$4.12</span>
+          </div>
+          <div class="row">
+            <span style="font-size:13px;color:var(--c-text-secondary)">OpenRouter</span>
+            <span style="display:flex;align-items:center;gap:7px">
+              <span class="badge warn">мало</span>
+              <span style="font-size:13px;font-weight:600;color:var(--c-warning-text)">$0.83</span>
+            </span>
+          </div>
+          <div class="row">
+            <span style="font-size:13px;color:var(--c-text-secondary)">glif</span>
+            <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">1 250 кредитов</span>
+          </div>
+        </div>
+
+        <div class="lvl">Все провайдеры</div>
+        <div class="rows">
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-success)"></span>Anthropic Claude</span>
+            <span class="hint" style="padding:0">3 модели</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-success)"></span>Zhipu GLM</span>
+            <span class="hint" style="padding:0">4 модели</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-success)"></span>Free LLM <span class="badge free">бесплатный</span></span>
+            <span class="hint" style="padding:0">2 модели</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-text-muted)"></span>Kimi</span>
+            <span class="hint" style="padding:0">не настроен · ключ в appsettings.Local.json</span>
+          </div>
+          <div class="row">
+            <span style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--c-text-secondary)"><span class="dot" style="background:var(--c-warning)"></span>Ollama</span>
+            <span class="hint" style="padding:0">офлайн · локальная модель недоступна</span>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          Если у провайдера кончился лимит на одной подписке, ответ продолжится на другой его
+          подписке — и только потом сменится модель.
+        </div>
+      </div>
+
+      <!-- ====== Вкладка: Модели по умолчанию ====== -->
+      <div class="pane" data-pane="slots">
+        <!-- Контекст: сегмент-пилюли вместо меню-кнопки -->
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div class="ctxpills" id="ctxpills">
+            <button class="ctxpill on" data-ctx="all">Общие · все пользователи</button>
+            <button class="ctxpill" data-ctx="me"><span class="ava">АН</span>Андрей</button>
+            <button class="ctxpill" data-ctx="maria"><span class="ava">МК</span>Мария</button>
+            <button class="ctxpill" data-ctx="more">Ещё 2 ▾</button>
+          </div>
+        </div>
+        <div class="hint" id="ctxhint" style="margin-top:8px">Общие слоты — основа для всех; пользователь может перекрыть любой своим.</div>
+
+        <!-- Быстрый выбор тройки: один селект вместо полосы чипсов -->
+        <div class="lvl">Быстрый выбор</div>
+        <div class="card" style="padding:10px 12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap">
+          <span style="font-size:12px;color:var(--c-text-secondary)">Все три уровня через:</span>
+          <button class="pick" data-quickpick>
+            <span class="lbl" style="font-weight:600;color:var(--c-text-heading)">Zhipu GLM</span>
+            <span class="car">▾</span>
+          </button>
+          <span class="hint" style="padding:0">GLM-4.7 / GLM-4.5-Air / GLM-4.5-Flash</span>
+        </div>
+        <!-- панель быстрого выбора -->
+        <div class="pickpanel" data-quickpanel hidden>
+          <button class="opt on"><span><div class="t">Zhipu GLM</div><div class="s">GLM-4.7 / GLM-4.5-Air / GLM-4.5-Flash</div></span><span class="mark">✓</span></button>
+          <button class="opt"><span><div class="t">Anthropic Claude</div><div class="s">Opus 5 / Sonnet 5 / Haiku 4.5</div></span></button>
+          <button class="opt"><span><div class="t">Free LLM <span class="badge free" style="margin-left:4px">бесплатный</span></div><div class="s">Qwen3-32B / Llama-3.3-8B / Gemma-3-4B</div></span></button>
+          <button class="opt"><span><div class="t">DeepSeek</div><div class="s">V3.2 / V3.1 / R1-Lite</div></span></button>
+        </div>
+
+        <div class="lvl">Уровни</div>
+        <div class="hint" style="margin-bottom:8px">На эти три модели ссылаются назначения мест — меняешь модель уровня, меняются все места, назначенные на него.</div>
+
+        <div style="display:flex;flex-direction:column;gap:8px" id="slotlist">
+          <!-- Слот: строка с триггером -->
+          <div class="card slot" style="padding:0">
+            <div style="display:flex;align-items:center;gap:10px;padding:11px 14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">Сильная</div>
+                <div class="hint" style="padding:0">Чаты, сложные задачи</div>
+              </div>
+              <button class="pick" data-slotpick>
+                <span class="lbl">GLM-4.7 · Zhipu</span><span class="car">▾</span>
+              </button>
+            </div>
+          </div>
+          <div class="card slot" style="padding:0">
+            <div style="display:flex;align-items:center;gap:10px;padding:11px 14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">Средняя</div>
+                <div class="hint" style="padding:0">Сабагенты, тяжёлый фон</div>
+              </div>
+              <button class="pick" data-slotpick>
+                <span class="lbl">GLM-4.5-Air · Zhipu</span><span class="car">▾</span>
+              </button>
+            </div>
+            <!-- раскрытая панель выбора — живёт ПОД строкой, экран не раздвигает список чипсов -->
+            <div style="padding:0 10px 10px">
+              <div class="pickpanel" style="margin-top:2px">
+                <div class="hint" style="padding:0 2px 2px">Сейчас пойдёт: GLM-4.5-Air → локальная → Claude</div>
+                <button class="opt on"><span><div class="t">Средняя</div><div class="s">GLM-4.5-Air · Zhipu</div></span><span class="mark">✓</span></button>
+                <button class="opt"><span><div class="t">🔗 Экономная цепочка</div><div class="s">Free LLM → GLM-4.5-Flash → Claude Haiku</div></span></button>
+                <div style="border-top:1px solid var(--c-border-light);margin:2px 0"></div>
+                <button class="opt"><span><div class="t">GLM-4.5-Air</div><div class="s">Zhipu · быстрые ответы, дешевле флагмана</div></span></button>
+                <button class="opt"><span><div class="t">Sonnet 5</div><div class="s">Anthropic · баланс скорости и качества</div></span></button>
+                <button class="opt"><span><div class="t">Qwen3-32B</div><div class="s">Free LLM · бесплатно</div></span></button>
+                <button class="opt"><span><div class="t">Все модели…</div><div class="s">полный список с описаниями</div></span></button>
+              </div>
+            </div>
+          </div>
+          <div class="card slot" style="padding:0">
+            <div style="display:flex;align-items:center;gap:10px;padding:11px 14px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">Слабая</div>
+                <div class="hint" style="padding:0">Теги, заголовки, мелочь</div>
+              </div>
+              <button class="pick" data-slotpick>
+                <span class="lbl">GLM-4.5-Flash · Zhipu</span><span class="car">▾</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ====== Вкладка: Специальности ====== -->
+      <div class="pane" data-pane="specs">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div class="hint" style="max-width:420px">Своя сильная/средняя/слабая модель у специальности — работают все её персоны. Персона может поставить своё.</div>
+          <div class="seg" id="specscope">
+            <button class="on" data-scope="all">Для всех</button>
+            <button data-scope="me">Только для меня</button>
+          </div>
+        </div>
+
+        <div class="rows" style="margin-top:12px" id="specrows">
+          <!-- шапка таблицы -->
+          <div class="row" style="background:var(--c-bg-inset);cursor:default">
+            <span style="flex:1;font-size:10.5px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em">Специальность</span>
+            <span style="width:150px;font-size:10.5px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em">Сильная</span>
+            <span style="width:150px;font-size:10.5px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em">Средняя</span>
+            <span style="width:150px;font-size:10.5px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;letter-spacing:.05em">Слабая</span>
+            <span style="width:30px"></span>
+          </div>
+          <div class="row">
+            <span style="flex:1;min-width:0"><span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Любая специальность</span><div class="hint" style="padding:0">для специальности без своих настроек</div></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick"><span class="lbl">GLM-4.5-Flash</span><span class="car">▾</span></button></span>
+            <span style="width:30px"></span>
+          </div>
+          <div class="row">
+            <span style="flex:1;min-width:0"><span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Исполнитель</span><div class="hint" style="padding:0">любая работа с правками файлов</div></span>
+            <span style="width:150px"><button class="pick"><span class="lbl">Opus 5</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:30px"><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></span>
+          </div>
+          <div class="row">
+            <span style="flex:1;min-width:0"><span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Backend-исполнитель</span> <span class="badge all">новая</span><div class="hint" style="padding:0">серверный код, данные, интеграции</div></span>
+            <span style="width:150px"><button class="pick"><span class="lbl">🔗 Глубокая работа</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick"><span class="lbl">Sonnet 5</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:30px"><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></span>
+          </div>
+          <!-- раскрытая деталь специальности -->
+          <div class="row" style="display:block;background:var(--c-bg-inset);cursor:default">
+            <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:var(--c-text-secondary)">
+              <span><b style="color:var(--c-text-heading)">Уровень по умолчанию:</b> средний ▾</span>
+              <span><b style="color:var(--c-text-heading)">Доступ:</b> полный</span>
+              <span><b style="color:var(--c-text-heading)">Инструменты:</b> задачи · заметки · веб</span>
+              <span class="badge warn">правили вручную: 2 персоны</span>
+            </div>
+            <div class="hint" style="margin-top:6px">Шаблон подставляется один раз — в момент выбора специальности; дальше права живут в персоне.</div>
+          </div>
+          <div class="row">
+            <span style="flex:1;min-width:0"><span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Frontend-исполнитель</span> <span class="badge all">новая</span><div class="hint" style="padding:0">интерфейс, вёрстка, клиентская логика</div></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:30px"><button class="iconbtn" title="Права, инструменты, уровень по умолчанию" data-specdet>⚙</button></span>
+          </div>
+          <div class="row">
+            <span style="flex:1;min-width:0"><span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Аналитик</span></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick"><span class="lbl">GLM-4.7</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:30px"><button class="iconbtn" data-specdet>⚙</button></span>
+          </div>
+          <div class="row">
+            <span style="flex:1;min-width:0"><span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Ревьюер</span></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:150px"><button class="pick empty"><span class="lbl">—</span><span class="car">▾</span></button></span>
+            <span style="width:30px"><button class="iconbtn" data-specdet>⚙</button></span>
+          </div>
+        </div>
+        <div class="hint" style="margin-top:8px">Ещё 4 специальности без своих моделей свёрнуты: <a href="#" style="color:var(--c-info)">показать все</a>. Пустая ячейка «—» — наследуется: специальность → «любая» → уровень по умолчанию.</div>
+      </div>
+
+      <!-- ====== Вкладка: Пресеты ====== -->
+      <div class="pane" data-pane="presets">
+        <div class="hint" style="margin-bottom:10px">Пресет — несколько моделей по порядку под одним именем. Первая не ответила — отвечает следующая. По умолчанию все свёрнуты: видна вся цепочка одной строкой.</div>
+
+        <div class="preset">
+          <div class="preset-head" data-preset>
+            <span style="font-size:13px">🔗</span>
+            <div style="flex:1;min-width:0">
+              <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Экономная цепочка</span>
+              <span class="chain" style="margin-left:8px">
+                <span class="step">Free LLM</span>→<span class="step">GLM-4.5-Flash</span>→<span class="step">Claude Haiku</span>
+              </span>
+            </div>
+            <span class="hint" style="padding:0;flex-shrink:0">3 шага</span>
+            <span class="car">▾</span>
+          </div>
+        </div>
+
+        <div class="preset">
+          <div class="preset-head" data-preset>
+            <span style="font-size:13px">🔗</span>
+            <div style="flex:1;min-width:0">
+              <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Глубокая работа</span>
+              <span class="badge all" style="margin-left:6px">для всех</span>
+              <span class="chain" style="margin-left:8px"><span class="step">Opus 5</span>→<span class="step">GLM-4.7</span></span>
+            </div>
+            <span class="hint" style="padding:0;flex-shrink:0">2 шага</span>
+            <span class="car">▾</span>
+          </div>
+        </div>
+
+        <!-- раскрытый пресет -->
+        <div class="preset" style="border-color:var(--c-accent)">
+          <div class="preset-head" data-preset>
+            <span style="font-size:13px">🔗</span>
+            <div style="flex:1;min-width:0">
+              <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Основной с запасом</span>
+              <span class="chain" style="margin-left:8px"><span class="step">GLM-4.7</span>→<span class="step">DeepSeek V3.2</span>→<span class="step">Локальная</span></span>
+            </div>
+            <span class="car up">▾</span>
+          </div>
+          <div class="preset-body">
+            <input value="Когда основная модель занята — уйти в DeepSeek, не в локаль" style="font:inherit;font-size:11px;color:var(--c-text-secondary);background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:8px;padding:5px 8px;width:100%" aria-label="Описание пресета" />
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--c-text-muted);width:14px;text-align:right">1.</span>
+              <button class="pick" style="flex:1;max-width:none"><span class="lbl">GLM-4.7 · Zhipu</span><span class="car">▾</span></button>
+              <button class="iconbtn" title="Выше">↑</button><button class="iconbtn" title="Ниже">↓</button><button class="iconbtn" title="Убрать шаг">✕</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:11px;color:var(--c-text-muted);width:14px;text-align:right">2.</span>
+              <button class="pick" style="flex:1;max-width:none"><span class="lbl">DeepSeek V3.2</span><span class="car">▾</span></button>
+              <button class="iconbtn" title="Выше">↑</button><button class="iconbtn" title="Ниже">↓</button><button class="iconbtn" title="Убрать шаг">✕</button>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px;opacity:.55">
+              <span style="font-size:11px;color:var(--c-text-muted);width:14px;text-align:right">3.</span>
+              <button class="pick" style="flex:1;max-width:none"><span class="lbl">Локальная · не настроена</span><span class="car">▾</span></button>
+              <span style="font-size:11px;color:var(--c-text-muted);flex-shrink:0">обычно не используется</span>
+            </div>
+            <button class="btn sm" style="border-style:dashed;color:var(--c-accent);background:var(--c-accent-light);border-color:var(--c-accent-muted)">+ Добавить модель</button>
+            <div class="hint">За один ответ система успевает сменить модель дважды — дальше 3-го шага дело обычно не доходит. <a href="#" style="color:var(--c-accent)">Изменить</a></div>
+            <div style="display:flex;gap:6px;justify-content:flex-end">
+              <button class="btn sm">Переименовать</button>
+              <button class="btn sm">Скопировать в мои</button>
+              <button class="btn sm" style="color:var(--c-danger-text)">Удалить</button>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+          <button class="btn sm">＋ Новый личный пресет</button>
+          <button class="btn sm">＋ Новый общий пресет</button>
+        </div>
+      </div>
+
+      <!-- ====== Вкладка: Применение ====== -->
+      <div class="pane" data-pane="apply">
+        <div class="lvl" style="margin-top:2px">Быстрая настройка</div>
+        <div class="card" style="padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn primary sm" style="flex:1;min-width:150px">Назначить автоматически</button>
+            <button class="btn ghost-filled sm" style="flex:1;min-width:150px">Экономно · бесплатные модели</button>
+            <button class="btn ghost-filled sm" style="flex:1;min-width:150px" disabled title="Локальная модель не настроена" style="opacity:.5">Локально · Ollama</button>
+          </div>
+          <div class="hint" style="padding:0">
+            «Автоматически» проставляет всем местам уровень по сложности. «Экономно» — то же,
+            но среди <b>бесплатных</b> провайдеров (сейчас это Free LLM): сложным местам — лучшая
+            бесплатная, простым — самая лёгкая. «Локально» видна, когда настроена Ollama.
+          </div>
+        </div>
+
+        <div class="lvl">Чаты и персоны</div>
+        <div class="rows">
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Новый чат</span><button class="pick"><span class="lbl">Средняя · GLM-4.5-Air</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Чат с персоной</span><button class="pick"><span class="lbl">Средняя · GLM-4.5-Air</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Исполнитель задач</span><button class="pick"><span class="lbl">Сильная · GLM-4.7</span><span class="car">▾</span></button></div>
+        </div>
+        <div class="lvl">Фоновые действия</div>
+        <div class="rows">
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Теги чата</span><button class="pick"><span class="lbl">Слабая · GLM-4.5-Flash</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">⚡ Сводка изменений</span><button class="pick"><span class="lbl">Средняя · GLM-4.5-Air</span><span class="car">▾</span></button></div>
+          <div class="row"><span style="font-size:12px;color:var(--c-text-secondary)">Заголовок чата</span><button class="pick"><span class="lbl">🔗 Экономная цепочка · 3 шага</span><span class="car">▾</span></button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ ЧТО ИЗМЕНИЛОСЬ ============================ -->
+  <h2 class="sec">2. Было → стало (по боли)</h2>
+  <div class="cmp">
+    <div>
+      <div class="tag">Было: «Модели по умолчанию»</div>
+      <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+        Полоса чипсов-пилюль «Claude Opus 5 / Sonnet 5 / Haiku», «GLM-4.7 / Air / Flash»… —
+        каждая в две строки, 4–6 штук занимают весь экран; контекст «Общие / пользователь»
+        прячется в меню-кнопке; правка слота разворачивает список пресетов + полный список
+        моделей прямо в потоке.
+      </div>
+      <div class="tag" style="margin-top:14px">Стало</div>
+      <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+        Быстрый выбор тройки — <b>один селект</b> «Все три уровня через: …» (в пунктах те же
+        тройки). Слоты — строки с компактным триггером справа; панель выбора открывается под
+        строкой (пресеты → топовые модели → «все модели…»). Контекст — видимые пилюли
+        «Общие · Андрей · Мария · Ещё 2», переключение в один клик.
+      </div>
+    </div>
+    <div>
+      <div class="tag">Было: «Специальности» и «Пресеты»</div>
+      <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+        Девять раскрывашек, внутри каждой — сетка 2×3 «Для всех / Только для меня» на каждый
+        уровень: до одной ячейки — 2 клика и экран скролла. Пресеты развёрнуты всегда:
+        редактор шагов на весь экран даже у чужих (общих) пресетов, которые ты только читаешь.
+      </div>
+      <div class="tag" style="margin-top:14px">Стало</div>
+      <div class="card" style="padding:12px;font-size:12px;color:var(--c-text-secondary);line-height:1.55">
+        Специальности — <b>таблица</b>: строка = специальность, колонки = уровни, ячейка =
+        триггер. Двуслойность поднята наверх в переключатель «Для всех / Только для меня» —
+        ячейки перестали быть сдвоенными. Права/инструменты — за «⚙» в строке-детали.
+        Пресеты свёрнуты: имя + цепочка чипсами одной строкой + слой («для всех»). Раскрытие
+        — только у редактируемого.
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ МОБИЛА ============================ -->
+  <h2 class="sec">3. Мобильная раскладка (шторка, 375px)</h2>
+  <p class="note">На телефоне раздел — шторка: вкладки скроллятся горизонтально, строки слотов складываются в столбик (триггер во всю ширину), таблица специальностей превращается в карточки с одной колонкой «модель».</p>
+  <div class="phones">
+    <div class="phone">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div style="padding:12px 14px 0">
+          <div class="m-title" style="font-size:16px">Модели и использование</div>
+        </div>
+        <div class="tabs" style="padding:10px 10px 0">
+          <button class="tab on">Использование</button>
+          <button class="tab">Модели</button>
+          <button class="tab">Специальности</button>
+          <button class="tab">Пресеты</button>
+          <button class="tab">Применение</button>
+        </div>
+        <div style="padding:12px 14px 16px">
+          <div class="lvl" style="margin-top:4px">Быстрый выбор</div>
+          <button class="pick" style="width:100%;max-width:none;justify-content:space-between"><span class="lbl" style="font-weight:600;color:var(--c-text-heading)">Все три уровня через: Zhipu GLM</span><span class="car">▾</span></button>
+          <div class="lvl">Уровни</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <div class="card" style="padding:10px 12px">
+              <div style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Сильная <span style="font-weight:400;font-size:11px;color:var(--c-text-muted)">· чаты, сложные задачи</span></div>
+              <button class="pick" style="width:100%;max-width:none;justify-content:space-between;margin-top:6px"><span class="lbl">GLM-4.7 · Zhipu</span><span class="car">▾</span></button>
+            </div>
+            <div class="card" style="padding:10px 12px">
+              <div style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Средняя <span style="font-weight:400;font-size:11px;color:var(--c-text-muted)">· сабагенты, тяжёлый фон</span></div>
+              <button class="pick" style="width:100%;max-width:none;justify-content:space-between;margin-top:6px"><span class="lbl">GLM-4.5-Air · Zhipu</span><span class="car">▾</span></button>
+            </div>
+            <div class="card" style="padding:10px 12px">
+              <div style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Слабая <span style="font-weight:400;font-size:11px;color:var(--c-text-muted)">· теги, заголовки</span></div>
+              <button class="pick" style="width:100%;max-width:none;justify-content:space-between;margin-top:6px"><span class="lbl">GLM-4.5-Flash · Zhipu</span><span class="car">▾</span></button>
+            </div>
+          </div>
+          <div class="lvl">Контекст</div>
+          <div class="seg" style="width:100%">
+            <button class="on" style="flex:1">Общие</button>
+            <button style="flex:1">Андрей</button>
+            <button style="flex:1">Ещё ▾</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="phone">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div style="padding:12px 14px 0">
+          <div class="m-title" style="font-size:16px">Специальности</div>
+        </div>
+        <div style="padding:12px 14px 16px">
+          <div class="seg" style="width:100%"><button class="on" style="flex:1">Для всех</button><button style="flex:1">Только для меня</button></div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-top:12px">
+            <div class="card" style="padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Backend-исполнитель</span>
+                <button class="iconbtn">⚙</button>
+              </div>
+              <div class="hint" style="padding:0;margin:2px 0 8px">серверный код, данные</div>
+              <div style="display:flex;flex-direction:column;gap:5px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Сильная</span><button class="pick" style="flex:1;max-width:none"><span class="lbl">🔗 Глубокая работа</span><span class="car">▾</span></button></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Средняя</span><button class="pick" style="flex:1;max-width:none"><span class="lbl">Sonnet 5</span><span class="car">▾</span></button></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Слабая</span><button class="pick empty" style="flex:1;max-width:none"><span class="lbl">—</span><span class="car">▾</span></button></div>
+              </div>
+            </div>
+            <div class="card" style="padding:10px 12px">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Аналитик</span>
+                <button class="iconbtn">⚙</button>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:5px;margin-top:8px">
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Сильная</span><button class="pick empty" style="flex:1;max-width:none"><span class="lbl">—</span><span class="car">▾</span></button></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Средняя</span><button class="pick" style="flex:1;max-width:none"><span class="lbl">GLM-4.7</span><span class="car">▾</span></button></div>
+                <div style="display:flex;align-items:center;gap:8px"><span style="width:56px;font-size:11px;color:var(--c-text-muted)">Слабая</span><button class="pick empty" style="flex:1;max-width:none"><span class="lbl">—</span><span class="car">▾</span></button></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ СОСТОЯНИЯ ============================ -->
+  <h2 class="sec">4. Состояния</h2>
+  <div class="cmp">
+    <div>
+      <div class="tag">Пресеты: пусто</div>
+      <div class="card" style="padding:18px 14px;text-align:center">
+        <div style="font-size:12px;color:var(--c-text-secondary);line-height:1.5;max-width:340px;margin:0 auto 10px">
+          Пресетов пока нет. Соберите первый: несколько моделей по порядку под своим именем —
+          и выбирайте это имя вместо модели в любом месте.
+        </div>
+        <button class="btn primary sm">Создать пресет</button>
+      </div>
+      <div class="tag" style="margin-top:14px">Слот: ничего не настроено (не-админ)</div>
+      <div class="card" style="padding:11px 14px;display:flex;align-items:center;gap:10px">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">Сильная</div>
+          <div class="hint" style="padding:0">Как у всех · GLM-4.7 — наследуется от общей настройки</div>
+        </div>
+        <button class="pick empty"><span class="lbl">Выбрать свою…</span><span class="car">▾</span></button>
+      </div>
+    </div>
+    <div>
+      <div class="tag">Ошибка сохранения</div>
+      <div style="padding:7px 10px;border-radius:6px;font-size:12px;color:var(--c-danger-text);background:var(--c-danger-bg);border:1px solid var(--c-danger-border)">
+        Не удалось сохранить — сервер не ответил. Значение возвращено к прежнему.
+      </div>
+      <div class="tag" style="margin-top:14px">Тяжёлая модель в слабом слоте</div>
+      <div style="padding:9px 11px;border-radius:8px;font-size:12px;line-height:1.5;color:var(--c-text-secondary);background:var(--c-bg-inset);border:1px solid var(--c-border)">
+        В слабый слот выбрана тяжёлая модель — на неё пойдут теги, заголовки чатов и сводки,
+        а это десятки вызовов в день. Дешевле поставить лёгкую или бесплатную.
+      </div>
+      <div class="tag" style="margin-top:14px">Битая ссылка на пресет</div>
+      <div class="card" style="padding:11px 14px;display:flex;align-items:center;gap:10px">
+        <div style="flex:1">
+          <div style="font-size:14px;font-weight:600;color:var(--c-text-heading)">Средняя</div>
+        </div>
+        <button class="pick empty" title="Нажмите, чтобы выбрать другой"><span class="lbl">Пресет удалён — работает настройка по умолчанию</span><span class="car">▾</span></button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  // Тема
+  document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+    document.body.dataset.theme = b.dataset.themeBtn === 'dark' ? 'dark' : '';
+    document.querySelectorAll('[data-theme-btn]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  // Вкладки
+  const tabs = document.getElementById('tabs');
+  tabs && tabs.addEventListener('click', e => {
+    const t = e.target.closest('.tab'); if (!t) return;
+    document.querySelectorAll('.tab').forEach(x => x.classList.toggle('on', x === t));
+    document.querySelectorAll('.pane').forEach(p => p.classList.toggle('on', p.dataset.pane === t.dataset.tab));
+  });
+  // Контекст-пилюли
+  const ctx = document.getElementById('ctxpills');
+  ctx && ctx.addEventListener('click', e => {
+    const p = e.target.closest('.ctxpill'); if (!p) return;
+    ctx.querySelectorAll('.ctxpill').forEach(x => x.classList.toggle('on', x === p));
+    const hint = document.getElementById('ctxhint');
+    if (hint) hint.textContent = p.dataset.ctx === 'all'
+      ? 'Общие слоты — основа для всех; пользователь может перекрыть любой своим.'
+      : 'Личные слоты перекрывают общие. Пустой слот — «как у всех».';
+  });
+  // Быстрый выбор тройки
+  const qp = document.querySelector('[data-quickpick]');
+  const qpanel = document.querySelector('[data-quickpanel]');
+  qp && qp.addEventListener('click', () => {
+    qpanel.hidden = !qpanel.hidden;
+    qp.classList.toggle('open', !qpanel.hidden);
+  });
+  qpanel && qpanel.addEventListener('click', e => {
+    const o = e.target.closest('.opt'); if (!o) return;
+    qpanel.querySelectorAll('.opt').forEach(x => { x.classList.toggle('on', x === o); const m = x.querySelector('.mark'); if (m) m.remove(); });
+    if (!o.querySelector('.mark')) { const m = document.createElement('span'); m.className = 'mark'; m.textContent = '✓'; o.appendChild(m); }
+    qp.querySelector('.lbl').textContent = o.querySelector('.t').childNodes[0].textContent.trim();
+  });
+  // Пресеты: сворачивание
+  document.querySelectorAll('[data-preset]').forEach(h => h.addEventListener('click', () => {
+    const body = h.parentElement.querySelector('.preset-body');
+    const car = h.querySelector('.car');
+    if (body) { body.hidden = !body.hidden; car && car.classList.toggle('up', !body.hidden); }
+  }));
+  // Слой специальностей
+  const ss = document.getElementById('specscope');
+  ss && ss.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    ss.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+  });
+</script>
+</body>
+</html>

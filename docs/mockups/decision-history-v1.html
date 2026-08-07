@@ -1,0 +1,837 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Панель «История решений» — v1</title>
+<style>
+  /* Токены — копия theme.css (обе темы), макет самодостаточен */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-msg-bg: rgba(251, 248, 242, 0.42);
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --c-output-bg:    #FFFFFF;
+    --c-output-border:#DED4C2;
+    --c-term-bg:      #2A251F;
+    --c-term-text:    #D8CFC0;
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+    --c-skeleton: #E4DCCC;
+    --canvas-ink: 42, 37, 31;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-msg-bg: rgba(46, 42, 37, 0.38);
+    --c-success:      #7CB86A;
+    --c-success-bg:   #232E20;
+    --c-success-text: #8FCB79;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --c-output-bg:    #262320;
+    --c-output-border:#3D3830;
+    --c-term-bg:      #17140F;
+    --c-term-text:    #C9C0B0;
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+    --c-skeleton: #38332D;
+    --canvas-ink: 237, 230, 219;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 64px;
+    background: var(--c-bg-main);
+    color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 28px; max-width: 760px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading);
+    margin: 44px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 780px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+
+  /* Переключатель темы */
+  .themebar { position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); border-radius: 10px; padding: 6px 12px;
+  }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  /* Рамка «окна продукта» */
+  .frame {
+    background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px;
+    padding: 12px; box-shadow: var(--shadow-card); overflow: hidden; position: relative;
+  }
+  .frame::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .05;
+    background-image:
+      repeating-linear-gradient(45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px),
+      repeating-linear-gradient(-45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px);
+  }
+  .frame > * { position: relative; }
+  .row { display: flex; gap: 8px; align-items: stretch; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; line-height: 1.5; }
+  svg.i { display: block; flex: 0 0 auto; }
+
+  /* Панель-остров */
+  .island {
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px;
+    box-shadow: var(--shadow-island); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .island-h {
+    height: 40px; flex: 0 0 40px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light);
+    display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px;
+  }
+  .island-h .ttl { font-size: 12px; color: var(--c-text-heading); font-weight: 600; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+  .island-h .ttl svg { color: var(--c-text-muted); }
+  .ibtns { display: flex; gap: 2px; flex: 0 0 auto; }
+  .ib {
+    width: 28px; height: 28px; border-radius: 8px; border: none; background: transparent;
+    color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer;
+  }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+  .ib.active { background: var(--c-accent-light); color: var(--c-accent); }
+
+  /* Подшапка: подзаголовок + фильтр по файлу/символу/коммиту */
+  .panel-sub { padding: 10px 12px 8px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-panel); }
+  .panel-sub .desc { font-size: 11.5px; color: var(--c-text-secondary); line-height: 1.5; margin: 0 0 8px; }
+  .scope-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-text-heading);
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 999px; padding: 4px 10px 4px 8px;
+    cursor: pointer; font-family: 'JetBrains Mono', monospace;
+  }
+  .chip.on { background: var(--c-accent-light); border-color: transparent; color: var(--c-accent); }
+  .chip svg { color: inherit; opacity: .85; }
+  .chip .drop { color: var(--c-text-muted); margin-left: 1px; }
+  .segwrap { display: inline-flex; background: var(--c-bg-selected); border-radius: 999px; padding: 2px; gap: 2px; }
+  .seg { font-size: 11px; font-family: inherit; border: none; background: transparent; color: var(--c-text-secondary);
+    border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+  .seg.on { background: var(--c-bg-white); color: var(--c-text-heading); box-shadow: var(--shadow-card); font-weight: 600; }
+
+  /* Тело панели */
+  .panel-body { flex: 1; overflow: auto; padding: 10px 12px 20px; background: var(--c-bg-panel); }
+
+  /* Карточка записи */
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
+  .card.dim { opacity: .92; }
+  .card-top { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; flex: 0 0 26px; display: grid; place-items: center;
+    font-size: 10.5px; font-weight: 700; margin-top: 1px; }
+  .avatar.human { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .avatar.persona { background: var(--c-accent-light); color: var(--c-accent); box-shadow: 0 0 0 2px var(--c-bg-card), 0 0 0 3px var(--c-accent-muted); }
+  .avatar svg { width: 13px; height: 13px; }
+  .card-main { flex: 1; min-width: 0; }
+  .why { font-size: 13px; font-weight: 600; color: var(--c-text-heading); line-height: 1.4; margin: 0 0 3px; }
+  .why.na { font-style: italic; font-weight: 400; color: var(--c-text-secondary); }
+  .meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--c-text-muted); }
+  .meta-row .who { color: var(--c-text-secondary); font-weight: 600; }
+  .meta-row .who.persona-name { color: var(--c-accent); }
+  .meta-row .persona-tag { font-weight: 400; color: var(--c-text-muted); }
+  .meta-row .sha { font-family: 'JetBrains Mono', monospace; }
+  .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--c-text-muted); flex: 0 0 auto; }
+  .degraded-tag { display: inline-flex; align-items: center; gap: 4px; color: var(--c-text-muted); }
+  .degraded-tag svg { width: 11px; height: 11px; }
+  .preview { font-size: 11.5px; color: var(--c-text-secondary); margin-top: 4px; line-height: 1.4;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chev { flex: 0 0 auto; color: var(--c-text-muted); margin-top: 3px; transition: transform .15s ease-out; }
+  .card.open .chev { transform: rotate(180deg); }
+
+  .card-expand { margin: 10px 0 2px 35px; }
+  .subsec { margin-bottom: 10px; }
+  .subsec:last-child { margin-bottom: 0; }
+  .subsec .h { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; color: var(--c-text-muted); margin: 0 0 4px; }
+  .subsec ul { margin: 0; padding-left: 16px; }
+  .subsec li { font-size: 12.5px; color: var(--c-text-primary); line-height: 1.5; margin-bottom: 3px; }
+  .subsec li::marker { color: var(--c-text-muted); }
+
+  .linkrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; margin-left: 35px; }
+  .card:not(.open) .linkrow { margin-top: 8px; }
+  .lbtn {
+    display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11.5px; cursor: pointer;
+    border: 1px solid var(--c-border); background: var(--c-bg-white); color: var(--c-text-primary);
+    border-radius: 999px; padding: 4px 10px 4px 8px;
+  }
+  .lbtn:hover { background: var(--c-bg-selected); }
+  .lbtn svg { width: 12px; height: 12px; color: var(--c-text-muted); }
+  .lbtn.stale { border: none; background: transparent; color: var(--c-text-muted); cursor: default; padding: 4px 4px; font-style: italic; }
+  .lbtn.stale svg { display: none; }
+
+  .no-summary { font-size: 12px; color: var(--c-text-secondary); font-style: italic; margin: 2px 0 0 35px; line-height: 1.5; }
+
+  /* Группа по датам (файл-хаб) */
+  .group-hdr {
+    display: flex; align-items: center; gap: 7px; padding: 7px 8px; margin-bottom: 4px; border-radius: 8px;
+    cursor: pointer; color: var(--c-text-secondary); font-size: 11.5px; font-weight: 600;
+  }
+  .group-hdr:hover { background: var(--c-bg-selected); }
+  .group-hdr svg.chevr { color: var(--c-text-muted); transition: transform .15s; }
+  .group-hdr.open svg.chevr { transform: rotate(90deg); }
+  .group-hdr .cnt { color: var(--c-text-muted); font-weight: 400; }
+  .compact-row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 30px; border-radius: 8px; cursor: pointer;
+  }
+  .compact-row:hover { background: var(--c-bg-selected); }
+  .compact-row .cwhy { flex: 1; min-width: 0; font-size: 12px; color: var(--c-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .compact-row .cmeta { flex: 0 0 auto; font-size: 10.5px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; }
+  .compact-row .cavatar { width: 16px; height: 16px; border-radius: 50%; flex: 0 0 16px; }
+  .compact-row .cavatar.persona { background: var(--c-accent-light); box-shadow: 0 0 0 1px var(--c-accent-muted) inset; }
+  .compact-row .cavatar.human { background: var(--c-bg-selected); }
+
+  /* Пустые состояния */
+  .state { display: grid; place-items: center; text-align: center; padding: 36px 20px; height: 100%; }
+  .state .ico { color: var(--c-text-muted); margin-bottom: 10px; }
+  .state .t { font-size: 13.5px; font-weight: 600; color: var(--c-text-heading); margin-bottom: 6px; line-height: 1.4; }
+  .state .s { font-size: 12px; color: var(--c-text-secondary); max-width: 260px; line-height: 1.55; margin: 0 auto 14px; }
+  .btn {
+    font: inherit; font-size: 12.5px; cursor: pointer; border-radius: 12px; padding: 7px 14px;
+    border: 1px solid transparent; background: var(--c-accent); color: var(--c-on-accent);
+    box-shadow: var(--shadow-button);
+  }
+  .btn.sec { background: var(--c-bg-card); color: var(--c-text-primary); border-color: var(--c-border); box-shadow: none; }
+
+  /* Скелетон загрузки */
+  .sk { background: var(--c-skeleton); border-radius: 6px; height: 11px; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .55 } 50% { opacity: .95 } }
+  .sk-card { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
+  .sk-row { display: flex; gap: 9px; align-items: flex-start; }
+  .sk-circle { width: 26px; height: 26px; border-radius: 50%; background: var(--c-skeleton); animation: pulse 1.4s ease-in-out infinite; flex: 0 0 26px; }
+  .sk-col { flex: 1; }
+  .sk-col .sk:nth-child(1) { width: 78%; margin-bottom: 7px; }
+  .sk-col .sk:nth-child(2) { width: 40%; height: 9px; }
+
+  /* Мобильная шторка */
+  .phone {
+    width: 340px; height: 640px; border-radius: 26px; border: 1px solid var(--c-border);
+    background: var(--c-bg-main); position: relative; overflow: hidden; box-shadow: var(--shadow-card);
+  }
+  .phone .content { padding: 12px; }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 82%;
+    background: var(--c-bg-panel); border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--c-divider); margin: 8px auto 4px; }
+  .scrim { position: absolute; inset: 0; background: rgba(23,19,15,.42); }
+  .mob-h { display: flex; align-items: center; gap: 8px; padding: 2px 8px 8px 14px; border-bottom: 1px solid var(--c-border-light); }
+  .mob-h .ttl { flex: 1; font-size: 13px; font-weight: 700; color: var(--c-text-heading); display: flex; align-items: center; gap: 6px; }
+  .ib44 { width: 40px; height: 40px; border-radius: 10px; border: none; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 14px; }
+  .spec { max-width: 980px; }
+  .spec table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-bottom: 16px; }
+  .spec th, .spec td { border: 1px solid var(--c-border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  .spec th { background: var(--c-bg-inset); color: var(--c-text-heading); font-weight: 600; }
+  .toolbtn { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); border-radius: 10px; padding: 6px 11px; cursor: pointer; }
+  .toolbtn svg { width: 14px; height: 14px; color: var(--c-text-muted); }
+  .toolbtn.on { background: var(--c-accent-light); color: var(--c-accent); border-color: transparent; }
+  .toolbtn.on svg { color: var(--c-accent); }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="themebar">
+    <button class="tbtn" id="t-light" aria-pressed="true" onclick="setTheme('light')">Светлая</button>
+    <button class="tbtn" id="t-dark" aria-pressed="false" onclick="setTheme('dark')">Тёмная</button>
+    <span style="font-size:11px;color:var(--c-text-muted)">все состояния макета проверяются в обеих темах</span>
+  </div>
+
+  <h1 class="doc">Панель «История решений»</h1>
+  <p class="lead">
+    Когда код меняют из чата или задачи, продукт сохраняет запись «зачем менялось, что решили, что отвергли,
+    какие грабли». Панель у файла показывает эту историю вместо голого списка коммитов — фича <code class="tok">change-dossiers</code>,
+    в интерфейсе называется «История решений».
+  </p>
+
+  <!-- ============ 1. ТОЧКИ ВХОДА ============ -->
+  <h2 class="sec">1. Точки входа</h2>
+  <p class="note">
+    Панель открывается из файлового менеджера (иконка у файла) и от просмотра изменений (кнопка в шапке диффа).
+    Живёт рядом с файлом — та же рельса, тот же drag-and-drop, тот же сплиттер, что у панелей «Документация» и «Чтение».
+  </p>
+  <div class="grid2">
+    <div>
+      <div class="frame">
+        <div class="island" style="border-radius:10px">
+          <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--c-bg-selected)">
+            <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted)"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/></svg>
+            <span style="font-size:12px;color:var(--c-text-heading);font-family:'JetBrains Mono',monospace;flex:1">ClaudeSession.cs</span>
+            <button class="ib active" title="История решений">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Файловый менеджер: иконка «История решений» рядом со строкой файла (по образцу иконок «Документации»/«Чтения»).</p>
+    </div>
+    <div>
+      <div class="frame">
+        <div class="island" style="border-radius:10px">
+          <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--c-bg-selected)">
+            <span style="font-size:12px;color:var(--c-text-heading);font-family:'JetBrains Mono',monospace;flex:1">Изменения · ClaudeSession.cs</span>
+            <button class="toolbtn on">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+              История решений
+            </button>
+            <button class="toolbtn">Отменить</button>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Просмотр изменений (diff): та же кнопка в тулбаре, открывает панель с записями по этому файлу.</p>
+    </div>
+  </div>
+
+  <!-- ============ 2. ПАНЕЛЬ — СПИСОК ЗАПИСЕЙ ============ -->
+  <h2 class="sec">2. Панель — список записей</h2>
+  <p class="note">
+    Пять карточек одного файла показывают сразу все обязательные нюансы: <b>A</b> — развёрнутая запись со всеми
+    блоками; <b>B</b> — пометка «код с тех пор менялся» (статус <code class="tok">degraded</code>), серым, рядом с датой,
+    без предупреждающей заливки — это нюанс, а не ошибка; <b>C</b> — выжимка не собралась
+    (<code class="tok">summaryFailed</code>), сохранён только факт изменения; <b>D</b> — чат и задача удалены,
+    кнопки погашены и заменены текстом, а «Показать изменения» жива всегда — она идёt от коммита, а не от чата/задачи.
+  </p>
+  <div class="frame">
+    <div class="row" style="height: 620px">
+      <div style="flex:1;display:flex;align-items:center;justify-content:center;color:var(--c-text-muted);font-size:12px;border:1px dashed var(--c-border);border-radius:12px">
+        область кода / диффа
+      </div>
+      <div class="island" style="width: 400px; flex: 0 0 400px">
+        <div class="island-h">
+          <div class="ttl">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+            <span>История решений</span>
+          </div>
+          <div class="ibtns">
+            <button class="ib" title="Фильтр">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            </button>
+            <button class="ib" title="Закрыть">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="panel-sub">
+          <p class="desc">Зачем менялся этот файл и что при этом решили</p>
+          <div class="scope-row">
+            <span class="chip on">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/></svg>
+              ClaudeSession.cs <span class="drop">▾</span>
+            </span>
+            <span class="chip">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 18 6-6-6-6"/><path d="m8 6-6 6 6 6"/></svg>
+              Символ <span class="drop">▾</span>
+            </span>
+            <span class="chip">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+              sha или текст
+            </span>
+          </div>
+        </div>
+        <div class="panel-body">
+
+          <!-- Карточка A — развёрнута, active, персона -->
+          <div class="card open">
+            <div class="card-top">
+              <div class="avatar persona">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+              </div>
+              <div class="card-main">
+                <p class="why">Слот модели резолвился дважды за один ход — второй вызов в one-shot раннере переопределял явный pin пользователя</p>
+                <div class="meta-row">
+                  <span class="who persona-name">Денис</span><span class="persona-tag">· персона</span>
+                  <span class="dot"></span><span class="sha">a3f91e2</span>
+                  <span class="dot"></span><span>3 августа 2026</span>
+                </div>
+              </div>
+              <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <div class="card-expand">
+              <div class="subsec">
+                <p class="h">Что решили</p>
+                <ul>
+                  <li>EffectiveModel считается один раз в начале хода и кладётся в поле сессии</li>
+                  <li>Резолв для one-shot вызовов идёт через тот же метод, а не дублируется в OneShotClaudeRunner</li>
+                </ul>
+              </div>
+              <div class="subsec">
+                <p class="h">Что отвергли и почему</p>
+                <ul>
+                  <li>Кешировать модель на весь процесс — смена слота в админке не подхватилась бы без рестарта чата</li>
+                  <li>Резолвить в конструкторе ClaudeSession — сессия ещё не знает своего владельца на этом шаге</li>
+                </ul>
+              </div>
+              <div class="subsec">
+                <p class="h">Грабли</p>
+                <ul>
+                  <li>EffectiveModel звался из двух разных мест до фикса — второй вызов нашли только по двум разным <code class="tok">model=</code> в логе одного хода</li>
+                </ul>
+              </div>
+            </div>
+            <div class="linkrow">
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Открыть чат</button>
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>Открыть задачу</button>
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>Показать изменения</button>
+            </div>
+          </div>
+
+          <!-- Карточка B — свёрнута, degraded, человек -->
+          <div class="card dim">
+            <div class="card-top">
+              <div class="avatar human">АН</div>
+              <div class="card-main">
+                <p class="why">Убрать двойное чтение data/sessions.json при старте сервера</p>
+                <div class="meta-row">
+                  <span class="who">Андрей Найченко</span>
+                  <span class="dot"></span><span class="sha">7c1d4b0</span>
+                  <span class="dot"></span><span>28 июля 2026</span>
+                  <span class="dot"></span>
+                  <span class="degraded-tag">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4"/><path d="M12 16h.01"/><circle cx="12" cy="12" r="10"/></svg>
+                    Код с тех пор заметно менялся
+                  </span>
+                </div>
+                <p class="preview">Решили: вынести чтение в SessionManager.LoadAsync, вызывать один раз из Program.cs</p>
+              </div>
+              <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <div class="linkrow">
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Открыть чат</button>
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>Показать изменения</button>
+            </div>
+          </div>
+
+          <!-- Карточка C — без выжимки (summaryFailed) -->
+          <div class="card">
+            <div class="card-top">
+              <div class="avatar persona">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+              </div>
+              <div class="card-main">
+                <p class="why na">Не удалось собрать описание — сохранён только сам факт изменения</p>
+                <div class="meta-row">
+                  <span class="who persona-name">Кира</span><span class="persona-tag">· персона</span>
+                  <span class="dot"></span><span class="sha">1f6a9e2</span>
+                  <span class="dot"></span><span>21 июля 2026</span>
+                </div>
+              </div>
+            </div>
+            <div class="linkrow">
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Открыть чат</button>
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>Показать изменения</button>
+            </div>
+          </div>
+
+          <!-- Карточка D — протухшие ссылки -->
+          <div class="card">
+            <div class="card-top">
+              <div class="avatar persona">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+              </div>
+              <div class="card-main">
+                <p class="why">Удалить неиспользуемый DTO SessionSnapshotLegacy</p>
+                <div class="meta-row">
+                  <span class="who persona-name">Кира</span><span class="persona-tag">· персона</span>
+                  <span class="dot"></span><span class="sha">4d8e112</span>
+                  <span class="dot"></span><span>14 июля 2026</span>
+                </div>
+                <p class="preview">Решили: DTO не используется с миграции на V2, ссылок в коде не осталось</p>
+              </div>
+              <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+            <div class="linkrow">
+              <span class="lbtn stale">Чат удалён</span>
+              <span class="lbtn stale">Задача удалена</span>
+              <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>Показать изменения</button>
+            </div>
+          </div>
+
+          <!-- Карточка E — обычная свёрнутая, человек -->
+          <div class="card">
+            <div class="card-top">
+              <div class="avatar human">АН</div>
+              <div class="card-main">
+                <p class="why">Добавить ClearEnv для ANTHROPIC_* перед каждым запуском claude</p>
+                <div class="meta-row">
+                  <span class="who">Андрей Найченко</span>
+                  <span class="dot"></span><span class="sha">9a2f001</span>
+                  <span class="dot"></span><span>9 июля 2026</span>
+                </div>
+                <p class="preview">Решили: чистить окружение на каждом exec, а не один раз при старте контейнера</p>
+              </div>
+              <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+  <p class="caption">
+    <b>Что видно без раскрытия:</b> «зачем» крупно + одна строка превью первого пункта «Что решили» (карточки B, D, E) —
+    этого достаточно, чтобы понять, стоит ли раскрывать; развёрнутый вид добавляет только отвергнутое и грабли.
+    <b>Персона vs человек:</b> у персоны — цветное кольцо аватара, значок «бот» вместо инициалов и подпись «· персона»
+    рядом с именем accent-цветом; у человека — нейтральный круг с инициалами, без подписи.
+  </p>
+
+  <!-- ============ 3. ФАЙЛ-ХАБ: 20+ ЗАПИСЕЙ ============ -->
+  <h2 class="sec">3. Файл-хаб — 20+ записей</h2>
+  <p class="note">
+    Полные карточки — только для последних 30 дней (обычно 3–6 штук). Более старые сворачиваются в группы по месяцам
+    со счётчиком; внутри открытой группы — однострочные компактные записи (аватар + «зачем» в одну строку + sha),
+    клик по строке разворачивает её в полную карточку на месте. Так список не превращается в свалку даже у файла-хаба.
+  </p>
+  <div class="frame">
+    <div class="island" style="width: 400px; margin: 0 auto">
+      <div class="island-h">
+        <div class="ttl">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          <span>История решений</span>
+        </div>
+      </div>
+      <div class="panel-sub">
+        <div class="scope-row">
+          <span class="chip on">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/></svg>
+            SessionManager.cs <span class="drop">▾</span>
+          </span>
+          <span style="font-size:11px;color:var(--c-text-muted)">27 записей</span>
+        </div>
+      </div>
+      <div class="panel-body">
+        <p style="font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;font-weight:700;color:var(--c-text-muted);margin:2px 0 6px">Последние 30 дней</p>
+
+        <div class="card">
+          <div class="card-top">
+            <div class="avatar persona"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></div>
+            <div class="card-main">
+              <p class="why">Гейт удаления транскрипта: не трогать сессию, на которую ссылается resumeSessionId</p>
+              <div class="meta-row"><span class="who persona-name">Денис</span><span class="persona-tag">· персона</span><span class="dot"></span><span class="sha">e51a0c3</span><span class="dot"></span><span>2 августа 2026</span></div>
+            </div>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-top">
+            <div class="avatar human">АН</div>
+            <div class="card-main">
+              <p class="why">Ограничить resumeSessionId белым списком символов</p>
+              <div class="meta-row"><span class="who">Андрей Найченко</span><span class="dot"></span><span class="sha">b207fa1</span><span class="dot"></span><span>27 июля 2026</span></div>
+            </div>
+            <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <div class="group-hdr open">
+          <svg class="chevr" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Июнь 2026 <span class="cnt">· 8 записей</span>
+        </div>
+        <div class="compact-row"><div class="cavatar persona"></div><span class="cwhy">Перенести GetByRootPath-каскад в отдельный сервис</span><span class="cmeta">a44f0</span></div>
+        <div class="compact-row"><div class="cavatar human"></div><span class="cwhy">Убрать N+1 при загрузке sessions.json на старте</span><span class="cmeta">7c19b</span></div>
+        <div class="compact-row"><div class="cavatar persona"></div><span class="cwhy">Добавить внеочередную проверку HEAD по завершении хода</span><span class="cmeta">f02e8</span></div>
+        <p style="font-size:11px;color:var(--c-text-muted);margin:2px 0 8px 30px">и ещё 5 записей…</p>
+
+        <div class="group-hdr">
+          <svg class="chevr" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Май 2026 <span class="cnt">· 11 записей</span>
+        </div>
+        <div class="group-hdr">
+          <svg class="chevr" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          Апрель 2026 <span class="cnt">· 6 записей</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 4. ЗАГРУЗКА ============ -->
+  <h2 class="sec">4. Загрузка</h2>
+  <p class="note">Скелетон карточек — форма совпадает с реальной карточкой (аватар + две строки), чтобы список не «прыгал» при появлении данных.</p>
+  <div class="frame">
+    <div class="island" style="width: 400px; margin: 0 auto">
+      <div class="island-h"><div class="ttl">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        <span>История решений</span>
+      </div></div>
+      <div class="panel-body">
+        <div class="sk-card"><div class="sk-row"><div class="sk-circle"></div><div class="sk-col"><div class="sk"></div><div class="sk"></div></div></div></div>
+        <div class="sk-card"><div class="sk-row"><div class="sk-circle"></div><div class="sk-col"><div class="sk" style="width:60%"></div><div class="sk"></div></div></div></div>
+        <div class="sk-card"><div class="sk-row"><div class="sk-circle"></div><div class="sk-col"><div class="sk" style="width:85%"></div><div class="sk"></div></div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 5. ПУСТЫЕ СОСТОЯНИЯ ============ -->
+  <h2 class="sec">5. Пустые состояния</h2>
+  <p class="note">Тексты дословно из согласованной с владельцем заметки — не переписывались.</p>
+  <div class="grid3">
+    <div class="island" style="height: 260px">
+      <div class="island-h"><div class="ttl">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        <span>История решений</span>
+      </div></div>
+      <div class="state">
+        <div class="ico"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></div>
+        <p class="t">Здесь появится история решений</p>
+        <p class="s">Когда код меняют из чата или задачи, AI Home сохранит, зачем это делалось и что при этом решили. Дальше — просто работайте как обычно.</p>
+      </div>
+    </div>
+    <div class="island" style="height: 260px">
+      <div class="island-h"><div class="ttl">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        <span>История решений</span>
+      </div></div>
+      <div class="state">
+        <div class="ico"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v6h6"/></svg></div>
+        <p class="t">Этот файл ещё не меняли из чата</p>
+        <p class="s">История решений собирается с момента включения — для старого кода её нет.</p>
+      </div>
+    </div>
+    <div class="island" style="height: 260px">
+      <div class="island-h"><div class="ttl">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+        <span>История решений</span>
+      </div></div>
+      <div class="state">
+        <div class="ico"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg></div>
+        <p class="t">История решений выключена</p>
+        <p class="s">Включите её в «Экспериментальных функциях», чтобы AI Home начал сохранять, зачем меняется код.</p>
+        <div><button class="btn sec">Открыть настройки</button></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 6. МОБИЛЬНАЯ РАСКЛАДКА ============ -->
+  <h2 class="sec">6. Мобильная раскладка</h2>
+  <p class="note">Шторка снизу, как у остальных панелей воркспейса на телефоне: скругление 22 (<code class="tok">R.sheet</code>), тень <code class="tok">SHADOW.sheet</code>, закрытие свайпом/тапом по затемнению/«✕». Карточки — та же вёрстка, во всю ширину.</p>
+  <div class="row" style="gap:24px;flex-wrap:wrap">
+    <div>
+      <div class="phone">
+        <div class="content" style="color:var(--c-text-muted);font-size:11px">лента чата под шторкой…</div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="mob-h">
+            <div class="ttl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+              История решений
+            </div>
+            <button class="ib44">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div class="panel-sub" style="padding:8px 12px">
+            <div class="scope-row"><span class="chip on" style="font-size:11px">ClaudeSession.cs</span></div>
+          </div>
+          <div class="panel-body" style="padding:8px 10px 16px">
+            <div class="card open">
+              <div class="card-top">
+                <div class="avatar persona"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg></div>
+                <div class="card-main">
+                  <p class="why">Слот модели резолвился дважды за один ход</p>
+                  <div class="meta-row"><span class="who persona-name">Денис</span><span class="persona-tag">· персона</span><span class="dot"></span><span class="sha">a3f91e2</span></div>
+                </div>
+                <svg class="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+              <div class="card-expand">
+                <div class="subsec"><p class="h">Что решили</p><ul><li>EffectiveModel считается один раз в начале хода</li></ul></div>
+              </div>
+              <div class="linkrow">
+                <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Чат</button>
+                <button class="lbtn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>Изменения</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-top">
+                <div class="avatar human">АН</div>
+                <div class="card-main">
+                  <p class="why">Убрать двойное чтение data/sessions.json</p>
+                  <div class="meta-row"><span class="who">Андрей Найченко</span><span class="dot"></span><span>28 июля</span><span class="dot"></span><span class="degraded-tag" style="gap:3px"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4"/><path d="M12 16h.01"/><circle cx="12" cy="12" r="10"/></svg>менялся</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Список с одной развёрнутой и одной degraded-записью.</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="content" style="color:var(--c-text-muted);font-size:11px">лента чата под шторкой…</div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="mob-h">
+            <div class="ttl">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+              История решений
+            </div>
+            <button class="ib44">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+            </button>
+          </div>
+          <div class="state" style="height:auto;padding-top:64px">
+            <div class="ico"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 2.64-6.36L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></div>
+            <p class="t">Здесь появится история решений</p>
+            <p class="s">Когда код меняют из чата или задачи, AI Home сохранит, зачем это делалось и что при этом решили. Дальше — просто работайте как обычно.</p>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Empty-state «записей ещё нет» на телефоне — та же вёрстка, шторка вместо острова.</p>
+    </div>
+  </div>
+
+  <!-- ============ 7. СПЕЦИФИКАЦИЯ ============ -->
+  <h2 class="sec">7. Спецификация для реализации</h2>
+  <div class="spec">
+    <table>
+      <tr><th>Элемент</th><th>Токены</th><th>Поведение</th></tr>
+      <tr>
+        <td>Панель</td>
+        <td><code class="tok">ISLAND.*</code>, шапка 40px (<code class="tok">ISLAND.headerH</code>)</td>
+        <td>Обычная панель воркспейса (рельса/drag/сплиттер/шторка бесплатно, как у «Документации» и «Чтения»)</td>
+      </tr>
+      <tr>
+        <td>Подшапка</td>
+        <td><code class="tok">C.bgPanel</code>, <code class="tok">SP.sm</code></td>
+        <td>Подзаголовок «Зачем менялся этот файл…» + чипы области (файл/символ) + поиск по sha — фильтр из ADR §4/§5</td>
+      </tr>
+      <tr>
+        <td>Карточка</td>
+        <td><code class="tok">C.bgCard</code>, <code class="tok">R.xl</code>≈12, <code class="tok">SHADOW.card</code> не используется (плоские в списке)</td>
+        <td>Свёрнута по умолчанию, кроме первой/самой релевантной; клик по заголовку — раскрытие на месте</td>
+      </tr>
+      <tr>
+        <td>«Зачем»</td>
+        <td><code class="tok">FS.base</code> 13, 600, <code class="tok">C.textHeading</code></td>
+        <td>Главная строка, видна всегда, без обрезки — при необходимости переносится на 2 строки</td>
+      </tr>
+      <tr>
+        <td>Превью-строка</td>
+        <td><code class="tok">FS.sm</code> 11.5, <code class="tok">C.textSecondary</code>, <code>text-overflow: ellipsis</code></td>
+        <td>Первый пункт «Что решили» в одну строку — виден без раскрытия карточки (см. §2)</td>
+      </tr>
+      <tr>
+        <td>Аватар — персона</td>
+        <td><code class="tok">C.accentLight</code> фон, <code class="tok">C.accent</code> иконка, кольцо <code class="tok">C.accentMuted</code></td>
+        <td>Иконка «бот», имя — <code class="tok">C.accent</code> + подпись «· персона»</td>
+      </tr>
+      <tr>
+        <td>Аватар — человек</td>
+        <td><code class="tok">C.bgSelected</code> фон, <code class="tok">C.textSecondary</code></td>
+        <td>Инициалы, без цветного кольца и подписи</td>
+      </tr>
+      <tr>
+        <td>Пометка «код менялся»</td>
+        <td><code class="tok">C.textMuted</code>, без danger/warning-заливки</td>
+        <td>Текст рядом с датой, статус <code class="tok">degraded</code> (ADR §5) — нюанс, не ошибка; иконка info-стиля, не alert</td>
+      </tr>
+      <tr>
+        <td>Ссылки-кнопки</td>
+        <td><code class="tok">R.pill</code>, <code class="tok">C.border</code>, <code class="tok">C.bgWhite</code></td>
+        <td>«Открыть чат» / «Открыть задачу» / «Показать изменения»; протухшая — <code>.lbtn.stale</code>: без рамки, курсор по умолчанию, текст вместо кнопки</td>
+      </tr>
+      <tr>
+        <td>Группы по месяцам</td>
+        <td><code class="tok">FS.sm</code>, <code class="tok">C.textSecondary</code>, шеврон-поворот 90°</td>
+        <td>Записи старше 30 дней сворачиваются по месяцам со счётчиком; внутри — однострочные <code>.compact-row</code></td>
+      </tr>
+      <tr>
+        <td>Empty-state / загрузка</td>
+        <td>Компонент <code class="tok">EmptyState</code> из <code>components/ui/</code>, скелетон — <code class="tok">C.bgSelected</code>-тон с пульсацией</td>
+        <td>Три варианта текста — дословно из заметки; скелетон повторяет форму карточки (аватар + 2 строки)</td>
+      </tr>
+      <tr>
+        <td>Мобильная шторка</td>
+        <td><code class="tok">R.sheet</code>, <code class="tok">SHADOW.sheet</code>, <code class="tok">C.overlay</code>, <code class="tok">Z.modal</code></td>
+        <td>Полноширинные карточки, шапка с ручкой-грабом, закрытие свайпом/тапом по затемнению/«✕»</td>
+      </tr>
+    </table>
+  </div>
+
+  <p class="note" style="margin-top:8px">
+    Слова «паспорт», «досье», «dossier» в интерфейсе и в этом макете не используются — только «История решений» /
+    «запись истории решений», по согласованной заметке с текстами.
+  </p>
+</div>
+
+<script>
+  function setTheme(m) {
+    document.documentElement.setAttribute('data-theme', m);
+    document.getElementById('t-light').setAttribute('aria-pressed', String(m === 'light'));
+    document.getElementById('t-dark').setAttribute('aria-pressed', String(m === 'dark'));
+  }
+  setTheme('light');
+</script>
+</body>
+</html>

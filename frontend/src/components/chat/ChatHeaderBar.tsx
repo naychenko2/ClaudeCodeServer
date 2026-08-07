@@ -1,7 +1,8 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Plus, Menu, FileText } from 'lucide-react';
-import type { Project, Session, ClaudeBilling, Persona } from '../../types';
+import { Plus, Menu, FileText, Tags } from 'lucide-react';
+import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
+import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
@@ -15,7 +16,7 @@ import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { C, FONT, R, SHADOW, TB, CHAT_MAX_W } from '../../lib/design';
+import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton, Modal, ModalActions } from '../ui';
 import { bumpNotes } from '../../lib/notes';
@@ -904,6 +905,42 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 }
 
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
+  // Теги чата: реестр проекта (для чата вне проекта тегов нет — кнопки тоже нет).
+  // Локальная копия, чтобы создание тега сразу отражалось в меню без перезагрузки
+  const [tagRegistry, setTagRegistry] = useState<ProjectTag[]>(() => project?.tagRegistry ?? []);
+  useEffect(() => { setTagRegistry(project?.tagRegistry ?? []); }, [project?.id, project?.tagRegistry]);
+  const [tagMenu, setTagMenu] = useState<DOMRect | null>(null);
+  const projectId = project?.id;
+  const canTag = online && !!projectId;
+
+  // Переключить тег на чате: optimistic через onSessionUpdated, PUT, откат при сбое
+  const toggleTag = (name: string) => {
+    if (!projectId) return;
+    const cur = session.tags ?? [];
+    const has = cur.some(t => t.toLowerCase() === name.toLowerCase());
+    const next = has ? cur.filter(t => t.toLowerCase() !== name.toLowerCase()) : [...cur, name];
+    onSessionUpdated?.({ ...session, tags: next });
+    api.sessions.update(projectId, session.id, { tags: next })
+      .then(updated => onSessionUpdated?.(updated))
+      .catch(() => onSessionUpdated?.({ ...session, tags: cur }));
+  };
+
+  // Новый тег: в реестр проекта (цвет — следующий из палитры по кругу) и сразу на чат
+  const createTag = (name: string) => {
+    if (!projectId) return;
+    const color = GROUP_COLORS[tagRegistry.length % GROUP_COLORS.length];
+    const nextReg = [...tagRegistry, { name, order: tagRegistry.length, color }];
+    setTagRegistry(nextReg);
+    api.projects.updateTags(projectId, nextReg)
+      .then(p => setTagRegistry(p.tagRegistry ?? nextReg))
+      .catch(() => setTagRegistry(tagRegistry));
+    if (!(session.tags ?? []).some(t => t.toLowerCase() === name.toLowerCase())) {
+      const next = [...(session.tags ?? []), name];
+      onSessionUpdated?.({ ...session, tags: next });
+      api.sessions.update(projectId, session.id, { tags: next }).catch(() => {});
+    }
+  };
+
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
   // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
@@ -1005,6 +1042,18 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         />
       )}
     </div>
+  ) : null;
+
+  // Меню маркировки тегами (портал — рендерится в обоих return ниже)
+  const tagMenuEl = tagMenu ? (
+    <TagAssignMenu
+      anchor={tagMenu}
+      registry={tagRegistry}
+      selected={session.tags ?? []}
+      onToggle={toggleTag}
+      onCreate={createTag}
+      onClose={() => setTagMenu(null)}
+    />
   ) : null;
 
   // На десктопе заголовок держит минимум ~20 символов (не ужимается в «З…»);
@@ -1234,6 +1283,18 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const notifyBtn = online && !compact
     ? <NotifyButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
     : null;
+  // Теги чата — тот же TagAssignMenu, что в меню карточки списка. Только для проектных
+  // чатов: теги живут в реестре проекта, у чата вне проекта их нет
+  const tagsBtn = canTag && !compact ? (
+    <ToolbarIconButton
+      onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setTagMenu(r); }}
+      active={!!tagMenu}
+      isMobile={isMobile}
+      title="Теги чата"
+    >
+      <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+    </ToolbarIconButton>
+  ) : null;
 
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
@@ -1241,10 +1302,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{expiryBadge}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{expiryBadge}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{expiryBadge}</div>;
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{expiryBadge}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
@@ -1280,6 +1341,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {heroTitle}
           {rightCluster}
         </div>
+        {tagMenuEl}
       </div>
     );
   }
@@ -1294,6 +1356,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         ...(isMobile ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
       }}>
       {openBtn}{titleEl}{rightCluster}
+      {tagMenuEl}
     </Toolbar>
   );
 }

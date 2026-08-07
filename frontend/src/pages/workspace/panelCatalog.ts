@@ -16,7 +16,7 @@
 import {
   BookOpen, BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
   SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, Puzzle,
-  TableOfContents,
+  TableOfContents, Lightbulb,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -32,7 +32,7 @@ export const PANEL_KEYS = [
   // Порядок рельсы: сначала работа с проектом «здесь и сейчас» — дерево файлов,
   // его изменения, задачи по ним; дальше справочное (документация, знания, граф)
   // и командное
-  'chats', 'files', 'changes', 'tasks', 'docs', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
   // Панели разделов хаба
@@ -50,6 +50,11 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // «Знаниями» (панель ниже, lib/ai/actions) — здесь строки текста внутри разводят их
   // между собой; FileText отдан заметкам.
   docs:     { title: 'Документация', Icon: BookOpenText },
+  // «История решений» (рабочее имя change-dossiers): «зачем менялся код, что решили,
+  // что отвергли» — записи у файла, привязанные к коммитам из чата/задачи. Lightbulb
+  // (идея/решение), а не History — та иконка уже занята вкладкой «История» (git-лог
+  // файла) в FileViewer, и рядом друг с другом они читались бы как одно и то же
+  dossiers: { title: 'История решений', Icon: Lightbulb },
   // База знаний ЭТОГО проекта: что проиндексировано в Dify и доступно ассистенту
   // семантическим поиском. Не путать с knowledgeList («Базы») — тот раздел хаба
   // показывает ВСЕ датасеты пользователя. Пара ровно того же рода, что team
@@ -94,6 +99,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   chats: 'left',
   files: 'right',
   docs: 'right',
+  dossiers: 'right',
   knowledge: 'right',
   changes: 'right',
   tasks: 'right',
@@ -116,7 +122,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'changes', 'tasks', 'docs', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)

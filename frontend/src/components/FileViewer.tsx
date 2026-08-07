@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents, Lightbulb } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -57,6 +57,7 @@ import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectio
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
 // кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
 import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -987,6 +988,18 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     else revealPanelKey('toc');
   };
 
+  // Тумблер «История решений» в шапке diff-просмотра — тем же каналом, что «Оглавление»
+  // выше. Только в diff (мокап: «кнопка в шапке diff-просмотра»), гейт по флагу —
+  // сама панель для выключенной фичи уже показывает свой empty-state с настройками,
+  // но кнопка в тулбаре ведёт себя как остальные фич-флаженные контролы: скрыта, пока флаг off
+  const dossiersFlag = useFeature(FLAGS.changeDossiers);
+  const dossiersPanelOpen = zoneOf(panelZones, 'dossiers') !== null;
+  const dossiersToggleVisible = dossiersFlag && tab === 'diff' && !isMobile;
+  const toggleDossiersPanel = () => {
+    if (dossiersPanelOpen) closePanelKey('dossiers');
+    else revealPanelKey('dossiers');
+  };
+
   // Ctrl+C без выделения: отдаём исходник открытого текстового файла (см. selectionScope)
   const copySourceRef = useRef<() => string | null>(() => null);
   useEffect(() => {
@@ -1217,6 +1230,24 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         item: {
           key: 'toc', icon: <TableOfContents size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
           label: tocTitle, onClick: toggleTocPanel,
+        },
+      });
+    }
+    if (dossiersToggleVisible) {
+      const dossiersTitle = dossiersPanelOpen ? 'Скрыть историю решений' : 'История решений';
+      secondary.push({
+        key: 'dossiers',
+        node: (
+          <ToolbarIconButton
+            isMobile={isMobile} onClick={toggleDossiersPanel} title={dossiersTitle}
+            color={dossiersPanelOpen ? C.accent : undefined}
+          >
+            <Lightbulb size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'dossiers', icon: <Lightbulb size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: dossiersTitle, onClick: toggleDossiersPanel,
         },
       });
     }

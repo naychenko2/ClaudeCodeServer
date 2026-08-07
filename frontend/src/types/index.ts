@@ -206,6 +206,37 @@ export interface DocsScopeInfo {
   scopeFileError?: string | null;
 }
 
+// --- История решений (change-dossiers, этап 1) ---
+// Запись у файла/символа/коммита: «зачем менялось, что решили, что отвергли, какие
+// грабли» — AI-выжимка из чата/задачи, привязанная к коммиту. Контракт REST —
+// GET /api/projects/{id}/dossiers?file=|symbol=|commit= (ADR-004 §4/§8).
+export type DossierStatus = 'active' | 'degraded' | 'archived';
+
+export interface DossierEntry {
+  id: string;
+  commitSha: string;
+  commitSubject: string;
+  committedAt: string;        // ISO
+  sessionId: string | null;   // чат-источник — может протухнуть (sessionId остаётся, см. linksStale)
+  taskId: string | null;      // задача-источник — может протухнуть
+  personaId: string | null;   // null — коммит человека-владельца, иначе персона
+  files: string[];
+  symbols: string[];
+  why: string;
+  decisions: string[];
+  rejected: string[];
+  pitfalls: string[];
+  invariants: string[];
+  // active — код почти не менялся с записи; degraded — файл заметно переписан
+  // (нюанс, не ошибка); archived — символ исчез из графа (показывается только по запросу)
+  status: DossierStatus;
+  // Выжимка не собралась — сохранён только факт изменения, why не показываем
+  summaryFailed: boolean;
+  // Чат/задача, на которые указывают sessionId/taskId, больше не существуют —
+  // соответствующие ссылки гасятся текстом вместо кнопки
+  linksStale: boolean;
+}
+
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)
 export interface BoardItem {
   taskId: string;

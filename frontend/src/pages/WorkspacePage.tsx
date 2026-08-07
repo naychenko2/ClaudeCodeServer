@@ -49,6 +49,8 @@ import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
+import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
+import { wsPanels } from './workspace/panelStackState';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
 import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
@@ -319,6 +321,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // зону (см. DesktopWorkspace). Один экземпляр состояния на страницу.
   const readerFlag = useFeature(FLAGS.linkReader);
   const reader = useReaderPanel();
+  // «История решений»: реветь панель по клику на файл в файловом менеджере — той
+  // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
+  // у FileViewer (правим раскладку напрямую через стор зон)
+  const { reveal: revealPanelKey } = wsPanels.use();
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
@@ -588,6 +594,13 @@ const windowWidth = useWindowWidth();
     } else {
       navPush({ screen: 'project', project, view: mobileView, file: null, task: task.id });
     }
+  };
+
+  // «Открыть задачу» из записи истории решений: панель знает только id, карточка
+  // задачи хочет объект целиком — ищем в уже загруженном списке задач проекта
+  const handleOpenDossierTask = (taskId: string) => {
+    const t = allTasks.find(x => x.id === taskId);
+    if (t) handleSelectTask(t);
   };
 
   const ProjectBoardArea = (
@@ -1026,6 +1039,13 @@ const windowWidth = useWindowWidth();
     histDispatch({ type: 'push', entry: { path: filePath, line } });
   };
 
+  // «История решений» из файлового менеджера: открываем файл (панель фильтрует
+  // список по activeFilePath) и являем панель в её домашней зоне
+  const handleOpenDossiers = (filePath: string) => {
+    handleOpenFileFromTree(filePath);
+    revealPanelKey('dossiers');
+  };
+
   // Переход по md-ссылке из центрального FileViewer (клик по ссылке в открытом md).
   // В отличие от дерева, НЕ переключает режим просмотра (сплит/полный экран остаётся
   // прежним) — читатель остаётся в том же виде, где был. anchor — слаг раздела для скролла.
@@ -1323,6 +1343,9 @@ const windowWidth = useWindowWidth();
               ? <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
+                  {/* onOpenDossiers не передаём: «История решений» на телефоне недоступна
+                      совсем (как «Документация») — панелей рельсы здесь нет, пункт
+                      меню вёл бы в никуда */}
                   <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} />
                 </div>
               )
@@ -1463,11 +1486,15 @@ const windowWidth = useWindowWidth();
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
           onOpenReader={readerFlag ? handleOpenReader : undefined}
           panels={{
-            files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} />,
+            files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenDossiers={handleOpenDossiers} />,
             knowledge: <KnowledgePanel project={project} isMobile={false} />,
             // Документация проекта: превью и навигация — в панели, крупное чтение —
             // «развернуть» тем же путём, что открываются остальные файлы
             docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} activeFilePath={openFile} onCloseFile={backFromFile} />,
+            // «История решений» (change-dossiers, этап 1): гейт по флагу — внутри самой
+            // панели (мокап требует видимый вход даже при выключенной фиче — она сама
+            // показывает empty-state с кнопкой «Открыть настройки»)
+            dossiers: <DossierHistoryPanel project={project} auth={auth} activeFilePath={openFile ?? openCommitFile} onOpenChat={handleOpenTaskSession} onOpenTask={handleOpenDossierTask} onOpenCommit={handleOpenCommit} />,
             changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,

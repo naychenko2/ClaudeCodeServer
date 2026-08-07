@@ -1,4 +1,4 @@
-import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult } from '../types';
+import type { Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -1182,6 +1182,19 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ folder, items }),
       }),
+  },
+
+  // История решений (change-dossiers, этап 1) — записи «зачем менялось, что решили,
+  // что отвергли, какие грабли», привязанные к коммитам. ADR-004 §4/§8
+  dossiers: {
+    list: (projectId: string, filter?: { file?: string; symbol?: string; commit?: string }) => {
+      const qs = new URLSearchParams();
+      if (filter?.file) qs.set('file', filter.file);
+      if (filter?.symbol) qs.set('symbol', filter.symbol);
+      if (filter?.commit) qs.set('commit', filter.commit);
+      const s = qs.toString();
+      return request<DossierEntry[]>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
+    },
   },
 
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку

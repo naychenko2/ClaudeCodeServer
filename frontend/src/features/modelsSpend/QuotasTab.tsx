@@ -15,6 +15,7 @@ import {
 } from '../../lib/models';
 import { latestPerWindow, windowLabel } from '../../lib/rateLimit';
 import { addDaysUtc, openSpend, plural, spendQuery, todayUtc } from '../../lib/spend';
+import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
 import type { ProviderCardData } from './ProviderCard';
@@ -62,14 +63,6 @@ function sourceColor(key: string): string {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
   return GROUP_COLORS[h % GROUP_COLORS.length];
-}
-
-// Эвристика «бесплатный» для pgrid-бейджа (правило SpendSources.IsFree с бэка, на фронте его нет):
-// ollama → «локально», endsWith('-direct') или startsWith('freellm') → «бесплатный»
-function freeBadge(key: string): string | null {
-  if (key === 'ollama') return 'локально';
-  if (key.startsWith('freellm') || key.endsWith('-direct')) return 'бесплатный';
-  return null;
 }
 
 type ProvUsage = { balance: ProviderBalanceInfo | null; snapshots: { timestamp: string; balance: number; currency: string }[] };
@@ -299,17 +292,17 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
       const isQuota = bal?.currency === '%' || (bal?.windows?.length ?? 0) > 0;
       if (data === null) {
         // Ошибка — тип источника неизвестен, живёт в квотах (строчная раскладка, «—» не ломает ряд)
-        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'error', isFree: !!freeBadge(key), cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
+        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'error', isFree: isFreeSource(key), cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
         continue;
       }
       if (data === undefined || !bal) {
-        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'loading', isFree: !!freeBadge(key), cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
+        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'loading', isFree: isFreeSource(key), cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
         continue;
       }
       if (isQuota) {
         out.push({
           key, name: providerLabel(key), color: sourceColor(key), balance: bal,
-          snapshots: data.snapshots ?? [], state: 'ready', isFree: !!freeBadge(key),
+          snapshots: data.snapshots ?? [], state: 'ready', isFree: isFreeSource(key),
           cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key),
         });
       }
@@ -319,7 +312,7 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
       const c = providerCapsByKey(key);
       if (c.hasBalance || c.configured === false) continue;
       if (balanceKeys.includes(key)) continue;
-      out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'unavailable', isFree: !!freeBadge(key), onRetry: () => {} });
+      out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'unavailable', isFree: isFreeSource(key), onRetry: () => {} });
     }
     return out;
   }, [prov, balanceKeys, providerKeys, loadProvider]);
@@ -359,7 +352,7 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
         const n = models.filter(m => m.provider === key).length;
         count = n > 0 ? plural(n, 'модель', 'модели', 'моделей') : undefined;
       }
-      return { key, name: providerLabel(key), color: sourceColor(key), off: caps.configured === false, badge: freeBadge(key), count };
+      return { key, name: providerLabel(key), color: sourceColor(key), off: caps.configured === false, badge: freeSourceLabel(key), count };
     });
   }, [usage]);
 

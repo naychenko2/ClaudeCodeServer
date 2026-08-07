@@ -1757,11 +1757,15 @@ public class SessionManager : IDisposable
         var automation = _bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
         var token = GetServiceToken(ownerId);
+        // Флаг allow-модели серверов реестра — свойство владельца: серверу персон нужен для
+        // фолбэка enabledForPersona и allow-текстов (deafultEnabled с бэка уже учитывает флаг,
+        // но фолбэк и описания инструментов живут в самом MCP). Детерминирован на сессию.
+        var mcpAllowlist = _flags.IsEnabled(ownerId!, FeatureFlagKeys.McpAllowlist);
         return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, selfPersonaId,
             mentionsHint, BindingsEnabled: true,
             extraProjectIds.Count > 0 ? extraProjectIds : null,
             extraPersonaIds.Count > 0 ? extraPersonaIds : null,
-            ManageEnabled: manage, AutomationEnabled: automation);
+            ManageEnabled: manage, AutomationEnabled: automation, McpAllowlist: mcpAllowlist);
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца

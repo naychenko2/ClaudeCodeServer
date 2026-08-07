@@ -44,6 +44,10 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
     // тестах. Хранит созданные адаптеры по sessionId — тесты проверяют факт первого хода.
     internal FakeLlmSessionAdapterFactory LlmAdapters { get; } = new();
 
+    // Точка подмены сервисов для конкретного теста (напр. стаб IProviderBalanceService): null —
+    // хост собирается как обычно. Применяется после встроенных регистраций, поэтому может их перетереть.
+    public Action<IServiceCollection>? ExtraServices { get; set; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Создаём users.json до старта хоста — UserStore прочитает его при инициализации
@@ -115,6 +119,9 @@ public class TestWebApplicationFactory : WebApplicationFactory<Program>, IDispos
             // синглтон LlmSessionAdapterFactory из Program.cs (последняя побеждает).
             services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFactory>(LlmAdapters);
         });
+
+        if (ExtraServices is { } extra)
+            builder.ConfigureServices(extra);
     }
 
     private static void CreateUsersFile(string dir)

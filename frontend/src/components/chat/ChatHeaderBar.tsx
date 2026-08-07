@@ -273,8 +273,8 @@ function providerBalanceTone(balance: ProviderBalance | null): 'warn' | 'danger'
   return balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined;
 }
 
-// Квоту подписки бэкенд отдаёт остатком окна, а шапка и экран «Использование» говорят
-// языком расхода — переводим остаток в израсходованное (как UsageScreen.providerWindows).
+// Квоту подписки бэкенд отдаёт остатком окна, а шапка и раздел «Модели и расход» говорят
+// языком расхода — переводим остаток в израсходованное (как в карточках квот).
 function quotaUsedPct(balance: ProviderBalance | null): number | null {
   if (!balance) return null;
   const remaining = parseFloat(balance.totalBalance);

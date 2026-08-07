@@ -12,8 +12,7 @@ import { AvatarMenu } from '../features/projects/AvatarMenu';
 import { UserManagementModal } from './UserManagementModal';
 import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
-import { UsageScreen } from './UsageScreen';
-import { ModelProvidersTabsModal } from '../features/modelProviders/ModelProvidersTabsModal';
+import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
 import { useFeature, FLAGS } from '../lib/featureFlags';
 import { api } from '../lib/api';
@@ -60,13 +59,12 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showUserMgmt, setShowUserMgmt] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
-  const [showUsage, setShowUsage] = useState(false);
-  const [showBackgroundTasks, setShowBackgroundTasks] = useState(false);
+  const [showModelsSpend, setShowModelsSpend] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
   const mcpRegistry = useFeature(FLAGS.mcpRegistry);
 
-  // «Собрать цепочку…» из панелей выбора модели — открыть раздел на вкладке «Пресеты»
-  useEffect(() => subscribeModelProvidersNav(() => setShowBackgroundTasks(true)), []);
+  // «Собрать цепочку…» из панелей выбора модели — открыть единый раздел «Модели и расход»
+  useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
 
   const isAdmin = auth.role === 'admin';
   const serverUrl = localStorage.getItem('cc_server_url') ?? '';
@@ -296,8 +294,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onLogout={onLogout}
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
-          onShowUsage={() => setShowUsage(true)}
-          onShowBackgroundTasks={() => setShowBackgroundTasks(true)}
+          onShowModelsSpend={() => setShowModelsSpend(true)}
           // «MCP-серверы» — за фич-флагом mcp-registry: без флага пункта в меню нет
           onShowMcpServers={mcpRegistry ? () => setShowMcpServers(true) : undefined}
           onShowUserManagement={() => setShowUserMgmt(true)}
@@ -318,8 +315,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showUserMgmt && <UserManagementModal currentUserId={auth.id} onClose={() => setShowUserMgmt(false)} />}
       {showChangePassword && <ChangePasswordDialog onClose={() => setShowChangePassword(false)} />}
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
-      {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
-      {showBackgroundTasks && <ModelProvidersTabsModal isAdmin={isAdmin} onClose={() => setShowBackgroundTasks(false)} />}
+      {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
     </div>
   );

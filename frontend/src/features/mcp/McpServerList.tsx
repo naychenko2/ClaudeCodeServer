@@ -3,7 +3,7 @@ import type { CSSProperties } from 'react';
 import { Pencil, Plug, X } from 'lucide-react';
 import { Button, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { groupHeaderStyle } from '../../components/modelProvidersShared';
+import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { accessSummary, mcpAuthLine, mcpStatusTone } from './useMcpData';
 import type { McpData } from './useMcpData';

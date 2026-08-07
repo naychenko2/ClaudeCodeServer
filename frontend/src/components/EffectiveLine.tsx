@@ -1,5 +1,5 @@
-import { useEffectiveLine, type EffectiveLineContext } from '../../lib/presets';
-import { C, FS, R } from '../../lib/design';
+import { useEffectiveLine, type EffectiveLineContext } from '../lib/presets';
+import { C, FS, R } from '../lib/design';
 
 // Строка-итог «Сейчас пойдёт: {модель} · {откуда}» — ключевой элемент спеки (блок 4):
 // в каждом месте выбора видно не только что выбрано, но и чем это обернётся.

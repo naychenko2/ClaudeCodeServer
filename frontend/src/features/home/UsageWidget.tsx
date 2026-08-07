@@ -5,7 +5,7 @@ import { api } from '../../lib/api';
 import { C, FONT } from '../../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, latestPerWindow, worstWindow } from '../../lib/rateLimit';
 import { cliProviderKeys, providerCapsByKey, providerLabel } from '../../lib/models';
-import { UsageScreen } from '../../components/UsageScreen';
+import { ModelsSpendModal } from '../modelsSpend/ModelsSpendModal';
 import { WidgetCard, WidgetAction, WidgetEmpty } from './WidgetCard';
 
 // Балансы инертны — раз в 5 минут достаточно
@@ -47,7 +47,7 @@ function WindowRow({ w }: { w: RateWindow }) {
       </div>
       {/* Шкалу рисуем ТОЛЬКО с реальными данными: пустая полоса читалась как
           «израсходовано 0%», хотя означала «доля неизвестна». Так же на экране
-          «Использование» (UsageScreen.WindowCard) */}
+          «Использование» (виджет главной) */}
       {w.hasUtil && (
         <div style={{ height: 5, borderRadius: 3, background: C.track, overflow: 'hidden', marginTop: 5 }}>
           <div style={{ width: `${Math.min(100, w.pct)}%`, height: '100%', background: c.fill }} />
@@ -59,7 +59,7 @@ function WindowRow({ w }: { w: RateWindow }) {
 
 // «Использование»: окна лимитов по каждому аккаунту Claude из пула + плашки провайдеров
 // (балансы DeepSeek/fal; GLM без балансового API — процент 5-часового окна) и fal.
-// Компактная выжимка UsageScreen; «Подробнее» открывает полный экран модалом.
+// Компактная выжимка раздела «Модели и расход»; «Подробнее» открывает полную модалку.
 export function UsageWidget() {
   const [usage, setUsage] = useState<UsageResponse | null>(null);
   const [balances, setBalances] = useState<Array<{ key: string; label: string; value: number; credits?: boolean }>>([]);
@@ -73,7 +73,7 @@ export function UsageWidget() {
         .catch(() => { if (!cancelled) setUsage({ snapshots: [] }); });
       for (const key of cliProviderKeys()) {
         // Ненастроенный провайдер (configured === false) не запрашиваем — без ключа
-        // баланс вернёт 404 и забьёт консоль (та же проверка, что в UsageScreen)
+        // баланс вернёт 404 и забьёт консоль (та же проверка, что в QuotasTab)
         const caps = providerCapsByKey(key);
         if (!caps.hasBalance || caps.configured === false) continue;
         api.providers.usage(key)
@@ -189,7 +189,7 @@ export function UsageWidget() {
           ))}
         </div>
       )}
-      {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
+      {showUsage && <ModelsSpendModal onClose={() => setShowUsage(false)} />}
     </WidgetCard>
   );
 }

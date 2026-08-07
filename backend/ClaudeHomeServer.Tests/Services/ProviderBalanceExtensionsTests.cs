@@ -4,83 +4,14 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Доп. сведения (Note) и новые источники баланса провайдеров — фикстуры по живым снимкам
+// Типизированные поля и новые источники баланса провайдеров — фикстуры по живым снимкам
 // запросов 07.08.2026. Сетевые фетчеры требуют ключа/живого сервера (в dev провайдер выключен),
 // поэтому контракт фиксируется тестами на разборщиках (internal static) — как у GLM/Kimi.
 public class ProviderBalanceExtensionsTests
 {
     private static JsonElement El(string json) => JsonDocument.Parse(json).RootElement;
 
-    // ── DeepSeek: granted_balance → Note «В том числе подарочных: $X» ────────────────
-
-    [Fact]
-    public void DeepSeek_ПодарочныйБаланс_Note()
-    {
-        ProviderBalanceService.DeepSeekGrantedNote(El("""{"granted_balance":"5.50"}"""))
-            .Should().Be("В том числе подарочных: $5.5");
-    }
-
-    [Fact]
-    public void DeepSeek_ПодарочныйНоль_NoteНет()
-    {
-        // granted_balance = 0 — не шумим
-        ProviderBalanceService.DeepSeekGrantedNote(El("""{"granted_balance":"0.00"}"""))
-            .Should().BeNull();
-    }
-
-    [Fact]
-    public void DeepSeek_ПоляНет_NoteНет()
-    {
-        ProviderBalanceService.DeepSeekGrantedNote(El("""{"total_balance":"39.75"}"""))
-            .Should().BeNull();
-    }
-
-    // ── OpenRouter: GET /key → Note расхода по периодам и лимита ключа ───────────────
-
-    [Fact]
-    public void OpenRouter_РасходПоПериодам_БезЛимита()
-    {
-        // Живой снимок 07.08: limit/limit_remaining null → куска про лимит нет
-        var note = ProviderBalanceService.ParseOpenRouterKeyNote(El(
-            """{"data":{"usage_daily":0.0003,"usage_weekly":0,"usage_monthly":0,"limit":null,"limit_remaining":null}}"""));
-
-        note.Should().Be("Расход: $0.0003 сегодня · $0 за неделю · $0 за месяц");
-    }
-
-    [Fact]
-    public void OpenRouter_СЛимитомКлюча_КусокОЛимите()
-    {
-        var note = ProviderBalanceService.ParseOpenRouterKeyNote(El(
-            """{"data":{"usage_daily":1.2,"usage_weekly":2,"usage_monthly":3,"limit":100,"limit_remaining":45.5}}"""));
-
-        note.Should().Be("Расход: $1.2 сегодня · $2 за неделю · $3 за месяц · лимит ключа: осталось $45.5 из $100");
-    }
-
-    [Fact]
-    public void OpenRouter_ЛимитЧислом_RemainingNull_БезКускаОЛимите()
-    {
-        // limit задан, но limit_remaining null — сказать «осталось» нельзя, кусок опускаем
-        var note = ProviderBalanceService.ParseOpenRouterKeyNote(El(
-            """{"data":{"usage_daily":1,"usage_weekly":2,"usage_monthly":3,"limit":100,"limit_remaining":null}}"""));
-
-        note.Should().Be("Расход: $1 сегодня · $2 за неделю · $3 за месяц");
-    }
-
-    [Fact]
-    public void OpenRouter_ДневногоРасходаНет_NoteНет()
-    {
-        // Не хватает расходной части — лучше никакой Note, чем частичный
-        ProviderBalanceService.ParseOpenRouterKeyNote(El(
-            """{"data":{"usage_weekly":2,"usage_monthly":3}}""")).Should().BeNull();
-    }
-
-    [Fact]
-    public void OpenRouter_НетData_NoteНет()
-    {
-        ProviderBalanceService.ParseOpenRouterKeyNote(El("""{"error":"no key"}""")).Should().BeNull();
-    }
-
-    // ── FreeLLM: provider_health → окно «Провайдеры», usage_summary → Note ───────────
+    // ── FreeLLM: provider_health → окно «Провайдеры», usage_summary → Health ─────────
 
     [Fact]
     public void FreeLlm_Здоровье_СчитаетЖивыхИВсех()
@@ -119,36 +50,127 @@ public class ProviderBalanceExtensionsTests
         ProviderBalanceService.ParseFreeLlmHealth(El("""[]""")).Should().BeNull();
     }
 
+    // ── Новые типизированные поля (значения) ────────────────────────────────────────
+
+    // DeepSeek: GrantedBalance — число подарочного остатка (granted_balance > 0, иначе null)
     [Fact]
-    public void FreeLlm_Использование_ПолнаяNote()
+    public void DeepSeek_ПодарочныйБаланс_Значение()
     {
-        var json = """
-            {"range":"24h","requests":1500,"success_rate":97.5,
-             "input_tokens":120000,"output_tokens":45000,"top_models":[]}
-            """;
-        ProviderBalanceService.ParseFreeLlmUsage(El(json))
-            .Should().Be("За 24ч: 1500 запросов, успех 97.5% · токены 120000 вх / 45000 исх");
+        ProviderBalanceService.DeepSeekGrantedBalance(El("""{"granted_balance":"5.50"}"""))
+            .Should().Be(5.5);
     }
 
     [Fact]
-    public void FreeLlm_Использование_БезSuccessRate_КусокОпущен()
+    public void DeepSeek_ПодарочныйНоль_ЗначенияНет()
     {
-        var json = """{"range":"24h","requests":10,"success_rate":null,"input_tokens":1,"output_tokens":2}""";
-        ProviderBalanceService.ParseFreeLlmUsage(El(json))
-            .Should().Be("За 24ч: 10 запросов · токены 1 вх / 2 исх");
+        ProviderBalanceService.DeepSeekGrantedBalance(El("""{"granted_balance":"0.00"}"""))
+            .Should().BeNull();
+    }
+
+    // OpenRouter: ParseOpenRouterKey — Spend и KeyLimit как независимые поля
+    [Fact]
+    public void OpenRouter_Ключ_SpendИKeyLimit()
+    {
+        var data = ProviderBalanceService.ParseOpenRouterKey(El(
+            """{"data":{"usage_daily":1.2,"usage_weekly":2,"usage_monthly":3,"limit":100,"limit_remaining":45.5}}"""));
+        data!.Spend.Should().Be(new ProviderSpend(1.2, 2, 3));
+        data.KeyLimit.Should().Be(new ProviderKeyLimit(45.5, 100));
     }
 
     [Fact]
-    public void FreeLlm_Использование_НетRequests_NoteНет()
+    public void OpenRouter_Ключ_ЛимитNull_KeyLimitНет_SpendЕсть()
     {
-        ProviderBalanceService.ParseFreeLlmUsage(El("""{"success_rate":99}""")).Should().BeNull();
+        var data = ProviderBalanceService.ParseOpenRouterKey(El(
+            """{"data":{"usage_daily":0.1,"usage_weekly":0.2,"usage_monthly":0.3,"limit":null}}"""));
+        data!.Spend.Should().Be(new ProviderSpend(0.1, 0.2, 0.3));
+        data.KeyLimit.Should().BeNull();
     }
 
     [Fact]
-    public void FreeLlm_Использование_ТолькоЗапросы()
+    public void OpenRouter_Ключ_ДневногоРасходаНет_SpendНет_KeyLimitЕсть()
     {
-        // Ни успеха, ни токенов — Note из одного куска (квантор «запросов» из ТЗ, без склонения)
-        ProviderBalanceService.ParseFreeLlmUsage(El("""{"range":"24h","requests":7}"""))
-            .Should().Be("За 24ч: 7 запросов");
+        // Независимые поля: расхода нет, но лимит ключа разобрался
+        var data = ProviderBalanceService.ParseOpenRouterKey(El(
+            """{"data":{"usage_weekly":2,"limit":10,"limit_remaining":8}}"""));
+        data!.Spend.Should().BeNull();
+        data.KeyLimit.Should().Be(new ProviderKeyLimit(8, 10));
+    }
+
+    [Fact]
+    public void OpenRouter_Ключ_RemainingNull_KeyLimitНет()
+    {
+        var data = ProviderBalanceService.ParseOpenRouterKey(El(
+            """{"data":{"usage_daily":1,"usage_weekly":2,"usage_monthly":3,"limit":100,"limit_remaining":null}}"""));
+        data!.Spend.Should().NotBeNull();
+        data.KeyLimit.Should().BeNull();
+    }
+
+    [Fact]
+    public void OpenRouter_Ключ_НичегоНет_Null()
+    {
+        ProviderBalanceService.ParseOpenRouterKey(El("""{"error":"no key"}""")).Should().BeNull();
+    }
+
+    // FreeLLM: ParseFreeLlmUsageData — значения трафика; ComposeFreeLlmHealth — сборка Health
+    [Fact]
+    public void FreeLlm_Использование_Значения()
+    {
+        var data = ProviderBalanceService.ParseFreeLlmUsageData(El(
+            """{"range":"24h","requests":1500,"success_rate":97.5,"input_tokens":120000,"output_tokens":45000}"""));
+        data!.Requests24h.Should().Be(1500);
+        data.SuccessRate.Should().Be(97.5);
+    }
+
+    [Fact]
+    public void FreeLlm_Использование_БезSuccessRate_Значение()
+    {
+        var data = ProviderBalanceService.ParseFreeLlmUsageData(El(
+            """{"range":"24h","requests":10,"success_rate":null}"""));
+        data!.Requests24h.Should().Be(10);
+        data.SuccessRate.Should().BeNull();
+    }
+
+    [Fact]
+    public void FreeLlm_Использование_НетRequests_Null()
+    {
+        ProviderBalanceService.ParseFreeLlmUsageData(El("""{"success_rate":99}""")).Should().BeNull();
+    }
+
+    [Fact]
+    public void FreeLlm_Здоровье_СборкаИзПлатформИТрафика()
+    {
+        var health = ProviderBalanceService.ComposeFreeLlmHealth((2, 3),
+            new ProviderBalanceService.FreeLlmUsageData(1500, 97.5));
+        health!.Requests24h.Should().Be(1500);
+        health.SuccessRate.Should().Be(97.5);
+        health.PlatformsAlive.Should().Be(2);
+        health.PlatformsTotal.Should().Be(3);
+    }
+
+    [Fact]
+    public void FreeLlm_Здоровье_ТолькоПлатформы()
+    {
+        // usage не пришёл — Health есть на одних платформах, без трафика
+        var health = ProviderBalanceService.ComposeFreeLlmHealth((1, 2), null);
+        health!.Requests24h.Should().BeNull();
+        health.SuccessRate.Should().BeNull();
+        health.PlatformsAlive.Should().Be(1);
+        health.PlatformsTotal.Should().Be(2);
+    }
+
+    [Fact]
+    public void FreeLlm_Здоровье_ТолькоТрафик()
+    {
+        var health = ProviderBalanceService.ComposeFreeLlmHealth(null,
+            new ProviderBalanceService.FreeLlmUsageData(7, null));
+        health!.Requests24h.Should().Be(7);
+        health.PlatformsAlive.Should().BeNull();
+        health.PlatformsTotal.Should().BeNull();
+    }
+
+    [Fact]
+    public void FreeLlm_Здоровье_Ничего_Null()
+    {
+        ProviderBalanceService.ComposeFreeLlmHealth(null, null).Should().BeNull();
     }
 }

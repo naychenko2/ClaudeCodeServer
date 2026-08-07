@@ -11,7 +11,7 @@ import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { SESSION_KEYS } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
-import { UsageScreen } from '../components/UsageScreen';
+import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
@@ -329,10 +329,11 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const { reveal: revealPanelKey } = wsPanels.use();
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
-  const [showUsage, setShowUsage] = useState(false);
-  // Ссылка «Подробная статистика» в pop-up бейджа fal.ai открывает единый экран «Использование»
+  // «Модели и расход» — единый раздел вместо прежних «Использование»/«Поставщики моделей»:
+  // из мобильного меню «⋯» проекта и по диплинку «Подробная статистика» бейджа fal.ai
+  const [showModelsSpend, setShowModelsSpend] = useState(false);
   useEffect(() => {
-    const open = () => setShowUsage(true);
+    const open = () => setShowModelsSpend(true);
     window.addEventListener('open-fal-stats', open);
     return () => window.removeEventListener('open-fal-stats', open);
   }, []);
@@ -690,7 +691,7 @@ const windowWidth = useWindowWidth();
   }, [isMobile, leftTabOptions.length, leftTab]);
 
   // Видимые вкладки — первые projectVisibleCount; активную спрятанную подставляем
-  // последней, чтобы подсветка была верной. Остальные + «Использование» — в «⋯».
+  // последней, чтобы подсветка была верной. Остальные + «Модели и расход» — в «⋯».
   const activeLeftIdx = leftTabOptions.findIndex(o => o.value === leftTab);
   const mobileLeftTabOptions = activeLeftIdx >= projectVisibleCount
     ? [...leftTabOptions.slice(0, Math.max(0, projectVisibleCount - 1)), leftTabOptions[activeLeftIdx]]
@@ -706,9 +707,9 @@ const windowWidth = useWindowWidth();
       onClick: () => ensureGraphOpen(),
     },
     {
-      key: 'usage', label: 'Использование',
+      key: 'models-spend', label: 'Модели и расход',
       icon: <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2" /></svg>,
-      onClick: () => setShowUsage(true),
+      onClick: () => setShowModelsSpend(true),
     },
   ];
 
@@ -1442,7 +1443,7 @@ const windowWidth = useWindowWidth();
           </div>
         )}
         {columnsDialogEl}
-        {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
+        {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
         {editProjectOpen && (
           <EditDialog
             project={projectForEdit}
@@ -1556,7 +1557,7 @@ const windowWidth = useWindowWidth();
       </div>
 
       {columnsDialogEl}
-      {showUsage && <UsageScreen onClose={() => setShowUsage(false)} />}
+      {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {editProjectOpen && (
         <EditDialog
           project={projectForEdit}

@@ -447,6 +447,11 @@ export interface Session {
   agentName?: string;
   // Временный чат: авто-удаление через N минут после последней активности (updatedAt)
   expiresAfterMinutes?: number | null;
+  // Момент установки срока: отсчёт идёт от него, если он позже последней активности
+  // (иначе короткий срок на давно неактивном чате означал бы удаление сразу)
+  expiryAnchor?: string | null;
+  // Чат заглушён: браузерные уведомления по нему не показываются
+  notificationsMuted?: boolean;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
   // Режим «Командная реализация»; null/отсутствует — режим выключен

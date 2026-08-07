@@ -503,21 +503,24 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     return s;
   }, [items]);
 
-  // Браузерные уведомления (только когда вкладка не в фокусе) — нужно решение / ход завершён
+  // Браузерные уведомления (только когда вкладка не в фокусе) — нужно решение / ход завершён.
+  // Заглушённый чат (notificationsMuted) молчит; счётчики при этом ведём как обычно,
+  // иначе снятие мьюта выстрелило бы уведомлением о давно прошедшем событии
+  const muted = session.notificationsMuted === true;
   const prevWaitingRef = useRef(false);
   useEffect(() => {
-    if (isWaiting && !prevWaitingRef.current)
+    if (isWaiting && !prevWaitingRef.current && !muted)
       notify('Нужно решение', `${session.name ?? 'Чат'} ждёт вашего ответа`);
     prevWaitingRef.current = isWaiting;
-  }, [isWaiting, session.name]);
+  }, [isWaiting, session.name, muted]);
 
   const resultCountRef = useRef<number | null>(null);
   useEffect(() => {
     const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
-    if (resultCountRef.current !== null && rc > resultCountRef.current)
+    if (resultCountRef.current !== null && rc > resultCountRef.current && !muted)
       notify(`${asstName} закончил`, `${session.name ?? 'Чат'}: ход завершён`);
     resultCountRef.current = rc;
-  }, [items, session.name, asstName]);
+  }, [items, session.name, asstName, muted]);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
   // «Свежие» значения для стабильных колбэков (useCallback без лишних пересозданий):

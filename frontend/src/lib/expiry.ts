@@ -1,7 +1,9 @@
 import type { Session } from '../types';
 
 // Временные чаты: пресеты срока жизни и форматирование остатка времени.
-// Дедлайн = updatedAt (последняя активность) + expiresAfterMinutes.
+// Дедлайн = точка отсчёта + expiresAfterMinutes, где точка отсчёта — последняя
+// активность (updatedAt), но не раньше момента установки срока (expiryAnchor).
+// Тот же расчёт на бэкенде — ChatExpiryService.CountFrom.
 
 export const EXPIRY_PRESETS: { minutes: number; label: string }[] = [
   { minutes: 60, label: '1 час' },
@@ -18,14 +20,18 @@ export function expiryOptionLabel(minutes?: number | null): string {
   return EXPIRY_PRESETS.find(p => p.minutes === minutes)?.label ?? `${minutes} мин`;
 }
 
+type ExpiryFields = Pick<Session, 'updatedAt' | 'expiresAfterMinutes' | 'expiryAnchor'>;
+
 // Момент авто-удаления; null — чат не временный
-export function expiresAt(session: Pick<Session, 'updatedAt' | 'expiresAfterMinutes'>): Date | null {
+export function expiresAt(session: ExpiryFields): Date | null {
   if (!session.expiresAfterMinutes || session.expiresAfterMinutes <= 0) return null;
-  return new Date(new Date(session.updatedAt).getTime() + session.expiresAfterMinutes * 60_000);
+  const updated = new Date(session.updatedAt).getTime();
+  const anchor = session.expiryAnchor ? new Date(session.expiryAnchor).getTime() : 0;
+  return new Date(Math.max(updated, anchor) + session.expiresAfterMinutes * 60_000);
 }
 
 // Остаток до удаления: «через 40 мин / 3 ч / 6 дн», просрочен — «скоро»
-export function formatTimeLeft(session: Pick<Session, 'updatedAt' | 'expiresAfterMinutes'>): string | null {
+export function formatTimeLeft(session: ExpiryFields): string | null {
   const at = expiresAt(session);
   if (!at) return null;
   const leftMs = at.getTime() - Date.now();

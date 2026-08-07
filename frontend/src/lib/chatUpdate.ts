@@ -9,14 +9,15 @@ import { api } from './api';
 //  2) update на бэке — ПОЛНАЯ замена: name/model/effort перезаписываются целиком,
 //     и отсутствующее поле обнуляется. Поэтому недостающие подмешиваем из текущей
 //     сессии, иначе смена одного срока жизни стирала бы имя и модель чата.
-// Время жизни и теги живут по sentinel-семантике (нет поля = не менять) — их
-// подставляем только когда их реально просили изменить.
+// Время жизни, теги и тумблер уведомлений живут по sentinel-семантике (нет поля =
+// не менять) — их подставляем только когда их реально просили изменить.
 export interface ChatFieldsPatch {
   name?: string | null;
   model?: string | null;
   effort?: string | null;
   expiresAfterMinutes?: number | null;
   tags?: string[];
+  notificationsMuted?: boolean;
 }
 
 export function updateChatFields(session: Session, patch: ChatFieldsPatch): Promise<Session> {
@@ -26,6 +27,7 @@ export function updateChatFields(session: Session, patch: ChatFieldsPatch): Prom
     effort: patch.effort !== undefined ? patch.effort : (session.effort ?? null),
     ...(patch.expiresAfterMinutes !== undefined && { expiresAfterMinutes: patch.expiresAfterMinutes }),
     ...(patch.tags !== undefined && { tags: patch.tags }),
+    ...(patch.notificationsMuted !== undefined && { notificationsMuted: patch.notificationsMuted }),
   };
   return session.projectId
     ? api.sessions.update(session.projectId, session.id, data)

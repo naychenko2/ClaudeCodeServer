@@ -91,6 +91,10 @@ export function AiLauncher() {
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
   const aiBusy = useAiBusy();
+  // prefers-reduced-motion: на FAB гасим и дыхание, и кольца «Эхо» (в cc-fab-breathe и
+  // .cc-echo-ring анимация уже выключается, но статичные элементы оставались бы видимыми —
+  // круг-контур и застывшее лицо, поэтому кольца при reduced мы не рендерим вовсе)
+  const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   // Режим «Стены» — кнопка там всегда компактная (см. эффект на NAV_CHANGE_EVENT)
   const [wallMode, setWallMode] = useState(() => getNav()?.screen === 'wall');
   // Композер чата (или футер мастера персон) дошёл до угла кнопки → ужимаем её
@@ -470,32 +474,50 @@ export function AiLauncher() {
           onMouseLeave={leaveFab}
         >
           {/* Лицо кнопки: аватар релевантной персоны (фича default-personas-onboarding),
-              fallback — логотип «AI Home» (домик с трубой) на весь круг. Покой — серый;
-              идея — подскок (cc-fab-hop на кнопке); работа — «пыхтит» (cc-fab-huff) + дым.
-              Размер аватара повторяет геометрию кнопки (36 компакт / 54 полный и hover). */}
+              fallback — логотип «AI Home» на весь круг. fill: аватар растягивается по
+              контейнеру и точно совпадает с кругом на ЛЮБОМ кадре анимации размера
+              (36↔54), а не по фиксированному size, который рассинхронизировался с переходом.
+              Покой — лёгкое приглушение (opacity 0.85, без grayscale); идея — подскок
+              (cc-fab-hop на кнопке) + кольца; работа — кольца + дыхание (cc-fab-breathe). */}
+          {/* Кольца «Эхо»: «идея» (strong) и «работа» (aiBusy). Тот же приём, что в ленте
+              чата — .cc-echo-ring с --cc-echo-color. pointer-events: none в самом классе;
+              overflow у кнопки visible, ничто выше по дереву её не клипует. Лежат ПОД
+              аватаром: в покое (scale 1) контур скрыт за кругом лица, при расширении
+              выходит за края и читается как пульс. */}
+          {(fabStrong || aiBusy) && !reduced && (
+            <span
+              aria-hidden
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              style={{ position: 'absolute', inset: 0, ['--cc-echo-color' as any]: C.accent }}
+            >
+              <span className="cc-echo-ring" />
+              <span className="cc-echo-ring cc-echo-ring--2" />
+            </span>
+          )}
           {facePersona ? (
             <span
               aria-hidden
-              className={aiBusy ? 'cc-fab-huff' : undefined}
+              className={aiBusy ? 'cc-fab-breathe' : undefined}
               style={{
                 position: 'absolute', inset: 0, display: 'block', borderRadius: '50%', overflow: 'hidden',
-                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+                // Покой — приглушение без grayscale: обесцвеченное лицо читается как
+                // «оффлайн/заблокирован», а сигнал должен быть «спокоен, но на связи».
+                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.85 } : {}),
               }}
             >
-              <PersonaAvatar persona={facePersona} size={isMobile || (fabSmall && !(fabHover && !obstacleOverlap)) ? 36 : 54} />
+              <PersonaAvatar persona={facePersona} fill size={isMobile || (fabSmall && !(fabHover && !obstacleOverlap)) ? 36 : 54} />
             </span>
           ) : (
             <img
               src="/pwa-64x64.png" alt="" aria-hidden
-              className={aiBusy ? 'cc-fab-huff' : undefined}
+              className={aiBusy ? 'cc-fab-breathe' : undefined}
               style={{
                 position: 'absolute', inset: 0, width: '100%', height: '100%',
                 objectFit: 'cover', borderRadius: '50%', display: 'block',
-                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.85 } : {}),
               }}
             />
           )}
-          {aiBusy && <span className="cc-smoke cc-fab-smoke" aria-hidden><i /><i /><i /><i /></span>}
         </button>
       )}
 

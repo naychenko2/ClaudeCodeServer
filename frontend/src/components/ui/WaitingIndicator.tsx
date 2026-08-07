@@ -85,7 +85,10 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+      {/* minHeight = аватар (28): строка НЕ меняет высоту ни при смене глагола, ни в
+          пустой фазе печати. Иначе ResizeObserver на contentRef прижимает ленту
+          (scrollTop = scrollHeight) на каждом переносе/цикле — чат подпрыгивает. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 28 }}>
         {/* Лицо: аватар релевантной персоны (фича default-personas-onboarding),
             fallback — логотип «AI Home» маской (тонируется под тему/режим) */}
         {facePersona ? faceBox(
@@ -104,19 +107,30 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
             WebkitMaskSize: 'contain', maskSize: 'contain',
           }} />
         )}
-        <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
-          <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+        {/* Текст + курсор. nowrap + ellipsis: длинный глагол не переносится (высота
+            стабильна), а обрезается многоточием — у типичных коротких вариантов
+            («Думаю», «Работаю») места хватает на любой ширине. alignItems center, а не
+            baseline: в пустой фазе (между глаголами) baseline задаёт один курсор, и
+            строку чуть перекашивало по высоте каждый цикл. */}
+        <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 17, minWidth: 0, overflow: 'hidden' }}>
+          <span className="cc-shimmer-text" style={{
+            fontSize: 13, fontWeight: 600, fontFamily: 'inherit',
+            whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden',
+          }}>
             {text}
           </span>
           <span style={{
-            display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2,
+            display: 'inline-block', width: 2, height: '0.95em', marginLeft: 2, flexShrink: 0,
             background: pulseColor, borderRadius: 1, alignSelf: 'center',
             animation: (reduced || awaitingResponse) ? 'none' : 'blink 1s step-start infinite',
           }} />
         </span>
       </div>
       {hint && (
-        <span style={{ fontSize: 11.5, color: C.textMuted, marginLeft: 38, fontFamily: 'inherit' }}>
+        <span style={{
+          fontSize: 11.5, color: C.textMuted, marginLeft: 38, fontFamily: 'inherit',
+          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '100%',
+        }}>
           {hint}
         </span>
       )}

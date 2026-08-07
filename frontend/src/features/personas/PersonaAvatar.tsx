@@ -8,12 +8,21 @@ import { personaInitials } from '../../lib/personas';
 // Круглый аватар персоны. kind==='image' и есть картинка — рендерим <img>
 // (с фолбэком на инициалы при ошибке загрузки). Иначе — инициалы на цветном
 // фоне (цвет из палитры AGENT_COLORS через agentDotColor).
-export function PersonaAvatar({ persona, size = 40 }: { persona: Persona; size?: number }) {
+//
+// fill=true — аватар растягивается по родителю (width/height 100%). Нужно для
+// контейнеров, чей размер меняется плавно (плавающая кнопка AI: 36↔54 с transition),
+// чтобы картинка точно совпадала с кругом на каждом кадре, а не по фиксированному
+// size, который успевает рассинхронизироваться с анимацией. size при этом всё равно
+// передавай — от него считается кегль инициалов (у img objectFit cover и так отлично).
+export function PersonaAvatar({ persona, size = 40, fill = false }: {
+  persona: Persona; size?: number; fill?: boolean;
+}) {
   const [hasError, setHasError] = useState(false);
   const imageUrl = persona.avatar?.kind === 'image' ? api.personas.avatarUrl(persona) : null;
 
   const base: React.CSSProperties = {
-    width: size, height: size, borderRadius: R.full, flexShrink: 0, userSelect: 'none',
+    width: fill ? '100%' : size, height: fill ? '100%' : size,
+    borderRadius: R.full, flexShrink: 0, userSelect: 'none',
   };
 
   if (imageUrl && !hasError) {

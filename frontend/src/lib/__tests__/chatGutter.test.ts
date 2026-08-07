@@ -34,9 +34,12 @@ describe('gutterBox', () => {
     expect(box.marginRight).toBe(CHAT_GUTTER_L);
   });
 
-  it('жёлоба хватает на значок с дымком', () => {
-    // Значок 19px вынесен на 29px влево, дым уходит ещё на 7px
-    expect(CHAT_GUTTER_L).toBeGreaterThanOrEqual(29 + 7);
+  it('жёлоба хватает на аватар с кольцами «Эхо»', () => {
+    // Аватар 28px вынесен в жёлоб на -(28+10), центр на 14 от левого края жёлоба;
+    // кольца расходятся до radius 26 — левый край кольца = центр − 26 ≥ 0,
+    // иначе клип области прокрутки (overflow-x: hidden) режет пульс
+    const avatarCenter = CHAT_GUTTER_L - (28 + 10) + 14;
+    expect(avatarCenter - 26).toBeGreaterThanOrEqual(0);
   });
 
   // CHAT_COLUMN_W — то же самое число, но заранее: раскладке (useCenterOffset) нужно

@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Services.Backup;
 using FluentAssertions;
 
@@ -126,5 +127,75 @@ public class BackupValidationTests : IDisposable
 
         BackupValidation.Validate(_dir).Should().BeEmpty();
         BackupValidation.ValidateGraphWarnings(_dir).Should().BeEmpty();
+    }
+
+    // Шесть новых полей онбординга/дефолт-персоны (User.DefaultPersonaId,
+    // User.OnboardingSessionId, Project.DefaultPersonaId, Project.OnboardingSessionId,
+    // Session.OnboardingKind, Session.OnboardingCreatedPersonaId) — все string?.
+    // Поскольку схема не бампалась (поля добавлены без increment BackupSchema.Version),
+    // архив со старой SchemaVersion=5 ОБЯЗАН продолжать валидироваться как пригодный.
+    [Fact]
+    public void НовыеПоляОнбординга_ПроходятВалидацию()
+    {
+        Write("users.json", """
+            {
+              "Version": 1,
+              "users": [
+                {
+                  "Id": "u1",
+                  "Username": "admin",
+                  "Role": "admin",
+                  "DefaultPersonaId": "test-default-persona-1234",
+                  "OnboardingSessionId": "test-onboarding-session-5678"
+                }
+              ]
+            }
+            """);
+        Write("projects.json", """
+            [
+              {
+                "Id": "p1",
+                "Name": "Киберпсихология",
+                "RootPath": "C:/x",
+                "OwnerId": "u1",
+                "DefaultPersonaId": "test-project-default-persona-9012",
+                "OnboardingSessionId": "test-project-onboarding-session-3456"
+              }
+            ]
+            """);
+        Write("sessions.json", """
+            [
+              {
+                "Id": "s1",
+                "ProjectId": "p1",
+                "OwnerId": "u1",
+                "OnboardingKind": "project",
+                "OnboardingCreatedPersonaId": "test-onboarding-created-persona-7890"
+              }
+            ]
+            """);
+
+        BackupValidation.Validate(_dir).Should().BeEmpty();
+    }
+
+    // Forward compatibility: новый архив (с ещё не существовавшими на момент его создания
+    // полями) читается старым кодом без падения. System.Text.Json по умолчанию игнорирует
+    // неизвестные свойства, и архив не должен ломать стор, у которого этих полей нет.
+    // Проверяем в миниатюре: «старая» модель с одним Id десериализует JSON с лишним полем —
+    // Id доходит, исключения нет. На этом же построена совместимость для шести наших полей.
+    [Fact]
+    public void СтараяМодельИгнорируетНеизвестныеПоля()
+    {
+        const string json = """{ "Id": "u1", "MysteryField": "неведомое" }""";
+
+        var oldShape = JsonSerializer.Deserialize<OldUserShape>(json);
+
+        oldShape.Should().NotBeNull();
+        oldShape!.Id.Should().Be("u1");
+    }
+
+    private sealed class OldUserShape
+    {
+        public string? Id { get; set; }
     }
 }

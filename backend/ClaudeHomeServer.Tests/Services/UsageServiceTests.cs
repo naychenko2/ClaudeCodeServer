@@ -43,16 +43,21 @@ public class UsageServiceTests : IDisposable
     public void Load_СтарыйФайлБезПоляSource_ЧитаетсяSourceNull_НеПадает()
     {
         // Формат до появления Source (camelCase, как пишет сам UsageService).
+        // Метка времени — свежая: Load отбрасывает снимки старше окна хранения (8 дней),
+        // поэтому фиксированная дата в литерале была бы тайм-бомбой (тест зеленел до
+        // определённого дня, а потом падал «коллекция пуста»).
+        var ts = DateTime.UtcNow.AddHours(-1).ToString("o");
+        var resets = DateTime.UtcNow.AddHours(4).ToString("o");
         var storePath = Path.Combine(_tempDir, "usage.json");
-        File.WriteAllText(storePath, """
+        File.WriteAllText(storePath, $$"""
         [
             {
-                "timestamp": "2026-07-29T10:00:00Z",
+                "timestamp": "{{ts}}",
                 "limitType": "five_hour",
                 "utilization": 0.42,
                 "status": "allowed",
                 "isUsingOverage": false,
-                "resetsAt": "2026-07-29T15:00:00Z",
+                "resetsAt": "{{resets}}",
                 "overageStatus": null,
                 "overageResetsAt": null,
                 "subscriptionKey": "claude"

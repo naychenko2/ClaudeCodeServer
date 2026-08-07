@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { EyeOff, Pin, Plus, Search } from 'lucide-react';
+import { Minus, Pin, Plus, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
 import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
@@ -115,7 +115,7 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
         // проект, и целятся при этом в его иконку. Пока иконку тащат, подписи нет
         // вовсе — значит и кнопка не мешает дропу.
         action={onHide && !dragActive ? {
-          Icon: EyeOff,
+          Icon: Minus,
           title: 'Убрать из дока (проект останется в поиске)',
           onClick: () => onHide(p),
         } : undefined}

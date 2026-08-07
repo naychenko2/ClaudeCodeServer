@@ -1,29 +1,62 @@
-// Карточка квотного провайдера (.qcard в полосе «Квоты подписок»). Состояния:
-// загрузка/ошибка/недоступно/готово. На поверхности — percent-окна и здоровье FreeLLM;
-// count-окна (сессии), тренд и кабинет — в раскрытии (моментальный снимок, не расход).
+// Карточка квоты в полосе «Квоты подписок» — единая оболочка для двух источников:
+// CLI-провайдеров (GLM/Kimi/…) и аккаунтов подписок Claude. QuotasTab нормализует оба
+// в общую вью-модель (см. ProviderCardData); здесь — только размещение и общие
+// состояния: загрузка/ошибка/недоступно/готово. Поверхность — percent-окна и здоровье
+// FreeLLM; count-окна, тренд, кабинет, тариф и подписка-специфика — в раскрытии.
 import { useEffect, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
-import { ChevronRight, ExternalLink, RotateCw } from 'lucide-react';
-import type { ProviderBalanceInfo } from '../../types';
+import { Check, ChevronRight, Copy, ExternalLink, RotateCw } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Dot, IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { fmtReset } from '../../lib/rateLimit';
-import { QuotaWindow, parseQuotaWindow, barTextTone } from './QuotaWindow';
+import { QuotaWindow, type QuotaWindowView } from './QuotaWindow';
+
+export interface PillSpec { label: string; tone: 'plain' | 'danger' | 'free' }
+
+// Свежесть в углу шапки. Логику (канал данных, pollStatus, возраст) считает QuotasTab —
+// здесь только размещение: точка + подпись.
+export interface FreshnessSpec {
+  dot: string;        // цвет точки: success/warning/textMuted
+  text: string;       // «3 мин назад» / «на 14:20» / «по ходам · 2 ч назад»
+  textTone?: string;  // цвет подписи (по умолчанию textMuted; при stale — warningText)
+}
+
+export interface HealthSpec {
+  requests24h?: number | null;
+  successRate?: number | null;
+  platformsAlive?: number | null;
+  platformsTotal?: number | null;
+}
 
 export interface ProviderCardData {
   key: string;
   name: string;
   color: string;
-  balance: ProviderBalanceInfo | null;
-  snapshots: { timestamp: string; balance: number; currency: string }[];
   state: 'loading' | 'error' | 'ready' | 'unavailable';
   isFree: boolean;
-  // Момент следующей авто-попытки (Date.now()) — карточка ошибки ведёт по нему отсчёт
-  // «повтор через N сек». null/undefined — авто-ретрая нет, просто «не удалось получить».
+  dim?: boolean;            // притушение: данные устарели при ошибке сводки (как MoneyTile при stale)
   retryAt?: number | null;
-  cabinetUrl?: string;
   onRetry: () => void;
+  // === state === 'ready' ===
+  windows: QuotaWindowView[];        // percent-окна на поверхности
+  labelWidth?: number;               // подпись QuotaWindow (64 — провайдеры, 92 — подписки)
+  pills: PillSpec[];                 // пилюли шапки (planLabel, «бесплатный», «Предел»)
+  routingBadge?: { tone: 'ok' | 'warn'; label: string };  // бейдж ротации — только карточка-цель
+  freshness?: FreshnessSpec;         // свежесть в углу шапки
+  hint?: ReactNode;                  // хинт-строка (подписки: сброс худшего окна + reason)
+  health?: HealthSpec | null;        // здоровье FreeLLM (провайдеры)
+  hasExhausted: boolean;             // исчерпано ли окно → янтарный бордер
+  exhaustedResetAt?: string | null;  // когда отпустит исчерпанное окно (провайдеры, ISO)
+  // === раскрытие ===
+  expandable: boolean;
+  countWindows?: QuotaWindowView[];  // count-окна сегментами (провайдеры)
+  trend?: { t: number; u: number }[]; // sparkline — общий
+  cabinetUrl?: string;               // кабинет (провайдеры)
+  tier?: string | null;              // подписки: пилюля «Тариф: …» в раскрытии
+  thresholdNote?: string;            // подписки: пояснение порога вывода из ротации
+  freshnessDetail?: ReactNode;       // подписки: полная подпись свежести (из таблицы)
+  copyCommand?: string | null;       // подписки: loginCommand — моно-блок + кнопка копирования
 }
 
 const cardBase: CSSProperties = {
@@ -33,7 +66,7 @@ const cardBase: CSSProperties = {
 
 const nameStyle: CSSProperties = { fontSize: FS.base, fontWeight: 600, color: C.textHeading };
 
-// Пилюля тарифа (planLabel без «Подписка:») и бейдж «бесплатный»/«Предел» — один стиль
+// Пилюля шапки (planLabel без «Подписка:», «бесплатный», «Предел») — один стиль
 function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain' | 'danger' | 'free' }) {
   const styles: Record<string, CSSProperties> = {
     plain:  { background: C.bgCard, border: `1px solid ${C.border}`, color: C.textSecondary },
@@ -43,6 +76,18 @@ function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, ...styles[tone] }}>
       {children}
+    </span>
+  );
+}
+
+// Бейдж ротации на карточке-цели: успех (цель в ротации) / предупреждение (спилл)
+function RoutingPill({ tone, label }: { tone: 'ok' | 'warn'; label: string }) {
+  const s = tone === 'ok'
+    ? { background: C.successBg, border: C.success, color: C.successText }
+    : { background: C.warningBg, border: C.warning, color: C.warningText };
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, border: `1px solid ${s.border}`, background: s.background, color: s.color }}>
+      {label}
     </span>
   );
 }
@@ -65,47 +110,40 @@ function Sparkline({ points, height = 30 }: { points: { t: number; u: number }[]
   );
 }
 
-// Свежесть данных: точка + возраст. Протухло (>30 мин) — янтарная точка и время снимка
-const STALE_MS = 30 * 60 * 1000;
-const fmtClock = (iso: string) => {
-  const d = new Date(iso);
-  return isNaN(d.getTime()) ? '' : d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-};
-const fmtAgo = (iso: string) => {
-  const t = new Date(iso).getTime();
-  if (isNaN(t)) return null;
-  const mins = Math.floor((Date.now() - t) / 60000);
-  if (mins < 1) return 'только что';
-  if (mins < 60) return `${mins} мин назад`;
-  const h = Math.floor(mins / 60);
-  return h < 24 ? `${h} ч назад` : `${Math.floor(h / 24)} дн назад`;
-};
-const isStale = (iso?: string | null) => {
-  if (!iso) return false;
-  const t = new Date(iso).getTime();
-  return !isNaN(t) && Date.now() - t > STALE_MS;
-};
-function Freshness({ asOf }: { asOf?: string | null }) {
-  if (!asOf || !fmtAgo(asOf)) return null;
-  const stale = isStale(asOf);
+// Кнопка «Скопировать команду» (loginCommand) — единственное действие на вкладке:
+// аккаунт без полноценного входа чинится именно ею
+function CopyCommandButton({ cmd }: { cmd: string }) {
+  const [copied, setCopied] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(cmd)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => {});
+  };
+  const hot = hovered && !copied;
   return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0,
-      fontSize: FS.xs, color: stale ? C.warningText : C.textMuted, whiteSpace: 'nowrap',
-    }}>
-      <Dot color={stale ? C.warning : C.success} size={6} />
-      {stale ? `на ${fmtClock(asOf)}` : fmtAgo(asOf)}
-    </span>
+    <button onClick={copy} type="button"
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px', borderRadius: R.md,
+        border: `1px solid ${hot ? C.accent : C.border}`, background: C.bgWhite, fontSize: FS.xs,
+        color: copied ? C.successText : C.textSecondary, cursor: 'pointer', font: 'inherit',
+        transition: 'border-color .12s',
+      }}>
+      {copied
+        ? <Check size={12} color={C.successText} strokeWidth={ICON_STROKE} />
+        : <Copy size={12} color={hot ? C.accent : C.textSecondary} strokeWidth={ICON_STROKE} />}
+      {copied ? 'Скопировано' : 'Скопировать команду'}
+    </button>
   );
 }
 
-export function ProviderCard({ data }: { data: ProviderCardData }) {
+export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMobile?: boolean }) {
   const [open, setOpen] = useState(false);
-  const { name, color, balance, state, isFree, retryAt, onRetry } = data;
+  const [pressed, setPressed] = useState(false);
+  const { name, color, state, isFree, retryAt, onRetry } = data;
 
-  // Обратный отсчёт до авто-ретрая: тикает ежесекундно, только пока карточка в ошибке
-  // и известен момент следующей попытки. Хуки безусловные (нельзя ставить в ветке), но
-  // вне error-состояния таймер не заводится — лишних ре-рендеров нет.
+  // Обратный отсчёт до авто-ретрая: тикает ежесекундно, только пока карточка в ошибке.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (state !== 'error' || !retryAt) return;
@@ -116,7 +154,7 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
   // --- Загрузка: скелет (данные приходят разными запросами, мигающий текст мешал бы) ---
   if (state === 'loading') {
     return (
-      <div style={cardBase}>
+      <div style={{ ...cardBase, opacity: data.dim ? 0.55 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <span style={{ width: 7, height: 7, borderRadius: R.full, background: C.bgSelected, flexShrink: 0 }} />
           <span style={{ height: 11, width: '38%', borderRadius: R.sm, background: C.bgSelected }} />
@@ -131,10 +169,9 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
 
   // --- Ошибка: «не удалось получить» + обратный отсчёт до авто-ретрая + ручной повтор ---
   if (state === 'error') {
-    // Сколько секунд до очередной авто-попытки. null — авто-ретрая на вкладке нет.
     const remaining = retryAt ? Math.max(0, Math.ceil((retryAt - now) / 1000)) : null;
     return (
-      <div style={{ ...cardBase, cursor: 'default' }}>
+      <div style={{ ...cardBase, cursor: 'default', opacity: data.dim ? 0.55 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <Dot color={color} size={7} />
           <span style={nameStyle}>{name}</span>
@@ -157,7 +194,7 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
   // --- Недоступно: настроен, но квоту не отдаёт (Alibaba Cloud) — без выдуманных нулей ---
   if (state === 'unavailable') {
     return (
-      <div style={{ ...cardBase, cursor: 'default' }}>
+      <div style={{ ...cardBase, cursor: 'default', opacity: data.dim ? 0.55 : 1 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <Dot color={color} size={7} />
           <span style={nameStyle}>{name}</span>
@@ -171,44 +208,44 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
   }
 
   // --- Готово ---
-  const bal = balance!;
-  const windows = (bal.windows ?? []).map(parseQuotaWindow);
-  const percentWindows = windows.filter(w => w.kind === 'percent');
-  const countWindows = windows.filter(w => w.kind === 'count');
-  const hasExhausted = windows.some(w => w.exhausted);
-  const health = bal.health ?? null;
-
-  // Есть ли что раскрывать: count-окна, тренд или кабинет
-  const trend = data.snapshots.length
-    ? data.snapshots
-        .filter(s => !isNaN(s.balance))
-        .map(s => ({ t: new Date(s.timestamp).getTime(), u: Math.max(0, Math.min(1, (100 - s.balance) / 100)) }))
-        .filter(p => !isNaN(p.t))
-        .sort((a, b) => a.t - b.t)
-    : [];
-  const expandable = countWindows.length > 0 || trend.length >= 2 || !!data.cabinetUrl;
-
-  const topRight = <Freshness asOf={bal.asOf} />;
+  const clickable = data.expandable;
+  const pointerProps = clickable ? {
+    onPointerDown: () => setPressed(true),
+    onPointerUp: () => setPressed(false),
+    onPointerLeave: () => setPressed(false),
+    onPointerCancel: () => setPressed(false),
+  } : {};
+  const exhausted = data.hasExhausted;
+  const hasCountTrend = !data.countWindows || data.countWindows.length === 0;
 
   return (
     <div
-      onClick={expandable ? () => setOpen(v => !v) : undefined}
-      role={expandable ? 'button' : undefined}
+      onClick={clickable ? () => setOpen(v => !v) : undefined}
+      role={clickable ? 'button' : undefined}
+      {...pointerProps}
       style={{
         ...cardBase,
-        cursor: expandable ? 'pointer' : 'default',
-        borderColor: hasExhausted ? C.warning : C.border,
+        background: pressed ? C.bgSelected : C.bgWhite,
+        cursor: clickable ? 'pointer' : 'default',
+        borderColor: exhausted ? C.warning : C.border,
+        opacity: data.dim ? 0.55 : 1,
       }}
     >
-      {/* .top — имя, пилюли, свежесть */}
+      {/* .top — имя, пилюли, бейдж ротации, свежесть */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
         <Dot color={color} size={7} />
-        <span style={{ ...nameStyle, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        {bal.planLabel && <Pill>{bal.planLabel}</Pill>}
-        {isFree && <Pill tone="free">бесплатный</Pill>}
-        {hasExhausted && <Pill tone="danger">Предел</Pill>}
-        <span style={{ marginLeft: 'auto' }}>{topRight}</span>
-        {expandable && (
+        <span style={{ ...nameStyle, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+        {/* На мобиле шапка тесна: точка, имя, пилюля ротации, свежесть (пилюли тарифа — в раскрытии) */}
+        {!isMobile && data.pills.map((p, i) => <Pill key={i} tone={p.tone}>{p.label}</Pill>)}
+        {data.routingBadge && <RoutingPill tone={data.routingBadge.tone} label={data.routingBadge.label} />}
+        <span style={{ marginLeft: 'auto' }} />
+        {data.freshness && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.xs, color: data.freshness.textTone ?? C.textMuted, whiteSpace: 'nowrap' }}>
+            <Dot color={data.freshness.dot} size={6} />
+            {data.freshness.text}
+          </span>
+        )}
+        {clickable && (
           <ChevronRight size={15} strokeWidth={ICON_STROKE} style={{
             flexShrink: 0, color: C.textMuted, transition: 'transform .15s', transform: open ? 'rotate(90deg)' : 'none',
           }} />
@@ -216,30 +253,44 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
       </div>
 
       {/* .wins — percent-окна на поверхности */}
-      {percentWindows.length > 0 && (
+      {data.windows.length > 0 && (
         <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 5 }}>
-          {percentWindows.map((w, i) => <QuotaWindow key={i} w={w} />)}
+          {data.windows.map((w, i) => <QuotaWindow key={i} w={w} labelWidth={data.labelWidth} />)}
         </div>
       )}
 
-      {/* Здоровье FreeLLM — видное место на поверхности */}
-      {health && (health.platformsTotal ?? 0) > 0 && (
-        <FreeLlmHealth health={health} />
+      {/* Здоровье FreeLLM — видное место на поверхности (провайдеры) */}
+      {data.health && (data.health.platformsTotal ?? 0) > 0 && (
+        <FreeLlmHealth health={data.health} />
       )}
 
-      {/* Раскрытие: count-окна сегментами + моментальный снимок + тренд + кабинет */}
-      {open && expandable && (
+      {/* Хинт-строка (подписки: сброс худшего окна + reason ротации) */}
+      {data.hint && (
+        <div style={{ marginTop: 6, fontSize: FS.xs, color: C.textMuted }}>{data.hint}</div>
+      )}
+
+      {/* Раскрытие: count-окна/тренд/кабинет (провайдеры) + тариф/порог/свежесть/команда (подписки) */}
+      {open && clickable && (
         <div style={{ marginTop: 10, borderTop: `1px dashed ${C.dashed}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {countWindows.map((w, i) => (
+          {data.tier && <Pill>Тариф: {data.tier}</Pill>}
+          {data.thresholdNote && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{data.thresholdNote}</div>}
+          {data.freshnessDetail && <div style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>{data.freshnessDetail}</div>}
+          {data.copyCommand && (
+            <>
+              <span style={{ display: 'block', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, background: C.bgInset, padding: '5px 8px', borderRadius: R.md, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{data.copyCommand}</span>
+              <CopyCommandButton cmd={data.copyCommand} />
+            </>
+          )}
+          {data.countWindows?.map((w, i) => (
             <div key={i}>
-              <QuotaWindow w={w} />
+              <QuotaWindow w={w} labelWidth={data.labelWidth} />
               <div style={{ marginTop: 4, fontSize: FS.xs, color: C.textMuted }}>моментальный снимок, не расход</div>
             </div>
           ))}
-          {countWindows.length === 0 && percentWindows.length > 0 && trend.length >= 2 && (
+          {hasCountTrend && data.windows.length > 0 && data.trend && data.trend.length >= 2 && (
             <>
               <div style={{ fontSize: FS.xs, color: C.textSecondary }}>Расход окна во времени</div>
-              <Sparkline points={trend} />
+              <Sparkline points={data.trend} />
             </>
           )}
           {data.cabinetUrl && (
@@ -251,10 +302,10 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
         </div>
       )}
 
-      {/* Сброс исчерпанного окна — когда именно отпустит */}
-      {hasExhausted && (
+      {/* Сброс исчерпанного окна (провайдеры) — когда именно отпустит */}
+      {exhausted && data.exhaustedResetAt && (
         <div style={{ marginTop: 6, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
-          сброс {fmtReset(windows.find(w => w.exhausted)?.resetsAt ?? undefined)}
+          сброс {fmtReset(data.exhaustedResetAt ?? undefined)}
         </div>
       )}
     </div>
@@ -262,9 +313,7 @@ export function ProviderCard({ data }: { data: ProviderCardData }) {
 }
 
 // Здоровье FreeLLM: платформы сегментами + сводка за 24ч
-function FreeLlmHealth({ health }: {
-  health: { requests24h?: number | null; successRate?: number | null; platformsAlive?: number | null; platformsTotal?: number | null };
-}) {
+function FreeLlmHealth({ health }: { health: HealthSpec }) {
   const alive = health.platformsAlive ?? 0;
   const total = health.platformsTotal ?? 0;
   const rate = health.successRate;
@@ -279,7 +328,7 @@ function FreeLlmHealth({ health }: {
             <span key={i} style={{ display: 'block', width: 14, height: 6, borderRadius: 3, background: i < alive ? C.info : C.track }} />
           ))}
         </span>
-        <span style={{ flexShrink: 0, minWidth: 34, textAlign: 'right', fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: barTextTone(0) }}>
+        <span style={{ flexShrink: 0, minWidth: 34, textAlign: 'right', fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textHeading }}>
           {alive} из {total}
         </span>
       </div>

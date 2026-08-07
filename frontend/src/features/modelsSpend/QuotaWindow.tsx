@@ -1,7 +1,8 @@
-// Окно квоты — один ряд в карточке провайдера (макет .wins .qb): подпись 64px,
-// индикатор, моно-значение 34px. Два вида по ProviderQuotaWindow.unit:
+// Окно квоты — один ряд в карточке (.wins): подпись (ширина labelWidth), индикатор,
+// значение. Два вида по ProviderQuotaWindow.unit:
 //   percent — шкала ИЗРАСХОДОВАННОГО (в контракте value — остаток, переводим);
 //   count   — сегменты «занято 3 из 5»: моментальный снимок, шкала расхода врёт.
+// percent без доли (подписка «в пределах нормы») — без шкалы, значение sans/muted.
 import type { ProviderQuotaWindow } from '../../types';
 import { C, FONT, FS, SP } from '../../lib/design';
 
@@ -55,13 +56,23 @@ export function parseQuotaWindow(w: ProviderQuotaWindow): QuotaWindowView {
   };
 }
 
+// width подписи задаётся параметром labelWidth — у подписок подписи длиннее
+// («Неделя · Opus», «Перерасход · месяц»), 64px их обрезает до «Неделя · …»
 const labelStyle: React.CSSProperties = {
-  width: 64, flexShrink: 0, fontSize: FS.xs, color: C.textMuted,
+  flexShrink: 0, fontSize: FS.xs, color: C.textMuted,
   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };
 const valueStyle: React.CSSProperties = {
   flexShrink: 0, minWidth: 34, textAlign: 'right',
   fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700,
+};
+// «Спокойное» значение — percent-окно без доли (подписка «в пределах нормы»):
+// sans/muted без minWidth, иначе разорвёт ряд моно-значений («в пределах нормы»
+// рядом с «78%» уезжало бы и ломало выравнивание). Формулировка та же, что у
+// UsageWidget.WindowRow — язык у продукта один.
+const calmValueStyle: React.CSSProperties = {
+  flexShrink: 0, textAlign: 'right',
+  fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
 };
 
 // Ряд-сегменты для count-окна: дорожка C.track, занятые — C.info (решение §5: не шкала)
@@ -78,11 +89,13 @@ function CountSegments({ used, total }: { used: number; total: number }) {
   );
 }
 
-export function QuotaWindow({ w, dim }: { w: QuotaWindowView; dim?: boolean }) {
+export function QuotaWindow({ w, dim, labelWidth = 64 }: { w: QuotaWindowView; dim?: boolean; labelWidth?: number }) {
   const color = w.usedPct === null ? C.textMuted : barTextTone(w.usedPct);
+  // percent-окно без доли → «спокойное» sans-значение вместо моно-жирного
+  const calmValue = w.kind === 'percent' && w.usedPct === null;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-      <span style={labelStyle} title={w.label}>{w.label}</span>
+      <span style={{ ...labelStyle, width: labelWidth }} title={w.label}>{w.label}</span>
       {w.kind === 'percent' ? (
         w.usedPct === null ? (
           <span style={{ flex: 1 }} />
@@ -99,7 +112,7 @@ export function QuotaWindow({ w, dim }: { w: QuotaWindowView; dim?: boolean }) {
           ? <CountSegments used={w.usedCount} total={w.totalCount} />
           : <span style={{ flex: 1 }} />
       )}
-      <span style={{ ...valueStyle, color }}>{w.valueText}</span>
+      <span style={calmValue ? calmValueStyle : { ...valueStyle, color }}>{w.valueText}</span>
     </div>
   );
 }

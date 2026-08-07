@@ -257,18 +257,23 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var hasChain = chain.Count > 1;
         var chainIndex = 0;
 
+        // Фактическая пара текущей попытки «модель × ключ». Берётся из шага цепочки или
+        // эффективной модели на СТАРТЕ и далее обновляется применённой подменой (next), а не
+        // пересчитывается из _effectiveModel() каждую итерацию. _effectiveModel() — НАМЕРЕНИЕ
+        // хода (слот/назначение места); оно не отражает подмену на эквивалент стороннего
+        // провайдера. Считай от него — и в attempted ляжет намерение (напр. «opus»), а
+        // проверка зацикливания пойдёт по эквиваленту — пары разойдутся, и одна мёртвая пара
+        // повторится до потолка (инцидент 2026-08-07).
+        var currentModel = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
+        var currentKey = ProviderKeyFor(currentModel);
+
         try
         {
             while (!_cts.IsCancellationRequested)
             {
                 if (_userInterrupted) { await SettleAsync(turn); return; }
 
-                // Модель попытки: шаг цепочки (если есть) иначе эффективная модель сессии.
-                // После подмены Info.Model синхронизируем с шагом цепочки (ApplyTarget), чтобы
-                // следующий процесс стартовал на нужной модели.
-                var model = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
-                var key = ProviderKeyFor(model);
-                attempted.Add((model, key));
+                attempted.Add((currentModel, currentKey));
 
                 TaskCompletionSource<AttemptEnd> attemptTcs;
                 lock (turn.Sync)
@@ -300,14 +305,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
                 if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
 
-                trace.Add(TraceLine(model, key, cls));
+                trace.Add(TraceLine(currentModel, currentKey, cls));
                 if (substitutions >= EffectiveMaxSubstitutions())
                 {
                     await FailExhaustedAsync(turn, trace, substitutions, end);
                     return;
                 }
 
-                var next = ResolveNextTarget(cls, end, attempted, model, key, chain, hasChain, ref chainIndex);
+                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, hasChain, ref chainIndex);
                 if (next is null) { await FailExhaustedAsync(turn, trace, substitutions, end); return; }
 
                 // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
@@ -324,22 +329,32 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // процесс запустится уже на новой паре
                 if (end.Kind == AttemptEndKind.RateLimited) _inner.Interrupt();
 
-                // Подмена помечается в ленте существующим provider_switched (Auto=true).
-                // Label=null — переключил SessionManager.TryPoolFailover, маркер уже был.
-                // Reason — wire-имя класса ошибки, чтобы фронт показал каноническую
-                // формулировку подсказки вместо сырого текста Label
+                // Подмена помечается в ленте существующим provider_switched (Auto=true). Маркер —
+                // ТОЛЬКО при смене ТИПА поставщика (сторонний провайдер / шаг цепочки): переход
+                // между аккаунтами ОДНОГО пула Claude проходит тихо (Label=null), пользователь
+                // видит ровно один ход без служебных переключений. Reason — wire-имя класса
+                // ошибки, чтобы фронт показал каноническую формулировку подсказки.
                 if (next.Label is not null)
                 {
                     var reason = TurnErrorClassifier.WireName(cls);
                     await _downstream(new ProviderSwitchedMessage(next.Key, next.Model, next.Label, Auto: true, Reason: reason));
-                    LogInfo($"Подмена: {TraceLine(model, key, cls)} → «{KeyLabel(next.Key)}» / «{next.Model ?? model}» (причина {reason ?? "неизвестно"})");
+                    LogInfo($"Подмена: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» / «{next.Model ?? currentModel}» (причина {reason ?? "неизвестно"})");
                 }
                 else
                 {
-                    LogInfo($"Подмена без маркера: {TraceLine(model, key, cls)} → «{KeyLabel(next.Key)}» (маркер уже был от SessionManager)");
+                    // Тихая подмена (смена подписки того же пула): в ленту не идёт, для разбора
+                    // пишем конкретную причину — LogDetail ротации, иначе общий текст
+                    LogInfo(next.LogDetail
+                        ?? $"Подмена без маркера: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» (маркер уже был от SessionManager)");
                 }
 
                 ApplyTarget(next);
+                // Фактическая пара следующей попытки: смена провайдера несёт эквивалент
+                // (next.Model), смена подписки того же пула — модель не меняется; ключ — всегда
+                // next.Key. Согласовано с ApplyTarget (Info.Model/Provider), но не зависит от
+                // _effectiveModel() — поэтому именно эта пара попадает в attempted и в след.
+                currentModel = next.Model ?? currentModel;
+                currentKey = next.Key;
                 substitutions++;
             }
         }
@@ -412,9 +427,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (attempted.Contains((model, candidate))) continue;
                 var dstRoot = ResolveRootFor(candidate);
                 if (!TryMigrateTranscript(dstRoot)) continue;
+                // Смена подписки того же пула Claude — тихо: маркер в ленте только при
+                // переходе на ДРУГОЙ тип поставщика. Причина сохраняется в LogDetail для
+                // разбора (какая подписка на какую сменилась), наружу не идёт.
                 return new FallbackTarget(candidate, null,
-                    Label: $"Автофолбэк: подписка «{KeyLabel(currentKey)}» → «{KeyLabel(candidate)}»",
-                    ProfileRoot: dstRoot, IsProviderSwitch: false);
+                    Label: null,
+                    ProfileRoot: dstRoot, IsProviderSwitch: false,
+                    LogDetail: $"Автофолбэк: подписка «{KeyLabel(currentKey)}» → «{KeyLabel(candidate)}»");
             }
         }
 
@@ -666,7 +685,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         string? RateLimitResetsAt);
 
     private sealed record FallbackTarget(
-        string Key, string? Model, string? Label, string? ProfileRoot, bool IsProviderSwitch);
+        string Key, string? Model, string? Label, string? ProfileRoot, bool IsProviderSwitch,
+        // Текст тихой подмены (смена подписки того же пула, Label=null) для LogInfo: в ленту
+        // не идёт, но нужен для разбора — какая подписка на какую сменилась.
+        string? LogDetail = null);
 
     // Состояние хода под фолбэком: задержанные терминальные сообщения, исход текущей
     // попытки и флаг «оркестрация завершена» (после него события идут насквозь)

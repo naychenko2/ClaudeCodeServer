@@ -129,20 +129,13 @@ function buildTree(files: RowFile[]): TreeNode[] {
       }
     }
   }
-  // Схлопнуть цепочки папок с единственным ребёнком-папкой (a/b/c → «a/b/c»)
-  const collapse = (nodes: TreeNode[]): TreeNode[] => nodes.map(n => {
-    if (n.file) return n;
-    let cur = n;
-    while (cur.children.length === 1 && !cur.children[0].file) {
-      const only = cur.children[0];
-      cur = { name: `${cur.name}/${only.name}`, path: only.path, children: only.children };
-    }
-    return { ...cur, children: collapse(cur.children) };
-  });
+  // Каждая папка — отдельный узел, как в дереве «Файлов»: без схлопывания
+  // одиноких цепочек (раньше a/b/c сливалось в одну строку, и дерево Изменений
+  // отличалось от соседней панели структурой и отступами)
   const sortRec = (nodes: TreeNode[]): TreeNode[] =>
     nodes.map(n => ({ ...n, children: sortRec(n.children) }))
       .sort((a, b) => (a.file ? 1 : 0) - (b.file ? 1 : 0) || a.name.localeCompare(b.name));
-  return sortRec(collapse(root.children));
+  return sortRec(root.children);
 }
 
 export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange }: Props) {
@@ -466,11 +459,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           // Размеры и отступы — общие с деревом «Файлов» (см. ROW_H выше)
           display: 'flex', alignItems: 'center', gap: 5, position: 'relative',
           ...(showParent ? { minHeight: ROW_H_TWO_LINE } : { height: ROW_H }),
-          // По hover в рабочем скоупе правый отступ ужится до 4px: кнопка отката
-          // встаёт у края, но не вплотную. flex:1 у имени абсорбирует разницу —
-          // содержимое не прыгает, меняется лишь обрезка длинных имён
-          padding: `1px ${isWorking && hovered && !st.busy ? SP.xs : SP.sm}px`,
-          paddingLeft: SP.sm + depth * INDENT,
+          padding: `1px ${SP.sm}px`, paddingLeft: SP.sm + depth * INDENT,
           borderRadius: R.md, cursor: 'pointer', boxSizing: 'border-box',
           // Отклик на удержание: строка притухает, пока палец держат
           opacity: pressingKey === rowKey ? 0.6 : 1,
@@ -494,6 +483,12 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           >
             {!unchecked.has(f.path) && <span style={{ color: C.onAccent, fontSize: 10, fontWeight: 700, lineHeight: 1 }}>✓</span>}
           </span>
+        )}
+        {/* Слот шеврона дерева — пустой у файла, но ширины 12px (как в «Файлах»),
+            чтобы иконка файла встала в ту же колонку, что иконка папки с шевроном
+            в renderTree, и совпала с деревом «Файлов» */}
+        {viewMode === 'tree' && !(isWorking && selectMode) && (
+          <span style={{ width: 12, flexShrink: 0 }} />
         )}
         {/* Без чекбоксов — тег расширения (как в панели «Файлы») */}
         {!(isWorking && selectMode) && <FileTypeTile name={name} />}
@@ -752,7 +747,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
              панели (см. headerControls выше) === */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {/* Тело: история ветки (скоуп «ветка») ИЛИ список/дерево файлов */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 8px 6px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 4px 6px' }}>
           {isBranch ? (
             pushedCommits.length === 0 ? (
               <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>

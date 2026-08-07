@@ -865,12 +865,27 @@ const windowWidth = useWindowWidth();
   };
 
   // Пока чат открыт, приходящие в него сообщения не копят непрочитанность —
-  // следим за updatedAt, а не только за сменой чата (приём из ChatsPage)
+  // следим за updatedAt, а не только за смену чата (приём из ChatsPage)
   const activeSessionId = activeSession?.id;
   const activeSessionUpdatedAt = activeSession?.updatedAt;
   useEffect(() => {
     if (activeSessionId) markChatRead(activeSessionId);
   }, [activeSessionId, activeSessionUpdatedAt]);
+
+  // activeSession.updatedAt при ходе агента НЕ обновляется (status_changed несёт
+  // только status, user_message/exited не трогают activeSession вовсе) — поэтому
+  // эффект выше не срабатывает на новом ходе, и карточка помечалась непрочитанной,
+  // хотя юзер прямо в этом чате. Гасим напрямую: любое событие хода в активном
+  // чате → он прочитан. Переподписка при смене чата — нормально
+  useEffect(() => {
+    if (!activeSessionId) return;
+    return onMessage(msg => {
+      if (msg.sessionId !== activeSessionId) return;
+      if (msg.type === 'user_message' || msg.type === 'exited' || msg.type === 'status_changed') {
+        markChatRead(activeSessionId);
+      }
+    });
+  }, [activeSessionId]);
 
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;

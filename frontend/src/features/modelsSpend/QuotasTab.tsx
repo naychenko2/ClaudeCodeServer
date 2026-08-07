@@ -1,7 +1,7 @@
 // Вкладка «Квоты и деньги» раздела «Модели и расход» (макет docs/mockups/models-spend-v3.html §1).
 // KPI-лента → переход в аналитику → карточки квот → денежные балансы (админ) → все провайдеры.
 // Состояния §4: скелетон, ошибка-баннер, протухшие данные, пусто, недоступная/исчерпанная квота.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { AlertTriangle, ExternalLink } from 'lucide-react';
 import type { ProviderBalanceInfo, SpendOverviewResponse, UsageResponse } from '../../types';
@@ -16,6 +16,7 @@ import {
 import { latestPerWindow, windowLabel } from '../../lib/rateLimit';
 import { addDaysUtc, openSpend, plural, spendQuery, todayUtc } from '../../lib/spend';
 import { freeSourceLabel, isFreeSource } from '../../lib/spendSources';
+import { showToast } from '../../lib/toast';
 import { KpiRibbon } from './KpiRibbon';
 import { ProviderCard } from './ProviderCard';
 import type { ProviderCardData } from './ProviderCard';
@@ -23,6 +24,9 @@ import type { ProviderCardData } from './ProviderCard';
 // === Локальные хелперы (не вынесены в lib — повторяем) ===
 
 const STALE_MS = 30 * 60 * 1000;
+// Каденс авто-ретрая упавших провайдеров (и обновления снимков): те же 60с, что и
+// интервал опроса ниже. Счётчик «повтор через N сек» на карточке ошибки идёт от этого окна.
+const RETRY_INTERVAL_MS = 60_000;
 const fmtAgo = (iso: string) => {
   const t = new Date(iso).getTime();
   if (isNaN(t)) return null;
@@ -179,6 +183,13 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
   const [spend, setSpend] = useState<SpendOverviewResponse | null>(null);
   const [usageError, setUsageError] = useState(false);
   const [tick, setTick] = useState(0);
+  // Момент (Date.now()) следующей авто-попытки дотянуть упавших провайдеров. Карточка
+  // ошибки ведёт по нему обратный отсчёт «повтор через N сек», чтобы было видно, что
+  // респроба идёт сама, а не ждёт ручного «Повторить». null — авто-ретрая нет на вкладке.
+  const [retryAt, setRetryAt] = useState<number | null>(() => Date.now() + RETRY_INTERVAL_MS);
+  // Предыдущий снимок состояний провайдеров — чтобы заметить переход ошибка → данные
+  // (авто-ретрай вытянул упавшего) и коротко сообщить об этом тостом.
+  const prevProvRef = useRef<Record<string, ProvState>>({});
 
   const isAdmin = me?.role === 'admin';
 
@@ -213,14 +224,28 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
   // costUsd нужен только админу — грузим, когда роль известна
   useEffect(() => { if (isAdmin) loadSpend(); }, [isAdmin, loadSpend]);
 
-  // Раз в минуту — свежие снимки и повтор упавших
+  // Раз в минуту — свежие снимки и повтор упавших (без визуала раньше выглядело, будто
+  // ждёт ручного «Повторить»: теперь карточка ошибки ведёт обратный отсчёт до этого тика)
   useEffect(() => {
     const id = setInterval(() => {
       api.usage.get().then(setUsage).catch(() => {});
       setProv(prev => { for (const [k, v] of Object.entries(prev)) if (v === null) loadProvider(k); return prev; });
-    }, 60_000);
+      setRetryAt(Date.now() + RETRY_INTERVAL_MS);
+    }, RETRY_INTERVAL_MS);
     return () => clearInterval(id);
   }, [loadProvider]);
+
+  // Восстановление упавшего провайдера (null → данные): авто-ретрай или ручной «Повторить»
+  // вытянули баланс — короткий тост, чтобы человек понял, что связь вернулась сама.
+  useEffect(() => {
+    const prev = prevProvRef.current;
+    const names: string[] = [];
+    for (const [k, v] of Object.entries(prov)) {
+      if (prev[k] === null && v) names.push(providerLabel(k));
+    }
+    prevProvRef.current = prov;
+    if (names.length) showToast('Связь восстановлена', names.join(', '), 'info');
+  }, [prov]);
 
   // === Вычисления ===
 
@@ -292,7 +317,7 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
       const isQuota = bal?.currency === '%' || (bal?.windows?.length ?? 0) > 0;
       if (data === null) {
         // Ошибка — тип источника неизвестен, живёт в квотах (строчная раскладка, «—» не ломает ряд)
-        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'error', isFree: isFreeSource(key), cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
+        out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'error', isFree: isFreeSource(key), retryAt, cabinetUrl: CABINET_URL[key], onRetry: () => loadProvider(key) });
         continue;
       }
       if (data === undefined || !bal) {
@@ -315,7 +340,7 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
       out.push({ key, name: providerLabel(key), color: sourceColor(key), balance: null, snapshots: [], state: 'unavailable', isFree: isFreeSource(key), onRetry: () => {} });
     }
     return out;
-  }, [prov, balanceKeys, providerKeys, loadProvider]);
+  }, [prov, balanceKeys, providerKeys, loadProvider, retryAt]);
 
   // Денежные плитки (админ): денежные CLI-провайдеры
   const moneyTiles: MoneyTileData[] = useMemo(() => {

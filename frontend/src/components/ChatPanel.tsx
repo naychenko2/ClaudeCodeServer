@@ -1392,10 +1392,10 @@ export function ChatPanel({ session, project, onOpenFile, pendingMessage, onPend
 
         {online && showWaiting && (
           // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает
-          // в жёлоб перед ним: домик 19px + зазор 10px = 29px сдвига. Под левым краем
-          // пузырей дым из трубы (вверх-влево) наезжал на контент сверху; в жёлобе над
-          // домиком и слева пузырей нет — дым пыхтит в пустоту.
-          <div style={{ marginLeft: isMobile ? -12 : -29, marginTop: 5 }}>
+          // в жёлоб перед ним: аватар 28px + зазор 10px = 38px сдвига. Кольца «Эхо»
+          // расходятся в жёлоб и влево под пузыри; над ними и слева пузырей нет —
+          // кольца уходят в пустоту и не перекрывают текст ленты.
+          <div style={{ marginLeft: isMobile ? -12 : -38, marginTop: 5 }}>
             <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
           </div>
         )}

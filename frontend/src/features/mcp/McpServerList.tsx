@@ -1,17 +1,43 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
-import { Pencil, Plug, X } from 'lucide-react';
-import { Button, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
+import { ChevronDown, ChevronRight, Pencil, Plug, X } from 'lucide-react';
+import { Button, Dot, EmptyState, IconButton, TextField, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { accessSummary, mcpAuthLine, mcpStatusTone } from './useMcpData';
+import { accessSummary, mcpAuthLine, mcpStatusTone, plural } from './useMcpData';
 import type { McpData } from './useMcpData';
 import type { McpBuiltinServer, McpServer } from '../../types';
 
-// Вкладка «Серверы»: свои записи полноразмерными карточками, встроенные серверы
-// продукта — компактными плитками (их восемь, карточками они похоронили бы свои под
-// собой). Пустое состояние показано только там, где пусто: плитки остаются на месте.
+// Вкладка «Серверы»: свои записи полноразмерными карточками, всё остальное — компактными
+// плитками по группам. Ось группировки — кто подключил сервер и кто им управляет:
+// сервисы AI Home, память персон (свёрнута строкой — её столько же, сколько персон,
+// и делать с ней нечего) и наследство из конфигов CLI. Пустое состояние показано только
+// там, где пусто: остальные группы остаются на месте.
+
+// Человекочитаемые имена сервисов продукта: сырые ключи (wsp, codegraph) ничего не говорят.
+// Ключа нет в словаре (новый продуктовый сервер приехал раньше словаря) — показываем сам ключ
+const SERVICE_TITLES: Record<string, string> = {
+  tasks: 'Задачи',
+  notes: 'Заметки',
+  memory: 'Долгая память',
+  personas: 'Персоны',
+  wsp: 'Проекты и файлы',
+  notifications: 'Уведомления',
+  widgets: 'Виджеты',
+  codegraph: 'Граф кода',
+  dify: 'База знаний (Dify)',
+  'fal-ai': 'Генерация картинок (fal.ai)',
+  glif: 'Медиа-агент (Glif)',
+};
+
+const PMEM_PREFIX = 'pmem_';
+
+// Сетка плиток: minmax(140px) держит две колонки даже на 320px — при 150px там
+// оставалась одна растянутая плитка ради двух коротких строк
+const tileGridStyle: CSSProperties = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: SP.sm,
+};
 
 const hintStyle: CSSProperties = {
   fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px',
@@ -26,8 +52,12 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
 }) {
   const { servers, builtin } = data;
   const hasLegacy = servers?.some(s => s.source !== 'manual') ?? false;
-  const builtinTiles = builtin.filter(t => t.builtin);
-  const fromConfigTiles = builtin.filter(t => !t.builtin);
+  // Три известные группы разбираем явно, всё прочее — в «подключено вне AI Home»:
+  // незнакомое значение group (новая группа с бэкенда) обязано остаться видимым,
+  // иначе сервер подключён, а в списке его нет
+  const serviceTiles = builtin.filter(t => t.group === 'product' || t.group === 'integration');
+  const memoryTiles = builtin.filter(t => t.group === 'persona-memory');
+  const externalTiles = builtin.filter(t => !serviceTiles.includes(t) && !memoryTiles.includes(t));
 
   if (servers === null) {
     return <div style={{ color: C.textMuted, fontSize: FS.md, padding: '8px 0' }}>Загрузка…</div>;
@@ -71,39 +101,121 @@ export function McpServerList({ data, onEdit, onAdd, onOpenAccess, onDelete }: {
         </div>
       )}
 
-      <div style={groupHeaderStyle}>Встроенные в AI Home</div>
-      {builtinTiles.length === 0 ? (
+      <div style={groupHeaderStyle}>Сервисы AI Home</div>
+      {serviceTiles.length === 0 ? (
         <div style={hintStyle}>
-          Пока ничего не наблюдалось: статус встроенных серверов приезжает из первого же хода в чате.
+          Пока ничего не наблюдалось: статус серверов приезжает из первого же хода в чате.
         </div>
       ) : (
         <>
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: SP.sm,
-          }}>
-            {builtinTiles.map(tile => <BuiltinTile key={tile.key} tile={tile} />)}
+          <div style={tileGridStyle}>
+            {serviceTiles.map(tile => (
+              <Tile
+                key={tile.key}
+                tile={tile}
+                title={SERVICE_TITLES[tile.key] ?? tile.key}
+                subtitle={tile.key}
+                badge={tile.group === 'integration' ? 'через интернет' : undefined}
+              />
+            ))}
           </div>
           <div style={hintStyle}>
-            Встроенные серверы — часть AI Home: у них только статус, удалить или выключить их отсюда нельзя.
+            Сервисы — часть AI Home: здесь виден только статус, выключить или удалить их нельзя.
+            Метка «через интернет» — сервис, который ходит во внешнюю систему по ключу, настроенному в продукте.
           </div>
         </>
       )}
 
-      {fromConfigTiles.length > 0 && (
+      {memoryTiles.length > 0 && <PersonaMemorySection tiles={memoryTiles} />}
+
+      {externalTiles.length > 0 && (
         <>
-          <div style={groupHeaderStyle}>Из общего конфига</div>
-          <div style={{
-            display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: SP.sm,
-          }}>
-            {fromConfigTiles.map(tile => <BuiltinTile key={tile.key} tile={tile} />)}
+          <div style={groupHeaderStyle}>Подключено вне AI Home</div>
+          <div style={tileGridStyle}>
+            {externalTiles.map(tile => <Tile key={tile.key} tile={tile} title={tile.key} />)}
           </div>
           <div style={hintStyle}>
-            Эти серверы подключены файлом конфигурации на этом сервере. Здесь виден только их
-            статус — чтобы управлять ими из AI Home, добавьте их как свои на вкладке «Добавить».
+            Эти серверы Claude Code принёс из своих конфигов и плагинов — AI Home их не подключал
+            и ими не управляет, только показывает статус. Чтобы управлять таким сервером отсюда,
+            добавьте его как свой на вкладке «Добавить».
           </div>
         </>
       )}
     </div>
+  );
+}
+
+// Сводка по группе серверов памяти: человеку важно «всё ли в порядке», а не список.
+// Статусы приезжают из ходов в чате, поэтому «не проверялись» — нормальное начальное
+// состояние, а не проблема: тревожат только failed и needs-auth.
+function memorySummary(tiles: McpBuiltinServer[]): { text: string; alarming: boolean } {
+  const failed = tiles.filter(t => t.status?.status === 'failed').length;
+  const needsAuth = tiles.filter(t => t.status?.status === 'needs-auth').length;
+  if (failed) return { text: `${failed} не ${plural(failed, 'отвечает', 'отвечают', 'отвечают')}`, alarming: true };
+  if (needsAuth) return { text: `${needsAuth} — нужен вход`, alarming: true };
+  if (tiles.every(t => t.status?.status === 'connected')) return { text: 'все работают', alarming: false };
+  if (tiles.every(t => !t.status)) return { text: 'пока не проверялись', alarming: false };
+  return { text: 'часть ещё не проверялась', alarming: false };
+}
+
+// Память персон-консультантов: у каждой персоны с включённой памятью свой сервер, и
+// плитками по числу персон раздел раздувался бы в простыню, с которой всё равно нечего
+// делать. Свёрнута строкой; раскрывается сама, только если что-то сломалось.
+function PersonaMemorySection({ tiles }: { tiles: McpBuiltinServer[] }) {
+  const summary = memorySummary(tiles);
+  const [open, setOpen] = useState(summary.alarming);
+  const rowRef = useRef<HTMLButtonElement>(null);
+  const Icon = open ? ChevronDown : ChevronRight;
+
+  const toggle = () => {
+    setOpen(!open);
+    // На мобиле раскрытые плитки выпихивают строку из вида — человек не понимает,
+    // что раскрылось; возвращаем её в поле зрения
+    if (!open) requestAnimationFrame(() => rowRef.current?.scrollIntoView({ block: 'nearest' }));
+  };
+
+  return (
+    <>
+      <button
+        ref={rowRef}
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        style={{
+          display: 'flex', alignItems: 'center', gap: SP.sm, minHeight: 40,
+          padding: `${SP.sm}px 13px`, textAlign: 'left', cursor: 'pointer',
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+          fontFamily: FONT.sans, fontSize: FS.base,
+        }}
+      >
+        <Icon size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+        <span style={{ fontWeight: 600, color: C.textHeading }}>Память персон</span>
+        <span style={{ color: C.textMuted, fontSize: FS.sm }}>
+          {tiles.length} {plural(tiles.length, 'сервер', 'сервера', 'серверов')}
+        </span>
+        <span style={{ marginLeft: 'auto', fontSize: FS.sm, color: summary.alarming ? C.warningText : C.textMuted }}>
+          {summary.text}
+        </span>
+      </button>
+      {open && (
+        <>
+          <div style={tileGridStyle}>
+            {tiles.map(tile => (
+              <Tile
+                key={tile.key}
+                tile={tile}
+                title={tile.key.slice(PMEM_PREFIX.length)}
+                subtitle={tile.key}
+              />
+            ))}
+          </div>
+          <div style={hintStyle}>
+            Личная память заводится сама на каждую персону-консультанта с включённой памятью —
+            подключать и настраивать эти серверы не нужно.
+          </div>
+        </>
+      )}
+    </>
   );
 }
 
@@ -283,32 +395,55 @@ function ManualOAuthCode({ server, data }: { server: McpServer; data: McpData })
   );
 }
 
-function BuiltinTile({ tile }: { tile: McpBuiltinServer }) {
+// Компактная плитка наблюдаемого сервера: только статус, управления нет.
+// title — человекочитаемое имя, subtitle — технический ключ (когда они различаются).
+function Tile({ tile, title, subtitle, badge }: {
+  tile: McpBuiltinServer;
+  title: string;
+  subtitle?: string;
+  badge?: string;
+}) {
   const tone = mcpStatusTone(tile.status?.status);
   return (
     <div style={{
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
-      padding: '9px 11px', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
+      padding: `9px ${SP.md - 1}px`, display: 'flex', flexDirection: 'column',
+      gap: SP.xxs, minWidth: 0,
     }}>
-      <div style={{
-        fontSize: 12.5, fontWeight: 600, color: C.textHeading,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-      }}>{tile.key}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: FS.xs, color: C.textSecondary }}>
-        <span style={{ width: 6, height: 6, borderRadius: R.full, background: tone.dot, flexShrink: 0 }} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+        {/* Заголовок обрезается многоточием — в тултипе полное имя и технический ключ */}
+        <span title={subtitle && subtitle !== title ? `${title} · ${subtitle}` : title} style={{
+          fontSize: FS.sm, fontWeight: 600, color: C.textHeading, flex: 1,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{title}</span>
+        {badge && <Badge tone="outline">{badge}</Badge>}
+      </div>
+      {subtitle && subtitle !== title && (
+        <div style={{
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>{subtitle}</div>
+      )}
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, fontSize: FS.xs, color: C.textSecondary }}>
+        <Dot color={tone.dot} size={6} />
         {tone.label}
       </div>
     </div>
   );
 }
 
-function Badge({ tone, children }: { tone: 'own' | 'legacy'; children: string }) {
+// Метка на карточке и плитке. «Свой» и «через интернет» стоят почти рядом и не должны
+// сливаться: разводим их формой, а не цветом (заливка против контура) — так разница
+// читается и в тёмной теме, и новых токенов не нужно
+function Badge({ tone, children }: { tone: 'own' | 'legacy' | 'outline'; children: string }) {
   const skin = tone === 'legacy'
     ? { background: C.warningBg, color: C.warningText }
-    : { background: C.bgSelected, color: C.textSecondary };
+    : tone === 'outline'
+      ? { background: 'transparent', border: `1px solid ${C.border}`, color: C.textMuted }
+      : { background: C.bgSelected, color: C.textSecondary };
   return (
     <span style={{
-      fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 9,
+      fontSize: FS.xs, fontWeight: 700, padding: '1px 6px', borderRadius: R.pill,
       whiteSpace: 'nowrap', flexShrink: 0, ...skin,
     }}>{children}</span>
   );

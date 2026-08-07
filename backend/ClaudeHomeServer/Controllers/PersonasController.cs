@@ -246,6 +246,15 @@ public class PersonasController : ControllerBase
         // через форму/мастер этот параметр не шлёт — там инициалы или явный выбор
         if (req.AutoAvatar == true)
             persona = await TryAutoGenerateAvatarAsync(persona, req.AvatarPrompt);
+        // Персона, созданная из онбординг-сессии (через MCP personas_create), запоминается на ней:
+        // финализация досеет профиль дефолта ТОЛЬКО ей, а не выбранной существующей
+        // (та прав не получает — молчаливая дозапись Access=Full+manage была бы эскалацией).
+        if (Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault() is { Length: > 0 } csid)
+        {
+            var caller = _sessions.GetOwned(csid, UserId);
+            if (caller?.OnboardingKind is not null)
+                _sessions.SetOnboardingCreatedPersona(csid, UserId, persona.Id);
+        }
         await Broadcast("created", persona.Id);
         return Ok(persona);
     }
@@ -377,8 +386,15 @@ public class PersonasController : ControllerBase
     // User.OnboardingSessionId; у проектного — очистка Project.OnboardingSessionId.
     private async Task FinalizeOnboardingAsync(Session onboarding, Persona persona)
     {
-        // Досев профиля — только онбординг-путь (свежесозданная мастером/наставником персона)
-        persona = _bindings.SeedDefaultPersonaProfile(UserId, persona);
+        // Досев профиля дефолта (Coordinator+Full+manage) — ТОЛЬКО персоне, созданной в этом
+        // онбординге (через personas_create). Выбранная существующая персона прав НЕ получает:
+        // молчаливая дозапись Access=Full+manage была бы тихой эскалацией (как и ручная смена
+        // дефолта из настроек) — пользователь назначает роль, а не соглашается расширить права.
+        if (onboarding.OnboardingCreatedPersonaId is { Length: > 0 } seededId
+            && seededId == persona.Id)
+        {
+            persona = _bindings.SeedDefaultPersonaProfile(UserId, persona);
+        }
         if (onboarding.OnboardingKind == OnboardingKinds.User)
         {
             _sessions.SetPersona(onboarding.Id, UserId, persona.Id);

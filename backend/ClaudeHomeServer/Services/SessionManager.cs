@@ -1802,6 +1802,18 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
+    // Запомнить персону, созданную в ходе онбординг-сессии (через personas_create из чата
+    // мастера/наставника). Финализация (FinalizeOnboardingAsync) досевает профиль дефолта
+    // только ей: выбранная существующая персона прав не получает.
+    public void SetOnboardingCreatedPersona(string sessionId, string ownerId, string personaId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (ResolveOwnerId(entry.Info) != ownerId) return;
+        if (entry.Info.OnboardingCreatedPersonaId == personaId) return;
+        entry.Info.OnboardingCreatedPersonaId = personaId;
+        SaveSessions();
+    }
+
     // Общее ядро смены собеседника/спикера (SetPersona и роутинг группового чата):
     // PersonaId и модель/усилие персоны (у начатой сессии — только при том же провайдере),
     // флаг PersonaSwitched, сброс адаптера (новый слой подхватится при следующем ходе), Save.

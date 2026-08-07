@@ -303,6 +303,81 @@ public class LlmProviderRegistry
                 CopyIfNewer(src, Path.Combine(profileDir, rel));
             }
         }
+
+        SeedDefaultWorkflows(profileDir);
+        EnsureInstalledPluginsEnabled(profileDir);
+    }
+
+    // Встроенные механики «Обсудить с командой» (панель экспертов, командный спринт,
+    // ревью-консилиум, красная команда) кладутся в профиль ИЗ ПОСТАВКИ приложения, поверх
+    // всего, что приехало синком с хоста. Хостовый ~/.claude/workflows живёт вне репозитория:
+    // однажды туда попали копии, перекодированные мимо UTF-8, синк разнёс их по всем профилям,
+    // и запуск механики падал ещё до первого агента — в перекодированном тексте появляются
+    // управляющие символы C1, а CLI отбивает такой скрипт («script contains control characters»).
+    // Источник истины — claude-defaults; перезаписываются только одноимённые файлы,
+    // личные workflow-скрипты владельца (другие имена) остаются нетронутыми.
+    private static void SeedDefaultWorkflows(string profileDir)
+    {
+        try
+        {
+            var src = Path.Combine(AppContext.BaseDirectory, "claude-defaults", "workflows");
+            if (!Directory.Exists(src)) return;
+
+            var target = Path.Combine(profileDir, "workflows");
+            Directory.CreateDirectory(target);
+            foreach (var file in Directory.GetFiles(src, "*.js"))
+                File.Copy(file, Path.Combine(target, Path.GetFileName(file)), overwrite: true);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Сидинг встроенных механик в {profileDir} не удался: {ex.Message}");
+        }
+    }
+
+    // Плагины CLI, установленные владельцем, включаются профилю самим сервером. Раньше
+    // enabledPlugins попадал в профиль только копией из хостового settings.json — стоило тому
+    // обеднеть (а CLI переписывает его целиком, например при смене модели), и во всех профилях
+    // плагины оказывались выключены при живой установке: половина механик («Автопилот»,
+    // «Консенсус-план», «Интервью», «QA-цикл», «Трассировка», «Анализ кода») зовёт скиллы
+    // oh-my-claudecode и отвечала «Unknown command», хотя карточка механики была активна.
+    // Ставим true только отсутствующим ключам — осознанное выключение плагина переживает синк.
+    private static void EnsureInstalledPluginsEnabled(string profileDir)
+    {
+        try
+        {
+            var manifest = Path.Combine(profileDir, "plugins", "installed_plugins.json");
+            if (!File.Exists(manifest)) return;
+            if (JsonNode.Parse(File.ReadAllText(manifest)) is not JsonObject root ||
+                root["plugins"] is not JsonObject installed || installed.Count == 0) return;
+
+            var settingsPath = Path.Combine(profileDir, "settings.json");
+            JsonObject? settings = null;
+            if (File.Exists(settingsPath))
+                try { settings = JsonNode.Parse(File.ReadAllText(settingsPath)) as JsonObject; }
+                catch (JsonException) { }
+            settings ??= [];
+
+            if (settings["enabledPlugins"] is not JsonObject enabled)
+            {
+                enabled = [];
+                settings["enabledPlugins"] = enabled;
+            }
+
+            var changed = false;
+            foreach (var plugin in installed)
+            {
+                if (enabled.ContainsKey(plugin.Key)) continue;
+                enabled[plugin.Key] = true;
+                changed = true;
+            }
+            if (!changed) return;
+
+            File.WriteAllText(settingsPath, settings.ToJsonString(SettingsJsonOptions));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Включение плагинов в профиле {profileDir} не удалось: {ex.Message}");
+        }
     }
 
     private static void CopyIfNewer(string src, string dst)

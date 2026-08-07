@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/mcp/servers")]
 public class McpServersController(McpRegistry registry, McpSecretStore secrets,
     PersonaBindingsService bindings, McpStatusStore statuses, McpProbeService probe,
-    PersonaManager personas) : ControllerBase
+    PersonaManager personas, ProjectManager projects) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -127,6 +127,9 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
             if (!string.Equals(oldKey, updated.Key, StringComparison.OrdinalIgnoreCase))
             {
                 bindings.PurgeMcpBindings(UserId, oldKey);
+                // Выдачи сервера в проекты (McpServersOn) под старым ключом — та же протухшая
+                // выдача: новый сервер под этим ключом унаследовал бы чужие права
+                projects.PurgeMcpKey(UserId, oldKey);
                 // Наблюдение висело на прежнем ключе — под новым именем оно бы врало
                 statuses.Remove(UserId, oldKey);
             }
@@ -155,6 +158,9 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
         // Привязки персон на этот сервер осиротели: чистим их сразу, иначе следующая
         // полная замена привязок (bindings_set) упала бы на несуществующем ключе
         bindings.PurgeMcpBindings(UserId, removed.Key);
+        // Выдачи сервера в проекты (McpServersOn) тоже осиротели: протухшая выдача опаснее
+        // протухшего запрета — новый сервер под тем же ключом унаследовал бы чужие права
+        projects.PurgeMcpKey(UserId, removed.Key);
         statuses.Remove(UserId, removed.Key);
         return NoContent();
     }
@@ -191,6 +197,7 @@ public class McpServersController(McpRegistry registry, McpSecretStore secrets,
         draft.Enabled = req.Enabled ?? existing?.Enabled ?? true;
         draft.AlwaysLoad = req.AlwaysLoad ?? existing?.AlwaysLoad ?? false;
         draft.AllowReadOnlyPersonas = req.AllowReadOnlyPersonas ?? existing?.AllowReadOnlyPersonas ?? false;
+        draft.AllowOutsideProjects = req.AllowOutsideProjects ?? existing?.AllowOutsideProjects ?? false;
         draft.Source = existing?.Source ?? McpServerSource.Manual;
 
         var transportRaw = req.Transport ?? existing?.Transport.ToString() ?? "stdio";
@@ -290,6 +297,6 @@ public record McpServerUpsertRequest(
     string? Key, string? Label, string? Description, string? Transport,
     string? Command, List<string>? Args, List<McpValueInput>? Env,
     string? Url, List<McpValueInput>? Headers, McpAuthInput? Auth,
-    bool? Enabled, bool? AlwaysLoad, bool? AllowReadOnlyPersonas);
+    bool? Enabled, bool? AlwaysLoad, bool? AllowReadOnlyPersonas, bool? AllowOutsideProjects);
 
 public record McpEnableRequest(bool Enabled);

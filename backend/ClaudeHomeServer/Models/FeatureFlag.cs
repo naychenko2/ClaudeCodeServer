@@ -54,6 +54,12 @@ public static class FeatureFlagKeys
     // флага честно убирает серверы, а не оставляет их работать втихую).
     public const string McpRegistry = "mcp-registry";
 
+    // Разворот доступа серверов личного реестра на allow-list: сервер доезжает в чат, только
+    // если явно включён в проекте, разрешён вне проектов (AllowOutsideProjects) или выдан
+    // персоне (привязка Mode != Off). За флагом — deny-модель McpServersOff; снятие флага
+    // возвращает её без потери данных.
+    public const string McpAllowlist = "mcp-allowlist";
+
     // Паспорта изменений, этап 1 (ADR-004): захват (DossierCaptureService) + стор + REST
     // просмотра. Recall в промпт персон и MCP dossier_lookup/get — отдельный флаг
     // change-dossiers-recall, заводится отдельным решением после оценки качества выжимки.
@@ -125,6 +131,16 @@ public static class FeatureFlagCatalog
             Description: "Свой список внешних MCP-серверов: видно, какие подключены и работают ли они, можно добавить новый и выдать доступ конкретной персоне.",
             Default: false,
             Stage: "dev"),
+
+        // Разворот доступа серверов личного реестра на allow-list: сервер доезжает в чат
+        // только при явном включении в проекте / вне проектов / выдаче персоне. За флагом —
+        // прежняя deny-модель (McpServersOff). Критерий снятия — docs/research/mcp-allowlist-plan.md, п. 5.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.McpAllowlist,
+            Title: "Allow-list доступа MCP-серверов",
+            Description: "Сервер попадает в чат, только если явно включён в проекте, разрешён для чатов вне проектов или выдан персоне — а не у всех автоматически. Включите, чтобы выдавать доступ точечно.",
+            Default: false,
+            Stage: "experimental"),
 
         // Паспорта изменений (ADR-004), этап 1: у коммита из чата/задачи появляется
         // выжимка «зачем, что решили, что отвергли, какие грабли» — панель просмотра

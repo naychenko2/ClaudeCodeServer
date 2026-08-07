@@ -96,6 +96,12 @@ public class McpServerRecord
     /// инструментов мы не знаем, поэтому по умолчанию такие персоны его не получают.
     /// </summary>
     public bool AllowReadOnlyPersonas { get; set; }
+    /// <summary>
+    /// Доезжать ли в чаты ВНЕ проектов при allow-модели (флаг mcp-allowlist): ось «чаты вне
+    /// проектов». Дефолт false — сервер не появляется в внепроектных чатах, пока владелец
+    /// явно не разрешит. deny-ветка это поле не читает (там внепроектные чаты доставляются всегда).
+    /// </summary>
+    public bool AllowOutsideProjects { get; set; }
 
     public McpServerSource Source { get; set; } = McpServerSource.Manual;
 

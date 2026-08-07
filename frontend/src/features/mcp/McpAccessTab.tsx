@@ -549,7 +549,7 @@ function GrantPickerBody({ server, data, projects, personas, onDone }: {
               />
             )}
             {!q && filteredProjects.length > 0 && <div style={{ height: 1, background: C.borderLight, margin: '4px 0' }} />}
-            {filteredProjects.length === 0 ? (
+            {q && filteredProjects.length === 0 ? (
               <PickerEmpty label="Проверьте написание названия проекта" />
             ) : filteredProjects.map(project => (
               <PickerRow

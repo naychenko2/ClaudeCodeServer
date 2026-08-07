@@ -97,6 +97,17 @@ export function accessSummary(personasOff: number, projectsOff: number): string 
   return `Выключен ${parts.join(' и ')}`;
 }
 
+// Та же строка карточки, но для allow-модели (флаг mcp-allowlist): показываем, кому
+// сервер РЕАЛЬНО выдан, а не кого он обходит — «нигде не включён» здесь норма, а не поломка.
+export function accessSummaryOn(personasOn: number, projectsOn: number, outsideOn: boolean): string {
+  if (personasOn === 0 && projectsOn === 0 && !outsideOn) return 'Доступ не выдан';
+  const parts: string[] = [];
+  if (projectsOn > 0) parts.push(`${projectsOn} ${plural(projectsOn, 'проект', 'проекта', 'проектов')}`);
+  if (outsideOn) parts.push('чаты вне проектов');
+  if (personasOn > 0) parts.push(`${personasOn} ${plural(personasOn, 'персона', 'персоны', 'персон')}`);
+  return `Работает: ${parts.join(' · ')}`;
+}
+
 // Персона выключила сервер Off-привязкой «mcp:<ключ>» (по умолчанию сервер ей доступен)
 export function personaOffFor(persona: Persona, serverKey: string): boolean {
   const target = `mcp:${serverKey}`.toLowerCase();

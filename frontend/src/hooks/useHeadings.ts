@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
 import { slugify } from '../lib/docsLinks';
+import { LIST_FLASH_CLASS, LIST_FLASH_MS } from '../components/ListDateDivider';
 
 // Оглавление markdown-документа, снятое с РЕАЛЬНОГО DOM после рендера MarkdownViewer.
 //
@@ -57,8 +58,116 @@ export function useHeadings(contentRef: RefObject<HTMLElement | null>, dep: unkn
   return headings;
 }
 
-export function scrollToHeading(h: Heading): void {
-  h.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+// Отступ цели от верхней кромки зоны просмотра: заголовок, прижатый вплотную, читается
+// как обрезанный
+const HEADING_TOP_GAP = 16;
+// Сколько ждать конца плавной прокрутки, если браузер не шлёт scrollend (он есть не везде)
+const SCROLL_SETTLE_MS = 600;
+// Сколько после этого удерживать цель на месте, пока документ дорисовывается
+const HOLD_MS = 3000;
+const HOLD_TICK_MS = 100;
+// Промах в пару пикселей — это округление, а не сдвиг: дёргать из-за него не нужно
+const HOLD_EPS = 2;
+
+// Переход к разделу. root — контейнер документа: узел цели ищется в нём ЗАНОВО
+// (resolveHeadingEl), а не берётся из собранного оглавления, потому что markdown
+// перерисовывается между сбором заголовков и переходом — тогда узел из списка уже оторван
+// от документа, его геометрия нулевая и прокрутка молча остаётся на месте.
+// Параметр обязателен намеренно: забыть его — значит вернуть тот же баг.
+//
+// После прыжка цель УДЕРЖИВАЕТСЯ: документ дорисовывается и после прокрутки (доезжает
+// подсветка кода, картинки получают размеры, рендерятся диаграммы, приходят комментарии) —
+// высота растёт выше цели, и раздел уезжает из зоны просмотра. Одноразовый прыжок при этом
+// «иногда недоматывает», причём тем чаще, чем тяжелее документ. Поэтому позицию правим
+// короткими доводками, пока она не перестанет расходиться, и только тогда мигаем.
+//
+// false — живого узла ещё нет: звать снова после следующего пересбора оглавления.
+export function scrollToHeading(root: HTMLElement | null, h: Heading): boolean {
+  const el = resolveHeadingEl(root, h);
+  if (!el) return false;
+  const scroller = scrollerOf(el);
+  if (!scroller) {   // некому прокручивать (документ короче зоны) — только отметим цель
+    flashHeading(root, el);
+    return true;
+  }
+
+  const gapOf = (node: HTMLElement) =>
+    node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - HEADING_TOP_GAP;
+  scroller.scrollBy({ top: gapOf(el), behavior: 'smooth' });
+  holdHeading(root, scroller, h.text, gapOf);
+  return true;
+}
+
+// Удержание цели у кромки, пока документ дорисовывается. Прекращается досрочно, если
+// читатель тронул прокрутку сам: спорить с ним — худшее, что тут можно сделать.
+function holdHeading(
+  root: HTMLElement | null, scroller: HTMLElement, text: string,
+  gapOf: (node: HTMLElement) => number,
+): void {
+  let timer = 0;
+  let cancelled = false;
+  const cancel = () => {
+    cancelled = true;
+    window.clearTimeout(timer);
+    scroller.removeEventListener('wheel', cancel);
+    scroller.removeEventListener('touchstart', cancel);
+    scroller.removeEventListener('keydown', cancel);
+  };
+  scroller.addEventListener('wheel', cancel, { passive: true });
+  scroller.addEventListener('touchstart', cancel, { passive: true });
+  scroller.addEventListener('keydown', cancel);
+
+  const deadline = performance.now() + SCROLL_SETTLE_MS + HOLD_MS;
+  // Позиция считается устоявшейся, когда цель стоит на месте два тика подряд: один тик
+  // ловит и промежуточное состояние посреди перерисовки
+  let steady = 0;
+  const tick = () => {
+    if (cancelled) return;
+    const live = findHeadingEl(root, text);
+    // Узла сейчас нет — идёт перерисовка; ждём следующего тика, а не сдаёмся
+    if (live) {
+      const gap = gapOf(live);
+      if (Math.abs(gap) <= HOLD_EPS) steady++;
+      else { steady = 0; scroller.scrollBy({ top: gap }); }   // доводка без анимации
+      if (steady >= 2 || performance.now() >= deadline) {
+        cancel();
+        flashHeading(root, live);
+        return;
+      }
+    } else if (performance.now() >= deadline) { cancel(); return; }
+    timer = window.setTimeout(tick, HOLD_TICK_MS);
+  };
+  // Сначала даём доехать плавной прокрутке — иначе первая же доводка оборвёт её рывком
+  const startHold = () => {
+    scroller.removeEventListener('scrollend', startHold);
+    window.clearTimeout(timer);
+    if (!cancelled) timer = window.setTimeout(tick, 0);
+  };
+  scroller.addEventListener('scrollend', startHold);
+  timer = window.setTimeout(startHold, SCROLL_SETTLE_MS);
+}
+
+// Ближайший предок, который реально прокручивается. Считаем от узла, а не от root: у панели
+// «План» контейнер разметки и скроллер — разные элементы, и scrollBy по контейнеру был бы
+// холостым.
+function scrollerOf(el: HTMLElement): HTMLElement | null {
+  for (let p = el.parentElement; p; p = p.parentElement) {
+    const overflow = getComputedStyle(p).overflowY;
+    if ((overflow === 'auto' || overflow === 'scroll') && p.scrollHeight > p.clientHeight + 1) return p;
+  }
+  return null;
+}
+
+// Мигание заголовка, к которому перешли: тем же коротким затуханием, каким мигает группа
+// в списке документации, — жест поиска цели во всём продукте один и тот же. Зовётся, когда
+// документ уже доехал и устоялся (см. holdHeading): во время прокрутки анимацию глазом не
+// поймать, а взгляд приходит ровно к её концу.
+export function flashHeading(root: HTMLElement | null, el: HTMLElement): void {
+  // Узел мог смениться на перерисовке — ищем живой по тексту цели
+  const live = el.isConnected ? el : findHeadingEl(root, (el.textContent ?? '').trim());
+  if (!live) return;
+  live.classList.add(LIST_FLASH_CLASS);
+  window.setTimeout(() => live.classList.remove(LIST_FLASH_CLASS), LIST_FLASH_MS);
 }
 
 // Живой узел заголовка в ТЕКУЩЕМ документе.
@@ -73,9 +182,14 @@ export function scrollToHeading(h: Heading): void {
 // Поэтому храним заголовок как ТЕКСТ, а узел ищем в момент перехода: тексты при
 // перерисовке те же, слаг совпадает. Прежний узел берём, только пока он в документе.
 export function resolveHeadingEl(root: HTMLElement | null, h: Heading): HTMLElement | null {
-  if (h.el.isConnected) return h.el;
+  return h.el.isConnected ? h.el : findHeadingEl(root, h.text);
+}
+
+// Заголовок с таким текстом среди ЖИВЫХ узлов root. Сверка по слагу — тому же, которым
+// ходят якоря ссылок: разметка внутри заголовка на неё не влияет.
+function findHeadingEl(root: HTMLElement | null, text: string): HTMLElement | null {
   if (!root) return null;
-  const slug = slugify(h.text);
+  const slug = slugify(text);
   const live = [...root.querySelectorAll<HTMLElement>('h1,h2,h3,h4,h5,h6')]
     .find(n => slugify((n.textContent ?? '').trim()) === slug);
   return live ?? null;

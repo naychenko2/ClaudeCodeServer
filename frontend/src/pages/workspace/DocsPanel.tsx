@@ -1132,7 +1132,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     if (!pending || !doc || doc.path !== pending.path) return;
     const target = headings.find(h => slugify(h.text) === pending.anchor);
     if (!target) return;
-    scrollToHeading(target);
+    // Не проскроллили (узлы оторваны — markdown перерисовывается) — якорь не гасим,
+    // сработает на следующем пересборе оглавления
+    if (!scrollToHeading(contentRef.current, target)) return;
     pendingAnchorRef.current = null;
   }, [doc, headings]);
 
@@ -2259,7 +2261,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         key={i}
                         text={h.text}
                         level={h.level}
-                        onJump={() => { scrollToHeading(h); setTocAnchor(null); }}
+                        onJump={() => { scrollToHeading(contentRef.current, h); setTocAnchor(null); }}
                         onQuote={() => quoteSection(slugify(h.text), h.text)}
                       />
                     ))}

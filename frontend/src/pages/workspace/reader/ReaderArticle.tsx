@@ -29,8 +29,7 @@ export function ReaderArticle({ markdown, anchor, onFollow }: Props) {
   useEffect(() => {
     if (!anchor) { rootRef.current?.scrollTo({ top: 0 }); return; }
     const target = headings.find(h => slugify(h.text) === anchor);
-    if (target) scrollToHeading(target);
-    else rootRef.current?.scrollTo({ top: 0 });
+    if (!target || !scrollToHeading(rootRef.current, target)) rootRef.current?.scrollTo({ top: 0 });
     // headings пересобираются на каждый рендер статьи — привязка нужна только к смене markdown/anchor
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [markdown, anchor]);

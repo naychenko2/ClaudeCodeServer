@@ -44,19 +44,41 @@ const INDENT = 12;   // отступ на уровень вложенности
 const VIEW_KEY = 'cc_git_changes_view';
 const SCOPE_H_KEY = 'cc_git_scope_h';   // высота стека коммитов зоны скоупов (ресайз)
 const SCOPE_H_DEFAULT = 4 * 34;         // по умолчанию видно ~4 скоупа
+const SCROLLBAR_W = 10;                 // ширина полосы прокрутки (index.css) — держим её место справа всегда
 
-// Квадратная кнопка-действие иконкой (вместо текста) в нижней зоне: галка
-// «Зафиксировать» в белой обводке и accent-заливка у публикации. Габарит 28 —
-// как у соседних IconButton (fetch/pull, отмена всех), чтобы ряд не рябил
-const scopeIconBtnBase: CSSProperties = {
-  flexShrink: 0, width: 28, height: 28, borderRadius: R.md, cursor: 'pointer',
+// Стиль строки нижней зоны (селектор скоупов): геометрия и отклик — как у строки
+// файла в «Файлах» (та же высота ROW_H, R.md, gap 5), активный скоуп — заливкой
+// accentLight, как было до выравнивания зон. position:relative — чтобы
+// absolute-кнопки строки стэша встали поверх меты.
+// Высота ЖЁСТКАЯ и одна на все строки зоны (как в «Файлах»): кнопки строки — 24,
+// то есть на пиксель выше неё, и на minHeight список дёргался бы под курсором
+const scopeRowStyle = (active: boolean, hovered: boolean, pressing = false): CSSProperties => ({
+  display: 'flex', alignItems: 'center', gap: 5, position: 'relative', height: ROW_H,
+  // Правого padding нет: 8px даёт контейнер зоны, и кнопки строки встают ровно на
+  // ту же колонку, что publish в ряду ветки ниже. Со своими 8px они уезжали левее
+  padding: `1px 0 1px ${SP.sm}px`, borderRadius: R.md, cursor: 'pointer', boxSizing: 'border-box',
+  background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent',
+  opacity: pressing ? 0.6 : 1,
+  transition: 'background 0.1s, opacity 0.1s',
+});
+
+// Два главных действия панели — «Зафиксировать» в строке скоупа и «Опубликовать»
+// в ряду ветки — квадратными кнопками-иконками ОДНОГО габарита: они читаются как
+// пара. 24 (а не 28) — чтобы кнопка помещалась в строку скоупа высотой ROW_H и та
+// не росла под неё. Различает их только заливка: фиксация светлая, публикация accent
+const actionBtnBase: CSSProperties = {
+  flexShrink: 0, width: 24, height: 24, borderRadius: R.md, cursor: 'pointer',
   display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
-const commitIconStyle: CSSProperties = {
-  ...scopeIconBtnBase, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading,
+// «Зафиксировать» — квадратом ROW_H: кнопка вписана в строку скоупа и не растит её
+const commitBtnStyle: CSSProperties = {
+  ...actionBtnBase, width: ROW_H, height: ROW_H,
+  background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading,
 };
-const publishIconStyle: CSSProperties = {
-  ...scopeIconBtnBase, background: C.accent, border: 'none', color: C.onAccent,
+// Публикация — с подписью и ровно теми же метриками, что «Зафиксировать» выше:
+// два главных действия панели читаются как пара. Различает их только заливка
+const publishBtnStyle: CSSProperties = {
+  ...commitBtnStyle, background: C.accent, border: 'none', color: C.onAccent,
 };
 
 // Светлая компактная кнопка делегирования фиксации чату (в форме)
@@ -168,6 +190,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     catch { return SCOPE_H_DEFAULT; }
   });
   const [branchMenu, setBranchMenu] = useState(false);           // меню выбора ветки
+  const [branchHover, setBranchHover] = useState(false);         // наведение на капсулу ветки
   const [newBranchOpen, setNewBranchOpen] = useState(false);     // диалог новой ветки
   const [newBranchName, setNewBranchName] = useState('');
   const [pendingCheckout, setPendingCheckout] = useState<string | null>(null); // ветка, ждущая подтверждения (грязное дерево)
@@ -385,7 +408,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // ограниченная заданной scopeH, но не меньше дозволенного минимума (76 ≈ 2 строки).
   // Так форма замещает список тем же размером, а не распахивается на весь scopeH.
   const scopeRowsCount = (workingFiles.length > 0 ? 1 : 0) + st.stashes.length + st.unpushed.length;
-  const commitBodyH = Math.max(Math.min(scopeRowsCount * 32, scopeH), 76);
+  const commitBodyH = Math.max(Math.min(scopeRowsCount * ROW_H, scopeH), 76);
+  // Нужна ли прокрутка списка скоупов: строка «Изменений» есть всегда, к ней
+  // добавляются стэши и незапушенные коммиты. Пока всё влезает в scopeH — полосы нет
+  const scopeCanScroll = (1 + st.stashes.length + st.unpushed.length) * ROW_H > scopeH;
 
   // ✨ AI-описание по staged-диффу с кастомным промптом (проектный/глобальный)
   const handleAi = async () => {
@@ -850,51 +876,57 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </div>
         </div>
       ) : (
-        <div style={{ borderTop: `1px solid ${C.border}`, padding: '6px 8px', flexShrink: 0 }}>
+        // Правого padding у зоны НЕТ: отступ справа даёт жёлоб скролла ниже
+        // (scrollbar-gutter, ширина полосы 10 = правому отступу ряда ветки).
+        // Свой padding сложился бы с жёлобом в двойной зазор
+        <div style={{ borderTop: `1px solid ${C.border}`, padding: '6px 0 6px 8px', flexShrink: 0 }}>
           {/* Хендл ресайза высоты зоны скоупов — когда есть что скроллить (стэши/коммиты) */}
           {(st.stashes.length > 0 || st.unpushed.length > 0) && (
             <div
               onPointerDown={handleScopeResize}
               title="Потяните, чтобы изменить высоту зоны"
-              style={{ height: 9, margin: '-6px -8px 2px', cursor: 'row-resize', touchAction: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+              style={{ height: 9, margin: '-6px 0 2px -8px', cursor: 'row-resize', touchAction: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
             >
               <div style={{ width: 30, height: 3, borderRadius: 2, background: C.border }} />
             </div>
           )}
-          {/* Скролл скоупов: «Не зафиксировано» → стэши → коммиты; высота — хендлом */}
-          <div style={{ maxHeight: scopeH, overflowY: 'auto' }}>
+          {/* Скролл скоупов: «Не зафиксировано» → стэши → коммиты; высота — хендлом.
+              Справа ВСЕГДА зарезервированы те же SCROLLBAR_W: пока скроллить нечего
+              — обычным padding (полосы нет вовсе), когда список перерос высоту —
+              жёлобом полосы. Ширина строк от этого не меняется, и появление скролла
+              не двигает кнопки. Голый scrollbar-gutter: stable не годится — он рисует
+              пустой жёлоб даже на одной строке */}
+          <div style={{
+            maxHeight: scopeH,
+            overflowY: scopeCanScroll ? 'auto' : 'hidden',
+            ...(scopeCanScroll ? { scrollbarGutter: 'stable' } : { paddingRight: SCROLLBAR_W }),
+          }}>
               {/* «Не зафиксировано» — первым элементом списка, показываем всегда
                   (даже при чистом дереве); при пустом дереве — без кнопок и счётчика */}
               <div
                 onClick={() => selectScope('working')}
-                style={{
-                  // Геометрия как у строки ветки ниже (gap 6, кнопки 28): счётчик и
-                  // отмена встают ровно под fetch/pull, а «Зафиксировать» — под публикацией.
-                  // Правый padding 0 (а не 8): ряд ветки ниже боковых отступов не имеет,
-                  // и лишние 8px справа увели бы всю тройку кнопок на колонку левее
-                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 32, padding: '2px 0 2px 8px',
-                  borderRadius: 8, cursor: 'pointer',
-                  background: isWorking ? C.accentLight : 'transparent',
-                }}
+                onMouseEnter={() => setHoveredRow('scope:working')}
+                onMouseLeave={() => setHoveredRow(null)}
+                style={scopeRowStyle(isWorking, hoveredRow === 'scope:working')}
               >
-                <Pencil size={13} strokeWidth={ICON_STROKE} color={isWorking ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
-                <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isWorking ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Не зафиксировано</span>
+                <Pencil size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.sm, color: isWorking ? C.textHeading : C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>Не зафиксировано</span>
                 {/* Счётчик файлов — всегда (при чистом дереве 0), перед кнопками:
                     сколько правок ждёт фиксации, видно и с раскрытыми действиями.
-                    Ширина в размер кнопки рельсы — колонка под иконкой fetch */}
-                <span style={{ fontFamily: FONT.mono, fontSize: 10.5, color: C.textMuted, width: 28, textAlign: 'center', flexShrink: 0 }}>{workingFiles.length}</span>
+                    Ширина под compact-кнопку (24) — держит колонку правой меты */}
+                <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, width: 22, textAlign: 'center', flexShrink: 0 }}>{workingFiles.length}</span>
                 {/* Есть изменения и скоуп активен: отмена всех + «Зафиксировать».
                     Главное действие — крайним справа, разрушительное перед ним */}
                 {workingFiles.length > 0 && isWorking && (
                   <>
-                    <IconButton size="sm" title="Отменить все изменения"
+                    <IconButton size="xs" title="Отменить все изменения"
                       onClick={e => { e.stopPropagation(); setDiscardAllConfirm(true); }}>
                       <Undo2 size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                     </IconButton>
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
                       title="Зафиксировать изменения"
-                      style={commitIconStyle}
+                      style={{ ...commitBtnStyle, marginLeft: 'auto' }}
                     >
                       <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                     </button>
@@ -915,23 +947,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     onMouseEnter={() => setHoveredRow(rowKey)}
                     onMouseLeave={() => setHoveredRow(null)}
                     {...pressProps(rowKey, () => setTouchMenu({ kind: 'stash', stash: s }))}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 7, position: 'relative',
-                      minHeight: 32, padding: '4px 8px',
-                      borderRadius: R.md, cursor: 'pointer',
-                      background: active ? C.accentLight : hovered ? C.bgSelected : 'transparent',
-                      opacity: pressingKey === rowKey ? 0.6 : 1, transition: 'opacity 0.1s',
-                    }}
+                    style={scopeRowStyle(active, hovered, pressingKey === rowKey)}
                   >
-                    <Archive size={13} strokeWidth={ICON_STROKE} color={active ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
-                    <span title={s.message} style={{ flex: 1, minWidth: 0, fontSize: 12, color: active ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <Archive size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
+                    <span title={s.message} style={{ flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: active ? 600 : 400, color: active ? C.textHeading : C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {s.message || `stash@{${s.index}}`}
                     </span>
                     {/* Время — всегда в потоке (держит высоту строки); под кнопками при ховере прячем */}
                     <span title={relTime(s.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0, opacity: hovered && !st.busy ? 0 : 1 }}>{relTime(s.date)}</span>
                     {/* Кнопки — absolute поверх времени, не двигают layout */}
                     {hovered && !st.busy && (
-                      <span style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 2 }}>
+                      <span style={{ position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)', display: 'flex', alignItems: 'center', gap: 2 }}>
                         <IconButton size="xs" tone="accent" title="Вернуть изменения (pop)"
                           onClick={e => { e.stopPropagation(); if (active) setActiveScope('working'); void gitStashPop(project.id, s.index); }}>
                           <ArchiveRestore size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
@@ -947,18 +973,19 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               })}
               {st.unpushed.map((c: GitLogEntry) => {
                 const active = activeScope === c.sha;
+                const rowKey = `unp:${c.sha}`;
+                const hovered = hoveredRow === rowKey;
                 return (
                   <div
                     key={c.sha}
                     onClick={() => selectScope(c.sha)}
-                    style={{
-                      display: 'flex', alignItems: 'center', gap: 7, minHeight: 32, padding: '4px 8px',
-                      borderRadius: 8, cursor: 'pointer', background: active ? C.accentLight : 'transparent',
-                    }}
+                    onMouseEnter={() => setHoveredRow(rowKey)}
+                    onMouseLeave={() => setHoveredRow(null)}
+                    style={scopeRowStyle(active, hovered)}
                   >
-                    <GitCommit size={13} strokeWidth={ICON_STROKE} color={active ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />
-                    <span title={c.subject} style={{ flex: 1, minWidth: 0, fontSize: 12, color: active ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.subject}</span>
-                    <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.accent, flexShrink: 0 }}>{c.shortSha}</span>
+                    <GitCommit size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
+                    <span title={c.subject} style={{ flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: active ? 600 : 400, color: active ? C.textHeading : C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.subject}</span>
+                    <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
                   </div>
                 );
               })}
@@ -969,18 +996,23 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
       {/* === Ветка: капсула split-button (тело = коммиты ветки, стрелка = меню веток)
              + fetch/pull/публикация иконками; в режиме фиксации скрыта === */}
       {mode === 'list' && (
-      <div style={{ padding: '0 8px 8px', flexShrink: 0 }}>
+      <div style={{ padding: '0 10px 6px 8px', flexShrink: 0 }}>
         {/* Разделитель + воздух: отбиваем ряд ветки от скролла скоупов выше */}
-        <div style={{ height: 1, background: C.borderLight, margin: '2px 6px 8px' }} />
+        <div style={{ height: 1, background: C.borderLight, margin: '2px 6px 6px' }} />
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex' }}>
             {/* Капсула с рамкой = явный контрол (читается кликабельной и без ховера,
                 живёт на тач). Активный скоуп «ветка» / открытое меню — accent */}
             <div
+              onMouseEnter={() => setBranchHover(true)}
+              onMouseLeave={() => setBranchHover(false)}
               style={{
                 flex: 1, minWidth: 0, display: 'flex', alignItems: 'stretch', overflow: 'hidden',
-                border: `1px solid ${(isBranch || branchMenu) ? C.accent : C.border}`, borderRadius: 8,
-                background: (isBranch || branchMenu) ? C.accentLight : C.bgWhite,
+                border: `1px solid ${(isBranch || branchMenu) ? C.accent : branchHover ? C.textMuted : C.border}`, borderRadius: 8,
+                // Отклик на наведение — как у строк скоупов выше: нейтральная подложка.
+                // Выбранный скоуп «ветка» остаётся accent и hover-ом не перебивается
+                background: (isBranch || branchMenu) ? C.accentLight : branchHover ? C.bgSelected : C.bgWhite,
+                transition: 'background 0.1s, border-color 0.1s',
               }}
             >
               {/* Тело = выбор скоупа «ветка»: список её коммитов открывается в верхней зоне */}
@@ -988,14 +1020,16 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 onClick={() => selectScope('branch')}
                 title={status?.branch ?? undefined}
                 style={{
-                  flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 7, minHeight: 32,
-                  padding: '4px 8px', cursor: 'pointer', textAlign: 'left',
+                  // ROW_H - 2: рамка капсулы (1px сверху и снизу) добирает до ровно
+                  // ROW_H — внешняя высота совпадает со строкой скоупа «Изменений»
+                  flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, minHeight: ROW_H - 2,
+                  padding: '1px 8px', cursor: 'pointer', textAlign: 'left',
                 }}
               >
                 {st.busy
                   ? <span style={{ width: 13, height: 13, flexShrink: 0, borderRadius: '50%', border: `2px solid ${C.track}`, borderTopColor: C.accent, animation: 'cc-spin 0.6s linear infinite' }} />
                   : <GitBranch size={13} strokeWidth={ICON_STROKE} color={isBranch ? C.accent : C.textSecondary} style={{ flexShrink: 0 }} />}
-                <span style={{ flex: 1, minWidth: 0, fontSize: 12, fontWeight: 500, color: isBranch ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12, color: isBranch ? C.accent : C.textHeading, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {status?.detached ? `${status.branch ?? 'HEAD'} (detached)` : (status?.branch ?? '—')}
                 </span>
                 {(ahead > 0 || (status?.behind ?? 0) > 0) && (
@@ -1013,7 +1047,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 disabled={st.busy}
                 title="Выбрать ветку"
                 style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 30,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, width: 26,
                   border: 'none', background: 'transparent', cursor: st.busy ? 'default' : 'pointer',
                 }}
               >
@@ -1021,7 +1055,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               </button>
             </div>
             {branchMenu && (
-              <Menu onClose={() => setBranchMenu(false)} align="left" bottom={40} minWidth={220}>
+              <Menu onClose={() => setBranchMenu(false)} align="left" bottom={34} minWidth={220}>
                 {st.branches.map(b => (
                   <MenuItem
                     key={b.name}
@@ -1040,15 +1074,19 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             )}
           </div>
           {/* Обмен с remote по нарастанию: сначала лёгкий fetch, за ним pull */}
-          <IconButton size="sm" title="Проверить обновления (fetch)" disabled={st.busy} onClick={() => void gitFetch(project.id)}>
+          {/* Габарит кнопок ряда — ровно ROW_H, как у капсулы слева и строк скоупов выше */}
+          <IconButton size="xs" title="Проверить обновления (fetch)" disabled={st.busy}
+            style={{ width: ROW_H, height: ROW_H }} onClick={() => void gitFetch(project.id)}>
             <RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
-          <IconButton size="sm" title="Забрать и слить (pull)" disabled={st.busy} onClick={() => void gitPull(project.id)}>
+          <IconButton size="xs" title="Забрать и слить (pull)" disabled={st.busy}
+            style={{ width: ROW_H, height: ROW_H }} onClick={() => void gitPull(project.id)}>
             <ArrowDownToLine size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </IconButton>
-          {/* Публикация — accent-иконкой (главное действие панели); число коммитов не
-              дублируем, оно видно стрелкой ↑N в капсуле. Нечего публиковать → гаснет,
-              но остаётся на месте (ряд не прыгает) */}
+          {/* Публикация — с подписью, тем же примитивом и размером, что «Зафиксировать»
+              в строке скоупа выше: два главных действия панели читаются как пара.
+              Число коммитов не дублируем, оно видно стрелкой ↑N в капсуле. Нечего
+              публиковать → гаснет, но остаётся на месте (ряд не прыгает) */}
           <button
             onClick={() => setPublishConfirm(true)}
             disabled={!canPublish || st.busy}
@@ -1056,7 +1094,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               ? `Опубликовать (git push): ${ahead || st.unpushed.length} коммит(ов)`
               : 'Публиковать нечего'}
             style={{
-              ...publishIconStyle,
+              ...publishBtnStyle,
               cursor: canPublish && !st.busy ? 'pointer' : 'default',
               opacity: canPublish && !st.busy ? 1 : 0.4,
             }}

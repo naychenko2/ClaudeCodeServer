@@ -80,9 +80,17 @@ onlyoffice/local.json
 # Определения агентов — машинно-специфичные, не версионируем (конфликтуют между сессиями):
 # сюда PersonaAgentFileSync синкает персон владельца. Игнорим содержимое (не папку!),
 # чтобы работали точечные исключения для общих проектных агентов ниже.
-.claude/agents/*
+# Маска со ** — агент, запущенный с рабочей папкой внутри проекта, роняет копию .claude туда.
+**/.claude/agents/*
 !.claude/agents/designer.md
 
 # Справочник профилей категорий делегирования — его кладёт PersonaAgentFileSync
 # из константы OmoPrompts.DelegationCategoryProfiles (источник — docs/omo/translations)
-.claude/delegation-categories.md
+**/.claude/delegation-categories.md
+
+# Снятые из браузера дампы запросов (HAR) — несут токены сессии и данные аккаунта
+*.har
+api.txt
+
+# Локальные одноразовые скрипты (замеры, пробы) — у каждого свои
+*.local.mjs

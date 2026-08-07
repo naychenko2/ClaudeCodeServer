@@ -21,6 +21,7 @@ import type {
   PersonaSpecialty, PantheonTemplate, Project,
 } from '../../types';
 import { api } from '../../lib/api';
+import { useSpecialtyCatalog } from '../../lib/specialties';
 import { bumpPersonas, usePersonas } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
 import { Toolbar, PillSwitch } from '../../components/Toolbar';
@@ -29,11 +30,13 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ModelPicker } from '../../components/ModelPicker';
 import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
 import { effortsForProvider } from '../../lib/effort';
+import { setFabObstacle } from '../../lib/ai/fabObstacle';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { PersonaAvatar } from './PersonaAvatar';
 import { AvatarCropDialog, type AvatarCropResult } from './AvatarCropDialog';
 import { PersonaBindingsPanel } from './PersonaBindingsPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
+import { fetchBindingTargets } from './bindingMeta';
 import { Stepper } from './stepperUi';
 import { PERSONA_TEMPLATES, type PersonaTemplate } from './personaTemplates';
 
@@ -84,9 +87,10 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
 
   const [wizScope, setWizScope] = useState<PersonaScope>(scope);
   const [wizProjectId, setWizProjectId] = useState(projectId ?? projects[0]?.id ?? '');
-  useEffect(() => {
-    if (wizScope === 'project' && !wizProjectId && projects.length > 0) setWizProjectId(projects[0].id);
-  }, [wizScope, wizProjectId, projects]);
+  // Проект по умолчанию, если выбора ещё нет (список проектов мог доехать позже
+  // монтирования): вычисляется при рендере вместо синхронизирующего эффекта —
+  // все места чтения и так смотрят на значение только при wizScope === 'project'
+  const effProjectId = wizProjectId || projects[0]?.id || '';
 
   // Персона-черновик: null до первого создания (quick-create на шаге 1 либо
   // create в конце шага 2) — дальше все PUT идут по этому id
@@ -121,6 +125,14 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const [memoryEnabled, setMemoryEnabled] = useState(true);
   const [color, setColor] = useState('orange');
 
+  // Специальности: каталог с бэка, null — ещё грузится. При выборе специальности
+  // подставляются права и инструменты из шаблона; если пользователь уже правил их
+  // руками — спрашиваем подтверждение.
+  const specialtyCatalog = useSpecialtyCatalog();
+  const [rightsTouched, setRightsTouched] = useState(false);
+  const [pendingSpecialty, setPendingSpecialty] = useState<PersonaSpecialty | null>(null);
+  const [templateNote, setTemplateNote] = useState<string | null>(null);
+
   // AI-характер: генерация/улучшение — не требует существующей персоны
   const [aiCharAction, setAiCharAction] = useState<null | 'generate' | 'improve'>(null);
   const [aiCharError, setAiCharError] = useState<string | null>(null);
@@ -145,6 +157,27 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     api.personas.automation(persona.id).then(l => setAutomationCount(l.length)).catch(() => {});
   }, [step, persona]);
 
+  // Шаг «Доступ»: сводка «Инструменты и MCP» вместо легаси-чекбоксов TOOL_OPTIONS —
+  // сколько ключей каталога (включая серверы личного MCP-реестра) сейчас включено
+  const [toolSummary, setToolSummary] = useState<{ enabled: number; total: number } | null>(null);
+  useEffect(() => {
+    if (step !== 7 || !persona) return;
+    let alive = true;
+    Promise.all([fetchBindingTargets('tool', undefined, persona.id), api.personas.bindings(persona.id)])
+      .then(([catalog, personaBindings]) => {
+        if (!alive) return;
+        const lastMode = new Map<string, string>();
+        for (const b of personaBindings) if (b.type === 'tool') lastMode.set(b.target.toLowerCase(), b.mode);
+        const enabled = catalog.filter(t => {
+          const mode = lastMode.get(t.id.toLowerCase());
+          return mode ? mode !== 'off' : t.defaultEnabled !== false;
+        }).length;
+        setToolSummary({ enabled, total: catalog.length });
+      })
+      .catch(() => { if (alive) setToolSummary(null); });
+    return () => { alive = false; };
+  }, [step, persona]);
+
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
@@ -153,14 +186,13 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const accentColor = AGENT_COLORS[color] ?? C.accent;
 
   // FAB AI-хаба сидит в правом нижнем углу поверх всего — у мастера там же кнопка
-  // «Далее» в футере. Поднимаем FAB над футером тем же каналом, что ChatPanel — над композером.
+  // «Далее» в футере. Отдаём футер FAB как нижнее препятствие тем же каналом, что
+  // ChatPanel — композер: кнопка останется в углу, но ужмётся, если футер до неё достаёт.
   const footerRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    const root = document.documentElement;
-    if (step === 9) { root.style.setProperty('--cc-fab-bottom', '20px'); return; }
-    const h = footerRef.current?.offsetHeight ?? 64;
-    root.style.setProperty('--cc-fab-bottom', `${h + 12}px`);
-    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
+    if (step === 9) { setFabObstacle(null); return; }
+    setFabObstacle(footerRef.current);
+    return () => setFabObstacle(null);
   }, [step]);
 
   const parseLines = (s: string) => s.split('\n').map(l => l.trim()).filter(Boolean);
@@ -188,7 +220,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
       model: model || undefined,
       effort: effort || undefined,
       scope: wizScope,
-      projectId: wizScope === 'project' ? wizProjectId : undefined,
+      projectId: wizScope === 'project' ? effProjectId : undefined,
       color,
       greeting: greeting.trim() || undefined,
       memoryEnabled,
@@ -242,6 +274,40 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     setModel(t.model ?? '');
     setEffort(t.effort ?? '');
     setSpecialty(t.specialty ?? 'none');
+    setRightsTouched(false);
+    setTemplateNote(null);
+  }
+
+  // Подстановка шаблона специальности в права и инструменты: поля формы заполняются
+  // значениями шаблона, дальше правятся вручную. Источник правды — персона: при
+  // сохранении уходят именно эти (возможно отредактированные) значения.
+  function applySpecialtyTemplate(next: PersonaSpecialty) {
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (template) {
+      setAccess(template.access);
+      setTools(template.tools ?? ALL_TOOL_KEYS);
+      setDisallowedText((template.disallowedTools ?? []).join(', '));
+      setTemplateNote('Права и инструменты подставлены из шаблона специальности — можно поправить');
+      setRightsTouched(false);
+    } else {
+      setTemplateNote(null);
+    }
+    setSpecialty(next);
+  }
+
+  function changeSpecialty(next: PersonaSpecialty) {
+    if (next === specialty) return;
+    const template = specialtyCatalog?.find(e => e.key === next)?.template ?? null;
+    if (!template) {
+      setSpecialty(next);
+      setTemplateNote(null);
+      return;
+    }
+    if (rightsTouched) {
+      setPendingSpecialty(next);
+      return;
+    }
+    applySpecialtyTemplate(next);
   }
 
   const templates: PersonaTemplate[] = [
@@ -280,7 +346,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   // === Навигация по шагам ===
 
   const canProceedStep1 = method === 'ai' ? aiPrompt.trim().length > 0 : method === 'template' ? !!selectedTemplateKey : true;
-  const canProceedStep2 = name.trim().length > 0 && !(wizScope === 'project' && !wizProjectId);
+  const canProceedStep2 = name.trim().length > 0 && !(wizScope === 'project' && !effProjectId);
   const canProceed = step === 1 ? canProceedStep1 : step === 2 ? canProceedStep2 : true;
 
   async function goNext() {
@@ -292,7 +358,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
         try {
           const created = await api.personas.quickCreate({
             prompt: aiPrompt.trim(), scope: wizScope,
-            projectId: wizScope === 'project' ? wizProjectId : undefined,
+            projectId: wizScope === 'project' ? effProjectId : undefined,
           });
           hydrateFromPersona(created);
           setPersona(created);
@@ -495,7 +561,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     options={[{ value: 'global', label: 'Глобальная' }, { value: 'project', label: 'Проект' }]}
                   />
                   {wizScope === 'project' && (
-                    <select value={wizProjectId} onChange={e => setWizProjectId(e.target.value)} style={selectStyle} aria-label="Проект">
+                    <select value={effProjectId} onChange={e => setWizProjectId(e.target.value)} style={selectStyle} aria-label="Проект">
                       {projects.length === 0 && <option value="">— нет доступных проектов —</option>}
                       {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
@@ -627,20 +693,41 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                   <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
                 </Field>
                 <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер, брифинг, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
-                  <select value={specialty} onChange={e => setSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
+                  <select value={specialty} onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
                     <option value="none">Не задана</option>
-                    <option value="analyst">Аналитик</option>
-                    <option value="planner">Планировщик</option>
-                    <option value="reviewer">Ревьюер</option>
-                    <option value="executor">Исполнитель</option>
-                    <option value="secretary">Секретарь</option>
-                    <option value="coordinator">Координатор</option>
-                    <option value="mentor">Ментор</option>
-                    <option value="designer">Дизайнер</option>
-                    <option value="consultant">Консультант</option>
-                    <option value="librarian">Библиотекарь</option>
+                    {specialtyCatalog
+                      ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
+                        <option key={e.key} value={e.key}>{e.label}</option>
+                      ))
+                      : (<>
+                        <option value="analyst">Аналитик</option>
+                        <option value="planner">Планировщик</option>
+                        <option value="reviewer">Ревьюер</option>
+                        <option value="executor">Исполнитель</option>
+                        <option value="secretary">Секретарь</option>
+                        <option value="coordinator">Координатор</option>
+                        <option value="mentor">Ментор</option>
+                        <option value="designer">Дизайнер</option>
+                        <option value="consultant">Консультант</option>
+                        <option value="librarian">Библиотекарь</option>
+                      </>)}
                   </select>
+                  {templateNote && (
+                    <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+                      {templateNote}
+                    </span>
+                  )}
                 </Field>
+                {pendingSpecialty && (
+                  <ConfirmDialog
+                    title="Заменить права и инструменты?"
+                    subtitle="Вы уже настроили профиль доступа и инструменты вручную. Заменить их шаблоном новой специальности?"
+                    confirmLabel="Заменить"
+                    cancelLabel="Оставить как есть"
+                    onConfirm={() => { applySpecialtyTemplate(pendingSpecialty); setPendingSpecialty(null); }}
+                    onCancel={() => setPendingSpecialty(null)}
+                  />
+                )}
               </div>
             </>
           )}
@@ -672,7 +759,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                 <FieldLabel>Профиль доступа</FieldLabel>
                 <SegmentedControl<PersonaAccess>
-                  value={access} onChange={setAccess} columns={3}
+                  value={access} onChange={v => { setAccess(v); setRightsTouched(true); }} columns={3}
                   options={[{ value: 'full', label: 'Полный' }, { value: 'readOnly', label: 'Только чтение' }, { value: 'custom', label: 'Свой' }]}
                 />
                 {access === 'readOnly' && (
@@ -682,10 +769,21 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 )}
                 {access === 'custom' && (
                   <Field hint="Имена инструментов через запятую, напр. Bash, Edit, mcp__tasks__tasks_delete">
-                    <TextArea value={disallowedText} onChange={setDisallowedText} autoGrow minHeight={56} placeholder="Bash, Edit, Write" />
+                    <TextArea value={disallowedText} onChange={v => { setDisallowedText(v); setRightsTouched(true); }} autoGrow minHeight={56} placeholder="Bash, Edit, Write" />
                   </Field>
                 )}
               </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>Инструменты и MCP</div>
+                  <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>
+                    {toolSummary ? `${toolSummary.enabled} из ${toolSummary.total} включено` : 'Загрузка…'}
+                  </div>
+                </div>
+                <Button variant="ghost" size="sm" onClick={() => setStep(5)}>Настроить</Button>
+              </div>
+
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>
                 <div>
                   <div style={{ fontSize: 13.5, fontWeight: 600, color: C.textHeading }}>Долгая память</div>
@@ -780,7 +878,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                   )}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
                     <Tag>{model ? model : 'модель по умолчанию'}{caps.supportsEffort && effort ? ` · ${effort}` : ''}</Tag>
-                    <Tag>{wizScope === 'project' ? (projects.find(p => p.id === wizProjectId)?.name ?? 'Проект') : 'Глобальная'}</Tag>
+                    <Tag>{wizScope === 'project' ? (projects.find(p => p.id === effProjectId)?.name ?? 'Проект') : 'Глобальная'}</Tag>
                     <Tag>{access === 'full' ? 'Полный доступ' : access === 'readOnly' ? 'Только чтение' : 'Свой доступ'}</Tag>
                     <Tag>{memoryEnabled ? 'Память включена' : 'Память выключена'}</Tag>
                     {bindingsCount != null && <Tag>{bindingsCount} {bindingsCount === 1 ? 'умение' : 'умений'}</Tag>}

@@ -11,7 +11,7 @@ import { ICON_SIZE } from '../../components/ui/icons';
 import { NO_PROJECT_LABEL, projectColor, todayIso, toIsoDate } from '../../lib/tasks';
 import { TaskCard } from './TaskCard';
 import { RepeatIcon } from './bits';
-import { useTaskHover } from './TaskHoverCard';
+import { useTaskHover } from './useTaskHover';
 
 interface Props {
   tasks: Task[];

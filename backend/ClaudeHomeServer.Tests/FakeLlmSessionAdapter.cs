@@ -38,6 +38,7 @@ internal sealed class FakeLlmSessionAdapter : ILlmSessionAdapter
     public LlmCapabilities Capabilities => LlmCapabilitiesCatalog.Claude;
     public int CurrentTurnAgentDepth => 0;
     public bool CurrentTurnSuppressTasksExecute => false;
+    public bool HasLiveTurn => false;
 
     public Task StartAsync() => Task.CompletedTask;
 

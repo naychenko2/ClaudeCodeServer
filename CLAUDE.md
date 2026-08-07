@@ -109,7 +109,9 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   токеном — `C.onAccent`, на подложке вне темы (палитра, фото, лайтбокс) — `C.onDark`.
 - **Проверяется линтом:** `cd frontend; npm run lint:design` обязан быть зелёным (правило
   `design/no-raw-color`; исключения — список `RAW_COLOR_ALLOWED` в eslint.config.js либо
-  построчный `eslint-disable-next-line` с причиной).
+  построчный `eslint-disable-next-line` с причиной). Гейт стоит **перед коммитом**, а не
+  после каждой правки: щиток судит только цвета и на изменениях раскладки, логики или
+  замене токена на токен ловить ему нечего. По ходу работы хватает `npx tsc -b`.
 - Размеры — из шкал: `FS` (шрифты), `SP` (отступы), `R` (радиусы), `SHADOW`, `Z`, `MODAL_W`.
 - Контролы — только из `frontend/src/components/ui/` (Button, Modal, Field, Menu, Toggle,
   Island/IslandScaffold…) плюс общие Toolbar/EmptyState. Самодельные кнопки/модалки из
@@ -212,6 +214,17 @@ available». Ограничения по ходу — на бэкенде: се�
 инструменту (заголовки `X-Caller-Session-Id` + `X-Mcp-Tool` → `McpCallLogMiddleware`). Состав
 инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов
 при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md).
+
+**Личный реестр MCP-серверов** (флаг `mcp-registry`) — раздел «MCP-серверы»: свои внешние
+серверы владельца (не встроенные продуктовые выше) со статусом, пробой, входом по OAuth и
+доступом по проектам/персонам. Хранение — `McpServerRecord` в `data/mcp-servers.json` (без
+секретов) + `data/mcp-secrets.json` (значения, в `BackupPaths.SecretFileNames`) +
+`data/mcp-status.json` (наблюдения, в бэкап не едет). Каскад доступности реестр →
+`Project.McpServersOff` (deny-list) → Off-привязка персоны `mcp:<ключ>` (без `condition` —
+тот же инвариант состава хода). Доставка в ход — `SessionManager.BuildExternalMcpProvider` →
+`ClaudeSession.BuildTurnMcpConfig`, `AuthVersion` в отпечатке запуска. Известное ограничение:
+полный цикл входа по OAuth не проверялся на реальном сервере с учётными данными. Подробности —
+[docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
 
 ## Заметки и Знания (Dify RAG)
 
@@ -332,7 +345,15 @@ CSP), артефакты сессии (панель, derived из ленты), �
 на главной; настройка — секция `Backup` в `appsettings.Local.json`), панель «Документация»
 (документация проекта настраиваемой областью — файлы корня + папки + типы файлов, дефолт `README.md` + `docs/**` + Markdown
 как связный корпус: дерево, оглавление, поиск,
-переходы по ссылкам, обратные ссылки, отправка документа или раздела в чат).
+переходы по ссылкам, обратные ссылки, отправка документа или раздела в чат), панель
+«Сервисы» (дев-серверы проекта: инференс запусков из манифестов и конфигураций Rider,
+включая составные; страница в iframe через прокси `/preview/**`, живые логи, распознавание
+сервисов, поднятых вне продукта). **Ключи и эндпоинты панели «Сервисы» остались `preview`**
+— переименована только подпись. Ридер ссылок (панель «Чтение» рядом с чатом, за флагом
+`link-reader`): `POST /api/reader/read` сам идёт по внешнему URL (рубежи адресов на каждом
+хопе редиректа, только markdown на проводе, без кук/креденшалов/кеша — [ADR-005](docs/adr/ADR-005-link-reader-server.md)),
+`GET /api/reader/image` тем же SsrfGuard проксирует картинки статьи, чтобы браузер не ходил
+на CDN сайта напрямую.
 Детали каждой фичи — [docs/architecture/features.md](docs/architecture/features.md).
 
 ## Фич-флаги (feature toggles)
@@ -376,15 +397,24 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 ## Соглашения
 
-- **CI гоняет тесты на Linux** (`ubuntu-latest`, [.github/workflows/ci.yml](.github/workflows/ci.yml)),
+- **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`, [.github/workflows/ci.yml](.github/workflows/ci.yml)),
   а разработка идёт на Windows — тесты обязаны быть платформонезависимыми, иначе зелёные
   локально они падают в CI. Главная ловушка — пути: `Path.IsPathRooted("C:\\…")` на Linux
   даёт `false`, поэтому Windows-литералы там считаются относительными и проверки путей
   срабатывают не по тому правилу. Пути в тестах строить от `Path.GetTempPath()` +
   `Path.Combine`, разделители не хардкодить. Помнить и про остальное: регистрозависимость
-  ФС, отсутствие `.exe`, недоступность WinAPI. Сомневаешься — прогони набор в контейнере:
+  ФС, отсутствие `.exe`, недоступность WinAPI.
+  **Вторая ловушка — тайминги.** Раннер CI слабее рабочей машины и гоняет тесты параллельно,
+  так что ThreadPool там голодает: коллбэк `Timer`/фоновая задача приезжает много позже
+  своего срока. Слепая пауза (`await Task.Delay(500)` в расчёте на окно в 30мс) даёт
+  плавающий провал вида «collection is empty» — ждать надо **событие**, а не время:
+  `TaskCompletionSource` + `Task.WhenAny(tcs.Task, Task.Delay(таймаут))` со щедрым потолком
+  (образец — `WorkflowWatcherTests`, `SessionManagerTests`).
+  Сомневаешься — прогони набор в контейнере:
   `docker run --rm -v "<репа>:/src" -w /src/backend mcr.microsoft.com/dotnet/sdk:10.0 dotnet test ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj`
-  (после этого пересобери локально: контейнер оставляет в `bin`/`obj` Linux-артефакты)
+  (после этого пересобери локально: контейнер оставляет в `bin`/`obj` Linux-артефакты).
+  Если `bin` занят запущенным продуктом («Access to the path … is denied»), добавь
+  `-p:ArtifactsPath=/tmp/artifacts` — сборка уедет мимо рабочего дерева и гасить процесс не придётся.
 - **Тесты и их категории.** Большинство — чистые юнит-тесты (Services, моки, in-memory),
   1–50ms. Медленные — две группы: **Controllers** (поднимают `WebApplicationFactory` —
   полный HTTP-pipeline ASP.NET, 400–970ms) и **GitServiceTests** (гоняют настоящий `git`
@@ -434,6 +464,13 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
   остановит восстановление. Ломающее изменение формата любого стора = инкремент
   `BackupSchema.Version` (иначе старый код молча обнулит стор при откате).
   Детали — [docs/architecture/features.md](docs/architecture/features.md#бэкапы-и-восстановление)
+- **HTTP-клиент к опциональной зависимости — через `AddQuietHttpClient`**
+  ([Services/Http/QuietHttpLogger.cs](backend/ClaudeHomeServer/Services/Http/QuietHttpLogger.cs)).
+  Дефолтный логгер `IHttpClientFactory` печатает КАЖДЫЙ провалившийся запрос как Error со
+  стектрейсом, и погашенная зависимость (OTLP-коллектор, локальная Ollama) забивает консоль
+  портянками, в которых не видно настоящих ошибок. Тихий клиент даёт одну строку Warning
+  с последствием («Телеметрия не уходит») не чаще раза в 5 минут. Признак «опциональной»:
+  вызывающий уже умеет жить без неё — ловит ошибку и уходит в фолбэк
 - Комментарии в коде по-русски
 
 ## Коммиты

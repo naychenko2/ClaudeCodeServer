@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import type { CSSProperties } from 'react';
 import { Search, Trash2 } from 'lucide-react';
 import type { AgentInfo, SkillInfo, SkillsData } from '../types';
@@ -13,6 +13,10 @@ import { showToast } from '../lib/toast';
 
 interface Props {
   projectId: string;
+  // Состав навыков/агентов перечитан (загрузка, установка, удаление). Панель живёт
+  // рядом с композером, который держит СВОЙ снимок того же списка для «/»-команд:
+  // без этого сигнала установленный навык не появлялся бы в подсказке до перезагрузки.
+  onChanged?: (data: SkillsData) => void;
 }
 
 // Кнопки в шапке панели навыков (Найти навык / Создать по промпту) — общий стиль
@@ -23,7 +27,7 @@ const skillHeadBtn: CSSProperties = {
   cursor: 'pointer', fontFamily: FONT.sans, transition: 'border-color 0.15s, color 0.15s',
 };
 
-export function SkillsPanel({ projectId }: Props) {
+export function SkillsPanel({ projectId, onChanged }: Props) {
   const [data, setData] = useState<SkillsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,14 +36,20 @@ export function SkillsPanel({ projectId }: Props) {
   // Подтверждение удаления навыка проекта — через ConfirmDialog вместо window.confirm
   const [pendingDelete, setPendingDelete] = useState<SkillInfo | null>(null);
 
+  // Колбэк через ref: он приходит инлайн-функцией, и попади он в зависимости load —
+  // ответ родителя на onChanged пересоздавал бы load, а тот дёргал бы загрузку по кругу
+  const onChangedRef = useRef(onChanged);
+  useEffect(() => { onChangedRef.current = onChanged; });
+
   const load = useCallback(() => {
     setLoading(true);
     return api.skills.list(projectId)
-      .then(d => { setData(d); setError(null); })
+      .then(d => { setData(d); setError(null); onChangedRef.current?.(d); })
       .catch(() => setError('Не удалось загрузить скиллы и агенты'))
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка списка скиллов
   useEffect(() => { void load(); }, [load]);
 
   const confirmRemoveSkill = async () => {

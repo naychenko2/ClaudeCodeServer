@@ -28,6 +28,7 @@ function useIsMobile() {
   useEffect(() => {
     const mq = window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`);
     const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: мобильный брейкпоинт
     setMobile(mq.matches);
     // addEventListener поддерживается современными браузерами; для совместимости — фолбэк
     if (mq.addEventListener) mq.addEventListener('change', handler);
@@ -52,7 +53,13 @@ export function Modal({
   const isMobile = useIsMobile();
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    // preventDefault — сигнал нижележащим слоям (оверлей «Стены» и любой будущий),
+    // что Escape уже обработан: без него одно нажатие закрывало и модалку, и слой под ней
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      onClose();
+    };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
@@ -148,7 +155,10 @@ export function Modal({
         <div style={{
           padding: footer ? '26px 28px 20px' : 28,
           display: 'flex', flexDirection: 'column', gap: 18,
-          overflowY: 'auto',
+          // flex:1 нужен модалкам с заданной высотой карточки (cardStyle.height):
+          // без него контент занимает своё, и футер повисает посередине вместо низа.
+          // Карточке по контенту это ничего не меняет — расти всё равно не от чего.
+          overflowY: 'auto', flex: 1, minHeight: 0,
         }}>
           {header}
           {children}

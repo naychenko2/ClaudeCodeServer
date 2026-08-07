@@ -99,6 +99,20 @@ public sealed record ModuleMcpServer(string Key, string Command, IReadOnlyList<s
 // (null/пусто — модулей нет или все скрыты фич-флагами module-{id}).
 public sealed record ModulesMcpContext(IReadOnlyList<ModuleMcpServer> Servers);
 
+// Один MCP-сервер из личного реестра владельца (Services/Mcp/McpRegistry): Key — ключ
+// сервера в конфиге хода, Transport — stdio|http|sse. Значения Env/Headers приходят уже
+// РАЗВЁРНУТЫМИ (плейсхолдеры secret:<id> резолвнуты в McpSecretStore) — секрет живёт только
+// во временном конфиге хода. AuthVersion входит в отпечаток запуска: заголовки запекаются
+// в файл на старте процесса, и обновлённый токен живому процессу иначе не доедет.
+public sealed record ExternalMcpServer(string Key, string Transport,
+    string? Command, IReadOnlyList<string> Args, IReadOnlyDictionary<string, string> Env,
+    string? Url, IReadOnlyDictionary<string, string> Headers,
+    bool AlwaysLoad, int AuthVersion);
+
+// Контекст серверов личного реестра: аддитивно к наследству из .mcp.json (одноимённая
+// запись реестра его перекрывает), но встроенные серверы продукта ставятся позже и выигрывают.
+public sealed record ExternalMcpContext(IReadOnlyList<ExternalMcpServer> Servers);
+
 // Выделенный memory-сервер персоны-консультанта (файлового сабагента): ключ сервера
 // в MCP-конфиге хода ("pmem_<handle>") + env memory-server ЭТОЙ персоны. Файл агента
 // ссылается на сервер по имени (mcpServers: [pmem_<handle>]), а определение с токеном
@@ -176,4 +190,27 @@ public sealed record LlmSessionContext(
     // запуске CLI (ClaudeRuntimeSettings). Решение принимается по персоне, не по ходу —
     // Tool-ключ «browser» с дефолтом по роли (тестировщику включён). true — как раньше:
     // чат без персоны и все прочие пути ничего не теряют.
-    bool BrowserEnabled = true);
+    bool BrowserEnabled = true,
+    // Приёмник снимков промпта хода: принимает черновик, возвращает id записанного снимка
+    // (null — записать не удалось; снимок диагностический и ход не роняет). Замыкает
+    // Session.Id на стороне SessionManager — адаптер ключа хранилища не знает.
+    Func<PromptSnapshotDraft, string?>? PromptSnapshotSink = null,
+    // Дописать в уже записанный снимок состав инструментов и статусы MCP-серверов: они
+    // известны только из system/init, который приходит после старта процесса.
+    // Аргументы: id снимка, имена инструментов, серверы.
+    Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptSnapshotToolsSink = null,
+    // Корень профиля claude CLI (CLAUDE_CONFIG_DIR) этого хода: оттуда берутся глобальный
+    // CLAUDE.md и каталог скиллов для блока «слой CLI». Резолвится в SessionManager
+    // (ConfigRootFor знает раскладку профилей и песочницы), сюда приходит готовым;
+    // null — слой CLI собирается без файлов профиля.
+    string? CliConfigRoot = null,
+    // MCP-серверы личного реестра владельца: вычисляется на КАЖДЫЙ ход (правка реестра
+    // применяется без пересоздания адаптера, как у PersonaAgentsProvider). Решение
+    // принимается только по owner/project/persona — от свойств хода состав не зависит.
+    // null — фича выключена, нет владельца или реестр пуст.
+    Func<ExternalMcpContext?>? ExternalMcpProvider = null,
+    // Подсказка про трейлер CCS-Session/CCS-Task в системный промпт (ADR-004, «Паспорта
+    // изменений»): null — флаг change-dossiers выключен или чат вне проекта. Вычисляется
+    // при построении контекста (не Func — как WorkspaceMcp/NotificationsMcp, тоже не
+    // живёт мид-сессию без пересоздания адаптера).
+    string? DossierTrailerHint = null);

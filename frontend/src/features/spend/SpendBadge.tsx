@@ -38,6 +38,7 @@ export function SpendBadge({ sessionId, chatName, resultCount, isMobile }: {
   }, [sessionId, resultCount]);
 
   // Смена чата — прошлое значение не сравнимо
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс предыдущей суммы для дельты при смене чата
   useEffect(() => { prevTotal.current = null; setDelta(null); setBadge(null); }, [sessionId]);
 
   if (!badge || (badge.total.total === 0 && badge.turns === 0)) return null;

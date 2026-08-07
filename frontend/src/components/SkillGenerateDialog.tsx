@@ -49,6 +49,7 @@ export function SkillGenerateDialog({ onClose, persona, projectId, onSaved, init
   // Готовый результат генерации (в т.ч. если завершилась, пока диалог был закрыт) → в превью
   useEffect(() => {
     if (job.status === 'done' && job.result) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- гидрация формы результатом завершённой фоновой генерации
       setName(job.result.name);
       setDescription(job.result.description);
       setBody(job.result.body);

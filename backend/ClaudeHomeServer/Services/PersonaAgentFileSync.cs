@@ -332,8 +332,9 @@ public sealed class PersonaAgentFileSync
             // провайдера — ModelAliasFor отсеет её в null (пин только Claude-тиров)
             ModelAliasFor(_providers,
                 _assignments?.Resolve(Llm.LocalActionCatalog.SubagentConsultant,
-                    _assignments.PersonaModel(persona, ownerId), ownerId)
-                ?? persona.Model)));
+                    _assignments.PersonaModel(persona, ownerId,
+                        Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.SubagentConsultant)), ownerId)
+                    ?? persona.Model)));
     }
 
     // Алиас-тир модели персоны для пина в frontmatter сабагента. Пинится только тир

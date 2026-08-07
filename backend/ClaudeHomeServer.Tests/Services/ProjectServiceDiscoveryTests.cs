@@ -140,4 +140,317 @@ public class ProjectServiceDiscoveryTests : IDisposable
         // Инференсный "npm run dev" имеет ту же сигнатуру → отброшен в пользу saved.
         svcs.Count(s => s.Command == "npm" && s.Args.SequenceEqual(new[] { "run", "dev" })).Should().Be(1);
     }
+
+    // ── Конфигурации Rider ───────────────────────────────────────────────────
+    // XML в тестах — с реальных файлов (backend/.run этого репозитория и соседних
+    // проектов), а не выдуманный: у Rider у каждого типа своя схема.
+
+    [Fact]
+    public async Task Rider_LaunchSettingsProfile_BecomesDotnetRun()
+    {
+        Write("src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        Write("src/App/Properties/launchSettings.json", """
+            { "profiles": { "http": { "commandName": "Project", "applicationUrl": "http://localhost:5111" } } }
+            """);
+        Write(".run/Backend.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Backend" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+                <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/src/App/App.csproj" />
+                <option name="LAUNCH_PROFILE_NAME" value="http" />
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        var rider = svcs.Single(s => s.Source == "rider");
+
+        rider.Name.Should().Be("Backend");
+        rider.Command.Should().Be("dotnet");
+        rider.Args.Should().Equal("run", "--project", "src/App/App.csproj", "--launch-profile", "http");
+        // Порт подтянут из launchSettings.json того профиля, на который ссылается конфигурация
+        rider.SuggestedPort.Should().Be(5111);
+    }
+
+    [Fact]
+    public async Task Rider_LaunchSettings_DeduplicatesWithInferredDotnet()
+    {
+        Write("src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        Write("src/App/Properties/launchSettings.json", """
+            { "profiles": { "http": { "commandName": "Project", "applicationUrl": "http://localhost:5111" } } }
+            """);
+        Write(".run/Backend.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Backend" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+                <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/src/App/App.csproj" />
+                <option name="LAUNCH_PROFILE_NAME" value="http" />
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        // Тот же запуск нашёлся бы и разбором launchSettings.json — в списке он один,
+        // и это версия Rider (у неё осмысленное имя)
+        svcs.Count(s => s.Command == "dotnet" && s.Args.Contains("--launch-profile")).Should().Be(1);
+        svcs.Should().NotContain(s => s.Source == "dotnet");
+    }
+
+    [Fact]
+    public async Task Rider_NpmConfiguration_BecomesPackageManagerRun()
+    {
+        Write("web/package.json", """{ "scripts": { "dev": "vite" } }""");
+        Write(".run/Frontend.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Frontend" type="js.build_tools.npm">
+                <package-json value="$PROJECT_DIR$/web/package.json" />
+                <command value="run" />
+                <scripts>
+                  <script value="dev" />
+                </scripts>
+                <node-interpreter value="project" />
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        var rider = svcs.Single(s => s.Source == "rider");
+
+        rider.Name.Should().Be("Frontend");
+        rider.Command.Should().Be("npm");
+        rider.Args.Should().Equal("run", "dev");
+        rider.Cwd.Should().Be("web");
+    }
+
+    [Fact]
+    public async Task Rider_DockerDeploy_BecomesComposeUpWithProfile()
+    {
+        Write(".run/Docker.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Docker Run Base" type="docker-deploy" factoryName="docker-compose.yml">
+                <deployment type="docker-compose.yml">
+                  <settings>
+                    <option name="profiles">
+                      <list>
+                        <option value="base" />
+                      </list>
+                    </option>
+                    <option name="sourceFilePath" value=".docker/docker-compose.yaml" />
+                  </settings>
+                </deployment>
+              </configuration>
+            </component>
+            """);
+        Write(".docker/docker-compose.yaml", "services:\n  web:\n    image: nginx\n");
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        var rider = svcs.Single(s => s.Source == "rider");
+
+        rider.Command.Should().Be("docker");
+        rider.Args.Should().Equal("compose", "-f", ".docker/docker-compose.yaml", "--profile", "base", "up");
+    }
+
+    [Fact]
+    public async Task Rider_Multilaunch_BecomesGroupOfMembers()
+    {
+        Write("web/package.json", """{ "scripts": { "dev": "vite" } }""");
+        Write("src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        Write(".run/Frontend.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Frontend" type="js.build_tools.npm">
+                <package-json value="$PROJECT_DIR$/web/package.json" />
+                <command value="run" />
+                <scripts><script value="dev" /></scripts>
+              </configuration>
+            </component>
+            """);
+        Write(".run/Backend.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Backend" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+                <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/src/App/App.csproj" />
+                <option name="LAUNCH_PROFILE_NAME" value="http" />
+              </configuration>
+            </component>
+            """);
+        Write(".run/Compound.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Backend + Frontend" type="com.intellij.execution.configurations.multilaunch" factoryName="MultiLaunchConfiguration">
+                <rows>
+                  <ExecutableRowSnapshot>
+                    <option name="executable">
+                      <ExecutableSnapshot>
+                        <option name="id" value="runConfig:.NET Launch Settings Profile.Backend" />
+                      </ExecutableSnapshot>
+                    </option>
+                  </ExecutableRowSnapshot>
+                  <ExecutableRowSnapshot>
+                    <option name="executable">
+                      <ExecutableSnapshot>
+                        <option name="id" value="runConfig:npm.Frontend" />
+                      </ExecutableSnapshot>
+                    </option>
+                  </ExecutableRowSnapshot>
+                </rows>
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        var group = svcs.Single(s => s.Members is { Length: > 0 });
+
+        group.Name.Should().Be("Backend + Frontend");
+        group.Command.Should().BeEmpty();          // у группы своей команды нет
+        group.Members!.Should().HaveCount(2);
+
+        var members = group.Members!.Select(id => svcs.Single(s => s.Id == id)).ToList();
+        members.Select(m => m.Name).Should().Equal("Backend", "Frontend");
+    }
+
+    [Fact]
+    public async Task Rider_Multilaunch_WithoutResolvableMembers_IsSkipped()
+    {
+        // Ссылки ведут на типы, которые мы не поддерживаем → группе нечего запускать
+        Write(".run/Compound.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Скрипты" type="com.intellij.execution.configurations.multilaunch" factoryName="MultiLaunchConfiguration">
+                <rows>
+                  <ExecutableRowSnapshot>
+                    <option name="executable">
+                      <ExecutableSnapshot>
+                        <option name="id" value="runConfig:PowerShell.serve" />
+                      </ExecutableSnapshot>
+                    </option>
+                  </ExecutableRowSnapshot>
+                </rows>
+              </configuration>
+            </component>
+            """);
+        Write(".run/Script.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="serve" type="PowerShellRunType" factoryName="PowerShell" scriptUrl="$PROJECT_DIR$/docs/serve.ps1" />
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        svcs.Should().NotContain(s => s.Source == "rider");
+    }
+
+    [Fact]
+    public async Task Rider_MultilaunchRef_PrefersLongestNameMatch()
+    {
+        // «Backend» — суффикс имени «Telemetry Backend»: без выбора самого длинного
+        // совпадения ссылка ушла бы не в ту конфигурацию
+        Write("src/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        Write(".run/Two.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Backend" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+                <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/src/App/App.csproj" />
+                <option name="LAUNCH_PROFILE_NAME" value="http" />
+              </configuration>
+              <configuration default="false" name="Telemetry Backend" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+                <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/src/App/App.csproj" />
+                <option name="LAUNCH_PROFILE_NAME" value="telemetry" />
+              </configuration>
+              <configuration default="false" name="Всё сразу" type="com.intellij.execution.configurations.multilaunch" factoryName="MultiLaunchConfiguration">
+                <rows>
+                  <ExecutableRowSnapshot>
+                    <option name="executable">
+                      <ExecutableSnapshot>
+                        <option name="id" value="runConfig:.NET Launch Settings Profile.Telemetry Backend" />
+                      </ExecutableSnapshot>
+                    </option>
+                  </ExecutableRowSnapshot>
+                </rows>
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        var group = svcs.Single(s => s.Members is { Length: > 0 });
+        var member = svcs.Single(s => s.Id == group.Members![0]);
+
+        member.Name.Should().Be("Telemetry Backend");
+    }
+
+    [Fact]
+    public async Task Rider_ScriptConfigurations_AreSkipped()
+    {
+        Write(".run/Script.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="serve" type="PowerShellRunType" factoryName="PowerShell" scriptUrl="$PROJECT_DIR$/docs/serve.ps1" />
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        svcs.Should().NotContain(s => s.Source == "rider");
+    }
+
+    [Fact]
+    public async Task Rider_PathOutsideProject_IsSkipped()
+    {
+        // Конфигурация ссылается за пределы корня — запускать такое мы права не имеем
+        Write(".run/Outside.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Outside" type="js.build_tools.npm">
+                <package-json value="$PROJECT_DIR$/../elsewhere/package.json" />
+                <command value="run" />
+                <scripts>
+                  <script value="dev" />
+                </scripts>
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        svcs.Should().NotContain(s => s.Source == "rider");
+    }
+
+    [Fact]
+    public async Task Rider_IdeaRunConfigurations_AreFound()
+    {
+        // У Rider путь бывает вложенным: .idea/.idea.<Solution>/.idea/runConfigurations
+        Write("web/package.json", """{ "scripts": { "start": "node server.js" } }""");
+        Write(".idea/.idea.Sln/.idea/runConfigurations/Web.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Web" type="js.build_tools.npm">
+                <package-json value="$PROJECT_DIR$/web/package.json" />
+                <command value="run" />
+                <scripts>
+                  <script value="start" />
+                </scripts>
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        svcs.Should().Contain(s => s.Source == "rider" && s.Name == "Web");
+    }
+
+    [Fact]
+    public async Task Rider_ConfigInSubdirectory_IsFound()
+    {
+        // .run лежит рядом с solution, а не в корне репозитория (как backend/.run у нас)
+        Write("backend/App/App.csproj", "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        Write("backend/.run/Backend.run.xml", """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Backend" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+                <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/App/App.csproj" />
+                <option name="LAUNCH_PROFILE_NAME" value="http" />
+              </configuration>
+            </component>
+            """);
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        var rider = svcs.Single(s => s.Source == "rider");
+        rider.Args.Should().Equal("run", "--project", "backend/App/App.csproj", "--launch-profile", "http");
+    }
+
+    [Fact]
+    public async Task Rider_BrokenXml_DoesNotBreakDiscovery()
+    {
+        Write("package.json", """{ "scripts": { "dev": "vite" } }""");
+        Write(".run/Broken.run.xml", "<component name=\"ProjectRunConfigurationManager\"><configuration");
+
+        var svcs = await _svc.DiscoverAsync(Project());
+        // Битый файл пропущен, остальной инференс работает
+        svcs.Should().Contain(s => s.Source == "npm" && s.Args.Contains("dev"));
+    }
 }

@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Controllers;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
@@ -98,5 +100,119 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
         var put = await _admin.PutAsJsonAsync(
             $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "нет-такой-модели" });
         put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task ПресетДопустимМестуКаталога_ПриНаличииВСторе()
+    {
+        // Создаём общий пресет (ADR-007 §3): место «Кто что выполняет» обязано принимать preset:{id}
+        var presetId = "ps-" + Guid.NewGuid().ToString("N");
+        var layer = new
+        {
+            specialties = new Dictionary<string, object>(),
+            presets = new[]
+            {
+                new { id = presetId, name = "Тест-цепочка", steps = new[] { "tier:strong", "glm-5.2" } },
+            },
+        };
+        (await _admin.PutAsJsonAsync("/api/specialties/settings/global", layer)).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+
+        // preset:{id} принимается местом каталога (раньше падал в «Модель отсутствует в каталоге»)
+        var ok = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.ChatPersona}", new { route = $"preset:{presetId}" });
+        ok.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        // Несуществующий id пресета — 400 (опечатка ловится при сохранении, как у моделей)
+        var bad = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.ChatNew}", new { route = "preset:нет-такого-пресета" });
+        bad.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Describe_PresetМаршрут_ОтдаётПресетСИменем()
+    {
+        var presetId = "ds-" + Guid.NewGuid().ToString("N");
+        (await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
+        {
+            specialties = new Dictionary<string, object>(),
+            presets = new[]
+            {
+                new { id = presetId, name = "Цепочка", steps = new[] { "tier:strong", "glm-5.2" } },
+            },
+        })).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.ChatNew}", new { route = $"preset:{presetId}" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        // preset раскрыт именем и шагами — UI показывает «Цепочка», а не первый шаг
+        var preset = body.GetProperty("preset");
+        preset.GetProperty("id").GetString().Should().Be(presetId);
+        preset.GetProperty("name").GetString().Should().Be("Цепочка");
+        preset.GetProperty("steps").EnumerateArray().Select(s => s.GetString())
+            .Should().Equal(new[] { "tier:strong", "glm-5.2" });
+        // Существующие поля на месте (обратная совместимость — «Сейчас пойдёт» и старый UI)
+        body.GetProperty("route").GetString().Should().NotBeNull();
+        body.GetProperty("source").GetString().Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Describe_НеПresetМаршрут_PresetNull()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "tier:strong" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("preset").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("route").GetString().Should().Be("tier:strong");
+    }
+
+    // --- unit DescribePreset: через HTTP битую ссылку не смоделировать (валидация Set
+    //     отсекает несуществующий id), поэтому пробуем логику напрямую. ---
+
+    // Сериализуем descriptor в wire-формат (camelCase, как отдаёт ASP.NET) — чтобы unit-проверка
+    // видела те же имена полей, что и фронт (id/name/steps), а не PascalCase дефолта S.T.J.
+    private static readonly JsonSerializerOptions WireOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
+    private static JsonElement DescriptorAsJson(object? obj) =>
+        JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(obj!, WireOptions));
+
+    [Fact]
+    public void DescribePreset_ВалиднаяСсылка_ИмяИШаги()
+    {
+        var presets = new[]
+        {
+            new ModelRoutePreset { Id = "p1", Name = "Рабочая", Steps = ["opus", "glm-5.2"] },
+        };
+        var d = DescriptorAsJson(LocalActionsAdminController.DescribePreset("preset:p1", presets));
+        d.GetProperty("id").GetString().Should().Be("p1");
+        d.GetProperty("name").GetString().Should().Be("Рабочая");
+        d.GetProperty("steps").EnumerateArray().Select(s => s.GetString())
+            .Should().Equal(new[] { "opus", "glm-5.2" });
+    }
+
+    [Fact]
+    public void DescribePreset_БитаяСсылка_NameNullStepsПусто()
+    {
+        // Битая ссылка (пресет удалён, файл правили руками) → { id, name=null, steps=[] }.
+        var d = DescriptorAsJson(LocalActionsAdminController.DescribePreset("preset:ghost", Array.Empty<ModelRoutePreset>()));
+        d.GetProperty("id").GetString().Should().Be("ghost");
+        d.GetProperty("name").ValueKind.Should().Be(JsonValueKind.Null);
+        d.GetProperty("steps").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public void DescribePreset_НеСсылка_Null()
+    {
+        LocalActionsAdminController.DescribePreset("tier:strong", Array.Empty<ModelRoutePreset>())
+            .Should().BeNull();
+        LocalActionsAdminController.DescribePreset(null, Array.Empty<ModelRoutePreset>())
+            .Should().BeNull();
     }
 }

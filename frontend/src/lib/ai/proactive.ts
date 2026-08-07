@@ -7,6 +7,7 @@
 
 import { AI_ACTIONS, type AiActionCtx } from './actions';
 import { api } from '../api';
+import { loadChatsForWall } from '../../features/wall/wallSuggest';
 import { rankContext } from './suggest';
 import { aiOllamaAvailable } from './ollama';
 import type { SuggestionLevel } from './levels';
@@ -145,6 +146,30 @@ async function computeRuleSuggestion(ctx: AiActionCtx): Promise<Suggestion | nul
         return { key: `tasks-widget:${today}`, actionId: 'chat.widget', text: 'Могу показать интерактивную сводку задач виджетом', level: 'medium' };
     } catch { /* офлайн — без подсказки */ }
     return null;
+  }
+
+  // Стена — есть чаты, которые не стоят колонками: предложить поставить.
+  // strong только на ЖИВЫХ (идёт ход / ждёт ответа): такое состояние живёт минуты, и
+  // ради него будить кнопку уместно. Чаты, с которыми просто работали за сутки, дают
+  // medium — они видны подсвеченными в палитре, но балун ради них не всплывает,
+  // иначе кнопка прыгала бы на каждом заходе на стену.
+  if (nav.screen === 'wall' && ctx.online) {
+    const picked = await loadChatsForWall();
+    if (picked.length === 0) return null;
+    const waiting = picked.filter(c => c.session.status === 'waiting').length;
+    const live = picked.filter(c => c.live).length;
+    return {
+      // Ключ по составу: появился новый повод — подсказка снова свежая, а тот же
+      // самый набор второй раз не всплывает
+      key: `wall-chats:${picked.map(c => c.session.id).join(',')}`,
+      actionId: 'wall.addActive',
+      text: waiting > 0
+        ? (waiting === 1 ? 'Чат ждёт ответа — поставить его на стену?' : 'Чаты ждут ответа — поставить их на стену?')
+        : live > 0
+          ? 'Есть чаты в работе — поставить их на стену?'
+          : 'Есть чаты за сегодня — поставить их на стену?',
+      level: live > 0 ? 'strong' : 'medium',
+    };
   }
 
   // Обзорные экраны: НЕ навязываем подсказку без конкретного повода — раньше здесь всегда

@@ -44,8 +44,10 @@ function Chip({ color, bg, icon, label }: { color: string; bg: string; icon: Rea
   );
 }
 
-// Загрузка комментариев документа + перезагрузка на realtime notes_changed
-export function useDocAnnotations(scope: string, path: string, enabled: boolean) {
+// Загрузка комментариев документа + перезагрузка на realtime notes_changed.
+// Хук не экспортируется: живёт только в этом компонентном файле — экспорт хука
+// рядом с компонентом ломал бы fast refresh (см. eslint.config.js).
+function useDocAnnotations(scope: string, path: string, enabled: boolean) {
   const [items, setItems] = useState<DocAnnotation[]>([]);
   const notesVersion = useNotesVersion();
   const reload = useCallback(() => {
@@ -73,6 +75,11 @@ interface Props {
     hideLeadingH1?: boolean;
     // Относительные картинки документа (README со скриншотами) — в URL файла проекта
     resolveImageSrc?: (src: string) => string | undefined;
+    // Клик по ссылке в режиме документации: резолв относительных путей и якорей
+    // (переход между md-файлами, открытие файла кода, скролл к разделу). Без него
+    // MarkdownViewer рендерит обычный <a href>, и клик уводит браузер из SPA
+    // (относительный URL не матчится ни с одним роутом — переброс на главный экран).
+    onDocLink?: (href: string) => void;
   };
   // Счётчики комментариев наверх (чип в тулбаре файла)
   onCounts?: (total: number, open: number) => void;
@@ -382,7 +389,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       });
     });
     return () => cleanups.forEach(f => f());
-  }, [shown, enabled, content]);
+  }, [shown, enabled, content, fmOffset]);
 
   const panel = enabled && items.length > 0 && (
     <div ref={panelRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -565,7 +572,8 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
         <MarkdownViewer content={renderBody} blockPos={enabled}
           onWikilink={viewer?.onWikilink} existingTitles={viewer?.existingTitles}
           resolveNote={viewer?.resolveNote} embedSource={viewer?.embedSource}
-          hideLeadingH1={viewer?.hideLeadingH1} resolveImageSrc={viewer?.resolveImageSrc} />
+          hideLeadingH1={viewer?.hideLeadingH1} resolveImageSrc={viewer?.resolveImageSrc}
+          onDocLink={viewer?.onDocLink} />
         {below && panel && (
           <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>{panel}</div>
         )}

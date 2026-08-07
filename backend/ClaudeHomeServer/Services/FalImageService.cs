@@ -42,7 +42,9 @@ public class FalImageService
         count = Math.Clamp(count, 1, 4);
         try
         {
-            var client = _http.CreateClient();
+            // Именованный клиент, общий с FalAccountService/FalCostService: под ним висит
+            // тихий логгер (Program.cs), иначе заблокированный fal печатает Error со стектрейсом.
+            var client = _http.CreateClient("fal");
             client.Timeout = TimeSpan.FromSeconds(180);
 
             using var req = new HttpRequestMessage(HttpMethod.Post, $"https://fal.run/{_model}");

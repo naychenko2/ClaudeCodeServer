@@ -62,6 +62,9 @@ public class TeamWaveService
         _sessions.TeamEscalationRaiser = RaiseEscalationAsync;
         // Э8: ASK-вопрос интервью тоже будит человека уведомлением и push
         _sessions.TeamQuestionNotifier = OnStabQuestionAsync;
+        // Minor (волна 3): кнопки skip/drop карточки эскалации закрывают под-задачу тем же
+        // путём, что доклад исполнителя — иначе волна не закрывалась до ручного tasks_complete
+        _sessions.TeamSubtaskDropHandler = DropSubtaskAsync;
         // Закрытие волны ловим на переходе задачи в Done — единственном пути в Done (Update)
         _tasks.TaskCompleted += OnTaskDone;
         // Провал хода исполнителя: одна перевыдача, второй провал — эскалация
@@ -134,7 +137,14 @@ public class TeamWaveService
         var gate = _sessions.WithTeamState(session.Id, t =>
         {
             // Человек нажал «Остановить»: текущие исполнители дорабатывают, новые не стартуют
-            if (t.Stopped) return (Reserved: false, Stopped: true, Exceeded: (string?)null, Stale: (string?)null);
+            if (t.Stopped) return (Reserved: false, Stopped: true, Exceeded: (string?)null, Held: (string?)null);
+            // M2: волна не стартует поверх стадий, которые ждут человека. Окно clarify→vN+1:
+            // координатор объявил тупик (версия плана ещё та же, гард версий пропускает), а
+            // доехавшие задачи волны запускали следующую — стадия затиралась в Wave, интервью
+            // сбито. То же с «ждёт решения»: конвейер, идущий поверх нерешённой карточки,
+            // и есть «практика ждёт решения», которая на самом деле не ждёт.
+            if (t.Stage is TeamImplementStage.Interview or TeamImplementStage.AwaitingDecision)
+                return (false, false, null, $"практика в стадии «{t.Stage.ToWireToken()}» и ждёт человека");
             // Э8: волна идёт ТОЛЬКО по подтверждённой последней версии плана. Два случая:
             // план устарел (после интервью опубликован vN+1 — старый доигрывать нельзя) либо
             // новая версия ещё не подтверждена человеком (авто-волны смену плана не покрывают).
@@ -146,7 +156,7 @@ public class TeamWaveService
                 return (false, false, null,
                     $"версия плана {plan.Version} ещё не подтверждена человеком");
             if (t.Budget.ExceededReasonForWave(subtasks.Count) is { } reason)
-                return (Reserved: false, Stopped: false, Exceeded: reason, Stale: (string?)null);
+                return (Reserved: false, Stopped: false, Exceeded: reason, Held: (string?)null);
 
             t.Budget.TasksUsed += subtasks.Count;
             t.Budget.RunsUsed += subtasks.Count;
@@ -157,18 +167,19 @@ public class TeamWaveService
             // Отсечки для сторожа зависших волн (Э4): волна идёт, пока поля не обнулены
             t.WaveStartedAt = DateTime.UtcNow;
             t.WaveActivityAt = DateTime.UtcNow;
-            return (Reserved: true, Stopped: false, Exceeded: null, Stale: (string?)null);
+            return (Reserved: true, Stopped: false, Exceeded: null, Held: (string?)null);
         });
         if (gate.Stopped)
         {
             _log.LogInformation("Волна {Wave} плана {PlanId} не стартовала: практика остановлена человеком", wave, plan.Id);
             return [];
         }
-        // Устаревшая/неподтверждённая версия плана (Э8): молчим намеренно — карточка плана vN
-        // уже висит в ленте и ждёт «Запустить», вторая карточка про то же только мешала бы.
-        if (gate.Stale is { } stale)
+        // Волна придержана: устаревшая/неподтверждённая версия плана (Э8) либо стадия, ждущая
+        // человека (M2). Молчим намеренно — карточка (плана, уточнений или остановки) уже висит
+        // в ленте и ждёт его ответа, вторая карточка про то же только мешала бы.
+        if (gate.Held is { } held)
         {
-            _log.LogInformation("Волна {Wave} плана {PlanId} не стартовала: {Reason}", wave, plan.Id, stale);
+            _log.LogInformation("Волна {Wave} плана {PlanId} не стартовала: {Reason}", wave, plan.Id, held);
             return [];
         }
         if (gate.Exceeded is { } exceeded)
@@ -228,13 +239,16 @@ public class TeamWaveService
 
         // Пакетный запуск исполнителей — фоном: старт CLI-процессов долгий, а карточки задач
         // и состояние волны человек должен увидеть сразу после клика «Запустить».
-        if (_exec is not null) _ = Task.Run(() => LaunchAllAsync(created));
+        if (_exec is not null) _ = Task.Run(() => LaunchAllAsync(session, created));
         return created;
     }
 
     // Пакетный старт исполнителей волны: провал одного не отменяет остальных —
     // такая задача остаётся в Todo и подхватывается перевыдачей координатора (Э4).
-    private async Task LaunchAllAsync(IReadOnlyList<TaskItem> tasks)
+    // Молчаливым провал быть не должен (правило спеки «молчаливых пауз не бывает»): раньше
+    // непойманный старт уходил только в лог, а человек видел лишь исчезнувшую задачу — так и
+    // выглядел B3 приёмки (исполнитель упал на лимите провайдера ещё до первого хода).
+    private async Task LaunchAllAsync(Session session, IReadOnlyList<TaskItem> tasks)
     {
         foreach (var task in tasks)
         {
@@ -242,8 +256,51 @@ public class TeamWaveService
             catch (Exception ex)
             {
                 _log.LogError(ex, "Запуск исполнителя по задаче {TaskId} «{Title}» не удался", task.Id, task.Title);
+                await RaiseLaunchFailedAsync(session, task, ex);
             }
         }
+    }
+
+    // Карточка в ленту штаба: исполнитель не стартовал вовсе (модель недоступна, лимит
+    // провайдера, задача удалена). Kind — TaskFailed: для человека это ровно тот же случай
+    // «работа по под-задаче не идёт», и кнопки карточки те же.
+    internal async Task RaiseLaunchFailedAsync(Session session, TaskItem task, Exception ex)
+    {
+        var wave = session.TeamImplement?.WaveNumber ?? 0;
+        try
+        {
+            await RaiseEscalationAsync(session, new TeamEscalation
+            {
+                Kind = TeamEscalationKind.TaskFailed,
+                Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.TaskFailed, task.Title),
+                Details = $"Исполнитель по под-задаче «{task.Title}» не запустился: {ex.Message}.\n\n"
+                          + "Работа по ней не идёт. Проверьте модель исполнителя и доступность провайдера, "
+                          + "затем перевыдайте задачу.",
+                TaskId = task.Id,
+                Wave = wave,
+                Actions = TeamEscalationActions.For(TeamEscalationKind.TaskFailed),
+            });
+        }
+        catch (Exception publishEx)
+        {
+            // Карточка — страховка, а не критичный путь: её провал не должен ронять раздачу
+            _log.LogError(publishEx, "Карточка о несостоявшемся запуске задачи {TaskId} не опубликована", task.Id);
+        }
+    }
+
+    // Кнопки skip (TaskFailed)/drop (Blocker) карточки эскалации (Minor, волна 3): под-задача
+    // помечается Done с пояснением — тем же путём, что и обычный доклад исполнителя
+    // (TaskManager.TaskCompleted → OnTaskDone → CloseWaveIfDoneAsync), иначе волна не могла
+    // закрыться до ручного tasks_complete, а «Пропустить»/«Снять» на карточке ничего не делали.
+    internal async Task DropSubtaskAsync(string taskId, string reason)
+    {
+        var task = _tasks.GetById(taskId);
+        if (task is null) return;
+        var updated = _tasks.Update(taskId, new UpdateTaskRequest(
+            Status: TaskItemStatus.Done,
+            ResultMarkdown: reason));
+        if (updated is null) return;
+        if (updated.OwnerId is { } ownerId) await _hub.BroadcastTaskChangedAsync(ownerId, "updated", updated);
     }
 
     // --- Э4: автономный цикл волн ---
@@ -324,8 +381,22 @@ public class TeamWaveService
             _log.LogInformation("Волна {Wave} чата-штаба {SessionId} закрыта: {Count} задач, следующая — {Next}",
                 wave, session.Id, current.Count, nextWave?.ToString() ?? "нет");
 
+            // M2: закрытие волны — факт (работа доделана), а вот двигать конвейер дальше
+            // поверх стадий, ждущих человека, нельзя: следующая волна затирала бы интервью,
+            // гейт-карточка и «проверка» подменяли бы стадию, в которой человек как раз
+            // отвечает. Дождёмся его — он вернёт практику в работу (кнопкой или сообщением).
+            var waitsHuman = _sessions.WithTeamState(session.Id,
+                t => t.Stage is TeamImplementStage.Interview or TeamImplementStage.AwaitingDecision) is true;
+            if (waitsHuman)
+                _log.LogInformation("Волна {Wave} чата-штаба {SessionId} закрыта, но конвейер стоит: " +
+                    "практика ждёт человека", wave, session.Id);
+
             var started = false;
-            if (hasNext && !team.Stopped && team.AutoWaves)
+            if (waitsHuman)
+            {
+                // Ничего не двигаем: ни следующей волны, ни гейт-карточки, ни «проверки»
+            }
+            else if (hasNext && !team.Stopped && team.AutoWaves)
             {
                 // Авто: следующая волна идёт сама. Бюджет проверяет раздача — она же
                 // поднимет карточку исчерпания, если квота кончилась. Зовём Core: лок волны

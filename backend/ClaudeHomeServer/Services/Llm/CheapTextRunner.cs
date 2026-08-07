@@ -10,6 +10,12 @@ public interface ICheapTextRunner
 {
     bool UsesLocal(string actionKey);
 
+    // Краткое описание маршрута действия для лога и события: «kind=model/tier/local/claude»,
+    // конкретная модель или слот если применимо. Нужно диагностике в местах, где чейн
+    // разводится (планировщик «Командной реализации», сводка «Что нового»): без этого в
+    // логе «не ответил» без версий и провайдера, и разбор каждого сбоя — раскопки.
+    string DescribeRoute(string actionKey, string? fallbackModel);
+
     // actionKey — ключ из LocalActionCatalog (определяет маршрут и профиль вызова).
     // fallbackModel — модель claude для существующего пути (как раньше читалась из конфига).
     // ownerId — владелец для среды исполнения claude-пути (Ollama ходит по HTTP независимо).
@@ -53,6 +59,38 @@ public sealed class CheapTextRunner(
     UserModelTierResolver? userTiers = null) : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
+
+    // Описание маршрута для лога/события: kind + конкретная модель или слот, если это
+    // слот/модель. claude/local — без модели (дефолты маршрута). Пример: «model=nemotron:free»,
+    // «tier=strong», «claude», «local». Используется из TeamPlanningService — там, где
+    // раньше лог показывал только «не ответил».
+    public string DescribeRoute(string actionKey, string? fallbackModel)
+    {
+        var route = router.Resolve(actionKey);
+        return route.Kind switch
+        {
+            RouteKind.Model when !string.IsNullOrWhiteSpace(route.Model) =>
+                CloudCheapClient.IsDirectRoute(route.Model)
+                    ? $"direct:{CloudCheapClient.StripPrefix(route.Model!)}"
+                    : $"model={route.Model}",
+            RouteKind.Tier => $"tier={route.Tier?.ToString().ToLowerInvariant() ?? "medium"}",
+            RouteKind.Local => "local",
+            _ => string.IsNullOrWhiteSpace(fallbackModel) ? "claude" : $"claude({fallbackModel})",
+        };
+    }
+
+    // Таймаут ОБЛАЧНЫХ шагов цепочки (выбранная модель через CLI, direct-адаптер,
+    // финальный claude): профильный CloudTimeoutMs, а не локальный TimeoutMs — тот
+    // калибровался под Ollama и облачную сильную модель на сложной задаче обрывал.
+    private TimeSpan CloudTimeoutFor(string actionKey) =>
+        TimeSpan.FromMilliseconds(router.ProfileFor(actionKey).CloudTimeoutMs);
+
+    // Потолок вывода для ОБЛАЧНЫХ шагов (direct-адаптер, RunDetailedAsync). Локальный
+    // NumPredict — это num_predict Ollama (бережёт память GPU), для облачного маршрута он
+    // мал: модель обрезала крупный JSON-план на полуслове, симптом неотличим от таймаута
+    // (прод 2026-08-05). CloudNumPredict — отдельное поле профиля (дефолты в каталоге).
+    internal int CloudNumPredictFor(string actionKey) =>
+        router.ProfileFor(actionKey).CloudNumPredict;
 
     // При маршруте-слоте исполнитель — модель слота ВЛАДЕЛЬЦА действия (сильная/средняя/слабая
     // из личного per-user слота, с откатом на глобальный AppSettings), а не модель действия из
@@ -99,9 +137,25 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 3 — claude: маршрут-слот берёт модель слота, иначе модель действия из его конфига.
+        // Таймаут — облачный (не локальный). При обрыве по таймауту повторяем ОДИН раз:
+        // модель не дала ничего, повтор дешевле потерянной работы человека сверху
+        // (прод 2026-08-04: планировщик «Командной реализации»). Внешняя отмена ct —
+        // не сбой, по ней не повторяем. Прочие ошибки — как раньше, наверх без страховки.
         var effFallback = EffectiveFallback(route, fallbackModel, ownerId);
-        return await claude.RunAsync(prompt, claude.NormalizeModel(effFallback), ct: ct, ownerId: ownerId,
-            label: actionKey);
+        var cloudTimeout = CloudTimeoutFor(actionKey);
+        var model = claude.NormalizeModel(effFallback);
+        try
+        {
+            return await claude.RunAsync(prompt, model, timeout: cloudTimeout, ct: ct, ownerId: ownerId,
+                label: actionKey);
+        }
+        catch (LlmTimeoutException) when (!ct.IsCancellationRequested)
+        {
+            log.LogWarning("cheap-runner: действие {Action} не ответило за {Timeout} — повторяю один раз",
+                actionKey, cloudTimeout);
+            return await claude.RunAsync(prompt, model, timeout: cloudTimeout, ct: ct, ownerId: ownerId,
+                label: actionKey);
+        }
     }
 
     // Вызов выбранной модели. null — шаг не удался (провайдер не настроен, ошибка CLI,
@@ -112,7 +166,8 @@ public sealed class CheapTextRunner(
     {
         try
         {
-            var text = await claude.RunAsync(prompt, model, ct: ct, ownerId: ownerId, label: actionKey);
+            var text = await claude.RunAsync(prompt, model, timeout: CloudTimeoutFor(actionKey),
+                ct: ct, ownerId: ownerId, label: actionKey);
             if (!string.IsNullOrWhiteSpace(text)) return text;
             log.LogDebug("cheap-runner: действие {Action} — модель {Model} вернула пустой ответ", actionKey, model);
         }
@@ -126,17 +181,29 @@ public sealed class CheapTextRunner(
 
     // Прямой HTTP-адаптер (CloudCheapClient) на бесплатной модели агрегатора. maxTokens и
     // timeout — из профиля действия. null — 429/ошибка/пусто/адаптер не настроен → дальше по цепочке.
+    // ОБРЕЗАННЫЙ по лимиту ответ НЕ считаем успехом: на структурных JSON это эквивалент
+    // таймаута, иначе цепочка отдаст мусор, который у планировщика оборвёт ParsePlan. Уже
+    // залогировано в CloudCheapClient (с maxTokens и label), здесь — одна строка контекста
+    // для grep'а по «упал дальше по цепочке».
     private async Task<string?> TryDirectAsync(string actionKey, string route, string prompt,
         string? ownerId, CancellationToken ct)
     {
         var model = CloudCheapClient.StripPrefix(route);
-        var spec = router.ProfileFor(actionKey);
         try
         {
-            var text = await cloud.GenerateTextAsync(
-                model, prompt, TimeSpan.FromMilliseconds(spec.TimeoutMs), spec.NumPredict,
+            // Таймаут — облачный: локальный потолок профиля калибровался под Ollama.
+            // Потолок вывода — облачный (CloudNumPredict, не NumPredict): см. CloudNumPredictFor.
+            var result = await cloud.GenerateDetailedAsync(
+                model, prompt, CloudTimeoutFor(actionKey), CloudNumPredictFor(actionKey),
                 ownerId, label: actionKey, ct);
-            if (!string.IsNullOrWhiteSpace(text)) return text;
+            if (result.Truncated)
+            {
+                log.LogWarning(
+                    "cheap-runner: действие {Action} — прямой вызов {Model} обрезан по лимиту вывода, дальше по цепочке",
+                    actionKey, model);
+                return null;
+            }
+            if (!string.IsNullOrWhiteSpace(result.Text)) return result.Text;
             log.LogDebug("cheap-runner: действие {Action} — прямой вызов {Model} пуст/недоступен", actionKey, model);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
@@ -210,9 +277,13 @@ public sealed class CheapTextRunner(
         int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
     {
         var route = router.Resolve(actionKey);
-        var spec = router.ProfileFor(actionKey);
-        var effTimeout = timeout ?? TimeSpan.FromMilliseconds(spec.TimeoutMs);
-        var effMaxTokens = maxTokens ?? spec.NumPredict;
+        // Таймаут по маршруту: явный override потребителя (changelog), иначе ОБЛАЧНЫЙ
+        // потолок профиля — вызов заканчивается на claude даже у действий на локали.
+        var effTimeout = timeout ?? CloudTimeoutFor(actionKey);
+        // Потолок вывода: явный override потребителя (changelog), иначе облачный дефолт
+        // профиля. NumPredict — для Ollama и не подходит для облака: модель обрезала бы
+        // крупный JSON на полуслове (прод 2026-08-05).
+        var effMaxTokens = maxTokens ?? CloudNumPredictFor(actionKey);
 
         // Шаг 1 — выбранная модель. Direct → прямой адаптер (usage нет), иначе провайдер через
         // claude CLI (usage есть).
@@ -247,9 +318,19 @@ public sealed class CheapTextRunner(
         }
 
         // Шаг 3 — claude: маршрут-слот берёт модель слота, иначе модель действия из его конфига.
+        // Один повтор при таймауте — как в RunAsync (см. там).
         var effFallback = EffectiveFallback(route, fallbackModel, ownerId);
-        return await claude.RunDetailedAsync(prompt, claude.NormalizeModel(effFallback), effTimeout, ct, ownerId,
-            label: actionKey);
+        var claudeModel = claude.NormalizeModel(effFallback);
+        try
+        {
+            return await claude.RunDetailedAsync(prompt, claudeModel, effTimeout, ct, ownerId, label: actionKey);
+        }
+        catch (LlmTimeoutException) when (!ct.IsCancellationRequested)
+        {
+            log.LogWarning("cheap-runner (detailed): действие {Action} не ответило за {Timeout} — повторяю один раз",
+                actionKey, effTimeout);
+            return await claude.RunDetailedAsync(prompt, claudeModel, effTimeout, ct, ownerId, label: actionKey);
+        }
     }
 
     // Выбранная провайдерская модель через claude CLI, с расходом. null — шаг не удался.

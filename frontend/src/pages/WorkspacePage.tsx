@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, type ReactNode } from 'react';
-import { Plus, MessageCircle, Network } from 'lucide-react';
+import { useState, useEffect, useRef, useCallback, useMemo, useLayoutEffect, useReducer, type ReactNode } from 'react';
+import { Plus, MessageCircle, Network, Puzzle, GitCompare, BookOpen } from 'lucide-react';
 import type { Project, Session, SkillsData, AuthState, Task, ProjectService } from '../types';
 import { SessionList } from '../components/SessionList';
 import { FileExplorer } from '../components/FileExplorer';
@@ -13,7 +13,7 @@ import { SESSION_KEYS } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { UsageScreen } from '../components/UsageScreen';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
-import { loadWorkspaceState, saveWorkspaceState } from '../lib/workspaceState';
+import { loadWorkspaceState, saveWorkspaceState, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { C, FONT } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
@@ -22,7 +22,7 @@ import { ToolbarOverflowMenu, type OverflowItem } from '../components/ToolbarOve
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
 import { BackButton, Button, IconButton } from '../components/ui';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 import { showToast } from '../lib/toast';
 import { navPush, navReplace, parseHash, type NavSnapshot } from '../lib/nav';
@@ -48,12 +48,17 @@ import { TerminalView } from '../components/terminal/TerminalView';
 import { PreviewView } from '../components/preview/PreviewView';
 import * as terminalApi from '../lib/terminalSignalr';
 import { DesktopWorkspace } from './workspace/DesktopWorkspace';
-import type { PanelKey } from './workspace/panelStackState';
+import { useProjectTerminals } from '../hooks/useProjectTerminals';
+import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
+import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
+import { wsPanels } from './workspace/panelStackState';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
+import { SkillsPanel } from '../components/SkillsPanel';
 import { CodeGraphDocument } from '../features/codegraph/CodeGraphDocument';
 import { buildCodeGraph } from '../lib/codeGraph';
+import { useReaderPanel } from './workspace/reader/useReaderPanel';
 
 interface Props {
   project: Project;
@@ -64,8 +69,8 @@ interface Props {
   onLogout: () => void;
 }
 
-type LeftTab = 'sessions' | 'files' | 'tasks' | 'personas' | 'tools';
-type FileSubTab = 'files' | 'knowledge';
+// LeftTab живёт в lib/workspaceState — там же, где список для восстановления из
+// localStorage: держать union в двух местах уже приводило к потерянным вкладкам
 
 // Иконки вкладок проекта для мобильного компакт-режима (Feather-стиль, как HubTabs)
 const leftTabSvg = (children: React.ReactNode) => (
@@ -75,8 +80,15 @@ const leftTabSvg = (children: React.ReactNode) => (
 const LEFT_TAB_ICONS: Record<LeftTab, React.ReactNode> = {
   sessions: leftTabSvg(<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z" />),
   files: leftTabSvg(<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />),
+  // Та же иконка, что у панели «Изменения» в рельсе (PANEL_META.changes): на мобиле
+  // рельсы нет, и вкладка — единственный путь к git
+  changes: <GitCompare size={18} strokeWidth={2} />,
+  // База знаний проекта — иконка панели knowledge из того же реестра
+  knowledge: <BookOpen size={18} strokeWidth={2} />,
   tasks: leftTabSvg(<><path d="M9 11l3 3L22 4" /><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" /></>),
   personas: leftTabSvg(<><circle cx="12" cy="8" r="4" /><path d="M4 20c0-4 3.6-6 8-6s8 2 8 6" /></>),
+  // Пазл — та же метафора, что у панели «Навыки» в рельсе (PANEL_META.skills)
+  skills: <Puzzle size={18} strokeWidth={2} />,
   tools: leftTabSvg(<><polyline points="4 17 10 11 4 5" /><line x1="12" y1="19" x2="20" y2="19" /></>),
 };
 
@@ -117,7 +129,7 @@ function useViewportHeight() {
 // ремонтирует всё поддерево — xterm пересоздаётся, экран чернеет, ввод/вывод теряются.
 function ToolsPaneView({
   projectId, toolsTab, terminals, activeTerminalId, activeTerminalName, terminalBusy,
-  onTerminalActivity, previewServices, activePreviewId, onStopPreview, onBack,
+  onTerminalActivity, previewServices, activePreviewId, onStopPreview, onClosePreview, onBack,
 }: {
   projectId: string
   toolsTab: 'terminal' | 'preview'
@@ -129,6 +141,7 @@ function ToolsPaneView({
   previewServices: ProjectService[]
   activePreviewId: string | null
   onStopPreview: (id: string) => void
+  onClosePreview: () => void
   onBack?: () => void
 }) {
   const activePreview = previewServices.find(s => s.id === activePreviewId);
@@ -159,7 +172,7 @@ function ToolsPaneView({
             </svg>
           )}
           <span style={{ fontSize: 14, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {toolsTab === 'terminal' ? (activeTerminalName ?? 'Терминал') : 'Preview'}
+            {toolsTab === 'terminal' ? (activeTerminalName ?? 'Терминал') : 'Сервисы'}
           </span>
           {/* Индикатор активности терминала */}
           {toolsTab === 'terminal' && activeTerminalId && (
@@ -204,6 +217,8 @@ function ToolsPaneView({
             service={activePreview}
             projectId={projectId}
             onStop={onStopPreview}
+            onClose={onClosePreview}
+            services={previewServices}
           />
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontSize: 14 }}>
@@ -215,17 +230,60 @@ function ToolsPaneView({
   );
 }
 
+// ── История открытых файлов (back/forward в тулбаре FileViewer) ──
+// Запись — полный контекст открытия: путь + якорь/строка для скролла + режим diff/stage,
+// чтобы навигация туда-обратно восстанавливала вид, в котором файл открывали.
+interface FileHistoryEntry {
+  path: string;
+  anchor?: string;        // слаг раздела md («foo.md#раздел»)
+  line?: number;          // строка кода (из графа / ссылок на строку)
+  diffMode?: boolean;     // открытие на вкладке Diff
+  gitStagePath?: string | null;  // unstaged-файл для зернистого stage
+}
+
+interface FileHistoryState { entries: FileHistoryEntry[]; cursor: number }
+
+type FileHistoryAction =
+  | { type: 'push'; entry: FileHistoryEntry }
+  | { type: 'back' }
+  | { type: 'forward' };
+
+// Дедуп: подряд тот же путь в том же виде — не дублируем (двойной клик по той же ссылке,
+// повторное открытие из дерева). Якорь/строка/diff/stage должны совпасть тоже.
+function sameHistEntry(a: FileHistoryEntry, b: FileHistoryEntry): boolean {
+  return a.path === b.path
+    && (a.anchor ?? null) === (b.anchor ?? null)
+    && (a.line ?? null) === (b.line ?? null)
+    && !!a.diffMode === !!b.diffMode
+    && (a.gitStagePath ?? null) === (b.gitStagePath ?? null);
+}
+
+function histReducer(s: FileHistoryState, a: FileHistoryAction): FileHistoryState {
+  switch (a.type) {
+    case 'push': {
+      const cur = s.cursor >= 0 ? s.entries[s.cursor] : undefined;
+      if (cur && sameHistEntry(cur, a.entry)) return s;
+      // Обрезаем «форвард» после курсора — как в браузере: новая навигация
+      // аннулирует всё, что было прокручено вперёд кнопкой «назад»
+      const trimmed = s.entries.slice(0, s.cursor + 1);
+      return { entries: [...trimmed, a.entry], cursor: trimmed.length };
+    }
+    case 'back':
+      return s.cursor > 0 ? { ...s, cursor: s.cursor - 1 } : s;
+    case 'forward':
+      return s.cursor < s.entries.length - 1 ? { ...s, cursor: s.cursor + 1 } : s;
+  }
+}
+
 export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLogout }: Props) {
   // Восстанавливаем состояние окна для этого проекта (компонент перемонтируется при входе в проект)
   const [leftTab, setLeftTab] = useState<LeftTab>(() => {
     const savedRaw = loadWorkspaceState(project.id)?.leftTab;
     // Сохранённое 'agents' — ключ до переименования вкладки персон
     const saved = (savedRaw as string) === 'agents' ? 'personas' : savedRaw;
-    const ok = saved === 'sessions' || saved === 'files' || saved === 'tasks'
-      || saved === 'personas' || saved === 'tools';
-    return ok && (saved !== 'tools' || project.toolsEnabled) ? saved! : 'sessions';
+    if (!isLeftTab(saved)) return 'sessions';
+    return saved;
   });
-  const [fileSubTab, setFileSubTab] = useState<FileSubTab>(() => loadWorkspaceState(project.id)?.fileSubTab ?? 'files');
   const [activeSession, setActiveSession] = useState<Session | null>(() => {
     // Стартовая сессия от «Поговорить» проектной персоны (раздел «Персоны»): проект уже
     // открыт App-ом, сессию выбираем здесь — SessionList не перебьёт её авто-выбором list[0].
@@ -246,6 +304,13 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [gitStagePath, setGitStagePath] = useState<string | null>(null);
   // Номер строки для скролла при открытии файла (из графа) — сбрасывается после применения
   const [scrollToLine, setScrollToLine] = useState<number | undefined>(undefined);
+  // Слаг раздела для скролла при открытии md по ссылке с якорем («foo.md#раздел»).
+  // null — якоря нет; FileViewer сбрасывает потребление через ref, здесь только источник
+  const [scrollToAnchor, setScrollToAnchor] = useState<string | null>(null);
+  // История открытых файлов для back/forward. cursor = -1 — история пуста (файл ещё не открыт).
+  const [hist, histDispatch] = useReducer(histReducer, { entries: [], cursor: -1 });
+  const canFileBack = hist.cursor > 0;
+  const canFileForward = hist.cursor >= 0 && hist.cursor < hist.entries.length - 1;
   // Коммит открыт из git-панели «История» → просмотр в контентной области
   const [openCommitSha, setOpenCommitSha] = useState<string | null>(null);
   // Файл коммита, на котором сразу открыть diff (клик по файлу в стеке «Изменения»); null — первый
@@ -254,6 +319,14 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // что и openFile: крестик возвращает центр к чату, открытие любого другого документа
   // (файл/задача/чат) закрывает граф. Открывается из панели «Граф» в рельсе.
   const [graphOpen, setGraphOpen] = useState(false);
+  // Ридер ссылок: живёт как просмотр файла — сплит с чатом либо на всю контентную
+  // зону (см. DesktopWorkspace). Один экземпляр состояния на страницу.
+  const readerFlag = useFeature(FLAGS.linkReader);
+  const reader = useReaderPanel();
+  // «История решений»: реветь панель по клику на файл в файловом менеджере — той
+  // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
+  // у FileViewer (правим раскладку напрямую через стор зон)
+  const { reveal: revealPanelKey } = wsPanels.use();
   const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   const [showUsage, setShowUsage] = useState(false);
@@ -274,110 +347,32 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
     return () => window.removeEventListener('cc-open-project-session', open);
   }, [project.id]);
 
-  // Плашка «Изменения сохранены» в чате (док-режим) → открыть просмотр коммита хода
-  useEffect(() => {
-    const openCommit = (e: Event) => {
-      const d = (e as CustomEvent<{ projectId?: string; sha?: string }>).detail;
-      if (d?.sha && d.projectId === project.id) handleOpenCommit(d.sha);
-    };
-    window.addEventListener('cc-open-commit', openCommit);
-    return () => window.removeEventListener('cc-open-commit', openCommit);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  // Плашка «Изменения сохранены» в чате (док-режим) → открыть просмотр коммита хода.
+  // Сам обработчик — ниже (после объявления isMobile), эффект-подписка тоже там.
+
   const [editProjectOpen, setEditProjectOpen] = useState(false);
   const [projectForEdit, setProjectForEdit] = useState(project);
   type ToolsTab = 'terminal' | 'preview';
   const [toolsTab, setToolsTab] = useState<ToolsTab>('terminal');
-  const [activeTerminalId, setActiveTerminalId] = useState<string | null>(null);
-  const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
-  const [previewServices, setPreviewServices] = useState<ProjectService[]>([]);
   const [terminalBusy, setTerminalBusy] = useState(false);
-  // Список терминалов проекта — поднят сюда (не в ToolsSidebar): нужен и хедеру ToolsPane
-  // для имени активного, а на мобиле сайдбар и контент — разные вью и не смонтированы разом.
-  const [terminals, setTerminals] = useState<terminalApi.TerminalInfo[]>([]);
+
+  // Терминалы и сервисы — общие хуки (их же зовёт «Стена»); воркспейсная навигация
+  // осталась здесь: старт сервиса переключает вкладку инструментов (onStarted)
+  const {
+    terminals, activeTerminalId, setActiveTerminalId,
+    create: handleCreateTerminal, stop: handleStopTerminal, rename: handleRenameTerminal,
+  } = useProjectTerminals(project.id);
   const activeTerminalName = terminals.find(t => t.id === activeTerminalId)?.name;
 
-  const refreshTerminals = useCallback(async () => {
-    try { setTerminals(await terminalApi.listTerminals(project.id)); } catch { /* офлайн */ }
-  }, [project.id]);
+  const onServiceStarted = useCallback(() => setToolsTab('preview'), []);
+  const {
+    services: previewServices, activePreviewId, setActivePreviewId,
+    refresh: refreshServices, start: startService, stop: stopService,
+  } = useProjectServices(project.id, { onStarted: onServiceStarted });
 
-  // Список терминалов держим всегда: он нужен и вкладке «Инструменты», и панельке
-  // терминала в интерфейсе панелей проекта (она доступна независимо от активной вкладки)
-  useEffect(() => {
-    void refreshTerminals();
-    return terminalApi.onTerminalMessage(msg => {
-      if (msg.type === 'terminal_status') void refreshTerminals();
-      else if (msg.type === 'terminal_renamed' && msg.terminalId) {
-        setTerminals(prev => prev.map(t => t.id === msg.terminalId ? { ...t, name: msg.name ?? t.name } : t));
-      }
-    });
-  }, [leftTab, refreshTerminals]);
-
-  const handleCreateTerminal = useCallback(async () => {
-    try {
-      const t = await terminalApi.createTerminal(project.id);
-      setTerminals(prev => [...prev.filter(x => x.id !== t.id), t]);
-      setActiveTerminalId(t.id);
-    } catch { /* офлайн */ }
-  }, [project.id]);
-
-  const handleStopTerminal = useCallback(async (id: string) => {
-    await terminalApi.stopTerminal(id);
-    setActiveTerminalId(prev => prev === id ? null : prev);
-    void refreshTerminals();
-  }, [refreshTerminals]);
-
-  const handleRenameTerminal = useCallback(async (id: string, name: string) => {
-    try {
-      const updated = await terminalApi.renameTerminal(id, name);
-      if (updated) setTerminals(prev => prev.map(t => t.id === id ? updated : t));
-    } catch { /* офлайн */ }
-  }, []);
-
-  // ── Preview: список сервисов проекта + запуск/остановка ─────────────────
-  const refreshServices = useCallback(async () => {
-    try {
-      const r = await api.projects.services(project.id);
-      setPreviewServices(r.services);
-      if (r.activeServiceId) setActivePreviewId(r.activeServiceId);
-    } catch { /* офлайн — оставляем как есть */ }
-  }, [project.id]);
-
-  const startService = useCallback(async (svc: ProjectService) => {
-    setPreviewServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'starting', error: null } : s));
-    setActivePreviewId(svc.id);
-    setToolsTab('preview');
-    try {
-      const r = await api.projects.previewStart(project.id, {
-        serviceId: svc.id, name: svc.name, command: svc.command, args: svc.args,
-        cwd: svc.cwd ?? undefined, port: svc.suggestedPort ?? undefined, autoPort: svc.autoPort,
-      });
-      setPreviewServices(prev => prev.map(s => s.id === svc.id
-        ? { ...s, status: r.status, runningPort: r.port ?? null, error: r.error ?? null }
-        : s));
-    } catch {
-      setPreviewServices(prev => prev.map(s => s.id === svc.id ? { ...s, status: 'error' } : s));
-    }
-  }, [project.id]);
-
-  const stopService = useCallback(async (serviceId: string) => {
-    try { await api.projects.previewStop(project.id, serviceId); } catch { /* ignore */ }
-    setPreviewServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'stopped', runningPort: null } : s));
-  }, [project.id]);
-
-  // Живой статус сервисов из broadcast preview_status (группа user_*)
-  useEffect(() => {
-    return onMessage(msg => {
-      if (msg.type !== 'preview_status' || !msg.serviceId) return;
-      const sid = msg.serviceId;
-      setPreviewServices(prev => prev.map(s => s.id === sid
-        ? { ...s, status: msg.status, runningPort: msg.port ?? s.runningPort, error: msg.error ?? null }
-        : s));
-    });
-  }, []);
-
+  // Зеркало активной сессии для колбэков эффектов (реконнект SignalR читает свежее значение)
   const activeSessionRef = useRef<Session | null>(null);
-  activeSessionRef.current = activeSession;
+  useEffect(() => { activeSessionRef.current = activeSession; }, [activeSession]);
 
   // Стор персон — чтобы SessionList показал аватар/имя персоны у её сессий,
   // а вкладка «Команда» знала, есть ли персоны у проекта (для пустого стейта)
@@ -385,13 +380,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // Нужно для резолва контекста «в рамках какой задачи» в ArtifactsPanel/бэйджах чата
   // (плашка в ChatOriginBadge полагается на getTaskById из уже загруженного стора)
   useEffect(() => { void ensureTasksLoaded(); }, []);
-
-  // Инструменты выключили в настройках (projectForEdit) — уводим с вкладки «Инструменты»,
-  // иначе останется висеть недоступный режим. При включении вкладка появится сама
-  // (leftTabOptions пересчитывается из projectForEdit) — перезагрузка не нужна.
-  useEffect(() => {
-    if (leftTab === 'tools' && !projectForEdit.toolsEnabled) setLeftTab('sessions');
-  }, [projectForEdit.toolsEnabled, leftTab]);
 
   // Вкладка «Команда»: список персон — в сайдбаре, форма — в центральной зоне.
   // Состояние выбора поднято сюда, чтобы синхронизировать список ↔ форму.
@@ -486,7 +474,30 @@ const windowWidth = useWindowWidth();
   const viewportH = useViewportHeight();
   const isMobile = windowWidth <= MOBILE_MAX;
   const isTablet = windowWidth > MOBILE_MAX && windowWidth <= TABLET_MAX;
-  // Выбранный в панельке «Preview» сервис — его окно живёт в центре нового режима
+
+  // из git-панели «История»/«Изменения» → просмотр коммита в контентной области;
+  // filePath — открыть diff сразу на этом файле (клик по файлу коммита), иначе первый
+  const handleOpenCommit = useCallback((sha: string, filePath?: string) => {
+    setOpenFile(null);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setFileFullscreen(false);
+    setOpenCommitFile(filePath ?? null);
+    setOpenCommitSha(sha);
+    setGraphOpen(false);
+    if (isMobile) setMobileView('chat');
+  }, [isMobile]);
+
+  // Плашка «Изменения сохранены» в чате (док-режим) → открыть просмотр коммита хода
+  useEffect(() => {
+    const openCommit = (e: Event) => {
+      const d = (e as CustomEvent<{ projectId?: string; sha?: string }>).detail;
+      if (d?.sha && d.projectId === project.id) handleOpenCommit(d.sha);
+    };
+    window.addEventListener('cc-open-commit', openCommit);
+    return () => window.removeEventListener('cc-open-commit', openCommit);
+  }, [project.id, handleOpenCommit]);
+  // Выбранный в панельке «Сервисы» сервис — его окно живёт в центре нового режима
   const ccActivePreview = previewServices.find(s => s.id === activePreviewId) ?? null;
 
   // Задачи (за фич-флагом): вкладка «Задачи» в сайдбаре + карточка задачи в центре.
@@ -549,6 +560,7 @@ const windowWidth = useWindowWidth();
   const [boardColumns, setBoardColumns] = useState<BoardColumn[] | undefined>(project.boardColumns);
   const [columnsDialog, setColumnsDialog] = useState(false);
   // Проект мог освежиться серверными данными (App refetch) — подхватываем колонки из пропа
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация колонок доски с данными проекта
   useEffect(() => { setBoardColumns(project.boardColumns); }, [project]);
   const projectColumns = useMemo(() => resolveColumns(boardColumns), [boardColumns]);
   // Число задач в каждой колонке — для предупреждения при удалении непустой колонки
@@ -572,6 +584,27 @@ const windowWidth = useWindowWidth();
       onClose={() => setColumnsDialog(false)}
     />
   );
+  const handleSelectTask = (task: Task, autoEdit?: boolean) => {
+    setSelectedTaskId(task.id);
+    setAutoEditTaskId(autoEdit ? task.id : null);
+    // Открытый файл и граф уступают место карточке задачи
+    setOpenFile(null);
+    setGraphOpen(false);
+    if (isMobile) {
+      setMobileView('chat');
+      navPush({ screen: 'project', project, view: 'chat', file: null, task: task.id });
+    } else {
+      navPush({ screen: 'project', project, view: mobileView, file: null, task: task.id });
+    }
+  };
+
+  // «Открыть задачу» из записи истории решений: панель знает только id, карточка
+  // задачи хочет объект целиком — ищем в уже загруженном списке задач проекта
+  const handleOpenDossierTask = (taskId: string) => {
+    const t = allTasks.find(x => x.id === taskId);
+    if (t) handleSelectTask(t);
+  };
+
   const ProjectBoardArea = (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {isMobile && (
@@ -600,38 +633,24 @@ const windowWidth = useWindowWidth();
     </div>
   );
 
-  const handleSelectTask = (task: Task, autoEdit?: boolean) => {
-    setSelectedTaskId(task.id);
-    setAutoEditTaskId(autoEdit ? task.id : null);
-    // Открытый файл и граф уступают место карточке задачи
-    setOpenFile(null);
-    setGraphOpen(false);
-    if (isMobile) {
-      setMobileView('chat');
-      navPush({ screen: 'project', project, view: 'chat', file: null, task: task.id });
-    } else {
-      navPush({ screen: 'project', project, view: mobileView, file: null, task: task.id });
-    }
-  };
-
-  // Переход из карточки задачи в связанный диалог
-  const handleOpenTaskSession = async (sessionId: string) => {
-    try {
-      const sessions = await api.sessions.list(project.id);
-      const s = sessions.find(x => x.id === sessionId);
-      if (!s) return;
-      if (!isMobile) navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null });
-      setLeftTab('sessions');
-      handleSelectSession(s);
-    } catch { /* офлайн — остаёмся на задаче */ }
-  };
+  // Переход из карточки задачи в связанный диалог — объявлен ниже, после handleSelectSession
 
   const leftTabOptions: { value: LeftTab; label: string; icon?: ReactNode }[] = [
     { value: 'sessions', label: 'Чаты', icon: LEFT_TAB_ICONS.sessions },
     { value: 'files', label: 'Файлы', icon: LEFT_TAB_ICONS.files },
+    // Порядок тот же, что у панелей в рельсе (PANEL_KEYS): файлы → их изменения →
+    // задачи по ним, дальше справочное. На десктопе это панели, здесь рельсы нет —
+    // иначе git и знания с телефона недоступны совсем
+    { value: 'changes' as LeftTab, label: 'Изменения', icon: LEFT_TAB_ICONS.changes },
     { value: 'tasks', label: 'Задачи', icon: LEFT_TAB_ICONS.tasks },
+    { value: 'knowledge' as LeftTab, label: 'Знания', icon: LEFT_TAB_ICONS.knowledge },
     { value: 'personas' as LeftTab, label: 'Команда', icon: LEFT_TAB_ICONS.personas },
-    ...(projectForEdit.toolsEnabled ? [{ value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools }] : []),
+    // На десктопе навыки живут панелью в рельсе; на мобиле рельсы панелей проекта нет,
+    // поэтому им нужна своя вкладка — иначе доступ к ним с телефона пропадает совсем
+    { value: 'skills' as LeftTab, label: 'Навыки', icon: LEFT_TAB_ICONS.skills },
+    // На мобиле рельсы панелей проекта нет, и ящик рельсы не работает — поэтому
+    // Терминал/Сервисы доступны только через эту вкладку (на десктопе они панелями)
+    { value: 'tools' as LeftTab, label: 'Инструменты', icon: LEFT_TAB_ICONS.tools },
   ];
 
   // Мобильный таббар проекта: показываем столько вкладок, сколько влезает по ширине
@@ -695,10 +714,7 @@ const windowWidth = useWindowWidth();
 
   // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
   // проекте — открываем её на месте (переключаемся на «Чаты» и выбираем).
-  const handleOpenPersonaChat = (session: Session) => {
-    setLeftTab('sessions');
-    handleSelectSession(session);
-  };
+  // Обработчик объявлен ниже, после handleSelectSession.
 
   // Диплинк файла: App положил «projectId|путь» в sessionStorage.
   // Значение чужого проекта не трогаем — его заберёт WorkspacePage нужного проекта.
@@ -709,6 +725,7 @@ const windowWidth = useWindowWidth();
     const [pid, path] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
     if (pid !== project.id) return;
     sessionStorage.removeItem('cc_pending_file');
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое потребление диплинка из sessionStorage
     setOpenFile(path);
     setFileFullscreen(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -778,28 +795,7 @@ const windowWidth = useWindowWidth();
   }, [project.id]);
 
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
-  useEffect(() => {
-    const consumePendingProjectChat = async () => {
-      const raw = sessionStorage.getItem('cc_pending_project_chat');
-      if (!raw) return;
-      const sep = raw.indexOf('|');
-      const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
-      if (pid !== project.id) return;
-      sessionStorage.removeItem('cc_pending_project_chat');
-      try {
-        const sessions = await api.sessions.list(project.id);
-        const s = sessions.find(x => x.id === chatId);
-        if (s) {
-          setLeftTab('sessions');
-          handleSelectSession(s);
-        }
-      } catch { /* офлайн — остаёмся как есть */ }
-    };
-    consumePendingProjectChat();
-    window.addEventListener('cc-pending-project-chat', consumePendingProjectChat);
-    return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project.id]);
+  // Эффект-подписка объявлена ниже, после handleSelectSession.
   // Сайдбар, его ширина и сплиттеры жили здесь, пока десктоп рисовался этим
   // компонентом. Теперь десктоп и планшет — DesktopWorkspace с рельсами панелей
   // (ширина и сворачивание в состоянии зон), а мобильная ветка сайдбара не имеет.
@@ -823,22 +819,13 @@ const windowWidth = useWindowWidth();
     setSelectedTaskId(null);
     setActivePreviewId(null);
     if (isMobile) setMobileView('chat');
-  }, [isMobile]);
+  }, [isMobile, setActivePreviewId]);
 
   // «Построить граф» (empty-state документа и панели): явный POST-build на бэке,
   // стор сам переходит в 'building' и дожидается готовности polling'ом.
   const handleGraphBuild = useCallback(() => {
     void buildCodeGraph(project.id);
   }, [project.id]);
-
-  // Явная активация панели из рельсы (клик открыл её). У графа, в отличие от
-  // «Файлов»/«Задач», нет списка элементов — панель инспектирует единственный
-  // документ, поэтому открываем его в центре вместе с панелью. Вешать на mount
-  // панели нельзя: она монтируется и при восстановлении раскладки из localStorage,
-  // и граф выпрыгивал бы поверх чата при каждом входе в проект.
-  const handlePanelOpen = useCallback((k: PanelKey) => {
-    if (k === 'graph') ensureGraphOpen();
-  }, [ensureGraphOpen]);
 
   // Панели сессии для МОБИЛЬНОЙ ветки (десктоп собирает их в DesktopWorkspace).
   // Раньше их строила правая зона внутри себя — теперь контент приходит снаружи.
@@ -908,6 +895,49 @@ const windowWidth = useWindowWidth();
     setProjectGate(false);
   }, []);
 
+  // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
+  useEffect(() => {
+    const consumePendingProjectChat = async () => {
+      const raw = sessionStorage.getItem('cc_pending_project_chat');
+      if (!raw) return;
+      const sep = raw.indexOf('|');
+      const [pid, chatId] = sep === -1 ? [project.id, raw] : [raw.slice(0, sep), raw.slice(sep + 1)];
+      if (pid !== project.id) return;
+      sessionStorage.removeItem('cc_pending_project_chat');
+      try {
+        const sessions = await api.sessions.list(project.id);
+        const s = sessions.find(x => x.id === chatId);
+        if (s) {
+          setLeftTab('sessions');
+          handleSelectSession(s);
+        }
+      } catch { /* офлайн — остаёмся как есть */ }
+    };
+    consumePendingProjectChat();
+    window.addEventListener('cc-pending-project-chat', consumePendingProjectChat);
+    return () => window.removeEventListener('cc-pending-project-chat', consumePendingProjectChat);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSelectSession немемоизирован: включение переустанавливало бы подписку каждый рендер; функция свежая на момент события (эффект после её объявления)
+  }, [project.id]);
+
+  // Переход из карточки задачи в связанный диалог
+  const handleOpenTaskSession = async (sessionId: string) => {
+    try {
+      const sessions = await api.sessions.list(project.id);
+      const s = sessions.find(x => x.id === sessionId);
+      if (!s) return;
+      if (!isMobile) navPush({ screen: 'project', project, view: 'sidebar', file: null, task: null });
+      setLeftTab('sessions');
+      handleSelectSession(s);
+    } catch { /* офлайн — остаёмся на задаче */ }
+  };
+
+  // «Поговорить» из проектной вкладки «Команда»: сессия персоны создаётся в этом
+  // проекте — открываем её на месте (переключаемся на «Чаты» и выбираем).
+  const handleOpenPersonaChat = (session: Session) => {
+    setLeftTab('sessions');
+    handleSelectSession(session);
+  };
+
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;
   // SessionList подхватит его в список через activeSession.
@@ -919,9 +949,6 @@ const windowWidth = useWindowWidth();
       // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
       const s = await createChatWithContextPersona(
         { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null }, { mode: 'auto' });
-      // Панель чатов скрыта, пока чатов нет, — считаем сами: её SessionList ещё
-      // не смонтирован и сообщить о появлении первого чата некому
-      setChatCount(n => (n ?? 0) + 1);
       handleSelectSession(s);
     } catch (e) {
       showToast('Чат', e instanceof Error ? e.message : 'Не удалось создать чат');
@@ -952,7 +979,6 @@ const windowWidth = useWindowWidth();
   const handleClearSession = useCallback(() => {
     setActiveSession(null);
     setPendingMessage(undefined);
-    setChatCount(0);
   }, []);
 
   // Возобновление прерванного (orphaned) чата живёт внутри ChatPanel: обычный ход
@@ -962,8 +988,8 @@ const windowWidth = useWindowWidth();
 
   // Запоминаем состояние окна (активный чат/файл, панели) для проекта
   useEffect(() => {
-    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab, fileSubTab });
-  }, [project.id, activeSession, openFile, fileFullscreen, leftTab, fileSubTab]);
+    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab });
+  }, [project.id, activeSession, openFile, fileFullscreen, leftTab]);
 
   // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
@@ -986,24 +1012,6 @@ const windowWidth = useWindowWidth();
       } catch { /* офлайн — оставляем как есть */ }
     });
     return () => { leaveProject(project.id).catch(() => {}); unsub(); };
-  }, [project.id]);
-
-  // Сколько чатов у проекта. Нужно ЗДЕСЬ, а не внутри панели: пустая панель «Чаты»
-  // не показывается совсем (как сайдбар в разделе «Чаты»), и пока её нет — считать
-  // некому. Точное значение приходит от SessionList, пока панель на экране;
-  // первичная загрузка и удаление чата обрабатываются тут.
-  const [chatCount, setChatCount] = useState<number | null>(null);
-  useEffect(() => {
-    let alive = true;
-    const refresh = () => {
-      api.sessions.list(project.id)
-        .then(list => { if (alive) setChatCount(list.length); })
-        .catch(() => { /* офлайн — оставляем прежнее значение */ });
-    };
-    refresh();
-    // Чат могли удалить и мимо панели (временный по сроку, другая вкладка)
-    const off = onMessage(msg => { if (msg.type === 'chat_deleted') refresh(); });
-    return () => { alive = false; off(); };
   }, [project.id]);
 
   // Обновляем статус activeSession при status_changed — иначе session.status в ChatPanel frozen
@@ -1049,6 +1057,7 @@ const windowWidth = useWindowWidth();
     };
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- WorkspacePage перемонтируется на смену проекта (key={project.id} в App), подписка на весь жизненный цикл инстанса
   }, []);
 
   // Командный центр активен → фиксируем в истории (persona: null), чтобы «назад» из
@@ -1057,10 +1066,12 @@ const windowWidth = useWindowWidth();
     if (leftTab === 'personas' && !selectedPersonaId && !personaCreating) {
       navReplace({ screen: 'project', project, view: isMobile ? mobileView : 'sidebar', file: null, task: null, persona: null });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывание только на ВХОД в командный центр; зависимости от project/mobileView плодили бы лишние записи истории при каждом переключении вида
   }, [leftTab, selectedPersonaId, personaCreating]);
 
   // из дерева файлов → всегда полноэкранный режим; опциональная строка для скролла
   const handleOpenFileFromTree = (filePath: string, line?: number) => {
+    reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
     setOpenFileDiffMode(false);
@@ -1069,10 +1080,35 @@ const windowWidth = useWindowWidth();
     setGraphOpen(false);
     setScrollToLine(line);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath, line } });
+  };
+
+  // «История решений» из файлового менеджера: открываем файл (панель фильтрует
+  // список по activeFilePath) и являем панель в её домашней зоне
+  const handleOpenDossiers = (filePath: string) => {
+    handleOpenFileFromTree(filePath);
+    revealPanelKey('dossiers');
+  };
+
+  // Переход по md-ссылке из центрального FileViewer (клик по ссылке в открытом md).
+  // В отличие от дерева, НЕ переключает режим просмотра (сплит/полный экран остаётся
+  // прежним) — читатель остаётся в том же виде, где был. anchor — слаг раздела для скролла.
+  const handleOpenDocLink = (filePath: string, anchor?: string) => {
+    reader.actions.closeReader();
+    setOpenCommitSha(null);
+    setOpenFile(filePath);
+    setOpenFileDiffMode(false);
+    setGitStagePath(null);
+    setGraphOpen(false);
+    setScrollToLine(undefined);
+    setScrollToAnchor(anchor ?? null);
+    navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath, anchor } });
   };
 
   // из чата → split на десктопе, fullscreen на планшете/мобайле
   const handleOpenFileFromChat = (filePath: string) => {
+    reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
     setOpenFileDiffMode(false);
@@ -1080,11 +1116,13 @@ const windowWidth = useWindowWidth();
     setFileFullscreen(isMobile || isTablet);
     setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath } });
   };
 
   // из git-панели «Изменения» → тот же FileViewer, но сразу на вкладке Diff;
   // для unstaged-диффа включаем зернистый stage хунков/строк
   const handleOpenGitDiff = (filePath: string, staged?: boolean) => {
+    reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
     setOpenFileDiffMode(true);
@@ -1092,20 +1130,46 @@ const windowWidth = useWindowWidth();
     setFileFullscreen(true);
     setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
+    histDispatch({ type: 'push', entry: { path: filePath, diffMode: true, gitStagePath: staged ? null : filePath } });
   };
 
-  // из git-панели «История»/«Изменения» → просмотр коммита в контентной области;
-  // filePath — открыть diff сразу на этом файле (клик по файлу коммита), иначе первый
-  const handleOpenCommit = (sha: string, filePath?: string) => {
+  // Back/Forward по истории открытых файлов. Восстанавливают контекст записи
+  // (путь + режим diff/stage + скролл), НЕ трогая режима просмотра (split/fullscreen),
+  // граф и читалку — это переключение файла, а не новое открытие. push при этом не идёт,
+  // иначе каждая навигация плодила бы копии и кнопка «вперёд» обрезалась бы.
+  const applyHistEntry = (e: FileHistoryEntry) => {
+    setOpenFile(e.path);
+    setOpenFileDiffMode(!!e.diffMode);
+    setGitStagePath(e.gitStagePath ?? null);
+    setScrollToLine(e.line);
+    setScrollToAnchor(e.anchor ?? null);
+    navPush({ screen: 'project', project, view: mobileView, file: e.path });
+  };
+  const handleFileBack = () => {
+    if (hist.cursor <= 0) return;
+    const entry = hist.entries[hist.cursor - 1];
+    histDispatch({ type: 'back' });
+    applyHistEntry(entry);
+  };
+  const handleFileForward = () => {
+    if (hist.cursor < 0 || hist.cursor >= hist.entries.length - 1) return;
+    const entry = hist.entries[hist.cursor + 1];
+    histDispatch({ type: 'forward' });
+    applyHistEntry(entry);
+  };
+
+  // Открыть URL в ридере (кнопка-компаньон у внешней ссылки в чате) — как открытие
+  // файла: вытесняет открытый файл, ридер занимает то же место в центре
+  const handleOpenReader = (url: string) => {
     setOpenFile(null);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
     setFileFullscreen(false);
-    setOpenCommitFile(filePath ?? null);
-    setOpenCommitSha(sha);
-    setGraphOpen(false);
-    if (isMobile) setMobileView('chat');
+    reader.actions.openUrl(url);
   };
+
+  // из git-панели «История»/«Изменения» → просмотр коммита в контентной области —
+  // сам обработчик объявлен выше (useCallback handleOpenCommit), здесь только закрытие
   const closeCommitView = () => {
     setOpenCommitSha(null);
     if (isMobile) setMobileView('sidebar');
@@ -1153,7 +1217,14 @@ const windowWidth = useWindowWidth();
     setActivePreviewId(id);
     setToolsTab('preview');
     if (isMobile && id) setMobileView('chat');
-    if (id) void api.projects.previewActive(project.id, id).catch(() => {});
+    if (!id) return;
+    // Внешний сервис (поднят вне продукта) наш реестр не знает — у него свой эндпоинт,
+    // где порт берётся из конфигурации сервиса
+    const external = previewServices.find(s => s.id === id)?.status === 'external';
+    const call = external
+      ? api.projects.previewActiveExternal(project.id, id)
+      : api.projects.previewActive(project.id, id);
+    void call.catch(() => {});
   };
 
   const handleToggleFileFullscreen = () => setFileFullscreen(v => !v);
@@ -1226,6 +1297,7 @@ const windowWidth = useWindowWidth();
     projectId: project.id, toolsTab, terminals, activeTerminalId, activeTerminalName, terminalBusy,
     onTerminalActivity: setTerminalBusy, previewServices, activePreviewId,
     onStopPreview: stopService,
+    onClosePreview: () => setActivePreviewId(null),
   };
 
 
@@ -1256,9 +1328,9 @@ const windowWidth = useWindowWidth();
 
   if (isMobile) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', height: viewportH, background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-        {/* Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях */}
-        <CanvasBackdrop />
+      // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях.
+      // Высота — измеренная viewportH, а не 100dvh: см. комментарий при viewportH
+      <PageCanvas style={{ height: viewportH }}>
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
@@ -1291,11 +1363,17 @@ const windowWidth = useWindowWidth();
         <div style={{ flex: 1, display: !openFile && mobileView === 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
             {leftTab === 'sessions'
-              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onSessionsChanged={setChatCount} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              ? <SessionList project={project} activeSession={activeSession} onSelect={handleSelectSession} onSessionUpdated={handleSessionUpdated} onCleared={handleClearSession} isMobile={isMobile} workflowRunningFor={workflowRunningFor ?? undefined} />
+              : leftTab === 'changes'
+              // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
+              // экран в чат на каждую смену скоупа
+              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
               : leftTab === 'personas'
               ? <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={handleShowTeam} teamActive={!selectedPersonaId && !personaCreating} />
+              : leftTab === 'skills'
+              ? <SkillsPanel projectId={project.id} onChanged={setSkillsData} />
               : leftTab === 'tools'
               ? <ToolsSidebar projectId={project.id} activeTab={toolsTab} onTabChange={setToolsTab}
                   terminals={terminals} onCreateTerminal={handleCreateTerminal}
@@ -1305,12 +1383,14 @@ const windowWidth = useWindowWidth();
                   onRefreshServices={refreshServices} onStartService={startService}
                   onStopService={stopService} onSelectPreview={handleSelectPreview}
                   terminalBusy={terminalBusy} />
+              : leftTab === 'knowledge'
+              ? <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} />
               : (
                 <div style={{ flex: 1, overflow: 'hidden' }}>
-                  {fileSubTab === 'files'
-                    ? <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
-                    : <KnowledgePanel project={project} isMobile={isMobile} alwaysShowIcons={isTablet} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />
-                  }
+                  {/* onOpenDossiers не передаём: «История решений» на телефоне недоступна
+                      совсем (как «Документация») — панелей рельсы здесь нет, пункт
+                      меню вёл бы в никуда */}
+                  <FileExplorer project={project} activeFilePath={openFile} isMobile={isMobile} alwaysShowIcons={isTablet} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} />
                 </div>
               )
             }
@@ -1346,7 +1426,7 @@ const windowWidth = useWindowWidth();
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} />
           </div>
         )}
         {/* Просмотр коммита из git-«Истории» */}
@@ -1368,19 +1448,18 @@ const windowWidth = useWindowWidth();
             project={projectForEdit}
             onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
             onIconUpdated={setProjectForEdit}
+            onProjectUpdated={setProjectForEdit}
             onClose={() => setEditProjectOpen(false)}
           />
         )}
         {/* Обязательный онбординг проекта — оверлей поверх рабочего пространства */}
         {projectGate && <ProjectOnboardingGate project={project} onDone={handleProjectOnboardingDone} />}
-      </div>
+      </PageCanvas>
     );
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — начинается от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
       <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={() => setEditProjectOpen(true)} />
 
@@ -1396,9 +1475,8 @@ const windowWidth = useWindowWidth();
           isTablet={isTablet}
           project={project}
           projectForEdit={projectForEdit}
+          onOpenWall={() => onSwitchHub('wall')}
           railCounts={railCounts}
-          chatCount={chatCount}
-          onSessionsChanged={setChatCount}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
@@ -1419,11 +1497,19 @@ const windowWidth = useWindowWidth();
           gitStagePath={gitStagePath}
           fileFullscreen={fileFullscreen}
           onToggleFullscreen={handleToggleFileFullscreen}
+          onOpenDocLink={handleOpenDocLink}
+          scrollToAnchor={scrollToAnchor}
+          onFileBack={handleFileBack}
+          onFileForward={handleFileForward}
+          canFileBack={canFileBack}
+          canFileForward={canFileForward}
           openCommitSha={openCommitSha}
           openCommitFile={openCommitFile}
           onCloseCommit={closeCommitView}
           onOpenFileFromChat={handleOpenFileFromChat}
           onCloseFile={backFromFile}
+          readerState={reader.state}
+          readerActions={reader.actions}
           selectedTask={selectedTask}
           autoEditTaskId={autoEditTaskId}
           onOpenTaskSession={handleOpenTaskSession}
@@ -1440,31 +1526,33 @@ const windowWidth = useWindowWidth();
           boardOpen={projectBoard}
           boardArea={ProjectBoardArea}
           previewOpen={!!ccActivePreview}
-          previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} /> : null}
+          previewArea={ccActivePreview ? <PreviewView service={ccActivePreview} projectId={project.id} onStop={stopService} onClose={() => setActivePreviewId(null)} services={previewServices} /> : null}
           onClosePreview={() => setActivePreviewId(null)}
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
-          onPanelOpen={handlePanelOpen}
-          // Из projectForEdit, а не из project: настройки правят именно его, и по
-          // старому объекту Терминал с Preview появлялись в рельсе только после
-          // перезагрузки страницы
-          toolsEnabled={!!projectForEdit.toolsEnabled}
+          onOpenReader={readerFlag ? handleOpenReader : undefined}
           panels={{
-            files: fileSubTab === 'files'
-              ? <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onOpenGitDiff={handleOpenGitDiff} onOpenCommit={handleOpenCommit} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenKnowledge={() => setFileSubTab('knowledge')} />
-              : <KnowledgePanel project={project} isMobile={false} onDocumentsChanged={setIndexedFileNames} onBack={() => setFileSubTab('files')} />,
+            files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenDossiers={handleOpenDossiers} />,
+            knowledge: <KnowledgePanel project={project} isMobile={false} />,
             // Документация проекта: превью и навигация — в панели, крупное чтение —
             // «развернуть» тем же путём, что открываются остальные файлы
             docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} activeFilePath={openFile} onCloseFile={backFromFile} />,
+            // «История решений» (change-dossiers, этап 1): гейт по флагу — внутри самой
+            // панели (мокап требует видимый вход даже при выключенной фиче — она сама
+            // показывает empty-state с кнопкой «Открыть настройки»)
+            dossiers: <DossierHistoryPanel project={project} auth={auth} activeFilePath={openFile ?? openCommitFile} chatExcludedFromDossiers={!!activeSession?.excludeFromDossiers} onOpenChat={handleOpenTaskSession} onOpenTask={handleOpenDossierTask} onOpenCommit={handleOpenCommit} />,
             changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
-            graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
+            graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,
+            // Навыки и агенты рабочей папки. onChanged кладёт свежий состав в тот же
+            // skillsData, откуда композер берёт «/»-команды: установка навыка в панели
+            // видна в подсказке сразу, без перезагрузки страницы
+            skills: <SkillsPanel projectId={project.id} onChanged={setSkillsData} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
             preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
           }}
         />
-
       </div>
 
       {columnsDialogEl}
@@ -1474,11 +1562,12 @@ const windowWidth = useWindowWidth();
           project={projectForEdit}
           onSuccess={updated => { setProjectForEdit(updated); setEditProjectOpen(false); }}
           onIconUpdated={setProjectForEdit}
+          onProjectUpdated={setProjectForEdit}
           onClose={() => setEditProjectOpen(false)}
         />
       )}
       {/* Обязательный онбординг проекта — оверлей поверх рабочего пространства */}
       {projectGate && <ProjectOnboardingGate project={project} onDone={handleProjectOnboardingDone} />}
-    </div>
+    </PageCanvas>
   );
 }

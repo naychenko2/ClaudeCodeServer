@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem } from '../../../types';
 import { buildMediaVisibility, normalizeMediaUrl } from '../mediaDedup';
+import type { MediaItem } from '../MediaBlock';
 
 type ToolItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -19,7 +20,7 @@ const glifGallery = (media: Array<{ url: string; kind?: string; title?: string }
 const IMG = 'https://res.cloudinary.com/dzkwltgyd/image/upload/v1710000000/gen1.png';
 const VID = 'https://res.cloudinary.com/dzkwltgyd/video/upload/v1710000000/gen2.mp4';
 
-const visible = (map: Map<string, any[]>, id: string) => map.get(id) ?? [];
+const visible = (map: Map<string, MediaItem[]>, id: string): MediaItem[] => map.get(id) ?? [];
 
 describe('glif — дедуп project_update + media_view', () => {
   it('один и тот же image+video в двух tool-блоках → один блок, выживает media_view', () => {
@@ -32,8 +33,8 @@ describe('glif — дедуп project_update + media_view', () => {
     expect(visible(map, 'upd')).toEqual([]);
     // Галерея несёт оба медиа — ровно один img и один video (один плеер на mp4)
     const gal = visible(map, 'gal');
-    expect(gal.map((m: any) => m.kind)).toEqual(['image', 'video']);
-    expect(gal.map((m: any) => m.url)).toEqual([IMG, VID]);
+    expect(gal.map(m => m.kind)).toEqual(['image', 'video']);
+    expect(gal.map(m => m.url)).toEqual([IMG, VID]);
   });
 
   it('media_view раньше project_update в ленте — project_update всё равно скрыт', () => {
@@ -53,14 +54,14 @@ describe('glif — дедуп project_update + media_view', () => {
       tool('gal', 'mcp__glif__view_media', glifGallery([{ url: IMG, kind: 'image' }])),
     ];
     const map = buildMediaVisibility(items);
-    expect(visible(map, 'upd').map((m: any) => m.url)).toEqual([OTHER]);
+    expect(visible(map, 'upd').map(m => m.url)).toEqual([OTHER]);
     expect(visible(map, 'gal')).toHaveLength(1);
   });
 
   it('одиночный glif project_update без пары — медиа не пропадает', () => {
     const items = [tool('upd', 'mcp__glif__get_job_status', glifUpdate([{ url: IMG, kind: 'image' }, { url: VID, kind: 'video' }]))];
     const map = buildMediaVisibility(items);
-    expect(visible(map, 'upd').map((m: any) => m.kind)).toEqual(['image', 'video']);
+    expect(visible(map, 'upd').map(m => m.kind)).toEqual(['image', 'video']);
   });
 
   it('два media_view с одним URL — выживает первый, у второго дубль скрыт', () => {

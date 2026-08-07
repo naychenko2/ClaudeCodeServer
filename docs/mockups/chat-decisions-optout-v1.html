@@ -1,0 +1,630 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Тумблер «Не сохранять решения из этого чата» — v1</title>
+<style>
+  /* Токены — копия theme.css (обе темы), макет самодостаточен */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-track:        #D8CFBE;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --c-msg-bg: rgba(251, 248, 242, 0.42);
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);
+    --c-skeleton: #E4DCCC;
+    --canvas-ink: 42, 37, 31;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-track:        #453F37;
+    --c-overlay: rgba(0, 0, 0, 0.62);
+    --c-msg-bg: rgba(46, 42, 37, 0.38);
+    --c-success:      #7CB86A;
+    --c-success-bg:   #232E20;
+    --c-success-text: #8FCB79;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
+    --c-skeleton: #38332D;
+    --canvas-ink: 237, 230, 219;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 64px;
+    background: var(--c-bg-main);
+    color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .page { max-width: 1180px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 28px; max-width: 780px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading);
+    margin: 44px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  h3.sub { font-family: 'PT Serif', Georgia, serif; font-size: 16px; color: var(--c-text-heading); margin: 26px 0 6px; }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 800px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+
+  /* Переключатель темы */
+  .themebar { position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); border-radius: 10px; padding: 6px 12px;
+  }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  /* Рамка «окна продукта» */
+  .frame {
+    background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px;
+    padding: 20px 12px; box-shadow: var(--shadow-card); overflow: hidden; position: relative;
+  }
+  .frame::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .05;
+    background-image:
+      repeating-linear-gradient(45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px),
+      repeating-linear-gradient(-45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px);
+  }
+  .frame > * { position: relative; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; line-height: 1.5; }
+  .row { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+  svg.i { display: block; flex: 0 0 auto; }
+
+  /* === NewChatSetup: пилюли пустого чата (паттерн chat/NewChatSetup.tsx) === */
+  .setup { display: flex; flex-direction: column; align-items: center; gap: 10px; width: 100%; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .pill {
+    display: flex; align-items: center; gap: 9px; padding: 7px 12px;
+    border-radius: 10px; cursor: pointer; font: inherit; text-align: left;
+    border: 1px solid var(--c-border); background: var(--c-bg-white);
+  }
+  .pill.active { border-color: var(--c-accent); background: var(--c-accent-light); }
+  .pill .ic { color: var(--c-accent); display: flex; }
+  .pill .lbls { display: flex; flex-direction: column; align-items: flex-start; line-height: 1.2; min-width: 0; }
+  .pill .lbl { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--c-text-muted); }
+  .pill .val { font-size: 13px; font-weight: 600; color: var(--c-text-heading); white-space: nowrap; }
+  .pill .chev { color: var(--c-text-muted); transition: transform .15s; }
+  .pill.active .chev { transform: rotate(180deg); }
+
+  /* Инлайн-карточка под пилюлями (NewChatSetup: bgWhite + border + R.xl + shadow card, padding 12) */
+  .setup-card {
+    width: 380px; max-width: 100%;
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px;
+    box-shadow: var(--shadow-card); padding: 12px; text-align: left;
+  }
+
+  /* Строка настройки с тумблером: подпись слева, Toggle справа, подсказка под строкой */
+  .opt-row { display: flex; align-items: flex-start; gap: 12px; }
+  .opt-row .opt-label { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--c-text-heading); line-height: 1.35; padding-top: 2px; }
+  .opt-hint { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.45; margin: 8px 0 0; }
+  .opt-foot { font-size: 11.5px; color: var(--c-text-secondary); line-height: 1.45; margin: 10px 0 0; padding-top: 8px; border-top: 1px solid var(--c-border-light); display: flex; gap: 6px; align-items: flex-start; }
+  .opt-foot svg { color: var(--c-text-muted); margin-top: 1px; }
+
+  /* Toggle (ui/Toggle.tsx): 42×25, pad 3, thumb 19; off → C.track, on → C.accent */
+  .toggle {
+    width: 42px; height: 25px; border-radius: 25px; padding: 3px; flex-shrink: 0;
+    background: var(--c-track); display: flex; align-items: center; cursor: pointer;
+    transition: background .2s;
+  }
+  .toggle .th {
+    width: 19px; height: 19px; border-radius: 50%;
+    background: var(--c-bg-white); box-shadow: var(--shadow-thumb);
+    transition: margin .2s;
+  }
+  .toggle.on { background: var(--c-accent); }
+  .toggle.on .th { margin-left: 17px; }
+  .toggle:focus-visible { box-shadow: var(--shadow-focus); }
+
+  /* === Шапка начатого чата (ChatHeaderBar, hero-остров) === */
+  .chatbar {
+    max-width: 900px; margin: 0 auto;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px;
+    box-shadow: var(--shadow-island);
+    display: flex; align-items: center; gap: 10px; padding: 8px 12px; min-height: 52px;
+  }
+  .chatbar .ttl { flex: 1; min-width: 0; }
+  .chatbar .ttl .name { font-family: 'PT Serif', Georgia, serif; font-size: 16px; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .chatbar .ttl .meta { font-size: 11px; color: var(--c-text-muted); margin-top: 1px; }
+  .chatbar .acts { display: flex; align-items: center; gap: 4px; flex-shrink: 0; }
+  .hbtn {
+    display: flex; align-items: center; gap: 5px; padding: 3px 8px; height: 28px;
+    background: transparent; border: 1px solid transparent; border-radius: 10px;
+    color: var(--c-text-muted); cursor: pointer; font: inherit; font-size: 11px; font-weight: 600;
+    white-space: nowrap;
+  }
+  .hbtn:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  /* Кнопка «История решений» в состоянии «решения не сохраняются» — как временный чат
+     у ExpiryButton: обводка-пилюля, но иконка в accent, чтобы режим считывался с места */
+  .hbtn.optout { background: var(--c-bg-white); border-color: var(--c-border); }
+  .hbtn.optout .ic { color: var(--c-accent); }
+  .hbtn.optout .txt { color: var(--c-text-muted); }
+
+  /* Поповер Menu из шапки (паттерн ExpiryButton: anchor-кнопка, minWidth 300, padding 6-8) */
+  .menu {
+    width: 300px; max-width: 100%;
+    background: var(--c-bg-white); border: 1px solid var(--c-border); border-radius: 12px;
+    box-shadow: var(--shadow-dropdown); padding: 10px 12px 12px;
+  }
+  .menu-anchor-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+  /* === Панель «История решений» — остров с заметкой про исключённый чат === */
+  .island {
+    width: 340px; max-width: 100%;
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px;
+    box-shadow: var(--shadow-island); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .island-h {
+    height: 40px; flex: 0 0 40px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light);
+    display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px;
+  }
+  .island-h .ttl { font-size: 12px; color: var(--c-text-heading); font-weight: 600; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+  .island-h .ttl svg { color: var(--c-text-muted); }
+  /* Заметка «этот чат не пишется» — первым блоком тела панели, спокойный neutral,
+     не warning: это штатный режим, выбранный самим человеком, а не проблема */
+  .excl-note {
+    margin: 10px 12px 0; padding: 8px 10px;
+    background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 10px;
+    display: flex; gap: 8px; align-items: flex-start;
+  }
+  .excl-note svg { color: var(--c-accent); margin-top: 1px; }
+  .excl-note .t { font-size: 11.5px; color: var(--c-text-secondary); line-height: 1.45; }
+  .panel-body { padding: 10px 12px 16px; }
+  .panel-empty { padding: 18px 8px 8px; text-align: center; }
+  .panel-empty .big { font-size: 13px; color: var(--c-text-heading); font-weight: 600; margin-bottom: 4px; }
+  .panel-empty .small { font-size: 11.5px; color: var(--c-text-muted); line-height: 1.5; }
+
+  /* Мобильная рамка */
+  .phone { width: 360px; max-width: 100%; border-radius: 22px; padding: 12px 10px; }
+  .phone .pills { justify-content: flex-start; }
+  .phone .setup-card { width: 100%; }
+
+  /* Спека-таблица */
+  table.spec { border-collapse: collapse; width: 100%; max-width: 860px; font-size: 12px; }
+  table.spec th, table.spec td { border: 1px solid var(--c-border); padding: 6px 10px; text-align: left; vertical-align: top; line-height: 1.5; }
+  table.spec th { background: var(--c-bg-panel); color: var(--c-text-heading); font-weight: 700; }
+  table.spec td { color: var(--c-text-secondary); }
+  table.spec td:first-child { color: var(--c-text-heading); font-weight: 600; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <button class="tbtn" data-theme-btn="" aria-pressed="true">Светлая тема</button>
+    <button class="tbtn" data-theme-btn="dark" aria-pressed="false">Тёмная тема</button>
+  </div>
+
+  <h1 class="doc">Тумблер «Не сохранять решения из этого чата»</h1>
+  <p class="lead">
+    Настройка чата, которая исключает его из истории решений: записи не появятся в панели у файла
+    и не уедут в репозиторий. Живёт в двух местах, как «Время жизни»: пилюля в пустом чате
+    и кнопка в шапке начатого. Все тексты — из согласованной текстовой заметки.
+    Переключатель темы — выше.
+  </p>
+
+  <!-- ===================== 1. Пустой чат ===================== -->
+  <h2 class="sec">1. Пустой чат: пилюля в ряду настроек</h2>
+  <p class="note">
+    Рядом с «Моделью», «Усилием» и «Временем жизни» появляется четвёртая пилюля —
+    <code class="tok">История решений</code>. Показывается только у проектных чатов (как пилюля
+    «Теги»): личные чаты в историю решений не пишутся в принципе, настройка там лишняя.
+    Клик раскрывает инлайн-карточку с тумблером — тот же паттерн, что у «Времени жизни».
+  </p>
+
+  <div class="frame">
+    <div class="setup">
+      <div class="pills">
+        <button class="pill" type="button">
+          <span class="ic"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg></span>
+          <span class="lbls"><span class="lbl">Модель</span><span class="val">Claude Sonnet</span></span>
+          <svg class="i chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <button class="pill" type="button">
+          <span class="ic"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg></span>
+          <span class="lbls"><span class="lbl">Усилие</span><span class="val">Среднее</span></span>
+          <svg class="i chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <button class="pill" type="button">
+          <span class="ic"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>
+          <span class="lbls"><span class="lbl">Время жизни</span><span class="val">Бессрочно</span></span>
+          <svg class="i chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+        <button class="pill active" type="button" style="outline: 2px dashed var(--c-accent); outline-offset: 3px;">
+          <span class="ic"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+          <span class="lbls"><span class="lbl">История решений</span><span class="val">Сохраняются</span></span>
+          <svg class="i chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+
+      <div class="setup-card">
+        <div class="opt-row">
+          <div class="opt-label">Не сохранять решения из этого чата</div>
+          <div class="toggle" role="switch" aria-checked="false" aria-label="Не сохранять решения из этого чата" tabindex="0"><div class="th"></div></div>
+        </div>
+        <p class="opt-hint">Записи из этого чата не попадут в историю решений и не уедут в репозиторий.</p>
+      </div>
+    </div>
+    <p class="caption">
+      Пилюля — <code class="tok">pill()</code> NewChatSetup: иконка accent 15px (lucide
+      <code class="tok">history</code>), подпись 9.5px uppercase <code class="tok">C.textMuted</code>,
+      значение 13px/600 <code class="tok">C.textHeading</code>. Значение по умолчанию — «Сохраняются»:
+      дефолт продукта — решения пишутся, выключатель читается как исключение.
+      Карточка — <code class="tok">C.bgWhite</code> + <code class="tok">R.xl</code> +
+      <code class="tok">SHADOW.card</code>, ширина 380. Тумблер — <code class="tok">Toggle</code> из ui.
+      Пунктир — маркер «новый элемент», в продукте его нет.
+    </p>
+  </div>
+
+  <!-- ===================== 2. Состояния on/off ===================== -->
+  <h2 class="sec">2. Состояния тумблера</h2>
+  <p class="note">
+    Формулировка через «не сохранять», а не «сохранять»: дефолт — записи ведутся,
+    поэтому включённый тумблер должен читаться как осознанное исключение.
+    Подсказка под строкой не меняется от состояния — она объясняет настройку, а не статус.
+  </p>
+
+  <div class="row">
+    <div style="flex: 1 1 340px;">
+      <h3 class="sub">Выключен (дефолт) — решения сохраняются</h3>
+      <div class="frame">
+        <div class="setup-card" style="margin: 0 auto;">
+          <div class="opt-row">
+            <div class="opt-label">Не сохранять решения из этого чата</div>
+            <div class="toggle" role="switch" aria-checked="false" aria-label="Не сохранять решения из этого чата" tabindex="0"><div class="th"></div></div>
+          </div>
+          <p class="opt-hint">Записи из этого чата не попадут в историю решений и не уедут в репозиторий.</p>
+        </div>
+        <p class="caption" style="text-align:center;">
+          Трек <code class="tok">C.track</code>, бегунок слева. Пилюля в этот момент: «Сохраняются».
+        </p>
+      </div>
+    </div>
+    <div style="flex: 1 1 340px;">
+      <h3 class="sub">Включён — чат исключён из истории</h3>
+      <div class="frame">
+        <div class="setup-card" style="margin: 0 auto;">
+          <div class="opt-row">
+            <div class="opt-label">Не сохранять решения из этого чата</div>
+            <div class="toggle on" role="switch" aria-checked="true" aria-label="Не сохранять решения из этого чата" tabindex="0"><div class="th"></div></div>
+          </div>
+          <p class="opt-hint">Записи из этого чата не попадут в историю решений и не уедут в репозиторий.</p>
+          <p class="opt-foot">
+            <svg class="i" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span>Уже записанные решения останутся в истории — настройка действует на новые записи.</span>
+          </p>
+        </div>
+        <p class="caption" style="text-align:center;">
+          Трек <code class="tok">C.accent</code>, бегунок справа. Пилюля: «Не сохраняются».
+          Сноска про уже записанное появляется только во включённом состоянии —
+          снимает главный страх «а что со старыми записями?».
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== 3. Начатый чат ===================== -->
+  <h2 class="sec">3. Начатый чат: кнопка в шапке</h2>
+  <p class="note">
+    Пилюли NewChatSetup доступны только до первого сообщения — начатому чату настройка нужна
+    в шапке. Кнопка повторяет паттерн <code class="tok">ExpiryButton</code>: иконка открывает
+    поповер <code class="tok">Menu</code> с тем же блоком тумблера. Когда чат исключён, кнопка
+    становится обведённой пилюлей — как у временного чата, но иконка в accent:
+    режим считывается с места, не открывая поповер.
+  </p>
+
+  <h3 class="sub">3.1. Два состояния кнопки</h3>
+  <div class="row">
+    <div style="flex: 1 1 420px;">
+      <div class="frame">
+        <div class="chatbar">
+          <div class="ttl">
+            <div class="name">Перенос оплаты на новый провайдер</div>
+            <div class="meta">проект AI Home · Claude Sonnet</div>
+          </div>
+          <div class="acts">
+            <button class="hbtn" type="button" style="outline: 2px dashed var(--c-accent); outline-offset: 2px;" title="Решения этого чата сохраняются в историю. Нажмите, чтобы изменить.">
+              <svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+            </button>
+            <button class="hbtn" type="button" title="Время жизни">
+              <svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>
+            </button>
+          </div>
+        </div>
+        <p class="caption">
+          Дефолт: прозрачная иконка <code class="tok">history</code> в ряду кнопок шапки,
+          цвет <code class="tok">TB.iconColor</code>. Ничем не шумит — режим «сохраняем» и так обычный.
+        </p>
+      </div>
+    </div>
+    <div style="flex: 1 1 420px;">
+      <div class="frame">
+        <div class="chatbar">
+          <div class="ttl">
+            <div class="name">Эксперимент с горячим кешем</div>
+            <div class="meta">проект AI Home · Claude Sonnet</div>
+          </div>
+          <div class="acts">
+            <button class="hbtn optout" type="button" style="outline: 2px dashed var(--c-accent); outline-offset: 2px;" title="Решения этого чата не сохраняются. Нажмите, чтобы изменить.">
+              <span class="ic" style="display:flex;"><svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+              <span class="txt">Не сохраняются</span>
+            </button>
+            <button class="hbtn" type="button" title="Время жизни">
+              <svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg>
+            </button>
+          </div>
+        </div>
+        <p class="caption">
+          Чат исключён: обводка-пилюля (<code class="tok">C.bgWhite</code> +
+          <code class="tok">C.border</code>), иконка <code class="tok">C.accent</code>, подпись
+          11px/600 — постоянный индикатор в шапке. Текст только на десктопе; на мобиле — иконка.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="sub">3.2. Поповер из шапки (тумблер включён)</h3>
+  <div class="frame">
+    <div class="menu-anchor-wrap">
+      <button class="hbtn optout" type="button">
+        <span class="ic" style="display:flex;"><svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+        <span class="txt">Не сохраняются</span>
+      </button>
+      <div class="menu">
+        <div class="opt-row">
+          <div class="opt-label">Не сохранять решения из этого чата</div>
+          <div class="toggle on" role="switch" aria-checked="true" aria-label="Не сохранять решения из этого чата" tabindex="0"><div class="th"></div></div>
+        </div>
+        <p class="opt-hint">Записи из этого чата не попадут в историю решений и не уедут в репозиторий.</p>
+        <p class="opt-foot">
+          <svg class="i" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <span>Уже записанные решения останутся в истории — настройка действует на новые записи.</span>
+        </p>
+      </div>
+    </div>
+    <p class="caption">
+      Поповер — <code class="tok">Menu</code> с якорем на кнопке, minWidth 300 (мобила 260),
+      содержимое — та же строка «подпись + Toggle + подсказка», что в инлайн-карточке пустого чата.
+      Один компонент-строка на два места, как <code class="tok">ExpiryPicker</code> на пилюлю и шапку:
+      текст и разметка не разъезжаются по копиям.
+    </p>
+  </div>
+
+  <!-- ===================== 4. Индикация в панели ===================== -->
+  <h2 class="sec">4. Как человек понимает, что чат не пишется</h2>
+  <p class="note">
+    Два спокойных сигнала, ни один не кричит. Первый — обведённая пилюля в шапке (раздел 3.1).
+    Второй — заметка в панели «История решений» у файла: если человек пришёл сюда из чата-исключения
+    и удивляется пустоте, панель сама объясняет почему. Заметка нейтральная, не
+    <code class="tok">C.warning</code>: это выбранный человеком режим, а не неполадка.
+  </p>
+
+  <div class="row">
+    <div style="flex: 0 1 360px;">
+      <div class="island">
+        <div class="island-h">
+          <div class="ttl">
+            <svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+            История решений
+          </div>
+        </div>
+        <div class="excl-note">
+          <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          <div class="t">Решения из этого чата не сохраняются. Изменить можно в шапке чата — кнопка с иконкой истории.</div>
+        </div>
+        <div class="panel-body">
+          <div class="panel-empty">
+            <div class="big">Записей пока нет</div>
+            <div class="small">Из других чатов решения по этому файлу появятся здесь после первого коммита.</div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">
+        Заметка — первым блоком тела панели: карточка <code class="tok">C.bgCard</code> +
+        <code class="tok">C.borderLight</code> + <code class="tok">R.lg</code>, иконка accent,
+        текст 11.5px <code class="tok">C.textSecondary</code>. Показывается, только когда панель
+        открыта из чата с включённым «не сохранять»; в остальных случаях панель не меняется.
+      </p>
+    </div>
+    <div style="flex: 1 1 320px; min-width: 280px;">
+      <p class="note" style="margin-top: 2px;">
+        Почему не бейдж в списке чатов и не тост: исключение из истории — тихий фоновый режим,
+        как «временный чат» до появления ExpiryButton. Человеку достаточно увидеть его там,
+        где он с этим режимом сталкивается: в шапке своего чата и в панели, где он ждёт записи.
+        Бейдж в списке чатов превратил бы редкую настройку в перманентный шум для всех чатов.
+      </p>
+      <p class="note">
+        Tooltip кнопки в шапке дублирует состояние словами: «Решения этого чата не сохраняются.
+        Нажмите, чтобы изменить.» — для скринридера и наведения.
+      </p>
+    </div>
+  </div>
+
+  <!-- ===================== 5. Мобила ===================== -->
+  <h2 class="sec">5. Мобильная раскладка (360px)</h2>
+  <p class="note">
+    Пилюли переносятся в две строки, карточка — на всю ширину (поведение
+    <code class="tok">NewChatSetup</code> на мобиле). В шапке у кнопки-исключения пропадает подпись
+    «Не сохраняются» — остаётся обведённая иконка accent, как остаток времени пропадает у
+    временного чата. Поповер сужается до 260px, тумблер остаётся в строке — высоты строки хватает.
+  </p>
+
+  <div class="row">
+    <div class="frame phone">
+      <div class="setup">
+        <div class="pills">
+          <button class="pill" type="button">
+            <span class="ic"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="16" x="4" y="4" rx="2"/><rect width="6" height="6" x="9" y="9"/><path d="M15 2v2"/><path d="M15 20v2"/><path d="M2 15h2"/><path d="M2 9h2"/><path d="M20 15h2"/><path d="M20 9h2"/><path d="M9 2v2"/><path d="M9 20v2"/></svg></span>
+            <span class="lbls"><span class="lbl">Модель</span><span class="val">Claude Sonnet</span></span>
+            <svg class="i chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="pill" type="button">
+            <span class="ic"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 22h14"/><path d="M5 2h14"/><path d="M17 22v-4.172a2 2 0 0 0-.586-1.414L12 12l-4.414 4.414A2 2 0 0 0 7 17.828V22"/><path d="M7 2v4.172a2 2 0 0 0 .586 1.414L12 12l4.414-4.414A2 2 0 0 0 17 6.172V2"/></svg></span>
+            <span class="lbls"><span class="lbl">Время жизни</span><span class="val">Бессрочно</span></span>
+            <svg class="i chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+          <button class="pill active" type="button">
+            <span class="ic"><svg class="i" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+            <span class="lbls"><span class="lbl">История решений</span><span class="val">Не сохраняются</span></span>
+            <svg class="i chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="setup-card">
+          <div class="opt-row">
+            <div class="opt-label">Не сохранять решения из этого чата</div>
+            <div class="toggle on" role="switch" aria-checked="true" aria-label="Не сохранять решения из этого чата" tabindex="0"><div class="th"></div></div>
+          </div>
+          <p class="opt-hint">Записи из этого чата не попадут в историю решений и не уедут в репозиторий.</p>
+          <p class="opt-foot">
+            <svg class="i" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+            <span>Уже записанные решения останутся в истории — настройка действует на новые записи.</span>
+          </p>
+        </div>
+      </div>
+      <p class="caption">Пустой чат: пилюля в общем ряду, карточка на всю ширину.</p>
+    </div>
+
+    <div class="frame phone">
+      <div class="chatbar" style="min-height: 56px;">
+        <div class="ttl">
+          <div class="name">Эксперимент с горячим кешем</div>
+          <div class="meta">проект AI Home</div>
+        </div>
+        <div class="acts">
+          <button class="hbtn optout" type="button">
+            <span class="ic" style="display:flex;"><svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg></span>
+          </button>
+        </div>
+      </div>
+      <div style="display:flex; justify-content:flex-end; margin-top:6px;">
+        <div class="menu" style="width:260px;">
+          <div class="opt-row">
+            <div class="opt-label">Не сохранять решения из этого чата</div>
+            <div class="toggle on" role="switch" aria-checked="true" aria-label="Не сохранять решения из этого чата" tabindex="0"><div class="th"></div></div>
+          </div>
+          <p class="opt-hint">Записи из этого чата не попадут в историю решений и не уедут в репозиторий.</p>
+        </div>
+      </div>
+      <p class="caption">Начатый чат: кнопка-иконка с обводкой, поповер 260px.</p>
+    </div>
+  </div>
+
+  <!-- ===================== 6. Спецификация ===================== -->
+  <h2 class="sec">6. Спецификация для реализации</h2>
+  <p class="note">
+    Контролы готовые: <code class="tok">Toggle</code> (ui), <code class="tok">Menu</code> (ui).
+    Новое — одна строка настройки «подпись + Toggle + подсказка» общим компонентом (по образцу
+    <code class="tok">ExpiryPicker</code>), пилюля в <code class="tok">NewChatSetup</code> и кнопка в
+    <code class="tok">ChatHeaderBar</code> (по образцу <code class="tok">ExpiryButton</code>).
+  </p>
+  <table class="spec">
+    <tr><th>Элемент</th><th>Токены / паттерн</th><th>Состояния и поведение</th></tr>
+    <tr>
+      <td>Пилюля «История решений»</td>
+      <td><code class="tok">pill()</code> NewChatSetup: иконка lucide <code class="tok">history</code> 15px accent; подпись 9.5px uppercase <code class="tok">C.textMuted</code>; значение <code class="tok">FS.base</code>/600 <code class="tok">C.textHeading</code>; рамка <code class="tok">C.border</code> → active <code class="tok">C.accent</code> + <code class="tok">C.accentLight</code></td>
+      <td>Значение: «Сохраняются» (дефолт) / «Не сохраняются». Только у проектных чатов (как «Теги»). Клик раскрывает инлайн-карточку; повторный — сворачивает.</td>
+    </tr>
+    <tr>
+      <td>Строка с тумблером (общая)</td>
+      <td>Подпись <code class="tok">FS.base</code>/600 <code class="tok">C.textHeading</code>; <code class="tok">Toggle</code> 42×25 (off <code class="tok">C.track</code> / on <code class="tok">C.accent</code>, бегунок <code class="tok">C.bgWhite</code> + <code class="tok">SHADOW.thumb</code>); подсказка 11.5px <code class="tok">C.textMuted</code></td>
+      <td>Tap по строке = tap по тумблеру (вся строка кликабельна, на тач удобнее). Фокус с клавиатуры — <code class="tok">SHADOW.focus</code>, aria-label «Не сохранять решения из этого чата». Сохранение — сразу, как другие поля чата (<code class="tok">updateChatFields</code>).</td>
+    </tr>
+    <tr>
+      <td>Сноска «Уже записанные…»</td>
+      <td>11.5px <code class="tok">C.textSecondary</code>, разделитель <code class="tok">C.borderLight</code>, иконка <code class="tok">info</code> 13px <code class="tok">C.textMuted</code></td>
+      <td>Появляется только при включённом тумблере (on). При выключении скрыта.</td>
+    </tr>
+    <tr>
+      <td>Кнопка в шапке начатого чата</td>
+      <td>Паттерн <code class="tok">ExpiryButton</code>: padding 3px 8px, <code class="tok">R.lg</code>, 11px/600; дефолт — прозрачная, иконка <code class="tok">TB.iconColor</code>; исключён — <code class="tok">C.bgWhite</code> + <code class="tok">C.border</code>, иконка <code class="tok">C.accent</code></td>
+      <td>Дефолт: иконка без подписи. Исключён: на десктопе иконка + «Не сохраняются», на мобиле — только иконка. Tooltip озвучивает состояние. Клик → поповер <code class="tok">Menu</code> (minWidth 300/260) со строкой тумблера.</td>
+    </tr>
+    <tr>
+      <td>Заметка в панели «История решений»</td>
+      <td>Карточка <code class="tok">C.bgCard</code> + <code class="tok">C.borderLight</code> + <code class="tok">R.lg</code>, padding 8–10; иконка <code class="tok">history</code> 14px <code class="tok">C.accent</code>; текст 11.5px <code class="tok">C.textSecondary</code></td>
+      <td>Только когда панель открыта из чата-исключения. Без кнопок-действий, чисто объяснение + указание, где изменить.</td>
+    </tr>
+    <tr>
+      <td>Мобила</td>
+      <td>Карточка пустого чата — 100% ширины; поповер 260px; подпись кнопки шапки скрыта</td>
+      <td>Tap-состояния вместо hover; тумблер и пилюля — в пределах 44px по высоте строки.</td>
+    </tr>
+  </table>
+
+</div>
+
+<script>
+  // Переключатель темы макета (светлая/тёмная)
+  const btns = document.querySelectorAll('[data-theme-btn]');
+  btns.forEach(b => b.addEventListener('click', () => {
+    const t = b.getAttribute('data-theme-btn');
+    if (t) document.documentElement.setAttribute('data-theme', t);
+    else document.documentElement.removeAttribute('data-theme');
+    btns.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+</script>
+</body>
+</html>

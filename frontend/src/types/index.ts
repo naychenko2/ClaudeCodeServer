@@ -27,12 +27,14 @@ export interface Project {
   difyDatasetId?: string;
   systemPrompt?: string;
   showHiddenFiles?: boolean;
-  toolsEnabled?: boolean;        // вкладка «Инструменты» (терминал + preview)
   permissionRules?: PermissionRule[];
   boardColumns?: BoardColumn[];   // кастомные колонки Kanban-доски; отсутствует = дефолтные 3
   builtInSystemPrompt?: string;
   icon?: ProjectIcon;             // иконка проекта: инициалы+цвет или картинка
   tagRegistry?: ProjectTag[];     // реестр общих тегов проекта (имя, порядок, цвет)
+  // Ключи серверов личного MCP-реестра, ВЫКЛЮЧЕННЫХ в этом проекте (deny-list):
+  // сервер едет в ход везде, пока его не выключили здесь. Пусто/нет — выключенных нет
+  mcpServersOff?: string[] | null;
   // Персона-«руководитель проекта» (фича default-personas-onboarding): дефолт для новых
   // чатов проекта; null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
   defaultPersonaId?: string | null;
@@ -126,6 +128,10 @@ export interface DocEntry {
   size: number;
   headings: DocHeading[];
   binary?: boolean;         // файл без текста — открывается только в центре
+  // Папка, страницей которой служит документ («docs/decisions.md» при наличии
+  // «docs/decisions/»). Пара «страница + папка» пришла из code wiki: раздел там
+  // существует только так — файл несёт содержание, одноимённая папка даёт детей
+  sectionFolder?: string | null;
 }
 
 export interface DocBacklink {
@@ -197,6 +203,43 @@ export interface DocsScopeInfo {
   defaults: DocsScope;
   documents: DocOption[];          // документы области — варианты для «Начала»
   home: string | null;             // что сейчас работает «Началом» (выбор или README)
+  // Откуда взята область: 'file' — версионируемый .docs в корне репозитория (общий для
+  // всех, кто его открыл), 'project' — настройка продукта, своя у каждого владельца
+  scopeSource: 'file' | 'project';
+  // Заполнено, когда .docs есть, но не разобран: область при этом взята из настройки
+  // проекта, и без объяснения расхождение «в файле одно, в панели другое» необъяснимо
+  scopeFileError?: string | null;
+}
+
+// --- История решений (change-dossiers, этап 1) ---
+// Запись у файла/символа/коммита: «зачем менялось, что решили, что отвергли, какие
+// грабли» — AI-выжимка из чата/задачи, привязанная к коммиту. Контракт REST —
+// GET /api/projects/{id}/dossiers?file=|symbol=|commit= (ADR-004 §4/§8).
+export type DossierStatus = 'active' | 'degraded' | 'archived';
+
+export interface DossierEntry {
+  id: string;
+  commitSha: string;
+  commitSubject: string;
+  committedAt: string;        // ISO
+  sessionId: string | null;   // чат-источник — может протухнуть (sessionId остаётся, см. linksStale)
+  taskId: string | null;      // задача-источник — может протухнуть
+  personaId: string | null;   // null — коммит человека-владельца, иначе персона
+  files: string[];
+  symbols: string[];
+  why: string;
+  decisions: string[];
+  rejected: string[];
+  pitfalls: string[];
+  invariants: string[];
+  // active — код почти не менялся с записи; degraded — файл заметно переписан
+  // (нюанс, не ошибка); archived — символ исчез из графа (показывается только по запросу)
+  status: DossierStatus;
+  // Выжимка не собралась — сохранён только факт изменения, why не показываем
+  summaryFailed: boolean;
+  // Чат/задача, на которые указывают sessionId/taskId, больше не существуют —
+  // соответствующие ссылки гасятся текстом вместо кнопки
+  linksStale: boolean;
 }
 
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)
@@ -445,7 +488,7 @@ export interface Session {
   expiresAfterMinutes?: number | null;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
-  // Режим «Командная реализация» (флаг team-implement-mode); null/отсутствует — режим выключен
+  // Режим «Командная реализация»; null/отсутствует — режим выключен
   teamImplement?: SessionTeamImplement | null;
   // Отдельное git worktree чата: рабочая папка сессии вместо корня проекта.
   // null/отсутствует — чат в основном дереве. Только у проектных чатов.
@@ -468,6 +511,10 @@ export interface Session {
   // Общие теги чата (имена из Project.tagRegistry; тег без записи в реестре возможен —
   // показывается секцией-сиротой). Меняется через PUT sessions/{sid} (поле tags)
   tags?: string[];
+  // Opt-out «не сохранять решения из этого чата» (ADR-004 §6): true — записи из этого
+  // чата не попадают в историю решений и не уходят в репозиторий. Только у проектных
+  // сессий. Меняется через PUT sessions/{sid} (поле excludeFromDossiers)
+  excludeFromDossiers?: boolean;
 }
 
 // Строка сводки дашборда «Домой» (GET /api/home/summary): сессия + имя проекта
@@ -664,7 +711,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }
-  | { type: 'file_changed'; path: string; added: number; removed: number }
+  // external — правку сделали не Edit/Write этого чата (человек в IDE, форматтер);
+  // фронт снимает кнопку «Откатить» и помечает карточку «Изменение вне чата»
+  | { type: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
   // contextTokens — размер контекста последнего запроса хода (оценка заполнения окна).
   // usage для этого не годится: он суммирует все запросы хода, включая сабагентов.
   // usageModel — фактическая модель хода (её же бэк проставляет постам в истории):
@@ -698,25 +747,41 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'git_turn_commit'; sessionId: string; projectId: string; sha: string; subject: string }
   | { type: 'speaker_changed'; personaId: string; label: string }
   // Чат переключён на другой аккаунт/провайдер: auto — тихий фейловер пула подписок
-  // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции
-  | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean }
+  // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции.
+  // reason — классификация причины фолбэка с бэкенда (TurnErrorClassifier.WireName:
+  // rate_limit|usage_limit|provider_error|unreachable) для подсказки «Ответила … — … была
+  // недоступна» (см. providerSwitchReasonLabel в lib/providerLimit.ts)
+  | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean; reason?: string }
   // Лимит подписки исчерпан, в пуле переключиться некуда — предложение продолжить
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
   | { type: 'work_loop'; active: boolean; iteration: number; maxIterations: number; phase: string | null }
+  // Явная остановка цикла «до готово» в ленту — человекочитаемый текст (лимит/ошибка/ручной
+  // стоп), готовый с сервера. reason ∈ limit|error|manual (см. WorkLoopStoppedMessage)
+  | { type: 'work_loop_stopped'; reason: string; text: string }
   // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп)
   // modeLocked/planVersion — Э8: план-режим навязан чату (интервью/планирование),
   // версия текущего плана итерации
   | { type: 'team_implement'; active: boolean; stage: TeamImplementStage | null; waveNumber: number; autoWaves: boolean; coordinatorPersonaId: string | null; plannerPersonaId: string | null; executorPersonaIds: string[] | null; budget: TeamImplementBudget | null; planCardId: string | null; plannedWaves?: number; coordinatorNoCode?: boolean; stopped?: boolean; modeLocked?: boolean; planVersion?: number }
   // Карточка плана командной реализации. Переиздаётся при каждой правке (смена исполнителя,
   // решение человека) с тем же planId — клиент обновляет карточку, а не плодит дубли
-  | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null }
+  | { type: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved: boolean | null; supersededBy?: number | null }
   // Карточка остановки командной реализации: причина + кнопки решения. Переиздаётся при
   // ответе человека (resolved=true) с тем же escalationId — клиент обновляет карточку.
   // Поля плоские (в истории та же карточка лежит вложенным объектом escalation)
   // personaId — автор карточки (Э8, координатор на момент публикации)
   | { type: 'team_escalation'; escalationId: string; kind: TeamEscalationKind; title: string; details: string; actions: TeamEscalationAction[]; taskId: string | null; wave: number; resolved: boolean; chosenActionId: string | null; personaId?: string | null }
+  // Жизненный цикл вызова планировщика (не путать с team_implement — тот про стадию режима).
+  // Транзитное: в историю не пишется, после рестарта не восстанавливается — карточка плана
+  // (team_plan) или отказа (team_escalation) уже несут итог. start=true — планировщик запущен;
+  // start=false — закончил: success=true → subtaskCount/waveCount/elapsedMs, success=false →
+  // failure (готовый текст причины, тот же, что уйдёт в title карточки отказа следом)
+  | { type: 'team_planning'; start: boolean; success: boolean; subtaskCount: number; waveCount: number; elapsedMs: number; route: string | null; failure: string | null; promptChars: number; responseChars: number }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
+  // Вывод дев-сервера — приходит только подписчикам группы конкретного сервиса
+  // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
+  // (~100 мс) сразу куском: построчная рассылка захлёбывалась на сборках
+  | { type: 'preview_log'; serviceId: string; data: string }
   | { type: 'notification'; title: string; body: string; url?: string; kind: 'reminder' | 'claude' | 'info' | 'success' | 'meeting'; notificationId?: string; notifType?: string; projectId?: string; sessionId?: string; taskId?: string; source?: string; tag?: string; personaId?: string; personaName?: string; personaRole?: string; personaColor?: string; personaHasAvatar?: boolean; projectName?: string }
   | { type: 'recall_manifest'; items: RecallItem[] }
   // Полный снимок очереди сообщений занятой сессии (постановка/отмена/доставка).
@@ -730,7 +795,63 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'composer_restore'; text?: string | null; attachedPaths?: string[] | null; mode?: string | null }
   // Подсказка следующего сообщения — чип в композере
   | { type: 'prompt_suggestion'; text: string }
+  // Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
+  // Текст сюда не кладём — шторка забирает его отдельным REST-запросом.
+  // applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил
+  | { type: 'prompt_snapshot'; snapshotId: string; applied: boolean; inheritedFromId?: string }
 );
+
+// Снимок промпта хода (GET /api/sessions/{id}/prompt/{snapshotId})
+export interface PromptSection {
+  key: string;
+  title: string;
+  text: string;
+  // system — часть --append-system-prompt; turn — текст сообщения хода с обвязками;
+  // cli-file — файл слоя CLI (CLAUDE.md с раскрытыми импортами)
+  kind: 'system' | 'turn' | 'cli-file';
+  // Длина оригинального текста, когда сам текст в выдаче опущен (файлы слоя CLI
+  // грузятся по требованию — они весят десятки КБ)
+  size?: number | null;
+  // Кусок одинаков от хода к ходу → живёт в кэшируемом префиксе запроса.
+  // false — пересчитывается под текст хода (recall, привязки, граф, само сообщение)
+  stable?: boolean;
+  // Чья это часть промпта: persona | mcp | project | recall | turn | cli | misc.
+  // Слой персоны размазан по пяти секциям — по группе считается его суммарная цена
+  group?: string;
+}
+
+export interface CliSkill {
+  name: string;
+  description?: string | null;
+  // profile — каталог скиллов профиля CLI, project — .claude/skills рабочей папки
+  source: string;
+}
+
+// Доступная часть слоя claude CLI. Недоступны и потому отсутствуют: текст встроенного
+// системного промпта Anthropic и текстовые описания инструментов
+// Незаполненные поля сервер отдаёт как null (сериализатор контроллеров их не прячет),
+// поэтому все они nullable: проверять надо typeof, а не !== undefined
+export interface CliLayer {
+  tools?: string[] | null;
+  mcpServers?: { name: string; status: string }[] | null;
+  files?: PromptSection[] | null;
+  skills?: CliSkill[] | null;
+  transcriptBytes?: number | null;
+  transcriptMessages?: number | null;
+}
+
+export interface PromptSnapshot {
+  id: string;
+  createdAt: number;
+  applied: boolean;
+  inheritedFromId?: string | null;
+  sections: PromptSection[];
+  cliArgs: string[];
+  mcpServers: string[];
+  model?: string | null;
+  mode?: string | null;
+  cliLayer?: CliLayer | null;
+}
 
 export interface UsageInfo {
   inputTokens: number;
@@ -750,9 +871,14 @@ export interface ProjectService {
   suggestedPort: number | null;
   autoPort: boolean;
   saved: boolean;               // из .claude/launch.json — можно редактировать/удалять
-  status: string;               // idle | starting | started | stopped | error
+  // idle | starting | started | stopped | error | external (порт слушает процесс,
+  // запущенный вне продукта — остановить его нельзя и логов у него нет)
+  status: string;
   runningPort: number | null;
   error: string | null;
+  // Составной запуск (Rider multilaunch): id входящих сервисов. Своей команды у
+  // группы нет — она поднимает участников, статус и порт производные от них
+  members?: string[] | null;
 }
 
 // Одна конфигурация из .claude/launch.json (формат Claude Desktop)
@@ -790,6 +916,32 @@ export interface RateLimitInfo {
   isUsingOverage?: boolean;
   overageStatus?: string;
   overageResetsAt?: string;
+}
+
+// Одно окно квоты CLI-провайдера подписки (GET /api/providers/{key}/balance|usage):
+// unit 'percent' — value остаток в процентах ("97.3"), 'count' — уже отформатированная
+// строка вида "120/300" (число вызовов со знаменателем), рисуется как есть без суффиксов
+export type ProviderQuotaWindowUnit = 'percent' | 'count';
+export interface ProviderQuotaWindow {
+  label: string;
+  value: string;
+  resetsAt: string | null;
+  unit: ProviderQuotaWindowUnit;
+}
+
+// Баланс CLI-провайдера. windows — ВСЕ окна квоты (включая основное), только у квотных
+// провайдеров (GLM/Kimi/MiniMax); у денежных (deepseek/moonshot/openrouter) отсутствует/пусто —
+// totalBalance/resetsAt остаются единственным источником (обратная совместимость + график)
+export interface ProviderBalanceInfo {
+  available: boolean;
+  currency: string;
+  totalBalance: string;
+  asOf?: string;
+  resetsAt?: string | null;
+  windows?: ProviderQuotaWindow[] | null;
+  // Доп. сведения в раскрытую карточку (напр. «В том числе подарочных: $5», расход по периодам,
+  // уровень подписки, сводка за 24ч у FreeLLM) — null/отсутствует: показать нечего
+  note?: string | null;
 }
 
 // Снимок использования окна во времени (история с бэка, data/usage.json) — для экрана usage и тренда
@@ -845,6 +997,15 @@ export interface OllamaUsageInfo {
   actions: OllamaActionInfo[];
 }
 
+// Раскрытие пресета в ответе места каталога: заполнено, когда назначение места —
+// общий пресет (route при этом развёрнут в первый шаг — для «Сейчас пойдёт»);
+// name null — битая ссылка (пресет удалён)
+export interface PlacePresetRef {
+  id: string;
+  name: string | null;
+  steps: string[];
+}
+
 export interface OllamaActionInfo {
   key: string;
   title: string;
@@ -854,9 +1015,11 @@ export interface OllamaActionInfo {
   // Откуда взято действующее значение: дефолт каталога, конфиг Ollama:Actions или выбор админа
   source?: 'default' | 'config' | 'admin';
   // Исполнитель первого шага: 'local' | 'tier:strong|medium|weak' (слот) | id модели
-  // провайдера; легаси 'claude'/'default' ≙ tier:medium. Дальше действие идёт по цепочке
-  // «выбранное → локаль → claude»
+  // провайдера; легаси 'claude'/'default' ≙ tier:medium. Если назначение — пресет,
+  // здесь развёрнутый первый шаг цепочки, а сам пресет — в поле preset
   route?: string;
+  // Пресет назначения (разворачивается в route на бэке); null — назначение не пресет
+  preset?: PlacePresetRef | null;
   // Действию нужна сильная модель (лицо продукта, генерация артефактов) — локаль ему не
   // годится; пресеты подбирают Claude/облачную модель. В UI помечается бейджем.
   requiresStrong?: boolean;
@@ -916,7 +1079,7 @@ export interface WorkLoopState {
   phase: string | null;
 }
 
-// === Режим «Командная реализация» (флаг team-implement-mode) ===
+// === Режим «Командная реализация» ===
 // Стадии непрерывного контура — совпадают с wire-токенами TeamImplementStage на бэке
 export type TeamImplementStage =
   | 'interview'         // координатор спрашивает человека, прежде чем планировать (Э8)
@@ -975,7 +1138,7 @@ export interface SessionTeamImplement {
   planVersion: number;
 }
 
-// Live-состояние режима (из события team_implement; флаг team-implement-mode)
+// Live-состояние режима (из события team_implement)
 export interface TeamImplementState extends SessionTeamImplement {
   active: boolean;
 }
@@ -1013,10 +1176,17 @@ export interface TeamPlan {
   assumptions: string[];
   // Э8: «что изменилось» у плана vN относительно предыдущей версии; пусто у v1
   changes: string[];
+  // Замысел планировщика на 3–5 строк (решение 2026-08-02) — пусто/undefined у истории
+  // до этой доработки и когда планировщик не заполнил поле: блок в карточке не рисуем
+  intent?: string;
+  // Путь к файлу полного плана относительно корня проекта — null у глобального чата
+  // без проекта либо когда запись не удалась; undefined у истории до этой доработки
+  planFilePath?: string | null;
 }
 
-// Решение человека по карточке плана (метод хаба RespondTeamPlan)
-export type TeamPlanDecision = 'run' | 'reassign' | 'cancel';
+// Решение человека по карточке плана (метод хаба RespondTeamPlan). edit — правка плана
+// текстом (feedback): сервер сам гасит текущую карточку и пересобирает план версией vN+1
+export type TeamPlanDecision = 'run' | 'reassign' | 'cancel' | 'edit';
 
 // Триггер остановки практики — wire-токены TeamEscalationKind с бэка.
 // waveGate — не проблема, а гейт «волна закрыта, запускать следующую?» при снятом авто;
@@ -1077,7 +1247,10 @@ export type ChatItem =
   // волны): рисуется компактной плашкой-разделителем с этой подписью, а не пузырём
   // ts — время отправки (Unix-мс UTC): подпись в панели действий поста. Отсутствует
   // у истории, записанной до появления поля
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number }
+  // promptSnapshotId — снимок промпта, собранного для хода, который начался этим
+  // сообщением: по нему шторка «какой промпт ушёл». Нет у истории до появления поля,
+  // у ходов без нового сообщения и при сбое записи снимка
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
@@ -1097,11 +1270,14 @@ export type ChatItem =
   | { kind: 'plan_review'; requestId: string; plan: string; resolved: boolean; approved?: boolean; feedback?: string }
   // Карточка плана командной реализации: структурный план (под-задачи, исполнители,
   // волны) с кнопками «Запустить» / «Изменить план» / «Отменить». Сверяется по planId
-  | { kind: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved?: boolean | null }
+  | { kind: 'team_plan'; planId: string; plan: TeamPlan; resolved: boolean; approved?: boolean | null; supersededBy?: number | null }
   // Карточка остановки командной реализации: причина, суть и кнопки решения.
   // Сверяется по escalationId — ответ человека переиздаёт ту же карточку решённой
   | { kind: 'team_escalation'; escalationId: string; escalation: TeamEscalation }
-  | { kind: 'file_changed'; path: string; added: number; removed: number }
+  // Итог успешного вызова планировщика — короткая строка в потоке (не персистится, живёт
+  // только в ленте вкладки; после планировщика следом приходит карточка team_plan)
+  | { kind: 'team_planning_done'; subtaskCount: number; waveCount: number; elapsedMs: number }
+  | { kind: 'file_changed'; path: string; added: number; removed: number; external?: boolean }
   | { kind: 'result'; subtype: string; durationMs: number; numTurns: number; usage?: UsageInfo; totalCostUsd?: number; apiErrorStatus?: string; permissionDenials?: string[]; contextTokens?: number }
   | { kind: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   | { kind: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
@@ -1117,10 +1293,22 @@ export type ChatItem =
   | { kind: 'companion_switched'; label: string; personaId?: string }
   // Разделитель «Продолжено на …» — явная миграция чата на другого провайдера
   | { kind: 'provider_switched'; label: string }
+  // Разделитель «Ответила …» — рантайм-фолбэк сменил именно МОДЕЛЬ (уровень 2 цепочки —
+  // другой провайдер), не просто подписку того же провайдера: та ротация модель не трогает
+  // и своей пометки не получает (см. блок G model-providers-rework.md). model/previousModel —
+  // id из каталога моделей, подпись собирается на рендере (useModelLabel). reason —
+  // канонический класс причины с бэкенда (rate_limit|usage_limit|provider_error|unreachable,
+  // персистится в StoredModelSwitchedMessage.Reason). rawLabel — сырой label маркера
+  // provider_switched, фолбэк подсказки, когда reason не пришёл или не распознан
+  // (см. providerSwitchReasonLabel в lib/providerLimit.ts)
+  | { kind: 'model_switched'; model: string; previousModel: string; reason?: string; rawLabel?: string }
   // Карточка-предложение: лимит подписки исчерпан — продолжить на стороннем провайдере.
   // resolved — миграция состоялась (карточка гаснет)
   | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }
   | { kind: 'git_turn_commit'; projectId: string; sha: string; subject: string }
+  // Остановка цикла «до готово»: текст готов на сервере (лимит/ошибка/ручной стоп),
+  // фронт его не собирает — иначе разъедется с сервером при смене лимита
+  | { kind: 'work_loop_stopped'; reason: string; text: string }
   | { kind: 'error'; text: string; canRetry?: boolean };
 
 // Скиллы и агенты
@@ -1493,9 +1681,108 @@ export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 // Специальность персоны — функциональная роль для оркестрации (НЕ отображаемое имя роли):
 // конвейер (analyst→planner→reviewer→executor), голос брифинга (secretary),
 // группировка/статус команды, роутинг памяти команды. none — не задана.
+// backendExecutor/frontendExecutor — профильные исполнители; wire-значения совпадают
+// с ключами бэкендного SpecialtyCatalog (camelCase от enum).
 export type PersonaSpecialty =
   | 'none' | 'analyst' | 'planner' | 'reviewer' | 'executor' | 'secretary'
-  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian' | 'tester';
+  | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian' | 'tester'
+  | 'backendExecutor' | 'frontendExecutor';
+
+// Шаблон прав и инструментов специальности: подставляется в поля персоны
+// при выборе специальности, дальше правится вручную.
+export interface SpecialtyTemplate {
+  access: PersonaAccess;
+  // null — все возможности (tasks+notes+web)
+  tools: string[] | null;
+  // Имеет смысл только при access === 'custom'
+  disallowedTools: string[] | null;
+}
+
+// Запись каталога специальностей из GET /api/specialties: подписи и эффективный
+// шаблон прав вызывающего (настройки поверх дефолтов кода) приходят с бэкенда.
+export interface SpecialtyCatalogEntry {
+  key: PersonaSpecialty;
+  label: string;
+  executorFamily: boolean;
+  template: SpecialtyTemplate | null;
+}
+
+// Именованный пресет — упорядоченная цепочка шагов (ADR-007 §1). Шаг — маршрут
+// в лексике назначений мест: tier:strong|medium|weak, id модели, local, claude, default.
+// Ссылаться на другой пресет шаг не может (вложенность запрещена бэкенд-валидацией).
+export interface ModelRoutePreset {
+  id: string;
+  name: string;
+  description?: string | null;
+  steps: string[];
+}
+
+// Пресет в объединённом списке GET /api/specialties/settings: личные впереди,
+// затем общие; scope — признак слоя (общий чужой читается, но не правится)
+export interface ScopedPreset extends ModelRoutePreset {
+  scope: 'owner' | 'global';
+}
+
+// Настройка специальности в слое (глобальном или личном): шаблон прав + матрица
+// моделей по уровням (ADR-007 §2). Значение ячейки — id модели ИЛИ "preset:{id}";
+// пустая ячейка — «спроси матрицу шире». defaultTier — уровень по умолчанию для
+// персон специальности без своего. Запись в личном слое заменяет глобальную ЦЕЛИКОМ.
+export interface SpecialtyTemplateSettings {
+  access: PersonaAccess;
+  tools?: string[] | null;
+  disallowedTools?: string[] | null;
+  tierStrong?: string | null;
+  tierMedium?: string | null;
+  tierWeak?: string | null;
+  defaultTier?: ModelTierValue | null;
+}
+
+// Слой настроек специальностей и пресетов: шаблоны + «любая специальность» + пресеты-цепочки
+export interface SpecialtySettingsLayer {
+  specialties: Record<string, SpecialtyTemplateSettings>;
+  // «Любая специальность»: применяется, когда у конкретной специальности записи нет
+  defaultSpecialty?: SpecialtyTemplateSettings | null;
+  presets: ModelRoutePreset[];
+}
+
+// Ответ GET /api/specialties/settings: глобальный слой, личный слой вызывающего
+// и объединённый список пресетов с признаком слоя
+export interface SpecialtySettingsResponse {
+  version: number;
+  // Эффективный бюджет подмен цепочки хода (per-owner → global → дефолт, кламп 1..5):
+  // шаги пресета за пределом бюджета+1 приглушаются как «обычно не используется»
+  maxSubstitutions?: number;
+  global: SpecialtySettingsLayer;
+  owner: SpecialtySettingsLayer;
+  presets: ScopedPreset[];
+}
+
+// Ответ GET /api/models/preview — эффективный резолв для строки «Сейчас пойдёт»
+// (спека, блок 4). model — первая развёрнутая модель хода (null — пустой резолв или
+// битый пресет); source — где выбрано значение; tier/tierOrigin — эффективный уровень
+// и кто его задал; preset — раскрытие ссылки preset:{id}; chain — план фолбэка.
+export interface ModelPreviewResponse {
+  model: string | null;
+  source: 'persona-model' | 'persona-cell' | 'specialty-cell'
+    | 'owner-slot' | 'instance-slot' | 'place-assignment' | 'explicit' | null;
+  tier: ModelTierValue | null;
+  tierOrigin: 'task' | 'persona' | 'specialty' | 'place' | null;
+  preset: { id: string; name: string | null; steps: string[]; broken: boolean } | null;
+  chain: string[];
+}
+
+// Ответ GET /api/models/presets/{id}/usage — места, где выбран пресет
+// (диалог удаления, спека блок 6). ownerId — null у общих мест (инстанс/место каталога)
+export interface PresetUsageEntry {
+  kind: 'instance-slot' | 'owner-slot' | 'specialty-cell' | 'persona-model' | 'persona-cell' | 'place';
+  label: string;
+  ownerId?: string | null;
+}
+export interface PresetUsageResponse {
+  presetId: string;
+  count: number;
+  usages: PresetUsageEntry[];
+}
 
 // Параметры кропа загруженного аватара: масштаб + смещение центра окна
 // от центра картинки (в пикселях исходника)
@@ -1541,8 +1828,14 @@ export interface Persona {
   contract?: PersonaContract | null; // структурированный контракт (P1)
   model?: string;
   // Уровень модели персоны (слот); отсутствует — не задан. Слабее явной model и слабее
-  // уровня самой задачи, когда персона выступает исполнителем
+  // уровня самой задачи, когда персона выступает исполнителем.
+  // Семантика (ADR-007 §2): уровень разворачивается по самой узкой заполненной матрице —
+  // своя (tierStrong/… ниже) → специальности → слоты владельца.
   modelTier?: ModelTierValue;
+  // Свои модели по уровням: id модели ИЛИ "preset:{id}"; пусто — наследуется
+  tierStrong?: string | null;
+  tierMedium?: string | null;
+  tierWeak?: string | null;
   effort?: string;
   scope: PersonaScope;
   projectId?: string;         // задан только для scope === 'project'
@@ -1682,11 +1975,17 @@ export interface BindingTarget {
   id: string;
   label: string;
   hint?: string | null;
+  // Происхождение цели; для типа tool с ключом «mcp:<…>» (сервер личного реестра) — 'mcp'
   meta?: string | null;
   // Дефолт инструмента у конкретной персоны (только type=tool с personaId):
   // включён ли без привязки и чем задан дефолт (настройки / пресет роли / системный)
   defaultEnabled?: boolean | null;
   defaultOrigin?: 'settings' | 'role' | null;
+  // Последний известный статус сервера личного реестра (только type=tool, ключ «mcp:<…>»,
+  // см. McpServerStatuses на бэке: connected/failed/needs-auth/unknown). Строка, а не литерал —
+  // набор значений живёт на бэке. Нет данных (старый бэк / не mcp-ключ) — точка статуса
+  // в пикере не показывается.
+  status?: string | null;
 }
 
 // Тело создания персоны (POST /api/personas). Большинство полей опциональны.
@@ -2002,4 +2301,153 @@ export interface BackupStatus {
   lastError: string | null;
   lastAttemptAt: string | null;
   recent: BackupEntry[];
+}
+
+// --- Ридер ссылок (docs/adr/ADR-005-link-reader-server.md) ---
+
+// Причины отказа — таблица §6 ADR-005; тексты для человека рисует фронт (readerErrors.ts)
+export type ReaderErrorCode =
+  | 'invalid-url' | 'local-address' | 'dns-failed' | 'unreachable' | 'tls-invalid'
+  | 'timeout' | 'auth-required' | 'blocked-by-site' | 'not-found' | 'server-error'
+  | 'too-many-redirects' | 'not-a-page' | 'pdf' | 'too-large' | 'not-readable';
+
+export interface ReaderPage {
+  title: string;
+  siteName?: string | null;
+  byline?: string | null;
+  markdown: string;
+}
+
+export interface ReaderError {
+  code: ReaderErrorCode;
+  // Для диагностики — человеку не показывается (ADR §6)
+  httpStatus?: number | null;
+}
+
+// --- MCP-серверы: личный реестр владельца (фича mcp-registry) ---
+
+// Пара «имя — значение» из env/headers. Секретное значение наружу не выходит:
+// value = null при hasValue = true (в форме вместо него отметка «задано»).
+export interface McpValue {
+  name: string;
+  value?: string | null;
+  hasValue: boolean;
+  secret: boolean;
+}
+
+export interface McpAuth {
+  kind: string;                 // none | apikey | bearer | oauth2
+  headerName?: string | null;
+  hasSecret: boolean;
+  authorizationServer?: string | null;
+  clientId?: string | null;
+  expiresAt?: string | null;
+  hasTokens: boolean;
+}
+
+// Последнее известное состояние сервера: из system/init хода или из пробы по кнопке.
+// status — строка, набор значений живёт на бэке (connected/failed/needs-auth/unknown).
+export interface McpServerStatus {
+  status: string;
+  observedAt: string;
+  source: string;               // init | probe
+  sessionId?: string | null;
+  error?: string | null;
+}
+
+export interface McpServer {
+  id: string;
+  key: string;
+  toolKey: string;              // «mcp:<ключ>» — ключ привязки инструмента у персоны
+  label: string;
+  description?: string | null;
+  transport: string;            // stdio | http | sse
+  command?: string | null;
+  args: string[];
+  env: McpValue[];
+  url?: string | null;
+  headers: McpValue[];
+  auth: McpAuth;
+  enabled: boolean;
+  alwaysLoad: boolean;
+  allowReadOnlyPersonas: boolean;
+  source: string;               // manual | legacymcpconfig | legacyuserscope
+  authVersion: number;
+  createdAt: string;
+  updatedAt: string;
+  status?: McpServerStatus | null;
+}
+
+// Наблюдаемый сервер вне личного реестра: записи в реестре нет, есть только наблюдение
+// статуса. builtin=true — настоящая часть AI Home (tasks, notes, wsp…); false — подключён
+// помимо реестра (dify/fal-ai/glif, глобальный .mcp.json/~/.claude.json)
+export interface McpBuiltinServer {
+  key: string;
+  builtin: boolean;
+  status: McpServerStatus | null;
+}
+
+// Пара формы: пустое value у секрета = «оставить как было»
+export interface McpValueInput {
+  name: string;
+  value?: string | null;
+  secret?: boolean;
+}
+
+export interface McpServerUpsert {
+  key?: string;
+  label?: string;
+  description?: string | null;
+  transport?: string;
+  command?: string | null;
+  args?: string[];
+  env?: McpValueInput[];
+  url?: string | null;
+  headers?: McpValueInput[];
+  auth?: { kind?: string; headerName?: string | null; secret?: string | null; clientId?: string | null };
+  enabled?: boolean;
+  alwaysLoad?: boolean;
+  allowReadOnlyPersonas?: boolean;
+}
+
+export interface McpProbeResult {
+  ok: boolean;
+  status: string;
+  serverName?: string | null;
+  toolCount?: number | null;
+  toolNames?: string[] | null;
+  error?: string | null;
+}
+
+// Вход по OAuth (волна 7) — ответы POST .../oauth/start и .../oauth/complete
+export interface McpOAuthStartResult {
+  authorizeUrl: string;
+  state: string;
+  redirectUri: string;
+}
+export interface McpOAuthCompleteResult {
+  ok: boolean;
+  key: string;
+}
+
+// Диагностика вызовов MCP-инструментов (GET /api/mcp/calls, только админ)
+export interface McpToolStat {
+  tool: string;
+  calls: number;
+  failures: number;
+  avgMs: number;
+}
+
+export interface McpCallFailure {
+  at: string;
+  tool: string;
+  sessionId?: string | null;
+  path: string;
+  statusCode: number;
+  elapsedMs: number;
+}
+
+export interface McpCallsResponse {
+  tools: McpToolStat[];
+  recentFailures: McpCallFailure[];
 }

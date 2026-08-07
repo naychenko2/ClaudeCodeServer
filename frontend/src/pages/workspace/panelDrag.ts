@@ -21,12 +21,18 @@ export interface PanelDragState {
   from: PanelKey | null;
   fromZone: Zone | null;
   over: { zone: Zone; tag: string } | null;
+  // Кнопку тащат ИЗ ЯЩИКА рельсы (меню «…»), а не из самой рельсы или шапки панели.
+  // По этому признаку дроп в раскладку не просто открывает панель, а ещё и
+  // возвращает её кнопку на рельсу: перетаскивание из меню и есть жест возврата.
+  // Открытую спрятанную панель (её кнопка временно стоит в рельсе) можно двигать
+  // по раскладке как обычно — это перестановка, ящик она не трогает.
+  fromTucked: boolean;
   // Панель, которую ТОЛЬКО ЧТО переставили дропом. Живёт пару кадров и нужна
   // обеим зонам сразу — см. markPanelMoved.
   moved: PanelKey | null;
 }
 
-const IDLE: PanelDragState = { from: null, fromZone: null, over: null, moved: null };
+const IDLE: PanelDragState = { from: null, fromZone: null, over: null, fromTucked: false, moved: null };
 
 let _state: PanelDragState = IDLE;
 const listeners = new Set<() => void>();
@@ -34,8 +40,8 @@ const listeners = new Set<() => void>();
 function emit() { listeners.forEach(l => l()); }
 function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
 
-export function startPanelDrag(from: PanelKey, fromZone: Zone) {
-  _state = { from, fromZone, over: null, moved: null };
+export function startPanelDrag(from: PanelKey, fromZone: Zone, fromTucked = false) {
+  _state = { from, fromZone, over: null, fromTucked, moved: null };
   emit();
 }
 

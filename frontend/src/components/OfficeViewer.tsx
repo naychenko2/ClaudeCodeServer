@@ -5,7 +5,9 @@ import { getEffectiveTheme } from '../lib/themeMode';
 interface OfficeConfig {
   serverUrl: string;
   document: { fileType: string; key: string; title: string; url: string };
-  editorConfig: { mode: string; lang: string };
+  // customization сервер кладёт всегда (uiTheme, anonymous, compactToolbar, …) —
+  // мерж ниже сохраняет его поля, добавляя только logo
+  editorConfig: { mode: string; lang: string; customization?: { logo?: { visible?: boolean } } };
 }
 
 interface Props {
@@ -295,7 +297,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
         );
         if (!res.ok) throw new Error(`config ${res.status}`);
         cfg = await res.json();
-      } catch (e) {
+      } catch {
         if (!cancelled) setError('Не удалось получить конфиг документа');
         return;
       }
@@ -331,7 +333,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
 
       editorRef.current = new window.DocsAPI.DocEditor(containerId, {
         document: cfg.document,
-        editorConfig: { ...cfg.editorConfig, customization: { ...(cfg.editorConfig as any).customization, logo: { visible: false } } },
+        editorConfig: { ...cfg.editorConfig, customization: { ...cfg.editorConfig.customization, logo: { visible: false } } },
         documentType: docType,
         height: '100%',
         width: '100%',
@@ -346,7 +348,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
       const themeInterval = setInterval(() => {
         if (cancelled) { clearInterval(themeInterval); return; }
         const iframe = document.querySelector<HTMLIFrameElement>('iframe');
-        let idoc: Document | null = null;
+        let idoc: Document | null;
         try { idoc = iframe?.contentDocument ?? null; } catch { clearInterval(themeInterval); return; }
         if (!idoc?.body || !idoc.head) return;
         // Уже инжектировали — не дублируем
@@ -377,6 +379,7 @@ export function OfficeViewer({ projectId, filePath, mode = 'view', cacheKey, onR
         wrapper.removeChild(container);
       }
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- редактор живёт один раз на файл; cacheKey/mode/onReady не должны пересоздавать OO-инстанс (переключение режима — силами самого редактора)
   }, [projectId, filePath]);
 
   if (error) {

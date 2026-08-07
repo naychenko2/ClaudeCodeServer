@@ -5,12 +5,27 @@ namespace ClaudeHomeServer.Services.Llm;
 
 // AsOf — UTC-время последнего УСПЕШНОГО обновления (при отдаче протухшего кэша остаётся
 // временем того успешного обновления — фронт показывает свежесть данных).
-// ResetsAt — момент сброса окна квоты (UTC; у GLM и Kimi), null — не применимо.
-// SecondaryLabel/SecondaryValue/SecondaryResetsAt — второе окно квоты, когда у подписки
-// их два (у Kimi основное — 5-часовое, второе — недельное); у прочих провайдеров null.
+// ResetsAt — момент сброса ОСНОВНОГО (самого короткого) окна квоты, null — не применимо.
+// Windows — все окна квоты подписки списком произвольной длины (GLM — три: 5 часов + неделя
+// + месячный лимит веб-инструментов; Kimi/MiniMax — два; Alibaba — одно (неделя Token Plan));
+// у провайдеров с денежным балансом (deepseek/moonshot/openrouter) остаётся
+// пустым — там TotalBalance и есть весь ответ.
+// TrackHistory — годится ли TotalBalance точкой в историю графика: false, когда основным
+// стало НЕ то окно, что обычно (провайдер не отдал короткое), иначе в один ряд попали бы
+// точки разных окон и график запрыгал бы между шкалами.
+// Note — свободная строка «доп. сведения» в раскрытую карточку провайдера (null — не показывать):
+// напр. «В том числе подарочных: $5.50» у DeepSeek, «Подписка: Standard» у Kimi, расход по периодам
+// у OpenRouter, сводка за 24ч у FreeLLM. Контроллер отдаёт record как есть → в JSON уезжает как note.
 public sealed record ProviderBalance(bool Available, string Currency, string TotalBalance,
     DateTime AsOf = default, DateTime? ResetsAt = null,
-    string? SecondaryLabel = null, string? SecondaryValue = null, DateTime? SecondaryResetsAt = null);
+    IReadOnlyList<ProviderQuotaWindow>? Windows = null, bool TrackHistory = true,
+    string? Note = null);
+
+// Одно окно квоты подписки: подпись для UI, значение уже отформатированной строкой,
+// момент сброса и единица — "percent" (остаток в %, как у GLM/Kimi/MiniMax) или "count"
+// (число вызовов модели со знаменателем "120/300", как задумано для Alibaba Coding Plan) —
+// фронт по Unit выбирает, как рисовать значение, и не пишет "токенов" там, где их нет.
+public sealed record ProviderQuotaWindow(string Label, string Value, DateTime? ResetsAt, string Unit);
 
 // Точка истории баланса — для графика на экране «Использование»
 public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance, string Currency);
@@ -18,21 +33,30 @@ public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance,
 // Состояние аккаунта CLI-провайдера. Источник задаётся конфигом провайдера (Balance):
 // "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance;
 // "openrouter" — GET {ApiBaseUrl}/credits (деньги); "glm" — GET {BalanceUrl} (квота подписки
-// Coding Plan, остаток в % 5-часового окна); "kimi" — GET {ApiBaseUrl}/usages (квота подписки
-// Kimi for Coding: 5-часовое окно — основное, недельное — в Secondary*). Провайдер без
-// источника — баланс недоступен (UI скрывает блок). Кэш 5 мин; каждое успешное обновление
-// пишет снапшот в data/provider-usage-{key}.json (история для графика).
+// Coding Plan: окна токенов 5 часов + неделя в %, плюс месячный лимит вызовов веб-инструментов
+// count "currentValue/usage", все три в Windows); "alibaba" — POST {BalanceUrl} шлюза bailian
+// консоли с авторизацией по Cookie (ConsoleCookie), а не ApiKey: квота Token Plan одно окно
+// (неделя) в %; "kimi" — GET {ApiBaseUrl}/usages (квота подписки
+// Kimi for Coding: 5-часовое окно + недельное, оба в Windows); "minimax" — GET {BalanceUrl}
+// с фолбэком на https://www.minimax.io/v1/token_plan/remains (квота Token Plan: интервальное
+// окно + недельное, оба в Windows). Провайдер без источника — баланс недоступен (UI скрывает блок). Кэш 5 мин;
+// каждое успешное обновление пишет снапшот в data/provider-usage-{key}.json (история для графика,
+// по основному — самому короткому — окну).
 public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderRegistry providers,
     IConfiguration config)
 {
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan SnapshotRetention = TimeSpan.FromDays(8);
+    // Пауза после отказа провайдера: запрос идёт с таймаутом 10с и сериализуется на семафоре,
+    // так что без неё три захода на экран подряд заставляли третий ждать полминуты
+    private static readonly TimeSpan FailureBackoff = TimeSpan.FromSeconds(45);
 
     private sealed class ProviderCache
     {
         public readonly SemaphoreSlim Lock = new(1, 1);
         public ProviderBalance? Cached;
         public DateTime CachedAt;
+        public DateTime? FailedAt;
         public readonly object UsageLock = new();
     }
 
@@ -42,10 +66,13 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
 
-    // Провайдер с настроенным источником баланса (и ключом) — иначе null
+    // Провайдер с настроенным источником баланса (и ключом) — иначе null.
+    // ApiBaseUrl либо BalanceUrl: у alibabacloud ApiBaseUrl пуст (ход идёт через
+    // AnthropicBaseUrl, а квота — на отдельном хосте консоли в BalanceUrl)
     public LlmProviderConfig? GetSupported(string key) =>
         providers.GetByKey(key) is { Enabled: true } p
-        && !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl)
+        && !string.IsNullOrWhiteSpace(p.Balance)
+        && (!string.IsNullOrWhiteSpace(p.ApiBaseUrl) || !string.IsNullOrWhiteSpace(p.BalanceUrl))
             ? p : null;
 
     public async Task<ProviderBalance?> GetAsync(string key, CancellationToken ct)
@@ -53,13 +80,18 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         var p = GetSupported(key);
         if (p is null) return null;
 
-        var cache = _caches.GetOrAdd(p.Key, _ => new ProviderCache());
+        // Ключ кэша — в нижнем регистре: тот же экземпляр (и его UsageLock) достаёт GetSnapshots
+        var cache = _caches.GetOrAdd(p.Key.ToLowerInvariant(), _ => new ProviderCache());
         if (cache.Cached is not null && DateTime.UtcNow - cache.CachedAt < CacheTtl) return cache.Cached;
 
         await cache.Lock.WaitAsync(ct);
         try
         {
             if (cache.Cached is not null && DateTime.UtcNow - cache.CachedAt < CacheTtl) return cache.Cached;
+            // Негативный кэш: провайдер только что не ответил — не стучимся в него на каждый
+            // заход экрана и домашнего виджета, отдаём то, что есть (возможно, ничего)
+            if (cache.FailedAt is { } failedAt && DateTime.UtcNow - failedAt < FailureBackoff)
+                return cache.Cached;
 
             var balance = p.Balance switch
             {
@@ -67,13 +99,21 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                 "moonshot" => await FetchMoonshotAsync(p, ct),
                 "openrouter" => await FetchOpenRouterAsync(p, ct),
                 "glm" => await FetchGlmAsync(p, ct),
+                "alibaba" => await FetchAlibabaAsync(p, ct),
                 "kimi" => await FetchKimiAsync(p, ct),
+                "minimax" => await FetchMiniMaxAsync(p, ct),
+                "freellm" => await FetchFreeLlmAsync(p, ct),
                 _ => null,
             };
             // Протухший лучше, чем ничего: AsOf в нём остаётся временем прошлого
             // успешного обновления — фронт по нему покажет, что данные не свежие
-            if (balance is null) return cache.Cached;
+            if (balance is null)
+            {
+                cache.FailedAt = DateTime.UtcNow;
+                return cache.Cached;
+            }
 
+            cache.FailedAt = null;
             cache.Cached = balance with { AsOf = DateTime.UtcNow };
             cache.CachedAt = DateTime.UtcNow;
             RecordSnapshot(p.Key, cache, balance);
@@ -99,14 +139,16 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             var root = doc.RootElement;
             var available = root.TryGetProperty("is_available", out var av) && av.ValueKind == JsonValueKind.True;
             string currency = "", total = "";
+            string? note = null;
             if (root.TryGetProperty("balance_infos", out var infos) && infos.ValueKind == JsonValueKind.Array
                 && infos.GetArrayLength() > 0)
             {
                 var first = infos[0];
                 currency = first.TryGetProperty("currency", out var c) ? c.GetString() ?? "" : "";
                 total = first.TryGetProperty("total_balance", out var t) ? t.GetString() ?? "" : "";
+                note = DeepSeekGrantedNote(first);
             }
-            return new ProviderBalance(available, currency, total);
+            return new ProviderBalance(available, currency, total, Note: note);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -114,6 +156,17 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
             return null;
         }
+    }
+
+    // Note баланса DeepSeek: если в balance_infos есть подарочный granted_balance > 0 —
+    // поясняем «В том числе подарочных: $X». При нуле/отсутствии не шумим (null).
+    // internal — под тестами: живой запрос требует ключа, формат фиксируем фикстурой.
+    internal static string? DeepSeekGrantedNote(JsonElement info)
+    {
+        var granted = ReadNumber(info, "granted_balance");
+        if (double.IsNaN(granted) || granted <= 0) return null;
+        return "В том числе подарочных: $" + granted.ToString("0.##",
+            System.Globalization.CultureInfo.InvariantCulture);
     }
 
     // Формат Moonshot (Kimi): { status, data: { available_balance, voucher_balance, cash_balance } }
@@ -172,8 +225,10 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             if (double.IsNaN(credits) || double.IsNaN(used)) return null;
 
             var remaining = credits - used;
+            // /key самостоятелен: его отказ НЕ должен ронять деньги из /credits
+            string? note = await TryReadOpenRouterKeyNoteAsync(p, ct);
             return new ProviderBalance(remaining > 0, "USD",
-                remaining.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture));
+                remaining.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture), Note: note);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -183,20 +238,108 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         }
     }
 
-    // Число из JSON, приходящее как number или как строка; NaN — поля нет либо не разобрать
+    // Второй запрос баланса OpenRouter — GET {ApiBaseUrl}/key: расход по периодам и лимит ключа.
+    // /key самостоятелен и НЕ должен ронять основной баланс из /credits: не ответил/не разобрался
+    // → Note нет, деньги живут как раньше. Таймаут/ошибки — как у соседей (10с, swallow в null)
+    private async Task<string?> TryReadOpenRouterKeyNoteAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        try
+        {
+            var client = httpFactory.CreateClient("llm-provider");
+            using var req = new HttpRequestMessage(HttpMethod.Get, $"{p.ApiBaseUrl.TrimEnd('/')}/key");
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", p.ApiKey);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            if (!resp.IsSuccessStatusCode) return null;
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+            return ParseOpenRouterKeyNote(doc.RootElement);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить расход ключа {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Разбор ответа GET /key OpenRouter (internal — под тестами): { data: { usage_daily,
+    // usage_weekly, usage_monthly, limit, limit_remaining } }. Note — «Расход: $D сегодня ·
+    // $W за неделю · $M за месяц» (+ «· лимит ключа: осталось $R из $L», когда limit задан числом).
+    // Любая из расходных частей не разобралась → Note нет (лучше никакой, чем частичный)
+    internal static string? ParseOpenRouterKeyNote(JsonElement root)
+    {
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object) return null;
+        var daily = ReadNumber(data, "usage_daily");
+        var weekly = ReadNumber(data, "usage_weekly");
+        var monthly = ReadNumber(data, "usage_monthly");
+        if (double.IsNaN(daily) || double.IsNaN(weekly) || double.IsNaN(monthly)) return null;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var note = "Расход: $" + daily.ToString("0.####", inv) + " сегодня · $" +
+            weekly.ToString("0.####", inv) + " за неделю · $" + monthly.ToString("0.####", inv) + " за месяц";
+        // limit приходит null (лимита нет) либо числом — null/мусор пропускаем без куска про лимит
+        if (data.TryGetProperty("limit", out var limEl) && limEl.ValueKind == JsonValueKind.Number)
+        {
+            var remaining = ReadNumber(data, "limit_remaining");
+            if (!double.IsNaN(remaining))
+                note += " · лимит ключа: осталось $" + remaining.ToString("0.####", inv) +
+                    " из $" + limEl.GetDouble().ToString("0.####", inv);
+        }
+        return note;
+    }
+
+    // Число из JSON, приходящее как number или как строка; NaN — поля нет либо не разобрать.
+    // ValueKind проверяем явно: GetString() на bool/object/array бросает, а разборщики
+    // ответов обязаны переживать любой мусор от провайдера, а не падать целиком
     private static double ReadNumber(JsonElement obj, string name)
     {
         if (!obj.TryGetProperty(name, out var el)) return double.NaN;
         if (el.ValueKind == JsonValueKind.Number) return el.GetDouble();
+        if (el.ValueKind != JsonValueKind.String) return double.NaN;
         return double.TryParse(el.GetString(), System.Globalization.NumberStyles.Float,
             System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : double.NaN;
     }
 
+    private const double WeekMinutes = 7 * 24 * 60;
+
+    // Подпись окна выводим из ФАКТИЧЕСКОЙ длительности, а не из позиции в списке: провайдер
+    // может перестать отдавать короткое окно, и «5 часов» над недельным значением — прямая
+    // ложь пользователю. Длительность неизвестна — «Окно квоты» без периода.
+    // В подписи ТОЛЬКО период: расход это или остаток, решает экран (он приводит все окна
+    // к языку расхода), поэтому оценочных слов вроде «остаток квоты» тут быть не должно.
+    private static string WindowLabel(double? minutes)
+    {
+        if (minutes is not { } m || double.IsNaN(m) || double.IsInfinity(m) || m <= 0)
+            return "Окно квоты";
+        if (Math.Abs(m - WeekMinutes) < 60) return "Неделя";
+        if (m >= 28 * 24 * 60 && m <= 31 * 24 * 60) return "Месяц";
+        if (m >= 24 * 60 && Math.Abs(m % (24 * 60)) < 1)
+            return Plural(m / (24 * 60), "день", "дня", "дней");
+        if (m >= 60 && Math.Abs(m % 60) < 1)
+            return Plural(m / 60, "час", "часа", "часов");
+        return Plural(m, "минута", "минуты", "минут");
+    }
+
+    // Русская форма числительного: 1 час, 2 часа, 5 часов
+    private static string Plural(double value, string one, string few, string many)
+    {
+        var n = (long)Math.Round(value);
+        var mod100 = n % 100;
+        var mod10 = n % 10;
+        var word = mod100 is >= 11 and <= 14 ? many
+            : mod10 == 1 ? one
+            : mod10 is >= 2 and <= 4 ? few
+            : many;
+        return $"{n} {word}";
+    }
+
     // Формат GLM (z.ai Coding Plan, недокументированный монитор):
-    // { data: { limits: [ { type: "TOKENS_LIMIT", percentage, nextResetTime }, ... ] } }
-    // TOKENS_LIMIT-элементов два — 5-часовое окно и недельное; берём с ближайшим
-    // nextResetTime (самое короткое = 5-часовое). percentage — израсходовано;
-    // показываем остаток (100 − percentage). Хедер Authorization БЕЗ префикса "Bearer".
+    // GET {BalanceUrl} → { data: { limits: [ {type:"TOKENS_LIMIT", unit, number, percentage,
+    // nextResetTime}, {type:"TIME_LIMIT", unit, number, currentValue, usage, nextResetTime, ...} ] } }.
+    // TOKENS_LIMIT (unit=3 — часы, unit=6 — недели) → окна остатка токенов в процентах;
+    // TIME_LIMIT (unit=5 — месячный лимит вызовов веб-инструментов подписки search-prime/
+    // web-reader/zread) → окно count "currentValue/usage". Общей безоконной квоты токенов нет.
+    // Хедер Authorization БЕЗ префикса "Bearer". Разбор — ParseGlmQuota (фиксируется тестами).
     private async Task<ProviderBalance?> FetchGlmAsync(LlmProviderConfig p, CancellationToken ct)
     {
         var url = string.IsNullOrWhiteSpace(p.BalanceUrl)
@@ -214,39 +357,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             resp.EnsureSuccessStatusCode();
 
             using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
-            var root = doc.RootElement;
-            var data = root.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : root;
-            if (!data.TryGetProperty("limits", out var limits) || limits.ValueKind != JsonValueKind.Array)
-                return null;
-
-            // Среди TOKENS_LIMIT выбираем окно с ближайшим сбросом (5-часовое)
-            double bestUsed = double.NaN;
-            long bestReset = long.MaxValue;
-            foreach (var item in limits.EnumerateArray())
-            {
-                if (!item.TryGetProperty("type", out var t)
-                    || !string.Equals(t.GetString(), "TOKENS_LIMIT", StringComparison.OrdinalIgnoreCase))
-                    continue;
-                if (!item.TryGetProperty("percentage", out var pct)) continue;
-                var used = pct.ValueKind == JsonValueKind.Number ? pct.GetDouble()
-                    : double.TryParse(pct.GetString(), System.Globalization.NumberStyles.Float,
-                        System.Globalization.CultureInfo.InvariantCulture, out var v) ? v : double.NaN;
-                if (double.IsNaN(used)) continue;
-                var reset = item.TryGetProperty("nextResetTime", out var nr) && nr.ValueKind == JsonValueKind.Number
-                    ? nr.GetInt64() : long.MaxValue;
-                if (reset < bestReset) { bestReset = reset; bestUsed = used; }
-            }
-            if (double.IsNaN(bestUsed)) return null; // окна TOKENS_LIMIT нет — квоту показать нечем
-
-            var remaining = Math.Clamp(100 - bestUsed, 0, 100);
-            // nextResetTime — unix-время; порог отличает миллисекунды от секунд
-            DateTime? resetsAt = bestReset == long.MaxValue ? null
-                : (bestReset > 100_000_000_000
-                    ? DateTimeOffset.FromUnixTimeMilliseconds(bestReset)
-                    : DateTimeOffset.FromUnixTimeSeconds(bestReset)).UtcDateTime;
-            return new ProviderBalance(true, "%",
-                remaining.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture),
-                ResetsAt: resetsAt);
+            return ParseGlmQuota(doc.RootElement);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -256,12 +367,207 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         }
     }
 
+    // Разбор ответа квоты GLM (internal — под тестами). null — массива limits нет либо ни одного
+    // percent-окна (TOKENS_LIMIT) не разобрали: основного баланса в процентах без него нет.
+    // TOKENS_LIMIT-окна идут списком, отсортированными по длительности (короткое первым, с
+    // неизвестной длительностью — в конец); TIME_LIMIT достраивается последним как count-окно.
+    internal static ProviderBalance? ParseGlmQuota(JsonElement root)
+    {
+        var data = root.TryGetProperty("data", out var d) && d.ValueKind == JsonValueKind.Object ? d : root;
+        if (!data.TryGetProperty("limits", out var limits) || limits.ValueKind != JsonValueKind.Array)
+            return null;
+
+        // (окно, длительность в минутах, флаг «часовое») — длительность нужна для сортировки,
+        // флаг — для решения, вести ли историю (иначе в один ряд легли бы проценты разных окон)
+        var tokenWindows = new List<(ProviderQuotaWindow Window, double? Minutes, bool Hourly)>();
+        ProviderQuotaWindow? toolWindow = null;
+        foreach (var item in limits.EnumerateArray())
+        {
+            if (!item.TryGetProperty("type", out var t) || t.ValueKind != JsonValueKind.String) continue;
+            var type = t.GetString();
+
+            if (string.Equals(type, "TOKENS_LIMIT", StringComparison.OrdinalIgnoreCase))
+            {
+                // percentage — израсходовано; показываем остаток (100 − percentage)
+                var pct = ReadNumber(item, "percentage");
+                if (double.IsNaN(pct)) continue; // не разобрать процент — окно пропускаем, не роняя остальные
+                var (minutes, hourly) = GlmWindowSpan(item);
+                var value = Math.Clamp(100 - pct, 0, 100)
+                    .ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+                tokenWindows.Add((new ProviderQuotaWindow(WindowLabel(minutes), value,
+                    ReadUnixTime(item, "nextResetTime"), "percent"), minutes, hourly));
+            }
+            else if (string.Equals(type, "TIME_LIMIT", StringComparison.OrdinalIgnoreCase))
+            {
+                // Месячный лимит вызовов веб-инструментов подписки — НЕ токены: значение
+                // "currentValue/usage" (фронт по unit=count допишет «запросов»). Подпись — НЕ
+                // период: «Месяц» рядом с токен-окнами читался бы как общая месячная квота токенов
+                var current = ReadNumber(item, "currentValue");
+                var usage = ReadNumber(item, "usage");
+                if (double.IsNaN(current) || double.IsNaN(usage)) continue; // не разобрать числа — окно не добавляем
+                toolWindow = new ProviderQuotaWindow("Веб-инструменты", $"{(long)current}/{(long)usage}",
+                    ReadUnixTime(item, "nextResetTime"), "count");
+            }
+        }
+
+        if (tokenWindows.Count == 0) return null; // percent-окна нет — основной баланс показать нечем
+
+        // Короткое окно первым; неизвестная длительность (null) уходит в конец
+        tokenWindows.Sort((a, b) => (a.Minutes ?? double.MaxValue).CompareTo(b.Minutes ?? double.MaxValue));
+
+        var windows = tokenWindows.Select(w => w.Window).ToList();
+        if (toolWindow is not null) windows.Add(toolWindow);
+
+        var primary = tokenWindows[0];
+        // История — только когда основное окно часовое (unit=3): иначе (провайдер отдал одно
+        // недельное) в общий ряд легли бы проценты разных окон, и график запрыгал бы между шкалами
+        return new ProviderBalance(true, "%", primary.Window.Value, ResetsAt: primary.Window.ResetsAt,
+            Windows: windows, TrackHistory: primary.Hourly);
+    }
+
+    // Длительность окна GLM в минутах по паре (unit, number): unit=3 — часы, unit=6 — недели.
+    // Код unit недокументирован — маппим только наблюдённые значения; неизвестный → null, тогда
+    // подпись окна идёт без периода («Окно квоты»). Hourly = окно часовое (unit=3) — по нему
+    // решаем, вести ли историю; у недельного и неизвестного она не ведётся
+    private static (double? Minutes, bool Hourly) GlmWindowSpan(JsonElement item)
+    {
+        var unit = ReadNumber(item, "unit");
+        var number = ReadNumber(item, "number");
+        if (double.IsNaN(unit) || double.IsNaN(number) || number <= 0) return (null, false);
+        var perUnit = unit switch
+        {
+            3 => 60.0,            // час
+            6 => 7 * 24 * 60.0,   // неделя
+            _ => (double?)null    // неизвестный код — длительность не выдумываем
+        };
+        return perUnit is { } m ? (m * number, unit == 3) : (null, false);
+    }
+
+    // Формат Alibaba Cloud Model Studio (Coding Plan / Token Plan, шлюз консоли bailian):
+    // публичного API квоты у Token Plan нет — эндпоинт отдаёт 200 {"code":"ConsoleNeedLogin"}
+    // на любую авторизацию ApiKey. Квоту видит только web-сессия консоли, поэтому авторизация —
+    // по Cookie (ConsoleCookie из appsettings.Local.json), а не по ApiKey. POST {BalanceUrl} с
+    // query-хвостом шлюза и form-телом params=<JSON>&region=ap-southeast-1, заголовки Cookie/Origin/
+    // Referer. Ответ — глубокая обёртка data.DataV2.data.{code, data:{per1WeekResetTime,
+    // per1WeekPercentage}}; окно ровно одно (пятичасового у тарифа pro нет — не выдумывать).
+    // Cookie рано или поздно протухает — это штатная деградация: null → плашка скрывается, отрабатывает
+    // FailureBackoff. Редиректы отключены у клиента «alibaba-console»: шлюз редиректит неавторизованную
+    // сессию 302 на err.taobao.com, и следование даст HTML. Разбор — ParseAlibabaUsage (фиксируется тестами)
+    private const string AlibabaUsageApi = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage";
+
+    private async Task<ProviderBalance?> FetchAlibabaAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        // Cookie консоли — отдельный секрет; без него квоту не прочитать (ApiKey здесь ни при чём).
+        // Нет cookie → молча без плашки, как «нет источника»
+        if (string.IsNullOrWhiteSpace(p.ConsoleCookie)) return null;
+        var url = $"{p.BalanceUrl.TrimEnd('/')}" +
+            "?action=IntlBroadScopeAspnGateway&product=sfm_bailian" +
+            $"&api={AlibabaUsageApi}&_v=undefined";
+        try
+        {
+            var client = httpFactory.CreateClient("alibaba-console");
+            using var req = new HttpRequestMessage(HttpMethod.Post, url);
+            req.Headers.TryAddWithoutValidation("Cookie", p.ConsoleCookie);
+            req.Headers.TryAddWithoutValidation("Origin", "https://modelstudio.console.alibabacloud.com");
+            req.Headers.TryAddWithoutValidation("Referer", "https://modelstudio.console.alibabacloud.com/ap-southeast-1");
+            // params — JSON-объект запроса (Api/V/Data); region — ап-саут-ист (Сингапур, Coding Plan intl)
+            var payload = "{\"Api\":\"" + AlibabaUsageApi + "\",\"V\":\"1.0\",\"Data\":{}}";
+            req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["params"] = payload,
+                ["region"] = "ap-southeast-1",
+            });
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            // 302/4xx/5xx — протухшая сессия (шлюз редиректит на err.taobao.com) или сбой шлюза:
+            // для пользователя это «квота недоступна», а не ошибка продукта
+            if (!resp.IsSuccessStatusCode)
+            {
+                LogAlibabaExpiry($"HTTP {(int)resp.StatusCode}");
+                return null;
+            }
+            var body = await resp.Content.ReadAsStringAsync(timeoutCts.Token);
+            // Явный отказ авторизации в теле (200 OK) — cookie протух/не тот аккаунт
+            if (body.Contains("BailianGateway.Workspace.NotAuthorised", StringComparison.Ordinal))
+            {
+                LogAlibabaExpiry("NotAuthorised");
+                return null;
+            }
+            using var doc = JsonDocument.Parse(body);
+            var parsed = ParseAlibabaUsage(doc.RootElement);
+            if (parsed is null)
+                // code != SUCCESS / нет per1WeekPercentage / сломана обёртка — почти всегда то же
+                // протухание; логируем как деградацию одной строкой, не роняя консоль
+                LogAlibabaExpiry("ответ без квоты");
+            return parsed;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Разбор ответа шлюза bailian Alibaba (internal — под тестами). Обёртка глубокая:
+    // data.DataV2.data.{code, success, data:{per1WeekResetTime, per1WeekPercentage}}.
+    // per1WeekPercentage — доля ИЗРАСХОДОВАННОГО (0..1), показываем остаток (1 − pct)·100 —
+    // НЕ перепутать направление с соседними парсерами, где percentage уже остаток.
+    // null — нет data/DataV2/внутреннего data, code != SUCCESS, success=false, либо нет per1WeekPercentage.
+    internal static ProviderBalance? ParseAlibabaUsage(JsonElement root)
+    {
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object) return null;
+        if (!data.TryGetProperty("DataV2", out var dataV2) || dataV2.ValueKind != JsonValueKind.Object) return null;
+        if (!dataV2.TryGetProperty("data", out var inner) || inner.ValueKind != JsonValueKind.Object) return null;
+
+        // Шлюз отвечает 200 даже на отказ: code != SUCCESS / success=false — протухшая или
+        // неавторизованная сессия (NotAuthorised приходит как code), квоты в ответе нет
+        if (inner.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.False) return null;
+        if (inner.TryGetProperty("code", out var codeEl) && codeEl.ValueKind == JsonValueKind.String
+            && !string.Equals(codeEl.GetString(), "SUCCESS", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!inner.TryGetProperty("data", out var usage) || usage.ValueKind != JsonValueKind.Object) return null;
+        var pct = ReadNumber(usage, "per1WeekPercentage");
+        if (double.IsNaN(pct)) return null;
+
+        var remaining = Math.Clamp((1 - pct) * 100, 0, 100)
+            .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        var window = new ProviderQuotaWindow("Неделя", remaining,
+            ReadUnixTime(usage, "per1WeekResetTime"), "percent");
+        // Окно расходное (Token Plan): точки в историю графика пишем — TrackHistory=true
+        return new ProviderBalance(true, "%", remaining, ResetsAt: window.ResetsAt,
+            Windows: [window], TrackHistory: true);
+    }
+
+    // Протухание cookie консоли Alibaba — штатная деградация, не ошибка продукта. Логируем одной
+    // строкой не чаще раза в 5 мин (по образцу QuietHttpLogger): кэш + FailureBackoff и так гасят
+    // частоту, но несколько заходов на экран подряд без троттлера давали бы дубли. Скрытие плашки
+    // обратимо — оживёт с новым ConsoleCookie, без вмешательства в код
+    private static readonly TimeSpan AlibabaExpiryReportInterval = TimeSpan.FromMinutes(5);
+    private static readonly object _alibabaExpiryGate = new();
+    private static DateTime? _alibabaExpiryLastReport;
+
+    private static void LogAlibabaExpiry(string reason)
+    {
+        var now = DateTime.UtcNow;
+        lock (_alibabaExpiryGate)
+        {
+            if (_alibabaExpiryLastReport is { } last && now - last < AlibabaExpiryReportInterval) return;
+            _alibabaExpiryLastReport = now;
+        }
+        Console.Error.WriteLine(
+            $"[ProviderBalance] Alibaba: cookie консоли протух или квота недоступна ({reason}). " +
+            "Плашка скрыта до обновления ConsoleCookie в appsettings.Local.json.");
+    }
+
     // Формат Kimi for Coding (подписка kimi.com, недокументированный эндпоинт):
     // GET {ApiBaseUrl}/usages →
     // { usage: {limit, used, remaining, resetTime},              // недельное окно
     //   limits: [{ window: {duration, timeUnit}, detail: {limit, used, remaining, resetTime} }] }
     // Числа приходят СТРОКАМИ; limit=100 — шкала уже процентная. Основным считаем самое
-    // короткое окно из limits[] (5-часовое, 300 мин) — как у GLM; недельное кладём в Secondary*.
+    // короткое окно из limits[] (5-часовое, 300 мин) — как у GLM; недельное — вторым окном в Windows.
     private async Task<ProviderBalance?> FetchKimiAsync(LlmProviderConfig p, CancellationToken ct)
     {
         try
@@ -285,12 +591,255 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         }
     }
 
+    // Формат MiniMax Coding/Token Plan (недокументированный эндпоинт консоли):
+    // GET https://www.minimax.io/v1/token_plan/remains, Authorization: Bearer <ApiKey> →
+    // { model_remains: [ { model_name, end_time, current_interval_remaining_percent,
+    //                       weekly_end_time, current_weekly_remaining_percent, ... }, ... ],
+    //   base_resp: { status_code, status_msg } }
+    // model_remains содержит несколько строк по типу ресурса (наблюдались "general" и "video" —
+    // видеогенерация к CLI-квоте отношения не имеет); берём строку "general". end_time/
+    // weekly_end_time — unix-миллисекунды. Формат зафиксирован живым запросом 04.08.2026,
+    // фикстура — MiniMaxRemainsTests.
+    private const string MiniMaxRemainsUrl = "https://www.minimax.io/v1/token_plan/remains";
+
+    private async Task<ProviderBalance?> FetchMiniMaxAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        // Адрес — из конфига (BalanceUrl), как у GLM: переезд ручки не должен требовать пересборки
+        var url = string.IsNullOrWhiteSpace(p.BalanceUrl) ? MiniMaxRemainsUrl : p.BalanceUrl;
+        try
+        {
+            var client = httpFactory.CreateClient("llm-provider");
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", p.ApiKey);
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            resp.EnsureSuccessStatusCode();
+
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+            return ParseMiniMaxRemains(doc.RootElement);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Разбор ответа /v1/token_plan/remains MiniMax (internal — под тестами).
+    // null — status_code != 0, строки "general" нет, либо оба окна не разобрать.
+    internal static ProviderBalance? ParseMiniMaxRemains(JsonElement root)
+    {
+        if (root.TryGetProperty("base_resp", out var baseResp) && baseResp.ValueKind == JsonValueKind.Object
+            && baseResp.TryGetProperty("status_code", out var sc) && sc.ValueKind == JsonValueKind.Number
+            && sc.GetInt32() != 0)
+            return null;
+        if (!root.TryGetProperty("model_remains", out var remainsEl) || remainsEl.ValueKind != JsonValueKind.Array)
+            return null;
+
+        JsonElement general = default;
+        var found = false;
+        foreach (var item in remainsEl.EnumerateArray())
+        {
+            if (item.TryGetProperty("model_name", out var mn) && mn.ValueKind == JsonValueKind.String
+                && string.Equals(mn.GetString(), "general", StringComparison.OrdinalIgnoreCase))
+            {
+                general = item;
+                found = true;
+                break;
+            }
+        }
+        if (!found) return null;
+
+        var fiveHourPct = ReadNumber(general, "current_interval_remaining_percent");
+        var weeklyPct = ReadNumber(general, "current_weekly_remaining_percent");
+        if (double.IsNaN(fiveHourPct) && double.IsNaN(weeklyPct)) return null;
+
+        var fmt = (double v) => Math.Clamp(v, 0, 100).ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
+        // Длительность интервального окна считаем по самому ответу (start_time..end_time):
+        // нет границ — подпись идёт без периода, «пять часов» из воздуха не берём.
+        // У недельного окна семантика в имени полей (weekly_*), поэтому при неразобранных
+        // границах остаётся неделя
+        var intervalMinutes = SpanMinutes(general, "start_time", "end_time");
+        var weeklyMinutes = SpanMinutes(general, "weekly_start_time", "weekly_end_time") ?? WeekMinutes;
+        var windows = new List<ProviderQuotaWindow>();
+        if (!double.IsNaN(fiveHourPct))
+            windows.Add(new ProviderQuotaWindow(WindowLabel(intervalMinutes), fmt(fiveHourPct),
+                ReadUnixTime(general, "end_time"), "percent"));
+        if (!double.IsNaN(weeklyPct))
+            windows.Add(new ProviderQuotaWindow(WindowLabel(weeklyMinutes), fmt(weeklyPct),
+                ReadUnixTime(general, "weekly_end_time"), "percent"));
+        if (windows.Count == 0) return null;
+
+        var primary = windows[0];
+        // В историю точка идёт, только когда основное окно — интервальное: иначе (провайдер
+        // отдал одно недельное) в один ряд легли бы проценты разных окон
+        return new ProviderBalance(true, "%", primary.Value, ResetsAt: primary.ResetsAt, Windows: windows,
+            TrackHistory: !double.IsNaN(fiveHourPct));
+    }
+
+    // Формат FreeLLM (локальный роутер бесплатных моделей, нет квот/денег): состояние пула и
+    // трафик читаются через его MCP POST {BalanceUrl} (JSON-RPC 2.0 stateless, авторизация —
+    // тот же unified-ключ, что в ApiKey, Bearer). URL по умолчанию — ApiBaseUrl без хвоста /v1 + /mcp.
+    // Два вызова tools/call: provider_health → окно count «Провайдеры» (живых/всего; жива платформа
+    // с keys.healthy > 0); usage_summary range=24h → Note «За 24ч: …». Один упал — живём на втором;
+    // оба → null. TrackHistory false: это не расход, в историю графика точки не идут.
+    private async Task<ProviderBalance?> FetchFreeLlmAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        var url = string.IsNullOrWhiteSpace(p.BalanceUrl)
+            ? $"{FreeLlmBase(p.ApiBaseUrl)}/mcp" : p.BalanceUrl;
+        try
+        {
+            var client = httpFactory.CreateClient("llm-provider");
+
+            // provider_health → окно «Провайдеры» (живых/всего) и флаг Available
+            string? value = null;
+            var available = false;
+            if (await CallFreeLlmToolAsync(client, url, p.ApiKey, "provider_health", null, ct) is { } health
+                && ParseFreeLlmHealth(health) is { } h)
+            {
+                value = $"{h.Alive}/{h.Total}";
+                available = h.Alive > 0;
+            }
+
+            // usage_summary range=24h → Note «За 24ч: …»
+            string? note = null;
+            if (await CallFreeLlmToolAsync(client, url, p.ApiKey, "usage_summary", new { range = "24h" }, ct)
+                is { } usage)
+                note = ParseFreeLlmUsage(usage);
+
+            // Оба вызова ничего не дали → баланса нет
+            if (value is null && note is null) return null;
+
+            var windows = value is null ? null : new List<ProviderQuotaWindow>
+            {
+                new("Провайдеры", value, null, "count")
+            };
+            return new ProviderBalance(available, "count", value ?? "", ResetsAt: null,
+                Windows: windows, TrackHistory: false, Note: note);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Базовый URL FreeLLM без хвоста /v1 — MCP-ручка живёт в корне сервиса, а не под OpenAPI-префиксом
+    private static string FreeLlmBase(string apiBaseUrl)
+    {
+        var b = apiBaseUrl.TrimEnd('/');
+        const string suffix = "/v1";
+        return b.EndsWith(suffix, StringComparison.OrdinalIgnoreCase) ? b[..^suffix.Length] : b;
+    }
+
+    // Один вызов tools/call к MCP FreeLLM: result.content[0].text — pretty-printed JSON, его и
+    // возвращаем корневым элементом (Clone — переживает dispose внутреннего документа). null —
+    // ответ не JSON-RPC, нет result/content/text или text не JSON (мусор). Таймаут 10с как у соседей
+    private async Task<JsonElement?> CallFreeLlmToolAsync(HttpClient client, string url, string apiKey,
+        string tool, object? arguments, CancellationToken ct)
+    {
+        using var req = new HttpRequestMessage(HttpMethod.Post, url);
+        req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+        req.Content = System.Net.Http.Json.JsonContent.Create(new
+        {
+            jsonrpc = "2.0",
+            id = 1,
+            method = "tools/call",
+            @params = new { name = tool, arguments = arguments ?? new { } },
+        });
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+        using var resp = await client.SendAsync(req, timeoutCts.Token);
+        if (!resp.IsSuccessStatusCode) return null;
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(timeoutCts.Token));
+        if (!doc.RootElement.TryGetProperty("result", out var result) || result.ValueKind != JsonValueKind.Object)
+            return null;
+        if (!result.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array
+            || content.GetArrayLength() == 0)
+            return null;
+        if (!content[0].TryGetProperty("text", out var t) || t.ValueKind != JsonValueKind.String)
+            return null;
+        var text = t.GetString();
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        try { using var inner = JsonDocument.Parse(text!); return inner.RootElement.Clone(); }
+        catch { return null; }
+    }
+
+    // Разбор provider_health FreeLLM (internal — под тестами): { "<platform>": { keys: {healthy, …},
+    // … }, … }. Платформа жива, если keys.healthy > 0. Возвращаем (живых/всего); null — пусто/не объект
+    internal static (int Alive, int Total)? ParseFreeLlmHealth(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        var alive = 0;
+        var total = 0;
+        foreach (var prop in root.EnumerateObject())
+        {
+            total++;
+            if (prop.Value.ValueKind != JsonValueKind.Object) continue;
+            if (!prop.Value.TryGetProperty("keys", out var keys) || keys.ValueKind != JsonValueKind.Object)
+                continue;
+            var healthy = ReadNumber(keys, "healthy");
+            if (!double.IsNaN(healthy) && healthy > 0) alive++;
+        }
+        return total > 0 ? (alive, total) : null;
+    }
+
+    // Разбор usage_summary FreeLLM (internal — под тестами): { requests, success_rate, input_tokens,
+    // output_tokens }. Note «За 24ч: N запросов[, успех X%][ · токены N вх / N исх]». success_rate
+    // null → кусок с процентом опускаем; нет requests → Note нет совсем
+    internal static string? ParseFreeLlmUsage(JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Object) return null;
+        var requests = ReadNumber(root, "requests");
+        if (double.IsNaN(requests)) return null;
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var note = "За 24ч: " + (long)requests + " запросов";
+        var rate = ReadNumber(root, "success_rate");
+        if (!double.IsNaN(rate))
+            note += ", успех " + rate.ToString("0.#", inv) + "%";
+        var input = ReadNumber(root, "input_tokens");
+        var output = ReadNumber(root, "output_tokens");
+        if (!double.IsNaN(input) || !double.IsNaN(output))
+            note += " · токены " + (double.IsNaN(input) ? "—" : ((long)input).ToString()) +
+                " вх / " + (double.IsNaN(output) ? "—" : ((long)output).ToString()) + " исх";
+        return note;
+    }
+
+    // Unix-время из числового поля; порог отличает миллисекунды от секунд (как у GLM).
+    // Отсутствует/нечисловое/<=0/вне диапазона дат — null: непонятное время сброса гасит
+    // ТОЛЬКО ResetsAt, а не окно и не весь баланс (иначе один кривой таймстемп оставлял
+    // экран пустым при полностью разобранных процентах)
+    private static DateTime? ReadUnixTime(JsonElement obj, string name)
+    {
+        var v = ReadNumber(obj, name);
+        if (double.IsNaN(v) || v <= 0) return null;
+        try
+        {
+            return v > 100_000_000_000d
+                ? DateTimeOffset.FromUnixTimeMilliseconds((long)v).UtcDateTime
+                : DateTimeOffset.FromUnixTimeSeconds((long)v).UtcDateTime;
+        }
+        catch (ArgumentOutOfRangeException) { return null; }
+    }
+
+    // Длительность окна в минутах по паре границ; неразобранные границы — null (неизвестна)
+    private static double? SpanMinutes(JsonElement obj, string startName, string endName)
+    {
+        if (ReadUnixTime(obj, startName) is not { } start || ReadUnixTime(obj, endName) is not { } end)
+            return null;
+        var minutes = (end - start).TotalMinutes;
+        return minutes > 0 ? minutes : null;
+    }
+
     // Разбор ответа /usages Kimi (internal — под тестами). null — ни одного окна не разобрали.
     internal static ProviderBalance? ParseKimiUsages(JsonElement root)
     {
-        // Недельное окно — корневое "usage"
+        // Недельное окно — корневое "usage" (длительность в ответе не приходит, она в контракте)
         var weekly = root.TryGetProperty("usage", out var usageEl) && usageEl.ValueKind == JsonValueKind.Object
-            ? ParseKimiWindow(usageEl) : null;
+            ? ParseKimiWindow(usageEl, WeekMinutes) : null;
 
         // Основное — самое короткое окно из limits[] (окно 300 мин = 5-часовое)
         KimiWindow? primary = null;
@@ -303,28 +852,42 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                 var w = ParseKimiWindow(detail);
                 if (w is null) continue;
                 var minutes = WindowMinutes(item);
-                if (primary is null || minutes < primary.Value.Minutes)
+                // Окно неизвестной длины считаем самым длинным — короткое всегда выигрывает
+                if (primary is null || (minutes ?? double.MaxValue) < (primary.Value.Minutes ?? double.MaxValue))
                     primary = w.Value with { Minutes = minutes };
             }
         }
-        // Без limits[] живём на одном недельном окне
-        primary ??= weekly is { } w0 ? w0 with { Minutes = double.MaxValue } : null;
-        if (primary is null) return null;
+        // Без limits[] живём на одном недельном окне — и подписываем его неделей, а не пятью
+        // часами: длительность корневого usage задана контрактом эндпоинта
+        var fromLimits = primary is not null;
+        primary ??= weekly;
+        if (primary is not { } p) return null;
 
         var fmt = (double v) => v.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture);
-        var p = primary.Value;
-        // Вторым окном отдаём неделю, только когда она не совпала с основным
-        var hasSecondary = weekly is { } wk && wk != p;
-        return new ProviderBalance(true, "%", fmt(p.RemainingPct), ResetsAt: p.ResetsAt,
-            SecondaryLabel: hasSecondary ? "остаток квоты · неделя" : null,
-            SecondaryValue: hasSecondary ? fmt(weekly!.Value.RemainingPct) : null,
-            SecondaryResetsAt: hasSecondary ? weekly!.Value.ResetsAt : null);
+        var windows = new List<ProviderQuotaWindow>
+            { new(WindowLabel(p.Minutes), fmt(p.RemainingPct), p.ResetsAt, "percent") };
+        // Вторым окном отдаём неделю, только когда она не совпала с основным. Сравниваем
+        // явно по значению и сбросу: равенство record struct тянет ещё и Minutes, из-за чего
+        // совпавшее окно то задваивалось, то пропадало
+        if (weekly is { } wk && (wk.RemainingPct != p.RemainingPct || wk.ResetsAt != p.ResetsAt))
+            windows.Add(new ProviderQuotaWindow(WindowLabel(wk.Minutes), fmt(wk.RemainingPct), wk.ResetsAt, "percent"));
+        // Параллельные сессии — отдельное count-окно последним (после квотных): «занято/лимит».
+        // limit и занятость (details.length) приходят строками — через ReadNumber, как весь ответ Kimi
+        var parallel = KimiParallelWindow(root);
+        if (parallel is not null) windows.Add(parallel);
+        // Уровень подписки → Note («Подписка: Standard»). Неизвестный формат уровня — не показываем
+        var note = KimiMembershipNote(root);
+        // История — только по окну из limits[]: свалившись на недельное, мы писали бы в тот же
+        // ряд проценты другого окна
+        return new ProviderBalance(true, "%", fmt(p.RemainingPct), ResetsAt: p.ResetsAt, Windows: windows,
+            TrackHistory: fromLimits, Note: note);
     }
 
-    // Одно окно квоты Kimi: остаток в процентах (нормализуем к 0..100, даже если limit ≠ 100) + сброс
-    private readonly record struct KimiWindow(double RemainingPct, DateTime? ResetsAt, double Minutes);
+    // Одно окно квоты Kimi: остаток в процентах (нормализуем к 0..100, даже если limit ≠ 100),
+    // сброс и длительность окна (null — неизвестна)
+    private readonly record struct KimiWindow(double RemainingPct, DateTime? ResetsAt, double? Minutes);
 
-    private static KimiWindow? ParseKimiWindow(JsonElement el)
+    private static KimiWindow? ParseKimiWindow(JsonElement el, double? minutes = null)
     {
         var limit = ReadNumber(el, "limit");
         var remaining = ReadNumber(el, "remaining");
@@ -336,24 +899,59 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         }
         if (double.IsNaN(remaining) || double.IsNaN(limit) || limit <= 0) return null;
 
+        // Время читаем как UTC даже без суффикса Z: RoundtripKind оставил бы Kind=Unspecified,
+        // и ToUniversalTime() посчитал бы его локальным — сброс уезжал на часовой пояс машины
         DateTime? resetsAt = el.TryGetProperty("resetTime", out var rt) && rt.ValueKind == JsonValueKind.String
-            && DateTime.TryParse(rt.GetString(), null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
-                ? parsed.ToUniversalTime() : null;
-        return new KimiWindow(Math.Clamp(remaining / limit * 100, 0, 100), resetsAt, double.MaxValue);
+            && DateTimeOffset.TryParse(rt.GetString(), System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.AssumeUniversal
+                | System.Globalization.DateTimeStyles.AdjustToUniversal, out var parsed)
+                ? parsed.UtcDateTime : null;
+        return new KimiWindow(Math.Clamp(remaining / limit * 100, 0, 100), resetsAt, minutes);
     }
 
-    // Длительность окна limits[] в минутах (для выбора самого короткого); неизвестная — бесконечность
-    private static double WindowMinutes(JsonElement limitItem)
+    // Длительность окна limits[] в минутах (для выбора самого короткого); null — неизвестна
+    private static double? WindowMinutes(JsonElement limitItem)
     {
         if (!limitItem.TryGetProperty("window", out var w) || w.ValueKind != JsonValueKind.Object)
-            return double.MaxValue;
+            return null;
         var duration = ReadNumber(w, "duration");
-        if (double.IsNaN(duration) || duration <= 0) return double.MaxValue;
+        if (double.IsNaN(duration) || duration <= 0) return null;
         var unit = w.TryGetProperty("timeUnit", out var u) ? u.GetString() ?? "" : "";
         return unit.Contains("SECOND", StringComparison.OrdinalIgnoreCase) ? duration / 60
             : unit.Contains("HOUR", StringComparison.OrdinalIgnoreCase) ? duration * 60
             : unit.Contains("DAY", StringComparison.OrdinalIgnoreCase) ? duration * 24 * 60
             : duration; // TIME_UNIT_MINUTE и неизвестные считаем минутами
+    }
+
+    // Окно параллельных сессий Kimi: { parallel: { limit, details: [...] } } → count «занято/лимит»,
+    // сброс неприменим. limit (строка) и длина details (массив) — неразбор хотя бы одного → null
+    private static ProviderQuotaWindow? KimiParallelWindow(JsonElement root)
+    {
+        if (!root.TryGetProperty("parallel", out var par) || par.ValueKind != JsonValueKind.Object)
+            return null;
+        var limit = ReadNumber(par, "limit");
+        if (double.IsNaN(limit) || limit <= 0) return null;
+        var used = par.TryGetProperty("details", out var det) && det.ValueKind == JsonValueKind.Array
+            ? (double)det.GetArrayLength() : double.NaN;
+        if (double.IsNaN(used)) return null;
+        return new ProviderQuotaWindow("Параллельные сессии", $"{(long)used}/{(long)limit}", null, "count");
+    }
+
+    // Уровень подписки Kimi → Note «Подписка: Standard». user.membership.level приходит как
+    // LEVEL_<ИМЯ>; <ИМЯ> разворачиваем с большой буквы (STANDARD → Standard). Чужой формат — null
+    private static string? KimiMembershipNote(JsonElement root)
+    {
+        if (!root.TryGetProperty("user", out var user) || user.ValueKind != JsonValueKind.Object
+            || !user.TryGetProperty("membership", out var mem) || mem.ValueKind != JsonValueKind.Object
+            || !mem.TryGetProperty("level", out var lvl) || lvl.ValueKind != JsonValueKind.String)
+            return null;
+        var level = lvl.GetString() ?? "";
+        const string prefix = "LEVEL_";
+        if (!level.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+            || level.Length <= prefix.Length)
+            return null;
+        var name = level[prefix.Length..]; // STANDARD, PRO, FREE …
+        return "Подписка: " + char.ToUpperInvariant(name[0]) + name[1..].ToLowerInvariant();
     }
 
     // История баланса за последние дни — для графика на экране «Использование»
@@ -364,12 +962,17 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             return LoadSnapshots(key);
     }
 
-    private string UsagePath(string key) => Path.Combine(_dataDir, $"provider-usage-{key}.json");
+    // Регистр ключа приводим здесь: реестр провайдеров регистронезависим, и без этого
+    // /api/providers/MiniMax/usage писал бы один файл, а читал другой (на Linux — пустой график)
+    private string UsagePath(string key) => Path.Combine(_dataDir, $"provider-usage-{key.ToLowerInvariant()}.json");
     // Прежнее имя файла истории DeepSeek — читаем, если нового ещё нет
     private string LegacyDeepSeekPath => Path.Combine(_dataDir, "deepseek-usage.json");
 
     private void RecordSnapshot(string key, ProviderCache cache, ProviderBalance balance)
     {
+        // Точка не того окна в общий ряд не идёт: график «израсходовано окна» иначе прыгал бы
+        // между шкалами разных окон (см. TrackHistory)
+        if (!balance.TrackHistory) return;
         if (!double.TryParse(balance.TotalBalance,
             System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture,
             out var value)) return;
@@ -396,7 +999,8 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     private List<ProviderBalanceSnapshot> LoadSnapshots(string key)
     {
         var path = UsagePath(key);
-        if (!File.Exists(path) && key == "deepseek" && File.Exists(LegacyDeepSeekPath))
+        if (!File.Exists(path) && string.Equals(key, "deepseek", StringComparison.OrdinalIgnoreCase)
+            && File.Exists(LegacyDeepSeekPath))
             path = LegacyDeepSeekPath;
         try
         {

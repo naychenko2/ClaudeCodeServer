@@ -1,19 +1,26 @@
 import { memo, useState, useContext, useEffect } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
-import { splitFallbackOptions, formatSubscriptionMeta } from '../../lib/providerLimit';
+import {
+  splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel,
+  providerAvailabilityFromBalance, splitByAvailability, nearestReturn,
+  providersPlural, fmtReturnTime, invalidateExhaustedVerdict,
+} from '../../lib/providerLimit';
+import type { ProviderAvailabilityVerdict } from '../../lib/providerLimit';
+import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
 import { C, FONT, SHADOW, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
-import { relPath, stripRoot } from '../../lib/paths';
+import { relPathTree, stripRootTree } from '../../lib/paths';
 import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
 import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
 import { stripTeamMechanicMarkers, TeamMechanicOfferCard, type TeamMechanicOffer } from '../../features/team/TeamMechanicOffer';
 import { useContextPersona } from '../../lib/contextPersona';
-import { ChatProjectContext, PersonaContext, useAssistantName } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, useAssistantName } from './contexts';
+import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MessageOriginChip } from '../MessageOriginChip';
@@ -33,6 +40,7 @@ import { AskQuestionView } from './AskQuestionView';
 import { PlanReviewView } from './PlanReviewView';
 import { TeamPlanView } from './TeamPlanView';
 import { TeamEscalationView } from './TeamEscalationView';
+import { teamPlanningDoneText } from '../../lib/teamImplement';
 
 // Разбор input инструмента TodoWrite → пункты чек-листа (каждый вызов несет полный список)
 function parseTodoWriteInput(input: unknown): TodoItem[] {
@@ -110,15 +118,16 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
 }) {
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
+  const treePath = useContext(ChatTreePathContext);
   const asstName = useAssistantName();
 
   // Что именно собирается выполнить Claude — команда/путь/аргументы
   const detail = (() => {
     const inp = item.toolInput as Record<string, unknown> | null;
     if (!inp) return '';
-    if (typeof inp.command === 'string') return stripRoot(inp.command, project?.rootPath);
-    if (typeof inp.file_path === 'string') return relPath(inp.file_path, project?.rootPath);
-    if (typeof inp.path === 'string') return relPath(inp.path, project?.rootPath);
+    if (typeof inp.command === 'string') return stripRootTree(inp.command, project?.rootPath, treePath);
+    if (typeof inp.file_path === 'string') return relPathTree(inp.file_path, project?.rootPath, treePath);
+    if (typeof inp.path === 'string') return relPathTree(inp.path, project?.rootPath, treePath);
     try { const s = JSON.stringify(inp, null, 2); return s === '{}' ? '' : s; } catch { return ''; }
   })();
   // Консольная команда (Bash/shell) → тёмный «терминал»; прочее (путь файла и т.п.) → светлая панель
@@ -227,7 +236,8 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
   onRevert?: (path: string) => void;
 }) {
   const project = useContext(ChatProjectContext);
-  const relativePath = relPath(item.path, project?.rootPath);
+  const treePath = useContext(ChatTreePathContext);
+  const relativePath = relPathTree(item.path, project?.rootPath, treePath);
   return (
     <div style={{ padding: '3px 0', display: 'flex', alignItems: 'center', gap: 10 }}>
       <span style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, color: C.accent }}>
@@ -239,7 +249,9 @@ export const FileChangedRow = memo(function FileChangedRow({ item, online, onOpe
       </span>
       <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono, flexShrink: 0 }}>+{item.added}</span>
       <span style={{ fontSize: 11.5, color: C.diffRemText, fontFamily: FONT.mono, flexShrink: 0 }}>-{item.removed}</span>
-      {online && onRevert && (
+      {item.external ? (
+        <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0 }}>вне чата</span>
+      ) : online && onRevert && (
         <button onClick={() => onRevert(item.path)}
           style={{ fontSize: 11, padding: '2px 8px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer', color: C.dangerText, flexShrink: 0 }}>
           Откатить
@@ -269,7 +281,10 @@ function PostActionBar({ align = 'left', children }: {
     <div className="cc-actions" style={{
       position: 'absolute', bottom: -POST_BAR_H, [align]: 4, zIndex: 2,
       display: 'flex', alignItems: 'center', gap: 7,
-      maxWidth: '100%',
+      // Ширина по содержимому, а не по пузырю: панель — оверлей, места в ленте не
+      // занимает, а «100%» резало подпись у коротких сообщений («16 мин наз…»).
+      // Прижата к своему краю, поэтому растёт внутрь ленты, а не за её пределы.
+      width: 'max-content', maxWidth: '92vw', whiteSpace: 'nowrap',
     }}>
       {children}
     </div>
@@ -278,22 +293,56 @@ function PostActionBar({ align = 'left', children }: {
 
 // Мета поста — модель и время простым текстом. Оба слагаемых необязательны: старая
 // история их не несёт, и тогда под постом остаются одни действия.
-function PostMeta({ model, ts }: { model?: string; ts?: number }) {
+// Имя модели — вход в шторку «что она получила»: отдельная иконка в панели действий
+// была лишней, а связка «модель → её контекст» читается сама собой. Без имени модели
+// (старая история) вместо него показывается иконка.
+function PostMeta({ model, ts, promptSnapshotId, turnContextTokens, turnCache }: {
+  model?: string; ts?: number; promptSnapshotId?: string;
+  turnContextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
+}) {
   const label = useModelLabel(model);
   const time = formatPostTime(ts);
   const timeFull = formatPostTimeFull(ts);
-  if (!model && !time) return null;
+  const sessionId = useContext(ChatSessionContext);
+  const [snapshotOpen, setSnapshotOpen] = useState(false);
+  const canOpen = !!(promptSnapshotId && sessionId);
+  if (!model && !time && !canOpen) return null;
   return (
     <span style={{
       display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0,
       fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap',
     }}>
-      {model && (
+      {model && (canOpen ? (
+        <button onClick={() => setSnapshotOpen(true)}
+          title={`${label} — показать, что она получила`}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0,
+            background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+            fontFamily: 'inherit', fontSize: 'inherit', color: 'inherit',
+          }}
+          {...postIconHover}>
+          <Brain size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+        </button>
+      ) : (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, minWidth: 0 }}
           title={`Модель этого ответа: ${label}`}>
           <Brain size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
         </span>
+      ))}
+      {/* Модель неизвестна (история до появления поля) — вход остаётся иконкой */}
+      {!model && canOpen && (
+        <button onClick={() => setSnapshotOpen(true)} style={postIconBtn}
+          title="Что получила модель" aria-label="Что получила модель" {...postIconHover}>
+          <ScrollText size={13} strokeWidth={2} style={{ flexShrink: 0 }} />
+        </button>
+      )}
+      {snapshotOpen && sessionId && promptSnapshotId && (
+        <PromptSnapshotDialog sessionId={sessionId} snapshotId={promptSnapshotId}
+          contextTokens={turnContextTokens} turnCache={turnCache}
+          onClose={() => setSnapshotOpen(false)} />
       )}
       {time && (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}
@@ -355,7 +404,12 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 // Пузырь сообщения человека: та же панель по hover, но короче — копирование и время
 // (модель к своему сообщению отношения не имеет). Вынесен из switch, потому что
 // копирование и тап держат состояние, а хуки внутри case недопустимы.
-function UserMessageBubble({ text, ts, children }: { text: string; ts?: number; children: React.ReactNode }) {
+// Кнопки «что получила модель» тут нет намеренно: она описывает ход целиком и живёт
+// под ответом — там вопрос «на основании чего это написано» и возникает
+function UserMessageBubble({ text, ts, children }: {
+  text: string; ts?: number;
+  children: React.ReactNode;
+}) {
   const { tapped, handleTap } = usePostTap();
   return (
     <div className={`cc-msg${tapped ? ' cc-msg--tapped' : ''}`} onClick={handleTap}
@@ -377,9 +431,10 @@ function UserMessageBubble({ text, ts, children }: { text: string; ts?: number; 
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, streaming, model, ts }: {
+function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache }: {
   text: string; online: boolean; onRetry: () => void; streaming?: boolean;
-  model?: string; ts?: number;
+  model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
 }) {
   // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
   const project = useContext(ChatProjectContext);
@@ -447,7 +502,8 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts }: {
             </button>
           )}
           {/* Модель и время — после действий, как подпись к посту */}
-          <PostMeta model={model} ts={ts} />
+          <PostMeta model={model} ts={ts} promptSnapshotId={promptSnapshotId}
+            turnContextTokens={turnContextTokens} turnCache={turnCache} />
         </PostActionBar>
       )}
     </div>
@@ -560,6 +616,12 @@ interface ItemProps {
   onMigrateProvider?: (model: string, subscriptionKey?: string) => Promise<void>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
+  // Снимок промпта хода, к которому относится этот пост, и размер контекста его запроса —
+  // оба считает ChatPanel скользящим окном по ленте (у поста ассистента своего id нет).
+  // undefined — история до появления снимков либо пост сабагента: кнопки не будет
+  promptSnapshotId?: string;
+  turnContextTokens?: number | null;
+  turnCache?: { read: number; creation: number } | null;
   // Вложенная активность сабагента-персоны (дочерние tool_use/text/thinking с индексами) —
   // рендерится секцией внутри карточки консультации (передаёт ChatPanel только для
   // персона-вызовов Task)
@@ -586,6 +648,12 @@ interface ItemProps {
 // (транскрипт переезжает, контекст сохраняется); у опции пула передаём её key как
 // subscriptionKey — явный выбор вместо автовыбора пулом. После миграции карточка
 // гаснет по provider_switched (resolved в chatReducer).
+// Кнопки рисуются ТОЛЬКО для доступных прямо сейчас провайдеров: доступность берётся
+// из уже имеющихся данных о квотах (баланс /api/providers/{key}/balance). Недоступные
+// уходят в серую некликабельную сноску («Ещё N на паузе» + ближайший возврат), а когда
+// доступных не осталось вовсе — карточка становится нейтральным пустым состоянием
+// (не warning: нажимать нечего, это не авария). Раскладка — макет
+// docs/mockups/provider-limit-reader-header-v1.html.
 // export — для dev-витрины UiKitPage (демо обеих секций без живого лимита)
 export function ProviderLimitCard({ item, online, onMigrate }: {
   item: Extract<ChatItem, { kind: 'provider_limit' }>;
@@ -595,9 +663,45 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   // Busy по ключу опции, не по модели: у аккаунтов пула модель одна и та же
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Вердикты доступности сторонних провайдеров + ссылка на список опций, для
+  // которого они собраны: список сменился — вердикты считаются заново. Нет
+  // вердикта — запрос баланса ещё в полёте и кнопки провайдеров не рисуются:
+  // провайдер на паузе не должен мелькнуть в кнопках ни на мгновение
+  const [verdicts, setVerdicts] = useState<{
+    source: ProviderFallbackOption[] | null;
+    map: Record<string, ProviderAvailabilityVerdict>;
+  }>({ source: null, map: {} });
+
+  useEffect(() => {
+    const { providers: providerOptions } = splitFallbackOptions(item.providers);
+    if (providerOptions.length === 0) return;
+    let cancelled = false;
+    for (const p of providerOptions) {
+      const apply = (v: ProviderAvailabilityVerdict) => {
+        if (cancelled) return;
+        // Первый ответ для нового списка опций начинает карту заново —
+        // устаревшие вердикты от прежней карточки не подмешиваются
+        setVerdicts(prev => ({
+          source: item.providers,
+          map: { ...(prev.source === item.providers ? prev.map : {}), [p.key]: v },
+        }));
+      };
+      // Сбой/404 (баланс не настроен) — не повод прятать провайдера
+      api.providers.balance(p.key)
+        .then(b => apply(providerAvailabilityFromBalance(b)))
+        .catch(() => apply({ available: true, resetsAt: null }));
+    }
+    return () => { cancelled = true; };
+  }, [item.providers]);
+
   if (item.resolved || item.providers.length === 0) return null;
 
   const { subscriptions, providers } = splitFallbackOptions(item.providers);
+  const verdictMap = verdicts.source === item.providers ? verdicts.map : {};
+  const verdictsReady = providers.every(p => p.key in verdictMap);
+  const { available: availableProviders, hidden } = splitByAvailability(providers, verdictMap);
+  const nearest = nearestReturn(hidden);
+  const hasButtons = subscriptions.length > 0 || availableProviders.length > 0;
 
   let when = '';
   if (item.resetsAt) {
@@ -619,6 +723,12 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
       await onMigrate(option.model, option.kind === 'subscription' ? option.key : undefined);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось переключить чат');
+      // Ответ об исчерпании лимита у именно этого провайдера — источника новой попытки:
+      // его кэшированный /balance ещё до 5 минут будет врать «доступен», поэтому вердикт
+      // перекрывается на месте, и кнопка не предлагается повторно в этой же карточке
+      if (option.kind !== 'subscription') {
+        setVerdicts(prev => ({ source: prev.source, map: invalidateExhaustedVerdict(prev.map, option.key) }));
+      }
     } finally {
       setBusyKey(null);
     }
@@ -631,6 +741,34 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
     opacity: !online || (busyKey !== null && busyKey !== key) ? 0.55 : 1,
     fontFamily: 'inherit',
   });
+
+  // Доступных не осталось — вместо кнопок пустое состояние в нейтральном тоне
+  // (C.bgCard/C.border вместо warning): действия для человека сейчас нет,
+  // алармировать нечем. Текст объясняет причину и зовёт вернуться к сроку
+  // ближайшего возврата, если он известен
+  if (verdictsReady && !hasButtons) {
+    const emptyBold: React.CSSProperties = { color: C.textHeading, fontWeight: 600 };
+    return (
+      <div style={{
+        alignSelf: 'center', maxWidth: '100%',
+        background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: 10,
+        padding: '10px 14px', fontSize: 12.5, color: C.textPrimary,
+        display: 'flex', flexDirection: 'column', gap: 8,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 15, lineHeight: 1.4, color: C.textMuted }}>⏸</span>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontWeight: 600, color: C.textHeading }}>Продолжить пока не на чем</span>
+            <span style={{ color: C.textSecondary }}>
+              {nearest && nearest.resetsAt
+                ? <>Лимит подписки исчерпан, а все остальные провайдеры сейчас тоже на паузе. Ближайший — <b style={emptyBold}>{nearest.option.displayName}</b> — освободится {fmtReturnTime(nearest.resetsAt)}.</>
+                : <>Лимит подписки исчерпан, а остальные провайдеры сейчас на паузе — когда освободится ближайший, пока неизвестно. Как только один из них станет доступен, этот чат можно будет продолжить с сохранением контекста.</>}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div style={{
@@ -673,9 +811,18 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
           </span>
         </div>
       )}
-      {providers.length > 0 && (
+      {/* Балансы сторонних провайдеров в полёте — заглушка вместо пустого места: без неё
+          карточка на медленном соединении секунду-другую выглядит как «вариантов нет» */}
+      {!verdictsReady && providers.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5, color: C.textMuted }}>
+          <span style={{ display: 'inline-block', animation: 'cc-provider-limit-pulse 1.2s ease-in-out infinite' }}>⏳</span>
+          <span>Проверяем, где можно продолжить…</span>
+          <style>{'@keyframes cc-provider-limit-pulse{0%,100%{opacity:.4}50%{opacity:1}}'}</style>
+        </div>
+      )}
+      {verdictsReady && availableProviders.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {providers.map(p => (
+          {availableProviders.map(p => (
             <button
               key={p.key}
               onClick={() => void migrate(p)}
@@ -690,6 +837,23 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
           </span>
         </div>
       )}
+      {/* Сноска о скрытых (недоступных) провайдерах: справочная строка, не кнопка —
+          без onClick и hover. Рендерится только при наличии скрытых, иначе узла нет */}
+      {verdictsReady && hidden.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 11.5, color: C.textMuted,
+          paddingTop: 6, borderTop: `1px dashed ${C.border}`,
+        }}>
+          <span>⏸</span>
+          <span>
+            {`Ещё ${hidden.length} ${providersPlural(hidden.length)} на паузе`}
+            {nearest && nearest.resetsAt
+              ? ` · ${nearest.option.displayName} вернётся ${fmtReturnTime(nearest.resetsAt)}`
+              : ''}
+          </span>
+        </div>
+      )}
       {error && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: C.dangerText, fontSize: 12 }}>
           <AlertCircle size={13} style={{ flexShrink: 0 }} />
@@ -700,8 +864,35 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer }: ItemProps) {
+// Разделитель «Ответила X — Y была недоступна»: автоматическая подмена МОДЕЛИ рантайм-
+// фолбэком (см. chatReducer — отдельно от provider_switched, который остаётся тихим или
+// на пилюле «Продолжено на подписке» при ротации внутри провайдера). title — одна из трёх
+// канонических формулировок причины (providerSwitchReasonLabel), либо сырой label маркера
+// (rawLabel), когда reason не пришёл или не распознан
+function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_switched' }> }) {
+  const newLabel = useModelLabel(item.model);
+  const oldLabel = useModelLabel(item.previousModel);
+  return (
+    <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}
+      title={providerSwitchReasonLabel(item.reason, item.rawLabel)}>
+      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+      <span style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5,
+        fontSize: 12, color: C.warningText, whiteSpace: 'nowrap', overflow: 'hidden',
+        textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+        background: C.warningBg, border: `1px solid ${C.warning}`,
+      }}>
+        <Zap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+        Ответила {newLabel} — {oldLabel} была недоступна
+      </span>
+      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+    </div>
+  );
+}
+
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
+  const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
@@ -767,7 +958,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
-          <UserMessageBubble text={item.text} ts={item.ts}>
+          <UserMessageBubble text={item.text} ts={item.ts}
+          >
             {teamInfo ? (
               /* Командный ход механики: вместо сырой слэш-команды/JSON — карточка
                  запроса (механика + тема + чипы параметров). Сырой текст остаётся
@@ -802,7 +994,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                     padding: '1px 6px', fontSize: 11,
                   }}>
                     {/* В проекте — путь относительно корня; в чате без проекта — только имя файла */}
-                    {project ? relPath(p, project.rootPath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
+                    {project ? relPathTree(p, project.rootPath, treePath) : (p.replace(/\\/g, '/').split('/').pop() ?? p)}
                   </span>
                 ))}
               </div>
@@ -845,11 +1037,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Маркер предложения механики <team-mechanic/> из отображаемого текста стрижём всегда
       // (вместе с незакрытым префиксом в хвосте стрима); карточку рендерит проп ниже
       const bodyText = stripTeamMechanicMarkers(report ? report.body : item.text, streaming);
+      // Пост сабагента кнопки «какой промпт ушёл» не получает: его промпт собирал CLI,
+      // а наш снимок описывает ход основного агента
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
           <TextMessageView text={bodyText} online={online} onRetry={onRetry} streaming={streaming}
-            model={item.model} ts={item.ts} />
+            model={item.model} ts={item.ts}
+            promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
+            turnContextTokens={turnContextTokens} turnCache={turnCache} />
           {/* Карточка предложения командной механики — запуск только по кнопке */}
           {teamMechanicOffer && (
             <TeamMechanicOfferCard
@@ -1016,7 +1212,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
 
     case 'file_changed': {
-      const fileName = relPath(item.path, project?.rootPath);
+      const fileName = relPathTree(item.path, project?.rootPath, treePath);
       // Заметка (notes/*.md): подпись «Заметка · …», клик ведёт в раздел «Заметки»
       const isNote = /(^|\/)notes\/[^/]*\.md$/i.test(item.path);
       const noteTitle = item.path.split(/[\\/]/).pop()!.replace(/\.md$/i, '');
@@ -1050,6 +1246,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <span style={{ fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {isNote ? `Заметка · ${noteTitle}` : fileName}
             </span>
+            {item.external && (
+              <span style={{
+                fontSize: 11, fontWeight: 500, color: C.textMuted, background: C.bgInset,
+                borderRadius: 6, padding: '2px 7px', flexShrink: 0,
+              }}>
+                Изменение вне чата
+              </span>
+            )}
             <span style={{ fontSize: 11.5, color: C.diffAddText, fontFamily: FONT.mono }}>
               +{item.added}
             </span>
@@ -1069,7 +1273,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
                 {isNote ? 'Открыть заметку' : 'Открыть'}
               </button>
             )}
-            {online && onRevert && (
+            {!item.external && online && onRevert && (
               <button
                 onClick={() => onRevert(item.path)}
                 style={{
@@ -1273,6 +1477,26 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
     }
 
+    case 'team_planning_done':
+      // Итог планировщика — короткая строка в потоке (та же плашка-разделитель, что у смены
+      // собеседника/провайдера): план целиком покажет карточка team_plan следом, тут только
+      // факт и время, которых у карточки нет
+      return (
+        <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          <span style={{
+            display: 'flex', alignItems: 'center', gap: 5,
+            fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+            textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+            background: C.bgSelected, border: `1px solid ${C.border}`,
+          }}>
+            <Check size={11} strokeWidth={2.6} color={C.success} style={{ flexShrink: 0 }} />
+            {teamPlanningDoneText(item.subtaskCount, item.waveCount, item.elapsedMs)}
+          </span>
+          <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        </div>
+      );
+
     case 'provider_switched':
       // Разделитель «Продолжено на …» — явная миграция чата на другого провайдера
       return (
@@ -1288,6 +1512,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
         </div>
       );
+
+    case 'model_switched':
+      return <ModelSwitchedPill item={item} />;
 
     case 'provider_limit':
       return <ProviderLimitCard item={item} online={online} onMigrate={onMigrateProvider} />;
@@ -1305,6 +1532,20 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           {online && (
             <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer', color: C.textSecondary, whiteSpace: 'nowrap' }}>Повторить</button>
           )}
+        </div>
+      );
+
+    case 'work_loop_stopped':
+      // Остановка цикла «до готово» — та же визуальная семья, что и «Ход остановлен
+      // пользователем»: текст готов с сервера (лимит/ошибка/ручной стоп), не пересобираем
+      return (
+        <div style={{
+          alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', justifyContent: 'center',
+          background: C.bgSelected, border: `1px solid ${C.border}`, borderRadius: 8, padding: '6px 12px', fontSize: 12, color: C.textSecondary,
+          maxWidth: '100%', textAlign: 'center',
+        }}>
+          <svg width="11" height="11" viewBox="0 0 24 24" fill={C.textMuted} style={{ flexShrink: 0 }}><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
+          <span>{item.text}</span>
         </div>
       );
 

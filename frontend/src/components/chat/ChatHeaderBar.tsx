@@ -1,10 +1,12 @@
-import { useState, useEffect } from 'react';
-import { Plus, Menu, Hourglass, FileText, Settings } from 'lucide-react';
+import { useState, useEffect, type ReactNode } from 'react';
+import { Plus, Menu, FileText } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona } from '../../types';
 import { api } from '../../lib/api';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
-import { formatTimeLeft } from '../../lib/expiry';
+import { ExpiryButton } from './ExpiryButton';
+import { DossierOptOutButton } from './DossierOptOutButton';
+import { NotifyButton } from './NotifyButton';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { PersonaFace } from '../../features/personas/PersonaFace';
 import { GroupParticipantsPopover } from '../../features/personas/GroupParticipantsPopover';
@@ -14,6 +16,7 @@ import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { C, FONT, R, SHADOW, TB, CHAT_MAX_W } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton, Modal, ModalActions } from '../ui';
@@ -270,6 +273,15 @@ function providerBalanceTone(balance: ProviderBalance | null): 'warn' | 'danger'
   return balNum < 0.2 ? 'danger' : balNum < 1 ? 'warn' : undefined;
 }
 
+// Квоту подписки бэкенд отдаёт остатком окна, а шапка и экран «Использование» говорят
+// языком расхода — переводим остаток в израсходованное (как UsageScreen.providerWindows).
+function quotaUsedPct(balance: ProviderBalance | null): number | null {
+  if (!balance) return null;
+  const remaining = parseFloat(balance.totalBalance);
+  if (isNaN(remaining)) return null;
+  return Math.round(Math.min(100, Math.max(0, 100 - remaining)));
+}
+
 // Тело поповера статистики CLI-провайдера (стоимость/токены/ходы + баланс аккаунта).
 function ProviderCostPopoverBody({ providerName, stats, balance }: {
   providerName: string; stats: CostStats; balance: ProviderBalance | null;
@@ -277,6 +289,7 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
   const tone = providerBalanceTone(balance);
   const hasCost = stats.cost > 0;
   const isQuota = balance?.currency === '%';
+  const usedPct = isQuota ? quotaUsedPct(balance) : null;
   return (
     <>
       <div style={badgeTitleStyle}>{hasCost ? 'Стоимость' : 'Расход'} {providerName}</div>
@@ -290,11 +303,12 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
       {balance && (
         <>
           <div style={badgeSectionStyle}>{isQuota ? 'Квота подписки' : 'Баланс аккаунта'}</div>
-          <BadgeRow k={isQuota ? 'Осталось (5 ч)' : 'Остаток'} v={`${balance.totalBalance} ${balance.currency}`} />
+          <BadgeRow k={isQuota ? 'Израсходовано' : 'Остаток'}
+            v={isQuota ? (usedPct !== null ? `${usedPct}%` : '—') : `${balance.totalBalance} ${balance.currency}`} />
           {tone && (
             <div style={{ fontFamily: FONT.sans, fontSize: 11, color: RATE_COLORS[tone].text, marginTop: 4, lineHeight: 1.4 }}>
               {isQuota
-                ? (tone === 'danger' ? 'Квота почти исчерпана — обновится в следующем 5-часовом окне.' : 'Квота на исходе.')
+                ? (tone === 'danger' ? 'Квота почти исчерпана — дождитесь сброса окна.' : 'Квота на исходе.')
                 : (tone === 'danger' ? 'Баланс почти исчерпан — пополните аккаунт.' : 'Баланс на исходе.')}
             </div>
           )}
@@ -304,7 +318,7 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
         {hasCost
           ? `${providerName} работает по балансовой модели — стоимость списывается с аккаунта по факту.`
           : isQuota
-            ? `${providerName} работает по подписке Coding Plan — показываем остаток квоты 5-часового окна; расход в токенах для справки.`
+            ? `${providerName} работает по подписке — показываем, сколько квоты израсходовано; расход в токенах для справки.`
             : `${providerName} не отдаёт цены через API — показываем расход в токенах. Квоты смотрите в кабинете провайдера.`}
       </div>
     </>
@@ -319,13 +333,15 @@ function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
   const tone = providerBalanceTone(balance);
   const hasCost = stats.cost > 0;
   const totalTokens = stats.input + stats.output;
+  const isQuota = balance?.currency === '%';
+  const usedPct = isQuota ? quotaUsedPct(balance) : null;
   // Сумма в пилюле: деньги, если считаем стоимость; иначе токены; иначе прочерк
   const amountNode = (
     <>
       <span>{hasCost ? fmtUsd(stats.cost) : totalTokens > 0 ? `${fmtTokens(totalTokens)} ток.` : '—'}</span>
       {tone && balance && (
         <span style={{ marginLeft: 5, color: RATE_COLORS[tone].text, fontWeight: 700 }}>
-          · {balance.totalBalance} {balance.currency}
+          · {isQuota ? (usedPct !== null ? `${usedPct}%` : '—') : <>{balance.totalBalance} {balance.currency}</>}
         </span>
       )}
     </>
@@ -741,7 +757,6 @@ interface ChatHeaderBarProps {
   // Не задан — переключать нельзя (не админ): показывается только текущий режим
   onBillingChange?: (b: ClaudeBilling) => void;
   rateWindows: RateWindow[];
-  onOpenSettings: () => void;
   isMobile?: boolean;
   onBack?: () => void;
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
@@ -770,6 +785,8 @@ interface ChatHeaderBarProps {
   // Шапка живёт в собственном острове (Islands): фон и нижнюю границу даёт
   // карточка-остров, тулбар рисуется прозрачным и без borderBottom
   island?: boolean;
+  // Узкая колонка «Стены»: прячем кнопку настроек чата (её диалог шире колонки)
+  compact?: boolean;
 }
 
 // «Итог сессии в заметку» — теперь запускается ТОЛЬКО через AI-палитру (действие
@@ -777,6 +794,7 @@ interface ChatHeaderBarProps {
 // cc-ai-run; при успехе открывает созданную заметку.
 function SessionSummaryButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
   const [busy, setBusy] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
   const run = () => {
     if (busy) return;
@@ -801,6 +819,7 @@ function SessionSummaryButton({ session, hasMessages, online }: { session: Sessi
 // Невидимый слушатель cc-ai-run: перечитывает переписку и переименовывает чат по её смыслу.
 function RetitleButton({ session, hasMessages, online }: { session: Session; hasMessages: boolean; online: boolean }) {
   const [busy, setBusy] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс busy при смене чата
   useEffect(() => { setBusy(false); }, [session.id]);
   const run = () => {
     if (busy) return;
@@ -829,6 +848,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [dialog, setDialog] = useState<{ projectId: string | null; items: (ExtractedTaskCandidate & { sel: boolean })[] } | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс модалки и busy при смене чата
   useEffect(() => { setDialog(null); setBusy(false); }, [session.id]);
 
   const run = () => {
@@ -901,16 +921,26 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, onOpenSettings, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
-  // Клик по блоку персоны — карточка персоны в разделе «Персоны» (диплинк #/personas/{id}).
+  const dossiersFlag = useFeature(FLAGS.changeDossiers);
+  // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
+  // проекта (вкладка «Команда», #/project/{id}/persona/{pid}), в глобальном — раздел «Персоны».
   // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
   const [personaHover, setPersonaHover] = useState(false);
   const openPersonaCard = persona
-    ? () => { window.location.hash = `#/personas/${encodeURIComponent(persona.id)}`; }
+    ? () => {
+        const url = project
+          ? `#/project/${project.id}/persona/${encodeURIComponent(persona.id)}`
+          : `#/personas/${encodeURIComponent(persona.id)}`;
+        window.dispatchEvent(new CustomEvent('cc-open-url', { detail: { url } }));
+      }
     : null;
-  const personaCardLink = openPersonaCard && !(isMobile && onBack) ? {
+  // compact (колонка стены): блок персоны — просто подпись, без перехода. Уводить
+  // с экрана из шапки колонки нельзя: единственный выход отсюда — кнопка перехода
+  // в ярлыке колонки, и она ведёт к самому чату, а не в чужой раздел.
+  const personaCardLink = openPersonaCard && !compact && !(isMobile && onBack) ? {
     role: 'button' as const, tabIndex: 0,
     onClick: openPersonaCard,
     onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPersonaCard(); } },
@@ -926,6 +956,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   useEffect(() => {
     // Сброс всегда: при смене провайдера (deepseek → glm) 404 не перезаписал бы
     // стейт в catch — и в плашке остался бы чужой баланс
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс устаревшего баланса провайдера перед загрузкой
     setProvBalance(null);
     if (!isCliProvider) return;
     let alive = true;
@@ -940,13 +971,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const personaZoneText = personaIsProject
     ? (personaZoneName ? `Проект · ${personaZoneName}` : 'Проект')
     : 'Глобальный';
-  // Происхождение чата (задача/автоматизация). На мобиле — компактной иконкой в подзаголовке
-  // titleBlock (не отдельным чипом в ряду), на десктопе — полным бейджем в тулбаре.
+  // Происхождение чата (задача/автоматизация) — рисуется в мета-строке заголовка
+  // (см. metaRow): на мобиле компактной иконкой, на десктопе коротким бейджем.
   const origin = resolveChatOrigin(session);
-  const originInline = origin && isMobile ? <ChatOriginBadge origin={origin} iconOnly style={{ flexShrink: 0 }} /> : null;
-  // Блок названия чата + подзаголовок (режим/модель). На мобиле он целиком кликабелен как «назад».
-  // При наличии персоны — её идентификация доминирует: аватар + роль (serif, цвет персоны)
-  // и вторая строка «имя · зона · модель». session.name уходит в тултип, чтобы не потеряться.
+  // Блок названия чата. На мобиле он целиком кликабелен как «назад».
   // Кликабельный стек аватаров группового чата (активный спикер — с цветным
   // кольцом) + поповер управления составом. Размер аватара параметром: компактный
   // в тулбарной шапке, крупнее в hero-шапке. stopPropagation — на мобиле стек
@@ -1002,89 +1030,135 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // На десктопе заголовок держит минимум ~20 символов (не ужимается в «З…»);
   // при нехватке места правый кластер бейджей уходит второй строкой (flexWrap ряда)
   const titleMinW = isMobile ? 0 : 180;
-  const titleBlock = participants && participants.length > 1 ? (
-    // Групповой чат: стек аватаров участников вместо одиночного блока персоны;
-    // вторая строка — «Отвечает: Роль (Имя)».
+
+  // === Единая формула шапки: одна разметка на все типы чата и оба размера ===
+  // Заголовок — собеседник, когда он есть: персона «Роль · Имя», команда — имена
+  // участников. У чата без собеседника заголовок занимает название чата. Вторая
+  // строка (мета) везде одного состава и порядка: название чата → происхождение →
+  // активный спикер (команда) → зона → агент → усилие. Раньше здесь жили шесть
+  // разных разметок с тремя разными правилами «что главное», и название чата в
+  // паре с персоной не показывалось вовсе — только тултипом.
+  const isGroup = !!participants && participants.length > 1;
+  const chatName = session.name?.trim() || null;
+  const personaLines = persona ? personaTitleLines(persona) : null;
+  // Состав команды в заголовке: имена участников, при переполнении — «и ещё N»
+  // (кто именно — читается по стеку аватаров слева и через поповер состава)
+  const groupNames = isGroup ? participants!.map(p => p.name) : null;
+  const groupTitle = groupNames
+    ? (groupNames.length > 3
+        ? `${groupNames.slice(0, 3).join(', ')} и ещё ${groupNames.length - 3}`
+        : groupNames.join(', '))
+    : null;
+  const titleText = groupTitle ?? personaLines?.primary ?? chatName ?? 'Новый чат';
+  // Имя персоны — приглушённый хвост заголовка: роль ведёт, имя уточняет
+  const titleSuffix = groupTitle ? null : personaLines?.secondary ?? null;
+  // В мете название чата нужно, только когда заголовок занят собеседником
+  const metaChatName = (groupTitle || personaLines) ? chatName : null;
+  // Пилюля зоны — только когда зона персоны ОТЛИЧАЕТСЯ от контекста чата
+  // (глобальная персона в проектном чате и т.п.): совпадающая зона — шум,
+  // проект и так виден в сайдбаре воркспейса
+  const zoneDiffers = personaIsProject ? !project : !!project;
+  const speakerName = personaLines ? personaLines.secondary ?? personaLines.primary : null;
+
+  // Мета-строка шапки: слоты опциональны и схлопываются. Ужимается первым название
+  // чата — бейджи и пилюли короткие и места не уступают.
+  const metaRow = (hero: boolean) => {
+    const fs = hero ? 12 : 11.5;
+    const slots: ReactNode[] = [];
+    if (metaChatName) slots.push(
+      <span key="name" style={{ minWidth: 0, fontSize: fs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {metaChatName}
+      </span>
+    );
+    // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
+    // ряду длинный заголовок задачи выдавливал чипы и резался на 220px
+    if (origin) slots.push(
+      <ChatOriginBadge key="origin" origin={origin} compact iconOnly={isMobile} style={{ flexShrink: 0, maxWidth: 260 }} />
+    );
+    if (groupTitle) slots.push(
+      <span key="speaker" style={{ flexShrink: 0, fontSize: fs, color: C.textMuted, whiteSpace: 'nowrap' }}>
+        отвечает {speakerName ?? '—'}
+      </span>
+    );
+    if (persona && personaAccent && zoneDiffers) slots.push(
+      <span key="zone" style={{
+        flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
+        padding: '1px 7px', borderRadius: R.pill,
+        background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
+      }}>
+        {personaZoneText}
+      </span>
+    );
+    // .md-агент чата — лёгкая пометка: цветная точка + имя (не персона-блок)
+    if (agent && !persona && !isGroup) slots.push(
+      <span key="agent" style={{ flexShrink: 0, display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: fs, fontWeight: 600, color: C.textSecondary, whiteSpace: 'nowrap' }}>
+        <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
+        {agent.name}
+      </span>
+    );
+    // Только усилие, и только выбранное ЯВНО: метка «По умолчанию» ничего не сообщает.
+    // Модель ушла к постам — в шапке она врала после смены модели по ходу разговора
+    if (session.effort && !isMobile) slots.push(
+      <span key="effort" style={{ flexShrink: 0, fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
+        {effortLabel(session.effort)}
+      </span>
+    );
+    if (!slots.length) return null;
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: hero ? 3 : 1 }}>
+        {slots}
+      </div>
+    );
+  };
+
+  // Слот идентичности слева: стек участников (команда), аватар персоны, иначе пусто.
+  // В hero у персоны — фото скруглённым квадратом с чётким краем (вариант A).
+  const identity = (hero: boolean) => {
+    if (isGroup) return participantsStack(hero ? 34 : (isMobile ? 24 : 26));
+    if (!persona) return null;
+    return hero ? (
+      <PersonaFace
+        persona={persona} align="center" fontSize={24}
+        style={{
+          width: 52, height: 52, flexShrink: 0,
+          borderRadius: R.xl, border: `1px solid ${C.borderLight}`, boxSizing: 'border-box',
+        }}
+      />
+    ) : <PersonaAvatar persona={persona} size={28} />;
+  };
+
+  // Заголовок целиком. hero — крупная шапка-остров на холсте, иначе тулбарная строка.
+  // У чата с персоной весь блок — ссылка на её карточку (personaCardLink): клик, Enter/Space
+  // и подчёркивание заголовка по наведению.
+  const titleContent = (hero: boolean) => (
     <div
-      style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 10 }}
+      {...(persona ? (personaCardLink ?? {}) : {})}
+      title={persona && personaCardLink
+        ? `${chatName ? `${chatName} · ` : ''}Открыть карточку персоны`
+        : (chatName ?? undefined)}
+      style={{
+        minWidth: hero ? 240 : titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: hero ? 12 : 9,
+        cursor: persona && personaCardLink ? 'pointer' : undefined,
+      }}
     >
-      {participantsStack(isMobile ? 24 : 26)}
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {session.name ?? 'Групповой чат'}
-        </span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
-          {originInline}
-          <span style={{ fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            Отвечает: {persona ? personaTitleLines(persona).primary + (personaTitleLines(persona).secondary ? ` (${personaTitleLines(persona).secondary})` : '') : '—'}
-          </span>
-          {/* Модель здесь больше не пишем: она у каждого поста своя (её показывает
-              строка действий под постом), а в шапке вводила в заблуждение после смены */}
-          {!isMobile && session.effort && (
-            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              · {effortLabel(session.effort)}
-            </span>
+      {identity(hero)}
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div style={{
+          fontFamily: FONT.serif, fontSize: hero ? 28 : 16, fontWeight: hero ? 500 : 600,
+          color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: hero ? 1.25 : 1.3,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          textDecoration: persona && personaHover ? 'underline' : undefined,
+        }}>
+          {titleText}
+          {titleSuffix && (
+            <span style={{ color: C.textMuted, fontSize: hero ? 21 : 13.5 }}> · {titleSuffix}</span>
           )}
         </div>
-      </div>
-    </div>
-  ) : persona && personaAccent ? (
-    <div
-      {...(personaCardLink ?? {})}
-      title={personaCardLink
-        ? `${session.name ? `${session.name} · ` : ''}Открыть карточку персоны`
-        : (session.name ?? undefined)}
-      style={{ minWidth: titleMinW, flex: 1, display: 'flex', alignItems: 'center', gap: 9, cursor: personaCardLink ? 'pointer' : undefined }}>
-      <PersonaAvatar persona={persona} size={28} />
-      <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-        {/* Роль — заголовок (serif, цвет персоны); hover — подчёркивание как у ссылки */}
-        <span style={{ fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: personaAccent, letterSpacing: '-0.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: personaHover ? 'underline' : undefined }}>
-          {personaTitleLines(persona).primary}
-        </span>
-        {/* Строка 2: имя персоны + пилюля зоны + модель/effort (компактно) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 1 }}>
-          {originInline}
-          {personaTitleLines(persona).secondary && (
-            <span style={{ flexShrink: 0, fontSize: 11.5, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {personaTitleLines(persona).secondary}
-            </span>
-          )}
-          <span style={{
-            flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
-            padding: '1px 7px', borderRadius: R.pill,
-            background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
-          }}>
-            {personaZoneText}
-          </span>
-          {!isMobile && session.effort && (
-            <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-              {effortLabel(session.effort)}
-            </span>
-          )}
-        </div>
-      </div>
-    </div>
-  ) : (
-    <div style={{ minWidth: titleMinW, flex: 1 }}>
-      <div style={{ fontSize: 17, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {session.name ?? 'Новый чат'}
-      </div>
-      <div style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textMuted, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {originInline && <span style={{ marginRight: 4, verticalAlign: 'middle' }}>{originInline}</span>}
-        {/* .md-агент чата — лёгкая пометка: цветная точка + имя (не персона-блок) */}
-        {agent && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 4, verticalAlign: 'baseline' }}>
-            <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
-            <span style={{ fontFamily: FONT.sans, fontWeight: 600, color: C.textSecondary }}>{agent.name}</span>
-            <span> ·</span>
-          </span>
-        )}
-        {/* На мобиле имя проекта не дублируем — оно доступно через кнопку «назад» */}
-        {!isMobile && <span>{project ? project.name : 'без проекта'}</span>}
-        {session.effort && <span>{!isMobile && ' · '}{effortLabel(session.effort)}</span>}
+        {metaRow(hero)}
       </div>
     </div>
   );
+  const titleBlock = titleContent(false);
   // Элементы шапки — выносим, чтобы отрендерить в двух раскладках (с центр. переключателем и без)
   const openBtn = onOpenSidebar && !isMobile ? (
     <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
@@ -1094,34 +1168,19 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const titleEl = isMobile && onBack
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
-  // На десктопе происхождение — полный бейдж в ряду; на мобиле оно уже встроено
-  // в подзаголовок titleBlock (originInline), поэтому в ряду его не дублируем.
-  // compact + потолок ширины: длинное название задачи иначе выдавливает из ряда
-  // остальные чипы; при тесноте чип уступает место первым (flexShrink)
-  const originBadge = origin && !isMobile
-    ? <ChatOriginBadge origin={origin} compact style={{ maxWidth: 220, minWidth: 0, flexShrink: 1 }} />
-    : null;
-  // Бейдж последней запущенной механики команды (как origin — только на десктопе)
+  // Бейдж последней запущенной механики команды (только на десктопе)
   const mechanicBadge = lastMechanic && !isMobile ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
-  // Пилюля временного чата: остаток до авто-удаления; клик — быстрый путь к настройке.
-  // На мобиле не показываем — шапка и так плотная, метка есть в списке чатов
-  const expiryLeft = formatTimeLeft(session);
-  const expiryBadge = expiryLeft && !isMobile ? (
-    <button
-      type="button"
-      onClick={online ? onOpenSettings : undefined}
-      title={`Временный чат — удалится ${expiryLeft}, если не будет активности. Нажмите, чтобы изменить.`}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
-        background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
-        cursor: online ? 'pointer' : 'default',
-        fontFamily: FONT.sans, fontSize: 11, fontWeight: 600, color: C.textMuted, whiteSpace: 'nowrap',
-      }}
-    >
-      <Hourglass size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-      {expiryLeft}
-    </button>
+  // Время жизни чата: у временного — остаток до авто-удаления, у бессрочного —
+  // приглушённая иконка. Клик открывает выбор срока прямо здесь (в офлайне менять
+  // нечего — сохранение всё равно не пройдёт)
+  const expiryBadge = online ? (
+    <ExpiryButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
+  ) : null;
+  // Opt-out «не сохранять решения из этого чата» — только у проектных чатов и за
+  // флагом, рядом со «Временем жизни» (тем же паттерном кнопки в шапке)
+  const dossierBtn = project && dossiersFlag && online ? (
+    <DossierOptOutButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // На мобиле прогресс workflow втянут в объединённый чип (costBadges) — отдельный
   // бейдж рисуем только на десктопе, где ряду хватает места.
@@ -1152,7 +1211,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const spendBadge = (
     <SpendBadge sessionId={session.id} chatName={session.name} resultCount={cost.results} isMobile={isMobile} />
   );
-  const costBadges = isMobile ? (
+  // compact (колонка стены): плашек контекста, стоимости и расхода нет — в узкой
+  // шапке они занимают всю ширину и переносят строку, а следить за деньгами и
+  // контекстом уместнее в полном виде чата (открывается кнопкой из ярлыка колонки)
+  const costBadges = compact ? null : isMobile ? (
     // Мобилка: один объединённый чип (контекст + стоимость/расход) — не распирает шапку
     <>
       <MobileCombinedBadge
@@ -1190,11 +1252,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       </div>
     </ToolbarIconButton>
   ) : null;
-  const settingsBtn = online ? (
-    <ToolbarIconButton onClick={onOpenSettings} title="Настройки чата" isMobile={isMobile}>
-      <Settings size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-    </ToolbarIconButton>
-  ) : null;
+  // Тумблер браузерных уведомлений — сигнал о завершённом ходе, когда вкладка не в фокусе.
+  // compact (колонка стены): не показываем — настройка глобальная, и повторять её
+  // в каждой из нескольких колонок незачем (срок жизни у колонок свой, он остаётся)
+  const notifyBtn = online && !compact ? <NotifyButton isMobile={isMobile} /> : null;
 
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
@@ -1202,10 +1263,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{settingsBtn}</div>;
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
@@ -1216,7 +1277,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
       ...(isMobile ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
     }}>
-      {originBadge}{mechanicBadge}{expiryBadge}{workflowBadge}{costBadges}{actionBtns}
+      {mechanicBadge}{workflowBadge}{costBadges}{actionBtns}
     </div>
   );
 
@@ -1224,97 +1285,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // на холсте — как шапка «Календаря». У персоны слева фото скруглённым квадратом
   // с чётким краем (не в круге); рядом крупная serif-идентификация, справа контролы.
   if (island && !isMobile) {
-    // Пилюля зоны — только когда зона персоны ОТЛИЧАЕТСЯ от контекста чата
-    // (глобальная персона в проектном чате и т.п.): совпадающая зона — шум,
-    // проект и так виден в сайдбаре воркспейса
-    const zoneDiffers = personaIsProject ? !project : !!project;
-    const zonePill = persona && personaAccent && zoneDiffers && (
-      <span style={{
-        flexShrink: 0, fontSize: 10, fontWeight: 600, letterSpacing: '0.02em',
-        padding: '1px 7px', borderRadius: R.pill,
-        background: `${personaAccent}${personaIsProject ? '2E' : '17'}`, color: personaAccent,
-      }}>
-        {personaZoneText}
-      </span>
-    );
-    // Только усилие, и только выбранное ЯВНО: метка «По умолчанию» ничего не сообщает.
-    // Модель ушла к постам — в шапке она врала после смены модели по ходу разговора
-    const modelBits = session.effort ? effortLabel(session.effort) : '';
-    const modelLine = modelBits ? (
-      <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-        {modelBits}
-      </span>
-    ) : null;
-    const heroTitle = participants && participants.length > 1 ? (
-      // Группа — тот же hero-стиль: крупный стек участников + имя чата serif,
-      // второй строкой «Отвечает: …» и модель. minWidth 240 — serif-28 при меньшем ломается
-      <div style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
-        {participantsStack(34)}
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {session.name ?? 'Групповой чат'}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, marginTop: 3 }}>
-            <span style={{ fontSize: 12, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flexShrink: 0 }}>
-              Отвечает: {persona ? personaTitleLines(persona).primary + (personaTitleLines(persona).secondary ? ` (${personaTitleLines(persona).secondary})` : '') : '—'}
-            </span>
-            {modelLine}
-          </div>
-        </div>
-      </div>
-    ) : persona && personaAccent ? (
-      <div
-        {...(personaCardLink ?? {})}
-        style={{ minWidth: 240, flex: 1, display: 'flex', alignItems: 'center', gap: 12, cursor: personaCardLink ? 'pointer' : undefined }}
-        title={personaCardLink
-          ? `${session.name ? `${session.name} · ` : ''}Открыть карточку персоны`
-          : (session.name ?? undefined)}>
-        {/* Фото персоны: скруглённый квадрат с чётким краем (вариант A) */}
-        <PersonaFace
-          persona={persona} align="center" fontSize={24}
-          style={{
-            width: 52, height: 52, flexShrink: 0,
-            borderRadius: R.xl, border: `1px solid ${C.borderLight}`, boxSizing: 'border-box',
-          }}
-        />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: personaAccent, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textDecoration: personaHover ? 'underline' : undefined }}>
-            {personaTitleLines(persona).primary}
-            {personaTitleLines(persona).secondary && (
-              <span style={{ color: C.textMuted, fontSize: 21 }}> · {personaTitleLines(persona).secondary}</span>
-            )}
-          </div>
-          {/* Вторая строка — только когда есть что сказать (иначе заголовок один) */}
-          {(zonePill || modelLine) && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, marginTop: 3 }}>
-              {zonePill}
-              {modelLine}
-            </div>
-          )}
-        </div>
-      </div>
-    ) : (
-      <div style={{ minWidth: 240, flex: 1 }}>
-        <div style={{ fontFamily: FONT.serif, fontSize: 28, fontWeight: 500, color: C.textHeading, letterSpacing: '-0.01em', lineHeight: 1.25, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {session.name ?? 'Новый чат'}
-        </div>
-        {/* Вторая строка — только агент и явно выбранная модель/усилие: имя проекта
-            не дублируем (оно в сайдбаре воркспейса), «без проекта» и «По умолчанию»
-            ничего не сообщают */}
-        {(agent || modelLine) && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, marginTop: 3, fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>
-            {agent && (
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-                <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(agent.color), display: 'inline-block', flexShrink: 0 }} />
-                <span style={{ fontFamily: FONT.sans, fontWeight: 600, color: C.textSecondary }}>{agent.name}</span>
-                {modelLine && <span>·</span>}
-              </span>
-            )}
-            {modelLine}
-          </div>
-        )}
-      </div>
-    );
+    // Та же формула, что и в тулбарной шапке — крупным кеглем (minWidth 240:
+    // serif-28 при меньшей ширине ломается)
+    const heroTitle = titleContent(true);
     return (
       // Полоса снизу — мягкая граница шапки к ленте (как у тулбара, но на холсте).
       // Шапка не растягивается на всю зону: её ширина = колонке ленты чата
@@ -1334,7 +1307,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   }
 
   return (
-    <Toolbar isMobile={isMobile} noBorder={island} bg={island ? 'transparent' : undefined}
+    // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
+    // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
+    <Toolbar isMobile={isMobile} noBorder={island} bg={island || compact ? 'transparent' : undefined}
       style={{
         ...(personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : null),
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой

@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
@@ -15,7 +17,10 @@ namespace ClaudeHomeServer.Services.Docs;
 // Кеш живёт на КОРЕНЬ ПАПКИ, а не на проект: у соседей по папке (один RootPath, разные
 // владельцы) документация одна и та же, разбирать её дважды незачем. Доступ проверяет
 // контроллер — сюда попадает уже разрешённый корень.
-public sealed partial class DocsIndexService
+// files необязателен (DI подставляет): нужен только созданию документов — писать в рабочее
+// дерево продукт обязан через файловый сервис, там SafeJoin и уведомление OnMutated, на
+// котором висит синк базы знаний. Юнит-тестам чтения он ни к чему.
+public sealed partial class DocsIndexService(FileService? files = null)
 {
     // Область по умолчанию, пока проект не настроил свою: docs/ + README.md + markdown.
     // Имена точные: на Linux файловая система регистрозависима, и «Docs/» — другая папка.
@@ -78,6 +83,39 @@ public sealed partial class DocsIndexService
     // Сколько символов текста показываем вокруг совпадения в поиске
     private const int SnippetRadius = 60;
 
+    // Файл порядка страниц — из Azure DevOps code wiki: по одному на папку, построчный список
+    // имён без расширения. Читаем его, чтобы панель показывала документацию в том же порядке,
+    // в каком её увидит читатель опубликованной wiki: алфавит по заголовку разрушает
+    // выстроенный автором маршрут чтения.
+    private const string OrderFileName = ".order";
+
+    // Описание области в корне репозитория. Настройка проекта живёт в хранилище продукта и
+    // у каждого владельца своя; файл версионируется вместе с документами, поэтому у всех,
+    // кто открыл репозиторий, документация одна и та же.
+    public const string ScopeFileName = ".docs";
+
+    // Имена полей — camelCase, как в API. Регистр игнорируем, неизвестные поля отбрасываем:
+    // файл переживёт и старый бэкенд, и новое поле в формате.
+    private static readonly JsonSerializerOptions ScopeFileJson = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        WriteIndented = true,
+        // Пустое поле не пишем: «home: null» в файле читается как выбранный пустой путь,
+        // хотя означает ровно противоположное — «начальный документ выбирается сам»
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    // Сырой файл: все оси необязательны. Отсутствующая — «как по умолчанию», пустой массив —
+    // осознанное «ничего отсюда» (это разные вещи, и нормализаторы их различают).
+    private sealed record ScopeFileShape(
+        List<string>? Folders, List<string>? RootFiles, List<string>? Types, string? Home);
+
+    // Результат чтения .docs: область либо причина, по которой файл не применился.
+    // Ошибку показываем в диалоге — молча игнорировать битый файл нельзя, иначе «почему
+    // не применилось» выясняется только по логам сервера.
+    public record ScopeFileResult(DocsScope? Scope, string? Error);
+
     private readonly ConcurrentDictionary<string, CachedIndex> _cache = new(StringComparer.OrdinalIgnoreCase);
 
     // Разобранный корпус + отпечаток файлов, по которому решаем, не устарел ли он
@@ -94,6 +132,9 @@ public sealed partial class DocsIndexService
         public required Dictionary<string, string> Texts { get; init; }
         public required Dictionary<string, List<DocLink>> OutLinks { get; init; }
         public required Dictionary<string, List<DocBacklink>> Backlinks { get; init; }
+        // Строки .order по папкам («» — корень проекта). Нужны и после сортировки:
+        // «Начало» по умолчанию берётся из первой строки файла.
+        public required Dictionary<string, IReadOnlyList<string>> Orders { get; init; }
     }
 
     // ---------- публичное API ----------
@@ -203,7 +244,27 @@ public sealed partial class DocsIndexService
         var corpus = GetCorpus(rootPath, scope);
         if (scope.Home is not null && corpus.ByPath.TryGetValue(scope.Home, out var chosen))
             return chosen.Path;
+        // Первая строка .order первой папки области: автор выстроил порядок сам, и первая
+        // страница списка — вход в документацию (так же её трактует code wiki)
+        if (scope.Folders.Count > 0 && FirstOfOrder(corpus, scope.Folders[0]) is { } first)
+            return first;
+        // README корня. Дальше не спускаемся: null здесь означает «начального документа нет»,
+        // и панель по нему предлагает вернуть README в область — подмена первым попавшимся
+        // документом эту подсказку бы отняла
         return corpus.Docs.FirstOrDefault(d => IsReadme(d.Path))?.Path;
+    }
+
+    // Документ, названный первой строкой .order указанной папки
+    private static string? FirstOfOrder(DocsCorpus corpus, string folder)
+    {
+        if (!corpus.Orders.TryGetValue(folder, out var names) || names.Count == 0) return null;
+        foreach (var doc in corpus.Docs)
+        {
+            if (!string.Equals(Folder(doc.Path), folder, StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(Path.GetFileNameWithoutExtension(doc.Path), names[0], StringComparison.OrdinalIgnoreCase))
+                return doc.Path;
+        }
+        return null;
     }
 
     // Собрать область из полей проекта: у каждой оси свой null со своим дефолтом
@@ -212,6 +273,57 @@ public sealed partial class DocsIndexService
         project.DocsRootFiles ?? DefaultScope.RootFiles,
         project.DocsTypes ?? DefaultScope.Types,
         project.DocsHome));
+
+    // Единственная точка резолва области: файл репозитория сильнее настройки проекта.
+    // Иначе двое владельцев одной папки видели бы разную документацию — ровно то, от чего
+    // уходили, вынося настройку в репозиторий. Файл читается на каждый вызов (он крошечный):
+    // правку из git панель обязана заметить без перезапуска.
+    public DocsScope ResolveScope(Project project) =>
+        ReadScopeFile(project.RootPath).Scope ?? ScopeOf(project);
+
+    // Область из файла .docs. Scope = null — файла нет либо он не разобран; тогда действует
+    // настройка проекта, а причина уезжает во фронт вместе с описанием области.
+    public ScopeFileResult ReadScopeFile(string rootPath)
+    {
+        var file = Path.Combine(Path.GetFullPath(rootPath), ScopeFileName);
+        string json;
+        try
+        {
+            if (!File.Exists(file)) return new ScopeFileResult(null, null);
+            json = File.ReadAllText(file);
+        }
+        catch (IOException) { return new ScopeFileResult(null, null); }          // пишут прямо сейчас
+        catch (UnauthorizedAccessException) { return new ScopeFileResult(null, null); }
+
+        ScopeFileShape? parsed;
+        try { parsed = JsonSerializer.Deserialize<ScopeFileShape>(json, ScopeFileJson); }
+        catch (JsonException e) { return new ScopeFileResult(null, e.Message); }
+
+        // Пустой файл или «null» — то же, что отсутствие: описания области в нём нет
+        if (parsed is null) return new ScopeFileResult(null, null);
+
+        // Нормализаторы вызываются поштучно, а не через NormalizeScope: у каждой оси свой
+        // дефолт на null, и общий конструктор DocsScope такой формы не принимает
+        return new ScopeFileResult(new DocsScope(
+            NormalizeFolders(parsed.Folders),
+            NormalizeRootFiles(parsed.RootFiles),
+            NormalizeTypes(parsed.Types),
+            NormalizeHome(parsed.Home)), null);
+    }
+
+    // Записать область в файл репозитория. Пишем все оси явно: файл читают и правят руками,
+    // и «чего нет — то по умолчанию» в сохранённом виде сбивало бы с толку. Home опускается,
+    // когда его нет: пустая строка в файле выглядела бы как выбранный пустой путь.
+    public void WriteScopeFile(string rootPath, DocsScope scope)
+    {
+        var normalized = NormalizeScope(scope);
+        var shape = new ScopeFileShape(
+            [.. normalized.Folders], [.. normalized.RootFiles], [.. normalized.Types], normalized.Home);
+        var file = Path.Combine(Path.GetFullPath(rootPath), ScopeFileName);
+        // Без BOM и с \n: файл лежит в репозитории, и лишние байты дают шум в диффе
+        File.WriteAllText(file, JsonSerializer.Serialize(shape, ScopeFileJson).ReplaceLineEndings("\n") + "\n",
+            new UTF8Encoding(false));
+    }
 
     // Папки: прямые слэши, без краёв-разделителей, без дублей и без выходов за корень
     public static IReadOnlyList<string> NormalizeFolders(IReadOnlyList<string>? folders)
@@ -285,12 +397,15 @@ public sealed partial class DocsIndexService
         // владельцы) настройки свои, и без области в ключе они вытесняли бы корпус друг друга
         var key = $"{root}\n{string.Join('|', scope.Folders)}\n{string.Join('|', scope.RootFiles)}\n{string.Join('|', scope.Types)}";
         var files = CollectFiles(root, scope);
-        var fingerprint = Fingerprint(root, files);
+        // Файлы порядка обязаны попасть в отпечаток: правка .order не меняет ни один документ,
+        // и без них кеш не инвалидируется — панель показывала бы прежний порядок до перезапуска
+        var orderFiles = CollectOrderFiles(root, files);
+        var fingerprint = Fingerprint(root, [.. files, .. orderFiles]);
 
         if (_cache.TryGetValue(key, out var cached) && cached.Fingerprint == fingerprint)
             return cached.Corpus;
 
-        var corpus = BuildCorpus(root, files);
+        var corpus = BuildCorpus(root, files, ReadOrders(root, orderFiles));
         _cache[key] = new CachedIndex(fingerprint, corpus);
         return corpus;
     }
@@ -326,6 +441,56 @@ public sealed partial class DocsIndexService
         catch (DirectoryNotFoundException) { /* папку удалили между проверкой и обходом */ }
         catch (UnauthorizedAccessException) { /* нет прав на часть дерева — отдаём что смогли */ }
         return files;
+    }
+
+    // Файлы .order по всем папкам дерева документов, включая промежуточные: порядок папки
+    // нужен, даже когда её собственные документы лежат уровнем ниже (docs/ и docs/adr/).
+    // Корень проекта тоже участвует — в области бывают файлы корня (README.md).
+    private static List<string> CollectOrderFiles(string root, List<string> files)
+    {
+        var folders = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "" };
+        foreach (var file in files)
+        {
+            var folder = Folder(Relative(root, file));
+            // Поднимаемся до корня; встретили уже добавленную папку — выше тоже добавляли
+            while (folder.Length > 0 && folders.Add(folder))
+                folder = Folder(folder);
+        }
+
+        var result = new List<string>();
+        foreach (var folder in folders)
+        {
+            var dir = folder.Length == 0
+                ? root
+                : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+            var path = Path.Combine(dir, OrderFileName);
+            if (File.Exists(path)) result.Add(path);
+        }
+        return result;
+    }
+
+    // Строки .order по папкам («» — корень проекта). Пустые строки и края-пробелы
+    // отброшены, BOM срезан: файл правят руками, в том числе редакторами Windows.
+    private static Dictionary<string, IReadOnlyList<string>> ReadOrders(string root, List<string> orderFiles)
+    {
+        var result = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var file in orderFiles)
+        {
+            string[] lines;
+            try { lines = File.ReadAllLines(file); }
+            catch (IOException) { continue; }             // файл переписывают прямо сейчас
+            catch (UnauthorizedAccessException) { continue; }
+
+            var names = new List<string>();
+            foreach (var raw in lines)
+            {   // ﻿ — BOM: ReadAllLines снимает его сам, но не когда файл записан
+                // как UTF-8 с BOM внутри уже открытого потока
+                var name = raw.Trim('﻿', ' ', '\t', '\r');
+                if (name.Length > 0) names.Add(name);
+            }
+            result[Folder(Relative(root, file))] = names;
+        }
+        return result;
     }
 
     private static bool HasExtension(string path, IReadOnlyList<string> extensions)
@@ -366,6 +531,20 @@ public sealed partial class DocsIndexService
                 queue.Enqueue(sub);
             }
         }
+    }
+
+    // Настройка области проекта вместе с источником: файл репозитория или настройка продукта.
+    // Отдельный метод от Describe(rootPath, scope), потому что источник знает только резолв —
+    // а диалогу без него не понять, что именно он правит
+    public DocsScopeInfo Describe(Project project)
+    {
+        var file = ReadScopeFile(project.RootPath);
+        var info = Describe(project.RootPath, file.Scope ?? ScopeOf(project));
+        return info with
+        {
+            ScopeSource = file.Scope is not null ? "file" : "project",
+            ScopeFileError = file.Error,
+        };
     }
 
     // Настройка области целиком: что выбрано, что можно выбрать, что было бы по умолчанию
@@ -471,14 +650,22 @@ public sealed partial class DocsIndexService
         foreach (var f in files.OrderBy(x => x, StringComparer.Ordinal))
         {
             var info = new FileInfo(f);
-            sb.Append(Relative(root, f)).Append('|')
+            var rel = Relative(root, f);
+            sb.Append(rel).Append('|')
               .Append(info.Exists ? info.LastWriteTimeUtc.Ticks : 0).Append('|')
-              .Append(info.Exists ? info.Length : -1).Append('\n');
+              .Append(info.Exists ? info.Length : -1);
+            // Есть ли рядом одноимённая папка — то есть документ ли это или страница
+            // раздела. Ни один файл при появлении пустой папки не меняется, и без этого
+            // признака новый раздел не показался бы до следующей правки документов
+            if (IsMarkdown(rel))
+                sb.Append(SectionDirExists(root, rel[..^3]) ? "|s" : "|_");
+            sb.Append('\n');
         }
         return sb.ToString();
     }
 
-    private static DocsCorpus BuildCorpus(string root, List<string> files)
+    private static DocsCorpus BuildCorpus(string root, List<string> files,
+        Dictionary<string, IReadOnlyList<string>> orders)
     {
         var docs = new List<DocEntry>();
         var byPath = new Dictionary<string, DocEntry>(StringComparer.OrdinalIgnoreCase);
@@ -569,28 +756,904 @@ public sealed partial class DocsIndexService
             outLinks[from] = resolved;
         }
 
-        // README первым, дальше по папке и ЗАГОЛОВКУ: панель показывает дерево в этом же
-        // порядке и подписывает строки заголовками — сортировка по имени файла выглядела бы
-        // в ней произвольной (observability-audit.md с заголовком «Аудит…» вставал не туда).
-        // Папка старше заголовка, иначе документы разных групп перемешались бы между собой.
-        docs.Sort((a, b) =>
-        {
-            // README — первый среди корневых: он вход в документацию, а по алфавиту
-            // заголовков мог оказаться где угодно среди прочих файлов корня
-            if (IsReadme(a.Path) != IsReadme(b.Path)) return IsReadme(a.Path) ? -1 : 1;
-            var byFolder = string.Compare(Folder(a.Path), Folder(b.Path), StringComparison.OrdinalIgnoreCase);
-            if (byFolder != 0) return byFolder;
-            // Сравнение с учётом языка: заголовки русские, и ordinal ставил бы кириллицу
-            // после латиницы, а внутри кириллицы — по кодам, а не по алфавиту
-            var byTitle = string.Compare(a.Title, b.Title, StringComparison.CurrentCultureIgnoreCase);
-            return byTitle != 0 ? byTitle : string.Compare(a.Path, b.Path, StringComparison.OrdinalIgnoreCase);
-        });
+        // Пары «страница + папка» проставляем до сортировки: порядок опирается на эту связь —
+        // страница раздела и его дочерние документы идут в дереве одной строкой .order
+        MarkSections(root, docs, byPath);
 
         return new DocsCorpus
         {
-            Docs = docs, ByPath = byPath, Texts = texts,
-            OutLinks = outLinks, Backlinks = backlinks,
+            Docs = OrderDocs(docs, orders), ByPath = byPath, Texts = texts,
+            OutLinks = outLinks, Backlinks = backlinks, Orders = orders,
         };
+    }
+
+    // ---------- порядок документов ----------
+
+    // Документ, рядом с которым лежит одноимённая папка, — страница её раздела
+    // («docs/decisions.md» + «docs/decisions/»). Записи в списке и в словаре подменяются
+    // вместе: DocEntry неизменяем, а расходиться этим двум представлениям нельзя.
+    private static void MarkSections(string root, List<DocEntry> docs, Dictionary<string, DocEntry> byPath)
+    {
+        // Канонический путь папки (в том регистре, в каком он пришёл из ФС) — фронту нужно
+        // ровно то же значение, что стоит у дочерних документов в Folder(Path)
+        var folders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var doc in docs)
+        {
+            var folder = Folder(doc.Path);
+            while (folder.Length > 0 && folders.TryAdd(folder, folder))
+                folder = Folder(folder);
+        }
+
+        for (var i = 0; i < docs.Count; i++)
+        {
+            var doc = docs[i];
+            var parent = Folder(doc.Path);
+            var name = Path.GetFileNameWithoutExtension(doc.Path);
+            var candidate = parent.Length == 0 ? name : $"{parent}/{name}";
+            // Папка ЕЩЁ ПУСТА (только что созданный раздел) — документов в ней нет, и по
+            // ним её не найти. Спрашиваем файловую систему: без этого новый раздел
+            // выглядел бы обычной строкой, и войти в него, чтобы наполнить, было нечем
+            if (!folders.TryGetValue(candidate, out var canonical))
+            {
+                if (!IsMarkdown(doc.Path) || !SectionDirExists(root, candidate)) continue;
+                canonical = candidate;
+            }
+            var updated = doc with { SectionFolder = canonical };
+            docs[i] = updated;
+            byPath[doc.Path] = updated;
+        }
+    }
+
+    // Лежит ли рядом с документом одноимённая папка. Отдельным методом, потому что ту же
+    // проверку делает отпечаток: без неё появление папки в git не инвалидировало бы кеш —
+    // ни один файл при этом не менялся, и раздел не появлялся бы до следующей правки
+    private static bool SectionDirExists(string root, string relativeFolder)
+    {
+        try
+        {
+            return Directory.Exists(Path.Combine(root, relativeFolder.Replace('/', Path.DirectorySeparatorChar)));
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    // Узел уровня: имя без расширения, документы с этим именем и одноимённая папка.
+    // Документ и папка объединены в один узел намеренно — в .order это ОДНА строка
+    // («decisions» задаёт место и страницы раздела, и его содержимого).
+    private sealed class OrderNode(string key)
+    {
+        public string Key { get; } = key;
+        public List<DocEntry> Docs { get; } = [];
+        public string? Folder { get; set; }
+    }
+
+    // Порядок документов = дерево папок, на каждом уровне упорядоченное своим .order.
+    // Уплощается обходом в глубину, поэтому страница раздела идёт непосредственно перед
+    // дочерними документами — как в дереве wiki. Неперечисленное встаёт после перечисленного
+    // по прежнему правилу (README первым, затем заголовок): .order сортирует, а не фильтрует.
+    private static List<DocEntry> OrderDocs(List<DocEntry> docs,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> orders)
+    {
+        var byFolder = new Dictionary<string, List<DocEntry>>(StringComparer.OrdinalIgnoreCase);
+        var subFolders = new Dictionary<string, SortedSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var doc in docs)
+        {
+            var folder = Folder(doc.Path);
+            if (!byFolder.TryGetValue(folder, out var list)) byFolder[folder] = list = [];
+            list.Add(doc);
+
+            // Регистрируем цепочку папок до корня: промежуточная папка без собственных
+            // документов всё равно должна попасть в дерево
+            var current = folder;
+            while (current.Length > 0)
+            {
+                var parent = Folder(current);
+                if (!subFolders.TryGetValue(parent, out var set))
+                    subFolders[parent] = set = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (!set.Add(current)) break;   // выше по цепочке уже регистрировали
+                current = parent;
+            }
+        }
+
+        var result = new List<DocEntry>(docs.Count);
+        Walk("");
+        return result;
+
+        void Walk(string folder)
+        {
+            var nodes = new Dictionary<string, OrderNode>(StringComparer.OrdinalIgnoreCase);
+            var level = new List<OrderNode>();
+
+            OrderNode NodeFor(string key)
+            {
+                if (nodes.TryGetValue(key, out var existing)) return existing;
+                var created = new OrderNode(key);
+                nodes[key] = created;
+                level.Add(created);
+                return created;
+            }
+
+            if (byFolder.TryGetValue(folder, out var here))
+                foreach (var doc in here)
+                    NodeFor(Path.GetFileNameWithoutExtension(doc.Path)).Docs.Add(doc);
+
+            if (subFolders.TryGetValue(folder, out var subs))
+                foreach (var sub in subs)
+                    NodeFor(NameOf(sub)).Folder = sub;
+
+            var index = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            if (orders.TryGetValue(folder, out var lines))
+                for (var i = 0; i < lines.Count; i++) index.TryAdd(lines[i], i);
+
+            level.Sort((a, b) => CompareNodes(a, b, index));
+
+            foreach (var node in level)
+            {
+                // Один ключ — обычно один документ; несколько бывает при api.md рядом с api.pdf
+                if (node.Docs.Count > 1)
+                    node.Docs.Sort((x, y) => string.Compare(x.Path, y.Path, StringComparison.OrdinalIgnoreCase));
+                result.AddRange(node.Docs);
+                if (node.Folder is not null) Walk(node.Folder);
+            }
+        }
+    }
+
+    private static int CompareNodes(OrderNode a, OrderNode b, Dictionary<string, int> index)
+    {
+        var ia = index.TryGetValue(a.Key, out var x) ? x : int.MaxValue;
+        var ib = index.TryGetValue(b.Key, out var y) ? y : int.MaxValue;
+        if (ia != ib) return ia.CompareTo(ib);
+
+        // README — первый среди корневых: он вход в документацию, а по алфавиту заголовков
+        // мог оказаться где угодно среди прочих файлов корня
+        var readmeA = a.Docs.Count > 0 && IsReadme(a.Docs[0].Path);
+        var readmeB = b.Docs.Count > 0 && IsReadme(b.Docs[0].Path);
+        if (readmeA != readmeB) return readmeA ? -1 : 1;
+
+        // Узел с подпапкой — ниже обычных документов уровня: без .order сохраняется прежнее
+        // правило «папка старше заголовка», иначе вложенная группа вклинивалась бы между
+        // документами своей же папки по алфавиту заголовков
+        var nestedA = a.Folder is not null;
+        var nestedB = b.Folder is not null;
+        if (nestedA != nestedB) return nestedA ? 1 : -1;
+
+        // Сравнение с учётом языка: заголовки русские, и ordinal ставил бы кириллицу после
+        // латиницы, а внутри кириллицы — по кодам, а не по алфавиту
+        var byTitle = string.Compare(TitleOf(a), TitleOf(b), StringComparison.CurrentCultureIgnoreCase);
+        // Ключ добивает сравнение до детерминированного: List.Sort нестабилен
+        return byTitle != 0 ? byTitle : string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase);
+
+        // У узла без документов (папка без страницы раздела) заголовка нет — сортируем по имени
+        static string TitleOf(OrderNode node) => node.Docs.Count > 0 ? node.Docs[0].Title : node.Key;
+    }
+
+    // Последний сегмент пути папки: «docs/decisions» → «decisions»
+    private static string NameOf(string folder)
+    {
+        var i = folder.LastIndexOf('/');
+        return i < 0 ? folder : folder[(i + 1)..];
+    }
+
+    // ---------- запись порядка ----------
+
+    public enum OrderWriteStatus { Ok, FolderNotInScope, BadItems }
+
+    // Результат записи .order: причина отказа нужна контроллеру, чтобы развести 404 и 400
+    public sealed record OrderWriteResult(OrderWriteStatus Status, string? Error = null);
+
+    // Переставить строки .order указанной папки. items — имена БЕЗ расширения (как в файле)
+    // в новом порядке; это подмножество уровня, а не весь его состав: панель показывает
+    // документы папки и её разделы разными группами, и присылает то, что пользователь
+    // реально видел.
+    //
+    // Перестановка идёт ПО ЗАНЯТЫМ ПОЗИЦИЯМ: строки, которых в items нет (раздел между
+    // документами, документ с временно снятым типом, строка от чужой ветки), остаются на
+    // своих местах. Иначе жест мышью выбрасывал бы из порядка то, чего пользователь не видел.
+    public OrderWriteResult WriteOrder(string rootPath, string? folder,
+        IReadOnlyList<string> items, DocsScope? scope = null)
+    {
+        var root = Path.GetFullPath(rootPath);
+
+        string target;
+        if (string.IsNullOrWhiteSpace(folder)) target = "";     // корень репозитория тоже уровень
+        else
+        {
+            var normalized = NormalizeFolder(folder);
+            if (normalized is null)
+                return new OrderWriteResult(OrderWriteStatus.FolderNotInScope, $"Недопустимая папка: {folder}");
+            target = normalized;
+        }
+
+        var corpus = GetCorpus(root, scope);
+        var level = LevelNames(corpus, target);
+        if (level is null)
+            return new OrderWriteResult(OrderWriteStatus.FolderNotInScope,
+                $"Папка вне области документации: {(target.Length == 0 ? "корень проекта" : target)}");
+
+        // Имена сверяем с фактическим составом уровня: .order — не место для произвольных
+        // строк от клиента, чужую строку туда может дописать только сам пользователь в git
+        var wanted = new List<string>(items.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in items)
+        {
+            var name = raw?.Trim() ?? "";
+            if (name.Length == 0)
+                return new OrderWriteResult(OrderWriteStatus.BadItems, "Пустое имя в списке порядка");
+            if (!level.Contains(name, StringComparer.OrdinalIgnoreCase))
+                return new OrderWriteResult(OrderWriteStatus.BadItems,
+                    $"В папке нет документа или раздела «{name}»");
+            if (!seen.Add(name))
+                return new OrderWriteResult(OrderWriteStatus.BadItems, $"Имя повторяется: «{name}»");
+            wanted.Add(name);
+        }
+
+        var dir = target.Length == 0 ? root : Path.Combine(root, target.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        var existing = File.Exists(file) ? File.ReadAllText(file) : null;
+
+        // Файла не было — фиксируем ВЕСЬ текущий порядок уровня, а не одну перетащенную
+        // строку: иначе остальные документы стали бы неперечисленными и уехали в хвост,
+        // то есть жест сломал бы порядок вместо того, чтобы его задать
+        List<string> lines = existing is null ? [.. level] : SplitOrderLines(existing);
+
+        // Появившееся мимо панели (git pull параллельно) дописываем в хвост: без этого
+        // перетаскивание молча выкинуло бы чужой документ из порядка
+        foreach (var name in level)
+            if (!lines.Contains(name, StringComparer.OrdinalIgnoreCase))
+                lines.Add(name);
+
+        var slots = new List<int>(wanted.Count);
+        for (var i = 0; i < lines.Count; i++)
+            if (wanted.Contains(lines[i], StringComparer.OrdinalIgnoreCase)) slots.Add(i);
+        for (var k = 0; k < slots.Count && k < wanted.Count; k++) lines[slots[k]] = wanted[k];
+
+        // Стиль концов строк сохраняем: файл лежит в репозитории, и смена CRLF на LF
+        // показала бы в диффе весь файл вместо одной перестановки. Новый пишем с \n —
+        // git применит autocrlf сам. BOM не пишем никогда
+        var eol = existing is not null && existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, string.Join(eol, lines) + eol, new UTF8Encoding(false));
+        return new OrderWriteResult(OrderWriteStatus.Ok);
+    }
+
+    // Дописать имя в конец .order, ЕСЛИ файл в папке уже есть. Нет файла — не создаём:
+    // порядок в такой папке задан правилом индекса (README первым, дальше по заголовку),
+    // и одно нажатие «Создать» не должно рожать в чужом репозитории файл на весь состав
+    // папки, которого никто не просил. Появится он от перетаскивания — жеста, который
+    // и означает «я задаю порядок сам».
+    private static void AppendToOrder(string root, string folder, string name)
+    {
+        var dir = folder.Length == 0 ? root : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        if (!File.Exists(file)) return;
+
+        var existing = File.ReadAllText(file);
+        var lines = SplitOrderLines(existing);
+        if (lines.Contains(name, StringComparer.OrdinalIgnoreCase)) return;
+        lines.Add(name);
+        var eol = existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, string.Join(eol, lines) + eol, new UTF8Encoding(false));
+    }
+
+    // Строки существующего .order как есть (без пустых и краёв-пробелов) — их порядок
+    // и состав переживают запись, включая имена, которым сейчас не соответствует файл
+    private static List<string> SplitOrderLines(string text)
+    {
+        var result = new List<string>();
+        foreach (var raw in text.Split('\n'))
+        {
+            var name = raw.Trim('﻿', ' ', '\t', '\r');
+            if (name.Length > 0) result.Add(name);
+        }
+        return result;
+    }
+
+    // Имена узлов уровня в нынешнем порядке: markdown-документы самой папки и её подпапки.
+    // Порядок берём из индекса — он уже уплощён деревом, поэтому первое появление имени и
+    // есть его место среди соседей. Не-markdown в состав не входит: .order обязан оставаться
+    // wiki-совместимым, а «cover» без «cover.md» там просто мусор.
+    // null — папки в области нет вовсе (гейт эндпоинта).
+    private static List<string>? LevelNames(DocsCorpus corpus, string folder)
+    {
+        var prefix = folder.Length == 0 ? "" : $"{folder}/";
+        var names = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var known = folder.Length == 0;     // корень существует, пока в области есть хоть что-то
+
+        foreach (var doc in corpus.Docs)
+        {
+            if (prefix.Length > 0 && !doc.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            known = true;
+            var rest = doc.Path[prefix.Length..];
+            var slash = rest.IndexOf('/');
+            if (slash < 0)
+            {
+                if (!IsMarkdown(rest)) continue;
+                var name = Path.GetFileNameWithoutExtension(rest);
+                if (seen.Add(name)) names.Add(name);
+            }
+            // Документ глубже уровнем: его место в .order занимает первый сегмент — раздел
+            else if (seen.Add(rest[..slash])) names.Add(rest[..slash]);
+        }
+
+        return known && corpus.Docs.Count > 0 ? names : null;
+    }
+
+    private static bool IsMarkdown(string path) =>
+        Path.GetExtension(path).Equals(".md", StringComparison.OrdinalIgnoreCase);
+
+    // ---------- создание документов и разделов ----------
+
+    public enum DocCreateStatus { Ok, FolderNotInScope, BadName, Conflict }
+
+    public sealed record DocCreateResult(DocCreateStatus Status, string? Path = null, string? Error = null);
+
+    // Azure DevOps wiki не открывает страницу, полный путь которой длиннее этого. Ограничение
+    // чужое, но проверяем его мы: узнать о нём при публикации, когда документов уже сотня,
+    // дороже, чем отказать в момент создания
+    private const int MaxDocPathLength = 235;
+
+    // Имена, которыми на Windows нельзя назвать файл ни с каким расширением: «CON.md» не
+    // создастся, а на Linux создастся и сломается при первом клоне на Windows
+    private static readonly HashSet<string> ReservedNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    };
+
+    // Имя файла из названия по правилам wiki: пробелы становятся дефисами (в wiki обратное
+    // преобразование делает заголовок страницы). null — название непригодно, причина в error.
+    public static string? DocFileName(string? title, out string? error)
+    {
+        error = null;
+        var name = (title ?? "").Trim().Replace(' ', '-');
+        if (name.Length == 0) { error = "Название пустое"; return null; }
+
+        // Точка по краям: «.order» стал бы скрытым файлом, «имя.» Windows молча срежет
+        if (name.StartsWith('.') || name.EndsWith('.'))
+        {
+            error = "Название не может начинаться или заканчиваться точкой";
+            return null;
+        }
+        // Набор запрещённых — явный и платформонезависимый: Path.GetInvalidFileNameChars()
+        // на Linux (среда CI) НЕ содержит ':' '*' '?' '"' '<' '>' '|', и «a:b» там молча
+        // создалось бы, а при первом клоне на Windows сломалось. Перечисляем весь Windows-набор
+        // сами, а Linux-набор добавляем сверху надмножеством (control-символы 0–31 уже в нём).
+        // '#' формально допустим в имени файла, но в markdown-ссылке он открывает якорь,
+        // и ссылка на такой документ не соберётся ни в панели, ни в wiki.
+        var invalid = new HashSet<char>(Path.GetInvalidFileNameChars())
+            { '<', '>', ':', '"', '/', '\\', '|', '?', '*', '#' };
+        foreach (var ch in name)
+            if (invalid.Contains(ch))
+            {
+                error = $"Название содержит недопустимый символ «{ch}»";
+                return null;
+            }
+        if (ReservedNames.Contains(name))
+        {
+            error = $"«{name}» — зарезервированное имя Windows";
+            return null;
+        }
+        return name;
+    }
+
+    // Создать документ или раздел в папке области.
+    //
+    // Раздел — это ПАРА «<имя>.md + <имя>/»: в code wiki раздел существует только так, и
+    // папка без парного файла открывается пустой страницей. Ради этого дефекта всё и
+    // затевалось, поэтому продукт создаёт обе половины сразу — и достраивает недостающую,
+    // если половина уже лежит на диске.
+    public DocCreateResult CreateDoc(string rootPath, string? folder, string? title,
+        bool section, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocCreateResult(DocCreateStatus.BadName, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        // Корень репозитория — законная цель: в области рядом с docs/ живут и файлы корня
+        // (README.md, docs.md). Документ там попадёт в панель, только если его имя стоит
+        // в «файлах корня», — дописывает его контроллер по флагу InRoot ниже
+        var target = string.IsNullOrWhiteSpace(folder) ? "" : NormalizeFolder(folder);
+        if (target is null || (target.Length > 0 && !InScope(scope, target)))
+            return new DocCreateResult(DocCreateStatus.FolderNotInScope,
+                Error: $"Папка вне области документации: {folder}");
+
+        // Раздел в корне — это новая папка документации, то есть правка области, а не
+        // создание страницы: продукт не расширяет область молча, за спиной у остальных
+        // владельцев репозитория
+        if (section && target.Length == 0)
+            return new DocCreateResult(DocCreateStatus.BadName,
+                Error: "Раздел в корне репозитория не создаётся — выберите папку документации");
+
+        var name = DocFileName(title, out var nameError);
+        if (name is null) return new DocCreateResult(DocCreateStatus.BadName, Error: nameError);
+
+        var docPath = target.Length == 0 ? $"{name}.md" : $"{target}/{name}.md";
+        if (docPath.Length > MaxDocPathLength)
+            return new DocCreateResult(DocCreateStatus.BadName,
+                Error: $"Путь длиннее {MaxDocPathLength} символов — wiki такую страницу не откроет");
+
+        // Сравнение без учёта регистра: на Windows «API.md» и «api.md» — один файл, и
+        // создание второго молча затёрло бы первый
+        var dir = target.Length == 0 ? root : Path.Combine(root, target.Replace('/', Path.DirectorySeparatorChar));
+        var pageExists = EntryExists(dir, $"{name}.md", directory: false);
+        var folderExists = EntryExists(dir, name, directory: true);
+        if (section ? pageExists && folderExists : pageExists)
+            return new DocCreateResult(DocCreateStatus.Conflict,
+                Error: $"«{name}» в этой папке уже есть");
+
+        // Через FileService, а не File.WriteAllText: там SafeJoin и уведомление OnMutated,
+        // на котором висит синк базы знаний
+        if (!pageExists)
+        {
+            files.CreateFile(root, docPath);
+            files.WriteFile(root, docPath, $"# {(title ?? "").Trim()}\n");
+        }
+        if (section && !folderExists) files.CreateDirectory(root, $"{target}/{name}");
+
+        // Строка в .order РОДИТЕЛЬСКОЙ папки — одна и та же для документа и для раздела:
+        // «decisions» задаёт место и страницы раздела, и всего его содержимого
+        AppendToOrder(root, target, name);
+        return new DocCreateResult(DocCreateStatus.Ok, docPath);
+    }
+
+    // ---------- переименование ----------
+
+    public enum DocRenameStatus { Ok, NotFound, BadName, Conflict, Failed }
+
+    // Moved — старый путь → новый по КАЖДОМУ переехавшему документу: контроллеру он нужен
+    // для побочных привязок (комментарии заметок, «Начало»), а панели — чтобы поправить
+    // закреплённые и открытый документ
+    public sealed record DocRenameResult(
+        DocRenameStatus Status, string? Path = null, int UpdatedDocs = 0, int BrokenLinks = 0,
+        string? Error = null, IReadOnlyDictionary<string, string>? Moved = null);
+
+    // Переименовать документ или раздел.
+    //
+    // Раздел переименовывается ПАРОЙ: файл и одноимённая папка. Расщеплённая пара хуже
+    // отказа — в wiki она даёт сразу и пустой раздел, и осиротевшую страницу, — поэтому
+    // сбой второго шага откатывает первый.
+    //
+    // Ссылки чинятся по РАЗОБРАННЫМ целям, а не текстовым поиском старого имени: для
+    // каждой ссылки пересчитывается относительный путь от источника к новому расположению.
+    // Подписи ссылок («Журнал решений») не трогаем — это авторский текст, а не путь.
+    // Предел механизма: видно только то, что входит в корпус. Ссылка из кода или из .md
+    // вне области останется битой при любом updateLinks — их число возвращается наружу.
+    public DocRenameResult RenameDoc(string rootPath, string path, string? newTitle,
+        bool updateLinks, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocRenameResult(DocRenameStatus.Failed, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(root, scope);
+        var key = NormalizePath(path);
+        if (key is null || !corpus.ByPath.TryGetValue(key, out var entry))
+            return new DocRenameResult(DocRenameStatus.NotFound, Error: $"Документ вне области документации: {path}");
+        if (!IsMarkdown(entry.Path))
+            return new DocRenameResult(DocRenameStatus.BadName,
+                Error: "Переименование поддержано только для markdown-документов");
+
+        var name = DocFileName(newTitle, out var nameError);
+        if (name is null) return new DocRenameResult(DocRenameStatus.BadName, Error: nameError);
+
+        var parent = Folder(entry.Path);
+        var oldName = Path.GetFileNameWithoutExtension(entry.Path);
+        var newDocPath = parent.Length == 0 ? $"{name}.md" : $"{parent}/{name}.md";
+        if (newDocPath.Length > MaxDocPathLength)
+            return new DocRenameResult(DocRenameStatus.BadName,
+                Error: $"Путь длиннее {MaxDocPathLength} символов — wiki такую страницу не откроет");
+        if (string.Equals(name, oldName, StringComparison.Ordinal))
+            return new DocRenameResult(DocRenameStatus.Ok, entry.Path);
+
+        // Смена ТОЛЬКО регистра — не коллизия: это переименование того же файла
+        var sameFile = string.Equals(name, oldName, StringComparison.OrdinalIgnoreCase);
+        var dir = parent.Length == 0 ? root : Path.Combine(root, parent.Replace('/', Path.DirectorySeparatorChar));
+        if (!sameFile && (EntryExists(dir, $"{name}.md", directory: false)
+            || (entry.SectionFolder is not null && EntryExists(dir, name, directory: true))))
+            return new DocRenameResult(DocRenameStatus.Conflict, Error: $"«{name}» в этой папке уже есть");
+
+        // Куда что переезжает: сама страница плюс всё поддерево раздела. Ключи — старые
+        // пути, значения — новые; по этой карте потом чинятся ссылки
+        var moved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [entry.Path] = newDocPath };
+        var oldFolder = entry.SectionFolder;
+        var newFolder = oldFolder is null ? null : (parent.Length == 0 ? name : $"{parent}/{name}");
+        if (oldFolder is not null)
+            foreach (var doc in corpus.Docs)
+                if (doc.Path.StartsWith($"{oldFolder}/", StringComparison.OrdinalIgnoreCase))
+                    moved[doc.Path] = $"{newFolder}{doc.Path[oldFolder.Length..]}";
+
+        // Ссылки на переезжающее ИЗ документов, которые сами никуда не едут: только их и
+        // придётся чинить. Считаем до переименования — после карта путей уже другая
+        var broken = 0;
+        foreach (var (target, _) in moved)
+            if (corpus.Backlinks.TryGetValue(target, out var backs))
+                broken += backs.Count(b => !moved.ContainsKey(b.Path));
+
+        try
+        {
+            RenameEntry(root, entry.Path, newDocPath, sameFile);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new DocRenameResult(DocRenameStatus.Failed, Error: $"Не удалось переименовать файл: {e.Message}");
+        }
+
+        if (oldFolder is not null)
+        {
+            try
+            {
+                RenameEntry(root, oldFolder, newFolder!, sameFile);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Откат: половина пары хуже отказа — в wiki это сразу и пустой раздел,
+                // и осиротевшая страница
+                try { RenameEntry(root, newDocPath, entry.Path, sameFile); }
+                catch (Exception rollback) when (rollback is IOException or UnauthorizedAccessException)
+                {
+                    return new DocRenameResult(DocRenameStatus.Failed,
+                        Error: $"Папка не переименована ({e.Message}), и вернуть файл не удалось: {rollback.Message}");
+                }
+                return new DocRenameResult(DocRenameStatus.Failed,
+                    Error: $"Не удалось переименовать папку раздела: {e.Message}");
+            }
+        }
+
+        // Строка .order меняется НА МЕСТЕ: позиция страницы в порядке чтения к имени
+        // отношения не имеет. Не было строки — не добавляем: документ и раньше был
+        // неперечисленным, и переименование не повод менять это
+        ReplaceInOrder(root, parent, oldName, name);
+
+        var updated = updateLinks ? UpdateLinks(root, corpus, moved) : 0;
+        return new DocRenameResult(DocRenameStatus.Ok, newDocPath, updated,
+            updateLinks ? 0 : broken, Moved: moved);
+    }
+
+    // Переименование через файловый сервис (там SafeJoin и уведомление OnMutated, на
+    // котором висит синк базы знаний). sameFile — смена только регистра: на Windows это
+    // один и тот же файл, git с core.ignorecase его не замечает, поэтому идём в два шага
+    // через временное имя — иначе правка не попала бы ни в панель, ни в коммит
+    private void RenameEntry(string root, string oldRel, string newRel, bool sameFile)
+    {
+        if (!sameFile) { files!.Rename(root, oldRel, newRel); return; }
+        var temp = $"{oldRel}~ccs-rename";
+        files!.Rename(root, oldRel, temp);
+        files.Rename(root, temp, newRel);
+    }
+
+    // Строка порядка на прежней позиции. Файла нет — ничего не создаём: порядок этой
+    // папки задан правилом индекса, и переименование не повод фиксировать его в git
+    private static void ReplaceInOrder(string root, string folder, string oldName, string newName)
+    {
+        var dir = folder.Length == 0 ? root : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        if (!File.Exists(file)) return;
+
+        var existing = File.ReadAllText(file);
+        var lines = SplitOrderLines(existing);
+        var hit = false;
+        for (var i = 0; i < lines.Count; i++)
+            if (string.Equals(lines[i], oldName, StringComparison.OrdinalIgnoreCase)) { lines[i] = newName; hit = true; }
+        if (!hit) return;
+
+        var eol = existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, string.Join(eol, lines) + eol, new UTF8Encoding(false));
+    }
+
+    // Починка ссылок вокруг переезда. Возвращает число изменённых документов.
+    //
+    // Каждая ссылка резолвится от СТАРОГО пути источника (в файле она записана
+    // относительно него) и записывается заново — относительно нового. Ломаются два
+    // разных класса ссылок, и оба закрываются одним правилом:
+    //   • чужие ссылки НА переехавшее — цель сменила путь;
+    //   • ссылки ВНУТРИ переехавшего на всё остальное — при переносе в другую папку
+    //     сменилась глубина, и «../vision.md» указывает уже не туда.
+    // При переименовании второй класс не страдает (глубина та же), и пересчёт даёт ту
+    // же строку — файл не переписывается.
+    private int UpdateLinks(string root, DocsCorpus corpus, Dictionary<string, string> moved)
+    {
+        var changed = 0;
+        foreach (var doc in corpus.Docs)
+        {
+            if (!IsMarkdown(doc.Path)) continue;
+            var from = doc.Path;
+            var fromNew = moved.GetValueOrDefault(from, from);
+
+            string text;
+            var file = Path.Combine(root, fromNew.Replace('/', Path.DirectorySeparatorChar));
+            try { text = File.ReadAllText(file); }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
+
+            var updated = LinkRegex().Replace(text, m =>
+            {
+                var raw = m.Groups[2].Value.Trim();
+                if (raw.Length == 0 || IsExternal(raw)) return m.Value;
+                var (targetPart, _) = SplitRawAnchor(raw);
+                if (targetPart.Length == 0) return m.Value;      // якорь внутри документа
+                var target = ResolveRelative(from, targetPart);
+                if (target is null) return m.Value;
+                var newTarget = moved.GetValueOrDefault(target, target);
+                // Ни источник, ни цель никуда не делись — ссылка как была
+                if (fromNew == from && newTarget == target) return m.Value;
+                // Ссылка от корня («/docs/x.md») на неподвижную цель менять смысла не
+                // имеет: она не зависит от расположения источника, а переписывание
+                // сменило бы авторский стиль записи
+                if (targetPart.StartsWith('/') && newTarget == target) return m.Value;
+
+                var anchor = raw[targetPart.Length..];           // «#…» как был, вместе с регистром
+                var rewritten = RelativeLink(fromNew, newTarget) + anchor;
+                return rewritten == raw ? m.Value : $"[{m.Groups[1].Value}]({rewritten})";
+            });
+
+            if (updated == text) continue;
+            try { File.WriteAllText(file, updated); changed++; }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        return changed;
+    }
+
+    // Путь ссылки БЕЗ разбора якоря: для замены нужен исходный хвост «#…» как он записан,
+    // а SplitAnchor нормализует его в слаг
+    private static (string Target, string Anchor) SplitRawAnchor(string raw)
+    {
+        var i = raw.IndexOf('#');
+        return i < 0 ? (raw, "") : (raw[..i], raw[i..]);
+    }
+
+    // Относительная ссылка от одного документа к другому — в том же виде, в каком её
+    // пишут руками: соседний файл именем, глубже — через папки, выше — через «../».
+    // Пробел кодируем: markdown обрывает цель ссылки на первом же пробеле
+    internal static string RelativeLink(string fromDoc, string toDoc)
+    {
+        var fromParts = Folder(fromDoc).Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var toParts = toDoc.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var common = 0;
+        while (common < fromParts.Length && common < toParts.Length - 1 &&
+               string.Equals(fromParts[common], toParts[common], StringComparison.OrdinalIgnoreCase))
+            common++;
+
+        var up = string.Concat(Enumerable.Repeat("../", fromParts.Length - common));
+        var down = string.Join('/', toParts.Skip(common));
+        var link = up + down;
+        return link.Replace(" ", "%20");
+    }
+
+    // ---------- перенос между папками ----------
+
+    public enum DocMoveStatus { Ok, NotFound, BadTarget, Conflict, Failed }
+
+    public sealed record DocMoveResult(
+        DocMoveStatus Status, string? Path = null, int UpdatedDocs = 0, int BrokenLinks = 0,
+        string? Error = null, IReadOnlyDictionary<string, string>? Moved = null);
+
+    // Перенести документ или раздел в другую папку области.
+    //
+    // От переименования отличается тем, что меняется ГЛУБИНА: относительные ссылки внутри
+    // переехавших документов на всё остальное («../vision.md») начинают указывать не туда,
+    // и их тоже приходится пересчитывать — этим занимается UpdateLinks.
+    //
+    // Раздел переезжает парой со всем поддеревом. Перенос раздела внутрь самого себя
+    // запрещён: папка не может стать собственным потомком, а ФС на такой Move отвечает
+    // невнятной ошибкой уже после того, как файл переименован.
+    public DocMoveResult MoveDoc(string rootPath, string path, string? targetFolder,
+        bool updateLinks, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocMoveResult(DocMoveStatus.Failed, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(root, scope);
+        var key = NormalizePath(path);
+        if (key is null || !corpus.ByPath.TryGetValue(key, out var entry))
+            return new DocMoveResult(DocMoveStatus.NotFound, Error: $"Документ вне области документации: {path}");
+
+        // Корень репозитория целью не бывает: документ там попадёт в область только
+        // поимённо, и перенесённый файл просто исчез бы из панели
+        var target = NormalizeFolder(targetFolder);
+        if (target is null || !InScope(scope, target))
+            return new DocMoveResult(DocMoveStatus.BadTarget, Error: $"Папка вне области документации: {targetFolder}");
+
+        var parent = Folder(entry.Path);
+        if (string.Equals(parent, target, StringComparison.OrdinalIgnoreCase))
+            return new DocMoveResult(DocMoveStatus.Ok, entry.Path, Moved: new Dictionary<string, string>());
+
+        var name = Path.GetFileNameWithoutExtension(entry.Path);
+        var ext = Path.GetExtension(entry.Path);
+        var newPath = $"{target}/{name}{ext}";
+        if (newPath.Length > MaxDocPathLength)
+            return new DocMoveResult(DocMoveStatus.BadTarget,
+                Error: $"Путь длиннее {MaxDocPathLength} символов — wiki такую страницу не откроет");
+
+        var oldFolder = entry.SectionFolder;
+        var newFolder = oldFolder is null ? null : $"{target}/{name}";
+        // Раздел внутрь себя: и сама папка целью, и любая её внутренность
+        if (oldFolder is not null &&
+            (string.Equals(target, oldFolder, StringComparison.OrdinalIgnoreCase) ||
+             target.StartsWith($"{oldFolder}/", StringComparison.OrdinalIgnoreCase)))
+            return new DocMoveResult(DocMoveStatus.BadTarget,
+                Error: "Раздел нельзя перенести внутрь самого себя");
+
+        var dir = Path.Combine(root, target.Replace('/', Path.DirectorySeparatorChar));
+        if (EntryExists(dir, $"{name}{ext}", directory: false) ||
+            (oldFolder is not null && EntryExists(dir, name, directory: true)))
+            return new DocMoveResult(DocMoveStatus.Conflict, Error: $"«{name}» в этой папке уже есть");
+
+        var moved = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { [entry.Path] = newPath };
+        if (oldFolder is not null)
+            foreach (var doc in corpus.Docs)
+                if (doc.Path.StartsWith($"{oldFolder}/", StringComparison.OrdinalIgnoreCase))
+                    moved[doc.Path] = $"{newFolder}{doc.Path[oldFolder.Length..]}";
+
+        // Ссылки на переезжающее из документов, которые остаются на месте: их и
+        // придётся чинить. Считаем до переноса — после карта путей уже другая
+        var broken = 0;
+        foreach (var (from, _) in moved)
+            if (corpus.Backlinks.TryGetValue(from, out var backs))
+                broken += backs.Count(b => !moved.ContainsKey(b.Path));
+
+        try { files.Rename(root, entry.Path, newPath); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new DocMoveResult(DocMoveStatus.Failed, Error: $"Не удалось перенести файл: {e.Message}");
+        }
+
+        if (oldFolder is not null)
+        {
+            try { files.Rename(root, oldFolder, newFolder!); }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Откат страницы: расщеплённая пара хуже отказа
+                try { files.Rename(root, newPath, entry.Path); }
+                catch (Exception rollback) when (rollback is IOException or UnauthorizedAccessException)
+                {
+                    return new DocMoveResult(DocMoveStatus.Failed,
+                        Error: $"Папка не перенесена ({e.Message}), и вернуть файл не удалось: {rollback.Message}");
+                }
+                return new DocMoveResult(DocMoveStatus.Failed,
+                    Error: $"Не удалось перенести папку раздела: {e.Message}");
+            }
+        }
+
+        // Порядок: из старой папки имя уходит, в новую дописывается в хвост — но только
+        // если .order там уже есть (правило то же, что при создании)
+        RemoveFromOrder(root, parent, name);
+        if (IsMarkdown(newPath)) AppendToOrder(root, target, name);
+
+        var updated = updateLinks ? UpdateLinks(root, corpus, moved) : 0;
+        return new DocMoveResult(DocMoveStatus.Ok, newPath, updated, updateLinks ? 0 : broken, Moved: moved);
+    }
+
+    // ---------- удаление ----------
+
+    public enum DocDeleteStatus { Ok, NotFound, Failed }
+
+    // Removed — что реально исчезло с диска (страница и весь подкорпус раздела); BrokenLinks —
+    // сколько ссылок на удалённое осталось у ОСТАВШИХСЯ документов. Починить их нечем —
+    // цели больше нет, — поэтому цифру показываем пользователю, а не прячем
+    public sealed record DocDeleteResult(
+        DocDeleteStatus Status, IReadOnlyList<string>? Removed = null, int BrokenLinks = 0,
+        int RemovedFiles = 0, string? Error = null);
+
+    // Удалить документ или раздел.
+    //
+    // У раздела удаляется ПАРА целиком: страница и её папка со всем содержимым. Половина
+    // пары в wiki — это либо пустой узел, либо осиротевшая страница, поэтому «удалить
+    // только файл» здесь не вариант. Вместе с папкой уходит и то, чего панель не
+    // показывала (картинки, файлы невыбранных типов) — число таких файлов возвращаем
+    // отдельно, чтобы диалог мог предупредить до, а не после.
+    public DocDeleteResult DeleteDoc(string rootPath, string path, DocsScope? rawScope = null)
+    {
+        if (files is null)
+            return new DocDeleteResult(DocDeleteStatus.Failed, Error: "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(root, scope);
+        var key = NormalizePath(path);
+        if (key is null || !corpus.ByPath.TryGetValue(key, out var entry))
+            return new DocDeleteResult(DocDeleteStatus.NotFound, Error: $"Документ вне области документации: {path}");
+
+        // Что исчезнет из КОРПУСА: сама страница плюс документы её раздела
+        var removed = new List<string> { entry.Path };
+        var section = entry.SectionFolder;
+        if (section is not null)
+            foreach (var doc in corpus.Docs)
+                if (doc.Path.StartsWith($"{section}/", StringComparison.OrdinalIgnoreCase))
+                    removed.Add(doc.Path);
+
+        // Ссылки на удаляемое из документов, которые остаются: чинить их нечем, но знать
+        // о них надо. Считаем до удаления — после корпус уже другой
+        var gone = new HashSet<string>(removed, StringComparer.OrdinalIgnoreCase);
+        var broken = 0;
+        foreach (var target in removed)
+            if (corpus.Backlinks.TryGetValue(target, out var backs))
+                broken += backs.Count(b => !gone.Contains(b.Path));
+
+        // Сколько файлов внутри папки раздела уйдёт помимо документов корпуса — картинки,
+        // вложения, файлы невыбранных типов. Панель их не показывает, а удаление уносит
+        var extraFiles = 0;
+        if (section is not null)
+        {
+            var dir = Path.Combine(root, section.Replace('/', Path.DirectorySeparatorChar));
+            try
+            {
+                if (Directory.Exists(dir))
+                    extraFiles = Directory.GetFiles(dir, "*", SearchOption.AllDirectories).Length - (removed.Count - 1);
+            }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        try
+        {
+            // Через FileService: SafeJoin и уведомление OnMutated (синк базы знаний)
+            files.Delete(root, entry.Path);
+            if (section is not null) files.Delete(root, section);
+        }
+        // FileNotFoundException — тоже IOException: файл мог исчезнуть между обходом и удалением
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new DocDeleteResult(DocDeleteStatus.Failed, Error: e.Message);
+        }
+
+        // Строку из .order убираем: имя, которому больше нечего соответствовать, — мусор,
+        // который автор в свой файл не клал
+        RemoveFromOrder(root, Folder(entry.Path), Path.GetFileNameWithoutExtension(entry.Path));
+
+        return new DocDeleteResult(DocDeleteStatus.Ok, removed, broken, Math.Max(extraFiles, 0));
+    }
+
+    // Убрать имя из .order родительской папки. Файла нет — ничего не создаём
+    private static void RemoveFromOrder(string root, string folder, string name)
+    {
+        var dir = folder.Length == 0 ? root : Path.Combine(root, folder.Replace('/', Path.DirectorySeparatorChar));
+        var file = Path.Combine(dir, OrderFileName);
+        if (!File.Exists(file)) return;
+
+        string existing;
+        try { existing = File.ReadAllText(file); }
+        catch (IOException) { return; }
+        catch (UnauthorizedAccessException) { return; }
+
+        var lines = SplitOrderLines(existing);
+        if (lines.RemoveAll(l => string.Equals(l, name, StringComparison.OrdinalIgnoreCase)) == 0) return;
+
+        var eol = existing.Contains("\r\n") ? "\r\n" : "\n";
+        File.WriteAllText(file, lines.Count == 0 ? "" : string.Join(eol, lines) + eol, new UTF8Encoding(false));
+    }
+
+    // Папка входит в область: сама выбрана в настройке либо лежит внутри выбранной.
+    // Проверяем по НАСТРОЙКЕ, а не по индексу (как гейт .order): в пустой папке области
+    // документов ещё нет, а создать в ней первый документ — законное действие
+    private static bool InScope(DocsScope scope, string folder)
+    {
+        foreach (var f in scope.Folders)
+            if (string.Equals(folder, f, StringComparison.OrdinalIgnoreCase) ||
+                folder.StartsWith($"{f}/", StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Существует ли в папке файл или каталог с таким именем — с точностью до регистра.
+    // File.Exists на Linux регистрозависим, а имя, отличающееся регистром, при клоне на
+    // Windows схлопнется с существующим
+    private static bool EntryExists(string dir, string name, bool directory)
+    {
+        try
+        {
+            var entries = directory ? Directory.GetDirectories(dir) : Directory.GetFiles(dir);
+            foreach (var entry in entries)
+                if (string.Equals(Path.GetFileName(entry), name, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        catch (DirectoryNotFoundException) { /* папки ещё нет — конфликтовать не с чем */ }
+        catch (UnauthorizedAccessException) { }
+        return false;
     }
 
     // README любого поддерживаемого расширения: в корне лежит и README.md, и README.txt

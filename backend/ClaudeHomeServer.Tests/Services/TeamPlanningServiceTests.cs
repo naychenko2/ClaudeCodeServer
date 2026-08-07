@@ -210,7 +210,7 @@ public class TeamPlanningServiceTests : IDisposable
         card.PersonaId.Should().Be(dev.Id);
         card.Name.Should().Be("Денис");
         card.Role.Should().Be("Backend-разработчик");
-        card.Specialty.Should().Be("Исполнитель");
+        card.Specialty.Should().Be("Исполнитель (универсальный)");
         card.Description.Should().Contain("ASP.NET");
         card.Bindings.Should().ContainSingle()
             .Which.Should().Be("папка backend — Любые задачи по серверной части на C#");
@@ -245,6 +245,109 @@ public class TeamPlanningServiceTests : IDisposable
         prompt.Should().Contain("бэкенд — бэкендеру");
     }
 
+    // Дыра покрытия (волна 3): «previous»-путь перепланирования (Э8) — промпт обязан нести
+    // предыдущую версию плана и просить блок «changes», иначе «Что изменилось» в карточке
+    // человеку взять неоткуда.
+    [Fact]
+    public void BuildPlannerPrompt_ПерепланированиеСПредыдущимПланом_НесётЕгоИТребуетChanges()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+        var previous = new TeamImplementPlan
+        {
+            Version = 1,
+            Summary = "Экспорт задач в CSV",
+            Subtasks =
+            [
+                new TeamImplementSubtask { Title = "Эндпоинт экспорта", Wave = 1, TaskId = "task-1" },
+                new TeamImplementSubtask { Title = "Кнопка «Экспорт»", Wave = 2 },
+            ],
+        };
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV, но в XLSX",
+            [dev], "ClaudeCodeServer", previous);
+
+        prompt.Should().Contain("ПРЕДЫДУЩИЙ ПЛАН (версия 1)");
+        prompt.Should().Contain("Эндпоинт экспорта (волна 1, уже роздана исполнителю)",
+            "розданная под-задача — сигнал планировщику не плодить её заново");
+        prompt.Should().Contain("Кнопка «Экспорт» (волна 2)");
+        prompt.Should().Contain("changes", "блок «что изменилось» обязателен только при перепланировании");
+        prompt.Should().Contain("\"changes\":");
+    }
+
+    [Fact]
+    public void BuildPlannerPrompt_БезПредыдущегоПлана_НеТребуетChanges()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer");
+
+        prompt.Should().NotContain("ПРЕДЫДУЩИЙ ПЛАН");
+        prompt.Should().NotContain("\"changes\":");
+    }
+
+    // Правка человека («Изменить план», прод 2026-08-04): уходит планировщику отдельным
+    // блоком поверх предыдущего плана — это причина пересборки, терять её нельзя.
+    [Fact]
+    public void BuildPlannerPrompt_ПравкаЧеловека_ИдётОтдельнымБлокомПоверхПредыдущегоПлана()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+        var previous = new TeamImplementPlan
+        {
+            Version = 1,
+            Subtasks = [new TeamImplementSubtask { Title = "Эндпоинт экспорта", Wave = 1 }],
+        };
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer", previous, feedback: "убери ревью из плана");
+
+        prompt.Should().Contain("ПРАВКА ЧЕЛОВЕКА К ПЛАНУ");
+        prompt.Should().Contain("убери ревью из плана");
+        prompt.Should().Contain("ПРЕДЫДУЩИЙ ПЛАН (версия 1)");
+    }
+
+    [Fact]
+    public void BuildPlannerPrompt_ПравкаБезПредыдущегоПлана_Игнорируется()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer", previous: null, feedback: "убери ревью");
+
+        prompt.Should().NotContain("ПРАВКА ЧЕЛОВЕКА",
+            "без предыдущего плана пересобирать нечего — правка не имеет смысла");
+    }
+
+    // Прод 2026-08-02 (находка Веры): планировщик выдал под-задачу с буквальным
+    // «<файл-1 в корне проекта>» вместо значения, которое человек указал в вводной —
+    // промпт обязан явно запрещать плейсхолдеры и требовать перенос конкретики или допущение.
+    [Fact]
+    public void BuildPlannerPrompt_ЗапрещаетПлейсхолдерыИТребуетКонкретику()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Добавить экспорт в CSV",
+            [dev], "ClaudeCodeServer");
+
+        prompt.Should().Contain("плейсхолдер");
+        prompt.Should().Contain("<файл-1 в корне проекта>", "конкретный пример утечки из прода — по нему проверяется, что запрет адресный");
+        prompt.Should().Contain("assumptions", "неизвестное значение — в допущения, а не в заглушку");
+    }
+
+    // Прод 2026-08-03 (находка Веры): просили hello5.txt/«QA smoke test file 5», получили
+    // smoke5.txt/«smoke run 5 ok» — это НЕ плейсхолдер (запрет 6a его уже покрывает), а прямая
+    // подмена названного человеком значения своим. Правило обязано отдельно запрещать и это.
+    [Fact]
+    public void BuildPlannerPrompt_ЗапрещаетПодменуНазванныхЗначенийСвоими()
+    {
+        var dev = TeamPlanningService.BuildCard(MakePersona("Денис", "Backend-разработчик"));
+
+        var prompt = TeamPlanningService.BuildPlannerPrompt("Создай hello5.txt", [dev], "ClaudeCodeServer");
+
+        prompt.Should().Contain("дословно");
+        prompt.Should().Contain("hello5.txt", "конкретный пример утечки из прода — по нему проверяется, что запрет адресный");
+    }
+
     // --- Разбор плана ---
 
     [Fact]
@@ -264,7 +367,7 @@ public class TeamPlanningServiceTests : IDisposable
                 "files":["frontend/src/components/Toolbar.tsx"],"wave":2,"doneCriteria":"файл скачивается"}]}
             """;
 
-        var plan = TeamPlanningService.ParsePlan(raw, "Экспорт в CSV", [dev, front])!;
+        var plan = TeamPlanningService.ParsePlan(raw, "Экспорт в CSV", [dev, front], out _)!;
 
         plan.Summary.Should().Be("Экспорт задач в CSV");
         plan.Subtasks.Should().HaveCount(2);
@@ -292,7 +395,7 @@ public class TeamPlanningServiceTests : IDisposable
              "executorRationale":"его зона","wave":1}]}
             """;
 
-        TeamPlanningService.ParsePlan(raw, "req", [dev])!.Subtasks[0].ExecutorPersonaId
+        TeamPlanningService.ParsePlan(raw, "req", [dev], out _)!.Subtasks[0].ExecutorPersonaId
             .Should().Be(dev.Id, "модель иногда отдаёт handle вместо id");
     }
 
@@ -305,7 +408,7 @@ public class TeamPlanningServiceTests : IDisposable
              "executorRationale":"","wave":1}]}
             """;
 
-        var subtask = TeamPlanningService.ParsePlan(raw, "req", [dev])!.Subtasks[0];
+        var subtask = TeamPlanningService.ParsePlan(raw, "req", [dev], out _)!.Subtasks[0];
 
         subtask.ExecutorPersonaId.Should().Be(dev.Id, "исполнитель только из состава кандидатов");
         subtask.ExecutorRationale.Should().Contain("проверьте",
@@ -320,7 +423,7 @@ public class TeamPlanningServiceTests : IDisposable
             {"summary":"s","subtasks":[{"title":"t","executorPersonaId":"{{dev.Id}}","wave":1}]}
             """;
 
-        TeamPlanningService.ParsePlan(raw, "req", [dev])!.Subtasks[0].ExecutorRationale
+        TeamPlanningService.ParsePlan(raw, "req", [dev], out _)!.Subtasks[0].ExecutorRationale
             .Should().Contain("не обосновал");
     }
 
@@ -334,7 +437,7 @@ public class TeamPlanningServiceTests : IDisposable
               {"title":"b","executorPersonaId":"{{dev.Id}}","executorRationale":"r","wave":"2"}]}
             """;
 
-        var plan = TeamPlanningService.ParsePlan(raw, "req", [dev])!;
+        var plan = TeamPlanningService.ParsePlan(raw, "req", [dev], out _)!;
 
         plan.Subtasks[0].Wave.Should().Be(1);
         plan.Subtasks[1].Wave.Should().Be(2, "номер волны строкой тоже принимается");
@@ -347,7 +450,7 @@ public class TeamPlanningServiceTests : IDisposable
         var items = string.Join(",", Enumerable.Range(1, TeamPlanningService.MaxSubtasks + 5)
             .Select(i => $$"""{"title":"t{{i}}","executorPersonaId":"{{dev.Id}}","executorRationale":"r","wave":1}"""));
 
-        TeamPlanningService.ParsePlan($$"""{"summary":"s","subtasks":[{{items}}]}""", "req", [dev])!
+        TeamPlanningService.ParsePlan($$"""{"summary":"s","subtasks":[{{items}}]}""", "req", [dev], out _)!
             .Subtasks.Should().HaveCount(TeamPlanningService.MaxSubtasks);
     }
 
@@ -359,7 +462,7 @@ public class TeamPlanningServiceTests : IDisposable
     public void ParsePlan_НевалидныйОтвет_Null(string raw)
     {
         var dev = MakePersona("Денис", "Бэкенд");
-        TeamPlanningService.ParsePlan(raw, "req", [dev]).Should().BeNull();
+        TeamPlanningService.ParsePlan(raw, "req", [dev], out _).Should().BeNull();
     }
 
     // --- Реальный состав команды проекта ---
@@ -459,9 +562,11 @@ public class TeamPlanningServiceTests : IDisposable
         var sut = new TeamPlanningService(_personas, cheap);
         var session = MakeSession(coordinator.Id, executors: team.Select(p => p.Id).ToList());
 
-        var plan = await sut.CreatePlanAsync(session, UserId,
+        var result = await sut.CreatePlanAsync(session, UserId,
             "Добавить экспорт задач в CSV", "ClaudeCodeServer");
 
+        result.Failure.Should().Be(TeamPlanningService.Failure.None);
+        var plan = result.Plan;
         plan.Should().NotBeNull();
         plan!.Subtasks.Should().HaveCount(3);
         // Главный критерий Э2: работа ушла по профилю персон
@@ -473,6 +578,10 @@ public class TeamPlanningServiceTests : IDisposable
         plan.Subtasks[0].ExecutorRationale.Should().Contain("backend");
         plan.WaveCount.Should().Be(3);
         plan.ExecutorCount.Should().Be(3);
+        // Диагностика для лога: промпт не пустой, ответ распарсился, маршрут «claude»
+        result.PromptChars.Should().BeGreaterThan(0);
+        result.ResponseChars.Should().BeGreaterThan(0);
+        result.Elapsed.Should().BeGreaterThan(TimeSpan.Zero);
     }
 
     [Fact]
@@ -481,7 +590,8 @@ public class TeamPlanningServiceTests : IDisposable
         var coord = MakePersona("Алекс", "Тимлид", scope: PersonaScope.Global);
         var session = MakeSession(coord.Id, projectId: null);
 
-        (await _sut.CreatePlanAsync(session, UserId, "сделай что-нибудь")).Should().BeNull();
+        var result = await _sut.CreatePlanAsync(session, UserId, "сделай что-нибудь");
+        result.Plan.Should().BeNull();
     }
 
     [Fact]
@@ -498,8 +608,9 @@ public class TeamPlanningServiceTests : IDisposable
             """);
         var sut = new TeamPlanningService(_personas, cheap);
 
-        var plan = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "Экспорт в CSV", "CCS");
+        var result = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "Экспорт в CSV", "CCS");
 
+        var plan = result.Plan;
         plan.Should().NotBeNull();
         plan!.PlannerPersonaId.Should().Be(planner.Id, "план построил подобранный планировщик");
         plan.Subtasks.Select(s => s.ExecutorPersonaId).Should().Equal(dev.Id, front.Id);
@@ -516,23 +627,82 @@ public class TeamPlanningServiceTests : IDisposable
         MakePersona("Денис", "Бэкенд");
         var sut = new TeamPlanningService(_personas, new FakeCheapRunner(throwOnRun: true));
 
-        (await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "задача")).Should().BeNull(
-            "падение планировщика не роняет ход — человек получает причину отказа");
+        var result = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "задача");
+        result.Plan.Should().BeNull("падение планировщика не роняет ход — человек получает причину отказа");
+        result.Failure.Should().Be(TeamPlanningService.Failure.Failed,
+            "обычный сбой — не таймаут и не обрыв, текст отказа другой");
     }
 
-    // Подставной раннер: запоминает вызов и отдаёт заготовленный ответ
-    private sealed class FakeCheapRunner(string answer = "", bool throwOnRun = false) : ICheapTextRunner
+    [Fact]
+    public async Task CreatePlanAsync_Таймаут_NullСПризнакомТаймаута()
+    {
+        // Обрыв по таймауту отличается от прочих отказов: причина не в постановке человека,
+        // и SessionManager показывает другой текст карточки (PlannerTimeoutReason).
+        var coord = MakePersona("Алекс", "Тимлид");
+        MakePersona("Денис", "Бэкенд");
+        var sut = new TeamPlanningService(_personas, new FakeCheapRunner(throwTimeout: true));
+
+        var result = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "задача");
+
+        result.Plan.Should().BeNull();
+        result.Failure.Should().Be(TeamPlanningService.Failure.TimedOut);
+    }
+
+    [Fact]
+    public async Task CreatePlanAsync_ОбрывПоТокенам_Truncated()
+    {
+        // Прод 2026-08-05: модель вернула открытую скобку без закрытия (NumPredict=1024
+        // обрезало JSON плана на полуслове). Раньше неотличимо от таймаута — теперь
+        // Failure.Truncated, карточка и лог дают свой текст с советом «короче вводную».
+        var coord = MakePersona("Алекс", "Тимлид");
+        MakePersona("Денис", "Бэкенд");
+        // Незакрытый JSON-объект: первый «{» без парного «}» — признак обреза.
+        var cheap = new FakeCheapRunner("{\"summary\":\"Экспорт\",\"subtasks\":[{\"title\":\"A\",\"wave\":1");
+        var sut = new TeamPlanningService(_personas, cheap);
+
+        var result = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "Экспорт в CSV");
+
+        result.Plan.Should().BeNull();
+        result.Failure.Should().Be(TeamPlanningService.Failure.Truncated);
+        // Диагностика: длина ответа больше нуля, иначе в логе «0 символов» — мусор.
+        result.ResponseChars.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task CreatePlanAsync_JSONБезПодЗадач_InvalidJson()
+    {
+        // Валидный JSON, но без subtasks — это «неразборчивый план» (InvalidJson), а не
+        // обрыв по токенам. Распознаётся по закрытой структуре с пустым subtasks.
+        var coord = MakePersona("Алекс", "Тимлид");
+        MakePersona("Денис", "Бэкенд");
+        var cheap = new FakeCheapRunner("{\"summary\":\"Экспорт\"}");
+        var sut = new TeamPlanningService(_personas, cheap);
+
+        var result = await sut.CreatePlanAsync(MakeSession(coord.Id), UserId, "Экспорт в CSV");
+
+        result.Plan.Should().BeNull();
+        result.Failure.Should().Be(TeamPlanningService.Failure.InvalidJson);
+    }
+
+    // Подставной раннер: запоминает вызов и отдаёт заготовленный ответ.
+    // throwOnRun — обычный сбой, throwTimeout — обрыв по таймауту (LlmTimeoutException).
+    private sealed class FakeCheapRunner(string answer = "", bool throwOnRun = false,
+        bool throwTimeout = false) : ICheapTextRunner
     {
         public string? LastActionKey { get; private set; }
         public string LastPrompt { get; private set; } = "";
 
         public bool UsesLocal(string actionKey) => false;
 
+        public string DescribeRoute(string actionKey, string? fallbackModel) =>
+            string.IsNullOrWhiteSpace(fallbackModel) ? "claude" : $"claude({fallbackModel})";
+
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             LastActionKey = actionKey;
             LastPrompt = prompt;
+            if (throwTimeout) throw new LlmTimeoutException();
             return throwOnRun
                 ? throw new InvalidOperationException("модель недоступна")
                 : Task.FromResult(answer);

@@ -152,11 +152,11 @@ public sealed class PersonaAutomationService : IDisposable
         var now = DateTime.UtcNow;
 
         // 0. Дешёвый гейт условия OnlyIf ДО throttle и платного хода: если событие явно НЕ
-        // удовлетворяет условию — не тратим ни лимит, ни платную сессию. Только когда действие
-        // на бесплатной локали (иначе OnlyIf оценивается внутри хода, как раньше). Фейл-открыто:
+        // удовлетворяет условию — не тратим ни лимит, ни платную сессию хода. Исполнителя
+        // (локаль/direct-модель/слот) решает маршрут места automation-gate из «Поставщиков
+        // моделей» — CheapTextRunner.RunAsync внутри EventFailsGateAsync. Фейл-открыто:
         // сомнение/ошибка/недоступность → реагируем как обычно.
         if (!bypassThrottle && rule.Condition?.OnlyIf is { } onlyIf && !string.IsNullOrWhiteSpace(onlyIf)
-            && _cheap.UsesLocal(Llm.LocalActionCatalog.AutomationGate)
             && await EventFailsGateAsync(rule, ev, onlyIf, persona.OwnerId))
         {
             MarkResult(state, "gated");
@@ -289,7 +289,7 @@ public sealed class PersonaAutomationService : IDisposable
                 title = "Новое сообщение";
                 // Осмысленную суть пытаемся собрать локальной моделью из последнего ответа;
                 // без локали/при ошибке — понятный шаблон с названием правила.
-                body = await TrySummarizeLastReplyAsync(session.Id)
+                body = await TrySummarizeLastReplyAsync(session.Id, ownerId)
                     ?? (rule is null ? "Ответ по правилу автоматизации"
                                      : $"Ответ по правилу «{rule.Name}»");
             }
@@ -323,14 +323,13 @@ public sealed class PersonaAutomationService : IDisposable
         catch { /* уведомление — best-effort */ }
     }
 
-    // Краткая осмысленная суть уведомления из последнего ответа персоны — локальной
-    // моделью (бесплатно). best-effort: нет локали/ошибка/пусто → null, вызывающий
-    // оставляет шаблонный текст. Платный claude на «украшение» уведомления НЕ тратим.
-    private async Task<string?> TrySummarizeLastReplyAsync(string sessionId)
+    // Краткая осмысленная суть уведомления из последнего ответа персоны — исполнителем,
+    // назначенным месту notification-summary в «Поставщиках моделей» (локаль/direct-модель/
+    // слот). best-effort: ошибка/пусто → null, вызывающий оставляет шаблонный текст.
+    private async Task<string?> TrySummarizeLastReplyAsync(string sessionId, string? ownerId)
     {
         try
         {
-            if (!_cheap.UsesLocal(Llm.LocalActionCatalog.NotificationSummary)) return null;
             var history = await _sessions.GetHistoryAsync(sessionId);
             var reply = history.OfType<StoredTextMessage>()
                 .LastOrDefault(t => t.ParentToolUseId is null && !string.IsNullOrWhiteSpace(t.Text))?.Text;
@@ -340,7 +339,7 @@ public sealed class PersonaAutomationService : IDisposable
                 "Ниже — ответ ассистента пользователю. Сожми его СУТЬ в одно короткое предложение " +
                 "(до 120 символов) по-русски, чтобы было понятно из уведомления. " +
                 "Без вступлений и кавычек — только суть.\n\n" + Truncate(reply, 4000);
-            var summary = (await _cheap.RunLocalOnlyAsync(Llm.LocalActionCatalog.NotificationSummary, prompt))?.Trim();
+            var summary = (await _cheap.RunAsync(Llm.LocalActionCatalog.NotificationSummary, prompt, ownerId: ownerId))?.Trim();
             return string.IsNullOrWhiteSpace(summary) ? null : Truncate(summary, 200);
         }
         catch (Exception ex) { _log.LogDebug(ex, "суть уведомления для сессии {Session}", sessionId); return null; }

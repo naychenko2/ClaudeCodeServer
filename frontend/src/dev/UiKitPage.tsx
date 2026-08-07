@@ -21,7 +21,7 @@ import {
   Star, Database,
   ClipboardList, FolderTree, GitCompare, ListTodo,
   Bot, Users, SquareTerminal, MonitorPlay, User,
-  ChevronDown, ChevronRight, Folder, File,
+  ChevronRight, Folder,
   Funnel, Check, BookOpen,
   Calendar, Share2, MessageCircle,
 } from 'lucide-react';
@@ -1527,7 +1527,7 @@ const PANELS_DEMO: { key: string; title: string; Icon: LucideIcon; accent?: bool
   { key: 'tasks',    title: 'Задачи',    Icon: ListTodo },
   { key: 'team',     title: 'Команда',   Icon: Users },
   { key: 'terminal', title: 'Терминал',  Icon: SquareTerminal, accent: true },
-  { key: 'preview',  title: 'Preview',   Icon: MonitorPlay, accent: true },
+  { key: 'preview',  title: 'Сервисы',   Icon: MonitorPlay, accent: true },
 ];
 
 // Четыре фоновых тона дизайн-системы (Rider Islands): холст → остров →
@@ -1699,7 +1699,7 @@ function HeaderSlotDemoContent() {
 // Все 9 панелей (План/Агенты/Персона + Файлы/Изменения/Задачи/Команда/
 // Терминал/Preview) в виде мини-PanelShell — одна сетка, чтобы видеть,
 // что рецепт общий: Island + IslandHeader (icon+title) + контент на C.bgWhite.
-// accent=true у Терминал/Preview — они доступны только при toolsEnabled.
+// accent=true у Терминал/Preview — их кнопки по умолчанию лежат в ящике рельсы.
 function PanelsSection() {
   return (
     <Island>
@@ -1846,8 +1846,8 @@ function PanelsSection() {
                   <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '70%' }} />
                   <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '90%' }} />
                   <div style={{ height: 8, borderRadius: R.sm, background: C.borderLight, width: '45%' }} />
-                  {/* accent=true — Терминал/Preview: требуют toolsEnabled.
-                      Подпись-признак вместо живого состояния. */}
+                  {/* accent=true — Терминал/Preview: их кнопки по умолчанию в ящике
+                      рельсы. Подпись-признак вместо живого состояния. */}
                   {accent && (
                     <div style={{
                       marginTop: SP.xs,
@@ -1859,7 +1859,7 @@ function PanelsSection() {
                       borderRadius: R.sm,
                       alignSelf: 'flex-start',
                     }}>
-                      toolsEnabled
+                      по умолчанию в «…»
                     </div>
                   )}
                 </div>
@@ -1939,7 +1939,6 @@ function PanelsSection() {
                     workflowRunning={false}
                     onSelect={() => {}}
                     onHover={() => {}}
-                    onEdit={() => {}}
                     onDelete={() => {}}
                   />
                 ))}
@@ -1986,7 +1985,6 @@ function PanelsSection() {
                     workflowRunning={false}
                     onSelect={() => {}}
                     onHover={() => {}}
-                    onEdit={() => {}}
                     onDelete={() => {}}
                   />
                 ))}
@@ -2138,44 +2136,47 @@ function PanelsSection() {
               </div>
             </MiniSidebarCard>
 
-            {/* 5. Файлы — FileExplorer. Дерево с раскрытием (ChevronDown для
-                раскрытой папки, ChevronRight для свёрнутой). Активный файл —
-                на C.accentLight. */}
+            {/* 5. Файлы — FileExplorer. Строка 22px (как в «Документации»), отступ
+                12 на уровень, стрелка-Chevron поворотом, у файла — плитка расширения
+                16×16 вместо иконки. Активный файл — на C.accentMuted. */}
             <MiniSidebarCard title="Файлы" where="Workspace">
-              <div style={{ padding: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-                {/* Уровень 0: папка раскрыта */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
-                  <ChevronDown size={13} strokeWidth={2.2} color={C.textMuted} style={{ flexShrink: 0 }} />
-                  <Folder size={14} strokeWidth={2} color={C.textSecondary} style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: FS.sm, color: C.textHeading, fontWeight: 500 }}>src</span>
-                </div>
-                {/* Уровень 1: файл */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, paddingLeft: SP.xl + SP.xs }}>
-                  <File size={13} strokeWidth={2} color={C.textMuted} style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: FS.sm, color: C.textSecondary }}>main.ts</span>
-                </div>
-                {/* Уровень 1: свёрнутая папка */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, paddingLeft: SP.xl + SP.xs }}>
-                  <ChevronRight size={13} strokeWidth={2.2} color={C.textMuted} style={{ flexShrink: 0 }} />
-                  <Folder size={14} strokeWidth={2} color={C.textSecondary} style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: FS.sm, color: C.textHeading, fontWeight: 500 }}>components</span>
-                </div>
-                {/* Уровень 1: активный файл */}
-                <div style={{
-                  display: 'flex', alignItems: 'center', gap: SP.xs,
-                  marginLeft: SP.xl + SP.xs,
-                  padding: `${SP.xxs}px ${SP.xs}px`,
-                  background: C.accentLight, borderRadius: R.sm,
-                }}>
-                  <File size={13} strokeWidth={2} color={C.accent} style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: FS.sm, color: C.accent, fontWeight: 600 }}>App.tsx</span>
-                </div>
-                {/* Уровень 0: свёрнутая папка */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginTop: SP.xs }}>
-                  <ChevronRight size={13} strokeWidth={2.2} color={C.textMuted} style={{ flexShrink: 0 }} />
-                  <Folder size={14} strokeWidth={2} color={C.textSecondary} style={{ flexShrink: 0 }} />
-                  <span style={{ fontSize: FS.sm, color: C.textHeading, fontWeight: 500 }}>docs</span>
-                </div>
+              <div style={{ padding: `${SP.xs}px ${SP.xs}px`, display: 'flex', flexDirection: 'column' }}>
+                {[
+                  { depth: 0, kind: 'dir' as const, name: 'src', open: true },
+                  { depth: 1, kind: 'ts' as const, name: 'main.ts' },
+                  { depth: 1, kind: 'dir' as const, name: 'components', open: false },
+                  { depth: 1, kind: 'tsx' as const, name: 'App.tsx', active: true },
+                  { depth: 0, kind: 'dir' as const, name: 'docs', open: false },
+                ].map(row => (
+                  <div key={row.name} style={{
+                    display: 'flex', alignItems: 'center', gap: 5, minHeight: 22,
+                    padding: `1px ${SP.xs}px`, paddingLeft: SP.sm + row.depth * 12,
+                    borderRadius: R.md,
+                    background: row.active ? C.accentMuted : 'transparent',
+                    boxShadow: row.active ? `inset 2px 0 0 ${C.accent}` : 'none',
+                  }}>
+                    <span style={{ width: 12, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted }}>
+                      {row.kind === 'dir' && (
+                        <ChevronRight size={11} strokeWidth={2} style={{ transform: row.open ? 'rotate(90deg)' : 'none' }} />
+                      )}
+                    </span>
+                    {row.kind === 'dir' ? (
+                      <Folder size={14} strokeWidth={2} color={C.accent} style={{ flexShrink: 0 }} />
+                    ) : (
+                      <span style={{
+                        width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+                        background: C.bgInset, color: C.textSecondary,
+                        fontFamily: FONT.mono, fontSize: 7.5, fontWeight: 700,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      }}>{row.kind}</span>
+                    )}
+                    <span style={{
+                      fontFamily: FONT.mono, fontSize: FS.sm,
+                      fontWeight: row.kind === 'dir' ? 700 : 500,
+                      color: C.textHeading,
+                    }}>{row.name}</span>
+                  </div>
+                ))}
               </div>
             </MiniSidebarCard>
 
@@ -2298,7 +2299,6 @@ function PanelsSection() {
                       workflowRunning={false}
                       onSelect={() => {}}
                       onHover={() => {}}
-                      onEdit={() => {}}
                       onDelete={() => {}}
                     />
                   ))}
@@ -2337,7 +2337,6 @@ function PanelsSection() {
                       workflowRunning={false}
                       onSelect={() => {}}
                       onHover={() => {}}
-                      onEdit={() => {}}
                       onDelete={() => {}}
                     />
                   ))}
@@ -2450,8 +2449,8 @@ function PanelsSection() {
           Сессийная группа (План/Агенты/Персона) — данные тянет из артефактов
           сессии и store персон; в витрине он пуст, поэтому плашки не видны.
           Проектные (Файлы/Изменения/Задачи/Команда/Терминал/Preview) берут
-          данные из своих сервисов. Терминал/Preview показываются только при
-          toolsEnabled проекта.
+          данные из своих сервисов. Кнопки Терминал/Preview по умолчанию лежат
+          в ящике рельсы («…») — как редко используемые.
         </p>
       </div>
     </Island>

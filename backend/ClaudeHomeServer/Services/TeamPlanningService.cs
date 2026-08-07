@@ -20,6 +20,44 @@ public class TeamPlanningService(
     // Кандидатов в промпт — не больше: команда крупнее размывает выбор и раздувает промпт
     public const int MaxCandidates = 20;
 
+    // Причина отказа планировщика. None — план собран. TimedOut / Truncated /
+    // InvalidJson — отказы с разным текстом для человека и разной диагностикой в логе
+    // (прод 2026-08-05: таймаут и обрыв по лимиту вывода давали одну пустоту, разбор
+    // каждого сбоя превращался в раскопки). Failed — всё прочее (модель не настроена,
+    // вызов упал, JSON без под-задач и т.п.).
+    public enum Failure { None, TimedOut, Truncated, InvalidJson, Failed }
+
+    // Текст для карточки отказа. Ключи — Failure (None не отдаётся, план есть).
+    // Разные причины — разные советы: таймаут «это не ваша вина, повторите», обрыв
+    // «упростите задачу, уменьшите число кандидатов» (это пройдёт через бóльший
+    // CloudNumPredict после фикса), невалидный JSON «повторите планирование», сбой —
+    // как сейчас «уточните задачу». Решение о длинных планах — за человеком, не за
+    // планировщиком: если вводная большая и явно не лезет — он сократит или раздробит.
+    public const string PlannerTimeoutReason = "Планировщик не уложился во время";
+    public const string PlannerTruncatedReason = "Планировщик не уместил план в лимит вывода";
+    public const string PlannerInvalidJsonReason = "Планировщик вернул неразборчивый план";
+
+    // Маршрут модели планировщика (для карточки и лога). Делаем отдельной записью,
+    // а не вкладываем в (Plan, Failure) — тестам и логике карточки так удобнее.
+    public sealed record RouteInfo(string? Model, bool Local);
+
+    // Итог планирования. Plan = null — отказ; Failure и Route уточняют причину и
+    // помогают карточке и логу. Diagnostics — длина промпта/ответа и финальный маршрут
+    // (только в лог, в карточку не идёт: человек увидит причину, а не «длина 3.2k»).
+    public sealed record Result(
+        TeamImplementPlan? Plan,
+        Failure Failure,
+        RouteInfo? Route,
+        int PromptChars,
+        int ResponseChars,
+        TimeSpan Elapsed);
+
+    // Сводный маршрут для лога и события: kind (claude/tier/model/local) + модель/тир.
+    public string DescribeRoute(string? actionKey, string? plannerModel) =>
+        actionKey is null
+            ? "no-runner"
+            : (cheap?.DescribeRoute(actionKey, plannerModel) ?? "no-runner");
+
     // Координатор режима — СОБЕСЕДНИК ЧАТА. Чат без персоны координатора не имеет:
     // режим требует выбрать его явно (фронт показывает пикер при включении).
     // Явно сохранённый в состоянии режима id приоритетнее — им фронт и пользуется.
@@ -99,27 +137,18 @@ public class TeamPlanningService(
         return hints;
     }
 
-    private static string SpecialtyLabel(PersonaSpecialty s) => s switch
-    {
-        PersonaSpecialty.Analyst => "Аналитик",
-        PersonaSpecialty.Planner => "Планировщик",
-        PersonaSpecialty.Reviewer => "Ревьюер",
-        PersonaSpecialty.Executor => "Исполнитель",
-        PersonaSpecialty.Secretary => "Секретарь",
-        PersonaSpecialty.Coordinator => "Координатор",
-        PersonaSpecialty.Mentor => "Наставник",
-        PersonaSpecialty.Designer => "Дизайнер",
-        PersonaSpecialty.Consultant => "Консультант",
-        PersonaSpecialty.Librarian => "Библиотекарь",
-        PersonaSpecialty.Tester => "Тестировщик",
-        _ => "",
-    };
+    // Подписи — из единого источника (SpecialtyCatalog): исполнительские специальности
+    // с профильными вариантами и актуальными подписями
+    private static string SpecialtyLabel(PersonaSpecialty s) =>
+        s == PersonaSpecialty.None ? "" : SpecialtyCatalog.Label(s);
 
     // Промпт планировщика. Главное требование Э2: у КАЖДОЙ под-задачи есть исполнитель
     // из списка кандидатов и одна строка обоснования — бэкендовая часть уходит бэкендеру,
     // фронтовая фронтендеру. Отсюда и жёсткий контракт ответа: только JSON.
+    // feedback — правка человека к текущему плану («Изменить план»): план пересобирается
+    // именно под неё; без previous она смысла не имеет и игнорируется.
     public static string BuildPlannerPrompt(string request, IReadOnlyList<TeamCandidateCard> cards,
-        string? projectHint = null, TeamImplementPlan? previous = null)
+        string? projectHint = null, TeamImplementPlan? previous = null, string? feedback = null)
     {
         var sb = new StringBuilder();
         sb.AppendLine("Ты планировщик командной реализации. Разбей задачу на под-задачи и раздай их " +
@@ -143,6 +172,15 @@ public class TeamPlanningService(
                               (s.TaskId is not null ? ", уже роздана исполнителю" : "") + ")");
             sb.AppendLine();
         }
+        // Правка человека («Изменить план»): причина пересборки. Стоит отдельным блоком,
+        // а не вливается в ЗАДАЧУ — планировщик обязан применить её дословно, как значения
+        // из вводной, и отразить в changes.
+        if (previous is not null && !string.IsNullOrWhiteSpace(feedback))
+        {
+            sb.AppendLine("ПРАВКА ЧЕЛОВЕКА К ПЛАНУ — применить в точности, это и есть причина пересборки:");
+            sb.AppendLine(feedback.Trim());
+            sb.AppendLine();
+        }
         sb.AppendLine("ИСПОЛНИТЕЛИ (выбирать ТОЛЬКО из них, по personaId):");
         foreach (var c in cards)
         {
@@ -164,19 +202,34 @@ public class TeamPlanningService(
         sb.AppendLine("5. files — файлы/папки во владении под-задачи; doneCriteria — как проверить, что готово.");
         sb.AppendLine("6. assumptions — что ты додумал за человека: неочевидные решения, принятые без его ответа. " +
                       "Он утверждает их вместе с планом, поэтому пиши по делу и без воды. Нечего додумывать — пустой список.");
+        sb.AppendLine("6a. НИКАКИХ плейсхолдеров и шаблонных скобок вроде «<файл-1 в корне проекта>», " +
+                      "«<заданная строка>», «[имя файла]» — ни в title/goal/doneCriteria, ни в files. Если " +
+                      "человек в ЗАДАЧЕ выше назвал конкретный файл, строку, значение или путь — перенеси " +
+                      "его дословно. Если конкретики в задаче нет и её должен назвать человек — не " +
+                      "выдумывай и не оставляй метку-заглушку: сформулируй разумное допущение и добавь его " +
+                      "в assumptions, а под-задаче дай goal/doneCriteria без пропусков, которые исполнитель " +
+                      "сможет выполнить и без этого значения.");
+        sb.AppendLine("6b. Дословный перенос — это не только про пустографки: заменить названное человеком " +
+                      "«hello5.txt» на своё «smoke5.txt» или сократить точную строку содержимого — такая же " +
+                      "ошибка, как оставить плейсхолдер (прод 2026-08-03). Придумывать свои имена, пути и " +
+                      "тексты можно ТОЛЬКО там, где человек не задал конкретики вовсе — и это тоже допущение.");
+        sb.AppendLine("7. intent — замысел на 3–5 строк: к чему идём, какие ключевые решения приняты и что " +
+                      "осознанно не делаем. Это то, что человек читает ПЕРВЫМ, ещё до состава под-задач, — " +
+                      "по нему он и проверяет, что команда поняла задачу верно. Без технических деталей — " +
+                      "им место в под-задачах.");
         if (previous is not null)
-            sb.AppendLine("7. changes — чем этот план отличается от предыдущего: по строке на изменение " +
+            sb.AppendLine("8. changes — чем этот план отличается от предыдущего: по строке на изменение " +
                           "(добавлено, убрано, переехало в другую волну, сменился исполнитель).");
         sb.AppendLine();
         sb.AppendLine("Ответь ТОЛЬКО JSON-объектом без пояснений и без markdown-обёртки:");
         sb.AppendLine(previous is null
             ? """
-            {"summary":"одна строка что делаем","assumptions":[""],
+            {"summary":"одна строка что делаем","intent":"замысел на 3-5 строк","assumptions":[""],
              "subtasks":[{"title":"","goal":"","executorPersonaId":"","executorRationale":"",
                           "files":[""],"wave":1,"doneCriteria":""}]}
             """
             : """
-            {"summary":"одна строка что делаем","assumptions":[""],"changes":[""],
+            {"summary":"одна строка что делаем","intent":"замысел на 3-5 строк","assumptions":[""],"changes":[""],
              "subtasks":[{"title":"","goal":"","executorPersonaId":"","executorRationale":"",
                           "files":[""],"wave":1,"doneCriteria":""}]}
             """);
@@ -185,50 +238,99 @@ public class TeamPlanningService(
     }
 
     // Построить план: промпт планировщику → JSON → валидация исполнителей.
-    // null — нет кандидатов, не настроен раннер или модель не вернула валидный план;
-    // вызывающая сторона (SessionManager) объясняет это человеку карточкой/сообщением.
-    public async Task<TeamImplementPlan?> CreatePlanAsync(Session session, string ownerId,
+    // Plan = null — нет кандидатов, не настроен раннер или модель не вернула валидный план;
+    // Failure уточняет причину отказа — вызывающая сторона (SessionManager) объясняет её
+    // человеку карточкой/сообщением. Route + диагностика уходят в лог и событие планировщика.
+    public async Task<Result> CreatePlanAsync(Session session, string ownerId,
         string request, string? projectHint = null, CancellationToken ct = default,
         // Перепланирование после интервью (Э8): предыдущая версия плана, поверх которой
         // строится vN — из неё берётся блок «Что изменилось».
-        TeamImplementPlan? previous = null)
+        TeamImplementPlan? previous = null,
+        // Правка человека к плану («Изменить план»): план пересобирается под неё.
+        string? feedback = null)
     {
-        if (cheap is null) return null;
-        if (string.IsNullOrWhiteSpace(request)) return null;
+        var promptChars = 0;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var route = new RouteInfo(Model: null, Local: false);
+
+        if (cheap is null) return EmptyResult(Failed());
+        if (string.IsNullOrWhiteSpace(request)) return EmptyResult(Failed());
 
         var candidates = ResolveCandidates(session, ownerId);
-        if (candidates.Count == 0) return null;
+        if (candidates.Count == 0) return EmptyResult(Failed());
 
         var planner = ResolvePlanner(session, ownerId, candidates);
         var cards = candidates.Select(BuildCard).ToList();
-        var prompt = BuildPlannerPrompt(request, cards, projectHint, previous);
+        var prompt = BuildPlannerPrompt(request, cards, projectHint, previous, feedback);
+        promptChars = prompt.Length;
+
+        var actionKey = LocalActionCatalog.TeamImplementPlan;
+        var fallback = planner?.Model;
 
         string raw;
         try
         {
-            // Модель планировщика: его собственная, иначе — по назначению места каталога
-            raw = await cheap.RunAsync(LocalActionCatalog.TeamImplementPlan, prompt,
-                fallbackModel: planner?.Model, ownerId: ownerId, ct: ct);
+            raw = await cheap.RunAsync(actionKey, prompt,
+                fallbackModel: fallback, ownerId: ownerId, ct: ct);
+        }
+        catch (LlmTimeoutException ex)
+        {
+            // Диагностика: таймаут — главный враг планировщика в проде, и без длин
+            // промпта/ответа каждый разбор превращался в раскопки. Маршрут и модель —
+            // из роутера, чтобы видеть, какой шаг цепочки не уложился.
+            log?.LogWarning(ex,
+                "Планировщик командной реализации не уложился во время: сессия {SessionId}, маршрут {Route}, " +
+                "модель {Model}, длина промпта {PromptChars} символов, заняло {Elapsed} мс",
+                session.Id, DescribeRoute(actionKey, fallback), fallback ?? "-",
+                promptChars, sw.ElapsedMilliseconds);
+            return new Result(null, Failure.TimedOut, route, promptChars, 0, sw.Elapsed);
         }
         catch (Exception ex)
         {
-            log?.LogWarning(ex, "Планировщик командной реализации не ответил (сессия {SessionId})", session.Id);
-            return null;
+            log?.LogWarning(ex,
+                "Планировщик командной реализации не ответил: сессия {SessionId}, маршрут {Route}, " +
+                "модель {Model}, длина промпта {PromptChars} символов, заняло {Elapsed} мс",
+                session.Id, DescribeRoute(actionKey, fallback), fallback ?? "-",
+                promptChars, sw.ElapsedMilliseconds);
+            return new Result(null, Failure.Failed, route, promptChars, 0, sw.Elapsed);
         }
 
-        var plan = ParsePlan(raw, request, candidates);
-        if (plan is null) return null;
+        var plan = ParsePlan(raw, request, candidates, out var looksTruncated);
+        if (plan is null)
+        {
+            // Два неудачных исхода, оба без плана: (1) JSON не распарсился и при этом
+            // похож на обрезку (открыли скобку и не закрыли) — это провайдер выдал
+            // первые N токенов и заткнулся; (2) JSON распарсился, но под-задач в нём нет.
+            // Первый — единственный с собственным текстом для человека, потому что совет
+            // другой: «план не уместился, попробуйте короче». Второй — общий сбой парсера.
+            var reason = looksTruncated ? Failure.Truncated : Failure.InvalidJson;
+            log?.LogWarning(
+                "Планировщик вернул неразборчивый план: сессия {SessionId}, маршрут {Route}, модель {Model}, " +
+                "длина промпта {PromptChars} символов, ответа {ResponseChars} символов, " +
+                "похоже на обрезку {LooksTruncated}, заняло {Elapsed} мс",
+                session.Id, DescribeRoute(actionKey, fallback), fallback ?? "-",
+                promptChars, raw.Length, looksTruncated, sw.ElapsedMilliseconds);
+            return new Result(null, reason, route, promptChars, raw.Length, sw.Elapsed);
+        }
+
         plan.PlannerPersonaId = planner?.Id;
-        return plan;
+        return new Result(plan, Failure.None, route, promptChars, raw.Length, sw.Elapsed);
+
+        static Failure Failed() => Failure.Failed;
+        static Result EmptyResult(Failure f) => new(null, f, null, 0, 0, TimeSpan.Zero);
     }
 
     // Разбор ответа планировщика. Под-задачи без валидного исполнителя не выбрасываем:
     // исполнитель проставляется первым кандидатом с пометкой, что выбор не обоснован —
     // человек увидит это в карточке и поправит до запуска (это и есть страховка Э2).
+    // looksTruncated — out-параметр: raw похож на обрез по лимиту вывода (есть открытая
+    // скобка, но баланс не сошёлся). Используется для отдельного Failure.Truncated
+    // (прод 2026-08-05: 1024 токенов обрывали план и сливались с таймаутом).
     internal static TeamImplementPlan? ParsePlan(string raw, string request,
-        IReadOnlyList<Persona> candidates)
+        IReadOnlyList<Persona> candidates, out bool looksTruncated)
     {
-        var json = ExtractJsonObject(raw);
+        looksTruncated = false;
+        var json = ExtractJsonObject(raw, ref looksTruncated);
         if (json is null) return null;
 
         JsonElement root;
@@ -257,6 +359,7 @@ public class TeamPlanningService(
                 // с ответами человека может не быть и допущений.
                 Assumptions = ReadStringArray(root, "assumptions"),
                 Changes = ReadStringArray(root, "changes"),
+                Intent = ReadString(root, "intent")?.Trim() ?? "",
             };
 
             foreach (var e in arr.EnumerateArray())
@@ -330,7 +433,12 @@ public class TeamPlanningService(
 
     // Первый сбалансированный JSON-объект из ответа (модель любит обрамлять его текстом
     // или ```-заборами) — как в DocumentAiService/SkillTranslationService.
-    private static string? ExtractJsonObject(string raw)
+    // looksTruncated — внешний out: если объект НЕ найден, но в raw есть открытая
+    // сбалансированная часть (depth > 0 в конце) — похоже на обрез по лимиту вывода.
+    // Это не строгий признак: модель могла просто не закрыть комментарий или оборвать
+    // текст за JSON; но в сочетании с большим raw и нулевым результатом парсинга —
+    // самый честный сигнал, который у нас есть без чтения finish_reason.
+    private static string? ExtractJsonObject(string raw, ref bool looksTruncated)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var start = raw.IndexOf('{');
@@ -344,6 +452,9 @@ public class TeamPlanningService(
             else if (c == '{') depth++;
             else if (c == '}' && --depth == 0) return raw[start..(i + 1)];
         }
+        // До сюда дошли — JSON-объект не закрыт. depth == 0 тут невозможно (иначе бы
+        // вернулись выше): значит, depth >= 1, что и есть «открыли и не закрыли».
+        looksTruncated = true;
         return null;
     }
 }

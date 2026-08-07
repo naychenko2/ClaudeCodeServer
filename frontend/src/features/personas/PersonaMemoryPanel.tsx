@@ -62,6 +62,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
 
   // Первичная загрузка при смене персоны
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка памяти персоны
     setLoading(true);
     void load();
   }, [load]);
@@ -69,7 +70,7 @@ export function PersonaMemoryPanel({ persona, onBack, isMobile, embedded }: {
   // Realtime: память текущей персоны изменилась (персона запомнил/забыл) — перечитать.
   // joinUser уже сделан стором personas; здесь только слушаем сообщения.
   const loadRef = useRef(load);
-  loadRef.current = load;
+  useEffect(() => { loadRef.current = load; }, [load]);
   useEffect(() => {
     const off = onMessage((msg: ServerMessage) => {
       if (msg.type === 'personas_changed' && msg.action === 'memory' && msg.personaId === persona.id) {

@@ -32,8 +32,8 @@ export function ChangePasswordDialog({ onClose }: Props) {
       const { token } = await api.auth.changePassword(current, next);
       setStoredToken(token);
       onClose();
-    } catch (e: any) {
-      setError(e.message ?? 'Ошибка смены пароля');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Ошибка смены пароля');
     } finally {
       setLoading(false);
     }

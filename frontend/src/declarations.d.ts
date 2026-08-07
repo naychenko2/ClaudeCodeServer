@@ -16,7 +16,20 @@ declare module 'react-syntax-highlighter/dist/esm/styles/prism' {
   export { oneLight };
 }
 
+// export {} делает файл модулем — без этого declare module 'react' заместил бы
+// типы React целиком вместо расширения (augmentation работает только из модуля)
+export {};
+
 declare module 'react-syntax-highlighter/dist/esm/languages/prism/*' {
   const language: unknown;
   export default language;
+}
+
+declare module 'react' {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- общий тип React, T здесь не используется
+  interface IframeHTMLAttributes<T> {
+    // ADR-006 §3: вторая линия защиты (Chrome) — iframe без кук, даже если в sandbox
+    // ошибочно появится allow-same-origin; неподдерживающими браузерами игнорируется
+    credentialless?: boolean;
+  }
 }

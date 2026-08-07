@@ -460,12 +460,28 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            var sha = await git.CommitAsync(Owner(p), RootFor(p), body.Message, body.Amend, ct);
+            var message = AppendDossierTrailer(body.Message);
+            var sha = await git.CommitAsync(Owner(p), RootFor(p), message, body.Amend, ct);
             await NotifyChanged(projectId);
             return Ok(new { sha });
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // ADR-004 §1, «второй канал»: MCP git_commit (workspace-server) коммитит от имени модели,
+    // которая сама сообщение не формулирует — трейлер CCS-Session/CCS-Task дописывает сервер,
+    // зная вызывающую сессию (X-Caller-Session-Id, тот же заголовок, что и у DenyOnDelegatedTurn).
+    // Без заголовка/неизвестная сессия — сообщение не трогаем (это UI-коммит человека/агента,
+    // где трейлер уже пришёл из системного промпта хода, если он был).
+    private string AppendDossierTrailer(string message)
+    {
+        var callerSessionId = Request.Headers[Filters.DenyOnDelegatedTurnAttribute.CallerHeader].ToString();
+        if (string.IsNullOrEmpty(callerSessionId)) return message;
+        var session = sessions.GetById(callerSessionId);
+        if (session is null) return message;
+        var trailer = $"CCS-Session: {session.Id}" + (session.TaskId is null ? "" : $"\nCCS-Task: {session.TaskId}");
+        return message.TrimEnd() + "\n\n" + trailer;
     }
 
     [HttpPost("fetch")]

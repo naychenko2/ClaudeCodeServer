@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/sessions/{sessionId}")]
-public class SessionMessagesController(SessionManager sessions, ProjectManager projects) : ControllerBase
+public class SessionMessagesController(SessionManager sessions, ProjectManager projects,
+    PromptSnapshotStore promptSnapshots, PromptAuditService promptAudit) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -24,6 +25,88 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
     // Сессия текущего пользователя: у проектной — владелец проекта, у чата — сама сессия.
     // Чужая/несуществующая — как отсутствующая (404). Владелец резолвится в SessionManager.
     private Models.Session? OwnedSession(string sessionId) => sessions.GetOwned(sessionId, UserId);
+
+    // GET /api/sessions/{sid}/prompt/{snapshotId} — что ушло модели на этом ходу
+    // (секции системного промпта, текст хода, аргументы запуска, доступная часть слоя CLI).
+    // Тексты файлов слоя CLI по умолчанию НЕ отдаются — один CLAUDE.md с раскрытыми
+    // импортами весит десятки КБ, а разворачивают его редко: вместо текста идёт size,
+    // а сам текст берётся ниже по требованию. withFiles=true — отдать всё разом.
+    // 404 — снимка нет: штатный случай, его вытеснил ретеншн последних 50 ходов чата.
+    [HttpGet("prompt/{snapshotId}")]
+    public IActionResult GetPromptSnapshot(string sessionId, string snapshotId,
+        [FromQuery] bool withFiles = false)
+    {
+        var session = OwnedSession(sessionId);
+        if (session is null) return NotFound();
+
+        // Путь строим от id РЕЗОЛВНУТОЙ сессии, а не от строки из URL: та становится
+        // сегментом пути к файлу (стор её тоже валидирует, но полагаться на это не станем)
+        var snapshot = promptSnapshots.Load(session.Id, snapshotId);
+        if (snapshot is null) return NotFound();
+
+        if (!withFiles && snapshot.CliLayer?.Files is { Count: > 0 } files)
+            snapshot = snapshot with
+            {
+                CliLayer = snapshot.CliLayer with
+                {
+                    Files = [.. files.Select(f => f with { Text = "", Size = f.Text.Length })],
+                },
+            };
+
+        return Ok(snapshot);
+    }
+
+    // GET /api/sessions/{sid}/prompt/{snapshotId}/file?key= — текст одного файла слоя CLI.
+    // Ленивый догруз для строк, которые человек раскрыл: ключ — путь файла из снимка.
+    [HttpGet("prompt/{snapshotId}/file")]
+    public IActionResult GetPromptSnapshotFile(string sessionId, string snapshotId,
+        [FromQuery] string? key)
+    {
+        var session = OwnedSession(sessionId);
+        if (session is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(key)) return BadRequest(new { error = "Не указан файл" });
+
+        // Ключ сверяется со списком ИЗ СНИМКА, а не читается с диска: наружу отдаётся
+        // только то, что мы сами туда положили при сборке хода
+        var file = promptSnapshots.Load(session.Id, snapshotId)?.CliLayer?.Files
+            ?.FirstOrDefault(f => f.Key == key);
+
+        return file is null ? NotFound() : Ok(file);
+    }
+
+    // POST /api/sessions/{sid}/prompt/{snapshotId}/analyze — разбор промпта хода моделью
+    // («что лишнее и как сократить»). По умолчанию наружу уходят только метаданные секций;
+    // includeText=true — человек осознанно разрешил приложить фрагменты их текста.
+    [HttpPost("prompt/{snapshotId}/analyze")]
+    public async Task<IActionResult> AnalyzePromptSnapshot(string sessionId, string snapshotId,
+        [FromBody] AnalyzePromptRequest? req, CancellationToken ct)
+    {
+        var session = OwnedSession(sessionId);
+        if (session is null) return NotFound();
+
+        var snapshot = promptSnapshots.Load(session.Id, snapshotId);
+        if (snapshot is null) return NotFound();
+
+        string? result;
+        try
+        {
+            result = await promptAudit.AnalyzeAsync(
+                session.Id, snapshot, req?.IncludeText ?? false, UserId, ct);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Исполнитель места prompt-audit не настроен либо вход в claude протух —
+            // отдаём причину текстом: по «не удалось разобрать» человек ничего не починит
+            return BadRequest(new { error = $"Разбор не удался: {ex.Message}" });
+        }
+
+        // null — по этой сессии разбор уже идёт: второй вызов был бы вторым платным
+        if (result is null) return Conflict(new { error = "Разбор этого чата уже идёт" });
+
+        return string.IsNullOrWhiteSpace(result)
+            ? BadRequest(new { error = "Модель для разбора вернула пустой ответ — проверьте, кто назначен на место «Разбор промпта хода» в «Поставщиках моделей»" })
+            : Ok(new { analysis = result });
+    }
 
     // GET /api/sessions/{sid}/history?limit= — последние N сообщений (компактно, тексты усечены)
     [HttpGet("history")]
@@ -97,6 +180,7 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         // ход — значит расходует ту же квоту пробуждения, что и доклад-блокер. Без этого
         // бюджет обходился бы соседним инструментом: chats_send вместо chats_report_up.
         // Ход человека и фронта сюда не попадает — только вызовы MCP (есть CallerHeader).
+        var wakeSpent = false;
         if (Request.Headers.ContainsKey(DenyOnDelegatedTurnAttribute.CallerHeader))
         {
             var wake = sessions.TryConsumeTeamWakeup(sessionId);
@@ -106,6 +190,7 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
                     error = $"Сообщение в чат-штаб недоступно: {wake.Reason}. Доложи результат "
                         + "в своей задаче — координатор увидит его, когда человек разрешит продолжить.",
                 });
+            wakeSpent = wake.TeamMode;
         }
 
         var waitTurn = !string.Equals(req.Wait, "none", StringComparison.OrdinalIgnoreCase);
@@ -119,6 +204,14 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
             result = await sessions.SendMessageAndWaitAsync(sessionId, text, timeout, agentDepth, senderPersonaId, senderOrigin, senderChatName);
         }
         catch (InvalidOperationException) { return NotFound(); }
+
+        // Квота списана авансом, а сообщение не дошло (дубль, переполнение очереди, занято
+        // ожиданием человека) — возвращаем единицу, как ReportBlockerAsync на TooDeep:
+        // иначе наивные ретраи агента выжигали бы MaxWakeups без единого реального хода.
+        // Принятое в очередь (не дубль) не рефандим — доставка по концу хода ход поднимет.
+        if (wakeSpent && result is SendAndWaitResult.Queued { Duplicate: true }
+            or SendAndWaitResult.QueueFull or SendAndWaitResult.Busy)
+            sessions.RefundTeamWakeup(sessionId);
 
         return result switch
         {
@@ -260,6 +353,10 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
 // Wait: "turn" (дефолт) — ждать завершения хода, "none" — вернуть 202 сразу.
 // TimeoutSec клампится в 5..240 секунд.
 public record SendSessionMessageRequest(string? Text, string? Wait = "turn", int? TimeoutSec = 90);
+
+// Разбор промпта хода. IncludeText=true — человек разрешил приложить фрагменты текста
+// секций (там recall личных заметок и память персоны); по умолчанию уходят метаданные.
+public record AnalyzePromptRequest(bool IncludeText = false);
 
 // Отчёт в родительский чат: текст ложится карточкой, ход родителя не запускается.
 // Blocker=true — доклад о блокере: постановщику запускается ход, а в режиме «Командная

@@ -1,16 +1,18 @@
 import { useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check } from 'lucide-react';
+import { Users, Play, Zap, ChevronDown, RotateCcw, AlertTriangle, Check, ArrowRight } from 'lucide-react';
 import type { ChatItem, Persona, TeamPlan, TeamPlanSubtask } from '../../types';
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
-import { relPath } from '../../lib/paths';
+import { relPath, basename } from '../../lib/paths';
 import { useIsMobile } from '../../lib/breakpoints';
 import { ensurePersonasLoaded, getPersonaById, usePersonas, usePersonasVersion } from '../../lib/personas';
 import { agentDotColor } from '../AgentSelector';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { teamPlanRunLabel } from '../../lib/teamImplement';
 import { Button } from '../ui/Button';
 import { Dot } from '../ui/Dot';
 import { Menu } from '../ui/Menu';
-import { ChatProjectContext, TeamPlanContext } from './contexts';
+import { FileLink } from './MarkdownContent';
+import { ChatProjectContext, ChatOpenFileContext, TeamPlanContext } from './contexts';
 
 // Склонение числительного (ру): 1 под-задача, 2 под-задачи, 5 под-задач
 function plural(n: number, one: string, few: string, many: string): string {
@@ -43,13 +45,14 @@ function planSubtitle(plan: TeamPlan): string {
 }
 
 // Блок «Что изменилось» / «Допущения» (Э8): пунктирная рамка, метка заглавными,
-// строки с точкой-маркером. Скрывается целиком, когда список пуст
-function AnnotationBlock({ label, items }: { label: string; items: string[] }) {
+// строки с точкой-маркером. Скрывается целиком, когда список пуст.
+// note — мелкая сноска под списком (у «Допущений» — пометка о моменте записи)
+function AnnotationBlock({ label, items, note }: { label: string; items: string[]; note?: string }) {
   if (items.length === 0) return null;
   return (
     <div style={{ border: `1px dashed ${C.dashed}`, borderRadius: R.lg, padding: '8px 10px 6px', margin: '10px 0' }}>
       <div style={{
-        fontSize: 10, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+        fontSize: FS.xs, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
         color: C.textMuted, padding: '0 2px 4px',
       }}>
         {label}
@@ -57,12 +60,67 @@ function AnnotationBlock({ label, items }: { label: string; items: string[] }) {
       {items.map((text, i) => (
         <div key={i} style={{
           display: 'flex', alignItems: 'flex-start', gap: 8, padding: '3px 2px',
-          fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45,
+          fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45,
         }}>
           <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.textMuted, flexShrink: 0, marginTop: 7 }} />
           <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{text}</span>
         </div>
       ))}
+      {note && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, padding: `${SP.xs}px ${SP.xxs}px ${SP.xxs}px`, lineHeight: 1.4 }}>
+          {note}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Блок «Замысел» (решение 2026-08-02): 3–5 строк от планировщика над списком под-задач —
+// к чему идём, ключевые решения, что осознанно не делаем. Тон обычный (не warning) — это
+// суть плана, а не предупреждение. Ограничение высоты + fade — на случай, если планировщик
+// не удержался в объёме (та же защита, что у тела длинного плана).
+function IntentBlock({ text }: { text: string }) {
+  const trimmed = text.trim();
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el) return;
+    setOverflowing(el.scrollHeight - el.clientHeight > 8);
+  }, [trimmed]);
+  if (!trimmed) return null;
+  return (
+    <div style={{ position: 'relative', margin: '10px 0' }}>
+      <div style={{
+        fontSize: FS.xs, fontWeight: 700, letterSpacing: '0.08em', textTransform: 'uppercase',
+        color: C.textMuted, marginBottom: 4,
+      }}>
+        Замысел
+      </div>
+      <div ref={bodyRef} style={{
+        fontSize: FS.base, color: C.textSecondary, lineHeight: 1.5,
+        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
+      }}>
+        {trimmed}
+      </div>
+      {overflowing && (
+        <div style={{
+          position: 'absolute', left: 0, right: 0, bottom: 0, height: 28,
+          background: `linear-gradient(to bottom, transparent, ${C.bgCard})`,
+          pointerEvents: 'none',
+        }} />
+      )}
+    </div>
+  );
+}
+
+// Строка-ссылка на файл полного плана (решение 2026-08-02): имя — хвост пути, открывает
+// файл в правой панели предпросмотра тем же механизмом, что MarkdownContent/PersonaTaskView.
+// Рендерится и у свёрнутой (resolved) карточки — план остаётся ценным ориентиром после запуска волн.
+function PlanFileLinkRow({ path, onOpen }: { path: string; onOpen: (path: string) => void }) {
+  return (
+    <div style={{ fontSize: FS.sm, color: C.textSecondary, margin: '6px 0 2px' }}>
+      Полный план — <FileLink path={path} onOpen={onOpen} mono>{basename(path)}</FileLink>
     </div>
   );
 }
@@ -128,7 +186,7 @@ function ExecutorChip({ personaId, candidates, onPick, disabled }: {
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 5, height: 22, padding: '0 7px',
           borderRadius: R.max, border: `1px solid ${C.border}`, background: C.bgCard,
-          cursor: disabled ? 'default' : 'pointer', fontSize: 11, fontWeight: 600,
+          cursor: disabled ? 'default' : 'pointer', fontSize: FS.xs, fontWeight: 600,
           color: C.textHeading, fontFamily: FONT.sans, maxWidth: 150,
         }}
       >
@@ -139,7 +197,7 @@ function ExecutorChip({ personaId, candidates, onPick, disabled }: {
       {anchor && (
         <Menu onClose={() => setAnchor(null)} anchor={anchor} minWidth={252} maxHeight={280}>
           {candidates.length === 0 ? (
-            <div style={{ padding: '9px 10px', fontSize: 12.5, color: C.textMuted }}>
+            <div style={{ padding: '9px 10px', fontSize: FS.sm, color: C.textMuted }}>
               Некого выбрать — в команде проекта нет персон
             </div>
           ) : candidates.map(p => {
@@ -152,14 +210,14 @@ function ExecutorChip({ personaId, candidates, onPick, disabled }: {
                   display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left',
                   border: 'none', borderRadius: R.md, padding: '7px 9px', cursor: 'pointer',
                   background: current ? C.accentLight : 'none', fontFamily: FONT.sans,
-                  fontSize: 13, color: C.textHeading,
+                  fontSize: FS.base, color: C.textHeading,
                 }}
               >
                 <Dot color={agentDotColor(p.avatar?.color)} size={9} />
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name}</span>
                 {p.role && (
                   <span style={{
-                    marginLeft: 'auto', flexShrink: 0, fontSize: 11,
+                    marginLeft: 'auto', flexShrink: 0, fontSize: FS.xs,
                     color: current ? C.accent : C.textMuted,
                   }}>
                     {p.role}
@@ -195,7 +253,7 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
         <span
           title={subtask.title}
           style={{
-            fontSize: 13, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0, maxWidth: '100%',
+            fontSize: FS.base, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0, maxWidth: '100%',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}
         >
@@ -206,7 +264,7 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
       </div>
       {files && (
         <div title={files.title} style={{
-          fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, marginTop: 3,
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, marginTop: 3,
           overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
         }}>
           {files.text}
@@ -215,7 +273,7 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
       {subtask.executorRationale && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', gap: 5, marginTop: 3,
-          fontSize: 11, lineHeight: 1.4,
+          fontSize: FS.xs, lineHeight: 1.4,
           color: warn ? C.warningText : C.textMuted,
           fontWeight: warn ? 600 : 400,
         }}>
@@ -256,7 +314,7 @@ function PlanBody({ plan, candidates, onReassign, readOnly, isMobile, rootPath, 
           <div key={wave}>
             <div style={{
               display: 'flex', alignItems: 'center', gap: 6, padding: '8px 2px 4px',
-              fontSize: 10, fontWeight: 700, letterSpacing: '0.08em',
+              fontSize: FS.xs, fontWeight: 700, letterSpacing: '0.08em',
               textTransform: 'uppercase', color: C.textMuted,
             }}>
               Волна {wave} · {waveHint(wave)}
@@ -293,7 +351,7 @@ function CollapsedPlan({ plan, isMobile, rootPath }: {
         onClick={() => setOpen(o => !o)}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 5, background: 'none', border: 'none',
-          cursor: 'pointer', padding: 0, fontSize: 12, fontWeight: 600, color: C.textSecondary,
+          cursor: 'pointer', padding: 0, fontSize: FS.sm, fontWeight: 600, color: C.textSecondary,
           fontFamily: FONT.sans,
         }}
       >
@@ -320,6 +378,7 @@ export function TeamPlanView({ item, online }: {
 }) {
   const ctx = useContext(TeamPlanContext);
   const project = useContext(ChatProjectContext);
+  const onOpenFile = useContext(ChatOpenFileContext);
   const isMobile = useIsMobile();
   const personas = usePersonas();
   usePersonasVersion();
@@ -330,6 +389,11 @@ export function TeamPlanView({ item, online }: {
 
   const plan = item.plan;
   const rootPath = project?.rootPath;
+  // Ссылка на файл полного плана — общая для всех состояний карточки (в т.ч. свёрнутых,
+  // Э8): null у глобального чата без проекта или когда запись на сервере не удалась
+  const fileLinkRow = onOpenFile && plan.planFilePath
+    ? <PlanFileLinkRow path={plan.planFilePath} onOpen={onOpenFile} />
+    : null;
 
   // Автор карточки (Э8): планировщик ИЗ ПЛАНА, не из текущего состояния режима — авторство
   // истории не должно меняться при смене координатора/планировщика. null у штаба без персоны —
@@ -357,17 +421,17 @@ export function TeamPlanView({ item, online }: {
 
   // === Решённое состояние: план запущен ===
   if (item.resolved && item.approved) {
-    const waveNumber = ctx?.waveNumber && ctx.waveNumber > 0 ? ctx.waveNumber : 1;
-    const waveLine = plan.waveCount > 1
-      ? `План запущен — идёт волна ${Math.min(waveNumber, plan.waveCount)} из ${plan.waveCount}`
-      : 'План запущен';
+    // «Идёт волна» — только у текущего плана и только пока волна реально идёт:
+    // после завершения итерации (idle, waveNumber=0) и у старой версии плана —
+    // честное «План запущен» (см. teamPlanRunLabel)
+    const waveLine = teamPlanRunLabel(plan, ctx);
     return (
       <div style={{
         border: `1px solid ${C.successBg}`, borderLeft: `3px solid ${C.success}`,
         borderRadius: R.xl, padding: '11px 14px', background: C.successBg,
         display: 'flex', flexDirection: 'column', gap: 6,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: 13, fontWeight: 600, color: C.successText }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.base, fontWeight: 600, color: C.successText }}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none" style={{ flexShrink: 0 }}>
             <circle cx="8" cy="8" r="8" fill={C.success} />
             <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
@@ -377,11 +441,41 @@ export function TeamPlanView({ item, online }: {
         {/* Мини-подпись автора (Э8): сохраняется и в свёрнутой карточке — после смены
             координатора видно, чей это был план */}
         {author && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textMuted }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs, color: C.textMuted }}>
             <PersonaAvatar persona={author} size={16} />
             {author.name} · планировщик
           </div>
         )}
+        {/* «Замысел» остаётся видимым и после старта волны (решение 2026-08-02, раунд 2):
+            человек по ходу работы сверяется, правильно ли команда поняла задачу — раньше
+            блок пропадал вместе с телом плана на подтверждении */}
+        {plan.intent && <IntentBlock text={plan.intent} />}
+        {fileLinkRow}
+        <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
+      </div>
+    );
+  }
+
+  // === Решённое состояние: карточка заменена версией vN (правка человека или clarify) ===
+  // Не «отменена» — правка принята и живёт в новой версии, старая остаётся ориентиром
+  if (item.resolved && item.approved === false && item.supersededBy != null) {
+    return (
+      <div style={{
+        border: `1px solid ${C.border}`, borderLeft: `3px solid ${C.textMuted}`,
+        borderRadius: R.xl, padding: '11px 14px', background: C.bgWhite,
+        display: 'flex', flexDirection: 'column', gap: 6,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>
+          <ArrowRight size={15} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
+          Эта версия заменена — смотрите план v{item.supersededBy} ниже
+        </div>
+        {author && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs, color: C.textMuted }}>
+            <PersonaAvatar persona={author} size={16} />
+            {author.name} · планировщик
+          </div>
+        )}
+        {fileLinkRow}
         <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
       </div>
     );
@@ -395,16 +489,17 @@ export function TeamPlanView({ item, online }: {
         borderRadius: R.xl, padding: '11px 14px', background: C.bgWhite,
         display: 'flex', flexDirection: 'column', gap: 6,
       }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: 13, fontWeight: 600, color: C.textSecondary }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>
           <RotateCcw size={15} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
           План отменён
         </div>
         {author && (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, color: C.textMuted }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: FS.xs, color: C.textMuted }}>
             <PersonaAvatar persona={author} size={16} />
             {author.name} · планировщик
           </div>
         )}
+        {fileLinkRow}
         <CollapsedPlan plan={plan} isMobile={isMobile} rootPath={rootPath} />
       </div>
     );
@@ -418,7 +513,7 @@ export function TeamPlanView({ item, online }: {
   const sendEdit = () => {
     const text = feedback.trim();
     if (!text || !ctx) return;
-    ctx.onSendMessage(text);
+    ctx.onRespond(item.planId, 'edit', undefined, undefined, text);
     setEditing(false);
     setFeedback('');
   };
@@ -442,12 +537,12 @@ export function TeamPlanView({ item, online }: {
         <div style={{ flex: 1, minWidth: 0 }}>
           {AuthorByline}
           <div style={{
-            fontFamily: FONT.serif, fontSize: 15, fontWeight: 700, color: C.textHeading, lineHeight: 1.2,
+            fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 700, color: C.textHeading, lineHeight: 1.2,
             marginTop: author ? 1 : 0,
           }}>
             План командной реализации
           </div>
-          <div style={{ fontSize: 12, color: C.textSecondary, marginTop: 2 }}>
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>
             {planSubtitle(plan)}
           </div>
         </div>
@@ -460,32 +555,40 @@ export function TeamPlanView({ item, online }: {
         )}
         <span style={{
           flexShrink: 0, background: C.accentLight, color: C.accent, borderRadius: R.sm,
-          padding: '2px 8px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap',
+          padding: '2px 8px', fontSize: FS.xs, fontWeight: 600, whiteSpace: 'nowrap',
         }}>
           на подтверждении
         </span>
       </div>
 
       {plan.summary && (
-        <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.45 }}>{plan.summary}</div>
+        <div style={{ fontSize: FS.base, color: C.textSecondary, lineHeight: 1.45 }}>{plan.summary}</div>
       )}
 
+      {/* «Замысел» (решение 2026-08-02): 3–5 строк от планировщика — над списком под-задач,
+          чтобы расхождение с задачей было видно ДО подтверждения распределения работ */}
+      {plan.intent && <IntentBlock text={plan.intent} />}
+      {fileLinkRow}
+
       {/* «Что изменилось» (Э8, только у v2+) — над телом плана: человек уже читал v1,
-          подтверждает именно дельту */}
-      <AnnotationBlock label={`Что изменилось в v${plan.version > 0 ? plan.version : 1} — по вашим ответам`} items={plan.changes} />
+          подтверждает именно дельту. Подпись — дословно из спеки */}
+      <AnnotationBlock label="Что изменилось" items={plan.changes} />
 
       <PlanBody plan={plan} candidates={candidates} onReassign={reassign}
         readOnly={!canAct} isMobile={isMobile} rootPath={rootPath} />
 
       {/* «Допущения» (Э8) — под телом, над кнопками: путь «вопросов нет» — главный
-          носитель, декларируются вместе с планом */}
-      <AnnotationBlock label="Допущения" items={plan.assumptions} />
+          носитель, декларируются вместе с планом. Текст фиксируется при составлении:
+          после смены исполнителя имена в допущениях могут отставать от назначения —
+          честно помечаем момент записи, а не переписываем чужой текст */}
+      <AnnotationBlock label="Допущения" items={plan.assumptions}
+        note="Записаны при составлении плана — имена в тексте не меняются при смене исполнителя" />
 
       {!online ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
+        <div style={{ fontSize: FS.sm, color: C.textMuted }}>Недоступно офлайн</div>
       ) : editing ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-          <div style={{ fontSize: 12, color: C.textSecondary }}>
+          <div style={{ fontSize: FS.sm, color: C.textSecondary }}>
             Что поправить в плане? Сообщение уйдёт координатору — он пересоберёт план
           </div>
           <textarea
@@ -497,7 +600,7 @@ export function TeamPlanView({ item, online }: {
             style={{
               width: '100%', boxSizing: 'border-box', borderRadius: R.lg,
               border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px',
-              fontSize: 13, color: C.textHeading, fontFamily: FONT.sans, resize: 'none', outline: 'none',
+              fontSize: FS.base, color: C.textHeading, fontFamily: FONT.sans, resize: 'none', outline: 'none',
             }}
           />
           <div style={{ display: 'flex', gap: SP.sm }}>
@@ -527,7 +630,7 @@ export function TeamPlanView({ item, online }: {
           {ctx?.autoWaves && (
             <div style={{
               display: 'flex', alignItems: 'flex-start', gap: 6, marginTop: SP.sm,
-              fontSize: 11, color: C.textMuted, lineHeight: 1.45,
+              fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45,
             }}>
               <Zap size={11} fill="currentColor" stroke="none" style={{ flexShrink: 0, marginTop: 2 }} />
               <span>После запуска волны пойдут одна за другой — вмешаемся только при проблеме или исчерпании бюджета</span>

@@ -327,10 +327,10 @@ const INSTRUCTIONS = [
   'ПРИВЯЗКА (bindings в create/update, bindings_set): { type, target, path?, condition?, mode? }.',
   '  type → target/path: project — проект целиком (projectId); projectPath — папка/файл проекта',
   '  (projectId; path обязателен); knowledge — база знаний (datasetId); notes — заметки',
-  '  ("personal"|projectId; path: папка); tool — рубильник инструмента (tasks/notes/web/…);',
-  '  skill — скилл (имя); projectPersonas — команда ЧУЖОГО проекта для persona_ask (projectId;',
-  '  path: id персоны = сужение до неё, пусто = вся команда); projectTasks — задачи ЧУЖОГО',
-  '  проекта (projectId; path "readonly" = только чтение, пусто = полный доступ).',
+  '  ("personal"|projectId; path: папка); tool — рубильник инструмента (tasks/…/mcp:<ключ>:',
+  '  personas_mcp_list); skill — скилл (имя); projectPersonas — команда ЧУЖОГО проекта для',
+  '  persona_ask (projectId; path: id персоны = сужение до неё, пусто = вся команда);',
+  '  projectTasks — задачи ЧУЖОГО проекта (projectId; path "readonly" = только чтение, пусто = полный доступ).',
   '  condition — когда применять (пусто = всегда). mode — auto (дефолт) | always | off.',
   ] : []),
   ...(AUTOMATION ? [
@@ -447,6 +447,16 @@ const TOOLS = [
         type: 'object',
         required: ['id'],
         properties: { id: { type: 'string', description: 'ID персоны' } },
+      },
+    },
+    {
+      name: 'personas_mcp_list',
+      description: 'MCP-серверы личного реестра владельца: key, label, транспорт, статус, ' +
+        'включён ли у персоны (id). Включить/выключить — personas_bindings_set/bindings ' +
+        'с target "mcp:<ключ>", отдельного инструмента для этого нет.',
+      inputSchema: {
+        type: 'object',
+        properties: { id: { type: 'string', description: 'ID персоны — проверить, включён ли у неё каждый сервер (без id — только список серверов)' } },
       },
     },
     // bindings_set — правка чужой персоны, поэтому едет с модулем manage, а не с
@@ -765,6 +775,24 @@ async function callTool(name, args) {
 
     case 'personas_suggest_bindings':
       return json(await api(`/api/personas/${encodeURIComponent(args.id)}/bindings/suggest`, { method: 'POST' }));
+
+    case 'personas_mcp_list': {
+      const servers = await api('/api/mcp/servers');
+      let enabledByKey = null;
+      if (args.id) {
+        const targets = await api(`/api/personas/binding-targets?type=tool&personaId=${encodeURIComponent(args.id)}`);
+        enabledByKey = new Map(
+          targets.filter(t => typeof t.id === 'string' && t.id.startsWith('mcp:'))
+            .map(t => [t.id.slice(4), t.defaultEnabled]));
+      }
+      return json(servers.map(s => ({
+        key: s.key,
+        label: s.label,
+        transport: s.transport,
+        status: s.status?.status ?? null,
+        ...(enabledByKey ? { enabledForPersona: enabledByKey.get(s.key) ?? true } : {}),
+      })));
+    }
 
     case 'personas_bindings_set': {
       assertNotSelfBindings(args.id);

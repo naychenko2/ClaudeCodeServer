@@ -8,7 +8,7 @@ import { DiffView } from './DiffView';
 import { IconButton, Menu, MenuItem, Modal, ModalActions } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
-// Цвета статус-бейджей — как в GitPanel/дереве файлов
+// Цвета статус-бейджей — как в панели «Изменения» и дереве файлов
 const BADGE: Record<string, { color: string; bg: string; label: string }> = {
   M: { color: C.accent, bg: C.accentLight, label: 'M' },
   A: { color: C.successText, bg: C.successBg, label: '+' },
@@ -88,6 +88,7 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
   };
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния предыдущего коммита перед загрузкой нового
     setDetail(null); setNotFound(false); setActivePath(null); setDiff(null);
     setFilter(''); setMobileShowDiff(false); setBodyExpanded(false);
     let cancelled = false;
@@ -109,17 +110,20 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
       })
       .catch(() => { if (!cancelled) setNotFound(true); });
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- initialPath/isMobile нужны только на момент загрузки; смену файла при открытом коммите обрабатывает эффект ниже, перезапрос не нужен
   }, [project.id, sha]);
 
   // Смена запрошенного файла при уже открытом коммите (клик по другому файлу того же коммита)
   useEffect(() => {
     if (initialPath && detail?.files.some(f => f.path === initialPath)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- выбор файла initialPath после загрузки списка файлов
       setActivePath(initialPath);
       if (isMobile) setMobileShowDiff(true);
     }
   }, [initialPath, detail, isMobile]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- диффа нет, когда нет активного файла
     if (!activePath) { setDiff(null); return; }
     let cancelled = false;
     setDiffLoading(true);

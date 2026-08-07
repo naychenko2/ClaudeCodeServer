@@ -38,11 +38,16 @@ services:
     environment:
       - SIGNOZ_GLOBAL_EXTERNAL__URL=${SIGNOZ_EXTERNAL_URL:-http://localhost:3301/telemetry-proxy}
     ports: !override
-      - "127.0.0.1:3301:8080"
+      - "${OBS_BIND:-127.0.0.1}:3301:8080"
 
   # OTLP receivers (ingester). Bind к localhost — внешний мир не должен слать
   # телеметрию без явного проброса.
+  #
+  # OBS_BIND переопределяет адрес привязки, когда стек живёт НЕ на той машине, где
+  # работает CCS: тогда localhost недостижим и нужен 0.0.0.0, а доступ ограничивается
+  # брандмауэром хоста (правило на локальную подсеть). Дефолт — прежний localhost,
+  # то есть на машине с CCS рядом ничего не меняется.
   ingester:
     ports: !override
-      - "127.0.0.1:4317:4317"  # OTLP gRPC
-      - "127.0.0.1:4318:4318"  # OTLP HTTP
+      - "${OBS_BIND:-127.0.0.1}:4317:4317"  # OTLP gRPC
+      - "${OBS_BIND:-127.0.0.1}:4318:4318"  # OTLP HTTP

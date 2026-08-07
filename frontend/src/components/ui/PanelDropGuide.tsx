@@ -90,9 +90,13 @@ export function PanelDropSpot({ over = false, icon: Icon, boxProps, style }: {
 // Направляющая-линия места вставки. Второй знак той же пары, что PanelDropSpot:
 // прямоугольник обещает панель во всю свободную область, линия — что панель
 // втиснется в этот стык. Общий и для дропа, и для наведения на иконку рельсы.
-export function PanelDropLine({ axis, over = false, shift = 0, inset = SEP_INSET }: {
+export function PanelDropLine({ axis, over = false, accent = false, shift = 0, inset = SEP_INSET }: {
   axis: 'x' | 'y';
   over?: boolean;
+  // Штриховая, но акцентным цветом (а не приглушённым серым): наведение на кнопку
+  // рельсы — точное «кликнешь — встанет сюда», поэтому линия контрастная, но
+  // остаётся пунктиром «возможного места», а не сплошной «отпустишь-сюда» дропа.
+  accent?: boolean;
   // Сдвиг от кромки панели наружу (крайние места вставки) — см. sepShift
   shift?: number;
   // Поля по торцам линии. Между панелями им нужен воздух, чтобы направляющая не
@@ -118,8 +122,8 @@ export function PanelDropLine({ axis, over = false, shift = 0, inset = SEP_INSET
         borderRadius: over ? SEP_LINE : 0,
         background: over
           ? C.accent
-          : `repeating-linear-gradient(${vertical ? 'to bottom' : 'to right'}, ${C.textSecondary} 0 ${DASH_LEN}px, transparent ${DASH_LEN}px ${DASH_STEP}px)`,
-        opacity: over ? 1 : SEP_REST_OPACITY,
+          : `repeating-linear-gradient(${vertical ? 'to bottom' : 'to right'}, ${accent ? C.accent : C.textSecondary} 0 ${DASH_LEN}px, transparent ${DASH_LEN}px ${DASH_STEP}px)`,
+        opacity: over ? 1 : accent ? 1 : SEP_REST_OPACITY,
         transition: 'background 0.12s ease, opacity 0.12s ease',
         ...(vertical
           ? { width: SEP_LINE, height: '100%' }

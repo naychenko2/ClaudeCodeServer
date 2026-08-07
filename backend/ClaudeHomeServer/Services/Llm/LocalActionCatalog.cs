@@ -1,13 +1,27 @@
 namespace ClaudeHomeServer.Services.Llm;
 
-// Профиль вызова локальной модели: задаёт размер контекстного окна, лимит вывода и
-// таймаут. Разные фоновые задачи грузят модель по-разному — от мелкой классификации
-// (short) до суммаризации большого транскрипта (large). num_ctx особенно важен:
+// Профиль вызова: задаёт размер контекстного окна, лимит вывода и таймауты. Разные
+// фоновые задачи грузят модель по-разному — от мелкой классификации (short) до
+// суммаризации большого транскрипта (large). num_ctx особенно важен:
 // Ollama по умолчанию режет вход до ~4k токенов и МОЛЧА теряет хвост промпта.
 public enum CheapProfile { Small, Text, Large }
 
 // Базовые параметры профиля (переопределяются секцией Ollama:Profiles в конфиге).
-public sealed record CheapProfileSpec(int NumCtx, int NumPredict, int TimeoutMs);
+// Параметров по ДВА на каждый ограничитель — по числу маршрутов, и по одной и той же
+// причине: локальные значения калибровались под Ollama на своём железе, облачным моделям
+// они малы.
+//  • TimeoutMs / CloudTimeoutMs — потолок времени. Облачная сильная модель на сложной
+//    задаче отвечает заметно дольше локали, и локальный потолок её обрывал (прод
+//    2026-08-04: планировщик «Командной реализации» на opus не уложился в 90 с).
+//  • NumPredict / CloudNumPredict — потолок ВЫВОДА. Локальный бережёт память Ollama
+//    (num_predict), облачный уходит в max_tokens запроса. Тот же перекос и та же цена:
+//    у профиля Large на облаке 1024 токена вывода обрывали JSON плана на полуслове,
+//    ParsePlan возвращал null, и человек видел «план не построился» — симптом,
+//    неотличимый от таймаута (прод 2026-08-05). Облачные значения — с запасом на
+//    крупный структурный ответ, но не выше 8k: это потолок вывода, который держат
+//    практически все модели агрегатора, а больший провайдер может отбить 400-й.
+public sealed record CheapProfileSpec(
+    int NumCtx, int NumPredict, int TimeoutMs, int CloudTimeoutMs, int CloudNumPredict);
 
 // Одно место применения модели. Исторически — фоновое one-shot действие, с v2 каталог
 // накрывает и агентные места (группа «Чаты и персоны»): им тоже назначается исполнитель.
@@ -82,14 +96,25 @@ public static class LocalActionCatalog
     public const string PersonaQuickCreate = "persona-quick-create";
     public const string PersonaAiTeam = "persona-ai-team";
     public const string Changelog = "changelog";
+    public const string PromptAudit = "prompt-audit";
+    // Паспорта изменений (ADR-004, этап 1): выжимка «зачем/решения/отказы/грабли» на коммит
+    public const string DossierSummary = "dossier-summary";
 
-    // Дефолты профилей. Переопределяются Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs}.
+    // Дефолты профилей. Переопределяются
+    // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs|CloudNumPredict}.
+    // CloudTimeoutMs и CloudNumPredict растут с профилем: мелкой задаче на облаке хватает
+    // общего дефолта раннера (120 с) и короткого ответа, тяжёлой нужно заметно больше —
+    // планировщик на сильной модели с большим промптом отвечает до нескольких минут и
+    // выдаёт многокилобайтный JSON.
     public static readonly IReadOnlyDictionary<CheapProfile, CheapProfileSpec> ProfileDefaults =
         new Dictionary<CheapProfile, CheapProfileSpec>
         {
-            [CheapProfile.Small] = new(NumCtx: 4096, NumPredict: 256, TimeoutMs: 20_000),
-            [CheapProfile.Text] = new(NumCtx: 8192, NumPredict: 768, TimeoutMs: 45_000),
-            [CheapProfile.Large] = new(NumCtx: 16384, NumPredict: 1024, TimeoutMs: 90_000),
+            [CheapProfile.Small] = new(NumCtx: 4096, NumPredict: 256,
+                TimeoutMs: 20_000, CloudTimeoutMs: 120_000, CloudNumPredict: 1024),
+            [CheapProfile.Text] = new(NumCtx: 8192, NumPredict: 768,
+                TimeoutMs: 45_000, CloudTimeoutMs: 180_000, CloudNumPredict: 4096),
+            [CheapProfile.Large] = new(NumCtx: 16384, NumPredict: 1024,
+                TimeoutMs: 90_000, CloudTimeoutMs: 300_000, CloudNumPredict: 8192),
         };
 
     private static readonly IReadOnlyList<LocalAction> Builtin =
@@ -117,6 +142,11 @@ public static class LocalActionCatalog
         new(ChatTitle, "Заголовок чата", "Чаты", CheapProfile.Small, DefaultLocal: true),
         new(ChatRetitle, "Обновление названия чата", "Чаты", CheapProfile.Text, DefaultLocal: true),
         new(ChatExtractTasks, "Извлечение задач из чата", "Задачи", CheapProfile.Large, DefaultLocal: true),
+        // Разбор промпта хода («что тут лишнее»): вызывается человеком по кнопке, не фоном.
+        // Локаль по умолчанию выключена — разбор идёт по метаданным секций и требует
+        // рассуждения, слабая модель выдаёт общие слова вместо конкретных сокращений.
+        new(PromptAudit, "Разбор промпта хода", "Чаты", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Medium),
         // Планировщик режима «Командная реализация»: декомпозиция вводной и подбор
         // исполнителей по компетенциям. Локаль намеренно выключена — слабая модель
         // раздаёт работу случайно, а весь смысл места в осмысленном выборе персоны.
@@ -162,6 +192,10 @@ public static class LocalActionCatalog
         // таймаут Changelog:TimeoutMs) — потребитель передаёт timeout/maxTokens поверх профиля.
         // Дефолт claude: на бесплатной модели показ стоимости отпадает (она 0), что корректно.
         new(Changelog, "Сводка «Что нового»", "Продукт", CheapProfile.Large, DefaultLocal: false),
+        // Паспорта изменений: сырьё как у ChatExtractTasks (реплики хода целиком) — Large
+        // обязателен, Text/Small молча обрежут хвост промпта (num_ctx Ollama) и дадут
+        // выдуманную выжимку, ради борьбы с которой заведён отдельный флаг recall.
+        new(DossierSummary, "Выжимка паспорта изменения", "Паспорта изменений", CheapProfile.Large, DefaultLocal: true),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =
@@ -214,4 +248,12 @@ public static class LocalActionCatalog
     // у агентных мест (задаётся явно в записи).
     public static ModelTier EffectiveDefaultTier(LocalAction action) =>
         action.Tier ?? (action.Profile == CheapProfile.Large ? ModelTier.Medium : ModelTier.Weak);
+
+    /// <summary>
+    /// Дефолтный уровень места по ключу каталога. Нужен вызывающим PersonaModel: уровень
+    /// места разворачивает матрицы персоны, когда ни у неё, ни у специальности своего
+    /// уровня нет (иначе ячейка персоны молча не срабатывала). null — неизвестный ключ.
+    /// </summary>
+    public static ModelTier? DefaultTierOf(string key) =>
+        Find(key) is { } action ? EffectiveDefaultTier(action) : null;
 }

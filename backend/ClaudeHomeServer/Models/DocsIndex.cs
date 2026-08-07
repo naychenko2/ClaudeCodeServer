@@ -23,8 +23,13 @@ public record DocHeading(int Level, string Text, string Slug);
 // Binary — файл без текста (pdf, visio, картинка, аудио): он занимает своё место в
 // документации, но заголовков, ссылок и поиска по телу у него нет, а открывается он
 // только в центральной области.
+// SectionFolder — папка, для которой этот документ является страницей раздела
+// («docs/decisions.md» при наличии «docs/decisions/»). Правило пары «страница + папка»
+// пришло из code wiki, где раздел существует только так: файл несёт содержание раздела,
+// одноимённая папка — его дочерние страницы. Считает бэкенд: только он знает точный состав
+// области и решает вопрос регистра путей один раз.
 public record DocEntry(string Path, string Title, DateTime Modified, long Size,
-    IReadOnlyList<DocHeading> Headings, bool Binary = false);
+    IReadOnlyList<DocHeading> Headings, bool Binary = false, string? SectionFolder = null);
 
 // Входящая ссылка: кто ссылается на документ и на какой его якорь
 public record DocBacklink(string Path, string Title, string? Anchor);
@@ -81,4 +86,11 @@ public record DocsScopeInfo(
     IReadOnlyList<DocOption> Documents,
     // Что сейчас работает «Началом»: выбранный документ либо README по умолчанию.
     // null — начального документа нет вовсе (пустая область или README удалён)
-    string? Home);
+    string? Home,
+    // Откуда взята область: «file» — файл .docs в репозитории (общий для всех, кто его
+    // открыл), «project» — настройка продукта, своя у каждого владельца. Диалог по этому
+    // полю решает, что он правит и предлагать ли вынести настройку в репозиторий.
+    string ScopeSource = "project",
+    // Заполнено, когда .docs есть, но не разобран: область при этом взята из настройки
+    // проекта, и без этой строки расхождение «в файле одно, в панели другое» необъяснимо
+    string? ScopeFileError = null);

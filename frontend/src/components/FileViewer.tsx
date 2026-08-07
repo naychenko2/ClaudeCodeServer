@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents, Lightbulb } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -21,14 +21,16 @@ import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
 import type { Project, GitBlameLine, GitLogEntry } from '../types';
 import { api } from '../lib/api';
-import { resolveDocImage } from '../lib/docsLinks';
+import { basename } from '../lib/paths';
+import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
 import { OfflineError } from '../lib/offline';
 import { useGitState, ensureGit, gitRestoreFile, loadGitRemote } from '../lib/git';
 import { parseDiffToHunks, buildHunkPatch, buildLinesPatch } from '../lib/gitPatch';
-import { relTime } from './GitPanel';
+import { relTime } from '../lib/gitFormat';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
+import { useHeadings, useHeadingSpy, resolveHeadingEl, type DocToc, type Heading } from '../hooks/useHeadings';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -40,6 +42,7 @@ import { NoteConnections } from '../features/notes/NoteConnections';
 import { NoteView } from '../features/notes/NoteView';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
+import { getExtMeta } from './FileExplorer';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
@@ -51,6 +54,10 @@ import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
 import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
+// Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
+// кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
+import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -96,6 +103,23 @@ interface Props {
   gitStagePath?: string;
   // Номер строки для скролла после открытия (из графа / ссылок на строку)
   scrollToLine?: number;
+  // Открыть другой файл в центре (переход по ссылке из md). anchor — слаг раздела,
+  // если ссылка вида «foo.md#раздел»: FileViewer проскроллит к нему после рендера.
+  onOpenFile?: (path: string, anchor?: string) => void;
+  // Слаг заголовка для скролла после открытия файла (ставит WorkspacePage, когда
+  // файл открыт переходом по md-ссылке с якорем). null/undefined — скроллить не нужно.
+  scrollToAnchor?: string | null;
+  // Back/Forward по истории открытых файлов (браузерная навигация в пределах сессии).
+  // Кнопки видны, пока есть куда идти (canFileBack/canFileForward); неактивная — disabled.
+  onFileBack?: () => void;
+  onFileForward?: () => void;
+  canFileBack?: boolean;
+  canFileForward?: boolean;
+  // Оглавление открытого md — наружу, панели «Оглавление» (см. DocToc). null означает
+  // «оглавления сейчас нет»: файл не markdown, просмотрщик закрылся или документ
+  // показывает не эта зона (заметка vault рисуется своим NoteView). Панель по этому
+  // null исчезает вместе со своей кнопкой, сохраняя место в раскладке.
+  onTocChange?: (toc: DocToc | null) => void;
 }
 
 interface FileContent {
@@ -124,6 +148,12 @@ type ViewTab = 'file' | 'diff' | 'blame' | 'history';
 // Вкладка «Код» — HTML-файл в исходнике: отдельный сегмент того же трека, что и остальные
 // вкладки (раньше рядом стоял второй, одинаковый по форме, переключатель «Просмотр | Код»)
 type TabKey = ViewTab | 'code';
+
+// Центральной области неважно, документ ли области или файл кода — любой путь открывается
+// здесь же FileViewer-ом (md тоже отрендерится). Поэтому knownDocs пуст: резолв ссылок
+// отличает только «якорь текущего документа» (kind 'doc', скроллим) от «другой файл»
+// (kind 'repo', открываем) — внешние MarkdownViewer уводит в новую вкладку сам.
+const EMPTY_DOCS: ReadonlySet<string> = new Set();
 
 // Ступени шапки по ширине ПАНЕЛИ (не окна — в сплите панель живёт своей жизнью).
 // comfort — подписи, cozy/narrow — иконки, tight — вкладки уезжают в меню.
@@ -176,7 +206,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   const toggle = () => {
     const a = audioRef.current;
     if (!a) return;
-    playing ? a.pause() : a.play().catch(() => {});
+    if (playing) a.pause(); else void a.play().catch(() => {});
   };
 
   const seek = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -298,11 +328,17 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange }: Props) {
   const online = useOnline();
+  // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
+  // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
+  // а не projects/{id}/files/*: обычные project-эндпоинты дали бы 403 (SafeJoin).
+  const isHostMode = /^[A-Za-z]:[\\/]|^\//.test(filePath);
   // Заметки vault (notes/*.md): рендерим [[wikilinks]] и уводим по клику в раздел «Заметки»
   const allNotes = useNotes();
-  const isNotesFile = /(^|\/)notes\//i.test(filePath);
+  // На абсолютном пути эвристика ложно срабатывает (мало ли где встретится «notes/»
+  // за пределами проекта) — в хост-режиме файл заметкой не считается никогда.
+  const isNotesFile = !isHostMode && /(^|\/)notes\//i.test(filePath);
   useEffect(() => { if (isNotesFile) void ensureNotesLoaded(); }, [isNotesFile]);
   const noteTitles = useMemo(() => existingTitleSet(allNotes), [allNotes]);
   const openNoteByTitle = (t: string) => {
@@ -321,6 +357,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const notesVersion = useNotesVersion();
   const [noteDetail, setNoteDetail] = useState<NoteDetail | null>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс noteDetail для не-заметочных файлов; сама загрузка асинхронная
     if (!isNotesFile) { setNoteDetail(null); return; }
     let alive = true;
     const title = filePath.split('/').pop()!.replace(/\.md$/i, '');
@@ -337,6 +374,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Навигация по ссылкам/backlinks внутри вьювера: открываем другую заметку на месте,
   // не уводя в раздел «Заметки» (сброс при смене файла в дереве)
   const [noteIdOverride, setNoteIdOverride] = useState<string | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс навигационного оверрайда при смене файла
   useEffect(() => { setNoteIdOverride(null); }, [filePath]);
   const openWikilinkInPlace = (target: string) => {
     const name = target.split('/').pop()!.split('#')[0].trim().toLowerCase();
@@ -350,6 +388,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [fileContent, setFileContent] = useState<FileContent | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
+  // 403 хост-режима (путь вне досягаемости песочницы) — отдельно от прочих ошибок,
+  // у него человекочитаемое сообщение вместо общего «не удалось открыть»
+  const [loadForbidden, setLoadForbidden] = useState(false);
   const [diff, setDiff] = useState<string | null>(null);
   const [tab, setTab] = useState<ViewTab>('file');
   // Git: репо-статус (гейт вкладки «Авторы»), blame-кэш и busy зернистого stage
@@ -392,6 +433,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   // Счётчики комментариев к документу — чип в тулбаре (данные поднимает DocCommentedMarkdown)
   const [commentCounts, setCommentCounts] = useState<{ total: number; open: number } | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс счётчиков комментариев при смене файла
   useEffect(() => { setCommentCounts(null); }, [filePath]);
   const onCommentCounts = useCallback((total: number, open: number) => setCommentCounts({ total, open }), []);
   const drawioRef = useRef<DrawioHandle>(null);
@@ -417,17 +459,70 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
   const content = fileContent?.content ?? '';
   const hasUnsavedChanges = editing && editContent !== content;
+
+  // Оглавление md для скролла к якорю: снимается с DOM контент-зоны (md внутри
+  // DocCommentedMarkdown — вложенность querySelectorAll не мешает). Используется и для
+  // клика по «#раздел» текущего документа, и для якоря при открытии файла по ссылке.
+  const headings = useHeadings(contentAreaRef, content);
+  // Якорь, ждущий отрисовки md. Привязан к пути: между сменой файла и пересбором
+  // оглавления есть кадр, где headings ещё от прежнего — без проверки пути якорь
+  // искался бы в чужом оглавлении. В ref, а не в состоянии: значение нужно эффекту.
+  const pendingAnchorRef = useRef<{ path: string; anchor: string } | null>(null);
+
+  // Скролл заголовка в зону просмотра. scrollIntoView здесь ненадёжен: md лежит внутри
+  // DocCommentedMarkdown (flex-рядок со sticky-сайдбаром комментариев), и нативный
+  // scrollIntoView на этом layout молчит. Скроллим контейнер руками по смещению элемента
+  // от верха зоны (минус padding, чтобы заголовок не прилипал под самый тулбар).
+  const scrollDocTo = useCallback((el: HTMLElement) => {
+    const container = contentAreaRef.current;
+    if (!container) return;
+    const delta = el.getBoundingClientRect().top - container.getBoundingClientRect().top - 16;
+    container.scrollBy({ top: delta, behavior: 'smooth' });
+  }, []);
+
+  // Открытие файла по md-ссылке с якорем: WorkspacePage ставит scrollToAnchor, здесь
+  // запоминаем его (привязав к текущему пути) — сработает эффектом ниже, когда md отрисован
+  useEffect(() => {
+    if (scrollToAnchor) pendingAnchorRef.current = { path: filePath, anchor: scrollToAnchor };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollToAnchor]);
+
+  useEffect(() => {
+    const pending = pendingAnchorRef.current;
+    if (!pending || pending.path !== filePath || !content || headings.length === 0) return;
+    const target = headings.find(h => slugify(h.text) === pending.anchor);
+    if (!target) return;
+    scrollDocTo(target.el);
+    pendingAnchorRef.current = null;
+  }, [filePath, content, headings, scrollDocTo]);
+
+  // Клик по ссылке в md (режим документации MarkdownViewer): резолв относительного пути
+  // и якоря. Якорь текущего документа — скролл; другой файл — onOpenFile (с якорем);
+  // внешние MarkdownViewer уводит в _blank сам, сюда они не доходят.
+  const handleDocLink = useCallback((href: string) => {
+    if (!filePath) return;
+    const link = resolveDocLink(filePath, href, EMPTY_DOCS);
+    if (!link || link.kind === 'external') return;
+    if (link.kind === 'doc' && link.target === filePath && link.anchor) {
+      const target = headings.find(h => slugify(h.text) === link.anchor);
+      if (target) scrollDocTo(target.el);
+      return;
+    }
+    onOpenFile?.(link.target, link.anchor ?? undefined);
+  }, [filePath, headings, onOpenFile, scrollDocTo]);
   const syncState = computeSyncState(marks, filePath);
   // Помечен, но содержимое ещё не скачано → спиннер
   const pending = !!syncState && !isDownloaded(project.id, filePath);
 
   // В режиме зернистого stage дифф — worktree против ИНДЕКСА (git diff без staged),
   // иначе патчи хунков не соответствовали бы содержимому индекса
-  const fetchDiff = () => gitStagePath
+  const fetchDiff = useCallback(() => gitStagePath
     ? api.git.diff(project.id, filePath, false)
-    : api.files.getDiff(project.id, filePath);
+    : api.files.getDiff(project.id, filePath),
+  [project.id, filePath, gitStagePath]);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- массовый сброс промежуточного UI-состояния перед загрузкой нового файла
     setEditing(false);
     setTab('file');
     setHtmlTab('preview');
@@ -438,6 +533,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setDrawioMode('view');
     setLoading(true);
     setLoadError(false);
+    setLoadForbidden(false);
     setFileContent(null);
     setImgDims(null);
     setActionError(null);
@@ -447,17 +543,24 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setVersionSha(null);
     setVersionDiff(null);
     setRestoreConfirmSha(null);
-    api.files.getContent(project.id, filePath).then(r => {
+    const contentPromise = isHostMode ? api.hostFiles.getContent(filePath) : api.files.getContent(project.id, filePath);
+    contentPromise.then(r => {
       setFileContent(r);
       setEditContent(r.content ?? '');
-    }).catch(() => setLoadError(true)).finally(() => setLoading(false));
+    }).catch(e => {
+      if (isHostMode && (e as { status?: number })?.status === 403) setLoadForbidden(true);
+      setLoadError(true);
+    }).finally(() => setLoading(false));
+    // Дифф — понятие проектного git-репо; у файла вне проекта его нет
+    if (isHostMode) setDiff(null);
     // diff недоступен офлайн — мягко игнорируем ошибку
-    fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
-  }, [project.id, filePath, gitStagePath]);
+    else fetchDiff().then(r => setDiff(r.diff)).catch(() => setDiff(null));
+  }, [project.id, filePath, gitStagePath, isHostMode, fetchDiff]);
 
   // Blame — лениво при первом открытии вкладки «Авторы» (кэш до смены файла)
   useEffect(() => {
     if (tab !== 'blame' || blame || blameLoading || blameError) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ленивая однократная загрузка blame; guard предотвращает повтор
     setBlameLoading(true);
     api.git.blame(project.id, filePath)
       .then(b => setBlame(b))
@@ -468,6 +571,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // История файла — лениво при первом открытии вкладки (кэш до смены файла)
   useEffect(() => {
     if (tab !== 'history' || fileLog || fileLogLoading) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- ленивая однократная загрузка истории; guard предотвращает повтор
     setFileLogLoading(true);
     void loadGitRemote(project.id);
     api.git.fileLog(project.id, filePath)
@@ -483,6 +587,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   useEffect(() => {
     if (tab !== 'history' || !versionSha) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- однократный fetch диффа выбранной версии git
     setVersionDiffLoading(true);
     setVersionContent(null);
     api.git.commitFileDiff(project.id, versionSha, filePath)
@@ -496,6 +601,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   useEffect(() => {
     if (tab !== 'history' || versionView !== 'content' || !versionSha || versionContent !== null) return;
     let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- однократный fetch содержимого версии; guard versionContent===null
     setVersionContentLoading(true);
     api.git.fileAtCommit(project.id, versionSha, filePath)
       .then(r => { if (!cancelled) setVersionContent(r.content ?? ''); })
@@ -528,6 +634,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // основного, чтобы перебить его сброс на 'file'; срабатывает и когда тот же файл
   // повторно открывают уже в diff-режиме)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- однократное применение initialTab из git-панели
     if (initialTab) setTab(initialTab);
   }, [initialTab, filePath]);
 
@@ -555,8 +662,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     loadDownloadedSet(project.id);
   }, [project.id]);
 
-  // Watcher: открытый файл изменился на диске → перечитываем (если не редактируем — не затираем правки)
+  // Watcher: открытый файл изменился на диске → перечитываем (если не редактируем — не затираем правки).
+  // Хост-режим — файл вне проекта, событий по нему не будет: подписка бессмысленна.
   useEffect(() => {
+    if (isHostMode) return;
     return onFilesChanged(({ projectId, paths }) => {
       // Пока draw.io в режиме edit — не перечитываем: autosave сам пишет файл,
       // а перезагрузка content дала бы лишние refetch на каждый autosave.
@@ -569,7 +678,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       setBlame(null);   // авторство устарело — перечитается при открытии вкладки
       setBlameError(false);
     });
-  }, [project.id, filePath, editing, drawioMode, gitStagePath]);
+  }, [project.id, filePath, editing, drawioMode, gitStagePath, isHostMode, fetchDiff]);
 
   const handleToggleSync = () => {
     toggleSyncMark(project.id, {
@@ -676,8 +785,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [docAi, setDocAi] = useState<{ title: string; markdown: string } | null>(null);
   const [docAiBusy, setDocAiBusy] = useState(false);
   const runDocAi = async (kind: 'summary' | 'extract' | 'tags' | 'convert') => {
-    // Разрешаем документы (pdf/docx/…) и текстовые файлы; блокируем прочие бинарные и повторный клик
-    if (docAiBusy || !fileContent || (fileContent.isBinary && !fileContent.isDocument)) return;
+    // Разрешаем документы (pdf/docx/…) и текстовые файлы; блокируем прочие бинарные и повторный клик.
+    // Хост-режим — эндпоинты проектные (project.id + путь), для файла вне проекта не сработают
+    if (docAiBusy || isHostMode || !fileContent || (fileContent.isBinary && !fileContent.isDocument)) return;
     setDocAiBusy(true);
     beginAiBusy();
     try {
@@ -724,7 +834,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       else if (a === 'file.extract') void runDocAi('extract');
       else if (a === 'file.tags') void runDocAi('tags');
       else if (a === 'file.convert') void runDocAi('convert');
-      else if (a === 'file.toMarkdown') void (async () => {
+      else if (a === 'file.toMarkdown' && !isHostMode) void (async () => {
         beginAiBusy();
         try {
           const r = await api.files.toMarkdown(project.id, filePath);
@@ -748,6 +858,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       onClose();
     }
   };
+
+  // Escape закрывает файл (handleClose сам спросит про несохранённое). Не перехватываем,
+  // если печатают в поле/редакторе или уже открыт диалог/меню — там Escape нужнее им.
+  // Через ref: слушатель вешаем один раз, но зовём всегда свежий handleClose.
+  const closeRef = useRef(handleClose);
+  closeRef.current = handleClose;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      void closeRef.current();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Смена режима «сплит ↔ на весь экран»: FileViewer при этом пересоздаётся
   // (в WorkspacePage это две разные ветки дерева), поэтому несохранённые правки
@@ -790,15 +917,94 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     URL.revokeObjectURL(url);
   };
 
-  const fileName = filePath.split('/').pop() ?? filePath;
+  // basename (не split('/').pop()): хост-путь может прийти с обратными слэшами
+  // (Windows), как есть — relPath не нормализует то, что вне корня проекта
+  const fileName = basename(filePath) || filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
   // Текстовый файл, содержимое которого можно скопировать целиком
   const isCopyableText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
     && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
 
+  // === ОГЛАВЛЕНИЕ НАРУЖУ (панель «Оглавление») ===
+  // Заголовки уже собраны выше (useHeadings) ради якорей — отдаём тот же список панели
+  // вместе с действиями над ним: прокруткой владеет просмотрщик (свой скроллер, своя
+  // поправка на шапку), нарезкой раздела — тоже он, потому что резать надо ИСХОДНЫЙ
+  // markdown, а не текст из DOM.
+  const sectionOf = useCallback(
+    (h: Heading) => sliceSection(content, slugify(h.text)),
+    [content]);
+
+  // Переход к разделу из панели. Узел берём НЕ из самого заголовка, а ищем заново
+  // (resolveHeadingEl): панель живёт рядом с документом сколько угодно, а markdown за
+  // это время перерисовывается — комментарии к документу приезжают асинхронно и меняют
+  // разметку целиком. Собранные узлы после такой перерисовки оторваны от документа, и
+  // прокрутка по ним молча уезжала в начало вместо нужного раздела.
+  // Стабильная (scrollDocTo стабилен) — иначе объект оглавления пересобирался бы на
+  // каждый рендер и эффект ниже гонял бы setState по кругу.
+  // Какой раздел читают сейчас — панель узнаёт подпиской (см. DocToc.subscribeActive)
+  const { subscribe: subscribeActiveHeading, pin: pinHeading } = useHeadingSpy(contentAreaRef, headings);
+
+  // Зависимости — на сами функции, а не на объект хука: объект в зависимостях
+  // пересобирал бы оглавление на каждом рендере (см. useHeadingSpy)
+  const jumpToHeading = useCallback((h: Heading) => {
+    const el = resolveHeadingEl(contentAreaRef.current, h);
+    if (!el) return;
+    // Сначала подсветка цели, потом прокрутка: клик по строке обязан отзываться
+    // мгновенно, а не после того, как документ доедет
+    pinHeading(h);
+    scrollDocTo(el);
+  }, [scrollDocTo, pinHeading]);
+
+  // Заметка vault рисуется отдельным NoteView (ранний return ниже) — её markdown в
+  // contentAreaRef не попадает, и оглавление там всегда пустое. Честнее не показывать
+  // панель вовсе, чем держать кнопку, которая открывает пустоту.
+  const tocAvailable = isMarkdown && !(isNotesFile && (noteIdOverride || noteDetail));
+
+  useEffect(() => {
+    if (!onTocChange) return;
+    onTocChange(tocAvailable
+      ? { path: filePath, headings, jump: jumpToHeading, sectionOf, subscribeActive: subscribeActiveHeading }
+      : null);
+  }, [onTocChange, tocAvailable, filePath, headings, jumpToHeading, sectionOf, subscribeActiveHeading]);
+
+  // Просмотрщик ушёл с экрана — панель обязана исчезнуть вместе с ним: иначе она
+  // осталась бы висеть с оглавлением закрытого документа
+  useEffect(() => () => onTocChange?.(null), [onTocChange]);
+
+  // Тумблер панели «Оглавление» в тулбаре. Кнопка рельсы стоит у самого края окна и
+  // при чтении оказывается далеко от глаз, поэтому оглавление зовётся и отсюда —
+  // от документа, к которому относится.
+  //
+  // Раскладку правим напрямую через стор зон (как «Открыть изменения» в git-баре):
+  // панель может лежать в любой из рельс, и знать это просмотрщику незачем — reveal
+  // открывает закрытую в её домашней зоне, close убирает открытую где бы то ни было.
+  const { zones: panelZones, reveal: revealPanelKey, close: closePanelKey } = wsPanels.use();
+  const tocPanelOpen = zoneOf(panelZones, 'toc') !== null;
+  // Тумблер нужен, только когда панели есть куда открыться: без onTocChange контент
+  // панели никто не собирает (мобильная вёрстка), и кнопка вела бы в пустоту
+  const tocToggleVisible = tocAvailable && !isMobile && !!onTocChange;
+  const toggleTocPanel = () => {
+    if (tocPanelOpen) closePanelKey('toc');
+    else revealPanelKey('toc');
+  };
+
+  // Тумблер «История решений» в шапке diff-просмотра — тем же каналом, что «Оглавление»
+  // выше. Только в diff (мокап: «кнопка в шапке diff-просмотра»), гейт по флагу —
+  // сама панель для выключенной фичи уже показывает свой empty-state с настройками,
+  // но кнопка в тулбаре ведёт себя как остальные фич-флаженные контролы: скрыта, пока флаг off
+  const dossiersFlag = useFeature(FLAGS.changeDossiers);
+  const dossiersPanelOpen = zoneOf(panelZones, 'dossiers') !== null;
+  const dossiersToggleVisible = dossiersFlag && tab === 'diff' && !isMobile;
+  const toggleDossiersPanel = () => {
+    if (dossiersPanelOpen) closePanelKey('dossiers');
+    else revealPanelKey('dossiers');
+  };
+
   // Ctrl+C без выделения: отдаём исходник открытого текстового файла (см. selectionScope)
   const copySourceRef = useRef<() => string | null>(() => null);
-  copySourceRef.current = () => (isCopyableText ? (fileContent?.content ?? null) : null);
+  useEffect(() => {
+    copySourceRef.current = () => (isCopyableText ? (fileContent?.content ?? null) : null);
+  });
   useEffect(() => {
     const el = contentAreaRef.current;
     if (!el) return;
@@ -825,8 +1031,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
   } : null;
-  // Вкладка «Авторы» (blame) — только для текстовых файлов в git-репо
-  const showBlameTab = inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
+  // Вкладка «Авторы» (blame) — только для текстовых файлов в git-репо; в хост-режиме
+  // git-вкладки скрыты целиком (файл вне проекта — своего репо/истории тут нет)
+  const showBlameTab = !isHostMode && inRepo && !loading && !loadError && !!fileContent && !fileContent.isBinary && !fileContent.isImage;
   const fileSizeMb = fileContent?.fileSize != null ? (fileContent.fileSize / 1024 / 1024).toFixed(2) : null;
 
   const btnPrimary: React.CSSProperties = {
@@ -834,7 +1041,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     borderRadius: 8, padding: '5px 13px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
   };
 
-  const isOfficeFile = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
+  // OnlyOffice — эндпоинт проектный (project.id + filePath), для хост-файла не сработает;
+  // офисные документы вне проекта показываем как обычный бинарник (см. рендер ниже)
+  const isOfficeFile = !isHostMode && !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind !== 'pdf';
   // Visio OnlyOffice открывает только на просмотр — переключатель «Редактировать» не показываем
   const isVisioFile = fileContent?.docKind === 'visio';
   const isCodeEditing = editing && tab === 'file' && !fileContent?.isBinary && !fileContent?.isImage;
@@ -880,6 +1089,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const dotAt = fileName.lastIndexOf('.');
   const nameBase = dotAt > 0 ? fileName.slice(0, dotAt) : fileName;
   const nameExt = dotAt > 0 ? fileName.slice(dotAt) : '';
+  // Плитка расширения перед именем — как в списке файлов (getExtMeta: фон/цвет/лейбл)
+  const extMeta = getExtMeta(fileName);
 
   // --- Вкладки (включая «Просмотр | Код» для HTML) ---
   const htmlSplit = isHtml && !editing && !isOfficeFile && !fileContent?.isBinary;
@@ -947,7 +1158,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           icon: <DiscardIcon />, onClick: () => setOfficeDiscardDialog(true),
         };
       }
-    } else if (isDrawioViewing) {
+    } else if (isDrawioViewing && !isHostMode) {
       mainAction = drawioMode === 'view'
         ? {
             key: 'drawio-edit', label: 'Редактировать',
@@ -959,7 +1170,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             icon: <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
             onClick: () => { void (async () => { await drawioRef.current?.flush(); setDrawioMode('view'); })(); },
           };
-    } else if (online && !isMobile && !fileContent?.isBinary) {
+    } else if (online && !isMobile && !isHostMode && !fileContent?.isBinary) {
       // На мобиле правку открывает плавающая кнопка (FAB) внизу слева
       mainAction = {
         key: 'edit', label: 'Править', primary: true,
@@ -991,13 +1202,59 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       {a.loading ? <InlineSpinner /> : a.icon}
     </ToolbarIconButton>
   );
+  // Слот главного действия режима («Править»/«Сохранить»/…) — на десктопе живёт в правом
+  // якоре, на мобиле в конце строки. На узких ступенях кнопка ужимается в иконку.
+  const actionSlot = (mainAction || cancelAction) ? (
+    actionAsIcon
+      ? <>{cancelAction && actionIcon(cancelAction)}{mainAction && actionIcon(mainAction)}</>
+      : <>{cancelAction && actionButton(cancelAction)}{mainAction && actionButton(mainAction)}</>
+  ) : null;
 
   // --- Вторичные действия: одинаковые кнопки, лишние уезжают в «···» справа налево ---
   const secondary: { key: string; node: ReactNode; item: OverflowItem }[] = [];
   if (!loading) {
+    // Оглавление — первым: при чтении документа к нему обращаются чаще прочих
+    // вторичных действий, а в «···» уезжают последние в этом списке
+    if (tocToggleVisible) {
+      const tocTitle = tocPanelOpen ? 'Скрыть оглавление' : 'Оглавление документа';
+      secondary.push({
+        key: 'toc',
+        node: (
+          <ToolbarIconButton
+            isMobile={isMobile} onClick={toggleTocPanel} title={tocTitle}
+            color={tocPanelOpen ? C.accent : undefined}
+          >
+            <TableOfContents size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'toc', icon: <TableOfContents size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: tocTitle, onClick: toggleTocPanel,
+        },
+      });
+    }
+    if (dossiersToggleVisible) {
+      const dossiersTitle = dossiersPanelOpen ? 'Скрыть историю решений' : 'История решений';
+      secondary.push({
+        key: 'dossiers',
+        node: (
+          <ToolbarIconButton
+            isMobile={isMobile} onClick={toggleDossiersPanel} title={dossiersTitle}
+            color={dossiersPanelOpen ? C.accent : undefined}
+          >
+            <Lightbulb size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+          </ToolbarIconButton>
+        ),
+        item: {
+          key: 'dossiers', icon: <Lightbulb size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />,
+          label: dossiersTitle, onClick: toggleDossiersPanel,
+        },
+      });
+    }
     if (!loadError && tab === 'file' && isCopyableText && !isDrawio && !(isHtml && htmlTab === 'preview')) {
       const copyTitle = copied ? 'Скопировано'
         : isMarkdown ? 'Скопировать Markdown (Shift — с форматированием)' : 'Скопировать содержимое';
+      // eslint-disable-next-line react-hooks/refs -- secondary — локальный массив рендера; taint от обработчиков, читающих refs только в событиях
       secondary.push({
         key: 'copy',
         node: (
@@ -1027,7 +1284,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         },
       });
     }
-    if (!loadError && online && !editing) {
+    if (!loadError && online && !editing && !isHostMode) {
       const cloud = <CloudGlyph filled={syncState === 'direct'} />;
       if (pending) {
         secondary.push(syncState === 'direct'
@@ -1083,7 +1340,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         item: { key: 'download', icon: <Download size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />, label: 'Скачать', onClick: handleDownload },
       });
     }
-    if (online && !editing) {
+    if (online && !editing && !isHostMode) {
       secondary.push({
         key: 'delete',
         node: (
@@ -1130,7 +1387,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // его вовсе, иначе строка получает лишний зазор в пустом месте
   const commentsChipVisible = showChips && !!commentCounts && commentCounts.total > 0 && !editing && tab === 'file';
   const diffChipVisible = showChips && !!diffStats && tab === 'diff';
-  const badgesVisible = commentsChipVisible || diffChipVisible || showTabs || !!(mainAction || cancelAction);
+  const badgesVisible = commentsChipVisible || diffChipVisible || showTabs;
 
   // Заметка vault — полноценный NoteView (теги, ✨-связи, перенос, правка через
   // notes-API с переименованием): тот же функционал, что в разделе «Заметки».
@@ -1182,21 +1439,46 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           [режим][закрыть] не сжимается и доступен при любой ширине. */}
       <Toolbar isMobile={isMobile}>
         <div ref={stripRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flex: 1, minWidth: 0 }}>
-        {/* Левый фиксированный блок: «назад» на мобиле, ☰ на широких ступенях десктопа
-            (на узких ☰ уезжает в «···») */}
-        {(isMobile || (onOpenSidebar && !iconTier)) && (
-          <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
-            {isMobile ? (
-              <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
-                <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
-              </BackButton>
-            ) : (
-              <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
-                <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+        {/* Левый блок: на десктопе «Закрыть» + ☰ + back/forward, на мобиле «Файлы».
+            Ширина входит в fixedLeftRef — useToolbarOverflow учитывает её в расчёте «···». */}
+        <div ref={fixedLeftRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
+          {isMobile ? (
+            <BackButton onClick={handleClose} title="К списку файлов" style={{ height: 32 }}>
+              <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textSecondary }}>Файлы</span>
+            </BackButton>
+          ) : (
+            <>
+              {/* Закрыть файл — слева */}
+              <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
+                <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
               </ToolbarIconButton>
-            )}
-          </div>
-        )}
+              {onOpenSidebar && !iconTier && (
+                <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+                  <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                </ToolbarIconButton>
+              )}
+              {/* Back/Forward: видимы, пока есть хотя бы одно направление навигации; неактивная — disabled */}
+              {(canFileBack || canFileForward) && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                  <ToolbarIconButton isMobile={isMobile} onClick={onFileBack} disabled={!canFileBack} title="Назад по истории файлов">
+                    <ChevronLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                  </ToolbarIconButton>
+                  <ToolbarIconButton isMobile={isMobile} onClick={onFileForward} disabled={!canFileForward} title="Вперёд по истории файлов">
+                    <ChevronRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                  </ToolbarIconButton>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        {/* Плитка расширения перед именем — как в списке файлов */}
+        <span style={{
+          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
+          background: extMeta.bg, color: extMeta.fg,
+          fontFamily: "'JetBrains Mono', monospace", fontSize: 7.5, fontWeight: 700,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '-0.02em',
+        }}>{extMeta.label}</span>
 
         {/* Имя файла — единственный гибкий элемент строки. Расширение отдельным span'ом:
             ellipsis режет хвост, а по нему и узнают файл. title — полный путь. */}
@@ -1208,7 +1490,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           {nameExt && <span style={{ flexShrink: 0 }}>{nameExt}</span>}
         </span>
 
-        {/* Бейджи + вкладки + главное действие — несжимаемый блок */}
+        {/* Бейджи + вкладки — несжимаемый блок */}
         {badgesVisible && (
         <div ref={badgesRef} style={{ display: 'flex', alignItems: 'center', gap: rowGap, flexShrink: 0 }}>
         {/* Комментарии к документу (флаг doc-annotations): счётчик в тулбаре */}
@@ -1279,18 +1561,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             />
           )
         )}
-
-        {/* Слот главного действия режима — ровно одна кнопка (+ необязательная «Отмена»).
-            Неприкосновенен: на узких ступенях меняет форму на иконку, но не сворачивается. */}
-        {actionAsIcon
-          ? <>
-              {cancelAction && actionIcon(cancelAction)}
-              {mainAction && actionIcon(mainAction)}
-            </>
-          : <>
-              {cancelAction && actionButton(cancelAction)}
-              {mainAction && actionButton(mainAction)}
-            </>}
         </div>
         )}
 
@@ -1302,47 +1572,48 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           <ToolbarOverflowMenu isMobile={isMobile} items={menuItems} title="Ещё" />
         )}
 
-        {/* Правый якорь-выход: режим просмотра + «Закрыть». Несжимаемая группа последним
-            ребёнком строки — эти две кнопки доступны всегда, даже когда панель ужата
-            до минимума и всё остальное уехало в «···». */}
+        {/* На мобиле правого якоря нет — главное действие ставим в конце строки */}
+        {isMobile && actionSlot}
+
+        {/* Правый якорь: режим просмотра (прячется при уходе курсора) + «Править» — контрастная
+            кнопка, самая правая, видна всегда. Несжимаемая группа последним ребёнком строки. */}
         {!isMobile && (
           <div ref={rightRef} style={{ display: 'flex', gap: SP.xs, alignItems: 'center', flexShrink: 0 }}>
             {/* Режим просмотра: сплит с чатом / на весь экран. Ступени: подписи →
-                только иконки → тумблер с иконкой ЦЕЛЕВОГО состояния. Показываем и в
-                правке: иначе из полноэкранного режима не выйти, пока не закончишь. */}
+                только иконки → тумблер-иконка. */}
             {onToggleFullscreen && (
-              tier === 'tight' ? (
-                <ToolbarIconButton
-                  isMobile={isMobile}
-                  onClick={handleToggleMode}
-                  title={fullscreen ? 'Свернуть: сплит с чатом' : 'Развернуть на весь экран'}
-                >
-                  {fullscreen
-                    ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-                    : <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                </ToolbarIconButton>
-              ) : (
-                <PillSwitch
-                  value={fullscreen ? 'full' : 'split'}
-                  iconsOnly={tier !== 'comfort'}
-                  options={[
-                    { value: 'split' as const, label: 'Сплит', title: 'Сплит с чатом', icon: <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
-                    { value: 'full' as const, label: 'Полный', title: 'На весь экран', icon: <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
-                  ]}
-                  onChange={(v) => {
-                    // handleToggleMode — toggle без аргумента, поэтому клик по уже активному
-                    // сегменту (напр. «Сплит», когда уже сплит) должен быть no-op, иначе toggle
-                    // уведёт в противоположный режим
-                    if (v === 'full' && !fullscreen) handleToggleMode();
-                    if (v === 'split' && fullscreen) handleToggleMode();
-                  }}
-                />
-              )
+              <span style={{ display: 'flex', alignItems: 'center' }}>
+                {tier === 'tight' ? (
+                  <ToolbarIconButton
+                    isMobile={isMobile}
+                    onClick={handleToggleMode}
+                    title={fullscreen ? 'Свернуть: сплит с чатом' : 'Развернуть на весь экран'}
+                  >
+                    {fullscreen
+                      ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+                      : <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                  </ToolbarIconButton>
+                ) : (
+                  <PillSwitch
+                    value={fullscreen ? 'full' : 'split'}
+                    iconsOnly={tier !== 'comfort'}
+                    options={[
+                      { value: 'split' as const, label: 'Сплит', title: 'Сплит с чатом', icon: <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+                      { value: 'full' as const, label: 'Полный', title: 'На весь экран', icon: <Maximize2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /> },
+                    ]}
+                    onChange={(v) => {
+                      // handleToggleMode — toggle без аргумента, поэтому клик по уже активному
+                      // сегменту (напр. «Сплит», когда уже сплит) должен быть no-op, иначе toggle
+                      // уведёт в противоположный режим
+                      if (v === 'full' && !fullscreen) handleToggleMode();
+                      if (v === 'split' && fullscreen) handleToggleMode();
+                    }}
+                  />
+                )}
+              </span>
             )}
-
-            <ToolbarIconButton isMobile={isMobile} onClick={handleClose} title="Закрыть">
-              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </ToolbarIconButton>
+            {/* Главное действие («Править») — контрастная, самая правая, видна всегда */}
+            {actionSlot}
           </div>
         )}
         </div>{/* конец строки шапки */}
@@ -1375,7 +1646,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           </div>
         )}
 
-        {!loading && loadError && (
+        {!loading && loadError && loadForbidden && (
+          <EmptyState
+            icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+            title="Файл вне досягаемости песочницы"
+            subtitle={filePath}
+          />
+        )}
+
+        {!loading && loadError && !loadForbidden && (
           <EmptyState
             icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
             title={online ? 'Не удалось открыть файл' : 'Файл не синхронизирован'}
@@ -1404,7 +1683,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               </div>
             )}
 
-            {fileContent?.isVideo && (
+            {/* Стрим — проектный эндпоинт (project.id + путь): для хост-файла вне
+                проекта не сработает, показываем как обычный бинарник со скачиванием */}
+            {fileContent?.isVideo && !isHostMode && (
               <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: 16 }}>
                 <video
                   controls
@@ -1419,7 +1700,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
               </div>
             )}
 
-            {fileContent?.isAudio && (
+            {fileContent?.isAudio && !isHostMode && (
               isMobile
                 ? (
                   <div style={{ display: 'flex', justifyContent: 'center', padding: 20 }}>
@@ -1473,8 +1754,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   />
             )}
 
-            {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server */}
-            {fileContent?.isDocument && fileContent.docKind !== 'pdf' && (
+            {/* Office-файлы (docx/xlsx/pptx) — через OnlyOffice Document Server (проектный
+                эндпоинт); для хост-файла вне проекта не сработает — только скачивание */}
+            {fileContent?.isDocument && fileContent.docKind !== 'pdf' && !isHostMode && (
               <div style={{ position: 'relative', width: '100%', height: '100%' }}>
                 <OfficeViewer
                   key={`${filePath}-${officeMode}-${officeCacheKey ?? ''}`}
@@ -1490,6 +1772,21 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   </div>
                 )}
               </div>
+            )}
+
+            {isHostMode && fileContent && (fileContent.isVideo || fileContent.isAudio || (fileContent.isDocument && fileContent.docKind !== 'pdf')) && (
+              <EmptyState
+                icon={<File size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+                title="Просмотр недоступен вне проекта"
+                subtitle={`${fileName}${fileSizeMb ? ` — ${fileSizeMb} МБ` : ''}`}
+                action={
+                  fileContent.base64 ? (
+                    <button onClick={handleDownload} style={{ ...btnPrimary, padding: '8px 16px' }}>
+                      Скачать
+                    </button>
+                  ) : undefined
+                }
+              />
             )}
 
             {fileContent?.isBinary && !fileContent.isImage && !fileContent.isVideo && !fileContent.isAudio && !fileContent.isDocument && (
@@ -1572,13 +1869,19 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                       )}
                     </div>
                   )
+                  : isMarkdown && isHostMode
+                  // Хост-режим: без комментариев к документу и резолва картинок —
+                  // обе фичи проектные (scope=project.id), для файла вне проекта не годятся
+                  ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
                   : isMarkdown
                   ? <div data-selection-scope="doc" data-selection-priority="2"><DocCommentedMarkdown
                       scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
                       onCounts={onCommentCounts}
                       // Логотип и скриншоты README лежат рядом в репозитории: путь в src
-                      // относителен документа, грузить их надо через файловый эндпоинт
-                      viewer={{ resolveImageSrc: src => {
+                      // относителен документа, грузить их надо через файловый эндпоинт.
+                      // onDocLink — переход по md-ссылкам внутри файла (другой файл/якорь),
+                      // иначе клик уводил бы браузер из SPA на главный экран
+                      viewer={{ onDocLink: handleDocLink, resolveImageSrc: src => {
                         const target = resolveDocImage(filePath, src);
                         return target ? api.files.fileUrl(project.id, target) : undefined;
                       } }}
@@ -1710,7 +2013,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Плавающая кнопка редактирования на мобиле (MA4). ЛЕВЫЙ нижний угол — правый занят
           глобальным AiLauncher (⌘/Ctrl+K), чтобы кнопки не накладывались. */}
-      {isMobile && online && !editing && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !(isHtml && htmlTab === 'preview') && (
+      {isMobile && online && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"
@@ -1798,7 +2101,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           onConfirm={async () => {
             setOfficeDiscardDialog(false);
             setOfficeSwitching(true);
-            try { await api.files.officeDiscard(project.id, filePath); } catch {}
+            // Осознанно глотаем сбой: сброс правок не должен блокировать переход в просмотр
+            try { await api.files.officeDiscard(project.id, filePath); } catch { /* ignore */ }
             setOfficeMode('view');
           }}
           onCancel={() => setOfficeDiscardDialog(false)}
@@ -1834,13 +2138,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 // группы различаются чередующимся фоном.
 function BlameView({ lines }: { lines: GitBlameLine[] }) {
   const rows = useMemo(() => {
-    let group = -1;
-    let prevSha = '';
-    return lines.map(l => {
-      const first = l.sha !== prevSha;
-      if (first) { group++; prevSha = l.sha; }
-      return { l, first, group };
-    });
+    const out: { l: GitBlameLine; first: boolean; group: number }[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const first = i === 0 || lines[i].sha !== lines[i - 1].sha;
+      out.push({ l: lines[i], first, group: i === 0 ? 0 : out[i - 1].group + (first ? 1 : 0) });
+    }
+    return out;
   }, [lines]);
   return (
     <div style={{ fontFamily: FONT.mono, fontSize: 12, lineHeight: '1.55' }}>

@@ -14,7 +14,7 @@
 // Стор параметризован неймспейсом (createPanelZones): воркспейс и раздел «Чаты»
 // держат НЕЗАВИСИМЫЕ раскладки, не мешая друг другу.
 import { useCallback, useSyncExternalStore } from 'react';
-import { PANEL_HOME, isPanelKey, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
+import { PANEL_HOME, RAIL_GROUPS, isPanelKey, migrateLegacyKey, type PanelKey, type Zone } from './panelCatalog';
 
 // Реестр панелей (ключи, мета, домашние зоны) — соседний panelCatalog.ts.
 // Здесь только раскладка: что где лежит и какого размера.
@@ -23,10 +23,24 @@ export type { PanelKey, Zone } from './panelCatalog';
 // Размеры самой рельсы (RAIL_W/RAIL_GAP) живут рядом с её компонентом —
 // components/ui/PanelRail: к состоянию раскладки они отношения не имеют.
 export const PANEL_MIN_H = 120;  // минимальная высота панельки, px (шапка 40 + контент)
+// Порог ДЕЛЕНИЯ соседа: открывая панель в забитую колонку, высоту уступает один
+// сосед — ровно половину своей (см. insertPlan в PanelZone). Половинки мельче этого
+// не делаем: панель уходит новым столбцом. Порог заметно выше PANEL_MIN_H, потому
+// что тот — предел физической живучести карточки (шапка плюс огрызок контента), а
+// здесь решается, будет ли в панели что читать. Без него деление шло каскадом по
+// нижней панели — на зоне 1080px колонка вырождалась в 536 | 264 | 128 | 128, где
+// последние две показывали одну шапку.
+export const PANEL_SPLIT_MIN_H = 260;
 export const COL_MIN = 280;      // клампы ширины ОДНОЙ колонки панелей
 export const COL_MAX = 560;
 export const COL_DEFAULT = 340;
-export const COL_CAP = 2;        // дефолтная вместимость колонки при открытии новой панели
+// Вместимость колонки при открытии новой панели — СКОЛЬКО ПАНЕЛЕЙ ТУДА ВЛЕЗАЕТ.
+// Настоящее число считает зона по живой высоте колонки (влезает ли ещё одна, не
+// ужимая соседей мельче порогов выше) и передаёт сюда; COL_CAP — только фолбэк,
+// когда высоты ещё нет (первый рендер, вызов не из раскладки). Раньше это была
+// ЗАШИТАЯ «пара на колонку», и третья панель уезжала колонкой вбок при свободном
+// экране.
+export const COL_CAP = 2;
 
 // Режим зоны: раскладка колонками (дефолт) или одна выбранная панель.
 // Состояние ЕДИНОЕ (без отдельной памяти на режим): вход в solo схлопывает
@@ -82,30 +96,100 @@ export function parseLayout(rawLayout: string | null, rawLegacyOpen: string | nu
   return [];
 }
 
-// Открытие панели: в колонку У РЕЛЬСЫ, пока в ней меньше COL_CAP, иначе новая
-// колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают к центру. Рельса у правой
-// зоны справа (её колонка — последняя в массиве, новая пушится в конец), у левой
-// слева (её колонка — первая, новая встаёт в начало). Раньше сторону не учитывали
-// и новая колонка всегда лезла в конец — у левой зоны это центр, а не край.
-export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right'): PanelKey[][] {
+// Открытие панели: в колонку У РЕЛЬСЫ, пока в неё влезает (cap — вместимость,
+// см. COL_CAP), иначе новая колонка тоже РОЖДАЕТСЯ У РЕЛЬСЫ, а прежние отъезжают
+// к центру. Рельса у правой зоны справа (её колонка — последняя в массиве, новая
+// пушится в конец), у левой слева (её колонка — первая, новая встаёт в начало).
+// Раньше сторону не учитывали и новая колонка всегда лезла в конец — у левой зоны
+// это центр, а не край.
+export function addPanel(layout: PanelKey[][], k: PanelKey, side: Zone = 'right', cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelKey[][] {
   if (layout.flat().includes(k)) return layout;
+  // Порядок кнопок известен — панель встаёт на СВОЁ место в нём (см. placeByRail).
+  // Без него (дефолты раскладки, миграции) — то же правило колонок, но панель
+  // просто дописывается в конец колонки: сравнивать ранги не с чем.
+  if (railSeq && railSeq.length > 0) return placeByRail(layout, k, side, cap, railSeq).layout;
   const out = layout.map(c => [...c]);
   const railIdx = side === 'left' ? 0 : out.length - 1;
   const railCol = out[railIdx];
-  if (railCol && railCol.length < COL_CAP) railCol.push(k);
+  if (railCol && railCol.length < cap) railCol.push(k);
   else if (side === 'left') out.unshift([k]);
   else out.push([k]);
   return out;
 }
 
-// Куда встанет ЕЩЁ НЕ ОТКРЫТАЯ панель — то же правило, что у addPanel, но без
-// самой вставки: нужно рельсе, чтобы под курсором показать место будущей панели
-// (призрак в раскладке). Возвращает индекс колонки, либо newColumn — панель
-// заведёт свою колонку у рельсы.
-export function nextPlacement(layout: PanelKey[][], side: Zone = 'right'): { ci: number } | { newColumn: true } {
-  const railIdx = side === 'left' ? 0 : layout.length - 1;
+// Ранг кнопки в вертикальном порядке рельсы (railSeq — плоский список кнопок
+// столбца сверху вниз). Кнопки в списке нет — ранг бесконечный: такую панель
+// считаем самой нижней. Так себя ведут ключи, которых на этом экране в рельсе
+// не показывают; спорить с ними за место в середине колонки не за что.
+function railRank(railSeq: readonly PanelKey[], k: PanelKey): number {
+  const i = railSeq.indexOf(k);
+  return i < 0 ? Number.MAX_SAFE_INTEGER : i;
+}
+
+export interface RailPlacement {
+  // Раскладка ПОСЛЕ вставки — ею пользуется addPanel
+  layout: PanelKey[][];
+  // Где панель оказалась. ci — индекс колонки в ИСХОДНОЙ раскладке (призрак
+  // рисуется по ней, до вставки); при newColumn он равен месту вставки новой
+  // колонки, то есть тоже исходной координате.
+  ci: number;
+  ri: number;
+  // Панель завела НОВУЮ колонку (место ci — куда та встанет)
+  newColumn: boolean;
+}
+
+// Размещение панели ПО ПОРЯДКУ КНОПОК РЕЛЬСЫ — единое правило и для вставки
+// (addPanel), и для прогноза под курсором (призрак места). Считать их порознь
+// нельзя: обещание рельсы и итог клика обязаны совпадать.
+//
+// Правило — две части:
+//
+//  1. МЕСТО В КОЛОНКЕ. Панель идёт в колонку у рельсы на место, где столько же
+//     панелей стоит ВЫШЕ неё в столбце кнопок. Позиция считается пересчётом, а не
+//     поиском первой «панели ниже», потому что колонка не обязана быть
+//     отсортирована по рельсе: раскладку правят перетаскиванием, переносом из
+//     соседней зоны и миграцией со старого формата — там порядок любой, и правило
+//     обязано давать однозначный результат на ЛЮБОЙ колонке.
+//
+//  2. ПЕРЕПОЛНЕНИЕ. В колонку у рельсы больше не влезает (cap — её вместимость по
+//     живой высоте) — панель заводит СВОЮ колонку, и тоже У РЕЛЬСЫ: свежая панель
+//     появляется под пальцем, рядом со своей кнопкой, а прежние колонки отъезжают
+//     к центру. Уже открытые панели при этом НЕ ТРОГАЮТСЯ: колонка живёт там, куда
+//     её сложили, и открытие соседки её не перетасовывает.
+//
+// Так у правой зоны новая колонка растёт справа (в конец массива), у левой — слева
+// (в начало): рост всегда от рельсы. Между этими вариантами выбирали дважды: сперва
+// «хвост колонки выталкивается к центру, новая колонка рождается там» (колонки
+// читались как один поток по кнопкам), но на живом экране это перетасовывало уже
+// открытые панели и уводило свежую от кнопки, по которой человек только что щёлкнул.
+export function placeByRail(
+  layout: PanelKey[][],
+  k: PanelKey,
+  side: Zone,
+  cap: number,
+  railSeq: readonly PanelKey[],
+): RailPlacement {
+  const capN = Math.max(1, cap);
+  const rank = (x: PanelKey) => railRank(railSeq, x);
+  const isLeft = side === 'left';
+  // Колонка у рельсы: у правой зоны рельса справа (последняя колонка массива),
+  // у левой слева (первая)
+  const railIdx = isLeft ? 0 : layout.length - 1;
   const railCol = layout[railIdx];
-  return railCol && railCol.length < COL_CAP ? { ci: railIdx } : { newColumn: true };
+
+  // Место для новой колонки у рельсы — та же кромка: конец массива справа, начало
+  // слева. Ею закрываются и пустая зона (колонок нет вовсе), и переполнение.
+  if (!railCol || railCol.length >= capN) {
+    const at = isLeft ? 0 : layout.length;
+    const cols = layout.map(c => [...c]);
+    cols.splice(at, 0, [k]);
+    return { layout: cols, ci: at, ri: 0, newColumn: true };
+  }
+
+  const ri = railCol.filter(x => rank(x) < rank(k)).length;
+  const cols = layout.map(c => [...c]);
+  cols[railIdx].splice(ri, 0, k);
+  return { layout: cols, ci: railIdx, ri, newColumn: false };
 }
 
 // Закрытие панели: удалить, пустые колонки схлопнуть
@@ -232,6 +316,20 @@ export interface PanelZones {
   // человек ждёт кнопку слева — там, где панель была, а не там, где родилась.
   // Пусто (панель ещё нигде не открывали) — берётся PANEL_HOME.
   home: Partial<Record<PanelKey, Zone>>;
+  // Кнопки, убранные с рельсы в её ящик (меню «…»): редко используемые панели,
+  // чтобы столбец иконок не рос бесконечно. Список ОБЩИЙ на обе зоны, а не свой у
+  // каждой: в какой рельсе показывать строку, и так решает home — второй список
+  // пришлось бы синхронизировать при каждом переезде кнопки между сторонами.
+  tucked: PanelKey[];
+  // Порядок кнопок в столбце рельсы, заданный перетаскиванием. Пусто — порядок
+  // каталожный (PANEL_KEYS). Список ОБЩИЙ на обе зоны по тем же основаниям, что и
+  // tucked: сторона кнопки живёт в home, и второй список пришлось бы синхронизировать
+  // с ним при каждом переезде.
+  //
+  // Плоский на все группы рельсы, хотя переставлять можно только ВНУТРИ группы:
+  // sortRail сравнивает лишь ключи переданного набора, поэтому чужие индексы в
+  // сравнение не попадают и разводить список по группам незачем.
+  railOrder: PanelKey[];
 }
 
 export function emptyZone(): ZoneState {
@@ -239,12 +337,17 @@ export function emptyZone(): ZoneState {
 }
 
 export function emptyZones(): PanelZones {
-  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {} };
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [] };
 }
 
 // Зона, в которой панель показывает свою иконку, когда закрыта
 export function homeOf(zones: PanelZones, k: PanelKey): Zone {
   return zones.home[k] ?? PANEL_HOME[k];
+}
+
+// Кнопка панели убрана в ящик рельсы (меню «…»)
+export function isTucked(zones: PanelZones, k: PanelKey): boolean {
+  return zones.tucked.includes(k);
 }
 
 // Запомнить, где сейчас лежит каждая панель — включая спрятанные «свернуть все»:
@@ -319,7 +422,24 @@ export function sanitizeZones(raw: unknown): PanelZones {
     right: readZone(src.right),
     weights: parseWeights(JSON.stringify(src.weights ?? {})),
     home: parseHome((src as { home?: unknown }).home),
+    tucked: parseKeyList((src as { tucked?: unknown }).tucked),
+    railOrder: parseKeyList((src as { railOrder?: unknown }).railOrder),
   });
+}
+
+// Список ключей панелей из сохранённого состояния (спрятанные в ящик, порядок
+// кнопок рельсы): чужие ключи отбрасываем, упразднённые имена переводим (как у
+// весов и привязок к зонам), дубли снимаем — оба списка читаются позиционно, и
+// повтор дал бы либо две одинаковые строки в меню, либо спор двух мест за одну
+// кнопку.
+export function parseKeyList(raw: unknown): PanelKey[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PanelKey[] = [];
+  for (const v of raw) {
+    const key = typeof v === 'string' ? migrateLegacyKey(v) : null;
+    if (key && !out.includes(key)) out.push(key);
+  }
+  return out;
 }
 
 // Сохранённая привязка «панель → зона»: чужие ключи и значения отбрасываем,
@@ -345,28 +465,151 @@ export function closePanel(zones: PanelZones, k: PanelKey): PanelZones {
   return withZone(zones, zone, z => ({ ...z, layout: removePanel(z.layout, k) }));
 }
 
+// Вынуть панель из свёрнутых наборов ОБЕИХ зон (кнопка «Свернуть все»).
+//
+// Нужно везде, где дом кнопки назначается ЯВНО: запись состояния заканчивается
+// trackHome, а тот перечитывает layout и stash — и панель, забытая в свёрнутом
+// наборе, утаскивает свой home обратно в прежнюю зону. Снаружи это выглядело так,
+// будто брошенная на чужую рельсу кнопка не переезжает вовсе: дроп срабатывал, но
+// его результат тут же откатывался. Заметно было только на панели, которую после
+// сворачивания ни разу не открывали, — открытие вычищает её из stash само
+// (enforceZoneInvariant: layout сильнее спрятанного набора).
+//
+// По смыслу это и правильно: кнопку унесли на другую сторону осознанно, и
+// разворачивание зоны должно вернуть только то, что в ней осталось.
+function dropFromStash(zones: PanelZones, k: PanelKey): PanelZones {
+  const strip = (z: ZoneState): ZoneState => {
+    if (!z.stash.some(col => col.includes(k))) return z;
+    return { ...z, stash: z.stash.map(col => col.filter(x => x !== k)).filter(col => col.length > 0) };
+  };
+  return { ...zones, left: strip(zones.left), right: strip(zones.right) };
+}
+
 // Закрыть панель, бросив её на рельсу зоны: она не просто закрывается, а
 // оставляет иконку ИМЕННО ТАМ, куда её бросили (даже если лежала в соседней
 // зоне) — это и есть «убрать панель с глаз, но положить кнопку под руку».
 export function closePanelTo(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
-  const closed = closePanel(zones, k);
+  const closed = dropFromStash(closePanel(zones, k), k);
   return { ...closed, home: { ...closed.home, [k]: zone } };
+}
+
+// Убрать кнопку панели в ящик рельсы (её меню «…»). Панель при этом ЗАКРЫВАЕТСЯ:
+// у открытой панели кнопка остаётся в рельсе (иначе её нечем было бы закрыть
+// привычным кликом), и «спрятать», не убрав панель с глаз, ничего бы не изменило.
+export function tuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  const closed = closePanelTo(zones, zone, k);
+  return isTucked(closed, k) ? closed : { ...closed, tucked: [...closed.tucked, k] };
+}
+
+// Вернуть кнопку из ящика на рельсу — именно той зоны, куда её бросили. Панель не
+// открывается: возвращают кнопку, а не панель (открытие — отдельный жест, дроп в
+// раскладку).
+export function untuckPanel(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+  const base = dropFromStash(zones, k);
+  return {
+    ...base,
+    tucked: base.tucked.filter(x => x !== k),
+    home: { ...base.home, [k]: zone },
+  };
+}
+
+// Разовая укладка кнопок в ящик рельсы при появлении фичи (см. defaultTucked).
+//
+// Дефолт в чистом состоянии решает задачу только для НОВОГО пользователя, а у всех
+// остальных раскладка уже сохранена — и новые «редкие» кнопки встали бы им в столбец.
+// Догоняем их здесь, но ровно ОДИН раз на кнопку: applied — список ключей, которым
+// ящик уже предлагали. Без него миграция срабатывала бы каждый запуск и утаскивала
+// обратно кнопку, которую человек осознанно вернул в столбец.
+//
+// Список, а не флаг «миграция пройдена»: набор defaultTucked со временем пополняется,
+// и новая кнопка обязана доехать до тех, кто прошлую волну уже видел.
+//
+// Открытую панель не трогаем и не закрываем (в отличие от tuckPanel): пока панель на
+// экране, её кнопка и так стоит в столбце (см. railKeyVisible), а в ящик уедет, когда
+// человек эту панель закроет.
+export function mergeTuckDefaults(
+  tucked: readonly PanelKey[],
+  want: readonly PanelKey[],
+  applied: readonly PanelKey[],
+): { tucked: PanelKey[]; applied: PanelKey[]; changed: boolean } {
+  const fresh = want.filter(k => !applied.includes(k));
+  if (fresh.length === 0) return { tucked: [...tucked], applied: [...applied], changed: false };
+  const nextTucked = [...tucked];
+  for (const k of fresh) if (!nextTucked.includes(k)) nextTucked.push(k);
+  return { tucked: nextTucked, applied: [...applied, ...fresh], changed: true };
+}
+
+// Порядок кнопок ОДНОЙ группы рельсы: сначала те, что человек расставил сам (по
+// индексам railOrder), затем незнакомые — хвостом, в исходном каталожном порядке.
+//
+// Незнакомые появляются у группы, которую ещё ни разу не переставляли, и у панели,
+// добавленной в продукт после того, как порядок был задан: в сохранённом списке её
+// нет, и место ей остаётся только в конце. Каталожный порядок при этом сохраняется —
+// новые панели встают в реестровой очерёдности между собой, а не как попало.
+export function sortRail(order: readonly PanelKey[], keys: readonly PanelKey[]): PanelKey[] {
+  if (order.length === 0) return [...keys];
+  const known: PanelKey[] = [];
+  const rest: PanelKey[] = [];
+  for (const k of keys) (order.includes(k) ? known : rest).push(k);
+  known.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  return [...known, ...rest];
+}
+
+// Порядок кнопок рельсы СВЕРХУ ВНИЗ по одному состоянию, без оглядки на экран:
+// группы реестра подряд, внутри группы — пользовательский порядок railOrder.
+//
+// Нужен ФОЛБЭКУ внешнего показа панели (revealPanel), когда спросить настоящий
+// порядок не у кого — зона на этом экране не смонтирована. Своих фильтров видимости
+// здесь нет намеренно: зона выбрасывает из столбца часть кнопок (чужая сторона,
+// ящик, сессионные без содержимого), но фильтрация ПОРЯДОК СОХРАНЯЕТ, а место в
+// колонке считается по относительному рангу панелей (placeByRail) — на нём выпавшие
+// ключи не сказываются. Полный список при этом строже: у ключа, которого в столбце
+// нет, ранга не было бы вовсе, и панель считалась бы самой нижней.
+export function railSequence(railOrder: readonly PanelKey[]): PanelKey[] {
+  return RAIL_GROUPS.flatMap(g => sortRail(railOrder, g));
+}
+
+// Перестановка кнопки внутри своей группы: moved встаёт ПЕРЕД before (null — в
+// конец группы). Место задаётся соседом, а не индексом, потому что рельса считает
+// его по ВИДИМЫМ кнопкам, а порядок хранится для всей группы целиком — вместе с
+// теми, что сейчас закрыты в соседней зоне или лежат в ящике. По индексу такие
+// кнопки молча съезжали бы на чужие места.
+//
+// Группа материализуется в railOrder ЦЕЛИКОМ при первой же перестановке: храни мы
+// только сдвинутый ключ, он всплывал бы поверх нетронутых соседей (у тех индекса
+// нет вовсе, и они уходят в хвост).
+export function reorderRail(
+  zones: PanelZones,
+  keys: readonly PanelKey[],
+  moved: PanelKey,
+  before: PanelKey | null,
+): PanelZones {
+  if (!keys.includes(moved) || moved === before) return zones;
+  const cur = sortRail(zones.railOrder, keys);
+  const next = cur.filter(k => k !== moved);
+  const at = before ? next.indexOf(before) : -1;
+  next.splice(at >= 0 ? at : next.length, 0, moved);
+  // Порядок не изменился — не будим подписчиков и не пишем localStorage
+  if (next.every((k, i) => k === cur[i])) return zones;
+  return { ...zones, railOrder: [...zones.railOrder.filter(k => !keys.includes(k)), ...next] };
 }
 
 // Открыть панель В ЗОНЕ. Если она открыта в другой — это перенос: из прежней
 // зоны панель уходит. В solo-режиме целевой зоны раскладка схлопывается до неё.
-export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
+// cap — вместимость колонки у рельсы (сколько панелей влезает по высоте), её
+// считает зона: см. COL_CAP.
+export function openPanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelZones {
   const base = closePanel(zones, k);
   return withZone(base, zone, z => ({
     ...z,
-    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone),
+    layout: z.mode === 'solo' ? [[k]] : addPanel(z.layout, k, zone, cap, railSeq),
   }));
 }
 
 // Клик по иконке рельсы: панель открыта В ЭТОЙ зоне — закрыть, иначе открыть
 // здесь (в том числе забрав из соседней зоны).
-export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey): PanelZones {
-  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k);
+export function togglePanelIn(zones: PanelZones, zone: Zone, k: PanelKey, cap = COL_CAP, railSeq?: readonly PanelKey[]): PanelZones {
+  return zoneOf(zones, k) === zone ? closePanel(zones, k) : openPanelIn(zones, zone, k, cap, railSeq);
 }
 
 // Дроп панели НА панель — они меняются местами, в том числе через границу зон:
@@ -473,9 +716,17 @@ export function isZoneCollapsed(z: ZoneState): boolean {
 // Показать панель по внешнему запросу (git-бар над композером просит «Изменения»).
 // Открытую НЕ трогаем и не перетаскиваем через полэкрана: вызывающий вместо этого
 // просит её мигнуть. Закрытая открывается в своей домашней зоне.
+//
+// ФОЛБЭК-путь: обычно внешний показ исполняет сама зона (registerOpener), потому что
+// правило размещения опирается на живую высоту колонки и настоящий порядок кнопок.
+// Здесь — то же правило (placeByRail через openPanelIn), но по каноническому порядку
+// кнопок и с фолбэк-вместимостью COL_CAP: зоны на экране нет, спросить не у кого.
+// Раньше этот путь шёл мимо правила рельсы вовсе: панель дописывалась в конец колонки,
+// не глядя на порядок кнопок, и высоты соседей при этом делились заново.
 export function revealPanel(zones: PanelZones, k: PanelKey): { zones: PanelZones; wasOpen: boolean } {
   if (zoneOf(zones, k)) return { zones, wasOpen: true };
-  return { zones: openPanelIn(zones, homeOf(zones, k), k), wasOpen: false };
+  const home = homeOf(zones, k);
+  return { zones: openPanelIn(zones, home, k, COL_CAP, railSequence(zones.railOrder)), wasOpen: false };
 }
 
 // ---------- миграция со старых раздельных ключей ----------
@@ -520,6 +771,10 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     // Привязки к зонам старое состояние не знало — их проставит trackHome по
     // фактическому расположению панелей при первой же записи
     home: {},
+    // Ящик рельсы и свой порядок кнопок появились позже раздельных ключей —
+    // переносить нечего
+    tucked: [],
+    railOrder: [],
   });
 }
 
@@ -554,8 +809,11 @@ export function migrateSidebarSection(
 
 export interface PanelZonesApi {
   zones: PanelZones;
-  // Клик по иконке рельсы зоны
-  toggle: (zone: Zone, k: PanelKey) => void;
+  // Клик по иконке рельсы зоны. cap — вместимость колонки у рельсы по живой
+  // высоте (см. COL_CAP): её знает только зона, состояние пикселей не хранит.
+  // railSeq — порядок кнопок столбца сверху вниз: по нему панель встаёт на своё
+  // место среди уже открытых (см. placeByRail). Знает его тоже только зона.
+  toggle: (zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => void;
   // Закрыть панель, где бы она ни лежала (её иконка остаётся в прежней зоне)
   close: (k: PanelKey) => void;
   // Дроп панели на рельсу: закрыть и положить иконку ИМЕННО в эту зону — панель
@@ -566,6 +824,15 @@ export interface PanelZonesApi {
   // Ремонт сохранённой раскладки: выгнать из зоны панели, которых на этом экране
   // в ней быть не может (см. evictForeign)
   evict: (zone: Zone, allowed: readonly PanelKey[]) => void;
+  // Дроп кнопки в ящик рельсы (её меню «…») / возврат кнопки из ящика на рельсу.
+  // Зона в обоих случаях та, к чьей рельсе относится жест: кнопка ложится и
+  // возвращается туда, куда её бросили.
+  tuck: (zone: Zone, k: PanelKey) => void;
+  untuck: (zone: Zone, k: PanelKey) => void;
+  // Перестановка кнопки в столбце рельсы: moved встаёт перед before (null — в конец).
+  // keys — ПОЛНЫЙ набор её группы (перетаскивать можно только внутри своей), см.
+  // reorderRail.
+  reorder: (keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null) => void;
   // Дроп панели на панель (в том числе через границу зон)
   swapWith: (a: PanelKey, b: PanelKey) => void;
   // Дроп панели из рельсы на открытую панель: гость встаёт в её слот, хозяин
@@ -583,6 +850,11 @@ export interface PanelZonesApi {
   // Показать панель по внешнему запросу (git-бар над композером). Возвращает
   // true, если она УЖЕ была открыта — тогда вызывающий просит её мигнуть.
   reveal: (k: PanelKey) => boolean;
+  // Зона объявляет стору, как она открывает у себя панель (её правило размещения:
+  // живая вместимость колонки, порядок кнопок, сохранение высот соседей). Стор
+  // сам этого не умеет и не должен: правило зависит от пикселей на экране.
+  // Возвращает функцию отписки — вызывать в useEffect зоны.
+  registerOpener: (zone: Zone, open: (k: PanelKey) => void) => () => void;
 }
 
 export type PanelZonesStore = { use: () => PanelZonesApi };
@@ -593,11 +865,22 @@ export type PanelZonesStore = { use: () => PanelZonesApi };
 function createPanelZones(ns: string, opts?: {
   legacyOpenKey?: string;
   defaultZones?: Partial<Record<Zone, PanelKey[][]>>;
+  // Кнопки, которые уезжают в ящик рельсы («…»), а не встают в столбец: редко
+  // используемые панели, чтобы столбец иконок не был длинным. Применяется и к
+  // чистому состоянию (новый пользователь), и РАЗОВО к уже сохранённому — иначе
+  // новая «редкая» кнопка встала бы в столбец всем, кроме новичков. Подробности
+  // и защита от повтора — mergeTuckDefaults.
+  defaultTucked?: PanelKey[];
   // Раздел переезжает со старого сайдбара: его ключ режима и панель, в которую
   // превращается прежний сайдбар
   legacySidebar?: { modeKey: string; panelKey: PanelKey };
 }): PanelZonesStore {
   const KEY = `cc_${ns}_zones`;
+  // Ключи, которым ящик рельсы уже предлагали (см. mergeTuckDefaults). Отдельным
+  // ключом, а не полем состояния: список переживает и сброс раскладки, и её порчу —
+  // иначе «почини мусор в cc_ws_zones» означало бы заново утащить в ящик кнопки,
+  // которые человек оттуда достал.
+  const TUCKED_KEY = `cc_${ns}_tucked_applied`;
 
   // Приоритет: новое состояние → миграция со старых раздельных ключей → дефолт.
   // defaultZones нужен там, где базовая панель должна быть открыта при первом
@@ -608,24 +891,51 @@ function createPanelZones(ns: string, opts?: {
   // trackHome на входе: у сохранённого состояния привязок может не быть (старый
   // формат, миграция, дефолт) — тогда они выводятся из того, где панели лежат
   let _zones: PanelZones = trackHome((() => {
-    const raw = lsGet(KEY);
-    if (raw) {
-      try { return sanitizeZones(JSON.parse(raw)); } catch { /* мусор → миграция/дефолт */ }
-    }
-    const fromLegacy = migrateZones(lsGet, ns, opts?.legacyOpenKey);
-    if (fromLegacy) { migrated = true; return fromLegacy; }
-    const fromSidebar = opts?.legacySidebar
-      && migrateSidebarSection(lsGet, opts.legacySidebar.modeKey, opts.legacySidebar.panelKey);
-    if (fromSidebar) { migrated = true; return fromSidebar; }
-    return sanitizeZones({
-      left: { layout: opts?.defaultZones?.left ?? [] },
-      right: { layout: opts?.defaultZones?.right ?? [] },
-    });
+    const base = (() => {
+      const raw = lsGet(KEY);
+      if (raw) {
+        try { return sanitizeZones(JSON.parse(raw)); } catch { /* мусор → миграция/дефолт */ }
+      }
+      const fromLegacy = migrateZones(lsGet, ns, opts?.legacyOpenKey);
+      if (fromLegacy) { migrated = true; return fromLegacy; }
+      const fromSidebar = opts?.legacySidebar
+        && migrateSidebarSection(lsGet, opts.legacySidebar.modeKey, opts.legacySidebar.panelKey);
+      if (fromSidebar) { migrated = true; return fromSidebar; }
+      return sanitizeZones({
+        left: { layout: opts?.defaultZones?.left ?? [] },
+        right: { layout: opts?.defaultZones?.right ?? [] },
+      });
+    })();
+
+    // Укладка новых «редких» кнопок в ящик — одинаково для всех веток выше: и
+    // новичок, и старожил проходят через одну проверку applied.
+    const want = opts?.defaultTucked ?? [];
+    if (want.length === 0) return base;
+    const applied = parseKeyList((() => {
+      try { return JSON.parse(lsGet(TUCKED_KEY) ?? '[]'); } catch { return []; }
+    })());
+    const merged = mergeTuckDefaults(base.tucked, want, applied);
+    if (!merged.changed) return base;
+    lsSet(TUCKED_KEY, JSON.stringify(merged.applied));
+    // Состояние поехало — его надо записать, иначе отметка applied уже стоит, а
+    // сам ящик пуст: следующий запуск сочтёт волну пройденной и кнопки останутся
+    // в столбце.
+    migrated = true;
+    return { ...base, tucked: merged.tucked };
   })());
 
   const listeners = new Set<() => void>();
   function emit() { listeners.forEach(l => l()); }
   function subscribe(l: () => void) { listeners.add(l); return () => { listeners.delete(l); }; }
+
+  // Открыватели смонтированных зон (см. registerOpener): по одному на сторону.
+  // Императивный реестр, а не поле состояния, СОЗНАТЕЛЬНО — это не данные, а канал
+  // к тому, кто знает пиксели: внешний показ панели обязан идти по тому же правилу,
+  // что и клик по кнопке рельсы, а оно считается по живой высоте колонки. Через
+  // состояние это была бы отложенная заявка с гонками (кто её исполнил, что делать
+  // с зависшей), здесь же вызов синхронный, и reveal по-прежнему сразу отвечает
+  // вызывающему, была ли панель открыта.
+  const openers = new Map<Zone, (k: PanelKey) => void>();
 
   function persist() { lsSet(KEY, JSON.stringify(_zones)); }
 
@@ -667,14 +977,24 @@ function createPanelZones(ns: string, opts?: {
   function usePanelZones(): PanelZonesApi {
     const zones = useSyncExternalStore(subscribe, () => _zones);
 
-    const toggle = useCallback((zone: Zone, k: PanelKey) => {
+    const toggle = useCallback((zone: Zone, k: PanelKey, cap?: number, railSeq?: readonly PanelKey[]) => {
       ensureWeight(k);
-      commit(togglePanelIn(_zones, zone, k));
+      commit(togglePanelIn(_zones, zone, k, cap, railSeq));
     }, []);
 
     const close = useCallback((k: PanelKey) => { commit(closePanel(_zones, k)); }, []);
 
     const closeTo = useCallback((zone: Zone, k: PanelKey) => { commit(closePanelTo(_zones, zone, k)); }, []);
+
+    const tuck = useCallback((zone: Zone, k: PanelKey) => { commit(tuckPanel(_zones, zone, k)); }, []);
+
+    const untuck = useCallback((zone: Zone, k: PanelKey) => { commit(untuckPanel(_zones, zone, k)); }, []);
+
+    const reorder = useCallback((keys: readonly PanelKey[], moved: PanelKey, before: PanelKey | null) => {
+      const next = reorderRail(_zones, keys, moved, before);
+      // Порядок не изменился — операция вернула то же состояние, писать нечего
+      if (next !== _zones) commit(next);
+    }, []);
 
     const evict = useCallback((zone: Zone, allowed: readonly PanelKey[]) => {
       // null — выселять нечего: молчим, чтобы не будить подписчиков на каждый рендер
@@ -756,13 +1076,26 @@ function createPanelZones(ns: string, opts?: {
       emit();
     }, []);
 
-    const reveal = useCallback((k: PanelKey) => {
-      const { zones: next, wasOpen } = revealPanel(_zones, k);
-      if (!wasOpen) commit(next);
-      return wasOpen;
+    const registerOpener = useCallback((zone: Zone, open: (k: PanelKey) => void) => {
+      openers.set(zone, open);
+      // Снимаем только СВОЙ открыватель: зона могла перемонтироваться, и её место
+      // уже занял новый — стереть его отпиской старого значило бы обезоружить стор.
+      return () => { if (openers.get(zone) === open) openers.delete(zone); };
     }, []);
 
-    return { zones, toggle, close, closeTo, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal };
+    const reveal = useCallback((k: PanelKey) => {
+      if (zoneOf(_zones, k)) return true;
+      // Открывает ЗОНА — правило размещения одно на все входы (клик по кнопке,
+      // перенос с чужой рельсы, этот показ). Вес панели она заведёт сама (toggle).
+      const open = openers.get(homeOf(_zones, k));
+      if (open) { open(k); return false; }
+      // Домашняя зона не смонтирована (другой экран, первый кадр) — раскладку правим
+      // сами, по тому же правилу, но с фолбэк-вместимостью: см. revealPanel
+      commit(revealPanel(_zones, k).zones);
+      return false;
+    }, []);
+
+    return { zones, toggle, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, reveal, registerOpener };
   }
 
   return { use: usePanelZones };
@@ -774,6 +1107,10 @@ function createPanelZones(ns: string, opts?: {
 export const wsPanels = createPanelZones('ws', {
   legacyOpenKey: 'cc_ws_panels_open',
   defaultZones: { left: [['chats']] },
+  // Редкие кнопки прячем в ящик рельсы из коробки: столбец остаётся коротким
+  // (Файлы/Изменения/Задачи/Документация/Команда), а Граф, Знания, Навыки,
+  // Терминал и Сервисы достаются из «…» по мере надобности.
+  defaultTucked: ['graph', 'knowledge', 'skills', 'terminal', 'preview'],
 });
 
 // Инстанс раздела «Чаты» — независимая раскладка (cc_chat_zones).

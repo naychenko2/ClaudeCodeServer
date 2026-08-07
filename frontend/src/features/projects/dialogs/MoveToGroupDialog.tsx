@@ -28,7 +28,7 @@ export function MoveToGroupDialog({ project, groups, onSuccess, onClose }: Props
       const updated = await api.projects.update(project.id, { groupId });
       invalidateProjectsCache(); // кэш списка проектов не должен отставать от мутаций
       onSuccess(updated);
-    } catch (e: any) { setError(e.message); setBusy(false); }
+    } catch (e: unknown) { setError(e instanceof Error ? e.message : 'Не удалось переместить'); setBusy(false); }
   };
 
   const options: { id: string; name: string; color?: string }[] = [

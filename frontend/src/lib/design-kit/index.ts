@@ -38,11 +38,13 @@ export { PillSwitch } from '../../components/ui/PillSwitch';
 export { SegmentedControl } from '../../components/ui/Segmented';
 export { EmptyState } from '../../components/ui/EmptyState';
 export { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+export { PageCanvas } from '../../components/ui/PageCanvas';
 
 // === Досдача примитивов (v1.5, кит 1.1.0) ===
 export { Menu, MenuItem } from '../../components/ui/Menu';
 export { BackButton } from '../../components/ui/BackButton';
-export { ModalActions, useIsMobileModal } from '../../components/ui/ModalActions';
+export { ModalActions } from '../../components/ui/ModalActions';
+export { useIsMobileModal } from '../../components/ui/useIsMobileModal';
 export { ConfirmDialog } from '../../components/ui/ConfirmDialog';
 export { IslandSplitter } from '../../components/ui/IslandSplitter';
 export { IslandSidebarSplitter } from '../../components/ui/IslandSidebarSplitter';

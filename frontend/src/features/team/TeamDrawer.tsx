@@ -3,9 +3,8 @@
 // компонент: выбранная механика и настройки живут у родителя (Composer), сюда приходят
 // пропсами. Тему пользователь пишет в самом поле композера.
 import { ShieldAlert } from 'lucide-react';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, Z } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { teamImplementModeWarning, teamImplementSwitchesMode } from '../../lib/teamImplement';
 import type { Mode } from '../../lib/modes';
 import type { Persona } from '../../types';
@@ -32,6 +31,10 @@ export interface TeamDrawerProps {
   // Текущий режим прав чата: «Командная реализация» с правилом «координатор не пишет код»
   // переключает его на «Авто» — предупреждаем, пока переключать есть что
   chatMode?: Mode;
+  // Режим «Командная реализация» уже включён в этом чате: повторный выбор механики
+  // не применяет состав/авто-волны (handleSend шлёт сообщение как новую вводную) —
+  // вместо мёртвых настроек показываем, где они меняются на самом деле
+  implementActive?: boolean;
   isMobile?: boolean;
   onPick: (id: TeamMechanicId) => void;
   onSettings: (s: TeamMechanicSettings) => void;
@@ -137,15 +140,10 @@ function SLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-export function TeamDrawer({ open, mech, settings, candidates, availableSkills, isProjectChat, chatMode, isMobile, onPick, onSettings, onClose, onResetModes }: TeamDrawerProps) {
+export function TeamDrawer({ open, mech, settings, candidates, availableSkills, isProjectChat, chatMode, implementActive, isMobile, onPick, onSettings, onClose, onResetModes }: TeamDrawerProps) {
   // Кандидаты — только реальные персоны; виртуальные роли пантеона из селекторов
   // убраны (подключение — через раздел «Персоны»)
   const allCandidates = candidates;
-  // Механики за фич-флагом: без включённого флага карточки в списке нет вовсе
-  const flagValues: Record<string, boolean> = {
-    [FLAGS.teamImplementMode]: useFeature(FLAGS.teamImplementMode),
-  };
-  const mechanics = TEAM_MECHANICS.filter(mc => !mc.featureFlag || flagValues[mc.featureFlag]);
 
   const m = mech ? teamMechanic(mech) : null;
   // Лимит участников: командная реализация — вся команда (до 8), ревью-консилиум — 5
@@ -276,14 +274,9 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         break;
       case 'autopilot':
         parts.push(
-          <span key="l" style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <SLabel>Завершение:</SLabel>
-            <Seg
-              options={['plan', 'done'] as const}
-              value={settings.untilDone ? 'done' : 'plan'}
-              onChange={v => onSettings({ ...settings, untilDone: v === 'done' })}
-              fmt={v => v === 'plan' ? 'Остановиться на плане' : 'Цикл «до готово»'}
-            />
+          <span key="d" style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
+            Работает без остановок, пока не отчитается о готовности. Порядок работы выбирает сам —
+            если нужен предсказуемый план с проверкой, начните с «Консенсус-плана».
           </span>,
         );
         break;
@@ -344,6 +337,17 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         }
         break;
       case 'implementMode':
+        // Режим уже включён: handleSend проигнорирует правки состава/авто-волн —
+        // не обманываем мёртвыми контролами, говорим, где настройки живут
+        if (implementActive) {
+          parts.push(
+            <span key="active" style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.4 }}>
+              Режим уже включён: состав и авто-волны меняются в бейдже «Командная реализация» у поля ввода,
+              а сообщение уйдёт команде как новая вводная.
+            </span>,
+          );
+          break;
+        }
         parts.push(
           <span key="p" style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
             <SLabel>Исполнители (по умолчанию — вся команда проекта):</SLabel>
@@ -392,14 +396,11 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         );
         break;
     }
-    // «Остановиться на плане» подменяет автопилот на консенсус-план при сборке текста
-    // (см. Composer) — оценку тяжести показываем от фактической механики
-    const estId: TeamMechanicId = mech === 'autopilot' && !settings.untilDone ? 'consensus' : mech;
     return (
       <>
         {parts}
         <span style={{ marginLeft: 'auto', fontSize: 11, color: C.textMuted, fontFamily: FONT.sans, whiteSpace: 'nowrap' }}>
-          {costEstimate(estId, settings)}
+          {costEstimate(mech, settings)}
         </span>
       </>
     );
@@ -464,15 +465,38 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
 
   // Группы в порядке первого появления в реестре
   const groups: string[] = [];
-  for (const mc of mechanics) if (!groups.includes(mc.group)) groups.push(mc.group);
+  for (const mc of TEAM_MECHANICS) if (!groups.includes(mc.group)) groups.push(mc.group);
 
   return (
     <div style={{
+      position: 'relative',
+      // Без этого div — position:static — красится НИЖЕ соседнего поля ввода композера
+      // (оно position:relative): по правилам стекинга позиционированные элементы с
+      // z-index:auto красятся поверх статичных, даже если раскрывашка идёт раньше по DOM
+      // и обычно не пересекается с полем геометрически. zIndex держит её сверху и в
+      // краевых случаях (другой набор механик, другая высота контента/вьюпорта).
+      zIndex: Z.dropdown,
       overflow: 'hidden',
-      maxHeight: open ? 560 : 0,
+      // Раскрывашка — flex-колонка: шапка и зона настроек держат свой размер (flexShrink:0),
+      // а карточкам достаётся весь ОСТАЛЬНОЙ бюджет высоты внутри maxHeight. Раньше у
+      // карточек был свой отдельный жёсткий maxHeight (330 / 38vh) — меньше, чем реально
+      // остаётся от общего бюджета после шапки и зоны настроек. Как только сетка групп
+      // переносилась на 2+ строки (обычная десктопная ширина ~900px, не только мобиль),
+      // нижняя карточка «Сделать» обрезалась этим меньшим лимитом ДО границы композера —
+      // клик по обрезанному пикселю проваливался на поле ввода под панелью (баг «клик по
+      // механикам перехватывается композером»). Единый бюджет через flex убирает рассинхрон.
+      display: 'flex',
+      flexDirection: 'column',
+      maxHeight: open ? 'min(640px, 78vh)' : 0,
       opacity: open ? 1 : 0,
       marginBottom: open ? 8 : 0,
-      transition: 'max-height 0.28s ease, opacity 0.22s ease, margin-bottom 0.28s ease',
+      // visibility — вторая (независимая от pointer-events) защита от невидимого кликабельного
+      // слоя: она снимает элемент из хит-теста целиком, а не полагается на то, что ни один
+      // потомок не переопределит pointer-events сам. Спецпочка браузеров держит visibility
+      // «visible» всю длительность transition при уходе в hidden (и наоборот — hidden→visible
+      // применяется мгновенно), поэтому анимация схлопывания не меняется.
+      visibility: open ? 'visible' : 'hidden',
+      transition: 'max-height 0.28s ease, opacity 0.22s ease, margin-bottom 0.28s ease, visibility 0.28s ease',
       background: C.bgPanel,
       border: `1px solid ${C.border}`,
       borderRadius: '16px 16px 6px 6px',
@@ -480,7 +504,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
       pointerEvents: open ? 'auto' : 'none',
     }}>
       {/* Шапка */}
-      <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px 4px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', padding: '12px 16px 4px', flexShrink: 0 }}>
         <h3 style={{ margin: 0, fontFamily: FONT.serif, fontSize: 15, fontWeight: 700, color: C.textHeading }}>
           Обсудить с командой
         </h3>
@@ -521,8 +545,11 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
         </button>
       </div>
 
-      {/* Карточки механик: группы-колонки, на узких экранах переносятся (auto-fit) */}
-      <div style={{ padding: '8px 16px 2px', overflowY: 'auto', maxHeight: isMobile ? '38vh' : 330 }}>
+      {/* Карточки механик: группы-колонки, на узких экранах переносятся (auto-fit).
+          flex:1 + minHeight:0 — забирает весь бюджет высоты, оставшийся от шапки и зоны
+          настроек (см. комментарий у maxHeight корня); overflowY:auto прокручивает,
+          только если групп реально больше, чем влезает в общий бюджет */}
+      <div style={{ padding: '8px 16px 2px', overflowY: 'auto', flex: '1 1 auto', minHeight: 0 }}>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(172px, 1fr))', gap: '12px 14px' }}>
           {groups.map(g => (
             <div key={g} style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
@@ -531,7 +558,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
                 color: C.textMuted, paddingLeft: 2, fontFamily: FONT.sans,
               }}>{g}</span>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {mechanics.filter(mc => mc.group === g).map(card)}
+                {TEAM_MECHANICS.filter(mc => mc.group === g).map(card)}
               </div>
             </div>
           ))}
@@ -542,6 +569,7 @@ export function TeamDrawer({ open, mech, settings, candidates, availableSkills, 
       <div style={{
         padding: '10px 16px 14px', borderTop: `1px dashed ${C.divider}`, marginTop: 8,
         display: 'flex', flexWrap: 'wrap', gap: '10px 22px', alignItems: 'center', minHeight: 56,
+        flexShrink: 0,
       }}>
         {renderSettings()}
       </div>

@@ -6,7 +6,9 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
+using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Mcp;
+using ClaudeHomeServer.Services.Reader;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Telemetry;
@@ -145,7 +147,16 @@ builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
+// Паспорта изменений (ADR-004, этап 1): редактор секретов + стор + hosted-захват коммитов
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
+AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Специальности и пресеты правил: стор настроек специальностей и пресетов правил
+// выбора модели (глобальные + per-owner) + применение шаблонов прав
+builder.Services.AddSingleton<SpecialtySettingsStore>();
+builder.Services.AddSingleton<SpecialtyTemplatesService>();
 // Планирование режима «Командная реализация» (Э2): подбор координатора/планировщика,
 // карточки кандидатов и структурный план
 builder.Services.AddSingleton<TeamPlanningService>();
@@ -206,6 +217,15 @@ AddHosted<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaClient>();
+// Локальная модель опциональна: погашенная Ollama — штатная ситуация, а не авария
+// (OllamaClient ловит её сам и уходит в фолбэк). Тихий логгер вместо дефолтного, иначе
+// каждый вызов даёт Error со стектрейсом на весь экран.
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Llm.OllamaClient.HttpClientName,
+    new ClaudeHomeServer.Services.Http.QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Llm.Ollama",
+        Subject: "локальной моделью Ollama",
+        Consequence: "Фоновые действия уйдут облачной модели."));
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OllamaActionRankService>();
 // Прямой HTTP-адаптер бесплатных моделей OpenRouter для фоновых one-shot задач
 // (второй транспорт рядом с провайдером через claude CLI; модели — курируемый список
@@ -221,6 +241,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionRouter>()
 // Резолвер моделей агентных мест (новый чат, чат персоны, исполнитель задач…):
 // явная модель → назначение админа → слот тира (сильная/средняя/слабая)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ModelAssignmentResolver>();
+// Стор настроек фолбэк-оркестрации модели (ADR §4): глобальный потолок подмен плюс
+// per-owner override, значение клампится в 1..HardMaxSubstitutions, дефолт 3.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.FallbackSettingsStore>();
 // Пресеты автоподбора исполнителя фоновых действий (рекомендованное/бесплатные/локальные)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LocalActionPresetService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
@@ -240,6 +263,8 @@ builder.Services.AddSingleton<SkillGenerationService>();
 builder.Services.AddSingleton<FileWatcherService>();
 builder.Services.AddSingleton<ConnectionDiagnostics>();
 builder.Services.AddSingleton<ChatHistoryService>();
+builder.Services.AddSingleton<PromptSnapshotStore>();
+builder.Services.AddSingleton<PromptAuditService>();
 builder.Services.AddSingleton<WorkspaceKnowledgeStore>();
 builder.Services.AddSingleton<FalCostService>();
 builder.Services.AddSingleton<FalAccountService>();
@@ -253,6 +278,17 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFa
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 // Наблюдаемость вызовов продуктовых MCP-серверов (счётчики + последние сбои, только в памяти)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
+// Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
+// и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpRegistry>();
+// Последний известный статус серверов (data/mcp-status.json — в архив не едет) и разовая
+// проба по кнопке: фонового поллинга нет, наблюдение приходит из system/init каждого хода
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpStatusStore>();
+// Вход в чужой сервер по OAuth: discovery, регистрация клиента, обмен кода и обновление
+// токена перед ходом (pending-записи входа живут только в памяти — отсюда singleton)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 builder.Services.AddSingleton<ModelCatalogService>();
@@ -296,16 +332,80 @@ builder.Services.AddSingleton<TerminalService>();
 builder.Services.AddSingleton<DevServerService>();
 builder.Services.AddSingleton<LaunchConfigService>();
 builder.Services.AddSingleton<ProjectServiceDiscovery>();
-builder.Services.AddHttpClient("proxy");
+// "proxy" ходит только к нашим же сервисам: dev-серверы проектов и скачивание готового
+// документа у OnlyOffice в office-callback. Egress-прокси им не нужен — см. WithoutEgressProxy.
+builder.Services.AddHttpClient("proxy").WithoutEgressProxy();
 // Загрузка произвольных пользовательских URL (save-from-url): без авто-редиректов,
 // чтобы редирект на приватный хост не обошёл SSRF-проверку (см. SsrfGuard).
 builder.Services.AddHttpClient("safe-download")
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-builder.Services.AddHttpClient("dify");
-builder.Services.AddHttpClient("forgejo");
-builder.Services.AddHttpClient("fal");
+// Ридер (ADR-005): без кук/креденшалов/авто-редиректов/системного egress-прокси — цепочку
+// хопов ведёт сам ReaderService, перепроверяя SsrfGuard на каждом. Хендлер (UseProxy=false +
+// ConnectCallback — вторая, TOCTOU-safe линия обороны) вынесен в ReaderHttpHandlerFactory,
+// чтобы её можно было проверить тестом напрямую.
+builder.Services.AddHttpClient(ReaderService.HttpClientName, client =>
+{
+    client.Timeout = Timeout.InfiniteTimeSpan; // таймауты — явные, в ReaderService (заголовки/операция)
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("ClaudeCodeServer-Reader/1.0");
+    client.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml");
+    client.DefaultRequestHeaders.AcceptLanguage.ParseAdd(
+        builder.Configuration.GetValue("Reader:AcceptLanguage", "en-US,en;q=0.9")!);
+})
+.ConfigurePrimaryHttpMessageHandler(ReaderHttpHandlerFactory.Create);
+builder.Services.AddSingleton<ReaderQuotaService>();
+builder.Services.AddSingleton<ReaderService>();
+// Dify и fal — опциональные зависимости: локальный Dify поднят не всегда, fal живёт за DPI,
+// и оба вызывающих ловят отказ сами (KnowledgeService деградирует, FalImageService возвращает
+// пустой список). Тихий клиент вместо дефолтного — иначе каждый запрос печатает Error
+// со стектрейсом; см. Services/Http/QuietHttpLogger.
+builder.Services.AddQuietHttpClient("dify", new QuietHttpClientProfile(
+    Category: "ClaudeHomeServer.Knowledge.Dify",
+    Subject: "базой знаний Dify",
+    Consequence: "Семантический поиск по заметкам и знаниям не работает."))
+    .WithoutEgressProxy();
+builder.Services.AddHttpClient("forgejo").WithoutEgressProxy();
+builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
+    Category: "ClaudeHomeServer.Media.Fal",
+    Subject: "сервисом fal.ai",
+    Consequence: "Генерация изображений и учёт расхода недоступны."));
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Controllers.FilesController.OnlyOfficeCommandClient,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Files.OnlyOffice",
+        Subject: "Command API OnlyOffice",
+        Consequence: "Принудительное сохранение документа ждёт таймаут."))
+    .WithoutEgressProxy();
 builder.Services.AddHttpClient("glif");
-builder.Services.AddHttpClient("llm-provider");
+// Проба MCP-сервера из личного реестра: чужой сервер лежит штатно (не поднят, сменил адрес),
+// и человек видит причину в ответе — консоли не нужны стектрейсы на каждый клик
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.McpProbeService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.Probe",
+        Subject: "внешним MCP-сервером",
+        Consequence: "Проверка сервера показала отказ — сам ход это не ломает."));
+// Authorization server чужого MCP-сервера: недоступен ровно так же штатно (нет DCR, лежит
+// well-known, отозван клиент) — человек видит причину в ответе, консоли стектрейсы не нужны
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Mcp.McpOAuthService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Mcp.OAuth",
+        Subject: "сервером авторизации MCP",
+        Consequence: "Вход в сервер не выполнен — инструменты этого сервера в ход не поедут."));
+// Сторонний провайдер — опциональная зависимость: баланс уходит в протухший кэш, каталог
+// моделей — в дефолтный список, фоновое действие — к другой модели. Мёртвый провайдер
+// не должен засыпать консоль стектрейсами (см. QuietHttpLogger)
+builder.Services.AddQuietHttpClient("llm-provider", new QuietHttpClientProfile(
+    Category: "ClaudeHomeServer.Llm.Provider",
+    Subject: "API стороннего провайдера моделей",
+    Consequence: "Баланс и каталог моделей не обновятся, фоновое действие уйдёт другой модели."));
+// Шлюз квоты Alibaba Coding Plan: авторизация по cookie консоли, а не по ApiKey (публичного
+// API квоты у Token Plan нет). Неавторизованную (протухшую) сессию шлюз редиректит 302 на
+// err.taobao.com — редиректы отключаем, иначе получим HTML вместо JSON. Логирование протухания
+// (одна строка Warning, троттлинг) — в ProviderBalanceService.LogAlibabaExpiry, без QuietHttpLogger,
+// чтобы не дублировать жалобы: протухание видно и на уровне тела (code != SUCCESS / NotAuthorised)
+builder.Services.AddHttpClient("alibaba-console")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
 // Раздел «Телеметрия»: опции проброса SigNoz UI (Telemetry:Ui) + короткий HTTP-клиент
@@ -313,7 +413,8 @@ builder.Services.AddHttpForwarder();
 // и контроллер статуса, и middleware проброса /telemetry-proxy/** ниже.
 builder.Services.AddSingleton(
     ClaudeHomeServer.Telemetry.TelemetryUiOptions.FromConfig(builder.Configuration));
-builder.Services.AddHttpClient("telemetry-ui", c => c.Timeout = TimeSpan.FromSeconds(3));
+builder.Services.AddHttpClient("telemetry-ui", c => c.Timeout = TimeSpan.FromSeconds(3))
+    .WithoutEgressProxy();
 builder.Services.AddReverseProxy()
     .LoadFromConfig(builder.Configuration.GetSection("ReverseProxy"))
     .ConfigureHttpClient((_, handler) =>
@@ -959,14 +1060,31 @@ app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
 
-// Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы
+// Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
+//
+// Ссылки берём СЕЙЧАС, а не в колбэке: если хост не смог подняться (занятый порт —
+// обычное дело, когда рядом уже крутится второй инстанс), провайдер успевает
+// освободиться раньше, чем сработает ApplicationStopping, и резолв падал с
+// ObjectDisposedException — гасить процессы было уже нечем. Все три сервиса —
+// синглтоны, так что заранее взятая ссылка та же самая.
+var shutdownSessions = app.Services.GetRequiredService<SessionManager>();
+var shutdownTerminals = app.Services.GetRequiredService<TerminalService>();
+var shutdownDevServers = app.Services.GetRequiredService<DevServerService>();
+
 app.Lifetime.ApplicationStopping.Register(() =>
 {
-    app.Services.GetRequiredService<SessionManager>().KillAllProcesses();
-    app.Services.GetRequiredService<TerminalService>().Dispose();
-    app.Services.GetRequiredService<DevServerService>().Dispose();
+    // Каждый шаг отдельно: упавшая уборка одного не должна оставить процессы других
+    static void Safe(Action step, string what)
+    {
+        try { step(); }
+        catch (Exception ex) { Console.Error.WriteLine($"Shutdown: {what} — {ex.Message}"); }
+    }
+
+    Safe(shutdownSessions.KillAllProcesses, "процессы claude");
+    Safe(shutdownTerminals.Dispose, "терминалы");
+    Safe(shutdownDevServers.Dispose, "dev-серверы");
     // Тот же pid-файл принадлежит боевому серверу — копия его не трогает
-    if (!inspectionMode) ProcessRegistry.KillAll();
+    if (!inspectionMode) Safe(ProcessRegistry.KillAll, "реестр процессов");
 });
 
 app.Run();

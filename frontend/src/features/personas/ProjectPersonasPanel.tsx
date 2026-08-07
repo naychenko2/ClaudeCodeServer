@@ -80,6 +80,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
   const [view, setView] = useState<PersonaView>(initialView ?? 'preview');
   // Развёрнута ли форма правки профиля (внутри вида «Профиль»)
   const [editing, setEditing] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс вида при смене персоны
   useEffect(() => { setView(initialView ?? 'preview'); setEditing(false); }, [personaId, initialView]);
 
   const [talking, setTalking] = useState(false);

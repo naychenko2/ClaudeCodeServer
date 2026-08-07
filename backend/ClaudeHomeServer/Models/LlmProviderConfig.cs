@@ -27,6 +27,11 @@ public class LlmProviderConfig
     // Явный URL эндпоинта баланса/квоты — когда он не выводится из ApiBaseUrl
     // (у GLM монитор живёт вне /paas/v4). Пусто — URL строит сам обработчик источника
     public string BalanceUrl { get; set; } = "";
+    // Cookie сессии консоли Alibaba Model Studio — для чтения квоты Coding Plan (Token Plan)
+    // по шлюзу bailian: публичного API у Token Plan нет, квота отдаётся только web-сессии
+    // консоли и авторизуется ЭТИМ cookie, а НЕ ApiKey. Секрет — только в appsettings.Local.json;
+    // в отслеживаемом appsettings.json пусто. Источник Balance="alibaba".
+    public string ConsoleCookie { get; set; } = "";
     // Префикс id моделей провайдера — по нему резолвится провайдер для моделей
     // не из конфига (напр. пришедших из GET /models); пусто — используется Key
     public string ModelPrefix { get; set; } = "";

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
   Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight,
@@ -11,6 +11,7 @@ import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useNow } from '../../lib/useNow';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
 import { C, FONT, R, SHADOW } from '../../lib/design';
@@ -84,13 +85,14 @@ export function TeamCommandCenter({
     await makeLead(p);
   };
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     try { setEvents((await api.projects.events(project.id, { limit })) as unknown as EventRow[] ?? []); }
     catch { setEvents([]); }
     try { setMem(await api.projects.teamMemory(project.id)); } catch { setMem([]); }
     try { setTasks(await api.tasks.listByProject(project.id)); } catch { setTasks([]); }
-  };
-  useEffect(() => { void refresh(); /* eslint-disable-next-line */ }, [project.id, limit]);
+  }, [project.id, limit]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- начальная загрузка ленты с интервалом поллинга
+  useEffect(() => { void refresh(); }, [refresh]);
 
   // Realtime: перечитываем ленту/память/задачи по событиям изменений (с дебаунсом) —
   // иначе «Активность» и индикаторы «в работе»/«на связи» заморожены до перемонтирования.
@@ -103,19 +105,21 @@ export function TeamCommandCenter({
     });
     const poll = setInterval(() => { void refresh(); }, 60_000);
     return () => { off(); if (t) clearTimeout(t); clearInterval(poll); };
-    // eslint-disable-next-line
-  }, [project.id, limit]);
+  }, [refresh]);
 
   const inFlight = useMemo(() => {
     const m = new Map<string, string>();
     for (const t of tasks ?? []) if (t.personaId && t.claudeStartedAt && !t.claudeResult && t.status !== 'done') m.set(t.personaId, t.title);
     return m;
   }, [tasks]);
+  // «Текущее время» — обновляемое состояние (useNow), а не Date.now() в мемо
+  // (purity): окно «на связи» переоценивается каждым тиком, как раньше обновлением events
+  const now = useNow(60_000);
   const onlineSet = useMemo(() => {
-    const s = new Set<string>(); const now = Date.now();
+    const s = new Set<string>();
     for (const e of events ?? []) if (e.type === 'chat_turn' && e.actor && e.actor !== 'user' && e.actor !== 'system' && now - new Date(e.ts).getTime() < 10 * 60_000) s.add(e.actor);
     return s;
-  }, [events]);
+  }, [events, now]);
   const tasksActive = (tasks ?? []).filter(t => t.status !== 'done').length;
   const chatsToday = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10); const s = new Set<string>();
@@ -453,9 +457,10 @@ function ActivityPanel({ events, personaById, filter, setFilter, actorFilter, se
 function Timeline({ events, personaById, onOpen }: {
   events: EventRow[]; personaById: (id: string) => Persona | undefined; onOpen: (e: EventRow) => void;
 }) {
+  const now = useNow(60_000);
   const groups = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
-    const yest = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+    const today = new Date(now).toISOString().slice(0, 10);
+    const yest = new Date(now - 86_400_000).toISOString().slice(0, 10);
     const m = new Map<string, EventRow[]>();
     for (const e of events) {
       const d = e.ts.slice(0, 10);
@@ -463,7 +468,7 @@ function Timeline({ events, personaById, onOpen }: {
       (m.get(label) ?? m.set(label, []).get(label)!).push(e);
     }
     return [...m.entries()];
-  }, [events]);
+  }, [events, now]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

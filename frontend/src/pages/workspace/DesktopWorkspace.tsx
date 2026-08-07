@@ -7,22 +7,30 @@
 import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
-import { C, FONT, ISLAND, CHAT_COLUMN_W } from '../../lib/design';
+import { C, FONT, ISLAND, CHAT_COLUMN_W, SPLASH_W } from '../../lib/design';
 import { useCenterOffset } from '../../lib/centerOffset';
 import { Button, Island } from '../../components/ui';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { SessionList } from '../../components/SessionList';
 import { ChatPanel } from '../../components/ChatPanel';
+import { showToast } from '../../lib/toast';
+import { addChatSafe } from '../../features/wall/wallStore';
+import { WallDock } from '../../features/wall/WallDock';
 import { FileViewer } from '../../components/FileViewer';
 import { GitCommitView } from '../../components/GitCommitView';
 import { TaskDetailsPane } from '../../features/tasks/TaskDetailsPane';
 import { ProjectPersonaPane } from '../../features/personas/ProjectPersonasPanel';
 import { ProjectRail } from '../../features/projects/ProjectRail';
 import { PanelZone } from './PanelZone';
+import { TocPanel } from './TocPanel';
 import { useSessionPanels } from './useSessionPanels';
+import type { DocToc } from '../../hooks/useHeadings';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import type { PanelKey } from './panelCatalog';
+import { ReaderHeaderBar } from './reader/ReaderHeaderBar';
+import { ReaderBody } from './reader/ReaderBody';
+import type { ReaderPanelActions, ReaderPanelState } from './reader/useReaderPanel';
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -61,10 +69,26 @@ interface Props {
   onCloseCommit: () => void;
   onOpenFileFromChat: (path: string) => void;
   onCloseFile: () => void;
+  // Ридер ссылок — открывается по кнопке-компаньону у внешней ссылки в чате, живёт
+  // в центре как просмотр файла: split с чатом либо на всю контентную зону
+  // («Развернуть»/«Свернуть» в собственной шапке — см. ReaderHeaderBar). Открытие
+  // ридера и открытие файла взаимно вытесняют друг друга — состояние обоих
+  // держит WorkspacePage.
+  readerState: ReaderPanelState;
+  readerActions: ReaderPanelActions;
   selectedTask: Task | null;
   autoEditTaskId: string | null;
   onOpenTaskSession: (sessionId: string) => void;
   onOpenFileFromTree: (path: string, line?: number) => void;
+  // Переход по md-ссылке из FileViewer (клик в открытом md) — открыть файл на месте,
+  // не меняя режим просмотра. anchor — слаг раздела для скролла к заголовку.
+  onOpenDocLink?: (path: string, anchor?: string) => void;
+  scrollToAnchor?: string | null;
+  // Back/Forward по истории открытых файлов (кнопки в тулбаре FileViewer)
+  onFileBack?: () => void;
+  onFileForward?: () => void;
+  canFileBack?: boolean;
+  canFileForward?: boolean;
   onCloseTask: () => void;
   // Персона из панельки «Команда» — студия в центре (приоритет ниже задачи, выше доски)
   selectedPersonaId: string | null;
@@ -86,19 +110,15 @@ interface Props {
   // Документ «Граф зависимостей»: открывается из панельки «Граф», живёт в центре
   graphOpen: boolean;
   graphArea: ReactNode;
-  // Панели проекта: доступность инструментов + готовый контент панелек.
-  // Контент общий для обеих зон — панель рисует та зона, в которой она лежит.
-  toolsEnabled: boolean;
+  // Панели проекта: готовый контент панелек. Контент общий для обеих зон — панель
+  // рисует та зона, в которой она лежит.
   panels: Partial<Record<PanelKey, ReactNode>>;
+  // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
+  onOpenReader?: (url: string) => void;
   // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
   railCounts?: Partial<Record<PanelKey, number>>;
-  // Сколько чатов у проекта; null — ещё не знаем. Пока чатов нет, панель «Чаты»
-  // не рендерится совсем — как сайдбар в разделе «Чаты»
-  chatCount: number | null;
-  // Точное число от списка чатов, пока панель на экране
-  onSessionsChanged: (n: number) => void;
-  // Хук на явную активацию панели из рельсы (клик открыл панель) — проброс в RightPanelStack
-  onPanelOpen?: (k: PanelKey) => void;
+  // Открыть режим «Стена» (док стены под доком проектов; вкладки в таббаре у стены нет)
+  onOpenWall?: () => void;
 }
 
 export function DesktopWorkspace(p: Props) {
@@ -109,6 +129,13 @@ export function DesktopWorkspace(p: Props) {
   // внутри себя — и потому они были прибиты к ней; теперь это часть общего набора,
   // и они переносятся между рельсами наравне с остальными.
   const sessionPanels = useSessionPanels(p.activeSession, p.project.id, p.project.rootPath);
+
+  // Оглавление документа, открытого в центре: его отдаёт сам FileViewer (см. DocToc),
+  // а панель «Оглавление» только показывает. null — оглавления сейчас нет: панель
+  // исчезает вместе со своей кнопкой, но МЕСТО В РАСКЛАДКЕ за собой сохраняет — этим
+  // и держится нужное поведение: открытая панель возвращается сама на следующем md,
+  // а закрытая пользователем остаётся закрытой (см. keyAvailable в PanelZone).
+  const [toc, setToc] = useState<DocToc | null>(null);
 
   // Пропорция чат/файл в split-режиме (как chatFlex в старой ветке; не персистится)
   const [chatFlex, setChatFlex] = useState(1);
@@ -143,16 +170,23 @@ export function DesktopWorkspace(p: Props) {
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
+  // «Стена»: док и пункт меню карточек чата. Планшету она доступна (колонок туда
+  // влезает одна-две), отсекается только телефон — но мобильной ветки тут и нет
+  const wallOn = !!p.onOpenWall;
+  const handleAddToWall = (s: Session) => {
+    void addChatSafe(s).then(() => showToast('Стена', `«${s.name?.trim() || 'Чат'}» на стене`));
+  };
+
   // Контент панели «Чаты» левой рельсы. Заголовок панели рисует PanelShell, поэтому
   // здесь только содержимое — список чатов на белом фоне контентной зоны, как у
   // панелей правой рельсы. Переключатель проектов жил сначала шапкой внутри этой
   // панели, потом отдельной панелью «Проекты»; теперь это док второй левой рельсы.
-  // Пока чатов нет — панели нет вовсе (undefined в наборе). Так же ведёт себя сайдбар
-  // раздела «Чаты»: пустой список показывать незачем, а создать чат зовёт центр.
-  // chatCount === null — ещё считаем: панель показываем, чтобы она не мигала на старте.
-  const chatsPanel = p.chatCount === 0 ? undefined : (
+  // Панель есть ВСЕГДА, даже когда чатов ноль: иначе её кнопка пропадала из рельсы
+  // (нет контента → keyAvailable=false), край рельсы дёргался и вход в чаты терялся.
+  // Пустой список сам показывает empty-state с кнопкой «Новый чат» (см. SessionList).
+  const chatsPanel = (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', background: C.bgWhite }}>
-      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onSessionsChanged={p.onSessionsChanged} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} />
+      <SessionList project={p.project} activeSession={p.activeSession} onSelect={handleSelectSession} onSessionUpdated={p.onSessionUpdated} onCleared={p.onClearSession} isMobile={false} workflowRunningFor={p.workflowRunningFor} onAddToWall={wallOn ? handleAddToWall : undefined} />
     </div>
   );
 
@@ -162,13 +196,16 @@ export function DesktopWorkspace(p: Props) {
   const zonePanels: Partial<Record<PanelKey, ReactNode>> = {
     chats: chatsPanel,
     ...p.panels,
+    // Оглавление живёт ровно столько, сколько открытый в центре md: контент null —
+    // и панель с кнопкой уходят с экрана сами
+    toc: toc ? <TocPanel toc={toc} /> : undefined,
   };
 
   // Фабрика центра-чата: одиночный режим — чат без рамки с шапкой-островом
   // (headerIsland), в split рядом с файлом — обычный вид внутри своего острова
   const chatPanel = (headerIsland: boolean) => p.activeSession ? (
     <ChatPanel
-      session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat}
+      session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat} onOpenReader={p.onOpenReader}
       pendingMessage={p.pendingMessage} onPendingMessageSent={p.onPendingMessageSent}
       onSessionUpdated={p.onSessionUpdated} isMobile={false} onWorkflowRunning={p.onWorkflowRunning}
       skills={p.skills} agents={p.agents}
@@ -205,9 +242,13 @@ export function DesktopWorkspace(p: Props) {
   // резиновые: им положено занимать всю колонку целиком).
   // Ширина — CHAT_COLUMN_W, а не CHAT_MAX_W: компенсации отдаётся только то, что
   // остаётся сверх ПОЛНОЙ потребности ленты (колонка + жёлоб + полоса прокрутки).
-  const chatOnly = !p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen
+  // Но ленты может и не быть: пока чат не выбран, в центре стоит заставка вдвое уже,
+  // и её потребность — SPLASH_W. Дашь тут CHAT_COLUMN_W — на окне ноутбука запаса
+  // не останется вовсе, компенсация выродится в ноль и заставку перекосит.
+  const chatOnly = !p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen
     && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && !p.graphOpen;
-  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(chatOnly ? CHAT_COLUMN_W : undefined);
+  const centerContentW = chatOnly ? (p.activeSession ? CHAT_COLUMN_W : SPLASH_W) : undefined;
+  const { rootRef: offsetRootRef, centerRef: offsetCenterRef } = useCenterOffset(centerContentW);
 
   // Центральный остров: карточка на холсте, внутри — оригинальная обёртка режима
   // (flex:1 в колонке острова растягивает её на всю высоту). По бокам — доп. воздух
@@ -239,20 +280,27 @@ export function DesktopWorkspace(p: Props) {
         side="left"
         panels={zonePanels}
         railCounts={p.railCounts}
-        toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
-        onPanelOpen={p.onPanelOpen}
-        railFooter={<ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />}
+        railFooter={
+          // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
+          // режим «Стена»: клик или дроп карточки чата из панели «Чаты»)
+          // flex: 1 — по высоте этой обёртки док проектов считает число видимых
+          // иконок; без неё они все уезжали бы под лупу «ещё N»
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <ProjectRail project={p.projectForEdit} onOpenSettings={p.onOpenProjectSettings} />
+            {wallOn && <WallDock onOpenWall={p.onOpenWall!} />}
+          </div>
+        }
       />
 
-      {/* === Центр: коммит → задача → персона → доска → файл (split/fullscreen) → чат === */}
-      {!p.openFile && p.openCommitSha && centerIsland(
+      {/* === Центр: коммит → задача → персона → доска → файл/ридер (split/fullscreen) → чат === */}
+      {!p.openFile && !p.readerState.open && p.openCommitSha && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex' }}>
           <GitCommitView project={p.project} sha={p.openCommitSha} initialPath={p.openCommitFile} onClose={p.onCloseCommit} />
         </div>
       )}
 
-      {!p.openFile && !p.openCommitSha && p.selectedTask && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && p.selectedTask && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <TaskDetailsPane key={p.selectedTask.id} task={p.selectedTask} project={p.project} startInEdit={p.selectedTask.id === p.autoEditTaskId} onOpenSession={p.onOpenTaskSession} onOpenFile={p.onOpenFileFromTree} onClose={p.onCloseTask} onDeleted={p.onCloseTask} />
         </div>
@@ -260,35 +308,35 @@ export function DesktopWorkspace(p: Props) {
 
       {/* Студия персоны из панельки «Команда»: закрытие — крестиком справа
           (левой стрелки «назад» на десктопе нет) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && personaOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && personaOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <ProjectPersonaPane project={p.project} personaId={p.personaCreating ? null : p.selectedPersonaId} creating={p.personaCreating} onOpenChat={p.onOpenPersonaChat} onSelectPersona={p.onPersonaSelectAfterCreate} onCleared={p.onPersonaCleared} onClose={p.onPersonaCleared} />
         </div>
       )}
 
       {/* Командный центр (кнопка «Команда» в панельке персон) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && p.teamCenterOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && p.teamCenterOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {p.teamCenterArea}
         </div>
       )}
 
       {/* Доска задач (вкладка «Доска» в панельке задач) */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && p.boardOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && p.boardOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {p.boardArea}
         </div>
       )}
 
       {/* Превью dev-сервиса (выбран в панельке «Preview») */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && p.previewOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && p.previewOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {p.previewArea}
         </div>
       )}
 
       {/* Документ «Граф зависимостей» (открыт из панельки «Граф») */}
-      {!p.openFile && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && p.graphOpen && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && !p.selectedTask && !personaOpen && !p.teamCenterOpen && !p.boardOpen && !p.previewOpen && p.graphOpen && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           {p.graphArea}
         </div>
@@ -315,7 +363,7 @@ export function DesktopWorkspace(p: Props) {
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} />
             </div>
           </Island>
         </div>
@@ -324,7 +372,34 @@ export function DesktopWorkspace(p: Props) {
       {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {/* На планшете сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} />
+        </div>
+      )}
+
+      {/* Split чат|ридер — тот же приём, что у файла: два острова, общий сплиттер
+          (файл и ридер взаимно вытесняют друг друга — одновременно не бывают) */}
+      {!p.openFile && p.readerState.open && !p.readerState.expanded && !p.isTablet && (
+        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              {chatPanel(false)}
+            </div>
+          </Island>
+          <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
+          <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              <ReaderHeaderBar state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
+              <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
+            </div>
+          </Island>
+        </div>
+      )}
+
+      {!p.openFile && p.readerState.open && (p.readerState.expanded || p.isTablet) && centerIsland(
+        <div style={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {/* На планшете сплита нет — тумблер режима не показываем */}
+          <ReaderHeaderBar state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} isTablet={p.isTablet} />
+          <ReaderBody state={p.readerState} actions={p.readerActions} onClose={p.readerActions.closeReader} />
         </div>
       )}
 
@@ -334,9 +409,8 @@ export function DesktopWorkspace(p: Props) {
         compact={p.isTablet}
         panels={zonePanels}
         railCounts={p.railCounts}
-        toolsEnabled={p.toolsEnabled}
         sessionPanels={sessionPanels}
-        onPanelOpen={p.onPanelOpen}
+        centerFileOpen={!!p.openFile}
       />
     </div>
   );

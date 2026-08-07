@@ -37,7 +37,6 @@ public class Project
     public string? DifyDatasetId { get; set; }
     public string? SystemPrompt { get; set; }
     public bool ShowHiddenFiles { get; set; } = false;
-    public bool ToolsEnabled { get; set; } = false;
     public Dictionary<string, List<string>>? DocumentTags { get; set; }
     // Область документации для панели «Документы». Везде null — «дефолт», а пустой
     // список — осознанный выбор «ничего отсюда»:
@@ -76,4 +75,9 @@ public class Project
     // OnboardingController.StartProject нормализует ссылку на чтении — GetOwned по
     // несуществующему id даёт null и создаёт свежую сессию (каскада на удаление не нужно).
     public string? OnboardingSessionId { get; set; }
+    // Ключи серверов личного реестра MCP (McpRegistry), выключенных В ЭТОМ проекте.
+    // Именно deny-list, а не allow-list: новый сервер владельца доезжает во все его
+    // проекты сам, а пустой/null список = «включено всё, что включено в реестре».
+    // Ось каскада реестр → проект → персона (см. SessionManager.BuildExternalMcpProvider).
+    public List<string>? McpServersOff { get; set; }
 }

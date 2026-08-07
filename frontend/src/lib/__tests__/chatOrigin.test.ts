@@ -1,6 +1,8 @@
-// Подпись чата-исполнителя задачи. Ключевое — не врать «Задача удалена», пока стор
-// задач ещё грузится: чат исполнения появляется в списке раньше, чем приезжают задачи
-// (находка приёмки Э7 «Командной реализации»).
+// Подпись чата-исполнителя задачи. Ключевое — не врать «Задача удалена» в двух гонках:
+// (1) стор задач ещё не грузился ни разу (первая загрузка приложения) и
+// (2) стор уже наполнен, но именно ЭТА (только что созданная) задача ещё не долетела
+// своим task_changed — сессия чата-исполнителя бродкастится раньше неё (находки
+// приёмки Э7 «Командной реализации» и волны 6).
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Session, Task } from '../../types';
 
@@ -50,6 +52,24 @@ describe('статус чата-задачи', () => {
   it('работающий чат подписан живым состоянием, даже пока задача неизвестна', () => {
     const info = describeTaskChat(chat({ status: 'working' }))!;
     expect(info.status).toEqual({ kind: 'run', label: 'Выполняется', spinner: true });
+  });
+
+  it.each(['starting', 'working', 'waiting'] as const)(
+    'свежий дочерний чат (%s) не подписывает «Задача (удалена)», даже когда стор уже загружен, но эту задачу ещё не привезли',
+    status => {
+      store.loaded = true;   // стор наполнен раньше — но конкретной задачи в нём нет
+      const info = describeTaskChat(chat({ status }))!;
+      expect(info.fullLabel).toBe('Задача');
+      expect(resolveChatOrigin(chat({ status }))!.label).toBe('Задача');
+    },
+  );
+
+  it('после того как чат угомонился, а задачи в загруженном сторе всё ещё нет — она действительно удалена', () => {
+    store.loaded = true;
+    const info = describeTaskChat(chat({ status: 'finished' }))!;
+    expect(info.status.kind).toBe('deleted');
+    expect(info.fullLabel).toBe('Задача (удалена)');
+    expect(resolveChatOrigin(chat({ status: 'finished' }))!.label).toBe('Задача (удалена)');
   });
 
   it('спокойный чат показывает статус самой задачи', () => {

@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -145,10 +145,10 @@ export const api = {
   // ollama ответа /usage.
   localActions: {
     setRoute: (key: string, route: string) =>
-      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
         { method: 'PUT', body: JSON.stringify({ route }) }),
     reset: (key: string) =>
-      request<{ key: string; route: string; source: string }>(`/admin/local-actions/${key}`,
+      request<{ key: string; route: string; source: string; preset?: PlacePresetRef | null }>(`/admin/local-actions/${key}`,
         { method: 'DELETE' }),
     // Массовый автоподбор исполнителя всем действиям по пресету; актуальные маршруты фронт
     // затем перечитывает из /usage. preset: 'tiers' | 'tiers-local'.
@@ -181,12 +181,50 @@ export const api = {
     list: () => request<{ items: ModuleInfo[] }>('/modules'),
   },
 
+  // Личный реестр MCP-серверов владельца (фича mcp-registry). Секретные значения наружу
+  // не выходят: в McpValue у секрета value = null, а в форме пустое значение секрета
+  // означает «оставить как было».
+  mcp: {
+    list: () => request<McpServer[]>('/mcp/servers'),
+    get: (id: string) => request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`),
+    // Встроенные серверы продукта — только наблюдение статуса, записи в реестре нет
+    builtin: () => request<McpBuiltinServer[]>('/mcp/servers/builtin'),
+    create: (data: McpServerUpsert) =>
+      request<McpServer>('/mcp/servers', { method: 'POST', body: JSON.stringify(data) }),
+    update: (id: string, data: McpServerUpsert) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+    setEnabled: (id: string, enabled: boolean) =>
+      request<McpServer>(`/mcp/servers/${encodeURIComponent(id)}/enable`, {
+        method: 'POST', body: JSON.stringify({ enabled }),
+      }),
+    delete: (id: string) => request<void>(`/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+    // Разовая проверка «по кнопке»: рукопожатие + tools/list, результат едет и в стор статусов
+    probe: (id: string) =>
+      request<McpProbeResult>(`/mcp/servers/${encodeURIComponent(id)}/probe`, { method: 'POST' }),
+    // Импорт фрагмента {"mcpServers": {...}} — записи заводятся выключенными
+    import: (fragment: unknown) =>
+      request<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>('/mcp/servers/import', {
+        method: 'POST', body: JSON.stringify(fragment),
+      }),
+    // Диагностика вызовов инструментов — только админ (данные всех владельцев)
+    calls: (failures = 50) => request<McpCallsResponse>(`/mcp/calls?failures=${failures}`),
+    // Вход по OAuth (волна 7): start отдаёт адрес окна провайдера, complete — запасной
+    // путь с кодом, вставленным вручную (сервер принимает только loopback-адрес возврата)
+    oauthStart: (id: string, clientId?: string) =>
+      request<McpOAuthStartResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/start`, {
+        method: 'POST', body: JSON.stringify(clientId ? { clientId } : {}),
+      }),
+    oauthComplete: (id: string, state: string, code: string) =>
+      request<McpOAuthCompleteResult>(`/mcp/servers/${encodeURIComponent(id)}/oauth/complete`, {
+        method: 'POST', body: JSON.stringify({ state, code }),
+      }),
+  },
+
   providers: {
-    balance: (key: string) =>
-      request<{ available: boolean; currency: string; totalBalance: string; asOf?: string; resetsAt?: string | null }>(`/providers/${key}/balance`),
+    balance: (key: string) => request<ProviderBalanceInfo>(`/providers/${key}/balance`),
     usage: (key: string) =>
       request<{
-        balance: { available: boolean; currency: string; totalBalance: string; asOf?: string; resetsAt?: string | null } | null;
+        balance: ProviderBalanceInfo | null;
         snapshots: { timestamp: string; balance: number; currency: string }[];
       }>(`/providers/${key}/usage`),
   },
@@ -200,6 +238,20 @@ export const api = {
         // пикеры подписывают пункт «По умолчанию (<модель>)»
         assignments?: Record<string, string | null>;
       }>('/models'),
+    // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
+    // что запуск хода — второй точки истины нет)
+    preview: (q: { place?: string; personaId?: string; specialty?: string; tier?: string }) => {
+      const qs = new URLSearchParams();
+      if (q.place) qs.set('place', q.place);
+      if (q.personaId) qs.set('personaId', q.personaId);
+      if (q.specialty) qs.set('specialty', q.specialty);
+      if (q.tier) qs.set('tier', q.tier);
+      const s = qs.toString();
+      return request<ModelPreviewResponse>(`/models/preview${s ? `?${s}` : ''}`);
+    },
+    // Места, где выбран пресет (диалог удаления)
+    presetUsage: (id: string) =>
+      request<PresetUsageResponse>(`/models/presets/${encodeURIComponent(id)}/usage`),
   },
 
   featureFlags: {
@@ -208,6 +260,21 @@ export const api = {
       request<{ values: Record<string, boolean> }>(`/feature-flags/${key}`, {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
+      }),
+  },
+
+  // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные
+  // шаблоны прав; настройки — глобальный слой (пишет только админ) и личный слой вызывающего.
+  specialties: {
+    list: () => request<SpecialtyCatalogEntry[]>('/specialties'),
+    getSettings: () => request<SpecialtySettingsResponse>('/specialties/settings'),
+    saveOwnerLayer: (layer: SpecialtySettingsLayer) =>
+      request<{ owner: SpecialtySettingsLayer }>('/specialties/settings', {
+        method: 'PUT', body: JSON.stringify(layer),
+      }),
+    saveGlobalLayer: (layer: SpecialtySettingsLayer) =>
+      request<{ global: SpecialtySettingsLayer }>('/specialties/settings/global', {
+        method: 'PUT', body: JSON.stringify(layer),
       }),
   },
 
@@ -236,7 +303,7 @@ export const api = {
     create: (name: string, rootPath: string | null, createDirectory = false, groupId?: string | null,
       git?: { enableGit?: boolean; gitAutoCommit?: boolean; gitAutoPush?: boolean }, color?: string | null) =>
       request<Project>('/projects', { method: 'POST', body: JSON.stringify({ name, rootPath, createDirectory, groupId, ...git, color }) }),
-    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; toolsEnabled?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null }) =>
+    update: (id: string, data: { name?: string; rootPath?: string; systemPrompt?: string; showHiddenFiles?: boolean; permissionRules?: PermissionRule[]; groupId?: string | null; color?: string | null; mcpServersOff?: string[] }) =>
       request<Project>(`/projects/${id}`, { method: 'PUT', body: JSON.stringify(data) }),
     // Реестр общих тегов проекта: перезапись целиком (бэк нормализует order по позиции
     // массива и валидирует уникальность имён без учёта регистра)
@@ -367,6 +434,12 @@ export const api = {
       request<{ running: { serviceId: string; name: string; port: number | null; status: string; error: string | null }[]; activeServiceId: string | null }>(`/projects/${id}/preview/status`),
     previewActive: (id: string, serviceId: string) =>
       request<{ activeServiceId: string }>(`/projects/${id}/preview/active`, {
+        method: 'POST', body: JSON.stringify({ serviceId }),
+      }),
+    // Сервис поднят вне продукта (Rider, терминал) — показать его в превью.
+    // Порт выбирает сервер по конфигурации сервиса, клиент его не передаёт.
+    previewActiveExternal: (id: string, serviceId: string) =>
+      request<{ activeServiceId: string; port: number }>(`/projects/${id}/preview/active-external`, {
         method: 'POST', body: JSON.stringify({ serviceId }),
       }),
     getLaunchConfig: (id: string) =>
@@ -869,7 +942,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
       }),
-    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[] }) =>
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
         method: 'PUT',
         body: JSON.stringify(data),
@@ -890,6 +963,36 @@ export const api = {
     cancelPending: (sessionId: string, messageId: string) =>
       request<void>(`/sessions/${encodeURIComponent(sessionId)}/pending/${encodeURIComponent(messageId)}`,
         { method: 'DELETE' }),
+    // Снимок промпта хода — что ушло модели (кнопка под постом). 404 — снимок вытеснен
+    // ретеншном последних 50 ходов чата
+    promptSnapshot: (sessionId: string, snapshotId: string) =>
+      request<PromptSnapshot>(
+        `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}`),
+    // Текст одного файла слоя CLI (CLAUDE.md) — грузится, только когда строку раскрыли:
+    // в основной выдаче у него лишь размер, иначе открытие шторки тянуло бы десятки КБ
+    promptSnapshotFile: (sessionId: string, snapshotId: string, key: string) =>
+      request<PromptSection>(
+        `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}/file?key=${encodeURIComponent(key)}`),
+    // Разбор промпта моделью. includeText=true — человек разрешил приложить фрагменты
+    // текста секций (по умолчанию уходят только метаданные)
+    // timeoutMs — это ход модели, дефолтных 30 с ему мало: обрыв по таймауту
+    // трактуется как сетевая ошибка и выглядит как «Действие недоступно офлайн»
+    analyzePrompt: (sessionId: string, snapshotId: string, includeText: boolean) =>
+      request<{ analysis: string }>(
+        `/sessions/${encodeURIComponent(sessionId)}/prompt/${encodeURIComponent(snapshotId)}/analyze`,
+        { method: 'POST', body: JSON.stringify({ includeText }), timeoutMs: 180_000 }),
+  },
+
+  // «Стена»: per-user набор чатов колонками. Ресурс бэка — /api/me/wall
+  // (MyWallController, конвенция per-user настроек), короткое имя здесь — для читаемости вызовов.
+  wall: {
+    // Состав стены — полные Session в порядке набора (мёртвые уже отфильтрованы сервером)
+    get: () => request<{ chats: Session[] }>('/me/wall'),
+    // Полная замена состава; ответ — итог после серверной чистки (дедуп/чужие/потолок)
+    put: (chatIds: string[]) =>
+      request<{ chats: Session[] }>('/me/wall', { method: 'PUT', body: JSON.stringify({ chatIds }) }),
+    // Кандидаты для пикера: все чаты владельца, свежие сверху
+    candidates: () => request<Session[]>('/me/wall/candidates'),
   },
 
   // Чаты вне проекта (project-less)
@@ -937,7 +1040,7 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ enabled }),
       }),
-    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
+    // Режим «Командная реализация»: вкл/выкл режима чата-штаба.
     // При включении можно сразу задать авто-волны и состав (пустой список = вся команда)
     setTeamImplement: (id: string, enabled: boolean, opts?: { autoWaves?: boolean; coordinatorPersonaId?: string; plannerPersonaId?: string; executorPersonaIds?: string[] }) =>
       request<Session>(`/chats/${id}/team-implement`, {
@@ -1043,6 +1146,68 @@ export const api = {
           home: scope.home === undefined ? null : scope.home,
         }),
       }),
+    // Вынести текущую область в файл .docs репозитория: дальше она версионируется и
+    // одинакова у всех, кто открыл репозиторий, а setScope правит уже файл
+    saveScopeFile: (projectId: string) =>
+      request<DocsScopeInfo>(`/projects/${projectId}/docs/scope-file`, { method: 'POST' }),
+    // Порядок страниц папки — правка .order в рабочем дереве, поэтому только по жесту
+    // пользователя. items — имена БЕЗ расширения в новом порядке (как строки в файле);
+    // это подмножество папки, остальные её строки сервер оставляет на своих местах.
+    // Ответ — свежий индекс: порядок приезжает вместе с подтверждением
+    // Создать документ или раздел. name — ЧЕЛОВЕЧЕСКОЕ название: имя файла из него делает
+    // сервер (пробелы → дефисы), а само название становится заголовком первой строки.
+    // Раздел создаётся парой «страница + папка» — в wiki он существует только так
+    create: (projectId: string, folder: string, name: string, kind: 'doc' | 'section') =>
+      request<{ path: string; index: DocEntry[] }>(`/projects/${projectId}/docs/create`, {
+        method: 'POST',
+        body: JSON.stringify({ folder, name, kind }),
+      }),
+    // Переименовать документ или раздел. Раздел переезжает парой со всем поддеревом:
+    // moved — карта «старый путь → новый» по каждому переехавшему документу, по ней
+    // панель чинит закреплённые и открытый документ. updateLinks=false оставляет чужие
+    // файлы нетронутыми и возвращает число ссылок, оставшихся битыми
+    rename: (projectId: string, path: string, newName: string, updateLinks: boolean) =>
+      request<{ path: string; updatedDocs: number; brokenLinks: number; moved: Record<string, string>; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/rename`, {
+          method: 'POST',
+          body: JSON.stringify({ path, newName, updateLinks }),
+        }),
+    // Удалить документ или раздел. Раздел уходит парой «страница + папка» со всем
+    // содержимым, включая файлы, которых панель не показывала (removedFiles).
+    // brokenLinks — сколько ссылок на удалённое осталось: починить их нечем
+    remove: (projectId: string, path: string) =>
+      request<{ removed: string[]; brokenLinks: number; removedFiles: number; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/delete`, {
+          method: 'POST',
+          body: JSON.stringify({ path }),
+        }),
+    // Перенести документ или раздел в другую папку области. Раздел переезжает со всем
+    // поддеревом; updateLinks чинит и чужие ссылки на переехавшее, и его собственные —
+    // при смене папки меняется глубина, и относительные пути ломаются в обе стороны
+    move: (projectId: string, path: string, targetFolder: string, updateLinks: boolean) =>
+      request<{ path: string; updatedDocs: number; brokenLinks: number; moved: Record<string, string>; index: DocEntry[] }>(
+        `/projects/${projectId}/docs/move`, {
+          method: 'POST',
+          body: JSON.stringify({ path, targetFolder, updateLinks }),
+        }),
+    setOrder: (projectId: string, folder: string, items: string[]) =>
+      request<DocEntry[]>(`/projects/${projectId}/docs/order`, {
+        method: 'PUT',
+        body: JSON.stringify({ folder, items }),
+      }),
+  },
+
+  // История решений (change-dossiers, этап 1) — записи «зачем менялось, что решили,
+  // что отвергли, какие грабли», привязанные к коммитам. ADR-004 §4/§8
+  dossiers: {
+    list: (projectId: string, filter?: { file?: string; symbol?: string; commit?: string }) => {
+      const qs = new URLSearchParams();
+      if (filter?.file) qs.set('file', filter.file);
+      if (filter?.symbol) qs.set('symbol', filter.symbol);
+      if (filter?.commit) qs.set('commit', filter.commit);
+      const s = qs.toString();
+      return request<DossierEntry[]>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
+    },
   },
 
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку
@@ -1065,8 +1230,8 @@ export const api = {
     },
     list: (projectId: string, path = '') =>
       request<FileEntry[]>(`/projects/${projectId}/files?path=${encodeURIComponent(path)}`),
-    tree: (projectId: string, path = '') =>
-      request<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}`),
+    tree: (projectId: string, path = '', showHidden?: boolean) =>
+      request<FileEntry[]>(`/projects/${projectId}/files/tree?path=${encodeURIComponent(path)}${showHidden ? '&showHidden=true' : ''}`),
     search: (projectId: string, q: string) =>
       request<FileEntry[]>(`/projects/${projectId}/files/search?q=${encodeURIComponent(q)}`),
     getContent: (projectId: string, path: string) =>
@@ -1136,6 +1301,14 @@ export const api = {
         throw new Error(err.error ?? res.statusText);
       }
     },
+  },
+
+  // Просмотр файла вне корня проекта (абсолютный путь) — например, файл открытый
+  // из карточки инструмента чата в другом проекте/дереве. Формат ответа тот же, что
+  // у files/content; 403 — путь вне досягаемости песочницы, 400 — путь не абсолютный.
+  hostFiles: {
+    getContent: (path: string) =>
+      request<{ content: string | null; isBinary: boolean; isImage: boolean; isVideo?: boolean; isAudio?: boolean; isDocument?: boolean; docKind?: string; mimeType?: string; base64?: string; fileSize?: number }>(`/host-files/content?path=${encodeURIComponent(path)}`),
   },
 
   // Git проекта (раздел «Файлы» → «Изменения»/«История»); ошибки операций — 409 { error }
@@ -1402,4 +1575,70 @@ export const api = {
     remove: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/sync?path=${encodeURIComponent(path)}`, { method: 'DELETE' }),
   },
+
+  reader: {
+    // Контракт ADR-005 (docs/adr/ADR-005-link-reader-server.md): успех — { title, siteName?,
+    // byline?, markdown }, отказ — { error: { code, httpStatus? } }. Отказ — ОЖИДАЕМЫЙ исход
+    // (часть сайтов не читается, это норма, а не поломка), поэтому здесь гасим исключение
+    // request() при non-2xx и возвращаем обе ветки как данные — вызывающему нечего ловить.
+    read: (url: string) => readReaderPage(url),
+    // Серверная проба встраиваемости (ADR-006 §1): POST /api/reader/embed-check, вердикт по
+    // заголовкам финального ответа (X-Frame-Options / CSP frame-ancestors). Поле reason —
+    // телеметрия/отладка; фронт на него НЕ ветвится — любой исход, кроме явного
+    // embeddable:true (включая 401/403/429 и сетевые сбои), означает «не встраивается»
+    // и тихо уводит панель в MD-режим.
+    embedCheck: (url: string) => checkReaderEmbeddable(url),
+  },
 };
+
+async function checkReaderEmbeddable(url: string): Promise<{ embeddable: boolean }> {
+  try {
+    const data = await request<{ embeddable?: unknown }>('/reader/embed-check', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+    return { embeddable: !!data && data.embeddable === true };
+  } catch {
+    // Сбой пробы — не исключение для показа, а сигнал идти MD-путём (ADR-006 §1)
+    return { embeddable: false };
+  }
+}
+
+function normalizeReaderError(raw: unknown, httpStatus?: number | null): { code: ReaderErrorCode; httpStatus?: number | null } {
+  const code = raw && typeof raw === 'object' && 'code' in raw && typeof (raw as { code?: unknown }).code === 'string'
+    ? (raw as { code: string }).code
+    : null;
+  const known = code != null && READER_ERROR_CODES.has(code as ReaderErrorCode);
+  const rawStatus = raw && typeof raw === 'object' && 'httpStatus' in raw
+    ? (raw as { httpStatus?: number | null }).httpStatus
+    : null;
+  return { code: known ? (code as ReaderErrorCode) : 'server-error', httpStatus: rawStatus ?? httpStatus ?? null };
+}
+
+const READER_ERROR_CODES = new Set<ReaderErrorCode>([
+  'invalid-url', 'local-address', 'dns-failed', 'unreachable', 'tls-invalid',
+  'timeout', 'auth-required', 'blocked-by-site', 'not-found', 'server-error',
+  'too-many-redirects', 'not-a-page', 'pdf', 'too-large', 'not-readable',
+]);
+
+export type ReaderReadResult =
+  | { ok: true; page: ReaderPage }
+  | { ok: false; error: { code: ReaderErrorCode; httpStatus?: number | null } };
+
+// Backend может сигналить отказ ЛИБО non-2xx статусом (request() бросает исключение,
+// тело ошибки летит в err.body), ЛИБО 200 с discriminated union в теле — конвенция ещё
+// не устоялась (эндпоинт делает Денис параллельно), поэтому распознаём оба варианта.
+async function readReaderPage(url: string): Promise<ReaderReadResult> {
+  try {
+    const data = await request<ReaderPage | { error: unknown }>('/reader/read', {
+      method: 'POST', body: JSON.stringify({ url }),
+    });
+    if (data && typeof data === 'object' && 'error' in data) {
+      return { ok: false, error: normalizeReaderError((data as { error: unknown }).error) };
+    }
+    return { ok: true, page: data as ReaderPage };
+  } catch (e) {
+    const err = e as Error & { status?: number; body?: { error?: unknown } };
+    return { ok: false, error: normalizeReaderError(err.body?.error, err.status) };
+  }
+}

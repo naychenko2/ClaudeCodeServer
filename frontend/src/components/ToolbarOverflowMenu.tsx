@@ -59,6 +59,11 @@ export function ToolbarOverflowMenu({
   renderTrigger?: TriggerRenderer;
 }) {
   const [open, setOpen] = useState(false);
+  // Куда раскрывать десктопный дропдаун и сколько ему позволено занять по высоте.
+  // Жёсткого «вниз» мало: тулбар композера стоит у нижней кромки окна, и меню
+  // уходило за экран целиком (на мобиле беды нет — там боттом-шит). Считаем в
+  // момент открытия по rect триггера: вверх, если снизу места меньше, чем сверху.
+  const [drop, setDrop] = useState<{ up: boolean; maxH: number }>({ up: false, maxH: 0 });
   const rootRef = useRef<HTMLDivElement>(null);
   const triggerElRef = useRef<HTMLElement | null>(null);
   const labelId = useId();
@@ -76,7 +81,22 @@ export function ToolbarOverflowMenu({
   }, [open]);
 
   const close = () => setOpen(false);
-  const toggle = () => setOpen(o => !o);
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    // Высоту меряем оценкой, а не по факту: реальная высота известна только у уже
+    // отрисованного меню, а измерять его в layout-эффекте — значит дёргать setState
+    // из эффекта ради того же ответа. Строк у списка мы знаем, произвольному
+    // содержимому (children) даём типовой максимум.
+    const h = items ? items.length * ROW_H + (title ? TITLE_H : 0) + PAD_H : CHILDREN_H;
+    const r = rootRef.current?.getBoundingClientRect();
+    if (r && !isMobile) {
+      const below = window.innerHeight - r.bottom - GAP - EDGE;
+      const above = r.top - GAP - EDGE;
+      const up = h > below && above > below;
+      setDrop({ up, maxH: Math.max(MIN_H, Math.floor(up ? above : below)) });
+    }
+    setOpen(true);
+  };
 
   const content = children ?? (items ? (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -90,6 +110,7 @@ export function ToolbarOverflowMenu({
   const setTriggerRef = (el: HTMLElement | null) => { triggerElRef.current = el; };
   let trigger: ReactNode;
   if (renderTrigger) {
+    // eslint-disable-next-line react-hooks/refs -- setTriggerRef — callback ref, React зовёт его на коммите, не в рендере
     trigger = renderTrigger({ open, toggle, ref: setTriggerRef });
   } else if (triggerLabel) {
     // Кнопка с подписью (например «Фильтры») — chip-стиль тулбара
@@ -130,7 +151,7 @@ export function ToolbarOverflowMenu({
       {trigger}
 
       {open && !isMobile && (
-        <div role="menu" aria-labelledby={title ? labelId : undefined} style={dropdownStyle(align)}>
+        <div role="menu" aria-labelledby={title ? labelId : undefined} style={dropdownStyle(align, drop)}>
           {title && <div id={labelId} style={sectionTitle}>{title}</div>}
           {content}
         </div>
@@ -200,11 +221,26 @@ function ItemRow({ item, isMobile, onDone }: { item: OverflowItem; isMobile?: bo
 }
 
 // === Стили ===
-function dropdownStyle(align: 'left' | 'right'): CSSProperties {
+// Метрики для выбора направления дропдауна: высота строки/заголовка/полей списка,
+// запас для произвольного содержимого, зазор до триггера, отступ от кромки окна
+// и минимум, ниже которого сворачивать меню бессмысленно (лучше проскроллить).
+const ROW_H = 40;
+const TITLE_H = 24;
+const PAD_H = 12;
+const CHILDREN_H = 320;
+const GAP = 6;
+const EDGE = 8;
+const MIN_H = 140;
+
+function dropdownStyle(align: 'left' | 'right', drop: { up: boolean; maxH: number }): CSSProperties {
   return {
-    position: 'absolute', top: 'calc(100% + 6px)',
+    position: 'absolute',
+    ...(drop.up ? { bottom: `calc(100% + ${GAP}px)` } : { top: `calc(100% + ${GAP}px)` }),
     left: align === 'left' ? 0 : undefined, right: align === 'right' ? 0 : undefined,
     minWidth: 240, maxWidth: 320,
+    // Потолок по свободному месту: даже развёрнутое в нужную сторону длинное меню
+    // не должно вылезать за кромку — остаток прокручивается внутри
+    ...(drop.maxH ? { maxHeight: drop.maxH, overflowY: 'auto' as const } : null),
     background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
     boxShadow: SHADOW.dropdown, padding: 6, zIndex: Z.dropdown,
   };

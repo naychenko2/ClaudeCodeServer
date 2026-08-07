@@ -154,10 +154,10 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
       <div
         ref={areaRef}
         onWheel={(e) => zoomAround(tf.s * (e.deltaY < 0 ? 1.12 : 0.89), e.clientX, e.clientY)}
-        onPointerDown={(e) => { if (e.pointerType === 'mouse') { drag.current = { x: e.clientX, y: e.clientY, tx: tf.x, ty: tf.y }; (e.currentTarget as Element).setPointerCapture?.(e.pointerId); } }}
+        onPointerDown={(e) => { if (e.pointerType === 'mouse') { drag.current = { x: e.clientX, y: e.clientY, tx: tf.x, ty: tf.y }; setGesturing(true); (e.currentTarget as Element).setPointerCapture?.(e.pointerId); } }}
         onPointerMove={(e) => { if (e.pointerType === 'mouse' && drag.current) { const d = drag.current; setTf(p => ({ ...p, x: d.tx + (e.clientX - d.x), y: d.ty + (e.clientY - d.y) })); } }}
-        onPointerUp={() => { drag.current = null; }}
-        onPointerCancel={() => { drag.current = null; }}
+        onPointerUp={() => { drag.current = null; setGesturing(false); }}
+        onPointerCancel={() => { drag.current = null; setGesturing(false); }}
         onTouchStart={(e) => {
           setGesturing(true);
           if (e.touches.length === 2) {
@@ -186,7 +186,7 @@ function MermaidLightbox({ svg, onClose }: { svg: string; onClose: () => void })
         <div
           style={{
             transform: `translate(${tf.x}px, ${tf.y}px) scale(${tf.s})`,
-            transition: (gesturing || drag.current) ? 'none' : 'transform 0.08s',
+            transition: gesturing ? 'none' : 'transform 0.08s',
             maxWidth: '92vw', maxHeight: '92vh',
             // Подложка-лист под тему: SVG прозрачный, иначе диаграмма висит на чёрном фоне
             background: C.bgMain, padding: 20, borderRadius: 10, boxShadow: '0 8px 40px rgba(0,0,0,0.45)',
@@ -225,6 +225,7 @@ export function MermaidDiagram({ code }: { code: string }) {
   useEffect(() => {
     // Уже в кэше (для текущей темы) — перерисовывать нечего, берём готовый SVG.
     const cached = mermaidSvgCache.get(cacheKey(code));
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- быстрая отдача кэшированного SVG диаграммы
     if (cached) { setSvg(cached); setFailed(false); return; }
     let cancelled = false;
     setFailed(false);

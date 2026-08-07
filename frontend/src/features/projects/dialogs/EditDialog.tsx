@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Folder, GitBranch, Lock, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
@@ -11,6 +11,7 @@ import { GroupSelect } from '../GroupSelect';
 import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
+import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 
 // === История файлов (Git) в настройках проекта ===
@@ -29,7 +30,7 @@ function GitHistorySection({ project }: { project: Project }) {
   const [firstDate, setFirstDate] = useState<string | null>(null);
   const [err, setErr] = useState('');
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     try {
       const st = await api.git.status(project.id);
       setIsRepo(st.isRepo);
@@ -46,13 +47,14 @@ function GitHistorySection({ project }: { project: Project }) {
       }
     } catch { /* оффлайн/ошибка — секция покажет «недоступно» через isRepo=false без карточек? нет: просто молчим */ }
     finally { setLoading(false); }
-  };
-  useEffect(() => { void reload(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [project.id]);
+  }, [project.id]);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка состояния git-репозитория при смене проекта
+  useEffect(() => { void reload(); }, [reload]);
 
   const run = async (op: () => Promise<unknown>) => {
     setBusy(true); setErr('');
     try { await op(); await reload(); }
-    catch (e: any) { setErr(e.message ?? 'Не получилось'); }
+    catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Не получилось'); }
     finally { setBusy(false); }
   };
 
@@ -150,12 +152,15 @@ interface Props {
   // Проброс обновлённого проекта в стор после иконочной мутации (generate/select/upload/recrop),
   // не дожидаясь «Сохранить» — иначе список стухнет при закрытии крестиком. Realtime у проектов нет.
   onIconUpdated?: (updated: Project) => void;
+  // Секция MCP сохраняет своё поле сама, минуя handleConfirm — без этого проброса
+  // повторное открытие диалога показывало состояние до клика (устаревший project prop)
+  onProjectUpdated?: (updated: Project) => void;
   onClose: () => void;
 }
 
 type View = 'main' | 'prompt' | 'rules';
 
-export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onClose }: Props) {
+export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
   const online = useOnline();
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
@@ -163,7 +168,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
   const [iconColor, setIconColor] = useState<string | null>(project.icon?.color ?? null);
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
-  const [toolsEnabled, setToolsEnabled] = useState(project.toolsEnabled ?? false);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
   const [draftPrompt, setDraftPrompt] = useState('');
   const [promptParts, setPromptParts] = useState<SystemPromptPart[] | null>(null);
@@ -188,14 +192,13 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
         groupId,
         systemPrompt,
         showHiddenFiles,
-        toolsEnabled,
         permissionRules: rules.filter(r => r.pattern.trim()).map(r => ({ pattern: r.pattern.trim(), action: r.action })),
         color: iconColor ?? '',
       });
       invalidateProjectsCache(); // полка/палитра проектов подхватывают новое имя/иконку
       onSuccess(updated);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Не удалось сохранить');
     }
   };
 
@@ -418,10 +421,6 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
           <span style={{ fontSize: 13, color: C.textPrimary }}>Скрытые файлы и папки</span>
           <Toggle checked={showHiddenFiles} onChange={setShowHiddenFiles} />
         </SettingsRow>
-        <SettingsRow title="Встроенный терминал и предпросмотр dev-сервера">
-          <span style={{ fontSize: 13, color: C.textPrimary }}>Инструменты</span>
-          <Toggle checked={toolsEnabled} onChange={setToolsEnabled} />
-        </SettingsRow>
         <SettingsRow last>
           <span style={{ fontSize: 13, color: C.textPrimary }}>
             Правила разрешений
@@ -434,6 +433,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onC
           </Button>
         </SettingsRow>
       </div>
+      <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       <GitHistorySection project={project} />
       <ProjectSyncToggle projectId={project.id} online={online} />
     </Modal>

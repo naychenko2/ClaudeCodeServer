@@ -22,6 +22,30 @@ public class TurnAccumulatorTests : IDisposable
     }
 
     [Fact]
+    public void SetPromptSnapshot_ПривязываетСнимокКСообщениюХода()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnUserMessage("почини сборку", []);
+
+        acc.SetPromptSnapshot("1700000000000-abcd");
+
+        acc.GetAll().OfType<StoredUserMessage>().Single()
+            .PromptSnapshotId.Should().Be("1700000000000-abcd");
+    }
+
+    [Fact]
+    public void SetPromptSnapshot_БезСообщенияХода_НеПадает()
+    {
+        // Продолжение цикла «до готово» идёт без нового сообщения человека: снимок
+        // остаётся на диске, но вешать его в ленте не на что
+        var acc = new TurnAccumulator([]);
+
+        var act = () => acc.SetPromptSnapshot("1700000000000-abcd");
+
+        act.Should().NotThrow();
+    }
+
+    [Fact]
     public void GetAll_EmptyAccumulator_ReturnsEmpty()
     {
         var acc = new TurnAccumulator([]);
@@ -64,6 +88,67 @@ public class TurnAccumulatorTests : IDisposable
         started.Model.Should().Be("claude-3");
         started.Mode.Should().Be("auto");
         started.TurnWorktree.Should().BeNull();
+    }
+
+    // Пометка автоподмены модели пишется в историю, чтобы после F5/рестарта человек
+    // видел, что отвечала не та модель. PreviousModel — модель последнего session_started
+    // этого хода (провалившаяся попытка успела его прислать).
+    [Fact]
+    public void OnModelSwitched_ПишетПометкуВИсторию()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnSessionStarted("claude-opus-4-8", "auto");
+        acc.OnModelSwitched("deepseek-chat", acc.LastStartedModel(), "rate_limit");
+
+        var all = acc.GetAll();
+        all.OfType<StoredModelSwitchedMessage>().Should().ContainSingle()
+            .Which.Should().Match<StoredModelSwitchedMessage>(m =>
+                m.Model == "deepseek-chat"
+                && m.PreviousModel == "claude-opus-4-8"
+                && m.Reason == "rate_limit");
+    }
+
+    // Без PreviousModel (в начале чата ещё не было session_started) пилюля не пишется —
+    // иначе в истории «Ответила X — была Y», а Y неизвестна
+    [Fact]
+    public void OnModelSwitched_БезSessionStarted_НеПишетПометку()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnModelSwitched("deepseek-chat", acc.LastStartedModel(), "rate_limit");
+
+        acc.GetAll().OfType<StoredModelSwitchedMessage>().Should().BeEmpty();
+    }
+
+    // LastStartedModel: обход с хвоста текущего хода вглубь истории — модель
+    // предыдущего хода остаётся «последней известной» к моменту подмены в новом
+    [Fact]
+    public void LastStartedModel_ОбходОтХвостаВглубьИстории()
+    {
+        var history = new List<StoredMessage>
+        {
+            new StoredSessionStartedMessage("gpt-4", "auto"),
+            new StoredTextMessage("старый ответ"),
+        };
+        var acc = new TurnAccumulator(history);
+        acc.OnSessionStarted("claude-opus-4-8", "auto");
+
+        acc.LastStartedModel().Should().Be("claude-opus-4-8",
+            "свежий session_started в текущем ходу — приоритет у него");
+    }
+
+    [Fact]
+    public void LastStartedModel_НетВТекущемХоду_ИзИстории()
+    {
+        var history = new List<StoredMessage>
+        {
+            new StoredSessionStartedMessage("claude-opus-4-8", "auto"),
+            new StoredTextMessage("прошлый ответ"),
+        };
+        var acc = new TurnAccumulator(history);
+        // Нового session_started в этом ходу нет
+
+        acc.LastStartedModel().Should().Be("claude-opus-4-8",
+            "для подмены в начале нового хода берётся модель прошлого");
     }
 
     // Признак «ход идёт в чужом дереве» переживает перезагрузку истории — попадает в
@@ -206,6 +291,27 @@ public class TurnAccumulatorTests : IDisposable
         file.Removed.Should().Be(5);
     }
 
+    [Fact]
+    public void OnFileChanged_External_СохраняетПометку()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnFileChanged("src/file.cs", 10, 3, external: true);
+
+        var changed = acc.GetAll().OfType<StoredFileChangedMessage>().Single();
+        changed.External.Should().BeTrue();
+    }
+
+    [Fact]
+    public void OnFileChanged_ОдинВкладОтМодели_СнимаетExternalСоВсейСтроки()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnFileChanged("src/file.cs", 10, 3, external: true);
+        acc.OnFileChanged("src/file.cs", 5, 2, external: false);
+
+        var changed = acc.GetAll().OfType<StoredFileChangedMessage>().Single();
+        changed.External.Should().BeFalse();
+    }
+
     // Модель хода приходит только с result, а посты к тому моменту уже созданы —
     // проверяем, что она проставляется им задним числом (подпись модели у поста)
     [Fact]
@@ -325,6 +431,41 @@ public class TurnAccumulatorTests : IDisposable
         var all = acc.GetAll();
         // история (1 user + 1 result) + текущий (1 user) = 3
         all.Should().HaveCount(3);
+    }
+
+    // Прод 2026-08-02 (находка Веры): в длинном ответе координатора вызов инструмента между
+    // открывающим и закрывающим тегом маркера дёргает FlushBuffers ДО того, как закрытие
+    // пришло следующей дельтой — раньше пара искалась в каждом куске между flush'ами
+    // независимо, и половина маркера (то открывающий тег, то осиротевший закрывающий)
+    // утекала в сохранённую историю буквально.
+    [Fact]
+    public async Task Маркер_РазъехалсяПоFlushBuffers_НеПротекаетИВырезаетсяЦеликом()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta("Договорились. <team:work>сделать экспорт");
+        acc.OnToolUse("t1", "bash", new { }); // FlushBuffers посреди маркера
+        acc.OnTextDelta("</team> Готово.");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        var texts = acc.GetAll().OfType<StoredTextMessage>().Select(m => m.Text).ToList();
+        texts.Should().OnlyContain(t => !t.Contains("<team:work>") && !t.Contains("</team"));
+        string.Concat(texts).Should().Be("Договорились.  Готово.");
+    }
+
+    // Симметрично живой трансляции (ЖиваяТрансляция_ХодОборванПослеНезавершённогоХвоста в
+    // SessionManagerTests): маркер, который так и не закрылся к концу хода (обрыв), не должен
+    // теряться молча — конец хода довешивает его как обычный текст, а не съедает навсегда.
+    [Fact]
+    public async Task Маркер_НеЗакрылсяККонцуХода_ДовешиваетсяКакОбычныйТекстВИстории()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta("Собираю план, минуту <team:wo");
+        await acc.OnErrorAsync("оборвался", _histSvc);
+
+        var texts = acc.GetAll().OfType<StoredTextMessage>().Select(m => m.Text).ToList();
+        string.Concat(texts).Should().Be("Собираю план, минуту <team:wo");
     }
 
     public void Dispose()

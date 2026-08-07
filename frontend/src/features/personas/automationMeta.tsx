@@ -25,6 +25,26 @@ export const ACTION_META: Record<AutomationActionWeight, { label: string }> = {
   work: { label: 'Полный ход' },
 };
 
+// Форма аргументов триггера (AutomationTrigger.args): фронт сам собирает её в
+// buildArgs (automationForm), сервер возвращает как есть. Структурный тип вместо
+// Record<string, any> — тот же JSON-мешок, но с известными ключами.
+export interface TriggerArgs {
+  schedule?: TriggerArgs;   // timer: вложенное расписание (те же type/time/…)
+  type?: string;            // тип расписания (daily/weekdays/weekly/interval)
+  time?: string;            // HH:mm
+  intervalMinutes?: number;
+  weekdays?: number[];      // ISO 1..7
+  folder?: string;          // file/gitCommit: папка без проекта
+  projectId?: string;
+  glob?: string;            // file
+  kinds?: string[];         // file: created/changed
+  source?: string;          // note: personal | projectId
+  tags?: string[];          // note
+  section?: string;         // note
+  from?: string;            // taskStatus
+  to?: string;              // taskStatus
+}
+
 // Короткие подписи статусов задач для детали триггера taskStatus
 const TASK_STATUS_SHORT: Record<string, string> = {
   Todo: 'К выполнению',
@@ -35,11 +55,11 @@ const TASK_STATUS_SHORT: Record<string, string> = {
 // Человекопонятная подпись параметров триггера (часть сводки-подзаголовка карточки).
 // projects опциональны: без списка имена проектов в подписи опускаются.
 export function triggerDetails(rule: PersonaAutomationRule, projects: Project[] = []): string {
-  const a = ((rule.trigger.args?.schedule as Record<string, any>) ?? rule.trigger.args ?? {}) as Record<string, any>;
+  const a = (rule.trigger.args?.schedule ?? rule.trigger.args ?? {}) as TriggerArgs;
   switch (rule.trigger.type) {
     case 'timer': {
       if (a.intervalMinutes) return `каждые ${a.intervalMinutes} мин`;
-      const sched = rule.trigger.args?.schedule as Record<string, any> | undefined;
+      const sched = rule.trigger.args?.schedule as TriggerArgs | undefined;
       const type = sched?.type ?? a.type;
       const kind = type === 'weekdays' ? 'по будням'
         : type === 'weekly' ? 'по выбранным дням'
@@ -48,27 +68,27 @@ export function triggerDetails(rule: PersonaAutomationRule, projects: Project[] 
       return time ? `${kind} в ${time}` : kind;
     }
     case 'file': {
-      const args = (rule.trigger.args ?? {}) as Record<string, any>;
+      const args = (rule.trigger.args ?? {}) as TriggerArgs;
       const glob = String(args.glob ?? '**/*');
       if (typeof args.folder === 'string') return `${glob} · 📁 ${args.folder || 'основная папка'}`;
       const proj = projects.find(p => p.id === args.projectId);
       return proj ? `${glob} · ${proj.name}` : glob;
     }
     case 'note': {
-      const args = (rule.trigger.args ?? {}) as Record<string, any>;
+      const args = (rule.trigger.args ?? {}) as TriggerArgs;
       const src = args.source ?? args.projectId;
       if (!src || src === 'personal') return 'личный vault';
       const proj = projects.find(p => p.id === src);
       return proj ? `проект «${proj.name}»` : 'заметки';
     }
     case 'gitCommit': {
-      const args = (rule.trigger.args ?? {}) as Record<string, any>;
+      const args = (rule.trigger.args ?? {}) as TriggerArgs;
       if (typeof args.folder === 'string') return `📁 ${args.folder || 'основная папка'}`;
       const proj = projects.find(p => p.id === args.projectId);
       return proj ? proj.name : 'репозиторий проекта';
     }
     case 'taskStatus': {
-      const args = (rule.trigger.args ?? {}) as Record<string, any>;
+      const args = (rule.trigger.args ?? {}) as TriggerArgs;
       const parts: string[] = [];
       if (args.from) parts.push(TASK_STATUS_SHORT[String(args.from)] ?? String(args.from));
       if (args.to) parts.push(TASK_STATUS_SHORT[String(args.to)] ?? String(args.to));

@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/usage")]
 public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscriptionPool,
     LlmProviderRegistry providers, LocalActionRouter localRouter, OllamaClient ollama,
-    SubscriptionOAuthUsageService oauthUsage) : ControllerBase
+    SubscriptionOAuthUsageService oauthUsage,
+    LocalActionOverridesStore localActions, SpecialtySettingsStore specialty) : ControllerBase
 {
     // История снимков использования лимитов подписки + тариф + per-subscription (для экрана usage)
     [HttpGet]
@@ -70,6 +71,7 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
     // Блок локальной модели: настройки Ollama + маршрут каждого фонового действия (локаль/claude)
     private OllamaUsageInfo BuildOllamaInfo()
     {
+        var globalPresets = specialty.Snapshot.Global.Presets;
         var actions = LocalActionCatalog.All
             .Select(a =>
             {
@@ -85,7 +87,10 @@ public class UsageController(UsageService usage, ClaudeSubscriptionPool? subscri
                         _ => route.Model ?? LocalActionOverridesStore.ClaudeRoute,
                     },
                     RequiresStrong: !a.DefaultLocal,
-                    Agentic: a.Agentic);
+                    Agentic: a.Agentic,
+                    // Та же логика, что в LocalActionsAdminController.Describe — без дубля:
+                    // preset раскрывается по сырому значению стора и общим пресетам.
+                    Preset: LocalActionsAdminController.DescribePreset(localActions.TryGet(a.Key), globalPresets));
             })
             .ToList();
         return new OllamaUsageInfo(ollama.Enabled, ollama.Enabled ? ollama.TextModel : null,

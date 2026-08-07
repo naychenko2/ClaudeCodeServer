@@ -1,7 +1,7 @@
 import {
   AppWindow, Bell, Bot, Database, FolderOpen, FolderSearch, GitBranch,
   Globe, LayoutGrid, ListTodo, MessageSquare, MessagesSquare, Network, NotebookPen,
-  StickyNote, Trash2, UserCog, Users, Wrench,
+  Plug, StickyNote, Trash2, UserCog, Users, Wrench,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { C } from '../../lib/design';
@@ -12,11 +12,12 @@ import { C } from '../../lib/design';
 // ключа в ToolCatalog на бэке сюда попадает иконка и группа; неизвестные ключи
 // не ломают пикер: уходят в группу «Прочее» с нейтральным тоном.
 
-export type ToolGroupKey = 'base' | 'mcp' | 'workspace' | 'specialty' | 'danger' | 'other';
+export type ToolGroupKey = 'base' | 'mcp' | 'mcpUser' | 'workspace' | 'specialty' | 'danger' | 'other';
 
 export const TOOL_GROUPS: Record<ToolGroupKey, { title: string; bg: string; fg: string }> = {
   base:      { title: 'Базовые',            bg: C.successBg,  fg: C.successText },
   mcp:       { title: 'MCP-серверы',        bg: C.infoBg,     fg: C.info },
+  mcpUser:   { title: 'Свои MCP-серверы',   bg: C.infoBg,     fg: C.info },
   workspace: { title: 'Рабочее пространство', bg: C.planLight, fg: C.plan },
   specialty: { title: 'По специальности',   bg: C.warningBg,  fg: C.warning },
   danger:    { title: 'Опасные',            bg: C.dangerBg,   fg: C.dangerText },
@@ -24,7 +25,7 @@ export const TOOL_GROUPS: Record<ToolGroupKey, { title: string; bg: string; fg: 
 };
 
 // Порядок групп в пикере («Прочее» — всегда последняя, только если есть неизвестные ключи)
-export const TOOL_GROUP_ORDER: ToolGroupKey[] = ['base', 'mcp', 'workspace', 'specialty', 'danger', 'other'];
+export const TOOL_GROUP_ORDER: ToolGroupKey[] = ['base', 'mcp', 'mcpUser', 'workspace', 'specialty', 'danger', 'other'];
 
 const TOOL_GROUP_OF: Record<string, ToolGroupKey> = {
   tasks: 'base', notes: 'base', web: 'base',
@@ -35,7 +36,14 @@ const TOOL_GROUP_OF: Record<string, ToolGroupKey> = {
   destructive: 'danger',
 };
 
+// Ключ сервера личного реестра («mcp:<ключ>», PersonaBindingsService.IsMcpKey на бэке) —
+// собственная группа «Свои MCP-серверы», не зависящая от статического TOOL_GROUP_OF
+export function isMcpUserKey(key: string): boolean {
+  return key.toLowerCase().startsWith('mcp:');
+}
+
 export function toolGroupOf(key: string): ToolGroupKey {
+  if (isMcpUserKey(key)) return 'mcpUser';
   return TOOL_GROUP_OF[key.toLowerCase()] ?? 'other';
 }
 
@@ -63,6 +71,7 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
 };
 
 export function toolIcon(key: string): LucideIcon {
+  if (isMcpUserKey(key)) return Plug;
   return TOOL_ICONS[key.toLowerCase()] ?? Wrench;
 }
 

@@ -119,6 +119,10 @@ function openChat(sid: string, projectId?: string) {
 // Прокрутка микро- и макрозадач: цепочка «история → join → снапшот после join»
 const flush = async () => { for (let i = 0; i < 6; i++) await new Promise(r => setTimeout(r, 0)); }
 
+// Переждать окно ожидания входа в группу (JOIN_WAIT_MS в useSession) — для случаев,
+// когда join намеренно подвешен и история должна сниматься не дожидаясь его
+const waitPastJoinWindow = async () => { await new Promise(r => setTimeout(r, 500)); await flush(); }
+
 function deferred<T>() {
   let resolve!: (v: T) => void;
   const promise = new Promise<T>(r => { resolve = r; });
@@ -329,11 +333,13 @@ describe('useSession: снапшот после входа в группу', () 
     m.joinSession.mockReturnValueOnce(join.promise);
 
     const back = openChat(sid);
-    await flush();
+    // Ждём дольше JOIN_WAIT_MS: пока хаб не ответил, снимок берётся не дожидаясь его —
+    // ровно так и возникает дыра, ради которой нужен повторный снимок после входа
+    await waitPastJoinWindow();
 
     expect(back.render().isWaiting).toBe(true); // дыра: конец хода прошёл мимо
-    // 1-2 — открытие чата до ухода (снимок + снапшот после join), 3 — снимок при возврате
-    expect(m.getHistory).toHaveBeenCalledTimes(3);
+    // 1 — открытие чата до ухода (join успел, повторный снимок не нужен), 2 — снимок при возврате
+    expect(m.getHistory).toHaveBeenCalledTimes(2);
 
     // Ход завершился ровно в окне между снимком и входом в группу
     m.getHistory.mockResolvedValue([...DONE_TURN, user('второй'), text('ответ 2'), result()]);
@@ -341,7 +347,7 @@ describe('useSession: снапшот после входа в группу', () 
     await flush();
 
     const st = back.render();
-    expect(m.getHistory).toHaveBeenCalledTimes(4); // 4 — снапшот ПОСЛЕ входа в группу
+    expect(m.getHistory).toHaveBeenCalledTimes(3); // 3 — снимок ПОСЛЕ входа в группу
     expect(st.isJoined).toBe(true);
     expect(st.isWaiting).toBe(false);
     expect(st.items.at(-1)!.kind).toBe('result');
@@ -361,6 +367,35 @@ describe('useSession: снапшот после входа в группу', () 
     const st = back.render();
     expect(st.items).toHaveLength(6);
     expect(st.items.at(-1)!.kind).toBe('result');
+  });
+});
+
+describe('useSession: второй наблюдатель уже присоединённого занятого чата', () => {
+  it('открытие чата с isWaiting=true всё равно подтягивает историю (снята !isWaiting)', async () => {
+    const sid = nextSid();
+    m.getHistory.mockResolvedValue([...DONE_TURN]);
+    const chat = openChat(sid);
+    await flush();
+    await chat.first.send('второй');
+    expect(chat.render().isWaiting).toBe(true);
+    expect(chat.render().isJoined).toBe(true);
+
+    // Первый компонент (например ChatPanel) остаётся смонтированным — сессия не покидает
+    // группу. Пока чат считался занятым, сервер дописал конец хода (карточка отчёта и т.п.).
+    m.getHistory.mockResolvedValue([...DONE_TURN, user('второй'), text('ответ 2'), result()]);
+    const before = m.getHistory.mock.calls.length;
+
+    // Второй наблюдатель того же sessionId (ArtifactsPanel) монтируется, пока сессия уже joined.
+    const second = openChat(sid);
+    await flush();
+
+    expect(m.getHistory.mock.calls.length).toBeGreaterThan(before);
+    const st = second.render();
+    expect(st.isWaiting).toBe(false);
+    expect(st.items.at(-1)!.kind).toBe('result');
+
+    chat.unmount();
+    second.unmount();
   });
 });
 
@@ -415,15 +450,15 @@ describe('useSession: идемпотентность повторного сна
 
     const itemsAfterJoin: ChatItem[] = chat.render().items;
     expect(itemsAfterJoin).toHaveLength(3);
-    // Снимок при открытии + снимок после входа в группу — ровно два обращения
-    expect(m.getHistory).toHaveBeenCalledTimes(2);
+    // Один снимок: в группу вошли до его снятия, значит повторный не нужен
+    expect(m.getHistory).toHaveBeenCalledTimes(1);
 
-    // Возврат в уже присоединённый чат: третий снимок той же истории
+    // Возврат в уже присоединённый чат: второй снимок той же истории
     const again = openChat(sid);
     await flush();
 
     const st = again.render();
-    expect(m.getHistory).toHaveBeenCalledTimes(3); // перезагрузки не размножаются
+    expect(m.getHistory).toHaveBeenCalledTimes(2); // перезагрузки не размножаются
     expect(st.items).toBe(itemsAfterJoin);          // состояние не пересоздано
   });
 });

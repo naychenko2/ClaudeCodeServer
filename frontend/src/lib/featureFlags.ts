@@ -12,6 +12,9 @@ export const FLAGS = {
   teamMemoryAutolearn: 'team-memory-autolearn',
   docAnnotations: 'doc-annotations',
   aiLocalSuggest: 'ai-local-suggest',
+  linkReader: 'link-reader',
+  mcpRegistry: 'mcp-registry',
+  changeDossiers: 'change-dossiers',
   teamImplementMode: 'team-implement-mode',
   defaultPersonasOnboarding: 'default-personas-onboarding',
 } as const;

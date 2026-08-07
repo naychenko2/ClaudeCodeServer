@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 
@@ -169,7 +171,10 @@ public class LlmProviderRegistry
         Provider = p.Key,
         DisplayName = string.IsNullOrWhiteSpace(p.DisplayName) ? p.Key : p.DisplayName,
         SupportsImages = p.SupportsImages,
-        HasBalance = !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl),
+        // ApiBaseUrl либо BalanceUrl: у alibabacloud ApiBaseUrl пуст (ход идёт через
+        // AnthropicBaseUrl, а квота — на отдельном хосте консоли в BalanceUrl)
+        HasBalance = !string.IsNullOrWhiteSpace(p.Balance)
+            && (!string.IsNullOrWhiteSpace(p.ApiBaseUrl) || !string.IsNullOrWhiteSpace(p.BalanceUrl)),
         Configured = p.Enabled,
         TierStrong = p.TierStrong,
         TierMedium = p.TierMedium,
@@ -244,7 +249,9 @@ public class LlmProviderRegistry
     // список: глобальная память, настройки, правила, скиллы, агенты, команды, workflow-скрипты,
     // плагины). Креденшалы (.credentials.json) НЕ копируем никогда — иначе изоляция теряет смысл
     // и OAuth-токен подписки утёк бы на сторонний эндпоинт.
-    private static readonly string[] SyncFiles = ["CLAUDE.md", "settings.json"];
+    // settings.json в этом списке НЕТ намеренно: он не копируется файлом, а мержится
+    // по ключам (MergeSettingsInto) — у профиля там свои значения, копия хостового их стирала
+    private static readonly string[] SyncFiles = ["CLAUDE.md"];
     private static readonly string[] SyncDirs = ["rules", "skills", "agents", "commands", "workflows", "plugins"];
 
     // Троттлинг синка: не чаще раза в 5 минут на провайдера
@@ -280,6 +287,10 @@ public class LlmProviderRegistry
         foreach (var name in SyncFiles)
             CopyIfNewer(Path.Combine(_userProfileDir, name), Path.Combine(profileDir, name));
 
+        MergeSettingsInto(
+            Path.Combine(_userProfileDir, "settings.json"),
+            Path.Combine(profileDir, "settings.json"));
+
         foreach (var sub in SyncDirs)
         {
             var srcDir = Path.Combine(_userProfileDir, sub);
@@ -307,6 +318,77 @@ public class LlmProviderRegistry
         {
             Console.Error.WriteLine($"[LlmProviders] Синк настройки {src} → {dst} не удался: {ex.Message}");
         }
+    }
+
+    private static readonly JsonSerializerOptions SettingsJsonOptions = new() { WriteIndented = true };
+
+    // Синк settings.json — НЕ копия файла, а мерж по ключам. Профильный settings.json
+    // не копия хостового: в нём живут собственные значения профиля — env маршрута
+    // провайдера, permissions.allow, enabledPlugins. File.Copy поверх стирал их молча
+    // (отвал ANTHROPIC_BASE_URL = ход провайдера уходит на родной эндпоинт или падает).
+    //
+    // ПРАВИЛО КОНФЛИКТА (ключ есть и в хостовом, и в профильном файле):
+    //   • ветка env — сильнее ПРОФИЛЬНОЕ значение: оно задаёт маршрут CLI, а хостовое
+    //     там заведомо неверно (оно про подписку, а профиль — про сторонний эндпоинт);
+    //   • все остальные ключи — сильнее ХОСТОВОЕ: это общая настройка пользователя,
+    //     профиль обязан её подхватывать.
+    // Вложенные объекты сливаются рекурсивно (поэтому профильный permissions.allow
+    // переживает хостовый permissions.deny), массивы и скаляры заменяются целиком.
+    // Ключи, которых нет в источнике, в профиле сохраняются всегда.
+    private static void MergeSettingsInto(string src, string dst)
+    {
+        try
+        {
+            if (!File.Exists(src)) return;
+            if (File.Exists(dst) && File.GetLastWriteTimeUtc(src) <= File.GetLastWriteTimeUtc(dst)) return;
+
+            if (JsonNode.Parse(File.ReadAllText(src)) is not JsonObject host) return;
+
+            JsonObject? profile = null;
+            if (File.Exists(dst))
+            {
+                // Битый профильный файл — не повод потерять синк: перезаписываем хостовым
+                try { profile = JsonNode.Parse(File.ReadAllText(dst)) as JsonObject; }
+                catch (JsonException) { }
+            }
+
+            var merged = profile is null ? (JsonObject)host.DeepClone() : MergeSettings(profile, host);
+            Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+            File.WriteAllText(dst, merged.ToJsonString(SettingsJsonOptions));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[LlmProviders] Мерж settings.json {src} → {dst} не удался: {ex.Message}");
+        }
+    }
+
+    private static JsonObject MergeSettings(JsonObject profile, JsonObject host)
+    {
+        var result = MergeObjects(profile, host, profileWins: false);
+        // env — единственная ветка, где профильное значение сильнее хостового
+        if (profile["env"] is JsonObject profileEnv && host["env"] is JsonObject hostEnv)
+            result["env"] = MergeObjects(profileEnv, hostEnv, profileWins: true);
+        return result;
+    }
+
+    // Накладывает host на profile: объекты рекурсивно, прочее — целиком.
+    // profileWins=true — при конфликте остаётся профильное значение (ветка env).
+    private static JsonObject MergeObjects(JsonObject profile, JsonObject host, bool profileWins)
+    {
+        var result = (JsonObject)profile.DeepClone();
+        foreach (var (key, hostValue) in host)
+        {
+            if (!result.TryGetPropertyValue(key, out var profileValue) || profileValue is null)
+            {
+                result[key] = hostValue?.DeepClone();
+                continue;
+            }
+            if (profileValue is JsonObject po && hostValue is JsonObject ho)
+                result[key] = MergeObjects(po, ho, profileWins);
+            else if (!profileWins)
+                result[key] = hostValue?.DeepClone();
+        }
+        return result;
     }
 
     // Построить env для дополнительной OAuth-подписки Claude (см. ClaudeSubscriptionPool).

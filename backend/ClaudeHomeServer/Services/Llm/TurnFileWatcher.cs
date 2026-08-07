@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Enumeration;
+using System.Linq;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -109,13 +110,23 @@ public sealed class TurnFileWatcher : IDisposable
                 // Кэш обновляем ДО проверки атрибуции: подавленная карточка не должна оставить
                 // это правку в diff-базе для следующего события своего же хода
                 _fileCache[fullPath] = newContent;
+                // Гасим только реальный no-op (содержимое побайтово то же). Раньше здесь стояла
+                // проверка added==0 && removed==0 от CountLineDiff — из-за неё правка, менявшая
+                // содержимое строки без изменения их числа (замена значения, переименование),
+                // считалась 0/0 и карточка не уходила вовсе.
+                if (newContent == oldContent) return;
                 var (added, removed) = CountLineDiff(oldContent, newContent);
-                if (added == 0 && removed == 0) return;
                 // Путь только что заявлен ДРУГОЙ живой сессией (параллельный ход того же
                 // проекта) — карточку покажет её собственный watcher, здесь дублировать не надо
-                if (_attributor is not null && _ownerSessionId is not null
-                    && _attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
-                _ = _onMessage(new FileChangedMessage(rel, added, removed));
+                var external = false;
+                if (_attributor is not null && _ownerSessionId is not null)
+                {
+                    if (_attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
+                    // Нет заявки вообще ни от кого (в т.ч. от своей сессии) — правку сделал
+                    // не Claude Edit/Write, а нечто снаружи процесса (человек, форматтер)
+                    external = !_attributor.IsClaimedBySelf(_ownerSessionId, fullPath);
+                }
+                _ = _onMessage(new FileChangedMessage(rel, added, removed, external));
             }
             catch { /* файл занят/удалён между событиями watcher-а — пропускаем */ }
         }, TaskScheduler.Default);
@@ -167,10 +178,29 @@ public sealed class TurnFileWatcher : IDisposable
         });
     }
 
+    // Мультисет-diff по содержимому строк, а не разница счётчиков: O(n) через подсчёт
+    // вхождений — правка строки (без изменения их числа) даёт честные 1 добавлена/1 удалена
+    // вместо 0/0. Не различает перестановку строк без изменения контента — компромисс ради
+    // O(n) вместо LCS/Myers, чтобы большие файлы не подвешивали ход.
     private static (int added, int removed) CountLineDiff(string? oldContent, string? newContent)
     {
-        var oldCount = oldContent?.Split('\n').Length ?? 0;
-        var newCount = newContent?.Split('\n').Length ?? 0;
-        return (Math.Max(0, newCount - oldCount), Math.Max(0, oldCount - newCount));
+        var oldLines = oldContent?.Split('\n') ?? [];
+        var newLines = newContent?.Split('\n') ?? [];
+
+        var counts = new Dictionary<string, int>(oldLines.Length);
+        foreach (var line in oldLines)
+            counts[line] = counts.GetValueOrDefault(line) + 1;
+
+        var added = 0;
+        foreach (var line in newLines)
+        {
+            if (counts.TryGetValue(line, out var count) && count > 0)
+                counts[line] = count - 1;
+            else
+                added++;
+        }
+
+        var removed = counts.Values.Sum(c => Math.Max(c, 0));
+        return (added, removed);
     }
 }

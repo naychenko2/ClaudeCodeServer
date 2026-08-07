@@ -50,8 +50,8 @@ export function DeleteDialog({ project, onSuccess, onClose }: Props) {
       await api.projects.delete(project.id);
       invalidateProjectsCache(); // удаленный проект уходит из полки/палитры сразу
       onSuccess();
-    } catch (e: any) {
-      setError(e.message || 'Ошибка удаления');
+    } catch (e: unknown) {
+      setError(e instanceof Error && e.message ? e.message : 'Ошибка удаления');
     }
   };
 

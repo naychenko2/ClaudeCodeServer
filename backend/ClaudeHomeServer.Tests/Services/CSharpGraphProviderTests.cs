@@ -409,7 +409,7 @@ public class CSharpGraphProviderTests : IDisposable
     [Fact]
     public async Task ПараллельныеВызовы_НеБросаютИСогласованы()
     {
-        // База: A↔B цикл + 10 «фоновых» типов, каждый Update крутит свой файл (без ФС-гонок).
+        // База: A↔B цикл + 10 «фоновых» типов, каждый Update перестраивает свой файл.
         await BuildAsync(
             ("A.cs", "public class A { public B _b; }"),
             ("B.cs", "public class B { public A _a; }"));
@@ -418,17 +418,25 @@ public class CSharpGraphProviderTests : IDisposable
                 $"public class W{i} {{ public B _b; }}");
         await _provider.BuildAsync(_tempDir, CancellationToken.None);
 
+        // Новое содержимое пишем ДО параллельной фазы. Внутри неё писать нельзя: Build
+        // сканирует ВЕСЬ каталог через File.ReadAllText, который держит файл с FileShare.Read,
+        // и запись из теста ловит IOException «файл занят другим процессом» — падал сам тест,
+        // а не провайдер (тот глотает IOException чтения: CompilationBuilder, UpdateAsync).
+        // Проверяем мы RMW кэша, а не файловую систему, поэтому ФС-гонка тут только шум.
+        var changedFiles = new string[10];
+        for (int i = 0; i < 10; i++)
+        {
+            changedFiles[i] = Path.Combine(_tempDir, $"W{i}.cs");
+            await File.WriteAllTextAsync(changedFiles[i],
+                i % 2 == 0 ? $"public class W{i} {{ }}" : $"public class W{i} {{ public A _a; }}");
+        }
+
         // 10 параллельных Build (как REST-чтение при пустом персистентном кэше) +
         // 10 параллельных Update на разные файлы (как фон по дебаунсу).
         var buildTasks = Enumerable.Range(0, 10)
             .Select(_ => Task.Run(() => _provider.BuildAsync(_tempDir, CancellationToken.None)));
-        var updateTasks = Enumerable.Range(0, 10).Select(i => Task.Run(async () =>
-        {
-            var file = Path.Combine(_tempDir, $"W{i}.cs");
-            await File.WriteAllTextAsync(file,
-                i % 2 == 0 ? $"public class W{i} {{ }}" : $"public class W{i} {{ public A _a; }}");
-            await _provider.UpdateAsync(_tempDir, new[] { file }, CancellationToken.None);
-        }));
+        var updateTasks = Enumerable.Range(0, 10).Select(i => Task.Run(() =>
+            _provider.UpdateAsync(_tempDir, new[] { changedFiles[i] }, CancellationToken.None)));
 
         var all = buildTasks.Concat(updateTasks).ToArray();
         var ex = await Record.ExceptionAsync(() => Task.WhenAll(all));

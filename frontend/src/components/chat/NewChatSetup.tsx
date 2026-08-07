@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
-import { Cpu, Zap, Hourglass, Tag as TagIcon, ChevronDown } from 'lucide-react';
+import { Cpu, Zap, Hourglass, History, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import type { Session, Project, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE } from '../../lib/models';
 import { effortsForProvider, effortLabel } from '../../lib/effort';
-import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
+import { expiryOptionLabel } from '../../lib/expiry';
+import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
+import { ExpiryPicker } from './ExpiryPicker';
+import { DossierOptOutRow } from './DossierOptOutRow';
 import { ModelPicker } from '../ModelPicker';
 import { SegmentedControl } from '../ui';
 import { TagPickerBody } from '../TagChip';
@@ -15,7 +19,7 @@ import { C, R, FONT, SHADOW, GROUP_COLORS } from '../../lib/design';
 // пишутся в сессию (провайдер ещё не «начат» — смена модели/провайдера разрешена). Инлайн-карточка
 // вместо плавающего поповера — надёжнее на мобильном, а в пустом чате места по вертикали хватает.
 
-type Panel = 'model' | 'effort' | 'expiry' | 'tags' | null;
+type Panel = 'model' | 'effort' | 'expiry' | 'dossiers' | 'tags' | null;
 
 // Иконка «чип» (модель)
 const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
@@ -23,6 +27,8 @@ const IconModel = <Cpu size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 const IconEffort = <Zap size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «песочные часы» (время жизни временного чата)
 const IconExpiry = <Hourglass size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
+// Иконка «история» (opt-out «не сохранять решения из этого чата»)
+const IconDossiers = <History size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 // Иконка «тег»
 const IconTags = <TagIcon size={15} strokeWidth={2} style={{ flexShrink: 0 }} />;
 
@@ -45,31 +51,20 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   const modelName = useModelLabel(session.model);
   const [panel, setPanel] = useState<Panel>(null);
   const [saving, setSaving] = useState(false);
+  const dossiersFlag = useFeature(FLAGS.changeDossiers);
 
   // Реестр тегов — optimistic state поверх project.tagRegistry (тот же паттерн, что в
   // SessionList): создание тега здесь видно сразу, не дожидаясь обновления project сверху.
   const [registryOverride, setRegistryOverride] = useState<ProjectTag[] | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс оверрайда реестра тегов при смене проекта
   useEffect(() => { setRegistryOverride(null); }, [project?.id, project?.tagRegistry]);
   const registry = registryOverride ?? project?.tagRegistry ?? [];
 
-  // Update на бэке — полная замена (Name/Model/Effort перезаписываются целиком, отсутствующее → null),
-  // поэтому шлём весь набор, подмешивая текущие значения сессии; иначе выбор усилия затёр бы модель/имя.
-  const persist = async (next: { model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[] }) => {
+  // Полная замена полей на бэке и выбор эндпоинта по projectId — в updateChatFields
+  const persist = async (next: ChatFieldsPatch) => {
     setSaving(true);
     try {
-      const data = {
-        name: session.name ?? null,
-        model: next.model !== undefined ? next.model : (session.model ?? null),
-        effort: next.effort !== undefined ? next.effort : (session.effort ?? null),
-        // Время жизни и теги — sentinel-семантика на бэке: отсутствие поля = не менять
-        ...(next.expiresAfterMinutes !== undefined && { expiresAfterMinutes: next.expiresAfterMinutes }),
-        ...(next.tags !== undefined && { tags: next.tags }),
-      };
-      // Проектная сессия — через /projects/{id}/sessions, чат вне проекта — через /chats (как в EditSessionDialog)
-      const updated = session.projectId
-        ? await api.sessions.update(session.projectId, session.id, data)
-        : await api.chats.update(session.id, data);
-      onSessionUpdated?.(updated);
+      onSessionUpdated?.(await updateChatFields(session, next));
     } catch {
       // молча: не критично — значение просто не применится
     } finally {
@@ -89,8 +84,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
     if (v !== (session.effort ?? '')) persist({ effort: v || null });
     setPanel(null);
   };
-  const pickExpiry = (v: string) => {
-    const minutes = v ? Number(v) : null;
+  const pickExpiry = (minutes: number | null) => {
     if (minutes !== (session.expiresAfterMinutes ?? null)) persist({ expiresAfterMinutes: minutes });
     setPanel(null);
   };
@@ -156,6 +150,8 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
         {pill('model', IconModel, 'Модель', modelName)}
         {caps.supportsEffort && pill('effort', IconEffort, 'Усилие', effortLabel(session.effort))}
         {pill('expiry', IconExpiry, 'Время жизни', expiryOptionLabel(session.expiresAfterMinutes))}
+        {/* История решений — только у проектных чатов (личные в неё не пишутся) и за флагом */}
+        {project && dossiersFlag && pill('dossiers', IconDossiers, 'История решений', session.excludeFromDossiers ? 'Не сохраняются' : 'Сохраняются')}
         {/* Теги — только у проектных чатов (реестр тегов per-project) */}
         {project && pill('tags', IconTags, 'Теги', session.tags?.length ? session.tags.join(', ') : 'Без тегов')}
       </div>
@@ -189,18 +185,10 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
               onToggle={toggleTag}
               onCreate={createTag}
             />
+          ) : panel === 'dossiers' ? (
+            <DossierOptOutRow value={!!session.excludeFromDossiers} onChange={v => persist({ excludeFromDossiers: v })} />
           ) : (
-            <>
-              <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 8, lineHeight: 1.4 }}>
-                Временный чат удалится сам вместе с историей, если не будет активности выбранное время.
-              </div>
-              <SegmentedControl
-                value={session.expiresAfterMinutes ? String(session.expiresAfterMinutes) : ''}
-                options={[{ value: '', label: 'Бессрочно' }, ...EXPIRY_PRESETS.map(p => ({ value: String(p.minutes), label: p.label }))]}
-                onChange={pickExpiry}
-                columns={3}
-              />
-            </>
+            <ExpiryPicker value={session.expiresAfterMinutes} onChange={pickExpiry} />
           )}
         </div>
       )}

@@ -4,10 +4,26 @@ import type { Persona, TeamPlanDecision } from '../../types';
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
 
+// Корень активного git-дерева (worktree) хода/чата — пути в ленте сначала пробуют
+// относительность к нему (короче и без префикса .claude/worktrees/…), и только
+// при неудаче — к корню проекта. Провайдится ChatPanel (turnTree.path ?? session.worktreePath);
+// null — дерева нет, пути считаются как раньше, только от rootPath.
+export const ChatTreePathContext = createContext<string | null>(null);
+
 // Открыть файл проекта на просмотр — тем же путём, что дерево и карточки инструментов.
 // Контекстом, а не пропом: MarkdownContent сидит глубоко в ленте, а ссылки на файлы
 // в тексте ассистента нужны в каждом её отпрыске.
 export const ChatOpenFileContext = createContext<((path: string) => void) | null>(null);
+
+// Открыть URL в панели «Чтение» — та же логика: MarkdownContent сидит глубоко в ленте,
+// а перехват клика по внешней ссылке и кнопка-компаньон нужны в каждом её отпрыске.
+// null — фича выключена (флаг link-reader) или чат не поддерживает ридер: ссылки
+// ведут себя как раньше (новая вкладка), кнопка-компаньон не рисуется.
+export const ChatOpenReaderContext = createContext<((url: string) => void) | null>(null);
+
+// Id текущей сессии — шторке «какой промпт ушёл» под постом: она грузит снимок по REST,
+// а ChatItemView сидит глубоко в ленте и id сессии пропом не получает.
+export const ChatSessionContext = createContext<string | null>(null);
 
 // Персона текущего чата, если он ведётся от её лица.
 // Провайдится в ChatPanel — лента показывает её аватар у реплик ассистента,
@@ -28,11 +44,13 @@ export function useAssistantName(): string {
 export interface TeamPlanChatContext {
   autoWaves: boolean;
   waveNumber: number;
+  // Id текущего плана режима — свёрнутая карточка отличает по нему «свой» ход волн
+  // от чужого (старая версия плана после перепланирования ходом не владеет)
+  planCardId: string | null;
   // Явно выбранный состав исполнителей; пустой — вся команда проекта
   executorPersonaIds: string[];
-  onRespond: (planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string) => void;
-  // Правка плана уходит координатору обычным сообщением (как «Ответить» у эскалаций)
-  onSendMessage: (text: string) => void;
+  // feedback — правка плана (decision 'edit'): сервер сам гасит карточку и пересобирает план
+  onRespond: (planId: string, decision: TeamPlanDecision, subtaskId?: string, executorPersonaId?: string, feedback?: string) => void;
 }
 export const TeamPlanContext = createContext<TeamPlanChatContext | null>(null);
 

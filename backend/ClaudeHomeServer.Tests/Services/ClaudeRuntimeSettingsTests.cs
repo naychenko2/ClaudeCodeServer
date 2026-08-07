@@ -27,10 +27,13 @@ public class ClaudeRuntimeSettingsTests
     }
 
     [Fact]
-    public void БраузерРазрешён_ПлагиныНеТрогаем()
+    public void БраузерРазрешён_ПлагинPlaywrightВключенЯвно()
     {
-        // Дефолт обязан остаться байт-в-байт прежним: чат без персоны ничего не теряет
-        Settings(browserEnabled: true).Json.TryGetProperty("enabledPlugins", out _).Should().BeFalse();
+        // Явная запись true нужна, даже когда доступ разрешён по умолчанию: иначе синк
+        // settings.json профиля (LlmProviderRegistry.SyncUserProfile) может затереть
+        // enabledPlugins хостовым {} и браузер пропадёт молча
+        var plugins = Settings(browserEnabled: true).Json.GetProperty("enabledPlugins");
+        plugins.GetProperty("playwright@claude-plugins-official").GetBoolean().Should().BeTrue();
     }
 
     [Fact]

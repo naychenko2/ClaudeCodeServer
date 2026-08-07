@@ -17,6 +17,11 @@ public class BackupPathsTests
     [InlineData("instance-id.txt")]
     [InlineData("handle-migration-v1.done")]
     [InlineData(".personas-project-bindings-migrated")]
+    // Паспорта изменений (ADR-004): невосстановимы (сырьё — история чатов), в архив по
+    // умолчанию — исключений и секретов стор не содержит (SecretRedactor вычищает до сохранения)
+    [InlineData("dossiers/owner1/project1.json")]
+    [InlineData("dossiers/owner1/project1.archive.jsonl")]
+    [InlineData("dossiers/state.json")]
     public void СтейтИМаркерыМиграций_ПопадаютВАрхив(string path)
     {
         BackupPaths.ShouldInclude(path).Should().BeTrue();
@@ -47,6 +52,8 @@ public class BackupPathsTests
     [Theory]
     [InlineData("logs/server.log")]
     [InlineData("sandbox-tmp/turn-1/mcp.json")]
+    // Снимки промпта ходов — диагностический лог, восстанавливать нечего
+    [InlineData("prompt-snapshots/chat1/1700000000000-abcd.json.gz")]
     [InlineData("backups/ccs-old.zip")]
     [InlineData("backups-secrets/ccs-secrets-1.zip")]
     [InlineData(".backup-staging/users.json")]
@@ -56,6 +63,16 @@ public class BackupPathsTests
     public void МусорИСлужебное_Исключены(string path)
     {
         BackupPaths.ShouldInclude(path).Should().BeFalse();
+    }
+
+    [Fact]
+    public void СтатусыMcpСерверов_Исключены()
+    {
+        // Наблюдение, а не настройка: восстановленное из архива, оно описывает состояние
+        // чужой машины в прошлом. Заново приедет из первого же system/init
+        BackupPaths.ShouldInclude("mcp-status.json").Should().BeFalse();
+        // А сам реестр серверов — настройка, он в архив едет (секретов в нём нет)
+        BackupPaths.ShouldInclude("mcp-servers.json").Should().BeTrue();
     }
 
     [Fact]

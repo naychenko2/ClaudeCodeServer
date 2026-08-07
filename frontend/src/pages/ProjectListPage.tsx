@@ -11,7 +11,7 @@ import { PanelZone } from './workspace/PanelZone';
 import { projectsPanels } from './workspace/panelStackState';
 import { PROJECTS_KEYS } from './workspace/panelCatalog';
 import { Button, IslandScaffold } from '../components/ui';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import { PillSwitch } from '../components/Toolbar';
 import type { HubTabValue } from '../components/HubTabs';
@@ -55,6 +55,7 @@ function useWide(bp = MOBILE_MAX + 1) {
   useEffect(() => {
     const mq = window.matchMedia(`(min-width: ${bp}px)`);
     const h = (e: MediaQueryListEvent) => setWide(e.matches);
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: синхронизация при смене порога
     setWide(mq.matches);
     if (mq.addEventListener) mq.addEventListener('change', h); else mq.addListener(h);
     return () => { if (mq.removeEventListener) mq.removeEventListener('change', h); else mq.removeListener(h); };
@@ -99,11 +100,13 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   useEffect(() => {
     if (sessionStorage.getItem('cc_pending_new_project')) {
       sessionStorage.removeItem('cc_pending_new_project');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое открытие диалога по флагу из sessionStorage
       setActiveDialog({ type: 'add' });
     }
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс состояния загрузки перед запросом
     setLoadState('loading');
     Promise.all([api.projects.list(), api.projectGroups.list().catch(() => [] as ProjectGroup[])])
       .then(async ([list, grps]) => {
@@ -120,7 +123,6 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         setActiveSessions(ids);
       })
       .catch(e => setLoadState(e instanceof OfflineError ? 'offline' : 'error'));
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [online, retryKey]);
 
   const filtered = projects.filter(p =>
@@ -154,7 +156,8 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // Секции для десктопа в зависимости от выбранного пункта сайдбара
   type Section = { key: string; name: string; color?: string; items: Project[] };
   const UNGROUPED_COLOR = C.textMuted;
-  let sections: Section[] = [];
+  // Инициализатор не нужен: все ветки ниже (all/sleeping/группа) гарантированно присваивают
+  let sections: Section[];
   let title = 'Проекты';
   if (view === 'all') {
     sections = byGroup.map(({ group, items }) => ({ key: group.id, name: group.name, color: group.color, items }));
@@ -191,6 +194,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           groups={orderedGroups}
           onSuccess={updated => { upsertProject(updated); closeDialog(); }}
           onIconUpdated={upsertProject}
+          onProjectUpdated={upsertProject}
           onClose={closeDialog}
         />
       )}
@@ -263,9 +267,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
   // ===== Десктоп/планшет: две панели =====
   if (wide) {
     return (
-      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-        {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-        <CanvasBackdrop />
+      <PageCanvas>
         <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
         <div style={{ flex: 1, minHeight: 0 }}>
           <IslandScaffold
@@ -355,15 +357,14 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
           />
         </div>
         {dialogs}
-      </div>
+      </PageCanvas>
     );
   }
 
   // ===== Мобильный: одна колонка =====
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон и на мобиле — под списком проектов */}
-      <CanvasBackdrop />
+    // Дудл-фон и на мобиле — под списком проектов
+    <PageCanvas>
       <HubHeader value="projects" onTab={onHubTab} auth={auth!} onLogout={onLogout} />
       <div style={{ maxWidth: 640, width: '100%', margin: '0 auto', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, padding: '0 22px' }}>
 
@@ -451,7 +452,7 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       </div>
 
       {dialogs}
-    </div>
+    </PageCanvas>
   );
 }
 

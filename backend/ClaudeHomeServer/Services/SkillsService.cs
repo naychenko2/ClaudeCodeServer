@@ -40,6 +40,12 @@ public class SkillsService
 
     public IReadOnlyList<SkillInfo> GetGlobalSkills() => ReadSkillsFrom(GlobalSkillsDir);
 
+    // Скиллы конкретного профиля CLI (CLAUDE_CONFIG_DIR хода), а не хоста: у чата на
+    // сторонней подписке и у пользователя-«контейнера» профиль свой, и каталог скиллов
+    // там другой. GetGlobalSkills смотрит только в ~/.claude и для этого не годится.
+    public IReadOnlyList<SkillInfo> GetSkillsInConfigRoot(string configRoot) =>
+        ReadSkillsFrom(Path.Combine(configRoot, "skills"));
+
     // Workflow-скрипты (~/.claude/workflows/*.js) — многоагентные оркестрации Claude Code
     // (например /panel-of-experts). Метаданные — из литерала `export const meta = {...}`
     // в начале скрипта (name/description); парсим эвристикой по строковым литералам,

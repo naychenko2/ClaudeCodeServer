@@ -1,10 +1,9 @@
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { FilterX, ChevronUp, ChevronDown } from 'lucide-react';
+import { FilterX, ChevronUp, ChevronDown, MessageCircle } from 'lucide-react';
 import type { Project, ProjectTag, Session } from '../types';
 import { api } from '../lib/api';
 import { onMessage, onReconnected } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { EditSessionDialog } from './EditSessionDialog';
 import { C, FS, GROUP_COLORS, MODAL_W, R } from '../lib/design';
 import { Modal, ModalActions } from './ui';
 import { usePersonas, usePersonasVersion } from '../lib/personas';
@@ -22,6 +21,7 @@ import { ListDateDivider } from './ListDateDivider';
 import { groupChats, groupByTags, sortChatsFlat, chatTagsSorted, type TagChatGroup } from '../lib/chatGroups';
 import { tagColor } from '../lib/tagRegistry';
 import { TagAssignMenu } from './TagChip';
+import { WALL_DRAG_TYPE } from '../features/wall/WallDock';
 
 interface Props {
   project: Project;
@@ -38,6 +38,10 @@ interface Props {
   // владельцу (WorkspacePage) обновить project.tagRegistry. Не задан — SessionList
   // держит реестр сам (optimistic state поверх props)
   onTagsReorder?: (registry: ProjectTag[]) => void;
+  // «На стену»: пункт в меню карточки; в ПЛОСКОМ режиме карточки ещё и
+  // перетаскиваются на док стены (в Иерархии нативный drag сломал бы dnd-kit вложения).
+  // Не задан — механики нет (мобила, флаг выключен).
+  onAddToWall?: (s: Session) => void;
 }
 
 // Кнопка порядка ▲▼ у заголовка секции тегов
@@ -48,7 +52,7 @@ const orderBtnStyle = (disabled: boolean): React.CSSProperties => ({
   background: 'transparent', color: disabled ? C.border : C.textMuted,
 });
 
-export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder }: Props) {
+export function SessionList({ project, activeSession, onSelect, onSessionUpdated, onSessionsChanged, onCleared, isMobile = false, workflowRunningFor, onTagsReorder, onAddToWall }: Props) {
   const online = useOnline();
   // Подписка на стор персон — перерисоваться, когда список подгрузится (аватары сессий персон)
   usePersonasVersion();
@@ -61,23 +65,23 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // этому числу решает показывать ли панель, схлопнул бы её сразу после открытия
   const [loaded, setLoaded] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Session | null>(null);
-  const [editTarget, setEditTarget] = useState<Session | null>(null);
   // Карточка под курсором — на ней показываем действия (на тач-устройствах hover нет, там действия видны всегда)
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const initializedRef = useRef(false);
   // Свежие activeSession/onSelect для обработчика chat_deleted (realtime-подписка живёт дольше рендера)
   const activeRef = useRef(activeSession);
-  activeRef.current = activeSession;
+  useEffect(() => { activeRef.current = activeSession; }, [activeSession]);
   const onSelectRef = useRef(onSelect);
-  onSelectRef.current = onSelect;
+  useEffect(() => { onSelectRef.current = onSelect; });
   const onClearedRef = useRef(onCleared);
-  onClearedRef.current = onCleared;
+  useEffect(() => { onClearedRef.current = onCleared; });
 
   // === Реестр общих тегов проекта ===
   // Optimistic state поверх project.tagRegistry: reorder/создание видны сразу, ответ
   // PUT (с нормализованным order) заменяет state; владелец может подхватить через
   // onTagsReorder и обновить project — тогда sync-эффект применит ту же правку.
   const [registry, setRegistry] = useState<ProjectTag[]>(() => project.tagRegistry ?? []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- синхронизация оптимистичного реестра тегов с project.tagRegistry
   useEffect(() => { setRegistry(project.tagRegistry ?? []); }, [project.id, project.tagRegistry]);
   // Открытое меню маркировки: чат + якорь кнопки (fixed-позиция, скролл списка закрывает)
   const [tagMenu, setTagMenu] = useState<{ sessionId: string; anchor: DOMRect } | null>(null);
@@ -118,6 +122,11 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         setSessions(prev => prev.map(x => (x.id === s.id ? { ...x, tags: prevTags } : x)));
       });
   };
+
+  // Переименование из карточки списка: ответ раскладывается тем же путём, что и теги —
+  // в список и (если чат открыт) владельцу, чтобы шапка панели не отстала
+  const renameSession = (s: Session, name: string) =>
+    api.sessions.update(project.id, s.id, { name }).then(updated => handleSessionUpdated(updated));
 
   const toggleTag = (s: Session, name: string) => {
     const tags = s.tags ?? [];
@@ -161,8 +170,9 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         initializedRef.current = true;
         // Автовыбор первого чата, если он есть. Пустой список чат НЕ создаём —
         // центр показывает пустое состояние с кнопкой «Новый чат» (создание только по клику).
-        if (!activeSession && list.length > 0) {
-          onSelect(list[0], undefined, true);
+        // Читаем через ref-зеркала: эффект живёт на весь project.id, пропсы за это время свежие.
+        if (!activeRef.current && list.length > 0) {
+          onSelectRef.current(list[0], undefined, true);
         }
       }
     };
@@ -246,6 +256,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   // не дожидаясь 5-секундного поллинга.
   useEffect(() => {
     if (!activeSession) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- подхват правок активной сессии в список, не дожидаясь поллинга
     setSessions(prev => {
       if (prev.some(s => s.id === activeSession.id)) {
         return prev.map(s =>
@@ -255,6 +266,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       // Чужую (глобальную) сессию в список этого проекта не добавляем
       return activeSession.projectId === project.id ? [activeSession, ...prev] : prev;
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сужение до полей осознанно: эффект зовёт setSessions, и зависимость от всего объекта activeSession дала бы цикл
   }, [activeSession?.id, activeSession?.name, activeSession?.model, activeSession?.mode, project.id]);
 
   const handleSessionUpdated = (updated: Session) => {
@@ -351,25 +363,43 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
     ? sortChatsFlat(filteredSessions, sortOrder)
     : null;
 
-  const renderCard = (s: Session) => (
-    <ChatCard
-      key={s.id}
-      session={s}
-      isActive={activeSession?.id === s.id}
-      isMobile={isMobile}
-      fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
-      online={online}
-      hovered={hoveredId === s.id}
-      workflowRunning={workflowRunningFor === s.id}
-      onSelect={() => onSelect(s)}
-      onHover={h => setHoveredId(h ? s.id : null)}
-      onEdit={() => setEditTarget(s)}
-      onDelete={() => setDeleteTarget(s)}
-      tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
-      onRemoveTag={online ? name => toggleTag(s, name) : undefined}
-      onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
-    />
-  );
+  const renderCard = (s: Session) => {
+    const card = (
+      <ChatCard
+        key={s.id}
+        session={s}
+        isActive={activeSession?.id === s.id}
+        isMobile={isMobile}
+        fallbackName={`Чат #${numberById.get(s.id) ?? 1}`}
+        online={online}
+        hovered={hoveredId === s.id}
+        workflowRunning={workflowRunningFor === s.id}
+        onSelect={() => onSelect(s)}
+        onHover={h => setHoveredId(h ? s.id : null)}
+        onDelete={() => setDeleteTarget(s)}
+        tags={chatTagsSorted(s, registry).map(name => ({ name, color: tagColor(registry, name) }))}
+        onRemoveTag={online ? name => toggleTag(s, name) : undefined}
+        onAssignTags={online ? anchor => setTagMenu(prev => prev?.sessionId === s.id ? null : { sessionId: s.id, anchor }) : undefined}
+        onRename={online ? name => renameSession(s, name) : undefined}
+        onAddToWall={onAddToWall ? () => onAddToWall(s) : undefined}
+      />
+    );
+    // Перетаскивание на док стены — ТОЛЬКО в плоском режиме: в Иерархии строки уже
+    // держит dnd-kit (ChatTreeRow.useDraggable), и нативный drag глушил бы вложение
+    if (!onAddToWall || hierarchy) return card;
+    return (
+      <div
+        key={s.id}
+        draggable
+        onDragStart={e => {
+          e.dataTransfer.setData(WALL_DRAG_TYPE, JSON.stringify(s));
+          e.dataTransfer.effectAllowed = 'copy';
+        }}
+      >
+        {card}
+      </div>
+    );
+  };
 
   // Заголовок секции режима «Теги»: цветовая точка, имя, счётчик чатов, кнопки
   // порядка ▲▼ (только у реестровых тегов; сироты и «Без тегов» неупорядочены)
@@ -440,6 +470,18 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
           шапкой. Без группировки список начинается сразу карточкой — ей нужен
           обычный отступ, иначе она липнет к заголовку. */}
       <div style={{ flex: 1, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+        {/* Чатов в проекте нет вовсе (список уже приехал) — не голая панель, а empty-state.
+            Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
+            нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт
+            в тулбаре панели сверху, дублировать его в empty незачем. */}
+        {loaded && sessions.length === 0 && (
+          <EmptyState
+            compact
+            icon={<MessageCircle size={20} strokeWidth={2} />}
+            title="Чатов пока нет"
+            subtitle="Начните первый чат по этому проекту."
+          />
+        )}
         {(tree ? tree.rows.length === 0 : filteredSessions.length === 0) && sessions.length > 0 && (
           <EmptyState
             compact
@@ -527,13 +569,6 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         );
       })()}
 
-      {editTarget && (
-        <EditSessionDialog
-          session={editTarget}
-          onSaved={handleSessionUpdated}
-          onClose={() => setEditTarget(null)}
-        />
-      )}
 
       {deleteTarget && (
         <Modal

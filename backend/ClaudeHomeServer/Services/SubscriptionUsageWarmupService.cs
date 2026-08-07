@@ -207,10 +207,15 @@ public sealed class SubscriptionUsageWarmupService(
     // Записываем снимок утилизации и правим состояние пула по свежему ответу:
     // отбит (rejected/100%) → MarkExhausted; здоровый ответ на ранее исчерпанном аккаунте →
     // снимаем пометку (возврат в ротацию раньше resetsAt). Та же логика exhausted, что в SessionManager.
+    // Состояние пула трогают только известные окна (IsExhaustionWindow) — прочие идут
+    // в usage для экрана и на ротацию не влияют.
     internal void RecordAndGuard(string key, RateLimitMessage m)
     {
         usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt,
             m.OverageStatus, m.OverageResetsAt, subscriptionKey: key, source: "probe");
+
+        if (!ClaudeSubscriptionPool.IsExhaustionWindow(m.LimitType))
+            return;
 
         if (m.Status == "rejected" || (m.Utilization >= 1.0 && !m.IsUsingOverage))
         {

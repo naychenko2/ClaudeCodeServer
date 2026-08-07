@@ -5,10 +5,10 @@ import { api } from '../lib/api';
 import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
-import { C, FONT, CHAT_COLUMN_W } from '../lib/design';
+import { C, FONT, CHAT_COLUMN_W, SPLASH_W } from '../lib/design';
 import { useIsMobile } from '../lib/breakpoints';
 import { Button, IslandScaffold } from '../components/ui';
-import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
 import type { HubTabValue } from '../components/HubTabs';
 import { HubHeader } from '../components/HubHeader';
@@ -54,6 +54,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   useEffect(() => { void ensureTasksLoaded(); }, []);
 
   // Вложения относятся к конкретному чату — сбрасываем при смене активного
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- очистка вложений при смене активного чата
   useEffect(() => { setAttachedFiles([]); }, [activeId]);
 
   // Видимость и ширина панели чатов целиком на LeftPanelStack (стор
@@ -205,9 +206,8 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // === Мобильная раскладка: список ИЛИ полноэкранный чат (не две панели) ===
   if (isMobile) {
     return (
-      <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-        {/* Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях */}
-        <CanvasBackdrop />
+      // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях
+      <PageCanvas>
         {activeChat ? (
           // Чат + сессионная рельса в ОДНОЙ строке: рельса — flex-сосед справа
           // (сам пейн колоночный, без row-обёртки рельса встала бы под чатом)
@@ -243,14 +243,12 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
             </div>
           </>
         )}
-      </div>
+      </PageCanvas>
     );
   }
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader value="chats" onTab={onHubTab} auth={auth} onLogout={onLogout} />
 
       {/* Тело: левая рельса + центральный остров (+ остров артефактов) на холсте */}
@@ -271,8 +269,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // Лента и композер держатся середины окна, даже когда список чатов
           // открыт слева, а сессионная рельса справа — узкая. Ширина — полная
           // потребность ленты (CHAT_COLUMN_W: колонка + жёлоб + полоса), иначе
-          // компенсация съест место, которое ленте ещё нужно
-          centerContentWidth={CHAT_COLUMN_W}
+          // компенсация съест место, которое ленте ещё нужно. Пока чат не выбран,
+          // в центре стоит заставка вдвое уже — её потребность SPLASH_W, и завышать
+          // её до ленты нельзя: на узком окне запаса не останется и заставку перекосит
+          centerContentWidth={activeChat ? CHAT_COLUMN_W : SPLASH_W}
           center={activeChat ? (
             <ChatPanel
               key={activeChat.id}
@@ -322,6 +322,6 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           ) : undefined}
         />
       </div>
-    </div>
+    </PageCanvas>
   );
 }

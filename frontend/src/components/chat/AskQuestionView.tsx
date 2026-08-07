@@ -1,9 +1,10 @@
 import { useState, useContext } from 'react';
 import { Check, SquarePen, MessageCircle } from 'lucide-react';
 import type { ChatItem } from '../../types';
-import { C, FONT } from '../../lib/design';
+import { C, FONT, FS, R } from '../../lib/design';
 import { useAssistantName, PersonaContext } from './contexts';
 import { personaLabel } from '../../lib/personas';
+import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -48,8 +49,8 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   // Отвеченный вопрос — компактная зелёная плашка «принято» со сводкой выбора по всем вопросам
   if (item.resolved) {
     return (
-      <div style={{ border: `1px solid ${C.success}`, borderLeft: `3px solid ${C.success}`, borderRadius: 12, padding: '13px 14px', background: C.successBg }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: 13, fontWeight: 600, color: C.successText }}>
+      <div style={{ border: `1px solid ${C.success}`, borderLeft: `3px solid ${C.success}`, borderRadius: R.xl, padding: '13px 14px', background: C.successBg }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, marginBottom: 10, fontSize: FS.base, fontWeight: 600, color: C.successText }}>
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="8" fill={C.success} /><path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" /></svg>
           Ответ передан {persona ? personaLabel(persona) : asstName}
         </div>
@@ -60,10 +61,10 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
             if (chosen.length === 0) return null;
             return (
               <div key={qi}>
-                <div style={{ fontSize: 12, color: C.textSecondary, marginBottom: 4 }}>{q.header || q.question}</div>
+                <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: 4 }}>{q.header || q.question}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {chosen.map((label, li) => (
-                    <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, fontWeight: 600, color: C.successText, background: C.bgWhite, border: `1px solid ${C.success}`, borderRadius: 7, padding: '3px 9px' }}>
+                    <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: FS.sm, fontWeight: 600, color: C.successText, background: C.bgWhite, border: `1px solid ${C.success}`, borderRadius: R.sm, padding: '3px 9px' }}>
                       <Check size={11} color={C.success} strokeWidth={3.5} style={{ flexShrink: 0 }} />
                       {label}
                     </span>
@@ -117,9 +118,9 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
 
   const renderQuestion = (q: QuestionDef, qi: number) => (
     <div>
-      <div style={{ fontSize: 13, color: C.textHeading, fontWeight: 600, marginBottom: 9 }}>
+      <div style={{ fontSize: FS.base, color: C.textHeading, fontWeight: 600, marginBottom: 9 }}>
         {q.question}
-        {q.multiSelect && <span style={{ fontWeight: 400, color: C.textMuted, fontSize: 11 }}> · можно несколько</span>}
+        {q.multiSelect && <span style={{ fontWeight: 400, color: C.textMuted, fontSize: FS.xs }}> · можно несколько</span>}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {q.options.map(opt => {
@@ -127,7 +128,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
           return (
             <button key={opt.label} disabled={disabled} onClick={() => toggleOption(qi, opt.label, !!q.multiSelect)}
               style={{
-                textAlign: 'left', padding: '9px 12px', borderRadius: 9, minHeight: 44, boxSizing: 'border-box',
+                textAlign: 'left', padding: '9px 12px', borderRadius: R.lg, minHeight: 44, boxSizing: 'border-box',
                 cursor: disabled ? 'default' : 'pointer',
                 border: isSel ? `1.5px solid ${C.accent}` : `1px solid ${C.border}`,
                 background: isSel ? C.accentLight : C.bgWhite,
@@ -136,8 +137,8 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
             >
               {!q.multiSelect && <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}><ChoiceMarker multi={false} selected={isSel} /></span>}
               <span style={{ flex: 1 }}>
-                <span style={{ display: 'block', fontSize: 13, fontWeight: 600, color: C.textHeading }}>{opt.label}</span>
-                {opt.description && <span style={{ display: 'block', fontSize: 12, color: C.textSecondary, marginTop: 2, lineHeight: 1.4 }}>{opt.description}</span>}
+                <span style={{ display: 'block', fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{opt.label}</span>
+                {opt.description && <span style={{ display: 'block', fontSize: FS.sm, color: C.textSecondary, marginTop: 2, lineHeight: 1.4 }}>{opt.description}</span>}
               </span>
               {q.multiSelect && <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}><ChoiceMarker multi selected={isSel} /></span>}
             </button>
@@ -148,11 +149,11 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
           const open = !!customOpen[qi];
           const filled = open && (customText[qi]?.trim().length ?? 0) > 0;
           return (
-            <div style={{ borderRadius: 9, overflow: 'hidden', border: open ? `1.5px solid ${C.accent}` : `1px dashed ${C.dashed}`, background: open ? C.accentLight : 'transparent' }}>
+            <div style={{ borderRadius: R.lg, overflow: 'hidden', border: open ? `1.5px solid ${C.accent}` : `1px dashed ${C.dashed}`, background: open ? C.accentLight : 'transparent' }}>
               <div onClick={() => !disabled && toggleCustom(qi, !!q.multiSelect)}
                 style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 12px', minHeight: 44, boxSizing: 'border-box', cursor: disabled ? 'default' : 'pointer' }}>
                 <SquarePen size={14} color={C.textMuted} strokeWidth={2} style={{ flexShrink: 0 }} />
-                <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: open ? C.textHeading : C.textMuted }}>Другое{open ? '' : '…'}</span>
+                <span style={{ flex: 1, fontSize: FS.base, fontWeight: 600, color: open ? C.textHeading : C.textMuted }}>Другое{open ? '' : '…'}</span>
                 {q.multiSelect && <span style={{ flexShrink: 0, display: 'flex' }}><ChoiceMarker multi selected={filled} /></span>}
               </div>
               {open && (
@@ -164,7 +165,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                     disabled={disabled}
                     placeholder="Введите свой ответ…"
                     rows={2}
-                    style={{ width: '100%', boxSizing: 'border-box', borderRadius: 8, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: 13, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
+                    style={{ width: '100%', boxSizing: 'border-box', borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite, padding: '8px 10px', fontSize: FS.base, color: C.textHeading, fontFamily: 'inherit', resize: 'none', minHeight: 44, outline: 'none' }}
                   />
                 </div>
               )}
@@ -176,27 +177,31 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
   );
 
   const secBtn = (label: string, onClick: () => void): React.ReactNode => (
-    <button onClick={onClick} style={{ flex: 1, minHeight: 44, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading, borderRadius: 9, padding: '9px 16px', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>{label}</button>
+    <button onClick={onClick} style={{ flex: 1, minHeight: 44, background: C.bgWhite, border: `1px solid ${C.border}`, color: C.textHeading, borderRadius: R.lg, padding: '9px 16px', cursor: 'pointer', fontSize: FS.base, fontWeight: 600 }}>{label}</button>
   );
   const interruptBtn = (): React.ReactNode => onInterrupt ? (
     <button onClick={onInterrupt}
-      style={{ minHeight: 44, background: 'none', border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: 9, padding: '9px 14px', cursor: 'pointer', fontSize: 13, fontWeight: 600, flexShrink: 0 }}>
+      style={{ minHeight: 44, background: 'none', border: `1px solid ${C.border}`, color: C.textMuted, borderRadius: R.lg, padding: '9px 14px', cursor: 'pointer', fontSize: FS.base, fontWeight: 600, flexShrink: 0 }}>
       Прервать
     </button>
   ) : null;
   const answerBtn = (full: boolean): React.ReactNode => (
     <button onClick={submit} disabled={!allAnswered}
-      style={{ flex: full ? undefined : 1, width: full ? '100%' : undefined, minHeight: 44, background: C.accent, color: C.onAccent, borderRadius: 9, padding: '9px 16px', border: 'none', cursor: allAnswered ? 'pointer' : 'default', fontSize: 13, fontWeight: 600, opacity: allAnswered ? 1 : 0.5 }}>Ответить</button>
+      style={{ flex: full ? undefined : 1, width: full ? '100%' : undefined, minHeight: 44, background: C.accent, color: C.onAccent, borderRadius: R.lg, padding: '9px 16px', border: 'none', cursor: allAnswered ? 'pointer' : 'default', fontSize: FS.base, fontWeight: 600, opacity: allAnswered ? 1 : 0.5 }}>Ответить</button>
   );
 
   return (
-    <div style={{ border: `1px solid ${C.accentMuted}`, borderLeft: `3px solid ${C.accent}`, borderRadius: 12, padding: '13px 14px', background: C.accentLight }}>
+    <div style={{ border: `1px solid ${C.accentMuted}`, borderLeft: `3px solid ${C.accent}`, borderRadius: R.xl, padding: '13px 14px', background: C.accentLight }}>
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 11 }}>
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
-          <MessageCircle size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 7, fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>
+          {/* Карточки штаба идут от лица персоны (Э8): аватар, как у плана и эскалаций.
+              Без персоны чата — прежний обезличенный вариант с иконкой */}
+          {persona
+            ? <PersonaAvatar persona={persona} size={20} />
+            : <MessageCircle size={15} color={C.accent} strokeWidth={2} style={{ flexShrink: 0 }} />}
           {persona ? personaLabel(persona) : asstName} уточняет
         </div>
-        {multiQ && <span style={{ fontSize: 12, fontWeight: 600, color: C.textMuted, fontFamily: FONT.mono }}>{activeTab + 1} / {questions.length}</span>}
+        {multiQ && <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textMuted, fontFamily: FONT.mono }}>{activeTab + 1} / {questions.length}</span>}
       </div>
 
       {multiQ && (
@@ -208,7 +213,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
               <button key={qi} disabled={disabled} onClick={() => setActiveTab(qi)}
                 style={{
                   flexShrink: 0, display: 'flex', alignItems: 'center', gap: 6, padding: '0 11px', height: 28, boxSizing: 'border-box',
-                  borderRadius: 14, cursor: disabled ? 'default' : 'pointer', fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap', lineHeight: 1,
+                  borderRadius: R.xxl, cursor: disabled ? 'default' : 'pointer', fontSize: FS.sm, fontWeight: 600, whiteSpace: 'nowrap', lineHeight: 1,
                   border: active ? `1.5px solid ${C.accent}` : `1px solid ${C.border}`,
                   background: active ? C.accentLight : C.bgWhite,
                   color: active || ans ? C.textHeading : C.textSecondary,
@@ -229,7 +234,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
       </div>
 
       {!online ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Недоступно офлайн</div>
+        <div style={{ fontSize: FS.sm, color: C.textMuted }}>Недоступно офлайн</div>
       ) : multiQ ? (
         <div style={{ display: 'flex', gap: 8 }}>
           {activeTab > 0 && secBtn('‹ Назад', () => setActiveTab(t => t - 1))}

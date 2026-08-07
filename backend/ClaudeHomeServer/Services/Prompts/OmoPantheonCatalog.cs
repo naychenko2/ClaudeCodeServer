@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Prompts;
 
@@ -20,7 +20,12 @@ public sealed record PantheonTemplate(
     string? Effort,
     // Специальность роли — функциональный тег для оркестрации (конвейер/брифинг/статус).
     // Ставится в Specialty при подключении персоны из каталога.
-    PersonaSpecialty Specialty = PersonaSpecialty.None);
+    PersonaSpecialty Specialty = PersonaSpecialty.None,
+    // Уровень модели роли (слот «сильная/средняя/слабая») вместо конкретной модели: каталог
+    // задаёт ТРЕБОВАНИЕ к мощности, а какой моделью его закрыть — решают слоты инстанса.
+    // Зашитый Claude-алиас тут молча уводил персону на Claude даже на стенде, полностью
+    // переведённом на стороннего провайдера (B3 приёмки «Командной реализации»).
+    ModelTier? ModelTier = null);
 
 // Каталог пантеона OmO: 8 ролей с полными переведёнными промптами oh-my-openagent
 // (по договорённости с авторами, соответствие — docs/omo/adoption.md). Полные
@@ -65,7 +70,8 @@ public static partial class OmoPantheonCatalog
             Color: "orange",
             Tools: null,
             Access: PersonaAccess.Full,
-            Model: "opus",
+            Model: null,
+            ModelTier: ModelTier.Strong,
             Effort: "high",
             Specialty: PersonaSpecialty.Coordinator),
 
@@ -105,7 +111,8 @@ public static partial class OmoPantheonCatalog
             Color: "red",
             Tools: null,
             Access: PersonaAccess.Full,
-            Model: "sonnet",
+            Model: null,
+            ModelTier: ModelTier.Medium,
             Effort: "high",
             Specialty: PersonaSpecialty.Executor),
 
@@ -145,7 +152,8 @@ public static partial class OmoPantheonCatalog
             Color: "blue",
             Tools: ["tasks", "notes"],
             Access: PersonaAccess.ReadOnly,
-            Model: "opus",
+            Model: null,
+            ModelTier: ModelTier.Strong,
             Effort: "high",
             Specialty: PersonaSpecialty.Planner),
 
@@ -185,7 +193,8 @@ public static partial class OmoPantheonCatalog
             Color: "brown",
             Tools: ["tasks"],
             Access: PersonaAccess.Full,
-            Model: "sonnet",
+            Model: null,
+            ModelTier: ModelTier.Medium,
             Effort: null,
             Specialty: PersonaSpecialty.Coordinator),
 
@@ -226,7 +235,8 @@ public static partial class OmoPantheonCatalog
             Color: "purple",
             Tools: ["notes"],
             Access: PersonaAccess.ReadOnly,
-            Model: "sonnet",
+            Model: null,
+            ModelTier: ModelTier.Medium,
             Effort: null,
             Specialty: PersonaSpecialty.Analyst),
 
@@ -266,7 +276,8 @@ public static partial class OmoPantheonCatalog
             Color: "yellow",
             Tools: [],
             Access: PersonaAccess.ReadOnly,
-            Model: "sonnet",
+            Model: null,
+            ModelTier: ModelTier.Medium,
             Effort: "high",
             Specialty: PersonaSpecialty.Reviewer),
 
@@ -306,7 +317,8 @@ public static partial class OmoPantheonCatalog
             Color: "cyan",
             Tools: ["web"],
             Access: PersonaAccess.ReadOnly,
-            Model: "opus",
+            Model: null,
+            ModelTier: ModelTier.Strong,
             Effort: "high",
             Specialty: PersonaSpecialty.Consultant),
 
@@ -345,7 +357,8 @@ public static partial class OmoPantheonCatalog
             Color: "green",
             Tools: ["web", "notes"],
             Access: PersonaAccess.ReadOnly,
-            Model: "haiku",
+            Model: null,
+            ModelTier: ModelTier.Weak,
             Effort: null,
             Specialty: PersonaSpecialty.Librarian),
     ];

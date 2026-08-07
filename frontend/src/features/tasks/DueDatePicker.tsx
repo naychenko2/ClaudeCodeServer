@@ -74,6 +74,7 @@ export function DueDatePicker({ dueDate, dueTime, onChange }: Props) {
   const customTime = dueTime && !TIME_PRESETS.includes(dueTime) ? dueTime : '';
   const [timeDraft, setTimeDraft] = useState(customTime);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- черновик времени следует за внешним изменением dueTime
   useEffect(() => { setTimeDraft(customTime); }, [customTime]);
 
   // Клик вне поповера — закрыть (portal: проверяем по data-атрибуту)

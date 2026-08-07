@@ -33,6 +33,7 @@ export function DocumentViewer({ kbId, doc, onClose, isMobile }: {
   // Загружаем содержимое документа. Перестарт при смене doc.id.
   useEffect(() => {
     let alive = true;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- загрузка содержимого документа при его смене
     setLoading(true);
     setError(null);
     setData(null);
@@ -41,7 +42,6 @@ export function DocumentViewer({ kbId, doc, onClose, isMobile }: {
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : 'Не удалось загрузить документ'); })
       .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kbId, doc.id]);
 
   // Закрытие по Escape — как в любых диалогах/панелях проекта.

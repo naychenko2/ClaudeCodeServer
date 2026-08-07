@@ -47,6 +47,7 @@
   </Target>
 
   <ItemGroup>
+    <PackageReference Include="AngleSharp" Version="1.5.2" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Negotiate" Version="10.0.10" />
     <PackageReference Include="Microsoft.CodeAnalysis" Version="4.12.0" />
@@ -55,6 +56,7 @@
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.17.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.17.0" />
     <PackageReference Include="OpenTelemetry.Instrumentation.Http" Version="1.17.0" />
+    <PackageReference Include="SmartReader" Version="0.11.1" />
     <!-- OpenTelemetry.Instrumentation.Runtime не нужен: он даёт СВОЙ метр
          (OpenTelemetry.Instrumentation.Runtime) через AddRuntimeInstrumentation(), а мы
          слушаем встроенный в .NET метр System.Runtime — он есть в рантайме сам по себе.

@@ -21,7 +21,7 @@ export const RAW_COLOR_ALLOWED = [
   'src/components/MermaidDiagram.tsx',    // themeVariables Mermaid (обе темы)
   'src/components/CodeEditor.tsx',        // HighlightStyle CodeMirror
   'src/features/notes/NoteEditor.tsx',    // HighlightStyle CodeMirror
-  'src/components/terminal/TerminalView.tsx', // ANSI-палитра xterm.js
+  'src/lib/xtermTheme.ts',                // ANSI-палитра xterm.js (терминал + логи сервисов)
   'src/components/DrawioViewer.tsx',      // параметры темы iframe drawio
   'src/lib/widgetHtml.ts',                // тема виджета в sandbox-iframe (переменные хоста туда не доходят)
   // Палитры-данные
@@ -54,7 +54,7 @@ export const designSystem = [
 ]
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores(['dist', 'dev-dist']),   // dev-dist — сгенерированный workbox PWA
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -65,6 +65,38 @@ export default defineConfig([
     ],
     languageOptions: {
       globals: globals.browser,
+    },
+    rules: {
+      // Понижено до warn по итогам задачи 3/5: точность правила на нашей базе — 1
+      // находка из 116 (все остальные — доминирующие легитимные идиомы фронта: fetch
+      // со сбросом состояния, сброс при смене сущности, подписки matchMedia/ResizeObserver).
+      // На уровне error каждый новый такой эффект упирался бы в ритуальное подавление
+      // не глядя — 115 точечных eslint-disable уже расставлены и не снимаются, они
+      // документируют, почему в этих местах так и надо.
+      'react-hooks/set-state-in-effect': 'warn',
+      // Отключено по итогам задачи 4б/5 (продолжение ba351c1b). Проверка HMR на живом
+      // dev-сервере показала: для констант и хелперов правило охраняет проблему,
+      // которой у нас нет — Vite предупреждение в консоли есть, перезагрузки и потери
+      // состояния нет. Опции не снимают шум, не снимая защиту: allowConstantExport
+      // (уже включён в пресете vite) покрывает только скалярные литералы, а наш
+      // доминирующий паттерн — константы-объекты/массивы и функции-хелперы рядом с
+      // компонентом (83 находки в 37 файлах остаются и с ним; allowExportNames
+      // потребовал бы глобального белого списка из ~75 имён). Единственная категория
+      // с настоящим риском — экспортируемые хуки: они вынесены из компонентных файлов
+      // в отдельные модули (useChatDrag, useIsMobileModal, usePanelWidth,
+      // useBindingLabels, useTaskHover; useDocAnnotations снят с экспорта), то есть
+      // риск закрыт структурно, а не линтом. Новые хуки рядом с компонентами не
+      // экспортируем — держим это соглашение вместо правила.
+      'react-refresh/only-export-components': 'off',
+      // Отключено по итогам задачи 5/5 (серия lint-debt). Правило — сигнал для React
+      // Compiler («ручную мемоизацию не удалось сохранить → компонент пропущен»), но
+      // компилятор в сборке не подключён (vite.config.ts: @vitejs/plugin-react без
+      // babel-plugin-react-compiler, пакета нет в node_modules). Находки (23 в
+      // FileExplorer/WorkspacePage/useInView) не меняют рантайм-поведение: ручные
+      // useCallback/useMemo продолжают работать как написаны, а выравнивание кода под
+      // инференс компилятора — рискованная переделка тяжёлых обработчиков без выигрыша.
+      // Если компилятор подключим — правило вернуть и разобрать места по-настоящему.
+      'react-hooks/preserve-manual-memoization': 'off',
     },
   },
   ...designSystem,

@@ -40,6 +40,12 @@ public class CoordinatorWriteGuardTests
     [InlineData("Get-Content x | Out-File y")]
     [InlineData("New-Item -ItemType File -Path a.txt")]
     [InlineData("Copy-Item a.txt b.txt")]
+    // Волна 3: способы обхода, найденные адверсарным аудитом Глеба, но не покрытые регэкспом
+    [InlineData("sed 's/old/new/' f > f2 && mv f2 f")]
+    [InlineData("awk '{print $1}' input.txt > output.txt")]
+    [InlineData("mv src.cs dst.cs")]
+    [InlineData("cp src.cs dst.cs")]
+    [InlineData("'using System;' > Program.cs")]
     public void LooksLikeFileWrite_ИзвестныеСпособыЗаписи_True(string command)
     {
         CoordinatorWriteGuard.LooksLikeFileWrite(command).Should().BeTrue();

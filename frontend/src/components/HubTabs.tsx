@@ -1,9 +1,9 @@
 import type { ReactNode } from 'react';
-import { Activity, Book, Calendar, Coins, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
+import { Activity, Book, Calendar, Coins, Columns3, Folder, House, MessageCircle, Puzzle, Share2, Users } from 'lucide-react';
 import { PillSwitch } from './Toolbar';
 import { useModules } from '../lib/modules';
 
-export type HubTab = 'home' | 'chats' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
+export type HubTab = 'home' | 'chats' | 'wall' | 'projects' | 'calendar' | 'notes' | 'personas' | 'knowledge' | 'notifications' | 'spend' | 'telemetry';
 
 // Значение таба хаба: фиксированный раздел ЛИБО внешний модуль (`module:{id}`, ТЗ R6).
 // Модульные табы приходят из реестра (GET /api/modules) и генерятся динамически.
@@ -20,6 +20,7 @@ export function moduleIdOf(v: HubTabValue): string | null {
 const TAB_ICONS: Record<HubTab, ReactNode> = {
   home: <House size={18} strokeWidth={2} />,
   chats: <MessageCircle size={18} strokeWidth={2} />,
+  wall: <Columns3 size={18} strokeWidth={2} />,
   projects: <Folder size={18} strokeWidth={2} />,
   calendar: <Calendar size={18} strokeWidth={2} />,
   notes: <Share2 size={18} strokeWidth={2} />,
@@ -32,7 +33,7 @@ const TAB_ICONS: Record<HubTab, ReactNode> = {
 
 // Подписи разделов (единый источник для таббара и overflow-меню «Разделы»)
 export const TAB_LABELS: Record<HubTab, string> = {
-  home: 'Домой', chats: 'Чаты', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
+  home: 'Домой', chats: 'Чаты', wall: 'Стена', projects: 'Проекты', calendar: 'Календарь', notes: 'Заметки',
   personas: 'Персоны', knowledge: 'Знания', notifications: 'Уведомления', spend: 'Аналитика',
   telemetry: 'Телеметрия',
 };
@@ -42,6 +43,8 @@ const DEFAULT_TABS: HubTab[] = ['chats', 'projects', 'calendar', 'notes', 'perso
 // не в таббаре, а в шапке — логотип «Домой», колокольчик «Уведомления», меню
 // аватара «Знания» и «Аналитика токенов». Всплывающая только внутри раздела
 // вкладка-призрак сбивает с толку: набор таббара скачет от того, где ты находишься.
+// «Стена» здесь не нужна: своей вкладки у неё нет, но как рабочий режим раздела
+// проектов она подсвечивает пилюлю «Проекты» (displayValue ниже).
 const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend', 'telemetry'];
 
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
@@ -61,6 +64,10 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
     .filter(m => m.tab)
     .map(m => ({ value: `module:${m.id}` as HubTabValue, label: m.tab!.label, icon: <Puzzle size={18} strokeWidth={2} /> }));
 
+  // «Стена» — рабочий режим раздела проектов: своей вкладки нет, подсвечиваем
+  // пилюлю «Проекты» (клик по ней со стены — выход к списку, App.switchHubTab).
+  const displayValue: HubTabValue = value === 'wall' ? 'projects' : value;
+
   // Переключение проектов живёт в доке воркспейса (ProjectRail), поэтому вкладка
   // «Проекты» в таббаре — обычная пилюля, отдельной зоны переключения нет.
   // Активный раздел вне набора табов: из TABLESS — не получает вкладку вовсе
@@ -68,8 +75,8 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
   // вкладкой в конец. На мобиле так всплывают «Заметки» и «Персоны» из «⋯ Разделы»,
   // чтобы было видно, где находишься. Модульный таб в набор фиксированных не входит —
   // он живёт в moduleOptions ниже, поэтому из проверки исключаем.
-  const isKnownFixed = !isModuleTab(value) && (tabs.includes(value) || TABLESS.includes(value));
-  const shown = isKnownFixed || isModuleTab(value) ? tabs : [...tabs, value as HubTab];
+  const isKnownFixed = !isModuleTab(displayValue) && (tabs.includes(displayValue) || TABLESS.includes(displayValue));
+  const shown = isKnownFixed || isModuleTab(displayValue) ? tabs : [...tabs, displayValue as HubTab];
   const fixedOptions = shown.map(v => mobile
     ? { value: v as HubTabValue, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
     : { value: v as HubTabValue, label: TAB_LABELS[v] });
@@ -77,7 +84,7 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
     : [...fixedOptions, ...moduleOptions.map(o => ({ value: o.value, label: o.label }))];
   return (
     <PillSwitch<HubTabValue>
-      value={value}
+      value={displayValue}
       onChange={onChange}
       draggable
       compact={mobile}

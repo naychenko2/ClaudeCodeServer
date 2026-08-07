@@ -18,7 +18,7 @@ import { NotesGraph, type GraphStats } from './NotesGraph';
 import { GraphSettingsBody } from './graph/GraphSettingsBody';
 import { useGraphSettings } from './graph/graphSettings';
 import { Button, IslandScaffold, ConfirmDialog } from '../../components/ui';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../../components/ui/PageCanvas';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { CollapseGroup, IconSearch, IconPlus, IconCalendarDay, SourceDot } from './shared';
 import { PanelZone } from '../../pages/workspace/PanelZone';
@@ -135,6 +135,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   // Диплинк #/notes/{id}
   useEffect(() => {
     const t = parseHash();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- диплинк из хэша #/notes/{id} при монтировании
     if (t?.screen === 'notes' && t.noteId) { setSelectedId(t.noteId); setMobileView('note'); }
   }, []);
 
@@ -203,6 +204,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   }, [semanticAvailable, leaveGraph]);
   useEffect(() => {
     const q = query.trim();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- часть debounce-эффекта: очистка результатов на пустом запросе
     if (!q) { setResults(null); setSemanticHits(null); return; }
     // Офлайн — фильтруем кэшированный список локально (серверный поиск/семантика недоступны)
     if (!online) {
@@ -513,14 +515,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
       left={<PanelZone side="left" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
       right={<PanelZone side="right" panelStack={notesPanels} allowedKeys={NOTES_KEYS} panels={zonePanels} />}
       centerBare
+      // Компенсация перекоса зон — только для приветствия: у него колонка
+      // фиксированной ширины, и без компенсации оно уезжает вслед за центром, стоит
+      // открыть панель с одной стороны. Заметка и граф резиновые (тянутся на всю
+      // колонку) — им компенсировать нечего, ширина не передаётся
+      centerContentWidth={mode === 'notes' && !selectedId ? CHAT_MAX_W : undefined}
       center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader value="notes" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>
         {body}
@@ -535,7 +540,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
           onCancel={() => setWikilinkTarget(null)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }
 

@@ -1,0 +1,193 @@
+// Док «Стены» — капсула ПОД доком проектов, в обоих режимах на одном месте:
+//  • в воркспейсе: кнопка входа в режим + приёмник чатов (перетащи карточку чата
+//    из панели «Чаты» — чат встанет колонкой);
+//  • на самой стене: та же капсула, но кнопка добавляет чат (пикер) — вход уже
+//    состоялся, а приёмник перетаскивания продолжает работать.
+//
+// При маунте лениво поднимает состав стены (initWall): addChat шлёт PUT полного
+// состава, и без загруженного снимка дроп затирал бы чужие монеты.
+import { useEffect, useRef, useState } from 'react';
+import { Columns3, LogOut, Plus } from 'lucide-react';
+import { C, FONT, R } from '../../lib/design';
+import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
+import { ICON_STROKE } from '../../components/ui/icons';
+import { showToast } from '../../lib/toast';
+import type { Session } from '../../types';
+import { useWallState, initWall, addChatSafe, swapChats, startOrderDrag, MAX_CHATS } from './wallStore';
+import { WallPicker } from './WallPicker';
+
+// Тип данных перетаскивания карточки чата (кладёт SessionList в плоском режиме)
+export const WALL_DRAG_TYPE = 'cc-wall-chat';
+
+export function WallDock({ onOpenWall, onExit, slots = 0 }: {
+  // Вход в режим (воркспейс). Не задан — мы уже на стене
+  onOpenWall?: () => void;
+  // Выход из режима (на стене): гасит навигационную память и уводит к проектам
+  onExit?: () => void;
+  // Сколько колонок помещается на экране: чаты сверх этого числа получают кнопки
+  slots?: number;
+}) {
+  const { chats } = useWallState();
+  // Тащат чат по экрану (мишень видна) и курсор именно над доком (мишень «горит»).
+  // dragging слушаем на документе: dragover самой капсулы не срабатывает, пока
+  // курсор не дойдёт до неё, а знать «сюда можно» надо заранее.
+  const [dragging, setDragging] = useState(false);
+  const [over, setOver] = useState(false);
+  // Счётчик enter/leave: переход курсора между ДОЧЕРНИМИ элементами капсулы шлёт
+  // dragleave, и без счётчика мишень мигала и гасла на полпути
+  const overDepth = useRef(0);
+
+  useEffect(() => {
+    const onStart = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes(WALL_DRAG_TYPE)) setDragging(true);
+    };
+    const onEnd = () => { setDragging(false); setOver(false); overDepth.current = 0; };
+    document.addEventListener('dragstart', onStart);
+    document.addEventListener('dragend', onEnd);
+    document.addEventListener('drop', onEnd);
+    return () => {
+      document.removeEventListener('dragstart', onStart);
+      document.removeEventListener('dragend', onEnd);
+      document.removeEventListener('drop', onEnd);
+    };
+  }, []);
+  // Пикер живёт в самом доке: кнопка «+» есть в обоих режимах, и держать её
+  // состояние в двух экранах-владельцах было бы дублем
+  const [picker, setPicker] = useState(false);
+
+  useEffect(() => { initWall(undefined); }, []);
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setOver(false);
+    setDragging(false);
+    overDepth.current = 0;
+    const raw = e.dataTransfer.getData(WALL_DRAG_TYPE);
+    if (!raw) return;
+    try {
+      const s = JSON.parse(raw) as Session;
+      const name = s.name?.trim() || 'Чат';
+      const res = await addChatSafe(s);
+      showToast('Стена',
+        res === 'added' ? `«${name}» на стене`
+        : res === 'duplicate' ? `«${name}» уже на стене`
+        : `На стене уже ${MAX_CHATS} чатов — уберите лишний`);
+    } catch { /* битые данные перетаскивания — игнорируем */ }
+  };
+
+  const onWall = !onOpenWall;
+  // Чаты, которым не хватило колонок (вместе с их позициями в наборе)
+  const hidden = onWall && slots > 0
+    ? chats.map((s, idx) => ({ s, idx })).filter(({ idx }) => idx >= slots)
+    : [];
+
+  return (
+    <RailCapsule
+      side="left"
+      style={{ marginTop: 8 }}
+      // Мишень как у рельсы панелей: пока чат тащат — пунктирная обводка, под
+      // курсором сплошная акцентная с подложкой (PanelRail.railBorder)
+      border={dragging ? (over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`) : undefined}
+      background={dragging && over ? C.accentMuted : undefined}
+      onDragEnter={e => {
+        if (!e.dataTransfer.types.includes(WALL_DRAG_TYPE)) return;
+        overDepth.current++;
+        setOver(true);
+      }}
+      onDragOver={e => { if (e.dataTransfer.types.includes(WALL_DRAG_TYPE)) e.preventDefault(); }}
+      onDragLeave={() => { overDepth.current = Math.max(0, overDepth.current - 1); if (overDepth.current === 0) setOver(false); }}
+      onDrop={handleDrop}
+    >
+      {/* Пока чат тащат, капсула ЦЕЛИКОМ становится мишенью: кнопки уступают место
+          одной иконке — рельса не должна расти на лишний слот и дёргать раскладку */}
+      {dragging ? (
+        <span style={{
+          width: 32, height: 32, borderRadius: R.md, flexShrink: 0, boxSizing: 'border-box',
+          border: over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`,
+          background: over ? C.accentLight : 'transparent',
+          color: over ? C.accent : C.textSecondary,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Plus size={16} strokeWidth={ICON_STROKE} />
+        </span>
+      ) : (
+      <>
+      {/* Выход из режима — ПЕРВЫМ в капсуле: возврат к проектам ищут у верхней
+          кромки, как «назад» в шапке */}
+      {onWall && onExit && (
+        <RailIconButton side="left" label="Выйти со стены" onClick={onExit}>
+          <LogOut size={16} strokeWidth={ICON_STROKE} style={{ transform: 'rotate(180deg)' }} />
+        </RailIconButton>
+      )}
+
+      {/* Вход в режим — только в воркспейсе (на стене мы уже здесь) */}
+      {!onWall && (
+      <RailIconButton
+        side="left"
+        label={`Стена${chats.length > 0 ? ` (${chats.length})` : ''}`}
+        onClick={() => onOpenWall?.()}
+      >
+        <span style={{ position: 'relative', display: 'flex' }}>
+          <Columns3 size={16} strokeWidth={ICON_STROKE} />
+          {chats.length > 0 && (
+            // Счётчик набора — справка, а не сигнал: акцентная заливка тут кричала бы
+            // громче колокольчика уведомлений. Нейтральная плашка в тон панелей.
+            <span style={{
+              position: 'absolute', top: -6, right: -8, minWidth: 13, height: 13,
+              padding: '0 3px', borderRadius: R.full, background: C.bgPanel, color: C.textSecondary,
+              border: `1px solid ${C.border}`, boxSizing: 'border-box',
+              fontSize: 9, fontWeight: 700, lineHeight: '11px', textAlign: 'center',
+              pointerEvents: 'none',
+            }}>
+              {chats.length}
+            </span>
+          )}
+        </span>
+      </RailIconButton>
+      )}
+
+      {/* Кнопка режима, номера невлезших чатов и добавление — три разные по смыслу
+          группы, каждая отбита чертой (как группы в рельсе панелей) */}
+      <RailSep />
+
+      {/* Чаты набора, которым не хватило колонок (окно узкое): кнопки с их номерами
+          между режимом и добавлением. Клик ставит чат вместо ПРАВОЙ колонки,
+          перетаскивание на конкретную колонку — вместо неё. Только на стене:
+          в воркспейсе колонок нет и менять нечего. */}
+      {onWall && hidden.map(({ s, idx }) => (
+        <RailIconButton
+          key={s.id}
+          side="left"
+          variant="media"
+          label={`${idx + 1}. ${s.name?.trim() || 'Без названия'}`}
+          wrapper={{
+            draggable: true,
+            onDragStart: (e: React.DragEvent) => startOrderDrag(e, idx, 'swap'),
+          }}
+          onClick={() => swapChats(idx, slots - 1)}
+        >
+          <span style={{
+            width: 32, height: 32, borderRadius: R.md, boxSizing: 'border-box',
+            border: `1px solid ${C.border}`, color: C.textMuted, background: 'transparent',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: FONT.sans, fontWeight: 700, fontSize: 13, lineHeight: 1,
+            flexShrink: 0, userSelect: 'none',
+          }}>
+            {idx + 1}
+          </span>
+        </RailIconButton>
+      ))}
+      {onWall && hidden.length > 0 && <RailSep />}
+
+      {/* Добавление чата — в ОБОИХ режимах: собрать стену можно, не покидая проект */}
+      <RailIconButton side="left" label="Добавить чат на стену" onClick={() => setPicker(true)}>
+        <Plus size={16} strokeWidth={ICON_STROKE} />
+      </RailIconButton>
+
+      </>
+      )}
+
+      {picker && <WallPicker onClose={() => setPicker(false)} />}
+    </RailCapsule>
+  );
+}

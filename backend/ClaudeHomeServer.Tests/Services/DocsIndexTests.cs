@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Docs;
 using FluentAssertions;
 
@@ -243,6 +244,956 @@ public class DocsIndexTests : IDisposable
         File.SetLastWriteTimeUtc(Path.Combine(_root, "docs", "b.md"), stamp);
 
         _svc.GetIndex(_root).Single().Path.Should().Be("docs/b.md");
+    }
+
+    // ─── Порядок из .order и разделы ────────────────────────────────────────
+
+    [Fact]
+    public void Order_ЗадаётПорядок_ПеребиваяАлфавит()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+
+        // По заголовку было бы «Абрикос, Яблоко» — файл переставляет их местами
+        _svc.GetIndex(_root).Select(d => d.Path).Should().ContainInOrder("docs/a.md", "docs/b.md");
+    }
+
+    [Fact]
+    public void Order_НеперечисленноеВХвост_ПоПрежнемуПравилу()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Банан", "docs", "b.md");
+        Write("# Абрикос", "docs", "c.md");
+        Write("a\n", "docs", ".order");
+
+        // .order сортирует, а не фильтрует: остальные идут следом по заголовку
+        _svc.GetIndex(_root).Select(d => d.Path).Should()
+            .ContainInOrder("docs/a.md", "docs/c.md", "docs/b.md");
+    }
+
+    [Fact]
+    public void Order_ПорядокПапок_ТожеИзФайлаРодителя()
+    {
+        Write("# Zzz", "docs", "z.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+        Write("adr\nz\n", "docs", ".order");
+
+        // Без файла документ уровня шёл бы перед вложенной папкой — строка это переопределяет
+        _svc.GetIndex(_root).Select(d => d.Path).Should()
+            .ContainInOrder("docs/adr/0001.md", "docs/z.md");
+    }
+
+    [Fact]
+    public void Order_СтраницаРаздела_ИдётПередСвоимиДочерними()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Запись", "docs", "decisions", "0001.md");
+        Write("# Vision", "docs", "vision.md");
+        Write("vision\ndecisions\n", "docs", ".order");
+
+        // Одна строка «decisions» задаёт место и страницы раздела, и его содержимого
+        _svc.GetIndex(_root).Select(d => d.Path).Should()
+            .ContainInOrder("docs/vision.md", "docs/decisions.md", "docs/decisions/0001.md");
+    }
+
+    [Fact]
+    public void Order_РегистрСтроки_НеВажен()
+    {
+        // На Linux регистрозависимая ФС, и строгое сравнение молча роняло бы строку в хвост
+        Write("# Zzz", "docs", "Api.md");
+        Write("# Aaa", "docs", "b.md");
+        Write("api\n", "docs", ".order");
+
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/Api.md");
+    }
+
+    [Fact]
+    public void Order_СтрокаБезФайла_НеЛомаетПорядок()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        // Строка может указывать на документ, удалённый в другой ветке
+        Write("удалённый-документ\na\nb\n", "docs", ".order");
+
+        _svc.GetIndex(_root).Select(d => d.Path).Should().ContainInOrder("docs/a.md", "docs/b.md");
+    }
+
+    [Fact]
+    public void Order_ПравкаФайла_ВидитсяСразу()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/a.md");
+
+        // Ни один документ не менялся: без .order в отпечатке кеш отдал бы прежний порядок
+        Write("b\na\n", "docs", ".order");
+
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/b.md");
+    }
+
+    [Fact]
+    public void Раздел_ДокументРядомСОдноимённойПапкой_ЭтоЕёСтраница()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Запись", "docs", "decisions", "0001.md");
+
+        var entry = _svc.GetIndex(_root).Single(d => d.Path == "docs/decisions.md");
+
+        entry.SectionFolder.Should().Be("docs/decisions");
+    }
+
+    [Fact]
+    public void Раздел_ДокументБезОдноимённойПапки_БезПризнака()
+    {
+        Write("# Обычный", "docs", "a.md");
+
+        _svc.GetIndex(_root).Single().SectionFolder.Should().BeNull();
+    }
+
+    [Fact]
+    public void Раздел_ПустаяПапкаСПарнойСтраницей_ЭтоТожеРаздел()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Directory.CreateDirectory(Path.Combine(_root, "docs", "decisions"));
+
+        // Только что созданный раздел ещё пуст, и по документам его не найти. Без него
+        // войти в раздел, чтобы наполнить, было бы нечем — он выглядел бы строкой
+        _svc.GetIndex(_root).Single(d => d.Path == "docs/decisions.md")
+            .SectionFolder.Should().Be("docs/decisions");
+    }
+
+    [Fact]
+    public void Раздел_ПоявлениеПапки_ВидитсяСразу()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        _svc.GetIndex(_root).Single().SectionFolder.Should().BeNull();
+
+        // Ни один файл не менялся: без папки в отпечатке кеш отдал бы прежний корпус
+        Directory.CreateDirectory(Path.Combine(_root, "docs", "decisions"));
+
+        _svc.GetIndex(_root).Single().SectionFolder.Should().Be("docs/decisions");
+    }
+
+    [Fact]
+    public void Раздел_ВложеннаяПапкаБезПары_ПризнакаНиУКого()
+    {
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        // Папка без файла-напарника — в wiki это пустая страница; продукт её не выдумывает
+        _svc.GetIndex(_root).Should().OnlyContain(d => d.SectionFolder == null);
+    }
+
+    // ─── Запись порядка (.order) ────────────────────────────────────────────
+
+    // Файл порядка как он лёг на диск — сырым текстом: тесты про концы строк и BOM
+    // смотрят именно байты, а не разобранный список
+    private string ReadOrderFile(params string[] segments) =>
+        File.ReadAllText(Path.Combine([_root, .. segments, ".order"]));
+
+    [Fact]
+    public void ЗаписьПорядка_МеняетФайлИИндекс()
+    {
+        Write("# Яблоко", "docs", "a.md");
+        Write("# Абрикос", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+
+        var result = _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        result.Status.Should().Be(DocsIndexService.OrderWriteStatus.Ok);
+        ReadOrderFile("docs").Should().Be("b\na\n");
+        _svc.GetIndex(_root)[0].Path.Should().Be("docs/b.md");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ФайлаНеБыло_СоздаётсяСоВсемСоставомПапки()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("# C", "docs", "c.md");
+
+        // Переставлены две строки, а записаны три: иначе «c» стал бы неперечисленным и
+        // уехал в хвост — жест сломал бы порядок вместо того, чтобы его задать
+        _svc.WriteOrder(_root, "docs", ["b", "a"]).Status.Should().Be(DocsIndexService.OrderWriteStatus.Ok);
+
+        ReadOrderFile("docs").Should().Be("b\na\nc\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ПоявившийсяМимоПанели_ДописанВХвост()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("# Новый", "docs", "new.md");      // приехал git pull'ом, панель его не видела
+        Write("a\nb\n", "docs", ".order");
+
+        _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        ReadOrderFile("docs").Should().Be("b\na\nnew\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_СтрокаБезФайла_ОстаётсяНаСвоёмМесте()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        // Документ мог быть удалён в другой ветке — молча выбрасывать чужую строку нельзя
+        Write("призрак\na\nb\n", "docs", ".order");
+
+        _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        ReadOrderFile("docs").Should().Be("призрак\nb\na\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_РазделМеждуДокументами_НеСдвигается()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Расширения", "docs", "extensions.md");
+        Write("# Плагин", "docs", "extensions", "plugin.md");
+        Write("# Бриф", "docs", "business-brief.md");
+        Write("vision\nextensions\nbusiness-brief\n", "docs", ".order");
+
+        // Панель показывает раздел отдельной группой и в items его не присылает: строки
+        // переставляются по занятым позициям, и «extensions» остаётся между документами
+        _svc.WriteOrder(_root, "docs", ["business-brief", "vision"]);
+
+        ReadOrderFile("docs").Should().Be("business-brief\nextensions\nvision\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_КорневойУровень_ЭтоТожеПапка()
+    {
+        Write("# Проект", "README.md");
+        Write("# Док", "docs", "a.md");
+
+        _svc.WriteOrder(_root, null, ["docs", "README"]).Status.Should().Be(DocsIndexService.OrderWriteStatus.Ok);
+
+        ReadOrderFile().Should().Be("docs\nREADME\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_КонцыСтрокСохраняются_BomНеПоявляется()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("a\r\nb\r\n", "docs", ".order");
+
+        _svc.WriteOrder(_root, "docs", ["b", "a"]);
+
+        // Первым байтом сразу имя, а не BOM: лишние байты дали бы в git шум на весь файл
+        var bytes = File.ReadAllBytes(Path.Combine(_root, "docs", ".order"));
+        bytes.Take(3).Should().NotEqual([(byte)0xEF, (byte)0xBB, (byte)0xBF]);
+        ReadOrderFile("docs").Should().Be("b\r\na\r\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ПапкаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+        Write("# Чужой", "backend", "NOTES.md");
+
+        _svc.WriteOrder(_root, "backend", ["NOTES"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.FolderNotInScope);
+        File.Exists(Path.Combine(_root, "backend", ".order")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ВыходЗаКорень_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        _svc.WriteOrder(_root, "../secret", ["a"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.FolderNotInScope);
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ИмениНетВПапке_ЭтоОтказ()
+    {
+        Write("# A", "docs", "a.md");
+        Write("a\n", "docs", ".order");
+
+        // .order — не место для произвольных строк от клиента: чужую строку туда
+        // дописывает только сам пользователь в git
+        _svc.WriteOrder(_root, "docs", ["a", "выдумка"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.BadItems);
+        ReadOrderFile("docs").Should().Be("a\n");
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_ПовторИмени_ЭтоОтказ()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+
+        _svc.WriteOrder(_root, "docs", ["a", "a"]).Status.Should()
+            .Be(DocsIndexService.OrderWriteStatus.BadItems);
+    }
+
+    [Fact]
+    public void ЗаписьПорядка_НеMarkdown_ВСоставУровняНеВходит()
+    {
+        Write("# A", "docs", "a.md");
+        Write("%PDF-1.4", "docs", "cover.pdf");
+
+        // «cover» без «cover.md» в wiki-порядке просто мусор — переставлять его нечем
+        _svc.WriteOrder(_root, "docs", ["cover"], new DocsScope(["docs"], [], ["markdown", "pdf"]))
+            .Status.Should().Be(DocsIndexService.OrderWriteStatus.BadItems);
+    }
+
+    // ─── Создание документов и разделов ─────────────────────────────────────
+
+    // Создание пишет в рабочее дерево, поэтому идёт через FileService (SafeJoin + OnMutated).
+    // Отдельный экземпляр сервиса: у остальных тестов файлового сервиса нет, он им не нужен
+    private DocsIndexService Creating() => new(new FileService());
+
+    [Fact]
+    public void Создание_Документа_ФайлСЗаголовкомИПутьВОтвете()
+    {
+        Write("# Док", "docs", "a.md");
+
+        var result = Creating().CreateDoc(_root, "docs", "Бизнес описание", section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.Ok);
+        // Пробелы в имени файла становятся дефисами, а само название — заголовком страницы
+        result.Path.Should().Be("docs/Бизнес-описание.md");
+        File.ReadAllText(Path.Combine(_root, "docs", "Бизнес-описание.md")).Should().Be("# Бизнес описание\n");
+    }
+
+    [Fact]
+    public void Создание_Раздела_ЭтоПараСтраницаИПапка()
+    {
+        Write("# Док", "docs", "a.md");
+
+        var result = Creating().CreateDoc(_root, "docs", "Журнал решений", section: true);
+
+        result.Path.Should().Be("docs/Журнал-решений.md");
+        Directory.Exists(Path.Combine(_root, "docs", "Журнал-решений")).Should().BeTrue();
+
+        // Разделом пара становится с первым документом внутри: индекс строится по документам,
+        // и пустая папка ему не видна. Без парного ФАЙЛА раздел открывался бы пустой
+        // страницей — ровно тот дефект, ради которого пары и поддерживаются
+        Write("# Запись", "docs", "Журнал-решений", "0001.md");
+        _svc.GetIndex(_root).Single(d => d.Path == "docs/Журнал-решений.md")
+            .SectionFolder.Should().Be("docs/Журнал-решений");
+    }
+
+    [Fact]
+    public void Создание_ПапкаБезСтраницы_ДостраиваетсяДоПары()
+    {
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        // Половина пары уже на диске — создаём недостающую, а не отказываем
+        Creating().CreateDoc(_root, "docs", "adr", section: true).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.Ok);
+
+        File.Exists(Path.Combine(_root, "docs", "adr.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Создание_ИмяВписываетсяВСуществующийOrder()
+    {
+        Write("# A", "docs", "a.md");
+        Write("a\n", "docs", ".order");
+
+        Creating().CreateDoc(_root, "docs", "Новый", section: false);
+
+        ReadOrderFile("docs").Should().Be("a\nНовый\n");
+    }
+
+    [Fact]
+    public void Создание_БезOrder_ФайлНеПоявляется()
+    {
+        Write("# A", "docs", "a.md");
+
+        Creating().CreateDoc(_root, "docs", "Новый", section: false);
+
+        // Порядок в такой папке задан правилом индекса; рождать файл на весь её состав
+        // из-за одного нажатия «Создать» продукт не должен
+        File.Exists(Path.Combine(_root, "docs", ".order")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Создание_ЗанятоеИмя_ЭтоКонфликт()
+    {
+        Write("# Док", "docs", "api.md");
+
+        // Регистр не спасает: на Windows «API.md» и «api.md» — один файл
+        var result = Creating().CreateDoc(_root, "docs", "API", section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.Conflict);
+        File.ReadAllText(Path.Combine(_root, "docs", "api.md")).Should().Be("# Док");
+    }
+
+    [Fact]
+    public void Создание_ПапкаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        Creating().CreateDoc(_root, "backend", "Заметка", section: false).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.FolderNotInScope);
+        File.Exists(Path.Combine(_root, "backend", "Заметка.md")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Создание_ДокументаВКорне_РазрешеноСоседямФайловКорня()
+    {
+        Write("# Проект", "README.md");
+
+        // Рядом с README живут и другие файлы корня области (docs.md и соседи). В область
+        // такой документ попадёт поимённо — имя в «файлы корня» дописывает контроллер
+        var result = Creating().CreateDoc(_root, "", "Карта документации", section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.Ok);
+        result.Path.Should().Be("Карта-документации.md");
+        File.Exists(Path.Combine(_root, "Карта-документации.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Создание_РазделаВКорне_ЭтоОтказ()
+    {
+        Write("# Проект", "README.md");
+
+        // Раздел в корне — это новая папка документации, то есть правка области: молча
+        // расширять её за спиной у остальных владельцев репозитория продукт не должен
+        Creating().CreateDoc(_root, "", "Спайки", section: true).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.BadName);
+        Directory.Exists(Path.Combine(_root, "Спайки")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Создание_ПустаяПапкаОбласти_ЭтоНеПрепятствие()
+    {
+        Directory.CreateDirectory(Path.Combine(_root, "docs"));
+
+        // Гейт создания судит по НАСТРОЙКЕ, а не по индексу: первый документ в пустой
+        // папке области — законное действие
+        Creating().CreateDoc(_root, "docs", "Первый", section: false).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.Ok);
+    }
+
+    [Theory]
+    [InlineData("", "пустое")]
+    [InlineData("   ", "одни пробелы")]
+    [InlineData(".order", "точка в начале")]
+    [InlineData("имя.", "точка в конце")]
+    [InlineData("a/b", "разделитель пути")]
+    [InlineData("a:b", "двоеточие")]
+    [InlineData("раздел#якорь", "решётка ломает markdown-ссылку")]
+    [InlineData("CON", "зарезервировано в Windows")]
+    [InlineData("lpt9", "зарезервировано в Windows")]
+    public void Создание_НепригодноеНазвание_ЭтоОтказ(string title, string _)
+    {
+        Write("# Док", "docs", "a.md");
+
+        Creating().CreateDoc(_root, "docs", title, section: false).Status.Should()
+            .Be(DocsIndexService.DocCreateStatus.BadName);
+    }
+
+    [Fact]
+    public void Создание_СлишкомДлинныйПуть_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        // 235 символов — предел Azure DevOps wiki: узнать о нём при публикации, когда
+        // документов уже сотня, дороже, чем отказать сейчас
+        var result = Creating().CreateDoc(_root, "docs", new string('я', 240), section: false);
+
+        result.Status.Should().Be(DocsIndexService.DocCreateStatus.BadName);
+        result.Error.Should().Contain("235");
+    }
+
+    [Fact]
+    public void ИмяФайла_ПробелыСтановятсяДефисами()
+    {
+        DocsIndexService.DocFileName(" Журнал решений ", out var error).Should().Be("Журнал-решений");
+        error.Should().BeNull();
+    }
+
+    // ─── Переименование ─────────────────────────────────────────────────────
+
+    private string Read(params string[] segments) => File.ReadAllText(Path.Combine([_root, .. segments]));
+
+    [Fact]
+    public void Переименование_Документа_ФайлИВходящиеСсылки()
+    {
+        Write("# Vision\n\nсм. [журнал](decisions.md)", "docs", "vision.md");
+        Write("# Журнал", "docs", "decisions.md");
+
+        var result = Creating().RenameDoc(_root, "docs/decisions.md", "Журнал решений", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Ok);
+        result.Path.Should().Be("docs/Журнал-решений.md");
+        File.Exists(Path.Combine(_root, "docs", "Журнал-решений.md")).Should().BeTrue();
+        // Подпись ссылки — авторский текст, её не трогаем; меняется только цель
+        Read("docs", "vision.md").Should().Contain("[журнал](Журнал-решений.md)");
+        result.UpdatedDocs.Should().Be(1);
+    }
+
+    [Fact]
+    public void Переименование_Раздела_ПараИВсёПоддерево()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Write("# Второе", "docs", "decisions", "0002.md");
+
+        var result = Creating().RenameDoc(_root, "docs/decisions.md", "Журнал решений", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Ok);
+        Directory.Exists(Path.Combine(_root, "docs", "Журнал-решений")).Should().BeTrue();
+        Directory.Exists(Path.Combine(_root, "docs", "decisions")).Should().BeFalse();
+        // Карта переезда покрывает всё поддерево: по ней контроллер чинит привязки заметок
+        result.Moved!.Keys.Should().BeEquivalentTo(
+            ["docs/decisions.md", "docs/decisions/0001.md", "docs/decisions/0002.md"]);
+        result.Moved["docs/decisions/0002.md"].Should().Be("docs/Журнал-решений/0002.md");
+    }
+
+    [Fact]
+    public void Переименование_Раздела_СсылкаИзнутриНаСтраницу()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое\n\nназад к [журналу](../decisions.md)", "docs", "decisions", "0001.md");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        // Документ переехал вместе с папкой, но ссылка смотрит на переименованную
+        // страницу уровнем выше — её и пересчитываем
+        Read("docs", "Журнал", "0001.md").Should().Contain("(../Журнал.md)");
+    }
+
+    [Fact]
+    public void Переименование_Раздела_СсылкиВнутриПоддереваНеТрогаем()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое\n\nсм. [второе](0002.md)", "docs", "decisions", "0001.md");
+        Write("# Второе", "docs", "decisions", "0002.md");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        // Оба документа переехали одинаково — относительный путь между ними тот же
+        Read("docs", "Журнал", "0001.md").Should().Contain("[второе](0002.md)");
+    }
+
+    [Fact]
+    public void Переименование_СтрокаOrder_НаПрежнейПозиции()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("vision\ndecisions\nbrief\n", "docs", ".order");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        // Позиция в порядке чтения к имени отношения не имеет
+        ReadOrderFile("docs").Should().Be("vision\nЖурнал\nbrief\n");
+    }
+
+    [Fact]
+    public void Переименование_БезOrder_ФайлНеСоздаётся()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+
+        Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: true);
+
+        File.Exists(Path.Combine(_root, "docs", ".order")).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Переименование_БезПочинкиСсылок_СообщаетЧислоБитых()
+    {
+        Write("# Vision\n\nсм. [журнал](decisions.md)", "docs", "vision.md");
+        Write("# Бриф\n\nтоже [журнал](decisions.md)", "docs", "brief.md");
+        Write("# Журнал", "docs", "decisions.md");
+
+        var result = Creating().RenameDoc(_root, "docs/decisions.md", "Журнал", updateLinks: false);
+
+        result.BrokenLinks.Should().Be(2);
+        result.UpdatedDocs.Should().Be(0);
+        // Чужие файлы не тронуты — молчаливая правка чужого текста хуже битой ссылки
+        Read("docs", "vision.md").Should().Contain("(decisions.md)");
+    }
+
+    [Fact]
+    public void Переименование_ТолькоРегистр_ЭтоНеКоллизия()
+    {
+        Write("# Api", "docs", "api.md");
+
+        var result = Creating().RenameDoc(_root, "docs/api.md", "API", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Ok);
+        result.Path.Should().Be("docs/API.md");
+        // На регистрозависимой ФС (Linux в CI) файл обязан называться точно так
+        Directory.GetFiles(Path.Combine(_root, "docs"), "*.md")
+            .Select(Path.GetFileName).Should().BeEquivalentTo(["API.md"]);
+    }
+
+    [Fact]
+    public void Переименование_ЗанятоеИмя_ЭтоКонфликт()
+    {
+        Write("# Первый", "docs", "a.md");
+        Write("# Второй", "docs", "b.md");
+
+        var result = Creating().RenameDoc(_root, "docs/a.md", "b", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocRenameStatus.Conflict);
+        Read("docs", "b.md").Should().Be("# Второй");
+    }
+
+    [Fact]
+    public void Переименование_ДокументаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+        Write("# Чужой", "backend", "NOTES.md");
+
+        Creating().RenameDoc(_root, "backend/NOTES.md", "Заметки", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocRenameStatus.NotFound);
+    }
+
+    [Fact]
+    public void Переименование_НепригодноеИмя_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+
+        Creating().RenameDoc(_root, "docs/a.md", "CON", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocRenameStatus.BadName);
+        File.Exists(Path.Combine(_root, "docs", "a.md")).Should().BeTrue();
+    }
+
+    [Theory]
+    [InlineData("docs/a.md", "docs/b.md", "b.md")]
+    [InlineData("docs/a.md", "docs/sub/b.md", "sub/b.md")]
+    [InlineData("docs/sub/a.md", "docs/b.md", "../b.md")]
+    [InlineData("docs/sub/a.md", "docs/other/b.md", "../other/b.md")]
+    [InlineData("README.md", "docs/b.md", "docs/b.md")]
+    public void Ссылка_ОтносительныйПуть_КакПишутРуками(string from, string to, string expected)
+    {
+        DocsIndexService.RelativeLink(from, to).Should().Be(expected);
+    }
+
+    // ─── Перенос между папками ──────────────────────────────────────────────
+
+    [Fact]
+    public void Перенос_Документа_ФайлИВходящиеСсылки()
+    {
+        Write("# Vision\n\nсм. [бриф](brief.md)", "docs", "vision.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocMoveStatus.Ok);
+        result.Path.Should().Be("docs/adr/brief.md");
+        File.Exists(Path.Combine(_root, "docs", "adr", "brief.md")).Should().BeTrue();
+        Read("docs", "vision.md").Should().Contain("[бриф](adr/brief.md)");
+    }
+
+    [Fact]
+    public void Перенос_ПересчитываетСобственныеСсылкиПереехавшего()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Бриф\n\nсм. [vision](vision.md)", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        // Глубина изменилась: ссылка на неподвижную цель тоже поехала. Именно этим
+        // перенос отличается от переименования, где глубина сохраняется
+        Read("docs", "adr", "brief.md").Should().Contain("[vision](../vision.md)");
+    }
+
+    [Fact]
+    public void Перенос_Раздела_ПараИПоддерево()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Directory.CreateDirectory(Path.Combine(_root, "docs", "архив"));
+        Write("# Старое", "docs", "архив", "old.md");
+
+        var result = Creating().MoveDoc(_root, "docs/decisions.md", "docs/архив", updateLinks: true);
+
+        result.Path.Should().Be("docs/архив/decisions.md");
+        Directory.Exists(Path.Combine(_root, "docs", "архив", "decisions")).Should().BeTrue();
+        Directory.Exists(Path.Combine(_root, "docs", "decisions")).Should().BeFalse();
+        result.Moved!.Keys.Should().BeEquivalentTo(["docs/decisions.md", "docs/decisions/0001.md"]);
+    }
+
+    [Fact]
+    public void Перенос_МеняетOrderОбеихПапок()
+    {
+        Write("# Vision", "docs", "vision.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+        Write("vision\nbrief\n", "docs", ".order");
+        Write("0001\n", "docs", "adr", ".order");
+
+        Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        // Из старой папки имя уходит, в новую дописывается в хвост
+        ReadOrderFile("docs").Should().Be("vision\n");
+        ReadOrderFile("docs", "adr").Should().Be("0001\nbrief\n");
+    }
+
+    [Fact]
+    public void Перенос_РазделаВСамогоСебя_ЭтоОтказ()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+
+        // Папка не может стать собственным потомком, а ФС отвечает на это невнятной
+        // ошибкой уже после того, как страница переименована
+        Creating().MoveDoc(_root, "docs/decisions.md", "docs/decisions", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocMoveStatus.BadTarget);
+        File.Exists(Path.Combine(_root, "docs", "decisions.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Перенос_ЗанятоеИмяВЦелевойПапке_ЭтоКонфликт()
+    {
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Другой бриф", "docs", "adr", "brief.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocMoveStatus.Conflict);
+        Read("docs", "adr", "brief.md").Should().Be("# Другой бриф");
+    }
+
+    [Fact]
+    public void Перенос_ВПапкуВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Бриф", "docs", "brief.md");
+        Directory.CreateDirectory(Path.Combine(_root, "backend"));
+
+        Creating().MoveDoc(_root, "docs/brief.md", "backend", updateLinks: true)
+            .Status.Should().Be(DocsIndexService.DocMoveStatus.BadTarget);
+        File.Exists(Path.Combine(_root, "docs", "brief.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Перенос_ВТуЖеПапку_НичегоНеДелает()
+    {
+        Write("# Бриф", "docs", "brief.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs", updateLinks: true);
+
+        result.Status.Should().Be(DocsIndexService.DocMoveStatus.Ok);
+        result.Moved.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Перенос_БезПочинкиСсылок_СообщаетЧислоБитых()
+    {
+        Write("# Vision\n\nсм. [бриф](brief.md)", "docs", "vision.md");
+        Write("# Бриф", "docs", "brief.md");
+        Write("# Запись", "docs", "adr", "0001.md");
+
+        var result = Creating().MoveDoc(_root, "docs/brief.md", "docs/adr", updateLinks: false);
+
+        result.BrokenLinks.Should().Be(1);
+        Read("docs", "vision.md").Should().Contain("(brief.md)");
+    }
+
+    // ─── Удаление ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Удаление_Документа_ФайлИСтрокаOrder()
+    {
+        Write("# A", "docs", "a.md");
+        Write("# B", "docs", "b.md");
+        Write("a\nb\n", "docs", ".order");
+
+        var result = Creating().DeleteDoc(_root, "docs/a.md");
+
+        result.Status.Should().Be(DocsIndexService.DocDeleteStatus.Ok);
+        result.Removed.Should().BeEquivalentTo(["docs/a.md"]);
+        File.Exists(Path.Combine(_root, "docs", "a.md")).Should().BeFalse();
+        // Имя, которому больше нечего соответствовать, — мусор в версионируемом файле
+        ReadOrderFile("docs").Should().Be("b\n");
+    }
+
+    [Fact]
+    public void Удаление_Раздела_ПараЦеликомСПоддеревом()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Write("# Второе", "docs", "decisions", "0002.md");
+
+        var result = Creating().DeleteDoc(_root, "docs/decisions.md");
+
+        // Половина пары в wiki — либо пустой узел, либо осиротевшая страница
+        Directory.Exists(Path.Combine(_root, "docs", "decisions")).Should().BeFalse();
+        File.Exists(Path.Combine(_root, "docs", "decisions.md")).Should().BeFalse();
+        result.Removed.Should().BeEquivalentTo(
+            ["docs/decisions.md", "docs/decisions/0001.md", "docs/decisions/0002.md"]);
+    }
+
+    [Fact]
+    public void Удаление_Раздела_СчитаетНевидимыеПанелиФайлы()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+        Write("PNG", "docs", "decisions", "схема.png");     // не документ выбранного типа
+
+        // Вместе с папкой уходит и то, чего панель не показывала: об этом диалог
+        // предупреждает ДО удаления, а не сообщает после
+        Creating().DeleteDoc(_root, "docs/decisions.md").RemovedFiles.Should().Be(1);
+    }
+
+    [Fact]
+    public void Удаление_СообщаетЧислоБитыхСсылок()
+    {
+        Write("# Vision\n\nсм. [журнал](decisions.md)", "docs", "vision.md");
+        Write("# Бриф\n\nтоже [журнал](decisions.md) и [первое](decisions/0001.md)", "docs", "brief.md");
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое", "docs", "decisions", "0001.md");
+
+        var result = Creating().DeleteDoc(_root, "docs/decisions.md");
+
+        // Чинить их нечем — цели больше нет; знать о них пользователь обязан
+        result.BrokenLinks.Should().Be(3);
+    }
+
+    [Fact]
+    public void Удаление_СсылкиИзУдаляемогоПоддерева_НеСчитаютсяБитыми()
+    {
+        Write("# Журнал", "docs", "decisions.md");
+        Write("# Первое\n\nназад к [журналу](../decisions.md)", "docs", "decisions", "0001.md");
+
+        // Документ-источник исчезает вместе с целью — считать эту ссылку битой не за что
+        Creating().DeleteDoc(_root, "docs/decisions.md").BrokenLinks.Should().Be(0);
+    }
+
+    [Fact]
+    public void Удаление_ДокументаВнеОбласти_ЭтоОтказ()
+    {
+        Write("# Док", "docs", "a.md");
+        Write("# Чужой", "backend", "NOTES.md");
+
+        Creating().DeleteDoc(_root, "backend/NOTES.md").Status.Should()
+            .Be(DocsIndexService.DocDeleteStatus.NotFound);
+        File.Exists(Path.Combine(_root, "backend", "NOTES.md")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void Удаление_ПоследнейСтрокиOrder_ОставляетПустойФайл()
+    {
+        Write("# A", "docs", "a.md");
+        Write("a\n", "docs", ".order");
+
+        Creating().DeleteDoc(_root, "docs/a.md");
+
+        // Сам файл не сносим: его завёл автор, и пустой .order — это его решение,
+        // а не наша уборка
+        ReadOrderFile("docs").Should().BeEmpty();
+    }
+
+    // ─── Область из файла .docs ─────────────────────────────────────────────
+
+    // Проект с настройкой области в хранилище продукта — она должна уступать файлу
+    private Project ProjectWith(IReadOnlyList<string>? folders = null, string? home = null) => new()
+    {
+        Id = "p1", Name = "test", RootPath = _root, OwnerId = "u1",
+        DocsFolders = folders is null ? null : [.. folders],
+        DocsHome = home,
+    };
+
+    [Fact]
+    public void ФайлОбласти_СильнееНастройкиПроекта()
+    {
+        Write("# Из файла", "wiki", "a.md");
+        Write("# Из проекта", "manual", "b.md");
+        Write("""{ "folders": ["wiki"] }""", ".docs");
+
+        var scope = _svc.ResolveScope(ProjectWith(["manual"]));
+
+        scope.Folders.Should().BeEquivalentTo(["wiki"]);
+        _svc.GetIndex(_root, scope).Select(d => d.Path).Should().Contain("wiki/a.md");
+    }
+
+    [Fact]
+    public void ФайлОбласти_ОтсутствующаяОсь_ЭтоДефолт()
+    {
+        // В файле только папки — остальные оси берут умолчание, а не пустоту
+        Write("""{ "folders": ["wiki"] }""", ".docs");
+
+        var scope = _svc.ResolveScope(ProjectWith());
+
+        scope.RootFiles.Should().BeEquivalentTo(DocsIndexService.DefaultScope.RootFiles);
+        scope.Types.Should().BeEquivalentTo(DocsIndexService.DefaultScope.Types);
+    }
+
+    [Fact]
+    public void ФайлОбласти_ПустойМассив_ЭтоНеДефолт()
+    {
+        // «Снял все галки» — осознанный выбор, и подменять его умолчанием нельзя
+        Write("""{ "folders": [], "rootFiles": [] }""", ".docs");
+
+        var scope = _svc.ResolveScope(ProjectWith());
+
+        scope.Folders.Should().BeEmpty();
+        scope.RootFiles.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ФайлОбласти_РегистрПолейИЛишниеПоля_НеМешают()
+    {
+        // Файл правят руками и читают разные версии продукта: незнакомое поле не повод падать
+        Write("""{ "Folders": ["wiki"], "somethingNew": 42 }""", ".docs");
+
+        _svc.ResolveScope(ProjectWith()).Folders.Should().BeEquivalentTo(["wiki"]);
+    }
+
+    [Fact]
+    public void ФайлОбласти_БитыйJson_ОткатываетсяКНастройкеПроекта()
+    {
+        Write("# Из проекта", "manual", "b.md");
+        Write("{ это не json", ".docs");
+
+        var project = ProjectWith(["manual"]);
+        _svc.ResolveScope(project).Folders.Should().BeEquivalentTo(["manual"]);
+
+        var info = _svc.Describe(project);
+        info.ScopeSource.Should().Be("project");
+        info.ScopeFileError.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public void ФайлОбласти_Описание_СообщаетИсточник()
+    {
+        Write("# Док", "wiki", "a.md");
+        _svc.Describe(ProjectWith()).ScopeSource.Should().Be("project");
+
+        Write("""{ "folders": ["wiki"] }""", ".docs");
+
+        var info = _svc.Describe(ProjectWith());
+        info.ScopeSource.Should().Be("file");
+        info.ScopeFileError.Should().BeNull();
+    }
+
+    [Fact]
+    public void ФайлОбласти_Запись_ЧитаетсяОбратно()
+    {
+        _svc.WriteScopeFile(_root, new DocsScope(["wiki"], ["INDEX.md"], ["markdown"], "wiki/a.md"));
+
+        var written = File.ReadAllText(Path.Combine(_root, ".docs"));
+        written.Should().StartWith("{");
+        written.Should().Contain("\"folders\"");     // camelCase, как в API
+        written.Should().NotContain("﻿");       // без BOM: файл лежит в репозитории
+
+        var scope = _svc.ReadScopeFile(_root).Scope!;
+        scope.Folders.Should().BeEquivalentTo(["wiki"]);
+        scope.RootFiles.Should().BeEquivalentTo(["INDEX.md"]);
+        scope.Home.Should().Be("wiki/a.md");
+    }
+
+    [Fact]
+    public void ФайлОбласти_НетФайла_ЭтоНеОшибка()
+    {
+        var result = _svc.ReadScopeFile(_root);
+
+        result.Scope.Should().BeNull();
+        result.Error.Should().BeNull();
     }
 
     // ─── Поиск ──────────────────────────────────────────────────────────────

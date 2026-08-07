@@ -109,7 +109,10 @@ public record AskQuestionMessage(string ToolUseId, object Input)
 public record PlanReviewMessage(string RequestId, string Plan)
     : ServerMessage("plan_review");
 
-public record FileChangedMessage(string Path, int Added, int Removed)
+// External — правка пришла не от модели этого чата (нет заявки FileChangeAttributor):
+// человек в IDE, форматтер, Bash-команда без Edit/Write. Фронт снимает кнопку «Откатить»
+// и показывает пометку «Изменение вне чата» — см. FileChangeAttributor.
+public record FileChangedMessage(string Path, int Added, int Removed, bool External = false)
     : ServerMessage("file_changed");
 
 // ContextTokens — размер контекста ПОСЛЕДНЕГО запроса к API за ход (input + cache_read +
@@ -135,7 +138,11 @@ public record TruncatedMessage() : ServerMessage("truncated");
 // Скрытое (зашифрованное) размышление — блок redacted_thinking
 public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 
-public record ErrorMessage(string Text)
+// ExpectResultFollows — синтетический ErrorMessage из ветки is_error (ClaudeSession):
+// следом БЕЗУСЛОВНО идёт ResultMessage того же хода, поэтому терминальные обработчики
+// «конец хода» (штаб, цикл «до готово») не должны дёргаться на нём дважды — см.
+// SessionManager.OnMessageAsync, SessionEntry.SkipNextTeamTurnEnd.
+public record ErrorMessage(string Text, bool ExpectResultFollows = false)
     : ServerMessage("error");
 
 // Телеметрия лимитов подписки (rate_limit_event, ~каждый ход). Utilization (0..1) — доля
@@ -178,6 +185,13 @@ public record ChatRenamedMessage(string Name)
 // Preview dev-server: смена статуса конкретного сервиса
 public record PreviewStatusMessage(string Status, int? Port = null, string? Error = null, string? ServiceId = null)
     : ServerMessage("preview_status");
+
+// Вывод дев-сервера (Data — накопленный за тик фрагмент текста с CRLF). Уходит только
+// подписчикам группы конкретного сервиса, см. DevServerService.LogGroup.
+// stdout и stderr склеены в порядке появления: разделять их флагом было бы враньём —
+// в батче за тик перемешаны оба потока.
+public record PreviewLogMessage(string ServiceId, string Data)
+    : ServerMessage("preview_log");
 
 public record StatusChangedMessage(string Status, string? LastMessage = null, int MessageCount = 0)
     : ServerMessage("status_changed");
@@ -264,6 +278,11 @@ public record SpeakerChangedMessage(string PersonaId, string Label)
 public record WorkLoopMessage(bool Active, int Iteration, int MaxIterations, string? Phase)
     : ServerMessage("work_loop");
 
+// Явная остановка цикла «до готово» в ленту (B5, см. StoredWorkLoopStoppedMessage) — WorkLoopMessage
+// гасит только бейдж, тут — человекочитаемый текст. Reason ∈ limit|error|manual (контракт с фронтом).
+public record WorkLoopStoppedMessage(string Reason, string Text)
+    : ServerMessage("work_loop_stopped");
+
 // Карточка плана режима «Командная реализация» (Э2): структурный план в ленту штаба.
 // Аналог plan_review, но план — объект (под-задачи, исполнители, обоснование, волны),
 // а не текст. Ответ — SessionHub.RespondTeamPlan. Событие переиздаётся при смене
@@ -274,7 +293,10 @@ public record TeamPlanMessage(
         string PlanId,
         Models.TeamImplementPlan Plan,
         bool Resolved,
-        bool? Approved)
+        bool? Approved,
+        // Версия, заменившая эту карточку (перепланирование): фронт рисует «заменена
+        // версией vN» вместо «план отменён». null — прочие исходы (запуск, отмена, открыта).
+        int? SupersededBy = null)
     : ServerMessage("team_plan");
 
 // Карточка остановки режима «Командная реализация» (Э4): блокер исполнителя, провал задачи,
@@ -294,7 +316,34 @@ public record TeamEscalationMessage(
         string? PersonaId = null)
     : ServerMessage("team_escalation");
 
-// Состояние режима «Командная реализация» (флаг team-implement-mode): для бейджа в композере
+// Жизненный цикл планировщика «Командной реализации» (Э2). Транзитное событие для ленты
+// штаба: показывает спиннер «Штаб планирует…» и снимает его по факту результата.
+// В историю не пишется — карточка плана (TeamPlanMessage) или карточка отказа
+// (TeamEscalationMessage) уже там, дублировать не надо; при рестарте сервера просто
+// пропадает (карточка подтянется через /api/.../history). Событие НЕ переиздаётся по
+// смене состояния — клиент по одному сообщению знает и факт, и результат.
+//  • Start=true           — планировщик запущен. Прочие поля диагностические (для логов).
+//  • Start=false, Success=true  — план собран, см. SubtaskCount/WaveCount/Route/ElapsedMs.
+//  • Start=false, Success=false — отказ, см. Failure (тот же текст, что в карточке отказа).
+// Failure == null у успеха; PromptChars/ResponseChars — диагностика для лога фронта
+// (карточка их не показывает, но клик по «что случилось» в dev-режиме открывает подробности).
+public record TeamPlanningMessage(
+        bool Start,
+        bool Success,
+        int SubtaskCount,
+        int WaveCount,
+        long ElapsedMs,
+        // Описание маршрута, как в логе: «model=nemotron:free», «tier=strong», «claude», «local».
+        string? Route,
+        // Причина отказа (текст для человека): «Планировщик не уложился во время»,
+        // «Планировщик не уместил план в лимит вывода», «Планировщик вернул неразборчивый план».
+        // null у Start=true и у Success=true.
+        string? Failure,
+        int PromptChars = 0,
+        int ResponseChars = 0)
+    : ServerMessage("team_planning");
+
+// Состояние режима «Командная реализация»: для бейджа в композере
 // и маркера в списке чатов. Stage — wire-токен стадии (planning/confirming/wave/…).
 // PlannedWaves — плановое число волн текущей итерации (Э3): бейдж «волна N из M» берёт
 // M отсюда; 0 — план ещё не запускался (тогда M показывать нечем).
@@ -325,7 +374,13 @@ public record TeamImplementMessage(
 // Чат переключён на другой аккаунт/провайдер. Auto=true — тихий фейловер внутри пула
 // подписок Claude (та же модель и эндпоинт, в ленту не попадает); иначе — явная миграция
 // на стороннего провайдера, Label — подпись разделителя «Продолжено на …».
-public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null, bool Auto = false)
+// Reason — структурированная причина автоподмены (wire-значения FallbackErrorClass:
+// rate_limit | usage_limit | provider_error | unreachable). Label остаётся текстом
+// разделителя, а по Reason фронт показывает каноническую формулировку подсказки
+// («Исчерпан лимит», «Провайдер выключен», «Эндпоинт недоступен») вместо сырого
+// текста маркера. null — подмена не автоматическая либо причина неизвестна.
+public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null,
+    bool Auto = false, string? Reason = null)
     : ServerMessage("provider_switched");
 
 // Лимит подписки исчерпан: предложение продолжить чат карточкой с кнопками в ленте —
@@ -368,6 +423,13 @@ public record NotificationMessage(string Title, string Body, string? Url = null,
 public record RecallItemDto(string Kind, string? Ref, string Title, string? Snippet);
 public record RecallManifestMessage(IReadOnlyList<RecallItemDto> Items)
     : ServerMessage("recall_manifest");
+
+// Снимок промпта хода записан: id для кнопки «какой промпт ушёл» под постом.
+// Текст по SignalR не гоняем — фронт забирает его отдельным REST-запросом при открытии.
+// Applied=false — ход доигрывался в живом процессе, и этот промпт модели не уходил;
+// действует снимок старта прогона (InheritedFromId).
+public record PromptSnapshotMessage(string SnapshotId, bool Applied, string? InheritedFromId = null)
+    : ServerMessage("prompt_snapshot");
 
 // Подсказка следующего сообщения: текст от claude CLI после хода.
 // Эфемерное событие — в history.json не пишется (нет case в OnMessageAsync и StoredMessage).

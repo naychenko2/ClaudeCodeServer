@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using FluentAssertions;
 using Xunit;
 
@@ -56,8 +57,12 @@ public class McpToolsetStabilityTests
         Skip.If(path is null, "ClaudeSession.cs не найден (сборка вне дерева репозитория)");
 
         var source = File.ReadAllText(path!);
-        var start = source.IndexOf("private (string? Path, string ServerKeys) BuildTurnMcpConfig", StringComparison.Ordinal);
-        start.Should().BeGreaterThan(0, "метод сборки MCP-конфига хода обязан существовать");
+        // Сигнатуру ищем регулярным выражением, а не точной строкой: кортеж возврата растёт
+        // (Path, ServerKeys, потом ServerNames…), и на каждом расширении сторож падал «метод
+        // не найден» — то есть сообщал не о нарушении инварианта, а о собственной хрупкости.
+        var signature = Regex.Match(source, @"private \([^)]*\) BuildTurnMcpConfig\(");
+        signature.Success.Should().BeTrue("метод сборки MCP-конфига хода обязан существовать");
+        var start = signature.Index;
 
         // Конец метода — начало следующего (MapMcpPath идёт сразу за ним)
         var end = source.IndexOf("private string? MapMcpPath", start, StringComparison.Ordinal);
@@ -89,6 +94,9 @@ public class McpToolsetStabilityTests
     [InlineData("private Func<string?, Task<string?>>? BuildCodeGraphProvider", "codegraph")]
     [InlineData("private bool PersonasEnabled", "personas")]
     [InlineData("private bool ConsultantsEnabled", "consultants")]
+    // Серверы личного реестра владельца: ключ каталога — «mcp:<ключ сервера>»,
+    // выключает только Off-привязка персоны. Состав от хода не зависит.
+    [InlineData("private Func<ExternalMcpContext?>? BuildExternalMcpProvider", "mcp:")]
     public void РубильникиСерверов_ГейтятсяТолькоПоПерсоне(string signature, string key)
     {
         var path = FindSource("Services", "SessionManager.cs");
@@ -105,6 +113,74 @@ public class McpToolsetStabilityTests
             + "с дефолтом по роли)");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав серверов");
+    }
+
+    /// <summary>
+    /// Каскад доступности серверов личного реестра: реестр (Enabled) → проект
+    /// (deny-list Project.McpServersOff) → персона (Off-привязка «mcp:&lt;ключ&gt;»).
+    /// Все три оси — свойства owner/project/persona, ни одна не смотрит на ход;
+    /// выпадение любой означало бы, что настройка молча перестала действовать.
+    /// </summary>
+    [SkippableFact]
+    public void КаскадРеестра_ТриОсиНаМесте()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+
+        body.Should().Contain("record.Enabled", "первая ось каскада — рубильник самой записи реестра");
+        body.Should().Contain("McpServersOff",
+            "вторая ось — deny-list проекта: сервер, выключенный в проекте, в ход не едет");
+        body.Should().Contain("ServerToolEnabled(", "третья ось — Off-привязка персоны");
+    }
+
+    /// <summary>
+    /// Статус MCP-серверов пишется из ОДНОЙ точки — приёмника состава инструментов, который
+    /// уже получает system/init хода. Заводить ради статуса второй канал (правку ClaudeSession,
+    /// новое поле протокола, фоновый поллинг) не нужно: init перечисляет все поднятые серверы.
+    /// </summary>
+    [SkippableFact]
+    public void СтатусСерверов_ПишетсяИзПриёмникаSystemInit()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? PromptToolsSinkFor");
+
+        body.Should().Contain("RecordFromInit(",
+            "наблюдение из system/init обязано попадать в McpStatusStore");
+        body.Should().Contain("ResolveOwnerId(",
+            "статусы per-owner: владельца сессии резолвит единая точка SessionManager.ResolveOwnerId");
+    }
+
+    /// <summary>
+    /// Профиль «Только чтение» режет серверы реестра ЦЕЛИКОМ (кроме записей с явным
+    /// AllowReadOnlyPersonas), а не запретами на отдельные инструменты: имена инструментов
+    /// чужого сервера мы не знаем, они меняются на его стороне, а неизвестное имя в
+    /// deny-правиле роняет запуск CLI (история MultiEdit в PersonaAccessPolicy).
+    /// </summary>
+    [SkippableFact]
+    public void ПрофильReadOnly_РежетСерверЦеликом_АНеЕгоИнструменты()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!),
+            "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
+
+        body.Should().Contain("PersonaAccess.ReadOnly",
+            "персона «только чтение» не получает серверы реестра по умолчанию");
+        body.Should().Contain("AllowReadOnlyPersonas",
+            "исключение — только явное разрешение в самой записи реестра");
+
+        // Список запретов профиля не смеет обрастать именами чужих инструментов
+        var policy = FindSource("Services", "PersonaAccessPolicy.cs");
+        Skip.If(policy is null, "PersonaAccessPolicy.cs не найден");
+        File.ReadAllText(policy!).Should().NotContain("mcp__mcp_",
+            "инструменты серверов реестра гасятся отключением сервера, а не deny-правилами");
     }
 
     /// <summary>

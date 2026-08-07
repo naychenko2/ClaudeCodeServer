@@ -61,6 +61,7 @@ export function CompanionSelector({ personas, agents, selectedPersona, selectedA
 
   // Закрытие дропдауна сбрасывает мультивыбор группы
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс мультивыбора при закрытии dropdown
     if (!open) { setGroupMode(false); setGroupSelected([]); }
   }, [open]);
 

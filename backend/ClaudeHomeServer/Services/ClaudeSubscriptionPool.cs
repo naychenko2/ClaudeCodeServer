@@ -25,6 +25,29 @@ public class ClaudeSubscriptionPool
     // не сбросится быстрее, а редкие пробные чаты сами продлят пометку при новом rejected.
     private static readonly TimeSpan DefaultExhaustion = TimeSpan.FromMinutes(30);
 
+    // Разброс сроков сброса, внутри которого исчерпанные аккаунты считаются равными
+    // (fallback-выбор «кто воскреснет раньше»).
+    private static readonly TimeSpan RecoveryTieWindow = TimeSpan.FromMinutes(1);
+
+    // Окна, исчерпание которых реально выводит аккаунт из ротации: базовые лимиты подписки.
+    // Всё остальное, что присылает CLI, — информационное, и его rejected подписку НЕ банит.
+    // Инцидент 2026-08-02: по живому аккаунту пришло одиночное rate_limit_event
+    // limit_type="seven_day_overage_included" status="rejected" (utilization=null) со сбросом
+    // через 5 суток — ходы на том же аккаунте продолжали проходить через полминуты, а пул
+    // держал его исчерпанным до resetsAt и ре-отравлялся из снапшотов на каждом рестарте.
+    // Per-model окна (seven_day_opus/sonnet/…) сюда тоже не входят: пометка исчерпания
+    // глобальная по аккаунту, а такое окно закрывает лишь одну модель — вывод всего
+    // аккаунта из ротации был бы ложным для остальных.
+    private static readonly HashSet<string> ExhaustionWindows =
+        new(StringComparer.OrdinalIgnoreCase) { "five_hour", "seven_day" };
+
+    /// <summary>Окно, по которому rejected/100% означает исчерпание подписки?</summary>
+    /// Единая точка для всех, кто маркирует пул (ход в SessionManager, идл-пинг warmup,
+    /// восстановление из снапшотов). Неизвестное окно — только снимок в UsageService для
+    /// экрана, состояние пула оно не трогает НИ в какую сторону (ни бан, ни снятие бана).
+    public static bool IsExhaustionWindow(string? limitType) =>
+        limitType is not null && ExhaustionWindows.Contains(limitType);
+
     private readonly IReadOnlyList<ClaudeSubscriptionConfig> _subscriptions;
     private readonly UsageService? _usage;
     // Аккаунт с утилизацией 5h-окна >= порога выводится из ротации (если есть кто ниже).
@@ -57,6 +80,8 @@ public class ClaudeSubscriptionPool
 
     // Пометки исчерпания живут in-memory и теряются при рестарте сервера — восстанавливаем
     // из последних снапшотов usage: окно rejected (или выбрано без overage) со сбросом в будущем.
+    // Только по окнам из белого списка (IsExhaustionWindow): иначе одно транзитное rejected
+    // неизвестного окна воскресало бы при каждом рестарте до своего далёкого resetsAt.
     // Снимки source="oauth" (SubscriptionOAuthUsageService) исключены: тот пишет status="allowed"
     // ВСЕГДА, независимо от реальной утилизации (эндпоинт отдаёт только проценты, не вердикт
     // accept/reject) — как хронологически последний в группе LimitType он маскировал бы более
@@ -66,7 +91,7 @@ public class ClaudeSubscriptionPool
     {
         foreach (var (key, snapshots) in usage.GetAllBySubscription())
         {
-            foreach (var last in snapshots.Where(s => s.Source != "oauth")
+            foreach (var last in snapshots.Where(s => s.Source != "oauth" && IsExhaustionWindow(s.LimitType))
                 .GroupBy(s => s.LimitType).Select(g => g.Last()))
             {
                 if (last.Status != "rejected" && !(last.Utilization >= 1.0 && !last.IsUsingOverage))
@@ -94,8 +119,8 @@ public class ClaudeSubscriptionPool
     /// selected model»). Среди оставшихся приоритет аккаунтам «в ротации» (утилизация 5h-окна
     /// ниже мягкого порога) — из них высший тариф (Max 20× > Max 5× > Max > Pro), при равенстве
     /// — минимальная утилизация. Свободных нет (все выше порога) — спилл на них же; все исчерпаны
-    /// — минимум из способных по модели: лучше упереться в лимит на правильном аккаунте, чем
-    /// гарантированно упасть на неправильном.
+    /// — из способных по модели берётся тот, чьё окно сбросится РАНЬШЕ (лучше упереться в лимит
+    /// на правильном аккаунте, чем гарантированно упасть на неправильном).
     public string Pick(string? model = null) => PickCore(model, deterministic: false);
 
     /// <summary>Куда фактически ушёл бы новый чат сейчас — цель роутинга для экрана usage.</summary>
@@ -119,17 +144,41 @@ public class ClaudeSubscriptionPool
         }
 
         var capable = AllKeys().Where(k => SupportsModel(k, model)).ToList();
-        return PickTopTier(capable.Count > 0 ? capable : AllKeys(), deterministic);
+        return PickSoonestRecovery(capable.Count > 0 ? capable : AllKeys(), deterministic);
     }
 
     // Из набора ключей — высший тариф, при равенстве тарифа — наименее загруженный.
     private string PickTopTier(IReadOnlyList<string> keys, bool deterministic)
     {
         if (keys.Count == 0) return PrimaryKey;
-        var topRank = keys.Max(TierRank);
-        var top = keys.Where(k => TierRank(k) == topRank).ToList();
-        return LeastLoaded(top, deterministic);
+        return LeastLoaded(TopTier(keys), deterministic);
     }
+
+    // Fallback «все исчерпаны»: среди высшего тарифа берём аккаунт, чья пометка снимется
+    // раньше — он скорее воскреснет. Утилизация тут бесполезна (при rejected CLI её часто
+    // не присылает, и у всех выходит 0 → случайный выбор гнал новые чаты на мёртвый аккаунт).
+    // Близкие сроки (в пределах RecoveryTieWindow) считаем равными: разница в секунды —
+    // это порядок прихода событий, а не реальное преимущество, решает загрузка.
+    private string PickSoonestRecovery(IReadOnlyList<string> keys, bool deterministic)
+    {
+        if (keys.Count == 0) return PrimaryKey;
+        var top = TopTier(keys);
+        var soonest = top.Min(ExhaustedUntil);
+        var earliest = top.Where(k => ExhaustedUntil(k) - soonest <= RecoveryTieWindow).ToList();
+        return LeastLoaded(earliest, deterministic);
+    }
+
+    // Ключи высшего тарифа из набора.
+    private List<string> TopTier(IReadOnlyList<string> keys)
+    {
+        var topRank = keys.Max(TierRank);
+        return keys.Where(k => TierRank(k) == topRank).ToList();
+    }
+
+    // До какого момента ключ помечен исчерпанным; не помечен — DateTime.MinValue
+    // («уже живой», такой аккаунт в fallback предпочтительнее любого помеченного).
+    private DateTime ExhaustedUntil(string key)
+        => _exhausted.TryGetValue(key, out var until) && until is not null ? until.Value : DateTime.MinValue;
 
     // Ранг тарифа подписки из её конфига (Tier). Ключ вне пула — 0 (не задан).
     private int TierRank(string key)

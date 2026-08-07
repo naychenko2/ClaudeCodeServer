@@ -32,14 +32,29 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Атрибуция file_changed чату-источнику — singleton на процесс, общий для всех сессий;
     // null — в тестах фабрики, собранных без него (фильтрация тогда просто выключена)
     private readonly FileChangeAttributor? _fileChangeAttributor;
+    // Слоты тиров владельца — фолбэку уровня 2 нужны для модели-эквивалента по слоту;
+    // null (тесты без него) — эквивалент берётся из среднего тира провайдера
+    private readonly UserModelTierResolver? _tiers;
+    // Стор настроек фолбэк-оркестрации (потолок подмен per-owner → global → дефолт).
+    // null (тесты без DI) — адаптер идёт по дефолту FallbackSettingsStore.DefaultMaxSubstitutions.
+    private readonly FallbackSettingsStore? _fallbackSettings;
+    // Логгер фолбэк-оркестрации: без него подмены нечем отлаживать (что
+    // классифицировали, куда переключились, почему кандидат отвергнут). null в тестах
+    // без DI — адаптер пишет в Console.Error, чтобы не терять диагностику совсем.
+    private readonly ILogger? _log;
 
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
         ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null,
-        FileChangeAttributor? fileChangeAttributor = null)
+        FileChangeAttributor? fileChangeAttributor = null, UserModelTierResolver? tiers = null,
+        FallbackSettingsStore? fallbackSettings = null,
+        ILogger<LlmSessionAdapterFactory>? log = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
+        _tiers = tiers;
+        _fallbackSettings = fallbackSettings;
+        _log = log;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
         _glifMcpToken = config["Glif:McpToken"];
@@ -80,8 +95,24 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         if (provider is { Enabled: false })
             throw new InvalidOperationException(
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");
-        return new Claude.ClaudeSession(session, context, _mcpConfigPath, _skills,
+
+        // Фолбэк при рантайм-ошибках доставки (ADR «Порядок резолва модели…»): адаптер
+        // оборачивается оркестратором, который видит все события хода через перехват
+        // OnMessage и перезапускает ход на другой паре «модель × подписка» (уровень 1 —
+        // ротация подписок пула, уровень 2 — цепочка сторонних провайдеров, потолок 5)
+        FallbackLlmSessionAdapter? fallback = null;
+        var innerContext = context with
+        {
+            OnMessage = msg => fallback is not null ? fallback.HandleMessageAsync(msg) : context.OnMessage(msg),
+        };
+        var claudeSession = new Claude.ClaudeSession(session, innerContext, _mcpConfigPath, _skills,
             _workspaceStore, _disallowedTools, _providers, _subscriptionPool, _fileWatcherOptions,
             _bgLingerTimeout, _falMcpApiKey, _glifMcpToken, _assignments, _fileChangeAttributor);
+        fallback = new FallbackLlmSessionAdapter(claudeSession,
+            () => claudeSession.EffectiveTurnModel,
+            context.OnMessage, _subscriptionPool, _providers, context.RootPath,
+            context.Launcher, context.CliConfigRoot, _tiers, _fallbackSettings,
+            () => claudeSession.EffectiveTurnChain, () => claudeSession.EffectiveTurnTier, _log);
+        return fallback;
     }
 }

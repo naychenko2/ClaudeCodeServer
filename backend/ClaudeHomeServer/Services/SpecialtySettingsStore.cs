@@ -1,0 +1,573 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Llm;
+
+namespace ClaudeHomeServer.Services;
+
+// Настройка шаблона специальности (слой: глобальный или per-owner). Слой, если он
+// задан для специальности, заменяет шаблон ЦЕЛИКОМ (полевого слияния между слоями нет):
+// не задан — берётся слой ниже (per-owner → глобальный → дефолт кода SpecialtyCatalog).
+public class SpecialtyTemplateSettings
+{
+    public PersonaAccess Access { get; set; } = PersonaAccess.Full;
+    // null — все возможности (tasks+notes+web); список — только перечисленные
+    public List<string>? Tools { get; set; }
+    // Имеет смысл только при Access == Custom
+    public List<string>? DisallowedTools { get; set; }
+
+    // Матрица моделей по уровням (ADR-007 §2): значение ячейки — id модели ИЛИ "preset:{id}".
+    // Пустая ячейка = «спроси следующую (широкую) матрицу». "tier:*" в ячейке запрещён
+    // валидацией: ячейка уже адресована уровнем, тир внутри неё — тавтология или петля.
+    public string? TierStrong { get; set; }
+    public string? TierMedium { get; set; }
+    public string? TierWeak { get; set; }
+    // Источник УРОВНЯ специальности (замена прежней роли «специальность даёт tier:*-маршрут»):
+    // каким уровнем работают персоны этой специальности, если у них/задачи нет своего.
+    // null — не задан (уровень берётся у персоны или дефолта места).
+    public ModelTier? DefaultTier { get; set; }
+
+    public string? TierCell(ModelTier tier) => tier switch
+    {
+        ModelTier.Strong => TierStrong,
+        ModelTier.Weak => TierWeak,
+        _ => TierMedium,
+    };
+}
+
+// Именованный пресет — упорядоченная цепочка шагов (ADR-007 §1). Шаг — маршрут в существующей
+// лексике LocalActionOverridesStore: tier:strong|medium|weak, id модели любого провайдера,
+// local, claude, default. Шаг НЕ может быть ссылкой "preset:{id}" — вложенность запрещена
+// валидацией (вложенность превращает разворачивание в обход графа с циклами; пользы нет —
+// цепочку можно записать плоско). Длина цепочки 1..5 — потолок общий с фолбэком
+// (FallbackSettingsStore.HardMaxSubstitutions): шаги после первого — это и есть подмены.
+public class ModelRoutePreset
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString();
+    public string Name { get; set; } = "";
+    public string? Description { get; set; }
+    public List<string> Steps { get; set; } = [];
+}
+
+// Признак пресета в объединённом списке: общий для инстанса или личный владельца
+public enum PresetScope { Global, Owner }
+
+// Слой настроек: шаблоны специальностей, «любая специальность» и пресеты-цепочки.
+public class SpecialtySettingsLayer
+{
+    public Dictionary<string, SpecialtyTemplateSettings> Specialties { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    // «Любая специальность» (наследник правила "any" v1): применяется, когда у конкретной
+    // специальности записи нет. Та же форма, что у записи специальности. Семантика слоёв
+    // сохраняется: owner-слой DefaultSpecialty заменяет глобальный целиком.
+    public SpecialtyTemplateSettings? DefaultSpecialty { get; set; }
+    public List<ModelRoutePreset> Presets { get; set; } = [];
+
+    public bool IsEmpty => Specialties.Count == 0 && Presets.Count == 0 && DefaultSpecialty is null;
+}
+
+// Файл стора на диске (data/specialty-settings.json)
+public class SpecialtySettingsFile
+{
+    public int Version { get; set; } = SpecialtySettingsStore.FormatVersion;
+    public SpecialtySettingsLayer Global { get; set; } = new();
+    public Dictionary<string, SpecialtySettingsLayer> Owners { get; set; } = new(StringComparer.Ordinal);
+}
+
+// Стор настроек специальностей и именованных пресетов-цепочек выбора модели.
+// Глобальные значения + per-owner слой: шаблоны специальностей переопределяют глобальные,
+// а личные пресеты живут РЯДОМ с глобальными — не затирают их даже при совпадении id или имени
+// (решение «Глобальные + личные рядом»).
+//
+// Файл живёт в data/ → попадает в бэкап автоматически (BackupPaths.ShouldInclude работает
+// от обратного). Формат версионирован: file.Version новее кода — содержимое игнорируется
+// с warning; старше кода — мигрируется при загрузке (v1→v2, ADR-007 §6).
+//
+// Снимок файла держим неизменяемым объектом и заменяем целиком под write-локом — читатели
+// не видят полумутированного состояния (образец: LocalActionOverridesStore).
+public sealed class SpecialtySettingsStore
+{
+    // v2 — пресет из «сборника правил специальность→маршрут» стал именованной цепочкой Steps;
+    // у специальности появились матрица моделей по уровням + DefaultTier; у слоя — DefaultSpecialty.
+    public const int FormatVersion = 2;
+
+    // Ключи возможностей персоны (PersonaManager.AllTools) — по ним фильтруем Tools шаблонов
+    private static readonly string[] CoreToolKeys = ["tasks", "notes", "web"];
+
+    private static readonly JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        WriteIndented = true,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    };
+
+    private readonly string _storePath;
+    private readonly ILogger<SpecialtySettingsStore>? _log;
+    private readonly object _writeLock = new();
+    private volatile SpecialtySettingsFile _file = new();
+
+    public SpecialtySettingsStore(IConfiguration config, ILogger<SpecialtySettingsStore>? log = null)
+    {
+        _log = log;
+        // Путь выводим ТОЛЬКО от DataPath (как LocalActionOverridesStore): иначе стор
+        // лёг бы рядом с исполняемым файлом и терялся при деплое
+        var dataPath = config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json");
+        _storePath = Path.Combine(Path.GetDirectoryName(dataPath)!, "specialty-settings.json");
+        Load();
+    }
+
+    // --- Чтение ---
+
+    public SpecialtySettingsFile Snapshot => _file;
+
+    // Настройка шаблона специальности: per-owner слой → глобальный. null — настройки нет
+    // (шаблон берётся из дефолтов кода SpecialtyCatalog).
+    public SpecialtyTemplateSettings? TemplateSettings(string ownerId, PersonaSpecialty specialty)
+    {
+        var key = SpecialtyCatalog.KeyOf(specialty);
+        var file = _file;
+        if (file.Owners.TryGetValue(ownerId, out var owner)
+            && owner.Specialties.TryGetValue(key, out var ownerSettings))
+            return ownerSettings;
+        return file.Global.Specialties.TryGetValue(key, out var globalSettings) ? globalSettings : null;
+    }
+
+    // Эффективный шаблон специальности для владельца: настройка (личная/глобальная)
+    // либо дефолт кода; null — шаблона нет вовсе (специальность без шаблона).
+    public SpecialtyTemplate? EffectiveTemplate(string ownerId, PersonaSpecialty specialty)
+    {
+        if (TemplateSettings(ownerId, specialty) is { } settings)
+            return new SpecialtyTemplate(settings.Access, settings.Tools, settings.DisallowedTools);
+        return SpecialtyCatalog.Get(specialty).DefaultTemplate;
+    }
+
+    // Эффективные пресеты владельца: личные, затем ВСЕ глобальные. Личные пресеты
+    // не переопределяют глобальные (в том числе с тем же id или именем) — оба набора
+    // живут рядом. Порядок значим для поиска по id при разворачивании preset:{id}
+    // (ExpandChain): личный блок идёт первым.
+    public IReadOnlyList<ModelRoutePreset> EffectivePresets(string ownerId)
+    {
+        var file = _file;
+        var owner = file.Owners.GetValueOrDefault(ownerId);
+        if (owner is null || owner.Presets.Count == 0) return file.Global.Presets;
+
+        var result = new List<ModelRoutePreset>(owner.Presets.Count + file.Global.Presets.Count);
+        result.AddRange(owner.Presets);
+        result.AddRange(file.Global.Presets);
+        return result;
+    }
+
+    // Объединённый список пресетов владельца с признаком слоя (общий / мой):
+    // личные впереди, затем глобальные — тот же порядок, что у EffectivePresets.
+    public IReadOnlyList<(ModelRoutePreset Preset, PresetScope Scope)> EffectivePresetsWithScope(string ownerId)
+    {
+        var file = _file;
+        var owner = file.Owners.GetValueOrDefault(ownerId);
+        var result = new List<(ModelRoutePreset, PresetScope)>(
+            (owner?.Presets.Count ?? 0) + file.Global.Presets.Count);
+        if (owner is not null)
+            result.AddRange(owner.Presets.Select(p => (p, PresetScope.Owner)));
+        result.AddRange(file.Global.Presets.Select(p => (p, PresetScope.Global)));
+        return result;
+    }
+
+    // Найти пресет по id среди эффективных (личные раньше глобальных). null — не найден
+    // (битая ссылка preset:{id}). Используется ExpandChain и (в будущем) UI «где используется».
+    public ModelRoutePreset? FindPreset(string ownerId, string presetId)
+    {
+        foreach (var p in EffectivePresets(ownerId))
+            if (string.Equals(p.Id, presetId, StringComparison.OrdinalIgnoreCase)) return p;
+        return null;
+    }
+
+    // Упорядоченный список матриц специальности для разворачивания уровня (ADR-007 §2):
+    // запись специальности (owner-слой → глобальный, целиком без полевого слияния), затем
+    // DefaultSpecialty (owner → глобальный). Только записи, которые ЕСТЬ в слое; пустые
+    // ячейки внутри записи рассматриваются разворачивателем (UserModelTierResolver) — здесь
+    // отдаём матрицу как есть, пустые ячейки в ней означают «спроси следующую».
+    public IReadOnlyList<TierMatrix> SpecialtyMatrices(string ownerId, PersonaSpecialty specialty)
+    {
+        var key = SpecialtyCatalog.KeyOf(specialty);
+        var file = _file;
+        var result = new List<TierMatrix>(2);
+        // Запись специальности: owner-слой есть → она (целиком), иначе глобальная
+        if (file.Owners.TryGetValue(ownerId, out var owner)
+            && owner.Specialties.TryGetValue(key, out var ownerSettings))
+        {
+            result.Add(ToMatrix(ownerSettings));
+        }
+        else if (file.Global.Specialties.TryGetValue(key, out var globalSettings))
+        {
+            result.Add(ToMatrix(globalSettings));
+        }
+        // DefaultSpecialty: owner-слой → глобальный (та же логика)
+        if (file.Owners.TryGetValue(ownerId, out owner) && owner.DefaultSpecialty is { } ods)
+            result.Add(ToMatrix(ods));
+        else if (file.Global.DefaultSpecialty is { } gds)
+            result.Add(ToMatrix(gds));
+        return result;
+    }
+
+    private static TierMatrix ToMatrix(SpecialtyTemplateSettings s) =>
+        new(s.TierStrong, s.TierMedium, s.TierWeak);
+
+    // Источник УРОВНЯ специальности (ADR-007 §2): каким уровнем работают персоны этой
+    // специальности, если у задачи/персоны нет своего. Запись специальности (owner → глобальный),
+    // затем DefaultSpecialty (owner → глобальный). null — уровень не задан специальностью.
+    public ModelTier? SpecialtyDefaultTier(string ownerId, PersonaSpecialty specialty)
+    {
+        var key = SpecialtyCatalog.KeyOf(specialty);
+        var file = _file;
+        if (file.Owners.TryGetValue(ownerId, out var owner)
+            && owner.Specialties.TryGetValue(key, out var ownerSettings))
+        {
+            if (ownerSettings.DefaultTier is { } t) return t;
+        }
+        else if (file.Global.Specialties.TryGetValue(key, out var globalSettings))
+        {
+            if (globalSettings.DefaultTier is { } t) return t;
+        }
+        if (file.Owners.TryGetValue(ownerId, out owner) && owner.DefaultSpecialty?.DefaultTier is { } odt) return odt;
+        if (file.Global.DefaultSpecialty?.DefaultTier is { } gdt) return gdt;
+        return null;
+    }
+
+    // Разворот маршрута в цепочку шагов (ADR-007 §3). Единая точка разворачивания цепочки:
+    // обычный маршрут → [маршрут]; "preset:{id}" → шаги пресета (поиск в EffectivePresets).
+    // Битая ссылка (пресет удалён) → пустой список (fail-open вниз) + warning. Шаги НЕ
+    // разворачиваются рекурсивно (вложенность пресетов запрещена валидацией): tier:*-шаги
+    // разворачивает вызывающий через UserModelTierResolver (по слотам владельца, без матриц).
+    public IReadOnlyList<string> ExpandChain(string? route, string? ownerId)
+    {
+        if (string.IsNullOrWhiteSpace(route)) return [];
+        if (LocalActionOverridesStore.ParsePresetRoute(route) is { } presetId)
+        {
+            if (FindPreset(ownerId ?? "", presetId) is { } preset)
+                return preset.Steps;
+            _log?.LogWarning("Ссылка на удалённый пресет {Id} (место выбора модели) — игнорирую, fail-open вниз", presetId);
+            return [];
+        }
+        return [route.Trim()];
+    }
+
+    // --- Запись ---
+
+    // Заменить глобальный слой. null-ошибка = слой валиден.
+    public string? SetGlobal(SpecialtySettingsLayer layer)
+    {
+        var error = ValidateLayer(layer);
+        if (error is not null) return error;
+        lock (_writeLock)
+        {
+            var next = Clone(_file);
+            next.Global = NormalizeLayer(layer);
+            next.Version = FormatVersion;
+            Persist(next);
+        }
+        _log?.LogInformation("Глобальные настройки специальностей обновлены");
+        return null;
+    }
+
+    // Заменить per-owner слой. Пустой слой снимает личные переопределения владельца
+    // (запись удаляется — остаются глобальные значения).
+    public string? SetOwner(string ownerId, SpecialtySettingsLayer layer)
+    {
+        var error = ValidateLayer(layer);
+        if (error is not null) return error;
+        lock (_writeLock)
+        {
+            var next = Clone(_file);
+            if (layer.IsEmpty) next.Owners.Remove(ownerId);
+            else next.Owners[ownerId] = NormalizeLayer(layer);
+            next.Version = FormatVersion;
+            Persist(next);
+        }
+        _log?.LogInformation("Личные настройки специальностей обновлены (owner={Owner})", ownerId);
+        return null;
+    }
+
+    // --- Валидация и нормализация ---
+
+    // null — слой валиден; иначе текст ошибки (контроллер отдаёт его как 400).
+    public static string? ValidateLayer(SpecialtySettingsLayer layer)
+    {
+        foreach (var key in layer.Specialties.Keys)
+            if (!SpecialtyCatalog.TryGetByKey(key, out _))
+                return $"Неизвестная специальность: {key}";
+
+        foreach (var (key, settings) in layer.Specialties)
+            if (ValidateTemplateSettings(settings, key) is { } e) return e;
+        if (layer.DefaultSpecialty is { } ds && ValidateTemplateSettings(ds, "any") is { } de) return de;
+
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var preset in layer.Presets)
+        {
+            if (string.IsNullOrWhiteSpace(preset.Name))
+                return "У пресета пустое имя";
+            if (!string.IsNullOrWhiteSpace(preset.Id) && !seenIds.Add(preset.Id))
+                return $"Дублируется id пресета: {preset.Id}";
+            if (preset.Steps.Count is < 1 or > FallbackSettingsStore.HardMaxSubstitutions)
+                return $"Пресет «{preset.Name}»: цепочка должна быть длиной 1..{FallbackSettingsStore.HardMaxSubstitutions} шагов";
+            foreach (var step in preset.Steps)
+            {
+                if (string.IsNullOrWhiteSpace(step))
+                    return $"Пресет «{preset.Name}»: пустой шаг цепочки";
+                // Шаг не может быть ссылкой на пресет — вложенность запрещена (ADR-007 §1)
+                if (LocalActionOverridesStore.IsPresetRoute(step))
+                    return $"Пресет «{preset.Name}»: шаг не может быть ссылкой на другой пресет — выпишите шаги подряд";
+            }
+        }
+        return null;
+    }
+
+    // Ячейки матрицы — id модели или "preset:{id}"; "tier:*" запрещён (ячейка уже адресована
+    // уровнем). name — для текста ошибки (ключ специальности или "any").
+    private static string? ValidateTemplateSettings(SpecialtyTemplateSettings settings, string name)
+    {
+        foreach (var cell in new[] { settings.TierStrong, settings.TierMedium, settings.TierWeak })
+        {
+            if (string.IsNullOrWhiteSpace(cell)) continue;
+            if (LocalActionOverridesStore.ParseTierRoute(cell) is not null)
+                return $"Специальность «{name}»: в ячейке уровня не может быть tier:* — уровень уже выбран строкой";
+        }
+        return null;
+    }
+
+    // Канонический вид слоя: ключи специальностей — camelCase каталога, Tools нормализованы
+    // (полный набор → null = «все»), у не-Custom запреты пусты, ячейки матриц триммированы,
+    // пустые id пресетов досозданы, шаги очищены от пустых.
+    private static SpecialtySettingsLayer NormalizeLayer(SpecialtySettingsLayer layer)
+    {
+        var specialties = new Dictionary<string, SpecialtyTemplateSettings>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (key, settings) in layer.Specialties)
+        {
+            if (!SpecialtyCatalog.TryGetByKey(key, out var entry)) continue;
+            specialties[entry.Key] = NormalizeTemplate(settings);
+        }
+
+        return new SpecialtySettingsLayer
+        {
+            Specialties = specialties,
+            DefaultSpecialty = layer.DefaultSpecialty is { } ds ? NormalizeTemplate(ds) : null,
+            Presets = layer.Presets.Select(p => new ModelRoutePreset
+            {
+                Id = string.IsNullOrWhiteSpace(p.Id) ? Guid.NewGuid().ToString() : p.Id.Trim(),
+                Name = p.Name.Trim(),
+                Description = string.IsNullOrWhiteSpace(p.Description) ? null : p.Description.Trim(),
+                Steps = p.Steps.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()).ToList(),
+            }).ToList(),
+        };
+    }
+
+    private static SpecialtyTemplateSettings NormalizeTemplate(SpecialtyTemplateSettings s) => new()
+    {
+        Access = s.Access,
+        Tools = NormalizeTools(s.Tools),
+        DisallowedTools = s.Access == PersonaAccess.Custom ? CleanList(s.DisallowedTools) : null,
+        TierStrong = CleanCell(s.TierStrong),
+        TierMedium = CleanCell(s.TierMedium),
+        TierWeak = CleanCell(s.TierWeak),
+        DefaultTier = s.DefaultTier,
+    };
+
+    private static string? CleanCell(string? cell) =>
+        string.IsNullOrWhiteSpace(cell) ? null : cell.Trim();
+
+    private static List<string>? NormalizeTools(List<string>? tools)
+    {
+        if (tools is null) return null;
+        var clean = tools.Select(t => t.Trim().ToLowerInvariant())
+            .Where(t => CoreToolKeys.Contains(t)).Distinct().ToList();
+        return CoreToolKeys.All(clean.Contains) ? null : clean;
+    }
+
+    private static List<string>? CleanList(List<string>? items)
+    {
+        var clean = items?.Where(i => !string.IsNullOrWhiteSpace(i)).Select(i => i.Trim())
+            .Distinct(StringComparer.Ordinal).ToList();
+        return clean is { Count: > 0 } ? clean : null;
+    }
+
+    // --- Персистентность ---
+
+    private static SpecialtySettingsFile Clone(SpecialtySettingsFile file) =>
+        JsonSerializer.Deserialize<SpecialtySettingsFile>(JsonSerializer.Serialize(file, JsonOpts), JsonOpts)!;
+
+    private void Persist(SpecialtySettingsFile next)
+    {
+        _file = next;
+        try
+        {
+            JsonFileStore.Save(_storePath, next, JsonOpts);
+        }
+        catch (Exception ex)
+        {
+            // Настройка уже применена в памяти — теряем только персистентность до рестарта
+            _log?.LogError(ex, "Не удалось записать {Path}", _storePath);
+        }
+    }
+
+    private void Load()
+    {
+        if (!File.Exists(_storePath)) return;
+        JsonNode? root;
+        try { root = JsonNode.Parse(File.ReadAllText(_storePath)); }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "Не удалось прочитать {Path}, продолжаю с дефолтами", _storePath);
+            return;
+        }
+        if (root is null) return;
+
+        // Версия — нечувствительно к регистру (Persist пишет PascalCase «Version»,
+        // мигрированные/внешние файлы могут нести «version»). JsonNode индексатор
+        // case-sensitive, поэтому ищем ключ вручную.
+        var version = ReadVersion(root);
+        if (version > FormatVersion)
+        {
+            // Файл снят более новым кодом (например, восстановлен из свежего бэкапа):
+            // незнакомую структуру не применяем — дефолты безопаснее молчаливой каши
+            _log?.LogWarning(
+                "specialty-settings.json имеет формат {FileVersion} новее поддерживаемого {Version} — стартую с дефолтами",
+                version, FormatVersion);
+            return;
+        }
+
+        SpecialtySettingsFile file;
+        try
+        {
+            file = version < FormatVersion
+                ? MigrateFromV1(root)
+                : root.Deserialize<SpecialtySettingsFile>(JsonOpts)!;
+        }
+        catch (Exception ex)
+        {
+            _log?.LogWarning(ex, "specialty-settings.json: не удалось разобрать (version={Version}), стартую с дефолтами", version);
+            return;
+        }
+
+        file.Global ??= new SpecialtySettingsLayer();
+        file.Owners ??= new Dictionary<string, SpecialtySettingsLayer>(StringComparer.Ordinal);
+        file.Version = FormatVersion;
+        _file = file;
+    }
+
+    // Версия формата из корня файла (case-insensitive). 1 — если поле нет (старый файл).
+    private static int ReadVersion(JsonNode root)
+    {
+        if (root is JsonObject obj)
+        {
+            foreach (var (key, value) in obj)
+            {
+                if (string.Equals(key, "version", StringComparison.OrdinalIgnoreCase)
+                    && value is not null)
+                {
+                    try { return value.GetValue<int>(); } catch { }
+                }
+            }
+        }
+        return 1;
+    }
+
+    // Миграция v1 → v2 (ADR-007 §6). Цель: ни одна заданная человеком привязка
+    // «специальность → маршрут» не пропадает. v1-пресет был сборником правил «специальность
+    // (или any) → ОДИН маршрут», применяемых автоматически ко всем ходам; v2-пресет — цепочка,
+    // сущность другого вида. Поэтому правила разносятся по матрицам специальностей, а сами
+    // v1-пресеты (имена и контейнеры правил) удаляются — осознанная потеря.
+    //
+    // Семантика разноски (та же, что у v1 ResolveRoute — первое совпадение выигрывает):
+    //   маршрут "tier:T"  → Specialty[X].DefaultTier = T (матрица пуста → разворот уровня
+    //                       провалится в слоты владельца, байт-в-байт как v1 «работай T-моделью владельца»);
+    //   маршрут = модель M → все три ячейки Specialty[X] = M (в v1 маршрут-модель означал
+    //                       «эта специальность всегда ходит M» — заполнение строки сохраняет это);
+    //   правило {specialty:"any"} → то же в DefaultSpecialty слоя.
+    // X первой подходящей специальности выставляется один раз (последующие правила для X в v1
+    // были мертвы — ResolveRoute брал первое совпадение).
+    private SpecialtySettingsFile MigrateFromV1(JsonNode root)
+    {
+        var file = new SpecialtySettingsFile { Version = FormatVersion };
+        file.Global = MigrateLayer(root["global"]);
+        var owners = root["owners"]?.AsObject();
+        if (owners is not null)
+        {
+            foreach (var (ownerId, ownerNode) in owners)
+                if (ownerNode is not null)
+                    file.Owners[ownerId] = MigrateLayer(ownerNode);
+        }
+        _log?.LogInformation("specialty-settings.json: миграция v1→v2 — правила пресетов перенесены в матрицы специальностей");
+        return file;
+    }
+
+    private static SpecialtySettingsLayer MigrateLayer(JsonNode? node)
+    {
+        var layer = new SpecialtySettingsLayer();
+        if (node is null) return layer;
+
+        // Шаблоны специальностей (Access/Tools) переносятся как есть — матрицы у них пустые
+        var specs = node["specialties"]?.AsObject();
+        if (specs is not null)
+        {
+            foreach (var (key, specNode) in specs)
+            {
+                if (specNode?.Deserialize<SpecialtyTemplateSettings>(JsonOpts) is { } tmpl
+                    && SpecialtyCatalog.TryGetByKey(key, out var entry))
+                    layer.Specialties[entry.Key] = tmpl;
+            }
+        }
+
+        // Правила v1-пресетов разносятся по матрицам. Обход: пресеты по порядку списка,
+        // правила по порядку; первое совпадение специальности (или any) выигрывает.
+        var assigned = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var anyAssigned = false;
+        var presets = node["presets"]?.AsArray();
+        if (presets is not null)
+        {
+            foreach (var presetNode in presets)
+            {
+                var rules = presetNode?["rules"]?.AsArray();
+                if (rules is null) continue;
+                foreach (var ruleNode in rules)
+                {
+                    var specialty = (string?)ruleNode?["specialty"] ?? SpecialtyCatalog.AnySpecialtyKey;
+                    var route = (string?)ruleNode?["route"];
+                    if (string.IsNullOrWhiteSpace(route)) continue;
+                    var routeTrim = route!.Trim();
+                    var isAny = string.Equals(specialty, SpecialtyCatalog.AnySpecialtyKey, StringComparison.OrdinalIgnoreCase);
+
+                    if (isAny)
+                    {
+                        if (anyAssigned) continue;
+                        layer.DefaultSpecialty = ApplyRoute(layer.DefaultSpecialty, routeTrim);
+                        anyAssigned = true;
+                    }
+                    else
+                    {
+                        if (!SpecialtyCatalog.TryGetByKey(specialty!, out var entry)) continue;
+                        if (!assigned.Add(entry.Key)) continue;
+                        layer.Specialties[entry.Key] = ApplyRoute(layer.Specialties.GetValueOrDefault(entry.Key), routeTrim);
+                    }
+                }
+            }
+        }
+        return layer;
+    }
+
+    // Применить v1-маршрут к (возможно существующей) записи специальности: tier:* → DefaultTier,
+    // модель → все три ячейки. Существующие шаблонные поля (Access/Tools) сохраняем.
+    private static SpecialtyTemplateSettings ApplyRoute(SpecialtyTemplateSettings? existing, string route)
+    {
+        var s = existing ?? new SpecialtyTemplateSettings();
+        if (LocalActionOverridesStore.ParseTierRoute(route) is { } tier)
+        {
+            s.DefaultTier ??= tier; // «если пуст»
+        }
+        else
+        {
+            // Конкретная модель — все три ячейки (в v1 маршрут-модель = «всегда этой моделью»)
+            s.TierStrong ??= route;
+            s.TierMedium ??= route;
+            s.TierWeak ??= route;
+        }
+        return s;
+    }
+}

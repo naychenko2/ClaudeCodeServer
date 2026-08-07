@@ -60,7 +60,8 @@ public sealed class PersonaAskService(
         // «чат с персоной» (слоты тиров), как и её обычный чат; прежде такой one-shot
         // уходил на дефолт CLI мимо настроек
         var askModel = assignments?.Resolve(LocalActionCatalog.ChatPersona,
-            assignments.PersonaModel(persona, ownerId), ownerId)
+            assignments.PersonaModel(persona, ownerId,
+                LocalActionCatalog.DefaultTierOf(LocalActionCatalog.ChatPersona)), ownerId)
             ?? persona.Model;
         var answer = await oneShot.RunAsync(sb.ToString(), oneShot.NormalizeModel(askModel),
             timeout, ct, persona.Effort);

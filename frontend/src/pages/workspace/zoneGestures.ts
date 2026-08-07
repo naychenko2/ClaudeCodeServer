@@ -1,4 +1,5 @@
 import { useRef, useState, type HTMLAttributes, type PointerEvent as ReactPointerEvent } from 'react';
+import { C, R, SHADOW } from '../../lib/design';
 import { startPointerDrag } from '../../lib/pointerDrag';
 import { COL_MIN, PANEL_MIN_H } from './panelStackState';
 import type { PanelKey, Zone } from './panelCatalog';
@@ -14,6 +15,61 @@ import { clearPanelDragOver, endPanelDrag, markPanelMoved, setPanelDragOver, sta
 // разъехались.
 
 // ---------- перетаскивание панелей ----------
+
+// Зазор между курсором и превью перетаскиваемой кнопки — как у призрака в доке
+// проектов: тот отступает от курсора на 16px при иконке 36px, здесь кнопка мельче
+const GHOST_GAP = 12;
+// Запас коробки ВОКРУГ превью. Снимок drag image режется по кромке коробки, и тени
+// (--shadow-dropdown это 0 8px 28px) нужно место со ВСЕХ сторон, включая ту, что
+// смотрит на курсор: обрезанная тень выглядит грязной каймой, а не тенью.
+const GHOST_PAD = 40;
+
+// Превью, которое браузер тащит за курсором, когда кнопку берут из СТОЛБЦА рельсы.
+//
+// По умолчанию это снимок самой кнопки, и висит он ровно под курсором — то есть
+// накрывает собой 40px-полосу рельсы вместе с линией места вставки: человек выбирает
+// место вслепую, видя только то, что и так держит в руке. Ту же беду в доке проектов
+// лечит призрак, вынесенный СБОКУ от курсора (ProjectRail) — здесь то же самое, но
+// средствами HTML5-drag: своё изображение вместо дефолтного. Вид тоже оттуда —
+// карточка с тенью, чуть повёрнутая: «кнопку взяли в руку», а не «иконка отклеилась».
+//
+// Сдвиг делается не отрицательной координатой в setDragImage (её браузеры трактуют
+// по-разному), а коробкой шире кнопки: превью прижато к дальнему от курсора краю,
+// курсор приходится на противоположный. Сторона — по зоне: превью всегда уезжает
+// К ЦЕНТРУ окна, прочь от рельсы.
+function railGhost(e: { currentTarget: EventTarget | null; dataTransfer: DataTransfer }, zone: Zone) {
+  const el = e.currentTarget as HTMLElement | null;
+  if (!el?.getBoundingClientRect) return;
+  const { width, height } = el.getBoundingClientRect();
+  if (width <= 0 || height <= 0) return;
+  const isLeft = zone === 'left';
+  const box = document.createElement('div');
+  // За кромкой окна, но НЕ display:none и не нулевого размера — иначе браузеру
+  // нечего снимать, и превью молча пропадает вместе с курсором
+  box.style.cssText = `position:fixed;top:-1000px;left:0;`
+    + `width:${width + GHOST_PAD * 2}px;height:${height + GHOST_PAD * 2}px;pointer-events:none;`;
+
+  // Превью стоит в ЦЕНТРЕ коробки — со всех сторон остаётся запас под тень
+  const ghost = document.createElement('div');
+  ghost.style.cssText = `position:absolute;top:${GHOST_PAD}px;left:${GHOST_PAD}px;`
+    + `display:flex;background:${C.bgWhite};border:1px solid ${C.border};border-radius:${R.md}px;`
+    + `box-shadow:${SHADOW.dropdown};transform:rotate(-3deg);opacity:0.95;`;
+  // Стили в проекте инлайновые, поэтому клон повторяет кнопку без единого класса
+  ghost.appendChild(el.cloneNode(true));
+  box.appendChild(ghost);
+  document.body.appendChild(box);
+
+  // Точка курсора — рядом с превью, но НЕ на кромке коробки: у левой рельсы курсор
+  // левее превью (оно уходит вправо, к центру окна), у правой — правее его
+  e.dataTransfer.setDragImage(
+    box,
+    isLeft ? GHOST_PAD - GHOST_GAP : GHOST_PAD + width + GHOST_GAP,
+    GHOST_PAD + height / 2,
+  );
+  // Снимок браузер делает синхронно, но удалять узел прямо здесь нельзя — в Chrome
+  // превью тогда не успевает отрисоваться; ближайший кадр уже безопасен
+  requestAnimationFrame(() => box.remove());
+}
 
 // Готовый набор пропсов для PanelShell поверх ОБЩЕГО состояния перетаскивания
 // (panelDrag): какая панель тащится, из какой зоны и над каким местом висит.
@@ -34,7 +90,7 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // Дроп ОДНОЙ панели на другую: они меняются местами (в т.ч. через границу зон)
   onSwap: (from: PanelKey, to: PanelKey) => void;
 }) {
-  const { from, fromZone, over, moved } = usePanelDragState();
+  const { from, fromZone, over, fromTucked, moved } = usePanelDragState();
   // Панель тащат И эта зона её принимает. Дальше по коду ориентируемся на неё:
   // непринимаемый дроп ведёт себя как «перетаскивания нет» — ни направляющих, ни
   // подсветки, ни dropEffect (курсор сам покажет запрет).
@@ -63,12 +119,28 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
     },
   });
 
-  // Что делает элемент «ручкой» панели: шапка карточки и иконка в рельсе. Из
-  // рельсы тащат ЗАКРЫТУЮ панель — так её можно сразу поставить в нужное место,
-  // а не открывать кликом туда, куда решит раскладка.
-  const dragSourceProps = (k: PanelKey): HTMLAttributes<HTMLElement> & { draggable?: boolean } => ({
+  // Что делает элемент «ручкой» панели: шапка карточки, иконка в рельсе и строка
+  // ящика («…»). Из рельсы тащат ЗАКРЫТУЮ панель — так её можно сразу поставить в
+  // нужное место, а не открывать кликом туда, куда решит раскладка.
+  // tucked — ручка живёт в ящике: дроп в раскладку тогда ещё и вернёт кнопку на
+  // рельсу (см. fromTucked в panelDrag).
+  // rail — ручка это иконка В СТОЛБЦЕ рельсы: её превью уводится вбок (см. railGhost).
+  const dragSourceProps = (k: PanelKey, opts?: { tucked?: boolean; rail?: boolean }): HTMLAttributes<HTMLElement> & { draggable?: boolean } => ({
     draggable: true,
-    onDragStart: e => { startPanelDrag(k, zone); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', k); },
+    onDragStart: e => {
+      // dataTransfer живёт только внутри обработчика — заполняем сразу
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', k);
+      if (opts?.rail) railGhost(e, zone);
+      // А состояние перетаскивания поднимаем СЛЕДУЮЩИМ кадром. Оно перестраивает
+      // обе зоны прямо под захваченным элементом (у рельсы появляется мишень с
+      // оверлеем поверх столбца иконок), и браузер на такую перестройку жест
+      // отменяет: dragstart приходит, следом сразу dragend, без единого события
+      // drag. Заметно это было только на иконках рельсы — карточку панели тащат
+      // за шапку, а её DOM оверлей рельсы не трогает. Кадр задержки не виден:
+      // человек в этот момент ещё только сдвигает курсор.
+      requestAnimationFrame(() => startPanelDrag(k, zone, opts?.tucked));
+    },
     onDragEnd: endPanelDrag,
   });
 
@@ -105,7 +177,7 @@ export function usePanelDnd({ zone, enabled, accepts, onSwap }: {
   // подменить хендлы ресайза направляющими). accepting — тащат панель, которую
   // ЭТА зона готова принять: по ней решается, показывать ли места вставки.
   return {
-    from, fromZone, active: from !== null, accepting: incoming !== null,
+    from, fromZone, fromTucked, active: from !== null, accepting: incoming !== null,
     // Панель, которую только что перенесли: анимацию появления в перестроенной
     // раскладке получает ТОЛЬКО она (см. markPanelMoved)
     moved,

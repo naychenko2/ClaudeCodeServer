@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties, type HTMLAttributes, type ReactNode } from 'react';
 import { Children } from 'react';
 import { X, type LucideIcon } from 'lucide-react';
-import { C, ISLAND } from '../../lib/design';
+import { C, ISLAND, SHADOW } from '../../lib/design';
+import { useCanHover } from '../../lib/pointer';
 import { ICON_STROKE } from './icons';
 import { IconButton } from './IconButton';
 import { Island, IslandHeader } from './Island';
@@ -50,6 +51,9 @@ interface PanelShellProps {
   dropTarget?: boolean;
   // Кратковременная подсветка «панель уже открыта»
   flash?: boolean;
+  // Держим акцентную подсветку, пока курсор на кнопке этой панели в рельсе —
+  // статичная (без вспышки flash), чтобы глаз сразу связал кнопку с карточкой
+  highlighted?: boolean;
   // Атрибуты корневого Island: onDragOver/onDragLeave/onDrop для DnD
   rootProps?: HTMLAttributes<HTMLDivElement>;
   // Доступ к корневому узлу карточки — для замеров раскладки (высота панели
@@ -109,6 +113,7 @@ export function PanelShell({
   dragged = false,
   dropTarget = false,
   flash = false,
+  highlighted = false,
   rootProps,
   rootRef,
   headerProps,
@@ -143,10 +148,15 @@ export function PanelShell({
   // пока курсор на карточке — в покое шапка чистая: иконка панели, заголовок,
   // бейдж. На устройствах без наведения (тач) прятать нечем: контролы видны
   // всегда, иначе к ним было бы не подобраться.
-  const [hoverCapable] = useState(
-    () => typeof window !== 'undefined' && !!window.matchMedia?.('(hover: hover)').matches);
+  // Не media query, а реальный ввод: планшет с клавиатурой рапортует «умею
+  // наводить», и контролы схлопывались прямо под пальцем — см. lib/pointer
+  const hoverCapable = useCanHover();
   const [panelHover, setPanelHover] = useState(false);
-  const controlsVisible = !hoverCapable || panelHover;
+  // Счётчик, а не флаг: попапов у панели может быть несколько (меню вида и меню
+  // создания), и закрытие одного не должно гасить контролы, пока открыт второй
+  const [holdCount, setHoldCount] = useState(0);
+  const hold = useCallback((held: boolean) => setHoldCount(n => Math.max(0, n + (held ? 1 : -1))), []);
+  const controlsVisible = !hoverCapable || panelHover || holdCount > 0;
   // Общий стиль для всех трёх обёрток контролов шапки. Скрытые контролы не только
   // гаснут, но и СХЛОПЫВАЮТСЯ по ширине (maxWidth: 0): прозрачность сама по себе
   // оставляет элемент в потоке, и невидимые кнопки продолжали занимать место —
@@ -198,8 +208,8 @@ export function PanelShell({
   const [slotLeftEl, setSlotLeftEl] = useState<HTMLDivElement | null>(null);
   const [slotPinnedEl, setSlotPinnedEl] = useState<HTMLDivElement | null>(null);
   const slotValue = useMemo(
-    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl, elPinned: slotPinnedEl }),
-    [slotEl, slotLeftEl, slotPinnedEl]);
+    () => ({ hasHeader: true, el: slotEl, elLeft: slotLeftEl, elPinned: slotPinnedEl, hold }),
+    [slotEl, slotLeftEl, slotPinnedEl, hold]);
 
   // Наведение на СЛОТ ловим нативно, а не пропсами React. Контролы приезжают в него
   // порталом, и react-события идут по React-дереву — то есть в саму панель, мимо
@@ -293,15 +303,31 @@ export function PanelShell({
     </span>
   );
 
+  // Атрибуты корня шапки IslandHeader — перетаскивание панели держится на них
+  const mergedHeaderProps = {
+    ...headerProps,
+    ref: setHeaderEl,
+    // Над кнопками карточка не тащится: draggable снимается с шапки, пока
+    // курсор в зоне контролов. Одного draggable={false} на самих кнопках мало —
+    // dragstart рождается на шапке (она источник), их обработчики его не видят,
+    // и попытка нажать кнопку уезжала перетаскиванием панели
+    draggable: draggable && !overControls,
+    title: draggable && !overControls ? 'Перетащите, чтобы поменять панели местами' : headerProps?.title,
+    style: {
+      ...headerProps?.style,
+      cursor: draggable && !overControls ? 'grab' : 'default',
+    },
+  };
+
   return (
     <PanelHeaderSlotContext.Provider value={slotValue}>
     <Island
       bg={ISLAND.bg}
-      borderColor={dropTarget || flash ? C.accent : ISLAND.border}
+      borderColor={dropTarget || flash || highlighted ? C.accent : ISLAND.border}
       // Перетаскиваемая панель «вдавливается»: теряет тень и чуть уменьшается,
       // будто прижата к холсту. Полупрозрачной её не делаем — сквозь неё
       // просвечивал контент, и было не понять, что именно едет за курсором.
-      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : dragged ? 'none' : ISLAND.shadow}
+      shadow={dropTarget ? `0 0 0 1px ${C.accent}` : dragged ? 'none' : highlighted ? `${ISLAND.shadow}, ${SHADOW.focus}` : ISLAND.shadow}
       style={{
         // fill=true (дефолт) — flex:1, панель растягивается на всю высоту.
         // fill=false — flex: '0 1 auto', панель по контенту, но сжимается
@@ -332,20 +358,7 @@ export function PanelShell({
         // Левый слот — у самого названия панели (PanelHeaderSlot side="left")
         leading={<div ref={setSlotLeftEl} draggable={false} onDragStart={e => e.preventDefault()}
           style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 4, ...controlsFade }} />}
-        headerProps={{
-          ...headerProps,
-          ref: setHeaderEl,
-          // Над кнопками карточка не тащится: draggable снимается с шапки, пока
-          // курсор в зоне контролов. Одного draggable={false} на самих кнопках мало —
-          // dragstart рождается на шапке (она источник), их обработчики его не видят,
-          // и попытка нажать кнопку уезжала перетаскиванием панели
-          draggable: draggable && !overControls,
-          title: draggable && !overControls ? 'Перетащите, чтобы поменять панели местами' : headerProps?.title,
-          style: {
-            ...headerProps?.style,
-            cursor: draggable && !overControls ? 'grab' : 'default',
-          },
-        }}
+        headerProps={mergedHeaderProps}
       >
         {/* Слот контролов панели: сюда порталом приезжает содержимое PanelHeaderSlot.
             Наведение отслеживается нативно (см. эффект выше) */}

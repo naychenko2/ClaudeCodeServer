@@ -41,21 +41,39 @@ function hostMatches(url: string, hosts: string[]): boolean {
   } catch { return false; }
 }
 
-export function classifyUrl(item: any): 'image' | 'video' | 'audio' | null {
-  const url = item?.url ?? item?.uri;
+// JSON из результатов MCP-инструментов (fal/glif): форма заранее неизвестна и
+// не описывается контрактом, поэтому обходим её с проверками на каждом шаге
+// (unknown-глубь вместо any).
+type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+
+// Значение — JSON-объект (не массив и не примитив)?
+function asObj(v: Json | undefined): { [key: string]: Json } | null {
+  return v != null && typeof v === 'object' && !Array.isArray(v) ? v : null;
+}
+
+// Строка, если значение — строка; иначе пустая строка
+function str(v: Json | undefined): string {
+  return typeof v === 'string' ? v : '';
+}
+
+export function classifyUrl(item: Json | undefined): 'image' | 'video' | 'audio' | null {
+  const obj = asObj(item);
+  if (!obj) return null;
+  const url = obj.url ?? obj.uri;
   if (typeof url !== 'string') return null;
   // Явный тип элемента: glif assets — type:"image"|"video"|"audio",
   // glif view_media media[] — kind с теми же значениями
-  const t: string = typeof item?.type === 'string' ? item.type
-    : typeof item?.kind === 'string' && ['image', 'video', 'audio'].includes(item.kind) ? item.kind
+  const t: string = typeof obj.type === 'string' ? obj.type
+    : typeof obj.kind === 'string' && ['image', 'video', 'audio'].includes(obj.kind) ? obj.kind
     : '';
   if (t === 'video') return 'video';
   if (t === 'audio') return 'audio';
   if (t === 'image') return 'image';
   // MIME: fal — content_type; glif (MCP resource_link / assets) — mimeType/contentType;
   // запасной вариант — формат файла (glif assets: metadata.format = "png"/"mp4"/…)
-  const ct: string = item.content_type ?? item.mimeType ?? item.contentType ?? '';
-  const fmt: string = typeof item?.metadata?.format === 'string' ? `.${item.metadata.format.toLowerCase()}` : '';
+  const ct = str(obj.content_type ?? obj.mimeType ?? obj.contentType);
+  const metaFmt = asObj(obj.metadata)?.format;
+  const fmt = typeof metaFmt === 'string' ? `.${metaFmt.toLowerCase()}` : '';
   if (ct.startsWith('video/') || /\.(mp4|webm|mov|avi|mkv)(\?|$)/i.test(url) || /\.(mp4|webm|mov|avi|mkv)$/.test(fmt)) return 'video';
   if (ct.startsWith('audio/') || /\.(mp3|wav|ogg|flac|aac|m4a|opus|weba)(\?|$)/i.test(url) || /\.(mp3|wav|ogg|flac|aac|m4a|opus|weba)$/.test(fmt)) return 'audio';
   if (ct.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg|avif)(\?|$)/i.test(url) || /\.(png|jpg|jpeg|gif|webp|svg|avif)$/.test(fmt)) return 'image';
@@ -73,13 +91,14 @@ const RESOURCE_LINK_RE = /\[Resource link:\s*([^\]]+)\]\s*(https?:\/\/\S+)/g;
 
 // Толерантный разбор результата: целиком JSON — отлично; нет — пробуем хвост от первой
 // фигурной скобки до последней (сплющенный боевой формат «мусор + {json}»).
-// На мусоре не падаем — вернём null, медиа из маркеров всё равно покажутся.
-function parseLoose(text: string): any {
-  try { return JSON.parse(text); } catch { /* не чистый JSON */ }
+// На мусоре не падаем — вернём undefined, медиа из маркеров всё равно покажутся.
+// JSON.parse по определению даёт JSON — каст к Json и есть проверка на границе.
+function parseLoose(text: string): Json | undefined {
+  try { return JSON.parse(text) as Json; } catch { /* не чистый JSON */ }
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  try { return JSON.parse(text.slice(start, end + 1)); } catch { return null; }
+  if (start < 0 || end <= start) return undefined;
+  try { return JSON.parse(text.slice(start, end + 1)) as Json; } catch { return undefined; }
 }
 
 // Извлекает изображения, видео и аудио из результата MCP-инструмента.
@@ -93,49 +112,59 @@ function parseLoose(text: string): any {
 export function extractMediaFromResult(result: string): MediaItem[] {
   const items: MediaItem[] = [];
 
-  const push = (item: any) => {
-    const url = item?.url ?? item?.uri;
+  const push = (item: Json | undefined) => {
+    const obj = asObj(item);
+    if (!obj) return;
+    const url = obj.url ?? obj.uri;
     if (typeof url !== 'string') return;
     // Входные изображения пользователя (uploaded) — не выход генерации
-    if (item?.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
-    const kind = classifyUrl(item);
+    if (obj.source === 'uploaded' || url.includes('glifchat-image-input-production')) return;
+    const kind = classifyUrl(obj);
     if (!kind) return;
     if (items.some(m => m.url === url)) return;
-    const fileName = item.file_name ?? item.fileName ?? item.filename ?? item.name ?? item.title;
+    const fileNameRaw = obj.file_name ?? obj.fileName ?? obj.filename ?? obj.name ?? obj.title;
+    const fileName = typeof fileNameRaw === 'string' ? fileNameRaw : undefined;
     // Размеры: fal кладёт в корень элемента, glif assets — в metadata.{width,height};
     // в view_media media[] размеров нет — блок рендерится без них, это ок
-    const width = item.width ?? item.metadata?.width;
-    const height = item.height ?? item.metadata?.height;
-    if (kind === 'audio') items.push({ kind: 'audio', url, duration: item.duration, fileName });
-    else items.push({ kind, url, width, height, fileName, ...(kind === 'video' ? { duration: item.duration } : {}) } as MediaItem);
+    const meta = asObj(obj.metadata);
+    const widthRaw = obj.width ?? meta?.width;
+    const heightRaw = obj.height ?? meta?.height;
+    const width = typeof widthRaw === 'number' ? widthRaw : undefined;
+    const height = typeof heightRaw === 'number' ? heightRaw : undefined;
+    const duration = typeof obj.duration === 'number' ? obj.duration : undefined;
+    if (kind === 'audio') items.push({ kind: 'audio', url, duration, fileName });
+    else items.push({ kind, url, width, height, fileName, ...(kind === 'video' ? { duration } : {}) } as MediaItem);
   };
 
-  const scan = (obj: any, depth: number) => {
-    if (!obj || typeof obj !== 'object' || depth > 3) return;
-    if (Array.isArray(obj)) {
+  const scan = (value: Json, depth: number) => {
+    if (!value || typeof value !== 'object' || depth > 3) return;
+    if (Array.isArray(value)) {
       // Массив MCP-блоков контента (glif): resource_link / resource
-      for (const b of obj) {
-        if (b?.type === 'resource_link') push(b);
-        else if (b?.type === 'resource') push(b?.resource);
+      for (const b of value) {
+        const block = asObj(b);
+        if (!block) continue;
+        if (block.type === 'resource_link') push(block);
+        else if (block.type === 'resource') push(block.resource);
       }
       return;
     }
     // Массивы медиа (fal + glif assets + glif view_media media[])
-    for (const arr of [obj.images, obj.videos, obj.audio_files, obj.audios, obj.assets, obj.media]) {
+    for (const arr of [value.images, value.videos, value.audio_files, value.audios, value.assets, value.media]) {
       if (Array.isArray(arr)) for (const item of arr) push(item);
     }
     // Одиночные объекты
-    for (const key of ['video', 'audio', 'audio_file', 'image']) push(obj[key]);
+    for (const key of ['video', 'audio', 'audio_file', 'image'] as const) push(value[key]);
     // MCP CallToolResult: content-блоки; text-блоки могут нести JSON (glif-хвосты)
-    if (Array.isArray(obj.content)) {
-      scan(obj.content, depth + 1);
-      for (const b of obj.content) {
-        if (b?.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith('{')) {
-          try { scan(JSON.parse(b.text), depth + 1); } catch { /* обычный текст */ }
+    if (Array.isArray(value.content)) {
+      scan(value.content, depth + 1);
+      for (const b of value.content) {
+        const block = asObj(b);
+        if (block?.type === 'text' && typeof block.text === 'string' && block.text.trimStart().startsWith('{')) {
+          try { scan(JSON.parse(block.text) as Json, depth + 1); } catch { /* обычный текст */ }
         }
       }
     }
-    for (const key of ['result', 'data', 'output', 'project', 'structuredContent']) scan(obj[key], depth + 1);
+    for (const key of ['result', 'data', 'output', 'project', 'structuredContent'] as const) scan(value[key], depth + 1);
   };
 
   // 1. Маркерные строки боевого формата — независимо от того, парсится ли JSON-хвост
@@ -168,10 +197,10 @@ export interface MediaMeta {
 // Нет поля → нет цены (для glif «считается…» не показываем).
 const BILLING_COST_KEYS = ['costUsd', 'cost_usd'];
 
-function findGlifBillingCost(glif: any): number | undefined {
-  if (!glif || typeof glif !== 'object') return undefined;
-  for (const bag of [glif.billing, glif.billingTelemetry, glif.billing_telemetry, glif.telemetry, glif]) {
-    if (!bag || typeof bag !== 'object') continue;
+function findGlifBillingCost(glif: { [key: string]: Json } | null | undefined): number | undefined {
+  if (!glif) return undefined;
+  for (const bag of [asObj(glif.billing), asObj(glif.billingTelemetry), asObj(glif.billing_telemetry), asObj(glif.telemetry), glif]) {
+    if (!bag) continue;
     for (const k of BILLING_COST_KEYS) {
       const v = Number(bag[k]);
       if (Number.isFinite(v) && v > 0) return v;
@@ -183,25 +212,29 @@ function findGlifBillingCost(glif: any): number | undefined {
 // Признаки glif-результата: _meta.glif / meta.glif; пара project_id+job_id (get_job_status)
 // или camelCase projectId (боевой view_media — без job_id) в корне / structuredContent /
 // JSON-хвосте text-блока; outputType вида media_*; либо медиа с glif-хоста
-function detectGlif(parsed: any, media: MediaItem[]): { glifMeta?: any; isGlif: boolean; outputType?: string } {
+function detectGlif(parsed: Json | undefined, media: MediaItem[]): { glifMeta?: { [key: string]: Json }; isGlif: boolean; outputType?: string } {
   // JSON не разобрался (битый хвост) — источник всё равно определяем по хостам медиа
   if (!parsed || typeof parsed !== 'object')
     return { isGlif: media.some(m => hostMatches(m.url, GLIF_SPECIFIC_HOSTS)) };
-  const glifMeta = parsed?._meta?.glif ?? parsed?.meta?.glif;
-  if (glifMeta && typeof glifMeta === 'object') return { glifMeta, isGlif: true };
+  const root = Array.isArray(parsed) ? null : parsed;
+  const glifMeta = asObj(asObj(root?._meta)?.glif) ?? asObj(asObj(root?.meta)?.glif);
+  if (glifMeta) return { glifMeta, isGlif: true };
   // Кандидатные объекты: сам результат и его structuredContent (хвост view_media)
-  const bags = [parsed, parsed?.structuredContent, parsed?.result];
-  const isGlifBag = (o: any) =>
+  const bags = [root, asObj(root?.structuredContent), asObj(root?.result)];
+  const isGlifBag = (o: { [key: string]: Json } | null) =>
     typeof o?.projectId === 'string' || // camelCase без job_id — боевой view_media
     (typeof o?.project_id === 'string' && typeof o?.job_id === 'string') ||
     (typeof o?.outputType === 'string' && o.outputType.startsWith('media_'));
   for (const bag of bags) {
-    if (isGlifBag(bag)) return { isGlif: true, outputType: typeof bag?.outputType === 'string' ? bag.outputType : undefined };
+    if (bag && isGlifBag(bag)) return { isGlif: true, outputType: typeof bag.outputType === 'string' ? bag.outputType : undefined };
   }
-  const blocks = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.content) ? parsed.content : [];
+  const blocks: Json[] = Array.isArray(parsed) ? parsed
+    : root && Array.isArray(root.content) ? root.content
+    : [];
   for (const b of blocks) {
-    if (b?.type === 'text' && typeof b.text === 'string' && b.text.trimStart().startsWith('{')) {
-      try { if (isGlifBag(JSON.parse(b.text))) return { isGlif: true }; } catch { /* не JSON */ }
+    const block = asObj(b);
+    if (block?.type === 'text' && typeof block.text === 'string' && block.text.trimStart().startsWith('{')) {
+      try { if (isGlifBag(asObj(JSON.parse(block.text) as Json))) return { isGlif: true }; } catch { /* не JSON */ }
     }
   }
   if (media.some(m => hostMatches(m.url, GLIF_SPECIFIC_HOSTS))) return { isGlif: true };
@@ -214,34 +247,34 @@ function detectGlif(parsed: any, media: MediaItem[]): { glifMeta?: any; isGlif: 
 export function extractMediaMeta(result: string, media?: MediaItem[]): MediaMeta {
   try {
     const parsed = parseLoose(result);
+    const root = asObj(parsed);
     // Имя модели: endpoint_id → берём только короткое имя после последнего / (в результате fal обычно отсутствует)
-    const endpointId: string | undefined = parsed?.endpoint_id;
+    const endpointId = typeof root?.endpoint_id === 'string' ? root.endpoint_id : undefined;
     const model = endpointId ? endpointId.split('/').pop() : undefined;
     // Время генерации: ищем в нескольких местах
-    const r = parsed?.result ?? parsed;
-    const inferenceTime: number | undefined =
-      r?.timings?.inference ??
-      r?.metrics?.inference_time ??
-      parsed?.timings?.inference ??
-      parsed?.metrics?.inference_time ??
-      undefined;
+    const r = asObj(root?.result) ?? root;
+    const inferenceTimeRaw =
+      asObj(r?.timings)?.inference ??
+      asObj(r?.metrics)?.inference_time ??
+      asObj(root?.timings)?.inference ??
+      asObj(root?.metrics)?.inference_time;
 
     const items = media ?? extractMediaFromResult(result);
     const { glifMeta, isGlif, outputType: bagOutputType } = detectGlif(parsed, items);
     // jobId glif-генерации: в _meta.glif или в одном из «мешков» результата (snake/camel)
-    const jobId: string | undefined = [glifMeta, parsed, parsed?.structuredContent, parsed?.result]
+    const jobId: string | undefined = [glifMeta, root, asObj(root?.structuredContent), asObj(root?.result)]
       .map(b => b?.jobId ?? b?.job_id)
-      .find(v => typeof v === 'string');
+      .find((v): v is string => typeof v === 'string');
     const source: MediaMeta['source'] = isGlif
       ? 'glif'
-      : (parsed?.request_id || endpointId || items.some(m => m.url.includes('fal.media') || m.url.includes('fal.run')))
+      : (root?.request_id || endpointId || items.some(m => m.url.includes('fal.media') || m.url.includes('fal.run')))
         ? 'fal'
         : undefined;
-    const outputType = glifMeta?.outputType ?? glifMeta?.output_type ?? (isGlif ? bagOutputType ?? parsed?.outputType : undefined);
+    const outputType = glifMeta?.outputType ?? glifMeta?.output_type ?? (isGlif ? bagOutputType ?? root?.outputType : undefined);
 
     return {
       model: model || undefined,
-      inferenceTime: inferenceTime ? Number(inferenceTime) : undefined,
+      inferenceTime: inferenceTimeRaw ? Number(inferenceTimeRaw) : undefined,
       source,
       outputType: typeof outputType === 'string' ? outputType : undefined,
       jobId: isGlif ? jobId : undefined,
@@ -515,7 +548,7 @@ export function MediaBlock({
                 value={saveDialog.baseName}
                 onChange={e => setSaveDialog({ ...saveDialog, baseName: e.target.value })}
                 placeholder="имя файла"
-                // eslint-disable-next-line jsx-a11y/no-autofocus
+                // Автофокус осознанный: диалог сохранения сразу ждёт ввода имени файла
                 autoFocus
                 onKeyDown={e => {
                   if (e.key === 'Enter' && saveDialog.baseName.trim()) {

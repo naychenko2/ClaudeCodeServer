@@ -58,6 +58,49 @@ public class OmoPantheonTests : IDisposable
             PersonaManager.HashInstructions(momus.Contract.Instructions));
     }
 
+    // B3 приёмки «Командной реализации»: каталог задаёт УРОВЕНЬ модели, а не конкретную.
+    // Зашитый Claude-алиас уводил персону (и её исполнителя задач) на Claude даже на стенде,
+    // целиком переведённом на стороннего провайдера.
+    [Fact]
+    public void Каталог_РолиПинятУровеньМоделиАНеКонкретную()
+    {
+        OmoPantheonCatalog.All.Should().OnlyContain(t => t.Model == null && t.ModelTier != null);
+    }
+
+    [Fact]
+    public void Connect_ПереноситУровеньРолиВПерсонуБезМодели()
+    {
+        var personas = _personas.ConnectPantheon(OwnerId);
+
+        var oracle = personas.Single(p => p.TemplateKey == "omo-oracle");
+        oracle.Model.Should().BeNull("конкретную модель каталог не пинит");
+        oracle.ModelTier.Should().Be(ModelTier.Strong);
+        personas.Single(p => p.TemplateKey == "omo-librarian").ModelTier.Should().Be(ModelTier.Weak);
+    }
+
+    // Персоны, подключённые ДО перехода на уровни, живут в personas.json с пином «opus»/
+    // «sonnet»/«haiku» — при загрузке он переносится на уровень (алиас и есть уровень).
+    [Fact]
+    public void Загрузка_ПереноситСтарыйПинПантеонаНаУровень()
+    {
+        var connected = _personas.ConnectPantheon(OwnerId);
+        var sisyphus = connected.Single(p => p.TemplateKey == "omo-sisyphus");
+        var custom = _personas.Create(OwnerId, "Своя", null, null, null, "haiku", null,
+            PersonaScope.Global, null, null, null, memoryEnabled: false);
+        // Возвращаем состояние «как до миграции»: пин моделью, уровень пуст
+        _personas.Update(sisyphus.Id, OwnerId, null, null, null, null, model: "opus", effort: null,
+            scope: null, projectId: null, color: null, greeting: null, memoryEnabled: null,
+            modelTier: "");
+
+        var reloaded = new PersonaManager(_config);
+
+        var migrated = reloaded.Get(sisyphus.Id, OwnerId)!;
+        migrated.Model.Should().BeNull();
+        migrated.ModelTier.Should().Be(ModelTier.Strong);
+        reloaded.Get(custom.Id, OwnerId)!.Model.Should().Be("haiku",
+            "персону вне каталога не трогаем — это выбор человека");
+    }
+
     [Fact]
     public void Connect_Повторный_БезДублей()
     {

@@ -15,7 +15,7 @@ const CHAT_HINTS = ['Найди информацию в интернете', 'Н
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
-export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona }: {
+export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona, compact }: {
   hasProject: boolean;
   hasCLAUDEmd: boolean | null;
   onHint: (hint: string) => void;
@@ -28,6 +28,8 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   personas?: Persona[];
   selectedPersonaId?: string;
   onPickPersona?: (p: Persona) => void;
+  // Узкая колонка (стена): без пилюль настройки чата
+  compact?: boolean;
 }) {
   const asstName = useAssistantName();
   // Лицо пустого чата (фича default-personas-onboarding): аватар персоны чата
@@ -161,8 +163,10 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
               />
             )}
 
-            {/* Настройка чата — модель, усилие рассуждения, время жизни, теги (до первого сообщения) */}
-            {session && (
+            {/* Настройка чата — модель, усилие рассуждения, время жизни, теги (до первого
+                сообщения). На стене (compact) пилюль нет: в колонке они занимают половину
+                пустого чата, а те же настройки лежат в композере и в полном виде чата */}
+            {session && !compact && (
               <NewChatSetup session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile} />
             )}
           </div>

@@ -60,3 +60,22 @@ export function stripRoot(text: string, root?: string | null): string {
   }
   return out;
 }
+
+// Путь для показа в ленте чата с учётом активного git-дерева (worktree) хода/чата:
+// сначала пробуем относительность к дереву (короче — без префикса .claude/worktrees/…),
+// не вышло (файл вне дерева либо дерева нет) — как обычно, к корню проекта.
+export function relPathTree(p: string, rootPath?: string | null, treePath?: string | null): string {
+  if (treePath) {
+    const rel = toRelative(p, treePath);
+    if (rel !== null) return rel;
+  }
+  return relPath(p, rootPath);
+}
+
+// Тот же приоритет «дерево → корень проекта», но для произвольного текста (команды и т.п.),
+// как stripRoot. Порядок важен: дерево обычно вложено в корень проекта, поэтому его
+// (более длинный) префикс режем первым — иначе первым сработает более короткий корень.
+export function stripRootTree(text: string, rootPath?: string | null, treePath?: string | null): string {
+  const afterTree = treePath ? stripRoot(text, treePath) : text;
+  return stripRoot(afterTree, rootPath);
+}

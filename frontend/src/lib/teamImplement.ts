@@ -1,8 +1,8 @@
-// Режим «Командная реализация» (флаг team-implement-mode): подписи стадий и тоны
+// Режим «Командная реализация»: подписи стадий и тоны
 // бейджа/маркера. Тексты — дословно из docs/architecture/team-implement-mode.md («Тексты»)
 // и макета docs/mockups/team-implement-mode.html (короткие формы маркера).
 
-import type { SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage } from '../types';
+import type { ChatItem, SessionTeamImplement, TeamEscalationKind, TeamImplementBudget, TeamImplementStage, TeamPlan } from '../types';
 import { MODE_META, type Mode } from './modes';
 
 // Тон по тому, кто должен действовать: work — команда работает (accent),
@@ -65,10 +65,23 @@ export const TEAM_IMPLEMENT_DESCRIPTION =
   'Чат работает как штаб: задачи ставятся исполнителям, их чаты видны под этим в списке. ' +
   'Напишите, что ещё нужно сделать — команда возьмёт в работу';
 
-// Тултип чипа «Авто» (текст тумблера + подпись из плана)
+// Тултип чипа «Авто» (текст тумблера + подпись из плана, дословно из спеки)
 export const TEAM_IMPLEMENT_AUTO_TITLE =
   'Авто-волны — не спрашивать после каждой волны. ' +
-  'План согласуете один раз, дальше команда работает сама, пока хватает бюджета';
+  'План согласуете один раз. Дальше команда работает сама, пока хватает бюджета';
+
+// Подпись свёрнутой карточки запущенного плана. «Идёт волна N из M» — только когда
+// волна реально идёт (waveNumber > 0: на стадии idle бэкенд обнуляет номер) И карточка —
+// текущий план режима: у старой версии (v1 после перепланирования) ход волн относится
+// к чужому плану, и карточка вечно врала бы «идёт волна». Иначе — просто «План запущен».
+export function teamPlanRunLabel(
+  plan: TeamPlan,
+  ctx: { waveNumber: number; planCardId: string | null } | null,
+): string {
+  const live = !!ctx && ctx.waveNumber > 0 && ctx.planCardId === plan.id;
+  if (!live || plan.waveCount <= 1) return 'План запущен';
+  return `План запущен — идёт волна ${Math.min(ctx.waveNumber, plan.waveCount)} из ${plan.waveCount}`;
+}
 
 // Правило «Координатор не пишет код» — строка состояния в поповере бейджа
 export const TEAM_IMPLEMENT_NO_CODE_ON = 'Координатор не пишет код — любая работа идёт задачей исполнителю';
@@ -198,6 +211,77 @@ export function teamEscalationDetailsLines(details: string): TeamEscalationDetai
 // блокер («Ответить» — что делать исполнителю) и продуктовая развилка (свой вариант)
 export function teamEscalationNeedsComment(kind: TeamEscalationKind): boolean {
   return kind === 'blocker' || kind === 'productDecision';
+}
+
+// === Индикатор паузы планирования ===
+// Между концом интервью и карточкой плана лента молчит минутами (потолок планировщика
+// 300с), и тишина читается как «всё встало» (прод 2026-08-04). На время стадии planning
+// в ленте живёт спокойная плашка; исчезает она с появлением карточки плана или отказа.
+
+// Тексты плашки: смысл — «это нормально и займёт время», планирование большой фичи
+// идёт минутами, а не секундами
+export const TEAM_PLANNING_TITLE = 'Команда готовит план…';
+export const TEAM_PLANNING_TEXT = 'Изучает задачу и собирает план — это может занять несколько минут';
+
+// Видна ли плашка планирования. Стадия planning приходит событием team_implement и из
+// REST-гидратации, момент входа фронт знает. Двух сообщений об одном быть не должно:
+// карточка отказа (или любая другая открытая карточка остановки) означает, что план
+// прямо сейчас НЕ готовится — практика ждёт человека, поэтому плашка гаснет. «Остановить»
+// на стадии планирования свою карточку не шлёт (Stopped приходит без неё) — отсюда
+// отдельная проверка stopped.
+//
+// live — состояние из события team_planning (см. ChatState.teamPlanning): точнее стадии
+// режима, потому что не зависит от записи файла плана на диск между «планировщик закончил»
+// и переключением стадии на confirming/planning-заново. undefined — событий не было в этой
+// сессии (например, чат открыли посреди планирования) — тогда решает только стадия, как
+// раньше; null — событие уже сказало «планировщик закончил», плашка гаснет НЕМЕДЛЕННО, не
+// дожидаясь стадии (иначе между отказом и карточкой team_escalation плашка соврала бы,
+// что штаб всё ещё думает)
+export function teamPlanningIndicatorVisible(
+  state: SessionTeamImplement | null | undefined,
+  items: ChatItem[],
+  live?: { startedAt: number } | null,
+): boolean {
+  if (!state || state.stopped) return false;
+  if (live === null) return false;
+  if (state.stage !== 'planning' && !live) return false;
+  return !items.some(it => it.kind === 'team_escalation' && !it.escalation.resolved);
+}
+
+// Склонение числительного (ру) — своя копия, как и в остальных местах проекта
+// (TeamPlanView, ProductHistory, BackupWidget…): маленькая и специфичная, шарить не стоит.
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+
+// Время планирования коротко: секунды до минуты, дальше — целые минуты (та же грубость,
+// что у teamPlanningElapsedLabel — точность до секунды тут не нужна)
+function teamPlanningElapsedShort(elapsedMs: number): string {
+  const totalSec = Math.round(elapsedMs / 1000);
+  if (totalSec < 60) return `за ${totalSec} с`;
+  return `за ${Math.round(totalSec / 60)} мин`;
+}
+
+// Итоговая строка успешного планирования — «строчка в потоке», не карточка: план целиком
+// (под-задачи, исполнители) уже покажет карточка team_plan следом, эта строка — только
+// закрытие плашки «идёт работа» фактом и временем, которого у карточки плана нет
+export function teamPlanningDoneText(subtaskCount: number, waveCount: number, elapsedMs: number): string {
+  const parts = [`${subtaskCount} ${pluralRu(subtaskCount, 'под-задача', 'под-задачи', 'под-задач')}`];
+  if (waveCount > 0) parts.push(`${waveCount} ${pluralRu(waveCount, 'волна', 'волны', 'волн')}`);
+  parts.push(teamPlanningElapsedShort(elapsedMs));
+  return `План собран — ${parts.join(' · ')}`;
+}
+
+// Признак течения времени на плашке — тот же приём, что «работает N мин» у фаз
+// workflow-карточки: отсчёт от момента, когда клиент УВИДЕЛ стадию (таймстампа начала
+// стадии на проводе нет), поэтому после перезагрузки посреди планирования счёт идёт
+// от нуля. Первую минуту не считаем: «меньше минуты» спокойнее мелькающих секунд.
+export function teamPlanningElapsedLabel(startedAt: number, now: number): string {
+  const mins = Math.floor(Math.max(0, now - startedAt) / 60000);
+  return mins < 1 ? 'меньше минуты' : `уже ${mins} мин`;
 }
 
 // Подписи поля ответа. У блокера — ответ исполнителю, у развилки — свой вариант

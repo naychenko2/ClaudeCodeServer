@@ -50,6 +50,21 @@ function ProjectRowItem({ p, active, onOpen }: { p: Project; active: boolean; on
   );
 }
 
+// Секция списка проектов. Живёт на уровне модуля (static-components): объявленная
+// внутри ProjectPalette, она пересоздавалась бы на каждый рендер, а вместе с ней
+// сбрасывалось бы состояние её поддерева.
+function PaletteSection({ title, items, currentProjectId, onOpen }: {
+  title: string; items: Project[]; currentProjectId?: string; onOpen: (p: Project) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <>
+      <div style={{ padding: '8px 14px 4px', fontSize: FS.xs, color: C.textMuted, letterSpacing: '.04em', textTransform: 'uppercase' }}>{title}</div>
+      {items.map(p => <ProjectRowItem key={p.id} p={p} active={p.id === currentProjectId} onOpen={onOpen} />)}
+    </>
+  );
+}
+
 export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId?: string; onClose: () => void }) {
   const projects = useAllProjects();
   const pinnedIds = usePinnedIds();
@@ -91,13 +106,6 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
   const goAllProjects = () => { onClose(); openAllProjects(); };
   const goNewProject = () => { onClose(); openNewProjectFlow(); };
 
-  const Section = ({ title, items }: { title: string; items: Project[] }) => items.length ? (
-    <>
-      <div style={{ padding: '8px 14px 4px', fontSize: FS.xs, color: C.textMuted, letterSpacing: '.04em', textTransform: 'uppercase' }}>{title}</div>
-      {items.map(p => <ProjectRowItem key={p.id} p={p} active={p.id === currentProjectId} onOpen={open} />)}
-    </>
-  ) : null;
-
   const empty = !currentList.length && !pinnedList.length && !recentList.length && !restList.length;
 
   // Портал в body обязателен: палитру открывают в том числе из панели-карточки,
@@ -131,10 +139,10 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
           />
         </div>
         <div style={{ overflowY: 'auto', padding: '4px 0 8px' }}>
-          <Section title="Текущий" items={currentList} />
-          <Section title="Закреплённые" items={pinnedList} />
-          <Section title="Недавние" items={recentList} />
-          <Section title={pinnedList.length || recentList.length ? 'Все проекты' : 'Проекты'} items={restList} />
+          <PaletteSection title="Текущий" items={currentList} currentProjectId={currentProjectId} onOpen={open} />
+          <PaletteSection title="Закреплённые" items={pinnedList} currentProjectId={currentProjectId} onOpen={open} />
+          <PaletteSection title="Недавние" items={recentList} currentProjectId={currentProjectId} onOpen={open} />
+          <PaletteSection title={pinnedList.length || recentList.length ? 'Все проекты' : 'Проекты'} items={restList} currentProjectId={currentProjectId} onOpen={open} />
           {empty && (
             <div style={{ padding: 20, textAlign: 'center', color: C.textMuted, fontSize: FS.base }}>
               Ничего не найдено

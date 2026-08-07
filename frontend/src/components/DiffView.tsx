@@ -70,10 +70,11 @@ export function DiffView({ diff, staging }: { diff: string; staging?: DiffStagin
   // Выбранные строки для частичного stage (ключ «hunk:line»); сброс при смене диффа
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [hoverHunk, setHoverHunk] = useState<number | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- очистка выбранных строк при смене диффа
   useEffect(() => { setSelected(new Set()); }, [diff]);
 
   const toggleLine = (key: string) =>
-    setSelected(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
+    setSelected(prev => { const n = new Set(prev); if (n.has(key)) n.delete(key); else n.add(key); return n; });
 
   const handleStageSelected = () => {
     if (!staging || selected.size === 0) return;

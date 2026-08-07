@@ -99,6 +99,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
   // Смена среза/уровней — дерево строится заново
   const levelsKey = levels.join('>');
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- перестройка сводного дерева при смене среза/фильтров
     setChunks({});
     setExpanded(new Set());
     setSelNode(null);
@@ -110,6 +111,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
 
   // Значения для подменю «+ фильтр → разрез»
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс значений подфильтра при смене меню
     if (!menu?.startsWith('fvals:')) { setFvals(null); return; }
     const dim = menu.slice(6) as SpendDim;
     let cancelled = false;
@@ -124,6 +126,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
   const selTurnId = st.selKey?.startsWith('turn:') ? st.selKey.slice(5) : null;
   const [turnDetail, setTurnDetail] = useState<SpendTurnDetailResponse | null | 'error'>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- скелетон вместо старого хода при смене выбора
     if (!selTurnId) { setTurnDetail(null); return; }
     let cancelled = false;
     setTurnDetail(null);
@@ -136,6 +139,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
   // ---- Свод выбранного узла (панель деталей) ----
   const [nodeOv, setNodeOv] = useState<SpendOverviewResponse | null | 'error'>(null);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- скелетон вместо старого обзора узла при смене выбора
     if (!selNode) { setNodeOv(null); return; }
     let cancelled = false;
     setNodeOv(null);
@@ -592,12 +596,12 @@ function Section({ title, extra, children }: { title: ReactNode; extra?: ReactNo
 function DaySpark({ byDay }: { byDay: { date: string; aggregated: boolean; total: number }[] }) {
   const max = Math.max(1, ...byDay.map(d => d.total));
   const hasAgg = byDay.some(d => d.aggregated);
-  let sepDone = false;
+  // Пунктирная граница — один раз, перед первым неагрегатным днём
+  const sepIdx = hasAgg ? byDay.findIndex(d => !d.aggregated) : -1;
   return (
     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 44 }}>
-      {byDay.map(d => {
-        const sep = !sepDone && !d.aggregated && hasAgg;
-        if (sep) sepDone = true;
+      {byDay.map((d, i) => {
+        const sep = i === sepIdx;
         return (
           <span key={d.date} style={{ display: 'contents' }}>
             {sep && <i style={{ borderLeft: `1px dashed ${C.warning}`, alignSelf: 'stretch', margin: '0 1px' }} />}

@@ -1,0 +1,763 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Режим чтения внешних ссылок — v1</title>
+<style>
+  /* Токены — копия theme.css (значения обеих тем), чтобы макет был самодостаточным */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-msg-bg: rgba(251, 248, 242, 0.42);
+    --c-success:      #5E8B4E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --c-output-bg:    #FFFFFF;
+    --c-output-border:#DED4C2;
+    --c-term-bg:      #2A251F;
+    --c-term-text:    #D8CFC0;
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+    --c-skeleton: #E4DCCC;
+    --canvas-ink: 42, 37, 31;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-msg-bg: rgba(46, 42, 37, 0.38);
+    --c-success:      #7CB86A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --c-output-bg:    #262320;
+    --c-output-border:#3D3830;
+    --c-term-bg:      #17140F;
+    --c-term-text:    #C9C0B0;
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+    --c-skeleton: #38332D;
+    --canvas-ink: 237, 230, 219;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 64px;
+    background: var(--c-bg-main);
+    color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 28px; max-width: 720px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading);
+    margin: 40px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 760px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+
+  /* Переключатель темы */
+  .themebar { position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); border-radius: 10px; padding: 6px 12px;
+  }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  /* Рамка «окна продукта» — холст с дудл-фоном */
+  .frame {
+    background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px;
+    padding: 12px; box-shadow: var(--shadow-card); overflow: hidden; position: relative;
+  }
+  .frame::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .05;
+    background-image:
+      repeating-linear-gradient(45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px),
+      repeating-linear-gradient(-45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px);
+  }
+  .frame > * { position: relative; }
+  .row { display: flex; gap: 8px; align-items: stretch; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; }
+
+  /* Рельса панелей */
+  .rail {
+    width: 40px; flex: 0 0 40px; background: var(--c-bg-panel); border: 1px solid var(--c-border-light);
+    border-radius: 14px; box-shadow: var(--shadow-island); padding: 6px 0;
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .rail button {
+    width: 28px; height: 28px; border-radius: 8px; border: none; background: transparent;
+    color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer;
+  }
+  .rail button.on { background: var(--c-accent-light); color: var(--c-accent); }
+  .rail .sep { width: 18px; height: 1px; background: var(--c-divider); margin: 3px 0; }
+
+  /* Панель-остров */
+  .island {
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px;
+    box-shadow: var(--shadow-island); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .island-h {
+    height: 40px; flex: 0 0 40px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light);
+    display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px;
+    font-size: 12px; color: var(--c-text-secondary); font-weight: 600;
+  }
+
+  /* Шапка ридера — 52px (TB.heightDesktop): две строки, заголовок + домен */
+  .reader-h {
+    height: 52px; flex: 0 0 52px; background: var(--c-bg-inset);
+    border-bottom: 1px solid var(--c-border-light);
+    display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px;
+  }
+  .reader-h .txt { min-width: 0; flex: 1; }
+  .reader-h .title {
+    font-size: 13px; font-weight: 600; color: var(--c-text-heading); line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .reader-h .host {
+    font-size: 11px; color: var(--c-text-muted); line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    display: flex; align-items: center; gap: 5px;
+  }
+  .favicon { width: 12px; height: 12px; border-radius: 3px; background: var(--c-accent-muted); flex: 0 0 12px; }
+  .hbtns { display: flex; gap: 2px; flex: 0 0 auto; }
+  .ib {
+    width: 32px; height: 32px; border-radius: 8px; border: none; background: transparent;
+    color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer;
+  }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+
+  /* Тело ридера */
+  .reader-body { flex: 1; overflow: auto; padding: 16px 16px 28px; background: var(--c-bg-panel); }
+  .reader-col { max-width: 680px; margin: 0 auto; }
+
+  /* Типографика статьи */
+  .art { color: var(--c-text-primary); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+  .art h1 { font-family: 'PT Serif', Georgia, serif; font-size: 22px; line-height: 1.3; color: var(--c-text-heading); margin: 0 0 4px; }
+  .art .meta { font-size: 11px; color: var(--c-text-muted); margin: 0 0 18px; }
+  .art h2 { font-family: 'PT Serif', Georgia, serif; font-size: 18px; color: var(--c-text-heading); margin: 24px 0 8px; }
+  .art h3 { font-size: 14px; font-weight: 600; color: var(--c-text-heading); margin: 18px 0 6px; }
+  .art p { margin: 0 0 12px; }
+  .art ul, .art ol { margin: 0 0 12px; padding-left: 20px; }
+  .art li { margin-bottom: 4px; }
+  .art a { color: var(--c-info); text-decoration: underline; }
+  .art blockquote {
+    margin: 12px 0; padding: 2px 0 2px 12px; border-left: 3px solid var(--c-accent);
+    color: var(--c-text-secondary); font-style: italic;
+  }
+  .art pre {
+    background: var(--c-output-bg); border: 1px solid var(--c-output-border); border-radius: 8px;
+    padding: 10px 14px; margin: 0 0 12px; overflow-x: auto;
+  }
+  .art pre code { font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--c-text-primary); white-space: pre; }
+  .art :not(pre) > code {
+    font-family: 'JetBrains Mono', monospace; font-size: 12.5px; background: var(--c-bg-selected);
+    padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading);
+  }
+  .art figure { margin: 0 0 14px; }
+  .art .imgph {
+    width: 100%; height: 150px; border-radius: 8px; border: 1px solid var(--c-border);
+    background:
+      linear-gradient(135deg, var(--c-bg-selected) 25%, transparent 25%) -10px 0/20px 20px,
+      var(--c-bg-card);
+    display: grid; place-items: center; color: var(--c-text-muted); font-size: 11px;
+  }
+  .art figcaption { font-size: 11px; color: var(--c-text-muted); margin-top: 5px; }
+  .art .tablewrap { overflow-x: auto; margin: 0 0 14px; }
+  .art table { border-collapse: collapse; min-width: 100%; font-size: 13px; }
+  .art th, .art td { border: 1px solid var(--c-border); padding: 6px 10px; text-align: left; white-space: nowrap; }
+  .art th { background: var(--c-bg-inset); font-weight: 600; color: var(--c-text-heading); }
+  .art .longline { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--c-text-secondary); }
+
+  /* Плашка «текст извлечён» под шапкой */
+  .srcbar {
+    display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--c-text-muted);
+    background: var(--c-bg-inset); border: 1px solid var(--c-border-light); border-radius: 8px;
+    padding: 6px 10px; margin: 0 auto 16px; max-width: 680px;
+  }
+
+  /* Лента чата */
+  .chat { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .msg {
+    background: var(--c-msg-bg); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px;
+    line-height: 1.65; font-size: 13.5px;
+  }
+  .msg.user { background: var(--c-bg-card); border: 1px solid var(--c-border-light); }
+  .who { font-size: 11px; color: var(--c-text-muted); margin-bottom: 4px; }
+  .lnk { color: var(--c-accent); text-decoration: underline; }
+
+  /* Кнопка-компаньон «Открыть рядом» */
+  .lnkwrap { display: inline-flex; align-items: center; gap: 2px; }
+  .openside {
+    display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 6px;
+    border: none; background: transparent; color: var(--c-text-muted); cursor: pointer;
+    vertical-align: -4px;
+  }
+  .openside.hidden { opacity: 0; }
+  .openside.hover { opacity: 1; background: var(--c-accent-light); color: var(--c-accent); }
+  .openside.touch { opacity: 1; color: var(--c-text-muted); }
+  .openside:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+
+  /* Состояния */
+  .state { display: grid; place-items: center; text-align: center; padding: 40px 24px; height: 100%; }
+  .state .ico { color: var(--c-text-muted); margin-bottom: 10px; }
+  .state .t { font-size: 14px; font-weight: 600; color: var(--c-text-heading); margin-bottom: 6px; }
+  .state .s { font-size: 12px; color: var(--c-text-secondary); max-width: 300px; line-height: 1.55; margin: 0 auto 14px; }
+  .btn {
+    font: inherit; font-size: 13px; cursor: pointer; border-radius: 12px; padding: 8px 16px;
+    border: 1px solid transparent; background: var(--c-accent); color: var(--c-on-accent);
+    box-shadow: var(--shadow-button);
+  }
+  .btn.sec { background: var(--c-bg-card); color: var(--c-text-primary); border-color: var(--c-border); box-shadow: none; }
+  .btns { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+
+  /* Скелетон загрузки */
+  .sk { background: var(--c-skeleton); border-radius: 6px; height: 12px; margin-bottom: 10px; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: .55 } 50% { opacity: .95 } }
+
+  /* Мобильная шторка */
+  .phone {
+    width: 340px; height: 620px; border-radius: 26px; border: 1px solid var(--c-border);
+    background: var(--c-bg-main); position: relative; overflow: hidden; box-shadow: var(--shadow-card);
+  }
+  .phone .content { padding: 12px; }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 78%;
+    background: var(--c-bg-panel); border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--c-divider); margin: 8px auto 4px; }
+  .scrim { position: absolute; inset: 0; background: rgba(23,19,15,.42); }
+  .mob-h { display: flex; align-items: center; gap: 8px; padding: 4px 8px 8px 14px; border-bottom: 1px solid var(--c-border-light); }
+  .ib44 { width: 44px; height: 44px; border-radius: 10px; border: none; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .spec { max-width: 900px; }
+  .spec table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-bottom: 16px; }
+  .spec th, .spec td { border: 1px solid var(--c-border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  .spec th { background: var(--c-bg-inset); color: var(--c-text-heading); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="themebar">
+    <button class="tbtn" id="t-light" aria-pressed="true" onclick="setTheme('light')">Светлая</button>
+    <button class="tbtn" id="t-dark" aria-pressed="false" onclick="setTheme('dark')">Тёмная</button>
+    <span style="font-size:11px;color:var(--c-text-muted)">оба состояния макета проверяются в обеих темах</span>
+  </div>
+
+  <h1 class="doc">Режим чтения внешних ссылок</h1>
+  <p class="lead">
+    Ссылка из ответа Claude открывается панелью рядом с разговором: содержимое страницы вытащено
+    в чистый текст и свёрстано в дизайн-системе продукта. Живой сайт — по кнопке «Открыть в браузере».
+    Клик по самой ссылке ведёт себя как раньше (новая вкладка) — чтение рядом идёт отдельным действием.
+  </p>
+
+  <!-- ============ 1. ТОЧКА ВХОДА ============ -->
+  <h2 class="sec">1. Точка входа у ссылки в ленте</h2>
+  <p class="note">
+    Кнопка-компаньон <code class="tok">PanelRight</code> сразу за ссылкой. На указателе она проявляется
+    при наведении на ссылку или на саму кнопку и при <code class="tok">:focus-visible</code> с клавиатуры.
+    На touch наведения нет — там кнопка видна всегда в приглушённом тоне, а её тач-цель расширена
+    до 44px невидимым полем (<code class="tok">::after</code>), сам значок остаётся 20px.
+  </p>
+  <div class="grid2">
+    <div>
+      <div class="frame">
+        <div class="msg">
+          <div class="who">Claude</div>
+          Ограничение <code style="font-family:'JetBrains Mono',monospace;font-size:12px">frame-ancestors</code>
+          описано в спецификации CSP — см.
+          <span class="lnkwrap"><a class="lnk" href="#">MDN: CSP frame-ancestors</a><button class="openside hidden" title="Открыть рядом">▹|</button></span>.
+          Именно поэтому встроенный браузер тут не работает.
+        </div>
+      </div>
+      <p class="caption">Покой (указатель): кнопки не видно, лента не зашумлена.</p>
+    </div>
+    <div>
+      <div class="frame">
+        <div class="msg">
+          <div class="who">Claude</div>
+          Ограничение <code style="font-family:'JetBrains Mono',monospace;font-size:12px">frame-ancestors</code>
+          описано в спецификации CSP — см.
+          <span class="lnkwrap"><a class="lnk" href="#" style="background:var(--c-accent-light);border-radius:4px">MDN: CSP frame-ancestors</a><button class="openside hover" title="Открыть рядом">▹|</button></span>.
+          Именно поэтому встроенный браузер тут не работает.
+        </div>
+      </div>
+      <p class="caption">Наведение / фокус с клавиатуры: кнопка проявилась, ссылка подсвечена accentLight.</p>
+    </div>
+    <div>
+      <div class="frame">
+        <div class="msg">
+          <div class="who">Claude</div>
+          Ограничение CSP описано в спецификации — см.
+          <span class="lnkwrap"><a class="lnk" href="#">MDN: CSP frame-ancestors</a><button class="openside touch" title="Открыть рядом">▹|</button></span>.
+        </div>
+      </div>
+      <p class="caption">Touch: кнопка видна всегда (textMuted), тач-цель 44×44 вокруг значка 20px.</p>
+    </div>
+    <div>
+      <div class="frame">
+        <div class="msg">
+          <div class="who">Claude</div>
+          Три источника подряд:
+          <span class="lnkwrap"><a class="lnk" href="#">RFC 7034</a><button class="openside touch" title="Открыть рядом">▹|</button></span>,
+          <span class="lnkwrap"><a class="lnk" href="#">issue #4821</a><button class="openside touch" title="Открыть рядом">▹|</button></span>,
+          <span class="lnkwrap"><a class="lnk" href="#">разбор на Stack Overflow</a><button class="openside touch" title="Открыть рядом">▹|</button></span>.
+        </div>
+      </div>
+      <p class="caption">Несколько ссылок в абзаце: кнопка не ломает перенос строки — обёртка inline-flex, разрыва между ссылкой и значком нет.</p>
+    </div>
+  </div>
+
+  <!-- ============ 2. ПАНЕЛЬ РЯДОМ С ЧАТОМ ============ -->
+  <h2 class="sec">2. Панель рядом с чатом — «готово»</h2>
+  <p class="note">
+    Обычная панель-остров правой зоны: та же рельса, тот же drag-and-drop, тот же сплиттер ширины.
+    Шапка — 52px (<code class="tok">TB.heightDesktop</code>) вместо типовых 40, потому что несёт две
+    строки: заголовок страницы и домен. Это осознанное отклонение, см. спецификацию.
+  </p>
+  <div class="frame">
+    <div class="row" style="height: 460px">
+      <div class="chat">
+        <div class="msg user"><div class="who">Ты</div>Почему нельзя просто встроить страницу в iframe?</div>
+        <div class="msg">
+          <div class="who">Claude</div>
+          Большинство сайтов запрещают встраивание заголовком
+          <code style="font-family:'JetBrains Mono',monospace;font-size:12px">Content-Security-Policy: frame-ancestors</code>.
+          Подробности —
+          <span class="lnkwrap"><a class="lnk" href="#" style="background:var(--c-accent-light);border-radius:4px">MDN: CSP frame-ancestors</a><button class="openside hover">▹|</button></span>.
+        </div>
+      </div>
+      <div class="island" style="width: 380px; flex: 0 0 380px">
+        <div class="reader-h">
+          <div class="txt">
+            <div class="title">CSP: frame-ancestors — HTTP | MDN</div>
+            <div class="host"><span class="favicon"></span>developer.mozilla.org</div>
+          </div>
+          <div class="hbtns">
+            <button class="ib" title="Развернуть на всю контентную зону">⤢</button>
+            <button class="ib" title="Открыть в браузере">↗</button>
+            <button class="ib" title="Закрыть">✕</button>
+          </div>
+        </div>
+        <div class="reader-body">
+          <div class="reader-col">
+            <div class="srcbar">Текст извлечён со страницы · вёрстка сайта не сохраняется</div>
+            <div class="art">
+              <h1>CSP: frame-ancestors</h1>
+              <p class="meta">developer.mozilla.org · обновлено 12 марта 2026</p>
+              <p>Директива <code>frame-ancestors</code> задаёт родителей, которым разрешено
+                встраивать страницу через <code>&lt;frame&gt;</code>, <code>&lt;iframe&gt;</code>,
+                <code>&lt;object&gt;</code> или <code>&lt;embed&gt;</code>.</p>
+              <h2>Синтаксис</h2>
+              <pre><code>Content-Security-Policy: frame-ancestors 'none'</code></pre>
+              <p>Значение <code>'none'</code> запрещает встраивание кому угодно — именно его
+                отдают GitHub и Stack Overflow.</p>
+              <ul>
+                <li><code>'self'</code> — только собственный origin;</li>
+                <li><code>&lt;host-source&gt;</code> — перечисление доменов;</li>
+                <li><code>'none'</code> — запрет для всех.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <button>📄</button><button>🗂</button><button>✓</button>
+        <div class="sep"></div>
+        <button class="on" title="Чтение">▤</button>
+        <button>🤖</button>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Иконка панели в рельсе — <code class="tok">Newspaper</code>, подпись «Чтение». Активная панель подсвечена accentLight, как остальные.</p>
+
+  <!-- ============ 3. РАЗВЁРНУТОЕ ============ -->
+  <h2 class="sec">3. Развёрнуто на всю контентную зону</h2>
+  <p class="note">
+    Чат и остальные панели скрыты, ридер занимает холст целиком. Колонка текста центрируется по
+    <code class="tok">CHAT_MAX_W</code> (950) с внутренним пределом 680 для сплошной прозы — длина строки
+    важнее ширины окна. Кнопка «Развернуть» превращается в «Свернуть» (<code class="tok">Minimize2</code>).
+  </p>
+  <div class="frame">
+    <div class="row" style="height: 420px">
+      <div class="island" style="flex:1">
+        <div class="reader-h">
+          <div class="txt">
+            <div class="title">Разбираем Content Security Policy на практике: длинный заголовок статьи, который не помещается в одну строку и обрезается</div>
+            <div class="host"><span class="favicon"></span>developer.mozilla.org</div>
+          </div>
+          <div class="hbtns">
+            <button class="ib" title="Свернуть к панели">⤡</button>
+            <button class="ib" title="Открыть в браузере">↗</button>
+            <button class="ib" title="Закрыть">✕</button>
+          </div>
+        </div>
+        <div class="reader-body">
+          <div class="reader-col">
+            <div class="art">
+              <h1>Разбираем Content Security Policy на практике</h1>
+              <p class="meta">developer.mozilla.org · 18 минут чтения</p>
+              <p>Политика безопасности контента ограничивает источники, из которых страница
+                может грузить скрипты, стили и кадры. Ниже — разбор директив по группам с примерами
+                конфигураций, которые действительно встречаются в проде.</p>
+              <blockquote>Заголовок работает как белый список: всё, что не разрешено явно, запрещено.</blockquote>
+              <h2>Сравнение директив</h2>
+              <div class="tablewrap">
+                <table>
+                  <tr><th>Директива</th><th>Что ограничивает</th><th>Частое значение</th><th>Ломает встраивание</th></tr>
+                  <tr><td>frame-ancestors</td><td>кто встраивает нас</td><td>'none'</td><td>да</td></tr>
+                  <tr><td>frame-src</td><td>кого встраиваем мы</td><td>'self' https://*.youtube.com</td><td>нет</td></tr>
+                  <tr><td>script-src</td><td>источники скриптов</td><td>'self' 'nonce-…'</td><td>нет</td></tr>
+                </table>
+              </div>
+              <h3>Очень длинная строка без пробелов</h3>
+              <p class="longline">https://developer.example.com/docs/Web/HTTP/Headers/Content-Security-Policy/frame-ancestors?utm_source=chat&amp;utm_campaign=very-long-tracking-parameter-value</p>
+              <p>Переносится по любому символу (<code>overflow-wrap: anywhere</code>) — горизонтальной
+                прокрутки у прозы не бывает.</p>
+              <figure>
+                <div class="imgph">изображение из статьи</div>
+                <figcaption>Схема проверки директив браузером. Подпись из alt/figcaption источника.</figcaption>
+              </figure>
+              <h3>Код шире панели</h3>
+              <pre><code>Content-Security-Policy: default-src 'self'; frame-ancestors 'none'; script-src 'self' 'nonce-r4nd0m'; img-src 'self' data: https://cdn.example.com</code></pre>
+              <p>Блок кода и таблица прокручиваются каждый в своей коробке, страница по горизонтали не едет.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="rail">
+        <button>📄</button><button>🗂</button><button>✓</button>
+        <div class="sep"></div>
+        <button class="on" title="Чтение">▤</button>
+        <button>🤖</button>
+      </div>
+    </div>
+  </div>
+  <p class="caption">Длинный заголовок в шапке обрезается ellipsis в одну строку; полный — в <code class="tok">title</code> и первой строкой статьи.</p>
+
+  <!-- ============ 4. СОСТОЯНИЯ ============ -->
+  <h2 class="sec">4. Состояния панели</h2>
+  <div class="grid2">
+    <div>
+      <div class="frame">
+        <div class="island" style="height: 340px">
+          <div class="reader-h">
+            <div class="txt">
+              <div class="title" style="color:var(--c-text-secondary)">Загружаем страницу…</div>
+              <div class="host"><span class="favicon"></span>developer.mozilla.org</div>
+            </div>
+            <div class="hbtns"><button class="ib" title="Открыть в браузере">↗</button><button class="ib" title="Закрыть">✕</button></div>
+          </div>
+          <div class="reader-body">
+            <div class="reader-col">
+              <div class="sk" style="width:70%;height:20px;margin-bottom:16px"></div>
+              <div class="sk" style="width:100%"></div>
+              <div class="sk" style="width:96%"></div>
+              <div class="sk" style="width:88%"></div>
+              <div class="sk" style="width:100%;height:80px;margin:16px 0"></div>
+              <div class="sk" style="width:92%"></div>
+              <div class="sk" style="width:60%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Загрузка. Домен известен сразу (он из URL) — показываем его, не дожидаясь ответа. Кнопки «Развернуть» нет: разворачивать пока нечего.</p>
+    </div>
+
+    <div>
+      <div class="frame">
+        <div class="island" style="height: 340px">
+          <div class="reader-h">
+            <div class="txt">
+              <div class="title">Не удалось показать</div>
+              <div class="host"><span class="favicon"></span>github.com</div>
+            </div>
+            <div class="hbtns"><button class="ib" title="Закрыть">✕</button></div>
+          </div>
+          <div class="reader-body">
+            <div class="state">
+              <div>
+                <div class="ico" style="font-size:26px">⚠</div>
+                <div class="t">Эту страницу не получилось показать рядом</div>
+                <div class="s">Сайт не отдал содержимое для чтения. Живой вариант откроется в браузере.</div>
+                <div class="btns">
+                  <button class="btn">Открыть в браузере</button>
+                  <button class="btn sec">Повторить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Ошибка. Главное действие — то, что точно сработает (браузер); «Повторить» вторичной кнопкой. Тон — нейтральный, без danger-заливки: это не поломка продукта.</p>
+    </div>
+
+    <div>
+      <div class="frame">
+        <div class="island" style="height: 340px">
+          <div class="island-h">▤&nbsp; Чтение <span style="flex:1"></span><button class="ib" title="Закрыть">✕</button></div>
+          <div class="reader-body">
+            <div class="state">
+              <div>
+                <div class="ico" style="font-size:26px">▤</div>
+                <div class="t">Пока нечего читать</div>
+                <div class="s">Нажми значок «Открыть рядом» у ссылки в ответе — страница появится здесь.</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Пусто: панель открыли из рельсы до того, как выбрали ссылку. Шапка обычная, 40px — заголовка страницы ещё нет.</p>
+    </div>
+
+    <div>
+      <div class="frame">
+        <div class="island" style="height: 340px">
+          <div class="reader-h">
+            <div class="txt">
+              <div class="title">Как мы переписали билд-пайплайн</div>
+              <div class="host"><span class="favicon"></span>engineering.example.com</div>
+            </div>
+            <div class="hbtns">
+              <button class="ib" title="Назад">←</button>
+              <button class="ib" title="Развернуть">⤢</button>
+              <button class="ib" title="Открыть в браузере">↗</button>
+              <button class="ib" title="Закрыть">✕</button>
+            </div>
+          </div>
+          <div class="reader-body">
+            <div class="reader-col">
+              <div class="art">
+                <h1>Как мы переписали билд-пайплайн</h1>
+                <p class="meta">engineering.example.com · 7 минут чтения</p>
+                <p>Переход по ссылке <a href="#">внутри статьи</a> грузит следующую страницу в тот же
+                  ридер, и в шапке появляется «Назад». Так чтение не расползается по вкладкам.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Переход внутри ридера: кнопка «Назад» появляется только при глубине &gt; 0 и уходит на первой странице.</p>
+    </div>
+  </div>
+
+  <!-- ============ 5. МОБИЛЬНАЯ ============ -->
+  <h2 class="sec">5. Мобильная раскладка — шторка</h2>
+  <p class="note">
+    На узком экране панели нет: ридер приходит нижней шторкой поверх ленты (радиус
+    <code class="tok">R.sheet</code>, тень <code class="tok">SHADOW.sheet</code>, затемнение фона).
+    Шторка занимает 78% высоты — верхняя полоска ленты остаётся видимой, и по ней шторка закрывается
+    тапом. «Развернуть» на мобиле нет: шторка и так во весь экран; свайп вниз и «✕» — закрыть.
+  </p>
+  <div class="grid2" style="grid-template-columns: repeat(auto-fit, minmax(340px, 380px))">
+    <div>
+      <div class="phone">
+        <div class="content">
+          <div class="msg" style="font-size:12.5px">
+            <div class="who">Claude</div>
+            Подробности —
+            <span class="lnkwrap"><a class="lnk" href="#">MDN: CSP frame-ancestors</a><button class="openside touch">▹|</button></span>.
+          </div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="mob-h">
+            <div class="txt" style="min-width:0;flex:1">
+              <div class="title" style="font-size:13px;font-weight:600;color:var(--c-text-heading);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">CSP: frame-ancestors — HTTP | MDN</div>
+              <div class="host" style="font-size:11px;color:var(--c-text-muted)"><span class="favicon"></span>developer.mozilla.org</div>
+            </div>
+            <button class="ib44" title="Открыть в браузере">↗</button>
+            <button class="ib44" title="Закрыть">✕</button>
+          </div>
+          <div class="reader-body" style="padding:14px 16px 24px">
+            <div class="art" style="font-size:14px">
+              <h1 style="font-size:20px">CSP: frame-ancestors</h1>
+              <p class="meta">developer.mozilla.org · обновлено 12 марта 2026</p>
+              <p>Директива задаёт родителей, которым разрешено встраивать страницу через
+                <code>&lt;iframe&gt;</code>.</p>
+              <pre><code>Content-Security-Policy: frame-ancestors 'none'</code></pre>
+              <p>Значение <code>'none'</code> запрещает встраивание кому угодно.</p>
+              <ul><li>'self' — только свой origin;</li><li>'none' — запрет для всех.</li></ul>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Готово. Кнопки в шапке шторки — 44×44, между ними ничего лишнего.</p>
+    </div>
+    <div>
+      <div class="phone">
+        <div class="content">
+          <div class="msg" style="font-size:12.5px">
+            <div class="who">Claude</div>
+            Смотри
+            <span class="lnkwrap"><a class="lnk" href="#">issue #4821</a><button class="openside touch">▹|</button></span>.
+          </div>
+        </div>
+        <div class="scrim"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <div class="mob-h">
+            <div class="txt" style="min-width:0;flex:1">
+              <div class="title" style="font-size:13px;font-weight:600;color:var(--c-text-heading)">Не удалось показать</div>
+              <div class="host" style="font-size:11px;color:var(--c-text-muted)"><span class="favicon"></span>github.com</div>
+            </div>
+            <button class="ib44" title="Закрыть">✕</button>
+          </div>
+          <div class="reader-body">
+            <div class="state" style="padding:24px 20px">
+              <div>
+                <div class="ico" style="font-size:26px">⚠</div>
+                <div class="t">Эту страницу не получилось показать рядом</div>
+                <div class="s">Сайт не отдал содержимое для чтения.</div>
+                <div class="btns" style="flex-direction:column">
+                  <button class="btn" style="width:100%;padding:12px 16px">Открыть в браузере</button>
+                  <button class="btn sec" style="width:100%;padding:12px 16px">Повторить</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p class="caption">Ошибка на мобиле: кнопки в столбик, высота 44+, главное действие сверху.</p>
+    </div>
+  </div>
+
+  <!-- ============ 6. СПЕЦИФИКАЦИЯ ============ -->
+  <h2 class="sec">6. Спецификация — токены и поведение</h2>
+  <div class="spec">
+    <table>
+      <tr><th>Элемент</th><th>Токены</th><th>Поведение</th></tr>
+      <tr>
+        <td>Панель ридера</td>
+        <td><code class="tok">ISLAND</code> целиком: <code class="tok">R.xxl</code>, <code class="tok">C.borderLight</code>, <code class="tok">SHADOW.island</code>, <code class="tok">ISLAND.gap</code></td>
+        <td>Новая панель <code class="tok">reader</code> в <code class="tok">panelCatalog.ts</code>, дом — правая зона, иконка <code class="tok">Newspaper</code>, заголовок «Чтение». Всё остальное (перетаскивание, сплиттер, стек, drawer на планшете) достаётся от <code class="tok">PanelZone</code> бесплатно.</td>
+      </tr>
+      <tr>
+        <td>Шапка ридера</td>
+        <td>высота <code class="tok">TB.heightDesktop</code> (52), фон <code class="tok">C.bgInset</code>, заголовок <code class="tok">FS.base</code>/600/<code class="tok">C.textHeading</code>, домен <code class="tok">FS.xs</code>/<code class="tok">C.textMuted</code></td>
+        <td>Заголовок в одну строку с ellipsis, полный — в <code class="tok">title</code>. Домен слева с фавиконом 12px. В пустом состоянии — обычная шапка острова (<code class="tok">ISLAND.headerH</code> 40): заголовка страницы ещё нет.</td>
+      </tr>
+      <tr>
+        <td>Кнопки шапки</td>
+        <td><code class="tok">TB.iconHitDesktop</code> 32 / <code class="tok">TB.iconHitMobile</code> 44, <code class="tok">R.md</code>, <code class="tok">TB.iconColor</code> → <code class="tok">TB.iconColorHover</code> на <code class="tok">TB.iconHoverBg</code></td>
+        <td>Порядок слева направо: «Назад» (<code class="tok">ArrowLeft</code>, только при глубине &gt; 0) · «Развернуть/Свернуть» (<code class="tok">Maximize2</code>/<code class="tok">Minimize2</code>, нет на мобиле и в состоянии загрузки) · «Открыть в браузере» (<code class="tok">ExternalLink</code>) · «Закрыть» (<code class="tok">X</code>).</td>
+      </tr>
+      <tr>
+        <td>Колонка текста</td>
+        <td>центрируется, предел 680px внутри <code class="tok">CHAT_MAX_W</code>; отступы <code class="tok">SP.lg</code></td>
+        <td>Новых констант ширины не заводим: 680 — внутренний предел прозы ридера, роль «колонки чтения» уже описана у <code class="tok">CHAT_MAX_W</code>.</td>
+      </tr>
+      <tr>
+        <td>Типографика статьи</td>
+        <td>H1 <code class="tok">FS.h2</code> + <code class="tok">FONT.serif</code>; H2 <code class="tok">FS.xl</code> serif; H3 <code class="tok">FS.md</code>/600 sans; тело <code class="tok">FS.md</code>, line-height 1.7; код <code class="tok">FONT.mono</code> <code class="tok">FS.sm</code></td>
+        <td><code class="tok">overflow-wrap: anywhere</code> на всей статье. Блоки кода и таблицы — каждый в своей коробке с <code class="tok">overflow-x: auto</code>; страница по горизонтали не едет никогда. Картинки <code class="tok">max-width: 100%</code> + подпись <code class="tok">FS.xs</code>/<code class="tok">C.textMuted</code>.</td>
+      </tr>
+      <tr>
+        <td>Ссылки внутри статьи</td>
+        <td><code class="tok">C.info</code> + underline</td>
+        <td>Клик грузит страницу в тот же ридер и наращивает стек «Назад». Внешние схемы (mailto:, tel:) — в систему, как обычно.</td>
+      </tr>
+      <tr>
+        <td>Кнопка «Открыть рядом» у ссылки</td>
+        <td>значок <code class="tok">PanelRight</code> <code class="tok">ICON_SIZE.xs</code> (14) в поле 20px, <code class="tok">R.sm</code>, покой <code class="tok">C.textMuted</code>, активная <code class="tok">C.accent</code> на <code class="tok">C.accentLight</code></td>
+        <td>Указатель: <code class="tok">opacity 0</code> → 1 на hover обёртки ссылки и на <code class="tok">:focus-visible</code> кнопки; кнопка всегда в DOM и в tab-порядке (клавиатура добирается без мыши). Touch (<code class="tok">useIsMobile</code> / <code class="tok">(hover: none)</code>): видна всегда в <code class="tok">C.textMuted</code>, тач-цель 44×44 через <code class="tok">::after</code> без сдвига раскладки. <code class="tok">aria-label</code> «Открыть рядом: {домен}».</td>
+      </tr>
+      <tr>
+        <td>Состояние «загрузка»</td>
+        <td>скелетон <code class="tok">C.bgSelected</code>, <code class="tok">R.sm</code>, пульсация 1.4s</td>
+        <td>Домен показываем сразу (он известен из URL), заголовок — «Загружаем страницу…» в <code class="tok">C.textSecondary</code>. Панель открывается мгновенно по клику — ожидание идёт внутри неё, а не до неё.</td>
+      </tr>
+      <tr>
+        <td>Состояние «ошибка»</td>
+        <td>нейтральный <code class="tok">EmptyState</code>, без <code class="tok">C.dangerBg</code></td>
+        <td>«Эту страницу не получилось показать рядом» + причина одной строкой. Главная кнопка — «Открыть в браузере» (<code class="tok">Button</code> primary), вторая — «Повторить» (secondary). На мобиле обе на всю ширину, в столбик.</td>
+      </tr>
+      <tr>
+        <td>Состояние «пусто»</td>
+        <td><code class="tok">EmptyState</code> из <code class="tok">ui/</code></td>
+        <td>«Пока нечего читать» + подсказка про значок у ссылки. Показывается, когда панель открыли из рельсы без выбранной ссылки.</td>
+      </tr>
+      <tr>
+        <td>Мобильная шторка</td>
+        <td><code class="tok">R.sheet</code> 22, <code class="tok">SHADOW.sheet</code>, оверлей <code class="tok">C.overlay</code>, <code class="tok">Z.modal</code></td>
+        <td>Высота 78vh, грабер сверху, закрытие свайпом вниз, тапом по затемнению и кнопкой «✕». Кнопки «Развернуть» нет.</td>
+      </tr>
+      <tr>
+        <td>Тёмная тема</td>
+        <td>только токены — новых цветов не заводим</td>
+        <td>Проверено на всех состояниях: тело статьи на <code class="tok">C.bgPanel</code>, блоки кода на <code class="tok">C.outputBg</code> (в тёмной он тёмный), скелетон на <code class="tok">C.bgSelected</code>, домен <code class="tok">C.textMuted</code> ≈ 4.6:1 к фону панели.</td>
+      </tr>
+    </table>
+  </div>
+
+  <p class="note" style="margin-top:24px">
+    Фич-флаг <code class="tok">link-reader</code> (по умолчанию выключен) гейтит и панель в рельсе,
+    и кнопку-компаньон у ссылок. Выключен — лента выглядит ровно как сегодня.
+  </p>
+</div>
+
+<script>
+  function setTheme(m) {
+    document.documentElement.setAttribute('data-theme', m);
+    document.getElementById('t-light').setAttribute('aria-pressed', String(m === 'light'));
+    document.getElementById('t-dark').setAttribute('aria-pressed', String(m === 'dark'));
+  }
+  setTheme('light');
+</script>
+</body>
+</html>

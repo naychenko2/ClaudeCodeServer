@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react'
 import type { Project, AuthState } from './types'
+import { C } from './lib/design'
 import { LoginPage } from './pages/LoginPage'
 import { ProjectListPage } from './pages/ProjectListPage'
 import { ChatsPage } from './pages/ChatsPage'
@@ -17,7 +18,7 @@ import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
-import { C } from './lib/design'
+import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { showToast } from './lib/toast'
@@ -30,6 +31,7 @@ import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { OnboardingPage } from './features/onboarding/OnboardingPage'
+import { isWallActive, setWallActive } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -40,6 +42,7 @@ import { ensureNotificationsSubscribed } from './lib/notifications'
 import { KnowledgePage } from './features/knowledge/KnowledgePage'
 import { NotificationsPage } from './features/notifications/NotificationsPage'
 import { HomePage } from './pages/HomePage'
+import { WallPage } from './pages/WallPage'
 import { SpendPage } from './features/spend/SpendPage'
 import { TelemetryPage } from './features/telemetry/TelemetryPage'
 import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
@@ -54,9 +57,28 @@ const UiKitPage = import.meta.env.DEV
   ? lazy(() => import('./dev/UiKitPage').then(m => ({ default: m.UiKitPage })))
   : null;
 
+// Симуляция паузы планирования (индикатор «Команда готовит план…») — тоже dev-only
+const TeamPlanSimPage = import.meta.env.DEV
+  ? lazy(() => import('./dev/TeamPlanSimPage').then(m => ({ default: m.TeamPlanSimPage })))
+  : null;
+
 function isDevUiKitHash(): boolean {
   return window.location.hash === '#/ui-kit';
 }
+
+function isDevTeamPlanSimHash(): boolean {
+  return window.location.hash === '#/team-plan-sim';
+}
+
+// Dev-only витрины служебных экранов, которые иначе видно лишь при стечении
+// обстоятельств: #/boom роняет рендер намеренно (заглушка ErrorBoundary),
+// #/boot показывает заставку старта (обычно она мелькает доли секунды и лишь
+// на медленной загрузке). Признак снимается ЗДЕСЬ, при загрузке модуля:
+// навигация ниже приводит незнакомый hash к известному экрану ещё до первого
+// рендера, и проверка внутри компонента его уже не увидела бы.
+// В prod обе ветки вырезаются вместе с DEV.
+const devBoom = import.meta.env.DEV && window.location.hash === '#/boom';
+const devBoot = import.meta.env.DEV && window.location.hash === '#/boot';
 
 // Диплинк из hash-URL (#/calendar, #/project/{id}/task/{tid}…) — читаем один раз
 // при загрузке страницы, до первого рендера (WorkspacePage заберёт pending-значения)
@@ -114,6 +136,7 @@ export default function App() {
     if (initialHash?.screen === 'home') return 'home'
     if (initialHash?.screen === 'calendar') return 'calendar'
     if (initialHash?.screen === 'chats') return 'chats'
+    if (initialHash?.screen === 'wall') return 'wall'
     if (initialHash?.screen === 'notes') return 'notes'
     if (initialHash?.screen === 'personas') return 'personas'
     if (initialHash?.screen === 'knowledge') return 'knowledge'
@@ -130,6 +153,17 @@ export default function App() {
   // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,
   // условие всегда ложно и режим не активируется.
   const [uiKitMode, setUiKitMode] = useState(() => isDevUiKitHash())
+  const [teamPlanSimMode, setTeamPlanSimMode] = useState(() => isDevTeamPlanSimHash())
+
+  // Демо экрана ошибки #/boom (dev). Начальное значение — из константы модуля:
+  // на старте hash успевают нормализовать до первого рендера. Обратно режим не
+  // выключается: из упавшего дерева возвращают кнопки самой заглушки.
+  const [boomMode, setBoomMode] = useState(devBoom)
+
+  // Демо заставки старта #/boot (dev). В отличие от #/boom выключается сам при
+  // смене hash: заставка своих кнопок не имеет, и выходом служит любая навигация
+  // (клик по ней, «назад» браузера).
+  const [bootMode, setBootMode] = useState(devBoot)
 
   // «Что нового» — продуктовая история по всем проектам. Overlay на верхнем уровне,
   // открывается из HubHeader (событие) из любого раздела.
@@ -263,9 +297,12 @@ export default function App() {
   }, [auth, me.loaded, me.needsOnboarding])
 
   const online = useOnline()
+  const onlineRef = useRef(online)
+  useEffect(() => { onlineRef.current = online }, [online])
+  const useOnlineRef = useRef(() => onlineRef.current)
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
-  projectIdRef.current = project?.id
+  useEffect(() => { projectIdRef.current = project?.id }, [project?.id])
 
   // Инвалидация DTO открытого проекта при смене дефолт-персоны: бэк шлёт
   // personas_changed action='default' из PersonasController.MakeDefault — и при
@@ -305,6 +342,7 @@ export default function App() {
   // При наличии сохранённых credentials — немедленно зондируем сервер, чтобы _online
   // выставился правильно ещё до первого рендера страниц (navigator.onLine ≠ «сервер доступен»)
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовый зонд доступности сервера по сохранённым credentials
     if (!auth) { setAuthChecking(false); return }
     // Максимум 3 секунды на проверку доступности сервера.
     // Если не ответил — показываем приложение в текущем (возможно офлайн) состоянии.
@@ -373,7 +411,8 @@ export default function App() {
     // поэтому стандартный seed ниже сбросил бы URL на дефолт (#/home) → hashchange listener
     // погасил бы uiKitMode, и витрина закрылась бы сразу после открытия.
     if (isDevUiKitHash()) return;
-    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
+    if (isDevTeamPlanSimHash()) return;
+    const seed: NavSnapshot = { screen: hubTab === 'home' ? 'home' : hubTab === 'chats' ? 'chats' : hubTab === 'wall' ? 'wall' : hubTab === 'calendar' ? 'calendar' : hubTab === 'notes' ? 'notes' : hubTab === 'personas' ? 'personas' : hubTab === 'knowledge' ? 'knowledge' : hubTab === 'spend' ? 'spend' : hubTab === 'telemetry' ? 'telemetry' : hubTab === 'notifications' ? 'notifications' : 'projects' }
     // Диплинк #/notes/{id}: сохраняем заметку в снимок, иначе сид затрёт id в URL
     if (seed.screen === 'notes' && initialHash?.screen === 'notes') seed.note = initialHash.noteId ?? null
     // Диплинк #/personas/{id}: сохраняем персону в снимок, иначе сид затрёт id в URL
@@ -421,6 +460,9 @@ export default function App() {
       } else if (s?.screen === 'chats') {
         // Раздел «Чаты» — открытый проект «спит», его не сбрасываем (навигационная память)
         if (hubTab !== 'chats') { localStorage.setItem(HUB_TAB_KEY, 'chats'); setHubTab('chats') }
+      } else if (s?.screen === 'wall') {
+        // «Стена» — проект «спит», как в остальных разделах хаба
+        if (hubTab !== 'wall') { localStorage.setItem(HUB_TAB_KEY, 'wall'); setHubTab('wall') }
       } else if (s?.screen === 'calendar') {
         // Раздел «Календарь» — проект тоже «спит»
         if (hubTab !== 'calendar') { localStorage.setItem(HUB_TAB_KEY, 'calendar'); setHubTab('calendar') }
@@ -475,13 +517,34 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [auth?.serverUrl])
 
-  // Прогрев/синхронизация: при входе и при возврате в онлайн — все проекты, начиная с текущего
+  // Снэпшот/drain — только при устойчивом онлайне. На мобиле связь часто «мигает»
+  // (online → degraded → online за секунды), и каждое возвращение дёргать полную
+  // синхронизацию — перегружать канал и снова ронять связь. Задержка 5с + потолок
+  // раз в минуту оставляют только осмысленные возвраты.
+  const lastHeavySyncRef = useRef(0)
+  const stableOnlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (auth && online) {
-      // Сперва проигрываем офлайн-очереди (задачи/заметки) на сервер, затем прогреваем кэш —
-      // независимо от того, какой раздел открыт (подписки в разделах заводятся при монтировании)
+    if (stableOnlineTimerRef.current !== null) {
+      clearTimeout(stableOnlineTimerRef.current)
+      stableOnlineTimerRef.current = null
+    }
+    if (!auth || !online) return
+    const now = Date.now()
+    const sinceLast = now - lastHeavySyncRef.current
+    if (lastHeavySyncRef.current > 0 && sinceLast < 60_000) return
+    stableOnlineTimerRef.current = setTimeout(() => {
+      stableOnlineTimerRef.current = null
+      // Проверяем, что за 5с нас не унесло обратно в degraded/offline.
+      if (!useOnlineRef.current()) return
+      lastHeavySyncRef.current = Date.now()
       void drainOfflineQueues()
       runOfflineSnapshot(projectIdRef.current)
+    }, 5_000)
+    return () => {
+      if (stableOnlineTimerRef.current !== null) {
+        clearTimeout(stableOnlineTimerRef.current)
+        stableOnlineTimerRef.current = null
+      }
     }
   }, [auth, online])
 
@@ -507,6 +570,7 @@ export default function App() {
       })
       .catch(() => { /* сервер недоступен — остаёмся в проекте, не трогаем состояние */ })
     return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- реагируем на смену id, а не объекта: эффект сам зовёт setProject(fresh), включение project дало бы цикл перезапросов
   }, [auth, online, project?.id])
 
   // Watcher: сервер уведомил об изменении файлов проекта → инкрементальный ре-синк офлайн-кэша
@@ -516,8 +580,21 @@ export default function App() {
   useEffect(() => { ensureNotificationsSubscribed(); }, []);
 
   // Dev-витрина #/ui-kit — переключение hash (вход/выход из режима) без перезагрузки.
+  // Тем же слушателем ловим #/boom: иначе демо экрана ошибки открывалось бы только
+  // с полной перезагрузкой, а вписанный в адресную строку hash ничего не делал.
   useEffect(() => {
-    const onHash = () => setUiKitMode(isDevUiKitHash());
+    const onHash = () => {
+      setUiKitMode(isDevUiKitHash());
+      if (import.meta.env.DEV && window.location.hash === '#/boom') setBoomMode(true);
+      if (import.meta.env.DEV) setBootMode(window.location.hash === '#/boot');
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+
+  // Dev-симуляция паузы планирования #/team-plan-sim — тот же механизм
+  useEffect(() => {
+    const onHash = () => setTeamPlanSimMode(isDevTeamPlanSimHash());
     window.addEventListener('hashchange', onHash);
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
@@ -543,6 +620,17 @@ export default function App() {
     navReplace({ screen: 'projects' })
     setProject(null)
   }
+  // Выход со стены её собственной кнопкой (рельса стены, заглушка на узком экране):
+  // возвращает В ПРОЕКТ, из которого на стену вошли, — он всё это время «спал» в
+  // state и восстанавливается как при возврате из любого другого раздела. К СПИСКУ
+  // проектов уводит другой жест — клик по подсвеченной пилюле «Проекты» (switchHubTab).
+  // Проекта нет (пришли по диплинку #/wall) — остаётся список.
+  const exitWall = () => {
+    setWallActive(false)
+    localStorage.setItem(HUB_TAB_KEY, 'projects')
+    setHubTab('projects')
+    navPush(project ? { screen: 'project', project, view: 'sidebar', file: null } : { screen: 'projects' })
+  }
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
@@ -562,6 +650,27 @@ export default function App() {
         navReplace(rest)
       }
     }
+    // Клик по «Проектам» с самой стены (там эта пилюля подсвечена как активная) —
+    // явный выход из режима стены к списку проектов: тот же жест, что повторный
+    // клик по активному разделу с открытым проектом ниже
+    if (t === 'projects' && hubTab === 'wall') {
+      setWallActive(false)
+      localStorage.removeItem(OPEN_PROJECT_KEY)
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setProject(null)
+      setHubTab('projects')
+      navPush({ screen: 'projects' })
+      return
+    }
+    // Возврат в рабочий режим: пока стена «активна», вкладка «Проекты» ведёт на неё,
+    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене или
+    // кликом по подсвеченным «Проектам» прямо со стены)
+    if (t === 'projects' && hubTab !== 'wall' && isWallActive()) {
+      localStorage.setItem(HUB_TAB_KEY, 'wall')
+      setHubTab('wall')
+      navPush({ screen: 'wall' })
+      return
+    }
     // Повторный клик по активному разделу «Проекты» с открытым проектом — выход к списку.
     if (t === 'projects' && hubTab === 'projects' && project) {
       localStorage.removeItem(OPEN_PROJECT_KEY)
@@ -576,7 +685,7 @@ export default function App() {
     const moduleId = moduleIdOf(t)
     const dest: NavSnapshot = moduleId
       ? { screen: 'module', moduleId }
-      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' }
+      : { screen: t === 'home' ? 'home' : t === 'chats' ? 'chats' : t === 'wall' ? 'wall' : t === 'calendar' ? 'calendar' : t === 'notes' ? 'notes' : t === 'personas' ? 'personas' : t === 'knowledge' ? 'knowledge' : t === 'spend' ? 'spend' : t === 'telemetry' ? 'telemetry' : t === 'notifications' ? 'notifications' : 'projects' }
     // Если на текущем табе открыто «глубокое» состояние (заметка/файл/задача/персона/база) — уходя,
     // сохраняем его в истории (navPush), чтобы Back вернул именно к нему. Уход С дашборда
     // «Домой» — тоже push: дашборд — хаб-центр, Back с любого раздела возвращает на него.
@@ -754,7 +863,7 @@ export default function App() {
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).
   // Listener ставится один раз; свежее замыкание openNotificationUrl — через ref.
   const openUrlRef = useRef(openNotificationUrl)
-  openUrlRef.current = openNotificationUrl
+  useEffect(() => { openUrlRef.current = openNotificationUrl })
   useEffect(() => {
     const onOpenUrl = (e: Event) => {
       const url = (e as CustomEvent<{ url: string }>).detail?.url
@@ -785,12 +894,35 @@ export default function App() {
     setAuth(null)
   }
 
+  // Намеренное падение для просмотра экрана ошибки (см. devBoom выше)
+  if (boomMode) throw new Error('Демо экрана ошибки: #/boom в dev-режиме');
+
+  // Заставка старта напоказ (см. devBoot выше). display:contents у обёртки —
+  // чтобы клик-выход не добавлял лишний бокс поверх раскладки заставки
+  if (bootMode) {
+    return (
+      <div style={{ display: 'contents' }} onClick={() => { window.location.hash = ''; }}>
+        {/* С hint — в демо ждать некуда, и строку состояния надо показать */}
+        <LoadingScreen hint="Проверяю вход" />
+      </div>
+    );
+  }
+
   // Early-return в режиме #/ui-kit: показываем витрину раньше UpdatePrompt/authChecking.
   // В prod UiKitPage === null → ветка недостижима и вырезается компилятором.
   if (uiKitMode && UiKitPage) {
     return (
-      <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+      <Suspense fallback={<LoadingScreen hint="Загружаю витрину" />}>
         <UiKitPage />
+      </Suspense>
+    );
+  }
+
+  // Early-return в режиме #/team-plan-sim — та же механика, что у витрины UI-кита
+  if (teamPlanSimMode && TeamPlanSimPage) {
+    return (
+      <Suspense fallback={<div style={{ minHeight: '100vh', background: C.bgMain }} />}>
+        <TeamPlanSimPage />
       </Suspense>
     );
   }
@@ -800,13 +932,15 @@ export default function App() {
       <UpdatePrompt />
       {auth && !authChecking && <NotificationToasts onNavigate={openNotificationUrl} />}
       {authChecking
-        ? <div style={{ minHeight: '100vh', background: C.bgMain }} />
+        ? <LoadingScreen hint="Проверяю вход" />
         : !auth
           ? <LoginPage onConnect={setAuth} />
           : effectiveHubTab === 'home'
             ? <HomePage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenProject={openProjectFromHome} />
           : effectiveHubTab === 'chats'
             ? <ChatsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
+          : effectiveHubTab === 'wall'
+            ? <WallPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onExitWall={exitWall} />
             : effectiveHubTab === 'calendar'
               ? <CalendarPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onOpenTask={openTaskInProject} />
             : effectiveHubTab === 'notes'

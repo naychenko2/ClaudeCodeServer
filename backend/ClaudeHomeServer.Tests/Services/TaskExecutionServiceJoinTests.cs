@@ -29,6 +29,7 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private readonly PersonaManager _personas;
     private readonly NotificationStore _notifStore;
     private readonly TaskExecutionService _sut;
+    private readonly UserStore _userStore;
 
     public TaskExecutionServiceJoinTests()
     {
@@ -38,10 +39,12 @@ public class TaskExecutionServiceJoinTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_dir, "projects.json"),
+                ["DefaultProjectsPath"] = Path.Combine(_dir, "homes"),
             })
             .Build();
 
         var userStore = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        _userStore = userStore;
         var appSettings = new AppSettingsService(config);
         var projectManager = new ProjectManager(config, userStore, appSettings);
         var personas = new PersonaManager(config);
@@ -116,6 +119,44 @@ public class TaskExecutionServiceJoinTests : IDisposable
         var task = _tasks.Create(null, ownerId, new CreateTaskRequest("Проверка join-а"));
         _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
         return _tasks.GetById(task.Id)!;
+    }
+
+    // ─── (е) волна 6: гонка двух конкурентных ExecuteAsync одной задачи ─────
+
+    // Guard «одна живая сессия на задачу» в ExecuteAsync читает LinkedSessionId ДО того, как
+    // CreateAsync/MarkClaudeStarted успеют его выставить — окно в секунды на подъём CLI-процесса.
+    // Живая приёмка волны 5: первый вызов tasks_run_executor иногда «падал», координатор
+    // ретраил — и раньше второй конкурентный вызов проскакивал мимо гарда в это окно, поднимая
+    // ВТОРОГО исполнителя на ту же задачу (следствие — задвоенный доклад TryDeliverCompletionAsync,
+    // т.к. оба исполнителя её закрывают). In-memory claim (_launching) закрывает окно на входе
+    // метода: второй конкурентный вызов получает явный отказ вместо гонки.
+    [Fact]
+    public async Task ExecuteAsync_ДваКонкурентныхВызоваОднойЗадачи_ЗапускаетРовноОдногоИсполнителя()
+    {
+        var user = _userStore.Add("race-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Гонка запуска исполнителя"));
+
+        var call1 = InvokeExecuteAsyncSafe(task);
+        var call2 = InvokeExecuteAsyncSafe(task);
+        var results = await Task.WhenAll(call1, call2);
+
+        results.Count(r => r.Ok).Should().Be(1, "исполнитель должен запуститься ровно один раз");
+        var failure = results.SingleOrDefault(r => !r.Ok);
+        failure.Error.Should().NotBeNull("второй конкурентный вызов обязан получить явный отказ");
+        failure.Error.Should().ContainAny("уже запускается", "уже работает сессия");
+    }
+
+    private async Task<(bool Ok, string? Error)> InvokeExecuteAsyncSafe(TaskItem task)
+    {
+        try
+        {
+            await _sut.ExecuteAsync(task, auto: false);
+            return (true, null);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return (false, ex.Message);
+        }
     }
 
     private async Task<int> CountNotificationsAsync(string ownerId) =>
@@ -310,6 +351,56 @@ public class TaskExecutionServiceJoinTests : IDisposable
         items[0].Title.Should().Be("Делегированная задача не выполнена");
         items[0].Url.Should().Be(TaskSchedulerService.TaskUrl(_tasks.GetById(task.Id)!),
             "доклада в исходном чате нет — разбираться идём в карточку задачи");
+    }
+
+    // ─── (е2) прод 2026-08-02 (находка Веры): дубль доклада после перезапуска исполнения ──
+    // Координатор перезапустил уже доставленную под-задачу в ответ на разблокировку карточки
+    // остановки — запуски разнесены во времени, _launching (TOCTOU-гард гонки) тут ни при чём.
+
+    [Fact]
+    public async Task ExecuteAsync_ДокладУжеДоставлен_ОтказДажеЕслиСтатусПереоткрыт()
+    {
+        var user = _userStore.Add("relaunch-owner", "password123", "user");
+        var task = _tasks.Create(null, user.Id, new CreateTaskRequest("Перезапуск после доклада"));
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        _tasks.MarkClaudeResult(task.Id, "success");
+        var tracked = _tasks.GetById(task.Id)!;
+        tracked.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(tracked);
+        tracked.CompletionDelivered.Should().BeTrue();
+
+        // Гипотетический путь реопена (Status переведён обратно) — гард по CompletionDelivered
+        // обязан блокировать перезапуск независимо от Status, а не только пока он Done
+        tracked.Status = TaskItemStatus.InProgress;
+
+        var act = async () => await _sut.ExecuteAsync(tracked, auto: true);
+        await act.Should().ThrowAsync<InvalidOperationException>()
+            .WithMessage("*доклад*доставлен*");
+    }
+
+    [Fact]
+    public async Task TryDeliverCompletionAsync_ПерезапускПослеДоставки_НеШлётВторойДоклад()
+    {
+        var task = CreateTrackedTask();
+        _tasks.MarkClaudeResult(task.Id, "success");
+        task.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(task);
+        task.CompletionDelivered.Should().BeTrue();
+
+        // Перезапуск исполнения той же задачи (новая сессия): MarkClaudeStarted сбрасывает
+        // ClaudeResult (новая попытка), но CompletionDelivered трогать не должен
+        _tasks.MarkClaudeStarted(task.Id, "sess-2", DateTime.UtcNow);
+        var relaunched = _tasks.GetById(task.Id)!;
+        relaunched.ClaudeResult.Should().BeNull();
+        relaunched.CompletionDelivered.Should().BeTrue("доклад уже доставлен — перезапуск не должен это забыть");
+
+        // Запоздавшие R/D-сигналы (исходной или новой попытки) не должны породить второй доклад
+        _tasks.MarkClaudeResult(relaunched.Id, "success");
+        relaunched.Status = TaskItemStatus.Done;
+        await _sut.TryDeliverCompletionAsync(relaunched);
+
+        (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1,
+            "доклад по задаче — один раз, даже после перезапуска исполнения");
     }
 
     [Fact]

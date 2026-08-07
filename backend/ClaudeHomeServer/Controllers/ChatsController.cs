@@ -144,21 +144,45 @@ public class ChatsController(SessionManager sessions, FileService files, Feature
     public async Task<IActionResult> SetWorkLoop(string id, [FromBody] SetWorkLoopRequest req)
     {
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        var updated = await sessions.SetWorkLoopAsync(id, req.Enabled);
-        return updated is null ? NotFound() : Ok(updated);
+        try
+        {
+            // manual: true — эндпоинт дёргает только человек через тумблер UI; явное
+            // сообщение об остановке (B5) шлётся внутри SetWorkLoopAsync на переходе true→false
+            var updated = await sessions.SetWorkLoopAsync(id, req.Enabled, manual: true);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        // Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате
+        catch (Services.SessionModeConflictException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
-    // Режим «Командная реализация» (флаг team-implement-mode): вкл/выкл режима чата-штаба.
-    // При включении можно сразу задать состав (пустой/null список исполнителей = вся команда
-    // проекта). Как loop, работает и для проектной сессии (GetOwned резолвит владельца).
+    // Режим «Командная реализация»: вкл/выкл режима чата-штаба. При включении можно сразу
+    // задать состав (пустой/null список исполнителей = вся команда проекта). Как loop,
+    // работает и для проектной сессии (GetOwned резолвит владельца).
     [HttpPut("{id}/team-implement")]
     public async Task<IActionResult> SetTeamImplement(string id, [FromBody] SetTeamImplementRequest req)
     {
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
-        var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,
-            req.AutoWaves, req.CoordinatorPersonaId, req.PlannerPersonaId,
-            req.ExecutorPersonaIds, UserId, req.CoordinatorNoCode);
-        return updated is null ? NotFound() : Ok(updated);
+        try
+        {
+            var updated = await sessions.SetTeamImplementAsync(id, req.Enabled,
+                req.AutoWaves, req.CoordinatorPersonaId, req.PlannerPersonaId,
+                req.ExecutorPersonaIds, UserId, req.CoordinatorNoCode);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        // Гард на входе (B2): нет координатора либо состава. Код отказа машинный — фронт по
+        // нему показывает пикер и НЕ отправляет вводную обычным сообщением.
+        catch (Services.TeamImplementSetupException ex)
+        {
+            return BadRequest(new { error = ex.Message, code = ex.Code });
+        }
+        // Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате
+        catch (Services.SessionModeConflictException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
     }
 
     // «Остановить» (Э4): текущие исполнители дорабатывают, новые волны не стартуют.

@@ -21,6 +21,7 @@ export function ProjectIcon({ project, size = 40, radius, outline, imageUrl: ima
   const imageUrl = imageUrlOverride ?? (project.icon?.kind === 'image' ? api.projects.iconUrl(project) : null);
   // Сброс ошибки при смене картинки — иначе после одного сбоя hasError залипает и валидный
   // новый src (перекроп/новый кандидат) не рисуется (компонент не перемонтируется по смене пропа).
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс флага ошибки загрузки при смене URL иконки
   useEffect(() => { setHasError(false); }, [imageUrl]);
   const br = radius ?? Math.round(size * 0.22);
 

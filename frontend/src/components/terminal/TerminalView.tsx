@@ -2,7 +2,8 @@ import { useEffect, useRef, useCallback } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
-import { C, FONT } from '../../lib/design'
+import { C } from '../../lib/design'
+import { XTERM_BASE_OPTIONS } from '../../lib/xtermTheme'
 import { sendTerminalInput, resizeTerminal, onTerminalMessage, connectTerminal } from '../../lib/terminalSignalr'
 
 interface Props {
@@ -22,7 +23,7 @@ export function TerminalView({ terminalId, onActivity, visible = true }: Props) 
   // onActivity — через ref: смена колбэка не должна пересоздавать xterm (иначе экран
   // чернеет и теряется ввод/вывод). xterm живёт ровно на один terminalId.
   const onActivityRef = useRef(onActivity)
-  onActivityRef.current = onActivity
+  useEffect(() => { onActivityRef.current = onActivity })
 
   const handleResize = useCallback(() => {
     const fit = fitAddonRef.current
@@ -37,23 +38,9 @@ export function TerminalView({ terminalId, onActivity, visible = true }: Props) 
     disposedRef.current = false
 
     const term = new Terminal({
+      ...XTERM_BASE_OPTIONS,
       cursorBlink: true,
       cursorStyle: 'bar',
-      fontSize: 13,
-      fontFamily: FONT.mono,
-      theme: {
-        background: C.termBg as string,
-        foreground: C.termText as string,
-        cursor: C.accent as string,
-        selectionBackground: C.accentMuted as string,
-        black: '#2e2e2e', red: '#cc6666', green: '#93c97d', yellow: '#e0c080',
-        blue: '#7fa6d6', magenta: '#c397d8', cyan: '#70c0b1', white: '#d0d0d0',
-        brightBlack: '#555555', brightRed: '#d97757', brightGreen: '#b8d7a3',
-        brightYellow: '#f0dfaf', brightBlue: '#a0b9d8', brightMagenta: '#d4a8d9',
-        brightCyan: '#8ed0c4', brightWhite: '#e8e8e8',
-      },
-      allowTransparency: false,
-      cols: 80, rows: 24, scrollback: 5000,
     })
 
     const fitAddon = new FitAddon()

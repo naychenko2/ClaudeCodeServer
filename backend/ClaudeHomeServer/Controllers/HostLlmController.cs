@@ -116,8 +116,9 @@ public class HostLlmController(
 
         try
         {
-            // Таймаут: потолок профиля действия; timeoutMs может только уменьшить (§10.5)
-            var ceilingMs = router.ProfileFor(fullKey).TimeoutMs;
+            // Таймаут: потолок ПО МАРШРУТУ действия (локаль/облако — свои значения,
+            // см. LocalActionRouter.TimeoutMsFor); timeoutMs может только уменьшить (§10.5)
+            var ceilingMs = router.TimeoutMsFor(fullKey);
             var effMs = req.TimeoutMs is int t && t > 0 ? Math.Min(t, ceilingMs) : ceilingMs;
 
             var route = router.Resolve(fullKey);

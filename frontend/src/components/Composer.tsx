@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
 import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
@@ -22,6 +22,7 @@ import { type Mode, MODE_META, MODES, ModeIcon, isDangerMode } from '../lib/mode
 import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
+import { showToast } from '../lib/toast';
 import { Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
@@ -76,7 +77,7 @@ export interface ComposerProps {
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
   workLoop?: WorkLoopState | null;
   onToggleWorkLoop?: () => void | Promise<void>;
-  // Режим «Командная реализация» (флаг team-implement-mode): состояние (live с фолбэком
+  // Режим «Командная реализация»: состояние (live с фолбэком
   // на Session.teamImplement); null — режим выключен. Бейдж виден при заданных обработчиках
   teamImplement?: SessionTeamImplement | null;
   onToggleTeamImplementAuto?: () => void | Promise<void>;
@@ -108,7 +109,17 @@ export interface ComposerProps {
   restore?: { text: string | null; attachedPaths: string[] | null; mode: string | null; seq: number } | null;
   // Замена всего списка вложений при restore (родитель владеет attachedFiles).
   onReplaceAttachments?: (paths: string[]) => void;
+  // Сигнал «поставь курсор в поле»: растущее число (на стене — фокус колонки).
+  // Именно счётчик, а не boolean: повторный запрос на то же значение не сработал бы.
+  focusSignal?: number;
 }
+
+// Ступени полосы контролов («губы» под полем ввода) — по ширине САМОЙ полосы, не окна.
+// Ниже STRIP_COMPACT правая группа (модель, усилие, собеседник) и селектор режима живут
+// иконками без подписей; выше STRIP_WIDE собеседнику разрешена длинная подпись. Между
+// ними — подписи есть, но короткие. Замеряется в самом Composer (stripWidth).
+const STRIP_COMPACT = 640;
+const STRIP_WIDE = 900;
 
 // Получить имя файла из пути
 function basename(filePath: string): string {
@@ -367,6 +378,7 @@ export function Composer({
   rateWindow,
   restore = null,
   onReplaceAttachments,
+  focusSignal,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
@@ -413,6 +425,7 @@ export function Composer({
     if (!r || r.seq === 0) return;
     if (getDraft(sessionId).trim()) return;          // черновик важнее
     if (r.text == null) return;                      // нечего восстанавливать
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- восстановление прерванного сообщения из события composer_restore
     setText(r.text);
     if (r.attachedPaths && r.attachedPaths.length > 0 && onReplaceAttachments) {
       onReplaceAttachments(r.attachedPaths);
@@ -420,6 +433,15 @@ export function Composer({
     textareaRef.current?.focus();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [restore?.seq, sessionId]);
+
+  // Внешний запрос фокуса (колонка «Стены» стала активной). Ждём кадр: композер
+  // в этот момент ещё проявляется, а фокус на скрытом поле браузер игнорирует.
+  useEffect(() => {
+    if (!focusSignal) return;
+    const id = requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [focusSignal]);
+
   const [modeMenuOpen, setModeMenuOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   // Опасный режим (bypass) ждёт подтверждения в модалке перед применением
@@ -465,6 +487,28 @@ export function Composer({
   const badgesRef = useRef<HTMLDivElement>(null);
   const rightRef = useRef<HTMLDivElement>(null);
 
+  // Ширина САМОЙ полосы, а не окна. Ступени раскладки губы раньше считались от isMobile
+  // (ширина окна ≤600), и на планшете, телефоне в ландшафте и в сплите получалось так:
+  // окно широкое → «десктопный» режим, а губа рядом со списком чатов узкая → пикеры
+  // разворачивались в полные подписи, кнопки не сворачивались, и строка вылезала за край.
+  // 0 — ещё не померили: до первого замера считаем полосу просторной, чтобы компактная
+  // форма не мигала на первом кадре. offline в зависимостях — в офлайне полосы нет в DOM,
+  // и наблюдателя надо переподписать на вернувшийся узел.
+  const [stripWidth, setStripWidth] = useState(0);
+  useEffect(() => {
+    const el = stripRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const read = () => setStripWidth(el.clientWidth);
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    read();
+    return () => ro.disconnect();
+  }, [offline]);
+  // Пикеры справа схлопнуты в иконки; подпись режима убрана
+  const compactStrip = !!isMobile || (stripWidth > 0 && stripWidth < STRIP_COMPACT);
+  // Собеседнику можно длинную подпись (иначе она режется по 200px)
+  const widePickers = !compactStrip && (stripWidth === 0 || stripWidth >= STRIP_WIDE);
+
   // Голосовой ввод целиком в хуке: распознанное дописываем к тексту, а при мёртвом
   // движке просто ставим фокус — диктовать будет системный ввод клавиатуры
   const { hasSpeech, isListening, recSeconds, startMic, stopMic } = useVoiceInput({
@@ -478,6 +522,7 @@ export function Composer({
     if (!sessionId) return;
     if (sessionStorage.getItem('cc_auto_discuss') === sessionId) {
       sessionStorage.removeItem('cc_auto_discuss');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое открытие «Команды» по флагу из sessionStorage
       setTeamOpen(true);
     }
   }, [sessionId]);
@@ -494,6 +539,17 @@ export function Composer({
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
   }, [modeMenuOpen, lockInfoOpen]);
+
+  // Низ мобильного меню режимов — по позиции кнопки (fixed во всю ширину чуть выше неё).
+  // Меряем в layout-эффекте: читать ref в рендере нельзя, а число без изменений
+  // не триггерит ререндер (setState с тем же значением выходит сразу).
+  const [modeMenuBottom, setModeMenuBottom] = useState(80);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- меряем каждый рендер, пока меню открыто: позиция кнопки плавает от высоты композера
+  useLayoutEffect(() => {
+    if (!modeMenuOpen || !isMobile) return;
+    const r = modeRef.current?.getBoundingClientRect();
+    setModeMenuBottom(r ? window.innerHeight - r.top + 6 : 80);
+  });
 
   const hasText = text.trim().length > 0;
 
@@ -579,6 +635,8 @@ export function Composer({
   const autoResize = useCallback(() => {
     const el = textareaRef.current;
     if (!el) return;
+    // Прямая DOM-мутация осознанно: высота поля не должна гонять ререндер на каждый ввод
+    // eslint-disable-next-line react-hooks/immutability -- стиль DOM-узла из эффекта, не рендер-данные
     el.style.height = 'auto';
     el.style.height = Math.min(el.scrollHeight, 200) + 'px';
   }, []);
@@ -591,6 +649,7 @@ export function Composer({
     setText('');
     setDraft(sessionId, '');
     if (textareaRef.current) {
+      // eslint-disable-next-line react-hooks/immutability -- сброс высоты DOM-узла из обработчика отправки
       textareaRef.current.style.height = '34px';
     }
   };
@@ -606,10 +665,17 @@ export function Composer({
       if (!isProjectChat && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
       // Режим уже включён — сообщение уходит как новая вводная, не пересобирая состояние
       if (!teamImplement && onEnableTeamImplement) {
-        await onEnableTeamImplement({
-          autoWaves: teamSettings.modeAutoWaves,
-          executorPersonaIds: teamSettings.participants.map(p => p.id),
-        });
+        try {
+          await onEnableTeamImplement({
+            autoWaves: teamSettings.modeAutoWaves,
+            executorPersonaIds: teamSettings.participants.map(p => p.id),
+          });
+        } catch {
+          // Включение не удалось (причину уже показал тост) — вводную НЕ отправляем
+          // обычным сообщением (M11): текст остаётся в поле, механика не сбрасывается,
+          // человек может повторить или разобраться с причиной отказа
+          return;
+        }
       }
       setLastMechanic(sessionId, 'implementMode');
       onSend(t, attachments);
@@ -627,18 +693,19 @@ export function Composer({
       const topicOptional = teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
       if (!t && !topicOptional) { setTeamOpen(true); return; }
       if ((teamMech === 'discuss' || teamMech === 'implement') && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
-      // «Остановиться на плане» у автопилота = честный консенсус-план (ralplan):
-      // у скилла autopilot нет флага «стоп на плане», а ralplan делает ровно это —
-      // план через спор до одобрения критика, без исполнения
-      const effective: TeamMechanicId =
-        teamMech === 'autopilot' && !teamSettings.untilDone ? 'consensus' : teamMech;
-      // Автопилот «до готово»: включаем цикл work-loop ДО отправки (PUT /chats/{id}/loop),
-      // только если он ещё не активен — тумблер переключает состояние
-      if (teamMech === 'autopilot' && teamSettings.untilDone && !workLoop?.active && onToggleWorkLoop) {
-        await onToggleWorkLoop();
+      // Автопилот работает только через цикл «до готово»: включаем work-loop ДО отправки
+      // (PUT /chats/{id}/loop), только если он ещё не активен. Включение может не удаться
+      // (чат занят, 4xx/5xx, обрыв) — тогда ход НЕ отправляем (как с «Командной реализацией»
+      // выше): иначе человек думает, что автопилот работает, а ушёл один обычный ход
+      if (teamMech === 'autopilot' && !workLoop?.active && onToggleWorkLoop) {
+        try {
+          await onToggleWorkLoop();
+        } catch {
+          return;
+        }
       }
-      setLastMechanic(sessionId, effective);
-      onSend(buildTeamTurnText(effective, t, teamSettings, chatContext), [], { auto: true });
+      setLastMechanic(sessionId, teamMech);
+      onSend(buildTeamTurnText(teamMech, t, teamSettings, chatContext), [], { auto: true });
       setTeamMech(null);
       setTeamOpen(false);
       resetInput();
@@ -679,6 +746,7 @@ export function Composer({
 
   // Подсказка следующего сообщения: дисмисс крестиком живёт до прихода новой подсказки
   const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс «скрыто» при приходе новой подсказки
   useEffect(() => { setSuggestionDismissed(false); }, [promptSuggestion]);
   const suggestionVisible = !!promptSuggestion && text.trim() === '' && !suggestionDismissed && !isGenerating && !isListening;
   const acceptSuggestion = useCallback(() => {
@@ -820,11 +888,16 @@ export function Composer({
   ) : null;
 
   // Цикл «до готово»: выключен — круглая кнопка в ряду, включён — пилюля в группе
-  // состояния, чей сегмент-иконка и есть кнопка (клик останавливает цикл, без confirm)
+  // состояния, чей сегмент-иконка и есть кнопка (клик останавливает цикл, без confirm).
+  // При провале onToggleWorkLoop сам показывает тост и бросает (для guard'а в handleSend) —
+  // тумблерные кнопки ход не отправляют, им остаётся только не уронить необработанный reject
   const loopActive = !!workLoop?.active;
+  const toggleWorkLoopSafe = onToggleWorkLoop
+    ? () => { void Promise.resolve(onToggleWorkLoop()).catch(() => {}); }
+    : undefined;
   const loopButton = onToggleWorkLoop && !loopActive ? (
     <button
-      onClick={onToggleWorkLoop}
+      onClick={toggleWorkLoopSafe}
       title="Цикл «до готово»: агент работает итерациями, пока не отчитается о завершении, затем верификационный ход"
       style={{
         width: isMobile ? 36 : 32, height: isMobile ? 36 : 32, borderRadius: R.pill, border: 'none',
@@ -842,7 +915,7 @@ export function Composer({
       isMobile={isMobile}
       icon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
       leadTitle="Остановить цикл «до готово»"
-      onLeadClick={() => void onToggleWorkLoop()}
+      onLeadClick={toggleWorkLoopSafe}
       valueTitle={workLoop.phase === 'verifying'
         ? 'Цикл «до готово»: верификационный ход'
         : `Цикл «до готово»: итерация ${workLoop.iteration} из ${workLoop.maxIterations}`}
@@ -852,7 +925,7 @@ export function Composer({
     />
   ) : null;
 
-  // Режим «Командная реализация» (флаг team-implement-mode): бейдж стадии + чип «Авто»
+  // Режим «Командная реализация»: бейдж стадии + чип «Авто»
   const teamImplementBadge = teamImplement && onToggleTeamImplementAuto && onDisableTeamImplement ? (
     <TeamImplementBadge
       state={teamImplement}
@@ -986,9 +1059,10 @@ export function Composer({
         onMouseEnter={e => { if (!modeMenuOpen && !modeLocked) e.currentTarget.style.background = C.accentLight; }}
         onMouseLeave={e => { if (!modeMenuOpen && !modeLocked) e.currentTarget.style.background = 'transparent'; }}
         style={{
-          // Сжатый (мобильный) вид — иконка + шеврон без подписи
-          ...(isMobile
-            ? { height: 36, padding: '0 6px', justifyContent: 'center', gap: 3 }
+          // Сжатый вид — иконка + шеврон без подписи. Высота остаётся тач-размером
+          // мобилы (36) только на мобиле: на планшете полоса десктопная, сжата лишь ширина
+          ...(compactStrip
+            ? { height: isMobile ? 36 : 28, padding: '0 6px', justifyContent: 'center', gap: 3 }
             : { height: 28, padding: '0 10px' }),
           borderRadius: R.md, border: 'none',
           background: modeMenuOpen ? C.bgSelected : 'transparent',
@@ -1001,11 +1075,11 @@ export function Composer({
         <ModeIcon mode={displayMode} />
         {/* В сжатом виде прячем только подпись (длинные названия распирают строку) —
             шеврон остаётся, как у модели, усилия и собеседника. Название — в тултипе. */}
-        {!isMobile && MODE_META[displayMode].label}
+        {!compactStrip && MODE_META[displayMode].label}
         {modeLocked ? (
           <Lock size={10} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.6 }} />
         ) : (
-          <ChevronDown size={isMobile ? 10 : ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+          <ChevronDown size={compactStrip ? 10 : ICON_SIZE.xs} strokeWidth={ICON_STROKE}
             style={{ flexShrink: 0, opacity: 0.55, transform: modeMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
         )}
       </button>
@@ -1015,7 +1089,7 @@ export function Composer({
           // bottom — чуть выше кнопки по getBoundingClientRect, чтобы меню не уезжало за край
           // экрана, когда кнопка сместилась из-за переноса строк.
           ...(isMobile
-            ? (() => { const r = modeRef.current?.getBoundingClientRect(); return { position: 'fixed' as const, left: 16, right: 16, bottom: r ? window.innerHeight - r.top + 6 : 80 }; })()
+            ? { position: 'fixed' as const, left: 16, right: 16, bottom: modeMenuBottom }
             : { position: 'absolute' as const, bottom: 'calc(100% + 6px)', left: 0, minWidth: 248 }),
           maxWidth: 'calc(100vw - 32px)',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
@@ -1195,8 +1269,8 @@ export function Composer({
       selectedAgentName={selectedAgentName ?? null}
       onSelect={onCompanionChange}
       isMobile={isMobile}
-      wide={!isMobile}
-      compact={isMobile}
+      wide={widePickers}
+      compact={compactStrip}
       onCreateGroup={onCreateGroup}
     />
   ) : null;
@@ -1204,10 +1278,11 @@ export function Composer({
   // Сворачиваемые кнопки полосы — в порядке показа. Не влезли → уезжают в «⋯» с конца
   // (то есть справа налево). Режим прав не сворачиваем: он и так крайний слева, а внутри
   // меню его собственный список выбора выглядел бы вложенным меню.
+  // eslint-disable-next-line react-hooks/refs -- кнопки не refs: taint от onClick-обработчиков, читающих refs только в событиях
   const collapsible = [
     { key: 'attach', node: attachButton, item: { key: 'attach', icon: <Plus size={16} strokeWidth={ICON_STROKE} />, label: 'Прикрепить файл', sublabel: 'Добавить файл к сообщению', onClick: onAttach } },
     slashButton && { key: 'slash', node: slashButton, item: { key: 'slash', icon: <span style={{ fontFamily: FONT.mono, fontSize: 15, fontWeight: 700, lineHeight: 1 }}>/</span>, label: 'Вставить скилл', sublabel: 'Список навыков через «/»', onClick: handleSlashButton } },
-    loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => { void onToggleWorkLoop?.(); } } },
+    loopButton && { key: 'loop', node: loopButton, item: { key: 'loop', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»', sublabel: 'Повторять итерациями, пока не готово', toggle: loopActive, onClick: () => toggleWorkLoopSafe?.() } },
     worktreeButton && { key: 'worktree', node: worktreeButton, item: { key: 'worktree', icon: <FolderGit2 size={16} strokeWidth={ICON_STROKE} />, label: 'Отдельное дерево', sublabel: worktreeToggleDisabled ? (worktreeActive ? `Включено · ${worktreeBranch} · идёт ход…` : 'Пока идёт ход, недоступно') : (worktreeActive ? `Включено · ${worktreeBranch}` : 'Чат в изолированном git worktree'), toggle: worktreeActive, disabled: worktreeToggleDisabled, onClick: () => { if (!worktreeToggleDisabled) void onToggleWorktree?.(); } } },
     discussButton && { key: 'discuss', node: discussButton, item: { key: 'discuss', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой', sublabel: 'Выбрать механику совместной работы', toggle: teamOpen, onClick: () => setTeamOpen(o => !o) } },
   ].filter(Boolean) as { key: string; node: React.ReactNode; item: OverflowItem }[];
@@ -1215,7 +1290,10 @@ export function Composer({
   const visibleCount = useToolbarOverflow({
     stripRef, fixedLeftRef, badgesRef, rightRef,
     count: collapsible.length,
-    enabled: !!isMobile,
+    // Всегда включено (как в шапке FileViewer): решает замер полосы, а не ширина окна.
+    // Гейт по isMobile оставлял планшет и телефон в ландшафте вовсе без сворачивания —
+    // кнопки с flexShrink:0 выдавливали строку за край губы
+    enabled: true,
     itemWidth: isMobile ? 36 : 32,
     gap: isMobile ? 6 : 4,
     menuWidth: isMobile ? 40 : 34,
@@ -1244,18 +1322,18 @@ export function Composer({
 
   // Пилюли активных режимов не сворачиваются (живут в badgesRef). В «⋯» дублируем их
   // строками-свитчами: цикл — только когда пилюли реально обрезаны (его «N/M» видно
-  // в самой пилюле); команду — на мобиле также когда «⋯» уже открыт свёрнутыми
-  // кнопками (её значение короткое, sublabel — единственное место, где оно видно,
-  // а дубль в существующее меню ничего не стоит). Дерева здесь нет: его кнопка-тумблер
-  // живёт в сворачиваемом ряду (collapsible) и попадает в «⋯» общим путём — дубль
-  // не нужен, а значение ветки показывает git-бар
+  // в самой пилюле); команду — также когда «⋯» уже открыт свёрнутыми кнопками (её
+  // значение короткое, sublabel — единственное место, где оно видно, а дубль в
+  // существующее меню ничего не стоит). Критерий узости — сам факт сворачивания, а не
+  // isMobile: полоса жмётся и на планшете. Дерева здесь нет: его кнопка-тумблер живёт
+  // в сворачиваемом ряду (collapsible) и попадает в «⋯» общим путём — дубль не нужен,
+  // а значение ветки показывает git-бар
   const collapsedAny = visibleCount < collapsible.length;
-  const dupOnMobile = isMobile && (collapsedAny || badgesOverflowed);
   const activeModeItems = ([
     badgesOverflowed && loopActive && workLoop && onToggleWorkLoop && { key: 'loop-on', icon: <RefreshCw size={16} strokeWidth={ICON_STROKE} />, label: 'Цикл «до готово»',
       sublabel: workLoop.phase === 'verifying' ? 'Включено · верификация' : `Включено · итерация ${workLoop.iteration}/${workLoop.maxIterations}`,
-      toggle: true, onClick: () => { void onToggleWorkLoop(); } },
-    (dupOnMobile || (!isMobile && badgesOverflowed)) && teamMechMeta && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой',
+      toggle: true, onClick: () => toggleWorkLoopSafe?.() },
+    (collapsedAny || badgesOverflowed) && teamMechMeta && { key: 'discuss-on', icon: <Users size={16} strokeWidth={ICON_STROKE} />, label: 'Обсудить с командой',
       sublabel: `Включено · ${teamMechMeta.name}`, toggle: true,
       onClick: () => setTeamMech(null) },
   ].filter(Boolean) as OverflowItem[]);
@@ -1298,14 +1376,17 @@ export function Composer({
           availableSkills={skills.map(s => s.name)}
           isProjectChat={isProjectChat}
           chatMode={mode}
+          implementActive={!!teamImplement}
           isMobile={isMobile}
           onPick={id => { setTeamMech(id); textareaRef.current?.focus(); }}
           onSettings={setTeamSettings}
           onClose={() => setTeamOpen(false)}
           onResetModes={skills.some(s => s.name === 'oh-my-claudecode:cancel')
             ? () => {
-                // Тихий ход: чистит state зависших OMC-режимов (autopilot/ultraqa/ralph)
+                // Тихий ход: чистит state зависших OMC-режимов (autopilot/ultraqa/ralph).
+                // Признака «было ли что чистить» на фронте нет — тост нейтральный
                 onSend('/oh-my-claudecode:cancel', [], { auto: true });
+                showToast('Командные режимы', 'Запрос на сброс отправлен');
                 setTeamOpen(false);
               }
             : undefined}
@@ -1462,13 +1543,13 @@ export function Composer({
               onChange={onModelChange}
               started={chatStarted}
               isMobile={isMobile}
-              compact={isMobile}
+              compact={compactStrip}
               // У чата с персоной своё назначение модели — пункт «По умолчанию» подписывается им
               usage={selectedPersona ? USAGE.chatPersona : USAGE.chatNew}
             />
           )}
           {onEffortChange && (
-            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={isMobile} />
+            <ComposerEffortPicker value={effort} onChange={onEffortChange} isMobile={isMobile} compact={compactStrip} />
           )}
           {companionSelector}
         </div>

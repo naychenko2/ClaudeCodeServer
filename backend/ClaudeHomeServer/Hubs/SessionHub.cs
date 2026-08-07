@@ -16,13 +16,16 @@ public class SessionHub : Hub
     private readonly ProjectManager _projects;
     private readonly FileWatcherService _watcher;
     private readonly ConnectionDiagnostics _diag;
+    private readonly DevServerService _devServer;
 
-    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher, ConnectionDiagnostics diag)
+    public SessionHub(SessionManager sessions, ProjectManager projects, FileWatcherService watcher,
+        ConnectionDiagnostics diag, DevServerService devServer)
     {
         _sessions = sessions;
         _projects = projects;
         _watcher = watcher;
         _diag = diag;
+        _devServer = devServer;
     }
 
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
@@ -92,10 +95,17 @@ public class SessionHub : Hub
                 new PendingMessagesMessage(queued) with { SessionId = sessionId });
     }
 
-    public async Task LeaveSession(string sessionId)
+    // Уход из чата: зрителя снимаем всегда (сервер снова вправе слать push/тост о конце хода),
+    // а из группы теперь НЕ выходим вовсе. Раньше выходили, если ход не идёт — это спасало от
+    // потери хвоста ответа при уходе в другой чат посреди хода, но топило внеходовые события
+    // (отчёт делегированной задачи, эскалацию, team_plan): они шлются один раз live-рассылкой
+    // в группу без ретрансляции и без replay в JoinSession, а клиент вне группы просто не видит
+    // сообщение до следующего хода. Та же болезнь, только вне хода — поэтому исключение снято,
+    // группа отпускается только при обрыве связи (OnDisconnectedAsync).
+    public Task LeaveSession(string sessionId)
     {
         _sessions.RemoveViewer(sessionId, Context.ConnectionId);
-        await Groups.RemoveFromGroupAsync(Context.ConnectionId, sessionId);
+        return Task.CompletedTask;
     }
 
     public async Task JoinProject(string projectId)
@@ -110,6 +120,27 @@ public class SessionHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, "project_" + projectId);
         _watcher.Unwatch(projectId, Context.ConnectionId);
     }
+
+    // Подписка на вывод дев-сервера (вкладка «Логи» панели «Сервисы»). Группа — на
+    // конкретный сервис, поэтому подписок ровно столько, сколько открытых вкладок логов.
+    //
+    // Накопленный буфер ВОЗВРАЩАЕТСЯ вызывающему, а не рассылается сообщением. Рассылка
+    // (даже адресная, Clients.Caller) приходит в соединение, а не в конкретный вьюер:
+    // при быстром пере-монтировании — а в dev его гарантирует StrictMode — свежий вьюер
+    // ловил и свой реплей, и чужой, и весь лог показывался дважды.
+    //
+    // Снимок берём ДО входа в группу: строка, пришедшая ровно в этот зазор, потеряется,
+    // но задвоиться не может. Из двух зол в логе виднее второе.
+    public async Task<string?> JoinPreviewLog(string projectId, string serviceId)
+    {
+        if (!OwnsProject(projectId)) throw Denied();
+        var buffered = _devServer.GetLogBuffer(projectId, serviceId, UserId!);
+        await Groups.AddToGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
+        return buffered;
+    }
+
+    public Task LeavePreviewLog(string projectId, string serviceId) =>
+        Groups.RemoveFromGroupAsync(Context.ConnectionId, DevServerService.LogGroup(projectId, serviceId));
 
     // Группа для realtime-обновления списка чатов вне проекта (без файлового watcher).
     // Подписаться можно только на самого себя.
@@ -184,9 +215,11 @@ public class SessionHub : Hub
 
     // Ответ по карточке плана «Командной реализации» (Э2). decision: run — запустить
     // (единственное согласование итерации), reassign — сменить исполнителя под-задачи
-    // (нужны subtaskId + executorPersonaId, карточка остаётся открытой), cancel — отменить.
+    // (нужны subtaskId + executorPersonaId, карточка остаётся открытой), cancel — отменить,
+    // edit — правка плана человеком (нужен feedback): сервер сам пересобирает план и
+    // публикует версию vN+1, погасив текущую карточку как заменённую.
     public async Task RespondTeamPlan(string sessionId, string planId, string decision,
-        string? subtaskId = null, string? executorPersonaId = null)
+        string? subtaskId = null, string? executorPersonaId = null, string? feedback = null)
     {
         if (!OwnsSession(sessionId)) throw Denied();
         var parsed = decision?.ToLowerInvariant() switch
@@ -194,10 +227,12 @@ public class SessionHub : Hub
             "run" => TeamPlanDecision.Run,
             "reassign" => TeamPlanDecision.Reassign,
             "cancel" => TeamPlanDecision.Cancel,
+            "edit" => TeamPlanDecision.Edit,
             _ => (TeamPlanDecision?)null,
         };
         if (parsed is null) throw new HubException($"Неизвестное решение по плану: {decision}");
-        await _sessions.RespondTeamPlanAsync(sessionId, planId, parsed.Value, subtaskId, executorPersonaId);
+        await _sessions.RespondTeamPlanAsync(sessionId, planId, parsed.Value, subtaskId, executorPersonaId,
+            feedback: feedback);
     }
 
     // Решение человека по карточке остановки «Командной реализации» (Э4). actionId — id

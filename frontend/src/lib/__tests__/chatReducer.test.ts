@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import type { ChatItem, ServerMessage, TeamEscalationKind } from '../../types';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, type ChatState } from '../chatReducer';
+import type { ChatItem, ServerMessage, TeamEscalationKind, SessionTeamImplement } from '../../types';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, type ChatState } from '../chatReducer';
 
 // --- Хелперы ---
 
@@ -370,6 +370,45 @@ describe('applyServerMessage: ожидание ответа пользовате
   });
 });
 
+// Жизненный цикл вызова планировщика (три состояния контракта: start / success / отказ).
+// Транзитное событие — карточку плана/отказа не подменяет, только ведёт живой флаг
+// ChatState.teamPlanning (плашка «идёт» в ChatPanel) и добавляет строку-итог на успехе
+describe('applyServerMessage: team_planning', () => {
+  const planningMsg = (over: Partial<Extract<ServerMessage, { type: 'team_planning' }>> = {}) =>
+    ({
+      type: 'team_planning' as const, start: false, success: false,
+      subtaskCount: 0, waveCount: 0, elapsedMs: 0, route: null, failure: null,
+      promptChars: 0, responseChars: 0,
+      ...over,
+    });
+
+  it('start=true — teamPlanning взводится, в ленту ничего не добавляется', () => {
+    const next = run([planningMsg({ start: true })]);
+    expect(next.items).toEqual([]);
+    expect(next.teamPlanning).toEqual({ startedAt: expect.any(Number) });
+  });
+
+  it('success=true — teamPlanning гасится, в ленту добавляется одна строка-итог', () => {
+    const running = run([planningMsg({ start: true })]);
+    const next = applyServerMessage(running, msg(planningMsg({
+      start: false, success: true, subtaskCount: 5, waveCount: 2, elapsedMs: 46_000,
+    })));
+    expect(next.teamPlanning).toBeNull();
+    expect(next.items).toEqual([
+      { kind: 'team_planning_done', subtaskCount: 5, waveCount: 2, elapsedMs: 46_000 },
+    ]);
+  });
+
+  it('success=false (отказ) — teamPlanning гасится, лента не трогается (карточка отказа придёт своим путём)', () => {
+    const running = run([planningMsg({ start: true })]);
+    const next = applyServerMessage(running, msg(planningMsg({
+      start: false, success: false, failure: 'Планировщик не уложился во время',
+    })));
+    expect(next.teamPlanning).toBeNull();
+    expect(next.items).toEqual([]);
+  });
+});
+
 // --- result / error / exited / file_changed ---
 
 describe('applyServerMessage: завершение хода', () => {
@@ -438,9 +477,22 @@ describe('applyServerMessage: завершение хода', () => {
       { type: 'file_changed', path: 'src/a.ts', added: 5, removed: 4 },
     ]);
     expect(next.items).toEqual([
-      { kind: 'file_changed', path: 'src/a.ts', added: 8, removed: 5 },
+      { kind: 'file_changed', path: 'src/a.ts', added: 8, removed: 5, external: false },
       { kind: 'file_changed', path: 'src/b.ts', added: 2, removed: 0 },
     ]);
+  });
+
+  it('file_changed: внешняя правка (без заявки) помечается external', () => {
+    const next = run([{ type: 'file_changed', path: 'src/a.ts', added: 3, removed: 1, external: true }]);
+    expect(next.items).toEqual([{ kind: 'file_changed', path: 'src/a.ts', added: 3, removed: 1, external: true }]);
+  });
+
+  it('file_changed: если хоть один вклад от модели — итог не external', () => {
+    const next = run([
+      { type: 'file_changed', path: 'src/a.ts', added: 3, removed: 1, external: true },
+      { type: 'file_changed', path: 'src/a.ts', added: 2, removed: 0, external: false },
+    ]);
+    expect(next.items).toEqual([{ kind: 'file_changed', path: 'src/a.ts', added: 5, removed: 1, external: false }]);
   });
 
   it('file_changed того же файла в РАЗНЫХ ходах (через result) — две строки', () => {
@@ -661,6 +713,22 @@ describe('composer_restore', () => {
 
 // --- normalizeHistory ---
 
+// --- work_loop_stopped: остановка цикла «до готово» ---
+
+describe('applyServerMessage: work_loop_stopped', () => {
+  it('добавляет системную строку с готовым текстом и причиной', () => {
+    const next = run([{ type: 'work_loop_stopped', reason: 'limit', text: 'Цикл остановлен: исчерпан лимит в 10 ходов.' }]);
+    expect(next.items).toEqual([
+      { kind: 'work_loop_stopped', reason: 'limit', text: 'Цикл остановлен: исчерпан лимит в 10 ходов.' },
+    ]);
+  });
+
+  it('переживает перезагрузку — persisted kind, поднимается из истории как есть', () => {
+    const raw = [{ kind: 'work_loop_stopped', reason: 'manual', text: 'Цикл остановлен вами. Текущий ход продолжает работу.' }];
+    expect(normalizeHistory(raw)).toEqual(raw);
+  });
+});
+
 describe('normalizeHistory', () => {
   it('thinking из истории свёрнут, error без повтора, остальное как есть', () => {
     const raw = [
@@ -677,6 +745,17 @@ describe('normalizeHistory', () => {
 
   it('пустая история → пустой список', () => {
     expect(normalizeHistory([])).toEqual([]);
+  });
+
+  // StoredModelSwitchedMessage (model_switched) — пометка «Ответила …» переживает
+  // перезагрузку страницы: поля с диска (model/previousModel/reason) переносятся как есть
+  it('model_switched из истории восстанавливает пометку подмены модели', () => {
+    const raw = [
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: 'rate_limit' },
+    ];
+    expect(normalizeHistory(raw)).toEqual([
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: 'rate_limit' },
+    ]);
   });
 
   // В истории поле зовётся timestamp, в ленте — ts. Без перекладывания панель поста
@@ -772,6 +851,50 @@ describe('фейловер провайдера', () => {
   it('тихий фейловер пула (auto) не оставляет следов в ленте', () => {
     const next = run([{ type: 'provider_switched', provider: 'my-second', auto: true }]);
     expect(next.items).toEqual([]);
+  });
+});
+
+// --- Пометка подмены модели: провалившийся ход перезапущен фолбэком на другой модели ---
+
+describe('пометка подмены модели (провалившийся ход + фолбэк)', () => {
+  const started = (model: string) =>
+    ({ type: 'session_started' as const, claudeSessionId: 'c1', isResume: false, model, mode: 'default' });
+
+  it('auto + смена модели → пометка model_switched вместо provider_switched', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'deepseek', model: 'deepseek-chat', label: 'Автофолбэк: смена провайдера → «DeepSeek»', auto: true },
+    ]);
+    expect(next.items).toEqual([
+      { kind: 'session_started', model: 'claude-opus-4-8', mode: 'default', cwd: undefined, toolCount: undefined, mcpServers: undefined, turnWorktree: undefined },
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: undefined, rawLabel: 'Автофолбэк: смена провайдера → «DeepSeek»' },
+    ]);
+  });
+
+  it('auto + смена модели + reason с провода — прокидывается в пометку', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'deepseek', model: 'deepseek-chat', label: 'Автофолбэк: смена провайдера → «DeepSeek»', auto: true, reason: 'rate_limit' },
+    ]);
+    expect(next.items[1]).toEqual(
+      { kind: 'model_switched', model: 'deepseek-chat', previousModel: 'claude-opus-4-8', reason: 'rate_limit', rawLabel: 'Автофолбэк: смена провайдера → «DeepSeek»' },
+    );
+  });
+
+  it('auto без модели (ротация подписки того же провайдера) — пометки модели нет', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'acc-b', label: 'Автофолбэк: подписка «acc-a» → «acc-b»', auto: true },
+    ]);
+    expect(next.items.some(it => it.kind === 'model_switched')).toBe(false);
+  });
+
+  it('auto + та же модель (гипотетически) — пометки модели нет, разъезда с provider_switched тоже', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'provider_switched', provider: 'acc-b', model: 'claude-opus-4-8', auto: true },
+    ]);
+    expect(next.items.some(it => it.kind === 'model_switched' || it.kind === 'provider_switched')).toBe(false);
   });
 });
 
@@ -948,5 +1071,69 @@ describe('serverHistoryNewer', () => {
     const prev: ChatItem[] = [u('в'), { kind: 'interrupted' }, t('час')];
     const server: ChatItem[] = [u('в'), t('частичный ответ'), { kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 }];
     expect(serverHistoryNewer(server, prev)).toBe(true);
+  });
+});
+
+// --- teamImplementSnapshot: снимок режима из REST-гидратации (M10/M12) ---
+
+describe('teamImplementSnapshot', () => {
+  // REST-объект Session.teamImplement в минимальной форме (как приходит с бэка)
+  const rest = (over: Partial<SessionTeamImplement> = {}): SessionTeamImplement => ({
+    stage: 'interview', waveNumber: 0, plannedWaves: 0, autoWaves: true, stopped: false,
+    executorPersonaIds: [], coordinatorNoCode: true, planVersion: 0,
+    budget: { tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 12, maxWaves: 4, maxRuns: 20, maxRetries: 3, maxWakeups: 10 },
+    ...over,
+  });
+
+  it('null (режим выключен) → НЕАКТИВНЫЙ снимок, а не undefined: он перекрывает устаревший live-объект', () => {
+    const snap = teamImplementSnapshot(null);
+    expect(snap.active).toBe(false);
+    expect(snap.stage).toBe('idle');
+    expect(snap.modeLocked).toBe(false);
+  });
+
+  it('savedMode на REST означает навязанный план-режим — modeLocked считается из него', () => {
+    const snap = teamImplementSnapshot(rest({ savedMode: 'auto' }));
+    expect(snap.active).toBe(true);
+    expect(snap.modeLocked).toBe(true);
+    expect(snap.stage).toBe('interview');
+  });
+
+  it('план-режим не навязан (savedMode null) — селектор свободен', () => {
+    const snap = teamImplementSnapshot(rest({ stage: 'wave', waveNumber: 2, savedMode: null }));
+    expect(snap.modeLocked).toBe(false);
+    expect(snap.waveNumber).toBe(2);
+  });
+
+  it('явный modeLocked с провода сильнее вычисленного из savedMode', () => {
+    expect(teamImplementSnapshot(rest({ modeLocked: true, savedMode: null })).modeLocked).toBe(true);
+    expect(teamImplementSnapshot(rest({ modeLocked: false, savedMode: 'auto' })).modeLocked).toBe(false);
+  });
+});
+
+// --- prompt_snapshot ---
+
+describe('applyServerMessage: снимок промпта хода', () => {
+  it('вешает id снимка на последнее сообщение человека', () => {
+    // Пузырь человека клиент добавляет оптимистично, событие догоняет его уже готовым
+    const s = run([
+      { type: 'user_message', text: 'почини сборку' },
+      { type: 'prompt_snapshot', snapshotId: '1700000000000-abcd', applied: true },
+    ]);
+
+    const last = s.items.findLast(i => i.kind === 'user_message');
+    expect(last && 'promptSnapshotId' in last ? last.promptSnapshotId : undefined)
+      .toBe('1700000000000-abcd');
+  });
+
+  it('без сообщения человека ленту не трогает', () => {
+    // Продолжение цикла «до готово» идёт без нового сообщения — вешать не на что
+    const before = state({ items: [{ kind: 'text', text: 'ответ' }] });
+    const s = applyServerMessage(before, msg({
+      type: 'prompt_snapshot', snapshotId: '1700000000000-abcd', applied: true,
+    }));
+
+    expect(s.items).toEqual(before.items);
   });
 });

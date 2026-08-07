@@ -55,3 +55,16 @@ export const RELATION_LABEL: Record<CodeGraphRelation, string> = {
 export function isDashed(confidence: CodeGraphConfidence): boolean {
   return confidence === 'Inferred';
 }
+
+// === Геометрия узла на холсте ===
+// Одни значения на оба холста («Фокус» и «Обзор») и в тех же величинах, что у графа
+// заметок (features/notes/graph): обводка ~2, кольцо выделения в 3px от кружка. Два
+// графа продукта не обязаны совпадать раскладкой — но толщины и зазоры, разъехавшиеся
+// по вкусу автора (2.2 здесь, 1.2 там), читаются как разные приложения.
+export const NODE_STROKE = 2;        // обводка кружка узла
+export const NODE_STROKE_MAIN = 3.5; // центр «Фокуса» — единственный, кто толще
+export const RING_HOVER_GAP = 3;     // кольцо под курсором
+export const RING_GOD_GAP = 6;       // пунктирное кольцо god-узла
+export const HIT_PAD = 10;           // прозрачный hit-target шире кружка
+export const HIT_MIN = 20;           // …но не мельче пальца
+export const LABEL_HALO = 3;         // подложка подписи цветом холста (читаемость поверх линий)

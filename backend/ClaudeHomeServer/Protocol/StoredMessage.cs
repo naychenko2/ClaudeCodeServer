@@ -19,6 +19,8 @@ namespace ClaudeHomeServer.Protocol;
 [JsonDerivedType(typeof(StoredCompactBoundaryMessage), "compact_boundary")]
 [JsonDerivedType(typeof(StoredErrorMessage), "error")]
 [JsonDerivedType(typeof(StoredWorkflowProgressMessage), "workflow_progress")]
+[JsonDerivedType(typeof(StoredWorkLoopStoppedMessage), "work_loop_stopped")]
+[JsonDerivedType(typeof(StoredModelSwitchedMessage), "model_switched")]
 public abstract class StoredMessage { }
 
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
@@ -28,6 +30,12 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
 {
     // Когда отправлено сообщение (Unix-мс UTC) — см. StoredTextMessage.Timestamp
     public long? Timestamp { get; init; } = timestamp;
+
+    // Снимок промпта, собранного для этого хода (кнопка «какой промпт ушёл» под постом).
+    // Заполняется НЕ при создании: снимок пишется позже, уже при запуске хода — поэтому set,
+    // а не init (см. TurnAccumulator.SetPromptSnapshot). null — история до этого поля,
+    // ход без нового сообщения (продолжение цикла «до готово») либо сбой записи снимка.
+    public string? PromptSnapshotId { get; set; }
 
     // Источник входящего сообщения, когда оно пришло ИЗ ДРУГОГО места: имя чужого проекта
     // либо «Вне проектов». Заполняет сервер, сравнив проекты отправителя и получателя;
@@ -94,11 +102,14 @@ public class StoredThinkingMessage(string text, string? parentToolUseId = null) 
     public string? ParentToolUseId { get; init; } = parentToolUseId;
 }
 
-public class StoredFileChangedMessage(string path, int added, int removed) : StoredMessage
+public class StoredFileChangedMessage(string path, int added, int removed, bool external = false) : StoredMessage
 {
     public string Path { get; init; } = path;
     public int Added { get; init; } = added;
     public int Removed { get; init; } = removed;
+    // См. FileChangedMessage.External — сохраняется, чтобы после перезагрузки ленты
+    // (F5, повторная загрузка истории) пометка «вне чата» и снятая кнопка «Откатить» не терялись
+    public bool External { get; init; } = external;
 }
 
 public class StoredResultMessage(string subtype, long durationMs, int numTurns,
@@ -119,6 +130,16 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
 
 public class StoredErrorMessage(string text) : StoredMessage
 {
+    public string Text { get; init; } = text;
+}
+
+// Явная остановка цикла «до готово» (B5): лимит итераций/ошибка хода/ручной стоп — иначе в
+// ленте гаснет только бейдж, и не видно, доделана работа или брошена. Живёт в истории — как
+// и остальные внеходовые записи (см. StoredTeamEscalationMessage), переживает перезагрузку.
+// Reason ∈ limit|error|manual — контракт для фронта.
+public class StoredWorkLoopStoppedMessage(string reason, string text) : StoredMessage
+{
+    public string Reason { get; init; } = reason;
     public string Text { get; init; } = text;
 }
 
@@ -208,6 +229,11 @@ public class StoredTeamPlanMessage : StoredMessage
     public Models.TeamImplementPlan Plan { get; set; } = new();
     public bool Resolved { get; set; }
     public bool? Approved { get; set; }
+    // Версия плана, заменившая эту карточку (перепланирование по правке человека или
+    // clarify): карточка погашена НЕ решением человека, а выходом новой версии — фронт
+    // рисует её «заменена версией vN», а не «план отменён». null — отмена человеком,
+    // запуск либо карточка ещё открыта.
+    public int? SupersededBy { get; set; }
     // Автор карточки (Э8): планировщик на момент публикации. В истории — чтобы после
     // рестарта и смены координатора карточка осталась речью того, кто её написал.
     public string? PersonaId { get; set; }
@@ -220,4 +246,19 @@ public class StoredTeamEscalationMessage : StoredMessage
 {
     public string EscalationId { get; init; } = "";
     public Models.TeamEscalation Escalation { get; set; } = new();
+}
+
+// Пометка «Ответила …» при автоподмене модели в фолбэке (тот же логический смысл, что
+// живая пилюля model_switched в ленте: провалившаяся попытка перед подменой уже прислала
+// session_started с PreviousModel, фактически ответила новая модель). Без записи в
+// историю после F5 / рестарта человек не увидит, что отвечала не та модель. PreviousModel
+// — модель последнего session_started этого чата на момент подмены; Model — новая
+// фактическая. Reason — канонический класс ошибки (rate_limit | usage_limit |
+// provider_error | unreachable) для подсказки; null — на проводе отсутствует (старая запись
+// либо подмена без Reason).
+public class StoredModelSwitchedMessage : StoredMessage
+{
+    public string Model { get; init; } = "";
+    public string PreviousModel { get; init; } = "";
+    public string? Reason { get; init; }
 }

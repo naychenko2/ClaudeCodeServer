@@ -15,10 +15,21 @@ export interface ChatOriginInfo {
   tone: 'info' | 'warning';
 }
 
+// Статусы, в которых чат-исполнитель мог только что стартовать: задача уже
+// существует на бэке (`Session.TaskId` выставляется при создании чата), но
+// бродкаст самой задачи (`MarkClaudeStarted` → `task_changed`) долетает до
+// фронта чуть позже бродкаста новой сессии — race каждой новой волны, не
+// только первой загрузки стора. Пока чат в одном из этих статусов, промах по
+// кешу — «ещё не долетела», а не «удалена» (тот же набор, что resolveTaskChatStatus
+// разбирает первым, до обращения к задаче).
+const TASK_PENDING_STATUSES: ReadonlySet<Session['status']> = new Set(['starting', 'working', 'waiting']);
+
 // Задачи нет в сторе. Утверждать «удалена» можно только когда стор реально наполнен
-// из сети: пока он грузится, промах — это гонка первой загрузки, а не удаление
-// (чат исполнения появляется в списке раньше, чем приезжают задачи).
-function taskMissingLabel(): string {
+// из сети (гонка первой загрузки — см. TASK_PENDING_STATUSES выше) И чат не в
+// разгаре собственного старта — иначе это гонка конкретной задачи с только что
+// созданным чатом-исполнителем.
+function taskMissingLabel(session: Session): string {
+  if (TASK_PENDING_STATUSES.has(session.status)) return 'Задача';
   return tasksLoaded() ? 'Задача (удалена)' : 'Задача';
 }
 
@@ -29,7 +40,7 @@ export function resolveChatOrigin(session: Session): ChatOriginInfo | null {
   if (session.origin === 'task') {
     const task = session.taskId ? getTaskById(session.taskId) : undefined;
     if (!task) {
-      const label = taskMissingLabel();
+      const label = taskMissingLabel(session);
       return { kind: 'task', label, shortLabel: label, tone: 'info' };
     }
     return { kind: 'task', label: `Задача: ${task.title}`, shortLabel: task.title, tone: 'info' };
@@ -101,7 +112,7 @@ export function describeTaskChat(session: Session): TaskChatInfo | null {
   if (session.origin !== 'task') return null;
   const task = session.taskId ? getTaskById(session.taskId) : undefined;
   const title = task?.title ?? (session.name ? stripTaskPrefix(session.name) : '');
-  const fullLabel = task ? `Задача: ${task.title}` : taskMissingLabel();
+  const fullLabel = task ? `Задача: ${task.title}` : taskMissingLabel(session);
   const subTotal = task?.subtasks.length ?? 0;
   const subDone = task?.subtasks.filter(st => st.isDone).length ?? 0;
   const dueText = task?.dueDate

@@ -40,6 +40,17 @@ public sealed class FileChangeAttributor
         return now - claim.At <= AttributionWindow;
     }
 
+    // Путь заявлен ИМЕННО sessionId в пределах окна — правку сделала модель этого чата
+    // (Edit/Write и т.п.). Нет живой заявки вообще ни от кого (в т.ч. от sessionId) —
+    // правка пришла извне процесса Claude (человек в IDE, форматтер) — false.
+    public bool IsClaimedBySelf(string sessionId, string fullPath, DateTimeOffset? at = null)
+    {
+        var now = at ?? DateTimeOffset.UtcNow;
+        if (!_claims.TryGetValue(NormalizePath(fullPath), out var claim)) return false;
+        if (!string.Equals(claim.SessionId, sessionId, StringComparison.Ordinal)) return false;
+        return now - claim.At <= AttributionWindow;
+    }
+
     // Регистр не в git-репо (нет .git) сравнивать не с чем — нормализация просто схлопывает
     // "." и ".." сегменты; сравнение по OrdinalIgnoreCase (как в FileService.SafeJoin) —
     // единообразно для Windows-разработки и Linux CI, а не по фактической ФС хоста.

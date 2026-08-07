@@ -26,6 +26,17 @@ public class OmoPromptsTests
     }
 
     [Fact]
+    public void ПродолжениеЦикла_ДаётВеткуДляЗастревания()
+    {
+        // B-п.4: продолжение не должно быть безусловным — застрявшая работа честно
+        // останавливается текстом, а не имитирует промис завершения
+        var text = OmoPrompts.WorkLoopContinuation("ГОТОВО", 3, 20);
+
+        text.Should().Contain("препятств");
+        text.Should().Contain("не изображай готовность");
+    }
+
+    [Fact]
     public void ВерификацияЦикла_ТребуетСвидетельств()
     {
         OmoPrompts.WorkLoopVerification.Should().Contain("ВЕРИФИКАЦИЯ");

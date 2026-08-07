@@ -14,6 +14,17 @@ internal class TurnAccumulator
     private readonly Dictionary<string, StoredPlanReviewMessage> _pendingPlans = [];
     private readonly StringBuilder _textBuf = new();
     private readonly StringBuilder _thinkingBuf = new();
+    // Волна 7 (утечка маркеров протокола в сохранённой истории, прод 2026-08-02): весь сырой
+    // текст ХОДА целиком (не чистится в FlushBuffers, только на границе хода в FlushAsync) —
+    // маркер `<team:work>`/`<escalate:*>` в длинном структурированном ответе координатора может
+    // открыться до, а закрыться ПОСЛЕ вызова инструмента/карточки плана/вопроса (все они дёргают
+    // FlushBuffers), и раньше пара искалась в каждом куске между flush'ами по отдельности —
+    // разъехавшиеся половины маркера не находили друг друга и утекали в историю буквально.
+    // Считаем «безопасный» текст от ВСЕГО _teamRawText сразу, как это уже делает живая
+    // трансляция (SessionManager.OnMessageAsync, entry.TeamTurnText) — и берём только новый
+    // хвост поверх уже показанного (_teamShownLength), симметрично тому же приёму.
+    private readonly StringBuilder _teamRawText = new();
+    private int _teamShownLength;
     // Защищает ВСЁ изменяемое состояние (_history/_currentTurn/буферы/pending-словари):
     // мутации идут из пампа stdout, SignalR-вызовов (ответы на вопросы/планы) и фонового
     // опроса billing-events fal.ai, чтение — из HTTP-потоков (GetAll).
@@ -58,6 +69,23 @@ internal class TurnAccumulator
             _currentTurn.Add(new StoredUserMessage(text, attachedPaths.Count > 0 ? [.. attachedPaths] : null,
                 viaAgent ? true : null, senderPersonaId, systemDirective ? true : null, auto ? true : null,
                 senderOrigin, staffNote: staffNote, timestamp: NowMs()));
+    }
+
+    // Снимок промпта хода записан — привязываем его к сообщению, которым ход начался
+    // (кнопка «какой промпт ушёл» живёт под этим постом). Сообщения может не быть:
+    // продолжение цикла «до готово» идёт без нового сообщения человека — тогда снимок
+    // остаётся на диске, но кнопки под постом не будет.
+    public void SetPromptSnapshot(string snapshotId)
+    {
+        lock (_lock)
+        {
+            for (var i = _currentTurn.Count - 1; i >= 0; i--)
+                if (_currentTurn[i] is StoredUserMessage user)
+                {
+                    user.PromptSnapshotId = snapshotId;
+                    return;
+                }
+        }
     }
 
     public void OnSessionStarted(string model, string mode, TurnWorktreeInfo? worktree = null)
@@ -187,23 +215,25 @@ internal class TurnAccumulator
         }
     }
 
-    public void OnFileChanged(string path, int added, int removed)
+    public void OnFileChanged(string path, int added, int removed, bool external = false)
     {
         lock (_lock)
         {
             FlushBuffers();
             // Дедуп за ход: повторная правка того же файла обновляет существующую строку
             // (дельты суммируем), а не плодит новую — иначе командные ходы (OmO, workflow)
-            // спамят ленту десятками строк по одним и тем же файлам
+            // спамят ленту десятками строк по одним и тем же файлам. External — по И: если
+            // хоть один вклад был от модели этого чата, строка в целом не «чужая»
             for (var i = _currentTurn.Count - 1; i >= 0; i--)
             {
                 if (_currentTurn[i] is StoredFileChangedMessage prev && prev.Path == path)
                 {
-                    _currentTurn[i] = new StoredFileChangedMessage(path, prev.Added + added, prev.Removed + removed);
+                    _currentTurn[i] = new StoredFileChangedMessage(path, prev.Added + added, prev.Removed + removed,
+                        prev.External && external);
                     return;
                 }
             }
-            _currentTurn.Add(new StoredFileChangedMessage(path, added, removed));
+            _currentTurn.Add(new StoredFileChangedMessage(path, added, removed, external));
         }
     }
 
@@ -214,6 +244,45 @@ internal class TurnAccumulator
             FlushBuffers();
             _currentTurn.Add(new StoredCompactBoundaryMessage(trigger, preTokens, postTokens));
         }
+    }
+
+    // Пометка «Ответила …» при автоподмене модели фолбэком уровня 2 (сторонний
+    // провайдер с моделью-эквивалентом). Уровень 1 (ротация подписок) модель не
+    // трогает — пилюля там не нужна. PreviousModel — модель последнего session_started
+    // этого хода (провалившаяся попытка успела его прислать). null — пометки не
+    // пишем: в начале чата session_started ещё нет, и без PreviousModel пилюля в
+    // истории врала бы («Ответила X — была Y»), а Y неизвестна.
+    public void OnModelSwitched(string model, string? previousModel, string? reason)
+    {
+        if (previousModel is null) return;
+        lock (_lock)
+        {
+            FlushBuffers();
+            _currentTurn.Add(new StoredModelSwitchedMessage
+            {
+                Model = model,
+                PreviousModel = previousModel,
+                Reason = reason,
+            });
+        }
+    }
+
+    // Последняя модель session_started этого хода: точка сравнения для пометки
+    // «Ответила …» в OnModelSwitched. Обход — от хвоста текущего хода вглубь истории:
+    // session_started предыдущего хода к моменту следующей подмены ещё актуален
+    // (модель не менялась между попытками, если не было другой подмены).
+    public string? LastStartedModel()
+    {
+        lock (_lock)
+        {
+            for (var i = _currentTurn.Count - 1; i >= 0; i--)
+                if (_currentTurn[i] is StoredSessionStartedMessage s && !string.IsNullOrEmpty(s.Model))
+                    return s.Model;
+            for (var i = _history.Count - 1; i >= 0; i--)
+                if (_history[i] is StoredSessionStartedMessage s && !string.IsNullOrEmpty(s.Model))
+                    return s.Model;
+        }
+        return null;
     }
 
     public void OnAskQuestion(string toolUseId, object? input)
@@ -288,6 +357,24 @@ internal class TurnAccumulator
         }
     }
 
+    // Погасить карточку плана как ЗАМЕНЁННУЮ новой версией (перепланирование по правке
+    // человека или clarify): не решение «отменено», а устаревание — фронт по SupersededBy
+    // рисует её иначе. Идемпотентна: уже разрешённую карточку не трогает.
+    // false — карточки с таким id нет либо она уже разрешена.
+    public bool OnTeamPlanSuperseded(string planId, int supersededByVersion)
+    {
+        lock (_lock)
+        {
+            var card = _currentTurn.Concat(_history).OfType<StoredTeamPlanMessage>()
+                .LastOrDefault(m => m.PlanId == planId && !m.Resolved);
+            if (card is null) return false;
+            card.Resolved = true;
+            card.Approved = false;
+            card.SupersededBy = supersededByVersion;
+            return true;
+        }
+    }
+
     // Карточка плана по id — источник правды при ответе хаба (правка исполнителя приходит
     // после рестарта сервера, когда состояние есть только в истории).
     public Models.TeamImplementPlan? FindTeamPlan(string planId)
@@ -349,7 +436,7 @@ internal class TurnAccumulator
     {
         lock (_lock)
         {
-            FlushBuffers();
+            FlushBuffers(final: true);
             // Модель хода известна только сейчас (её несёт result), а посты этого хода уже
             // созданы — проставляем задним числом. Сабагентские тексты (ParentToolUseId)
             // пропускаем: они могли идти другой моделью, и UsageModel про них не говорит.
@@ -365,7 +452,7 @@ internal class TurnAccumulator
     {
         lock (_lock)
         {
-            FlushBuffers();
+            FlushBuffers(final: true);
             _currentTurn.Add(new StoredErrorMessage(text));
         }
         await FlushAsync(svc);
@@ -421,9 +508,17 @@ internal class TurnAccumulator
             // Включаем буферизованный текст/думание (ещё не зафиксированный в _currentTurn)
             if (_thinkingBuf.Length > 0)
                 result.Add(new StoredThinkingMessage(_thinkingBuf.ToString()));
+            // Превью непрокоммиченного хвоста — от полного сырого текста хода (см. _teamRawText),
+            // иначе снимок посреди хода показал бы половину маркера, которую итоговый FlushBuffers
+            // потом всё равно скроет/довырежет
             if (_textBuf.Length > 0)
-                result.Add(new StoredTextMessage(_textBuf.ToString(), _personaId,
-                    timestamp: _textBufStartedAt ?? NowMs()));
+            {
+                var raw = _teamRawText.ToString() + _textBuf;
+                var safe = SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
+                if (safe.Length > _teamShownLength)
+                    result.Add(new StoredTextMessage(safe[_teamShownLength..], _personaId,
+                        timestamp: _textBufStartedAt ?? NowMs()));
+            }
             return result;
         }
     }
@@ -443,15 +538,36 @@ internal class TurnAccumulator
         finally { _saveLock.Release(); }
     }
 
-    // Вызывать только под _lock
-    private void FlushBuffers()
+    // Вызывать только под _lock. final=true — конец хода (OnResultAsync/OnErrorAsync):
+    // дальше дельт не будет, поэтому хвост, придержанный TrimUnresolvedMarkerOpen как «вдруг
+    // маркер ещё не закрылся», можно просто показать как обычный текст — симметрично тому,
+    // что делает живая трансляция на result/error (SessionManager.OnMessageAsync, finalSafe).
+    private void FlushBuffers(bool final = false)
     {
         if (_textBuf.Length > 0)
         {
-            _currentTurn.Add(new StoredTextMessage(_textBuf.ToString(), _personaId,
-                timestamp: _textBufStartedAt ?? NowMs()));
+            _teamRawText.Append(_textBuf);
             _textBuf.Clear();
-            _textBufStartedAt = null;
+        }
+        if (_teamRawText.Length > 0)
+        {
+            // Маркеры протокола «Командной реализации» (`<team:work>`, `<escalate:*>`,
+            // `<team:talk/>`) — внутренняя договорённость координатора с бэкендом, в
+            // сохранённой истории им не место (иначе после перезагрузки/reload они снова
+            // всплывают в ленте, даже если живая трансляция их уже отфильтровала). Считаем
+            // от ВСЕГО _teamRawText — маркер мог открыться до и закрыться ПОСЛЕ вызова
+            // инструмента, разъехавшись между несколькими FlushBuffers.
+            var raw = _teamRawText.ToString();
+            var safe = final
+                ? SessionManager.StripTeamProtocolMarkers(raw)
+                : SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
+            if (safe.Length > _teamShownLength)
+            {
+                var delta = safe[_teamShownLength..];
+                _teamShownLength = safe.Length;
+                _currentTurn.Add(new StoredTextMessage(delta, _personaId, timestamp: _textBufStartedAt ?? NowMs()));
+                _textBufStartedAt = null;
+            }
         }
         if (_thinkingBuf.Length > 0)
         {
@@ -469,6 +585,8 @@ internal class TurnAccumulator
             _pendingTools.Clear();
             _pendingQuestions.Clear();
             _pendingPlans.Clear();
+            _teamRawText.Clear();
+            _teamShownLength = 0;
         }
         await SaveSnapshotAsync(svc);
     }

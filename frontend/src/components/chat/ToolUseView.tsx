@@ -5,6 +5,7 @@ import { C, FONT } from '../../lib/design';
 import { relPath, stripRoot } from '../../lib/paths';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, asyncLaunchAckNote } from '../../lib/agentTail';
 import { ChatProjectContext, FalCostContext, GlifCostContext } from './contexts';
+import { CodeBlockFrame } from './CodeCopyButton';
 import { MediaBlock, extractMediaMeta, mediaLabel } from './MediaBlock';
 import { useVisibleMedia } from './mediaDedup';
 
@@ -125,7 +126,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
   const n = item.name.toLowerCase();
-  const inp = (item.input ?? {}) as Record<string, any>;
+  // input инструмента — неизвестный JSON (unknown в контракте ChatItem): читаем
+  // точечно по ключам, значения сужаем проверками в местах использования
+  const inp = (item.input ?? {}) as Record<string, unknown>;
   // Во время стриминга показываем накопленный partial_json («печатает команду»), затем — разобранный аргумент.
   // Пути показываем относительно корня проекта: file_path/path — целиком, в командах и
   // glob-шаблонах вырезаем абсолютный корень из текста (там путь — часть строки).
@@ -147,9 +150,9 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // Inline-diff из input (доступен сразу, не дожидаясь tool_result)
   const editHunks: Array<{ old?: string; new?: string }> =
     n === 'edit' && (typeof inp.old_string === 'string' || typeof inp.new_string === 'string')
-      ? [{ old: inp.old_string, new: inp.new_string }]
+      ? [{ old: typeof inp.old_string === 'string' ? inp.old_string : undefined, new: typeof inp.new_string === 'string' ? inp.new_string : undefined }]
     : n === 'multiedit' && Array.isArray(inp.edits)
-      ? inp.edits.map((e: any) => ({ old: e.old_string, new: e.new_string }))
+      ? (inp.edits as Array<{ old_string?: string; new_string?: string }>).map(e => ({ old: e.old_string, new: e.new_string }))
     : n === 'write' && typeof inp.content === 'string'
       ? [{ new: inp.content }]
     : [];
@@ -167,6 +170,12 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       return { body: asyncLaunchAckNote(item.bgAborted), tail: null };
     return splitAgentResultTail(item.result);
   }, [isAgentTool, item.result, item.bgAborted]);
+  // Полный текст вывода (без обрезки до 4000 символов, которая идёт только в показ) —
+  // то, что уходит в буфер по кнопке копирования.
+  const outputText = useMemo(() => {
+    if (item.result == null) return '';
+    return stripRoot(agentSplit?.body ?? item.result, project?.rootPath);
+  }, [item.result, agentSplit, project?.rootPath]);
   // Медиа (изображения + видео) из результата MCP-инструментов. Сквозной дедуп ленты
   // (glif project_update + media_view одного URL) применяется картой из контекста
   const rawMedia = useVisibleMedia(item);
@@ -194,6 +203,7 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
   // изображение под другим аккаунтом fal.ai — его нет в текущем billing), убираем метку через 30с.
   const [pendingExpired, setPendingExpired] = useState(false);
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- автоснятие метки pending по таймеру 30с
     if (!costPending) { setPendingExpired(false); return; }
     const t = setTimeout(() => setPendingExpired(true), 30000);
     return () => clearTimeout(t);
@@ -256,24 +266,23 @@ export const ToolUseView = memo(function ToolUseView({ item, online = true, onOp
       {open && hasDiff && <DiffBody hunks={editHunks} />}
       {open && !hasDiff && hasResult && !hasMedia && (
         <>
-          <pre style={{
-            margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px', padding: '8px 10px', borderRadius: 7,
-            // Bash → тёмный терминал; остальное → светлая панель вывода
-            background: isConsole ? C.termBg : C.outputBg,
-            border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
-            // На светлой панели ошибку красим в danger; на тёмной — светлый «терминальный» оттенок
-            color: isConsole
-              ? (item.isError ? C.termError : C.termText)
-              : (item.isError ? C.dangerText : C.textPrimary),
-            fontFamily: FONT.mono,
-            fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
-            whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          }}>
-            {(() => {
-              const r = stripRoot(agentSplit?.body ?? item.result!, project?.rootPath);
-              return r.length > 4000 ? r.slice(0, 4000) + '\n…(обрезано)' : r;
-            })()}
-          </pre>
+          <CodeBlockFrame text={outputText}>
+            <pre style={{
+              margin: agentSplit?.tail ? '0 0 4px' : '0 0 9px', padding: '8px 10px', borderRadius: 7,
+              // Bash → тёмный терминал; остальное → светлая панель вывода
+              background: isConsole ? C.termBg : C.outputBg,
+              border: isConsole ? 'none' : `1px solid ${C.outputBorder}`,
+              // На светлой панели ошибку красим в danger; на тёмной — светлый «терминальный» оттенок
+              color: isConsole
+                ? (item.isError ? C.termError : C.termText)
+                : (item.isError ? C.dangerText : C.textPrimary),
+              fontFamily: FONT.mono,
+              fontSize: 11.5, lineHeight: 1.5, maxHeight: 280, overflow: 'auto',
+              whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+            }}>
+              {outputText.length > 4000 ? outputText.slice(0, 4000) + '\n…(обрезано)' : outputText}
+            </pre>
+          </CodeBlockFrame>
           {/* Метрики сабагента из системного хвоста — вместо сырых строк CLI */}
           {agentSplit?.tail && (
             <div style={{

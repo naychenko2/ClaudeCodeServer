@@ -13,5 +13,10 @@ public static class BackupSchema
     /// JsonFileStore.Load на этом переименовывает файл в .corrupt-*.bak и отдаёт пустой
     /// стор — сервер бодро стартует без персон, и узнаёшь об этом через день.
     /// </summary>
-    public const int Version = 2;
+    // 3 — из users.json убрано поле NtHash (NT-хэш пароля больше не хранится)
+    // 4 — новые значения PersonaSpecialty (BackendExecutor, FrontendExecutor): старый код
+    //     не знает их и уронил бы десериализацию personas.json при восстановлении
+    // 5 — SpecialtySettingsStore.FormatVersion 1→2 (пресет-цепочки Steps, матрицы уровней у
+    //     специальности/персоны): старый код не знает полей и обнулил бы стор при восстановлении
+    public const int Version = 5;
 }

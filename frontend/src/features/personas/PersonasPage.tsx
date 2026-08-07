@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, FONT } from '../../lib/design';
+import { C, CONTENT_MAX_W } from '../../lib/design';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
@@ -11,7 +11,7 @@ import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
 import { ConfirmDialog, IslandScaffold } from '../../components/ui';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../../components/ui/PageCanvas';
 import { useIsMobile } from '../../lib/breakpoints';
 import { PanelZone } from '../../pages/workspace/PanelZone';
 import { personasPanels } from '../../pages/workspace/panelStackState';
@@ -62,6 +62,11 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
 
+  // Зеркало списка персон для обработчика диплинка: подписка одна на монтирование,
+  // а персоны могли ещё не догрузиться к моменту события
+  const allPersonasRef = useRef(allPersonas);
+  useEffect(() => { allPersonasRef.current = allPersonas; }, [allPersonas]);
+
   // Диплинк #/personas/{id} (старый #/agents/{id} парсится как алиас) — прямой заход/обновление
   // страницы. Плюс pending-канал cc_pending_persona_id + событие cc-open-persona — навигация
   // изнутри приложения (бэйдж автоматизации в чате глобальной персоны, см. lib/chatOrigin.ts),
@@ -81,6 +86,9 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         sessionStorage.removeItem('cc_pending_persona_view');
         setSelectedId(pending); setMobileView('card');
         setPendingView(view === 'automation' ? 'automation' : null);
+        // Диплинк на проектную персону — в дефолтном «Глобальные» её нет в списке, переключаем
+        const target = allPersonasRef.current.find(p => p.id === pending);
+        if (target && target.scope !== 'global') setListMode('all');
         navPush({ screen: 'personas', persona: pending });
         return;
       }
@@ -88,6 +96,8 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       if (t?.screen === 'personas' && t.personaId) {
         setSelectedId(t.personaId); setMobileView('card');
         setPendingView(t.personaView === 'automation' ? 'automation' : null);
+        const target = allPersonasRef.current.find(p => p.id === t.personaId);
+        if (target && target.scope !== 'global') setListMode('all');
       }
     };
     consume();
@@ -113,6 +123,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // Диплинк/выбор указывает на проектную персону — в глобальном разделе её нет, сбрасываем выбор
   useEffect(() => {
     if (selectedId && allPersonas.some(p => p.id === selectedId) && !personas.some(p => p.id === selectedId)) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс выбора, если персоны диплинка нет в проекте
       setSelectedId(null); setMobileView('list');
       if (getNav()?.persona) navReplace({ screen: 'personas' });
     }
@@ -238,14 +249,17 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
       left={<PanelZone side="left" panelStack={personasPanels} allowedKeys={PERSONAS_KEYS} panels={zonePanels} />}
       right={<PanelZone side="right" panelStack={personasPanels} allowedKeys={PERSONAS_KEYS} panels={zonePanels} />}
       centerBare
+      // Компенсация перекоса зон — только для хаба: его сетка ограничена
+      // CONTENT_MAX_W и без компенсации съезжает вслед за центром, стоит открыть
+      // панель с одной стороны. Студия и создание персоны резиновые — им нечего
+      // компенсировать, ширина не передаётся
+      centerContentWidth={hasContent ? undefined : CONTENT_MAX_W}
       center={<div style={{ flex: 1, minWidth: 0, minHeight: 0 }}>{centerPane}</div>}
     />
   );
 
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader value="personas" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0 }}>{body}</div>
       {deleteTarget && (
@@ -255,7 +269,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
           onCancel={() => setDeleteTarget(null)}
         />
       )}
-    </div>
+    </PageCanvas>
   );
 }
 

@@ -34,6 +34,7 @@ public class PersonasController : ControllerBase
     private readonly PersonaPromptBuilder _promptBuilder;
     private readonly PersonaAskService _ask;
     private readonly PersonaAutomationService _automation;
+    private readonly SpecialtyTemplatesService _specialtyTemplates;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
@@ -43,7 +44,8 @@ public class PersonasController : ControllerBase
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
         FalImageService falImage,
         Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
-        PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation, IConfiguration config,
+        PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation,
+        SpecialtyTemplatesService specialtyTemplates, IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
         _cheap = cheap;
@@ -61,6 +63,7 @@ public class PersonasController : ControllerBase
         _promptBuilder = promptBuilder;
         _ask = ask;
         _automation = automation;
+        _specialtyTemplates = specialtyTemplates;
         _config = config;
         _log = log;
         _hub = hub;
@@ -163,6 +166,8 @@ public class PersonasController : ControllerBase
                 tools = t.Tools,
                 access = t.Access,
                 model = t.Model,
+                // Роль каталога задаёт уровень модели, а не конкретную (см. PantheonTemplate.ModelTier)
+                modelTier = t.ModelTier?.ToString().ToLowerInvariant(),
                 effort = t.Effort,
                 specialty = t.Specialty,
                 connectedPersonaId = _personas.GetByTemplateKey(UserId, t.Key)?.Id,
@@ -203,6 +208,8 @@ public class PersonasController : ControllerBase
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+        if (!IsValidTierCell(req.TierStrong) || !IsValidTierCell(req.TierMedium) || !IsValidTierCell(req.TierWeak))
+            return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
         if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
 
@@ -223,14 +230,22 @@ public class PersonasController : ControllerBase
             }
         }
 
+        // Шаблон специальности: при выборе специальности неподставленные
+        // access/tools/disallowedTools берутся из эффективного шаблона;
+        // явные поля запроса всегда побеждают, после создания поля правятся вручную.
+        var createSpecialty = req.Specialty ?? PersonaSpecialty.None;
+        var templated = _specialtyTemplates.Apply(UserId, createSpecialty, currentSpecialty: null,
+            access, req.Tools, req.DisallowedTools);
+
         Persona persona;
         try
         {
             persona = _personas.Create(UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled ?? true, req.Tools, req.Contract,
-                access ?? PersonaAccess.Full, req.DisallowedTools, req.Specialty ?? PersonaSpecialty.None,
-                req.AllProjectsAccess ?? false, req.Handle, req.ModelTier);
+                req.MemoryEnabled ?? true, templated.Tools, req.Contract,
+                templated.Access ?? PersonaAccess.Full, templated.DisallowedTools, createSpecialty,
+                req.AllProjectsAccess ?? false, req.Handle, req.ModelTier,
+                req.TierStrong, req.TierMedium, req.TierWeak);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         if (bindings.Count > 0)
@@ -272,6 +287,8 @@ public class PersonasController : ControllerBase
             return BadRequest("Неверный профиль доступа (ожидается full | readOnly | custom)");
         if (!ModelTiers.IsValidWireValue(req.ModelTier))
             return BadRequest(new { error = ModelTiers.WireError });
+        if (!IsValidTierCell(req.TierStrong) || !IsValidTierCell(req.TierMedium) || !IsValidTierCell(req.TierWeak))
+            return BadRequest(new { error = "Модель уровня — это id модели или preset:{id}; tier:* здесь нельзя" });
         // Partial-update: null-поля не меняются, поэтому размер считаем по эффективному контракту.
         // Порог — только на рост: у раздутой персоны остаётся право сохранить сокращение
         if (req.Contract is not null || req.SystemPrompt is not null)
@@ -282,13 +299,20 @@ public class PersonasController : ControllerBase
                 return BadRequest(new { error = tooBig });
         }
 
+        // Шаблон специальности: применяется только при реальной СМЕНЕ специальности;
+        // неподставленные access/tools/disallowedTools берутся из шаблона, явные поля
+        // запроса побеждают. Та же специальность в запросе — поля не трогает.
+        var templated = _specialtyTemplates.Apply(UserId, req.Specialty ?? current.Specialty, current.Specialty,
+            access, req.Tools, req.DisallowedTools);
+
         Persona persona;
         try
         {
             persona = _personas.Update(id, UserId, req.Name, req.Role, req.Description, req.SystemPrompt,
                 req.Model, req.Effort, req.Scope, req.ProjectId, req.Color, req.Greeting,
-                req.MemoryEnabled, req.Tools, req.Contract, access, req.DisallowedTools, req.Specialty,
-                req.AllProjectsAccess, req.Handle, req.ModelTier);
+                req.MemoryEnabled, templated.Tools, req.Contract, templated.Access, templated.DisallowedTools,
+                req.Specialty, req.AllProjectsAccess, req.Handle, req.ModelTier,
+                req.TierStrong, req.TierMedium, req.TierWeak);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         await Broadcast("updated", id);
@@ -1480,7 +1504,8 @@ public class PersonasController : ControllerBase
                         if (persona is null) return NotFound();
                     }
 
-                    return Ok(PersonaBindingsService.ToolCatalog
+                    // Каталог владельца: статические ключи плюс серверы его личного MCP-реестра
+                    return Ok(_bindings.ToolCatalogFor(UserId)
                         .Select(kv =>
                         {
                             if (persona is null)
@@ -1772,7 +1797,7 @@ public class PersonasController : ControllerBase
             }
         }
         sb.AppendLine("Инструменты (type \"tool\", target = ключ):");
-        foreach (var kv in PersonaBindingsService.ToolCatalog)
+        foreach (var kv in _bindings.ToolCatalogFor(UserId))
             sb.AppendLine($"- {kv.Key} — {kv.Value.Label}: {kv.Value.Hint}");
 
         sb.AppendLine("\nВерни ТОЛЬКО JSON-массив (без пояснений и markdown) из НЕ БОЛЕЕ 5 объектов:");
@@ -2106,6 +2131,19 @@ public class PersonasController : ControllerBase
         return true;
     }
 
+    // Валидация ячейки матрицы уровней персоны (ADR-007 §2): пусто — годится, иначе id модели
+    // или "preset:{id}". tier:* в ячейке запрещён (ячейка уже адресована уровнем). Наличие
+    // пресета не проверяем — как у Model, ссылка становится битой только при удалении пресета.
+    private static bool IsValidTierCell(string? cell)
+    {
+        if (string.IsNullOrWhiteSpace(cell)) return true;
+        var v = cell.Trim();
+        if (Services.Llm.LocalActionOverridesStore.IsPresetRoute(v))
+            return Services.Llm.LocalActionOverridesStore.ParsePresetRoute(v) is not null;
+        // tier:* запрещён в ячейке; прочее трактуется как id модели
+        return Services.Llm.LocalActionOverridesStore.ParseTierRoute(v) is null;
+    }
+
     // Разбор CSV-параметра запроса (extraProjectIds/extraPersonaIds) в список id
     private static List<string> SplitCsv(string? csv) =>
         string.IsNullOrWhiteSpace(csv)
@@ -2157,7 +2195,11 @@ public record CreatePersonaRequest(
     // Ручной @handle (latin-slug); пусто — авто-генерация из имени. Занят/невалиден → 400
     string? Handle = null,
     // Уровень модели («strong|medium|weak») вместо конкретной Model; null/"" — не задан
-    string? ModelTier = null);
+    string? ModelTier = null,
+    // Свои модели по уровням (ADR-007 §2): id модели ИЛИ "preset:{id}"; null/"" — не задана
+    string? TierStrong = null,
+    string? TierMedium = null,
+    string? TierWeak = null);
 
 public record UpdatePersonaRequest(
     string? Name,
@@ -2187,7 +2229,11 @@ public record UpdatePersonaRequest(
     // Занят/невалиден → 400
     string? Handle = null,
     // Уровень модели: null — не менять, "" — сбросить, "strong|medium|weak" — задать
-    string? ModelTier = null);
+    string? ModelTier = null,
+    // Свои модели по уровням (ADR-007 §2): null — не менять, "" — сбросить, иначе id/preset:{id}
+    string? TierStrong = null,
+    string? TierMedium = null,
+    string? TierWeak = null);
 
 public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessionId = null, string? Name = null,
     string? ProjectId = null);

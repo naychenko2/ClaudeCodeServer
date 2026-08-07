@@ -6,8 +6,7 @@
 import type { AuthState } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
-import { C } from '../../lib/design';
+import { PageCanvas } from '../../components/ui/PageCanvas';
 import type { SpendOpenContext } from '../../lib/spend';
 import { SpendScreen } from './SpendScreen';
 
@@ -22,13 +21,11 @@ interface Props {
 
 export function SpendPage({ auth, onLogout, onHubTab, ctx, onClose }: Props) {
   return (
-    <div style={{ height: '100dvh', background: C.bgMain, display: 'flex', flexDirection: 'column', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+    <PageCanvas>
       <HubHeader value="spend" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <SpendScreen ctx={ctx} isAdmin={auth.role === 'admin'} onClose={onClose} embedded />
       </div>
-    </div>
+    </PageCanvas>
   );
 }

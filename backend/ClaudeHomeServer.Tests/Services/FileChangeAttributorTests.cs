@@ -87,4 +87,42 @@ public class FileChangeAttributorTests
         attributor.IsClaimedByOther("session-b", @"C:\REPO\file.CS", Base.AddSeconds(1))
             .Should().BeTrue();
     }
+
+    // IsClaimedBySelf — источник признака «правка вне чата» (FileChangedMessage.External):
+    // TurnFileWatcher помечает карточку внешней, когда для пути нет заявки от своей же сессии.
+    [Fact]
+    public void НезаявленныйПуть_НеСчитаетсяЗаявленнымСобой()
+    {
+        var attributor = new FileChangeAttributor();
+
+        attributor.IsClaimedBySelf("session-a", "/repo/file.cs", Base).Should().BeFalse();
+    }
+
+    [Fact]
+    public void СвояЗаявка_ВПределахОкна_СчитаетсяЗаявленнойСобой()
+    {
+        var attributor = new FileChangeAttributor();
+        attributor.Claim("session-a", "/repo/file.cs", Base);
+
+        attributor.IsClaimedBySelf("session-a", "/repo/file.cs", Base.AddSeconds(5)).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ЗаявкаДругойСессии_НеСчитаетсяЗаявленнойСобой()
+    {
+        var attributor = new FileChangeAttributor();
+        attributor.Claim("session-a", "/repo/file.cs", Base);
+
+        attributor.IsClaimedBySelf("session-b", "/repo/file.cs", Base.AddSeconds(5)).Should().BeFalse();
+    }
+
+    [Fact]
+    public void СвояЗаявка_ПослеОкна_БольшеНеСчитаетсяЗаявленнойСобой()
+    {
+        var attributor = new FileChangeAttributor();
+        attributor.Claim("session-a", "/repo/file.cs", Base);
+
+        var after = Base + FileChangeAttributor.AttributionWindow + TimeSpan.FromSeconds(1);
+        attributor.IsClaimedBySelf("session-a", "/repo/file.cs", after).Should().BeFalse();
+    }
 }

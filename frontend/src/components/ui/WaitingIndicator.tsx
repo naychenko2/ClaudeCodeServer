@@ -32,6 +32,7 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
 
   useEffect(() => {
     // Режим «Ожидаю ответа» — фиксированный текст без анимации печатания (кольца остаются)
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- анимация «печатания» текста таймерами
     if (awaitingResponse) { setText('Ожидаю ответа…'); return; }
     // При reduced-motion — статичная подпись без анимации печати
     if (reduced) { setText(pickVerb() + '…'); return; }

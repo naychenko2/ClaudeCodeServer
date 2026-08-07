@@ -128,6 +128,43 @@ describe('request: мутации офлайн', () => {
   });
 });
 
+describe('request: свой таймаут', () => {
+  // fetch, который висит до отмены и реджектит по abort — как настоящий
+  function hangUntilAbort() {
+    return (_url: string, init: RequestInit) => new Promise<never>((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')));
+    });
+  }
+
+  it('явный timeoutMs → RequestTimeoutError, связь не деградирует', async () => {
+    fetchMock.mockImplementation(hangUntilAbort());
+
+    const promise = offline.request('/sessions/s1/prompt/p1/analyze', {
+      method: 'POST', body: '{}', timeoutMs: 180_000,
+    });
+    // Ожидание вешаем ДО прокрутки таймеров: иначе реджект остаётся без обработчика
+    const assertion = expect(promise).rejects.toThrowError(offline.RequestTimeoutError);
+    await vi.advanceTimersByTimeAsync(180_000);
+    await assertion;
+
+    // Долгий ход модели — не улика против связи: приложение остаётся онлайн
+    expect(offline.getConnectionState()).toBe('online');
+  });
+
+  it('дефолтный таймаут → прежнее поведение: OfflineError и уход в офлайн', async () => {
+    fetchMock.mockImplementation(hangUntilAbort());
+
+    const promise = offline.request('/projects', { method: 'POST', body: '{}' });
+    const assertion = expect(promise).rejects.toThrowError(offline.OfflineError);
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+
+    // За 30 с успевает и ранний degraded-таймер (2 с), и промахи health-пинга —
+    // зависший запрос без явного лимита это и правда пропажа связи
+    expect(offline.getConnectionState()).toBe('offline');
+  });
+});
+
 describe('request: HTTP-ошибки', () => {
   it('401 с токеном → событие cc-unauthorized (логаут) и Error с текстом сервера', async () => {
     fetchMock.mockResolvedValue(jsonResponse({ error: 'ключ отозван' }, 401));
@@ -185,35 +222,58 @@ describe('heartbeat: детекция пропажи сервера в онла�
     offline.initConnectivity();
   }
 
-  it('первый промах — degraded, второй подряд — offline', async () => {
-    bootOnline();
-    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+  it('серия провалов суммарно ≥OFFLINE_DWELL_MS (8с) приводит к offline', async () => {
+    // Вызываем runMonitorTick напрямую, управляем результатом pingServer через spy.
+    // Это позволяет тестировать логику длительности без привязки к сетке таймеров.
+    // mockReturnValueOnce(Promise.resolve(false)) — резолвится сразу при вызове,
+    // не нужно advanceTimers чтобы сбросить _pingInFlight между тиками.
+    const pingServerSpy = vi.spyOn(offline, 'pingServer');
 
-    // Первый heartbeat (~15с): промах №1 — degraded, ещё не offline
-    await vi.advanceTimersByTimeAsync(15_000);
+    // Провал №1 → degraded
+    pingServerSpy.mockReturnValueOnce(Promise.resolve(false));
+    await offline.runMonitorTick();
     expect(offline.getConnectionState()).toBe('degraded');
-    expect(offline.isOnline()).toBe(true);
+    expect(offline._firstFailureAt).not.toBeNull();
 
-    // Добор через FAST_RETRY (~3с): промах №2 — порог достигнут, уходим в офлайн
-    await vi.advanceTimersByTimeAsync(3_000);
+    // 4с спустя (суммарно 4с < 8с) — ещё degraded
+    await vi.advanceTimersByTimeAsync(4_000);
+    pingServerSpy.mockReturnValueOnce(Promise.resolve(false));
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+
+    // Ещё 5с спустя (суммарно 9с ≥ 8с) — уходим в offline
+    await vi.advanceTimersByTimeAsync(5_000);
+    pingServerSpy.mockReturnValueOnce(Promise.resolve(false));
+    await offline.runMonitorTick();
     expect(offline.getConnectionState()).toBe('offline');
-    expect(offline.isOnline()).toBe(false);
+
+    pingServerSpy.mockRestore();
   });
 
   it('успешный пинг из degraded возвращает online и обнуляет серию промахов', async () => {
-    bootOnline();
-    fetchMock.mockRejectedValueOnce(new TypeError('failed to fetch'));
+    // Мокаем fetch напрямую: pingServer ходит в /api/health через fetch.
+    // Меняем мок между вызовами runMonitorTick.
+    let pingResult = false;
+    fetchMock.mockImplementation(async () => {
+      if (pingResult) return jsonResponse({}, 204);
+      throw new TypeError('failed to fetch');
+    });
 
-    await vi.advanceTimersByTimeAsync(15_000);
+    // Провал → degraded
+    pingResult = false;
+    await offline.runMonitorTick();
     expect(offline.getConnectionState()).toBe('degraded');
+    expect(offline._firstFailureAt).not.toBeNull();
 
-    fetchMock.mockResolvedValue(jsonResponse({}, 204));
-    await vi.advanceTimersByTimeAsync(3_000);
+    // Успешный пинг → сразу online, _firstFailureAt сброшен
+    pingResult = true;
+    await offline.runMonitorTick();
     expect(offline.getConnectionState()).toBe('online');
+    expect(offline._firstFailureAt).toBeNull();
 
-    // Серия обнулена: следующий промах — снова лишь degraded, не offline
-    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
-    await vi.advanceTimersByTimeAsync(15_000);
+    // Серия обнулена: следующий промах — снова degraded (с нуля)
+    pingResult = false;
+    await offline.runMonitorTick();
     expect(offline.getConnectionState()).toBe('degraded');
   });
 
@@ -313,31 +373,36 @@ describe('ранний degraded-таймер в request()', () => {
     return new Promise(resolve => setTimeout(() => resolve(resp), ms));
   }
 
-  it('зависший запрос (>2с) поднимает degraded и форсит проверку связи', async () => {
-    fetchMock.mockImplementation(() => delayed(3_000, jsonResponse({ ok: 1 })));
+  it('зависший запрос (>5с) поднимает degraded; forceConnectivityCheck из degraded-таймера убран', async () => {
+    // Fetch медленнее DEGRADED_THRESHOLD_MS=5с — degraded таймер сработает ДО ответа.
+    // Используем реальную задержку (setTimeout), т.к. vi.useFakeTimers не замедляет
+    // Promise.prototype.then.
+    function slowFetch() {
+      return new Promise(resolve => setTimeout(() => resolve(jsonResponse({ ok: 1 })), 6_000));
+    }
+    fetchMock.mockImplementation(slowFetch);
 
     const p = offline.request('/projects');
-    await vi.advanceTimersByTimeAsync(2_100);
+    // 5с — порог degraded, ещё до ответа fetch (6с)
+    await vi.advanceTimersByTimeAsync(5_100);
 
     expect(offline.getConnectionState()).toBe('degraded');
     expect(offline.isOnline()).toBe(true);
-    // форс-проверка ушла пингом на /health
-    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ method: 'GET' }));
+    // forceConnectivityCheck больше НЕ вызывается из degraded-таймера request()
+    expect(fetchMock).toHaveBeenCalledTimes(1); // только основной запрос
 
-    // Ответ пришёл — связь подтверждена, состояние возвращается в online
-    await vi.advanceTimersByTimeAsync(1_000);
+    // Ответ пришёл
+    await vi.advanceTimersByTimeAsync(2_000);
     await expect(p).resolves.toEqual({ ok: 1 });
-    await vi.advanceTimersByTimeAsync(2_500); // доотвечал health-пинг форс-проверки
-    expect(offline.getConnectionState()).toBe('online');
   });
 
   it('запрос с явным timeoutMs (заведомо долгий) ранним таймером не гейтится', async () => {
     fetchMock.mockImplementation(() => delayed(5_000, jsonResponse({ ok: 1 })));
 
     const p = offline.request('/ai/generate', { timeoutMs: 10_000 });
-    await vi.advanceTimersByTimeAsync(2_500);
+    await vi.advanceTimersByTimeAsync(5_100);
 
-    // 2с прошло, а degraded нет — запрос заведомо долгий
+    // 5с прошло, а degraded нет — запрос заведомо долгий (явный timeoutMs)
     expect(offline.getConnectionState()).toBe('online');
 
     await vi.advanceTimersByTimeAsync(3_000);
@@ -352,5 +417,179 @@ describe('ранний degraded-таймер в request()', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(p).resolves.toEqual({ ok: 1 });
     expect(offline.getConnectionState()).toBe('online');
+  });
+});
+
+describe('Мьютекс пинга: гонка forceConnectivityCheck', () => {
+  function bootOnline() {
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn() });
+    offline.initConnectivity();
+  }
+
+  it('три вызова forceConnectivityCheck подряд до резолва пининга — fetch вызывается один раз', async () => {
+    bootOnline();
+    // Пинг «зависает» — резолвится только после того как тест продвинет таймеры
+    let resolvePing: (v: boolean) => void;
+    fetchMock.mockImplementation(() => new Promise<boolean>(r => { resolvePing = r; }));
+
+    offline.forceConnectivityCheck();
+    offline.forceConnectivityCheck();
+    offline.forceConnectivityCheck();
+
+    // Таймеры не трогаем — пинг ещё в полёте
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    // Допускаем резолв — мьютекс снимается
+    resolvePing!(true);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it('второй вызов после завершения первого пина — запускает новый пинг', async () => {
+    bootOnline();
+    let resolvePing: (v: boolean) => void;
+    fetchMock.mockImplementation(() => new Promise<boolean>(r => { resolvePing = r; }));
+
+    offline.forceConnectivityCheck();
+    resolvePing!(true);
+    // Сбрасываем _pingInFlight и ждём следующий тик (scheduled с delay=FAST_RETRY_MS=5s)
+    await vi.advanceTimersByTimeAsync(5_001);
+    // Теперь тик исполнился, _pingInFlight = null, пинг завершён
+    offline.forceConnectivityCheck();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    resolvePing!(true);
+    await vi.advanceTimersByTimeAsync(5_001);
+  });
+});
+
+describe('Длительность серии: offline по времени, не по счётчику', () => {
+  it('первый промах → degraded, устойчивый провал ≥8с → offline', async () => {
+    // Мокаем fetch: каждый вызов pingServer делает один fetch.
+    let failCount = 0;
+    fetchMock.mockImplementation(async () => {
+      if (failCount < 10) { failCount++; throw new TypeError('failed to fetch'); }
+      return jsonResponse({}, 204);
+    });
+
+    // Провал №1 → degraded, _firstFailureAt записан
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+    const t0 = offline._firstFailureAt;
+    expect(t0).not.toBeNull();
+
+    // 4с спустя — суммарно 4с < 8с, всё ещё degraded
+    await vi.advanceTimersByTimeAsync(4_000);
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+    // _firstFailureAt не изменился
+    expect(offline._firstFailureAt).toBe(t0);
+
+    // Ещё 5с → суммарно 9с ≥ 8с → offline
+    await vi.advanceTimersByTimeAsync(5_000);
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('offline');
+  });
+
+  it('успешный пинг сбрасывает _firstFailureAt — новая серия считается с нуля', async () => {
+    let pingResult = false;
+    fetchMock.mockImplementation(async () => {
+      if (!pingResult) throw new TypeError('failed to fetch');
+      return jsonResponse({}, 204);
+    });
+
+    // Провал №1 → degraded
+    pingResult = false;
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+    const t0 = offline._firstFailureAt;
+
+    // Успех → online, _firstFailureAt сброшен
+    pingResult = true;
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('online');
+    expect(offline._firstFailureAt).toBeNull();
+
+    // Новая серия: промах с нуля
+    pingResult = false;
+    await vi.advanceTimersByTimeAsync(1); // сдвигаем fake time, чтобы t1 отличался от t0
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+    expect(offline._firstFailureAt).not.toBeNull();
+    // t0 от первой серии, новый t1
+    expect(offline._firstFailureAt).not.toBe(t0);
+  });
+});
+
+describe('Дрожащая сеть: короткие провалы не уводят в offline', () => {
+  it('успех внутри OFFLINE_DWELL_MS сбрасывает серию — флаппинг не роняет связь', async () => {
+    let pingResult = false;
+    fetchMock.mockImplementation(async () => {
+      if (!pingResult) throw new TypeError('failed to fetch');
+      return jsonResponse({}, 204);
+    });
+
+    // Провал → degraded, _firstFailureAt = T0
+    pingResult = false;
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+    const t0 = offline._firstFailureAt;
+
+    // 3с спустя (суммарно 3с < 8с) — ещё degraded
+    await vi.advanceTimersByTimeAsync(3_000);
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+    expect(offline._firstFailureAt).toBe(t0); // не изменился
+
+    // Успех → online, _firstFailureAt сброшен
+    pingResult = true;
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('online');
+    expect(offline._firstFailureAt).toBeNull();
+
+    // Новый провал — с нуля
+    pingResult = false;
+    await offline.runMonitorTick();
+    expect(offline.getConnectionState()).toBe('degraded');
+    expect(offline._firstFailureAt).not.toBe(t0); // новый момент
+  });
+});
+
+describe('Троттлинг forceConnectivityCheck', () => {
+  function bootOnline() {
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn() });
+    offline.initConnectivity();
+  }
+
+  it('два вызова forceConnectivityCheck в течение 1с — второй не запускает пинг', async () => {
+    bootOnline();
+    let resolvePing: (v: boolean) => void;
+    fetchMock.mockImplementation(() => new Promise<boolean>(r => { resolvePing = r; }));
+
+    offline.forceConnectivityCheck();
+    // Второй вызов через 500мс — под порогом MIN_FORCED_CHECK_INTERVAL_MS
+    await vi.advanceTimersByTimeAsync(500);
+    offline.forceConnectivityCheck();
+    // Должен быть только один пинг
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    resolvePing!(true);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+
+  it('вызов после 2с достаточнрго интервала — новый пинг уходит', async () => {
+    bootOnline();
+    let resolvePing: (v: boolean) => void;
+    fetchMock.mockImplementation(() => new Promise<boolean>(r => { resolvePing = r; }));
+
+    offline.forceConnectivityCheck();
+    resolvePing!(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // Ждём достаточно для троттла
+    await vi.advanceTimersByTimeAsync(2_000);
+    offline.forceConnectivityCheck();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    resolvePing!(true);
+    await vi.advanceTimersByTimeAsync(0);
   });
 });

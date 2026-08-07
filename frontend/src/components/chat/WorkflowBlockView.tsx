@@ -4,6 +4,7 @@ import { api, type WorkflowAgentInfo, type WorkflowAgentBlock } from '../../lib/
 import { parseWorkflowMeta } from '../../lib/workflowMeta';
 import { usePersonas, ensurePersonasLoaded } from '../../lib/personas';
 import { C, FONT, R } from '../../lib/design';
+import { useNow } from '../../lib/useNow';
 import { ToolUseView, toolWord, type ToolUseItem } from './ToolUseView';
 import { splitAgentResultTail } from '../../lib/agentTail';
 import { PersonaConsultCard, PersonaTaskView, findConsultedPersona, findPersonaByAgentType } from './PersonaTaskView';
@@ -18,6 +19,12 @@ function parseTranscriptDir(result: string | undefined): string | null {
   return m ? m[1].trim() : null;
 }
 
+// Галочка завершённого workflow. Вынесена из рендера (static-components):
+// компонент, объявленный внутри тела, пересоздавался бы на каждый рендер.
+function DoneIcon() {
+  return <Check size={14} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />;
+}
+
 // React.memo: пропсы (workflow-элемент, массивы агентов) пересоздаются только при
 // изменении items — карточка не перерендеривается на каждый чужой рендер ленты
 export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, agents, childrenByParentId, onOpenFile }: {
@@ -29,8 +36,10 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
 }) {
   // Блок Workflow раскрыт сразу — сверху видны этапы; сворачивается вручную
   const [expanded, setExpanded] = useState(true);
-  // Секция «Агенты» внизу свёрнута по умолчанию (раскрывается своим шевроном)
-  const [agentsOpen, setAgentsOpen] = useState(false);
+  // Секция «Агенты» раскрыта по умолчанию — единственное место, где видна реальная
+  // активность (промпт, счётчик инструментов) в течение долгой фазы без завершённых
+  // агентов; сворачивается вручную своим шевроном
+  const [agentsOpen, setAgentsOpen] = useState(true);
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
 
   // Персоны владельца: агенты workflow с agentType == handle персоны рендерятся
@@ -90,12 +99,31 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
       )
     : 0;
 
+  // Длительность активной фазы (замечена на клиенте, не серверный таймстамп —
+  // такого поля нет в WorkflowAgentInfo): без него долгая фаза без завершённых
+  // агентов выглядит как зависание (см. тикет — DeepSeek Pro, первый агент ~10 мин).
+  // useNow раз в 20с двигает текст, пока карточка смонтирована. Теперь now — состояние,
+  // а не Date.now() в рендере (purity).
+  const now = useNow(20000);
+  const activePhaseIdx = !isSettled && phases.length > 0 && completedPhaseCount < phases.length ? completedPhaseCount : -1;
+  // Момент входа фазы в active — состояние, пишется эффектом один раз на фазу
+  const [phaseStarts, setPhaseStarts] = useState<Map<number, number>>(() => new Map());
+  useEffect(() => {
+    if (activePhaseIdx < 0) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- фиксируем момент входа фазы в active (один раз на фазу)
+    setPhaseStarts(prev => (prev.has(activePhaseIdx) ? prev : new Map(prev).set(activePhaseIdx, now)));
+  }, [activePhaseIdx, now]);
+  const activePhaseMinutes = activePhaseIdx >= 0
+    ? Math.floor((now - (phaseStarts.get(activePhaseIdx) ?? now)) / 60000)
+    : null;
+
   // Фоллбэк-загрузка для старых сессий (где серверный ватчер не работал)
   useEffect(() => {
     if (serverAgents !== undefined) return; // сервер уже обрабатывает
     if (!isDone || localAgents !== null) return;
     const dir = parseTranscriptDir(workflow.result as string | undefined);
     if (!dir) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- фолбэк-загрузка агентов из локальной транскрипции
     setLocalLoading(true);
     api.workflow.getAgents(dir)
       .then(r => setLocalAgents(r.agents))
@@ -108,10 +136,6 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
     if (next.has(id)) next.delete(id); else next.add(id);
     return next;
   });
-
-  const DoneIcon = () => (
-    <Check size={14} color={C.success} strokeWidth={2.5} style={{ flexShrink: 0 }} />
-  );
 
   return (
     <div style={{ border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden', background: C.bgPanel }}>
@@ -150,6 +174,7 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
             {phases.length > 0 && (
               <span style={{ fontFamily: FONT.sans, fontSize: 11, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap' }}>
                 {completedPhaseCount}/{phases.length}
+                {activePhaseMinutes !== null && activePhaseMinutes >= 1 ? ` · работает ${activePhaseMinutes} мин` : ''}
               </span>
             )}
             {/* Когда фаз нет — счётчик агентов + бар */}
@@ -192,7 +217,12 @@ export const WorkflowBlockView = memo(function WorkflowBlockView({ workflow, age
                       : <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.border }} />}
                   </span>
                   <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 500, color: C.textPrimary, lineHeight: 1.4 }}>{phase.title}</div>
+                    <div style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 500, color: C.textPrimary, lineHeight: 1.4 }}>
+                      {phase.title}
+                      {phaseActive && activePhaseMinutes !== null && activePhaseMinutes >= 1 && (
+                        <span style={{ fontWeight: 400, color: C.textMuted, fontSize: 11 }}> · работает {activePhaseMinutes} мин</span>
+                      )}
+                    </div>
                     {phase.detail && (
                       <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary, lineHeight: 1.4, marginTop: 1 }}>{phase.detail}</div>
                     )}

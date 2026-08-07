@@ -45,6 +45,14 @@ public class UserStore
         if (doc is not null)
         {
             _users = doc.Users ?? [];
+            // Разовая миграция: выкидываем легаси-поле NtHash из файла. Само по себе
+            // неизвестное поле десериализации не мешает, но пока файл не переписан,
+            // NT-хэш продолжает лежать на диске и уезжать в облачный архив.
+            if (HasLegacyNtHash())
+            {
+                Save();
+                logger.LogInformation("users.json: удалено легаси-поле NtHash (NT-хэш пароля больше не хранится)");
+            }
             return;
         }
 
@@ -65,6 +73,20 @@ public class UserStore
             "║  Пароль: {Password}\n" +
             "║  Пароль показан ОДИН раз — смените после входа ║\n" +
             "╚══════════════════════════════════════════════╝", generatedPassword);
+    }
+
+    // Есть ли в файле на диске легаси-поле NT-хэша (записи, сделанные до его отмены)
+    private bool HasLegacyNtHash()
+    {
+        try
+        {
+            return File.Exists(_filePath)
+                && File.ReadAllText(_filePath).Contains("\"NtHash\"", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false; // нечитаемый файл — не повод падать на старте
+        }
     }
 
     private void Save()
@@ -91,7 +113,7 @@ public class UserStore
     }
 
     /// <summary>
-    /// Устанавливает пароль: bcrypt-хэш + NT-хэш для NTLM WebDAV.
+    /// Устанавливает пароль (bcrypt-хэш) и бампает версию сессий.
     /// </summary>
     public void SetPassword(User user, string password)
     {
@@ -102,24 +124,9 @@ public class UserStore
         }
     }
 
-    /// <summary>
-    /// Лениво вычисляет и сохраняет NT-хэш если его ещё нет.
-    /// Вызывается при успешном логине, чтобы активировать NTLM WebDAV.
-    /// </summary>
-    public void EnsureNtHash(User user, string plainPassword)
-    {
-        lock (_lock)
-        {
-            if (user.NtHash is { Length: 16 }) return;
-            user.NtHash = WebDav.NtlmHelper.ComputeNtHash(plainPassword);
-            Save();
-        }
-    }
-
     private void SetPasswordInternal(User user, string password)
     {
         user.PasswordHash = _hasher.HashPassword(user, password);
-        user.NtHash = WebDav.NtlmHelper.ComputeNtHash(password);
         // Смена пароля обесценивает все ранее выданные токены этого пользователя
         user.TokenVersion++;
     }
@@ -228,10 +235,7 @@ public class UserStore
             if (user is null) return false;
 
             user.PasswordHash = _hasher.HashPassword(user, newPassword);
-            // NtHash пересчитается лениво при следующем логине
-            user.NtHash = null;
-            // Идём мимо SetPasswordInternal (там NtHash считается сразу) — версию бампаем сами:
-            // админский сброс обязан выкидывать пользователя со всех устройств
+            // Версию бампаем сами: админский сброс обязан выкидывать пользователя со всех устройств
             user.TokenVersion++;
             Save();
             return true;
@@ -351,6 +355,36 @@ public class UserStore
 
     private static string? NormalizeTier(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    /// <summary>Состав «Стены» пользователя (id чатов в порядке монет); пусто — не настроена.</summary>
+    public IReadOnlyList<string> GetWallChatIds(string id)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            return user?.WallChatIds ?? [];
+        }
+    }
+
+    /// <summary>
+    /// Сохраняет состав «Стены». Список приходит уже отвалидированным (дедуп, только свои
+    /// живые чаты, потолок) — стор лишь фиксирует его. Возвращает false, если пользователь не найден.
+    /// </summary>
+    public bool SetWallChatIds(string id, IReadOnlyList<string> chatIds)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            // null и пустой список — одно и то же «стена не настроена»: без ?? [] каждый
+            // PUT пустого состава поверх null переписывал бы users.json вхолостую
+            if ((user.WallChatIds ?? []).SequenceEqual(chatIds)) return true; // без лишней записи файла
+
+            user.WallChatIds = chatIds.Count > 0 ? [.. chatIds] : null;
+            Save();
+            return true;
+        }
+    }
 
     /// <summary>
     /// Личная дефолт-персона пользователя (фича default-personas-onboarding); null — сброс.

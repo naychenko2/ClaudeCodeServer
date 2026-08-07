@@ -8,6 +8,7 @@ import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
 import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionCtx } from '../../lib/ai/actions';
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
+import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
 import { useIsMobile } from '../../lib/breakpoints';
 import { FLAGS } from '../../lib/featureFlags';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
@@ -19,6 +20,50 @@ import {
 } from '../../lib/ai/proactive';
 import { useContextPersona } from '../../lib/contextPersona';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+
+// Полный размер круглешка — от него считаем налезание (см. useFabObstacleOverlap)
+const FAB_FULL = 54;
+// Зазор между кнопкой и препятствием: ужимаемся, не дожидаясь касания впритык
+const FAB_CLEARANCE = 10;
+
+// Налезает ли нижнее препятствие (композер чата, футер мастера персон) на угол кнопки.
+// Замер ведём по геометрии ПОЛНОГО размера (54), а не текущего: иначе ужавшаяся кнопка
+// перестала бы пересекаться, выросла обратно и замигала бы туда-сюда.
+// Позиция кнопки задана от правого-нижнего края, поэтому её right/bottom от размера не
+// зависят — левый-верхний угол полного круга достраиваем от них.
+function useFabObstacleOverlap(fabRef: React.RefObject<HTMLElement | null>, active: boolean): boolean {
+  const [overlap, setOverlap] = useState(false);
+  useEffect(() => {
+    if (!active) { setOverlap(false); return; }
+    let ro: ResizeObserver | null = null;
+    const measure = () => {
+      const fab = fabRef.current;
+      const ob = getFabObstacle();
+      if (!fab || !ob) { setOverlap(false); return; }
+      const f = fab.getBoundingClientRect();
+      const o = ob.getBoundingClientRect();
+      if (o.width === 0 && o.height === 0) { setOverlap(false); return; }
+      setOverlap(
+        o.right > f.right - FAB_FULL - FAB_CLEARANCE && o.left < f.right + FAB_CLEARANCE &&
+        o.bottom > f.bottom - FAB_FULL - FAB_CLEARANCE && o.top < f.bottom + FAB_CLEARANCE,
+      );
+    };
+    // Наблюдаем само препятствие: композер и растёт в высоту (разнос грипом, длинный
+    // текст), и меняет ширину, когда открывается панель — оба случая двигают его кромку
+    // к кнопке. Плюс resize окна: он двигает саму кнопку, а не препятствие.
+    const attach = () => {
+      ro?.disconnect();
+      const ob = getFabObstacle();
+      if (ob) { ro = ro ?? new ResizeObserver(measure); ro.observe(ob); }
+      measure();
+    };
+    const unsub = subscribeFabObstacle(attach);
+    window.addEventListener('resize', measure);
+    attach();
+    return () => { unsub(); ro?.disconnect(); window.removeEventListener('resize', measure); };
+  }, [fabRef, active]);
+  return overlap;
+}
 
 // AI-хаб (pull-слой): плавающая кнопка + командная палитра. Открывается кликом,
 // хоткеем ⌘/Ctrl+K или событием 'cc-open-ai'. Палитра через getNav() знает текущий
@@ -32,6 +77,7 @@ export function AiLauncher() {
   const [idx, setIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const fabRef = useRef<HTMLButtonElement>(null);
   const hoverTimer = useRef<number | null>(null);
   // Push-слой: активная проактивная подсказка + состояние тумблера
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
@@ -45,6 +91,12 @@ export function AiLauncher() {
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
   const aiBusy = useAiBusy();
+  // Режим «Стены» — кнопка там всегда компактная (см. эффект на NAV_CHANGE_EVENT)
+  const [wallMode, setWallMode] = useState(() => getNav()?.screen === 'wall');
+  // Композер чата (или футер мастера персон) дошёл до угла кнопки → ужимаем её
+  const obstacleOverlap = useFabObstacleOverlap(fabRef, !open && !isMobile);
+  // Компактный круг: на стене всегда, в остальных местах — когда снизу подпёрло
+  const fabSmall = wallMode || obstacleOverlap;
   // Лицо AI-хаба (фича default-personas-onboarding): аватар релевантной персоны
   // (чат → проект → личная дефолт-персона); null — нейтральный логотип, как раньше
   const facePersona = useContextPersona();
@@ -75,8 +127,13 @@ export function AiLauncher() {
 
   // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
   // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
+  // Заодно ведём признак «Стена»: там колонок чатов много и композер у каждой свой —
+  // крупному кругу места нет, он всегда компактный.
   useEffect(() => {
-    const onNav = () => { setSuggestion(null); setFabLevel('none'); setRecs([]); };
+    const onNav = () => {
+      setSuggestion(null); setFabLevel('none'); setRecs([]);
+      setWallMode(getNav()?.screen === 'wall');
+    };
     window.addEventListener(NAV_CHANGE_EVENT, onNav);
     return () => window.removeEventListener(NAV_CHANGE_EVENT, onNav);
   }, []);
@@ -100,6 +157,14 @@ export function AiLauncher() {
   // Свайп-закрытие проактивного балуна на тач-экране (смещение вправо за экран)
   const [dragX, setDragX] = useState(0);
   const swipeStart = useRef<number | null>(null);
+
+  // Немедленный сброс статуса FAB при смене раздела — не ждём опросного тика (иначе старая
+  // подсказка/уровень «залипают» до 1.5 с и кажется, что статус не сбрасывается).
+  useEffect(() => {
+    const onNav = () => { setSuggestion(null); setFabLevel('none'); setRecs([]); };
+    window.addEventListener(NAV_CHANGE_EVENT, onNav);
+    return () => window.removeEventListener(NAV_CHANGE_EVENT, onNav);
+  }, []);
 
   // Список действий пересчитывается на каждый ввод, пока палитра открыта. Рекомендованные
   // (recs) получают уровень (recLevel) для бейджа/подсветки и поднимаются в начало группы.
@@ -138,6 +203,7 @@ export function AiLauncher() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, gradedFab]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс активного пункта на 0 при смене поиска
   useEffect(() => { setIdx(0); }, [q, open]);
   // Держим активный (стрелками) пункт в видимой области списка. block:'nearest' —
   // не дёргает, если пункт уже виден (напр. при наведении мышью).
@@ -166,6 +232,15 @@ export function AiLauncher() {
     return () => { window.removeEventListener('keydown', onKey, true); window.removeEventListener(OPEN_AI_EVENT, onOpen); };
   }, []);
 
+  // Пока палитра открыта, кнопки в DOM нет — mouseleave по ней уже не придёт, и признак
+  // наведения залипает: закрыв палитру, пользователь видел кнопку в РАЗВЁРНУТОМ виде,
+  // хотя курсор давно в стороне. Гасим признак на каждой смене состояния палитры;
+  // если курсор и правда над кнопкой, ближайшее движение мыши вернёт наведение.
+  useEffect(() => {
+    if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
+    setFabHover(false);
+  }, [open]);
+
   const close = () => setOpen(false);
   const fire = (a: AiAction) => { close(); a.run(buildCtx()); };
 
@@ -177,6 +252,13 @@ export function AiLauncher() {
     let firedForSig = '';
     const DWELL = 4000;          // обзорные экраны — полное «дожитие»
     const ENTITY_DWELL = 900;    // открыта конкретная сущность — быстрый пересчёт (триггер «смена сущности»)
+    // Экраны, где повод живёт своей жизнью: на стене чаты стартуют и завершают ходы
+    // без участия человека и без смены навигации, поэтому однажды посчитанный уровень
+    // застывал бы до ухода с экрана (кнопка оставалась серой при живом ходе).
+    // Статусы чужих чатов сюда не приходят событиями — стена держит группы только
+    // своего набора, поэтому периодический перерасчёт, а не подписка.
+    const LIVE_RECHECK_MS = 30_000;
+    let lastComputed = 0;
     const sigOf = (n: ReturnType<typeof getNav>) => n ? `${n.screen}|${n.note ?? ''}|${n.task ?? ''}|${n.persona ?? ''}|${n.knowledge ?? ''}|${n.file ?? ''}|${n.project?.id ?? ''}` : '';
     const hasEntity = (n: ReturnType<typeof getNav>) => !!(n && (n.note || n.task || n.file || n.persona || n.knowledge));
     // Форс-пересчёт (завершение хода Claude) — сбрасываем отметку, чтобы tick пересчитал
@@ -188,8 +270,13 @@ export function AiLauncher() {
       const sig = sigOf(ctx.nav);
       if (sig !== lastSig) { lastSig = sig; stableSince = Date.now(); firedForSig = ''; setSuggestion(null); setFabLevel('none'); setRecs([]); return; }
       const dwell = hasEntity(ctx.nav) ? ENTITY_DWELL : DWELL;
-      if (firedForSig === sig || Date.now() - stableSince < dwell) return;
+      if (Date.now() - stableSince < dwell) return;
+      // Уже считали для этого места — повторяем только там, где повод меняется сам,
+      // и не чаще LIVE_RECHECK_MS
+      const live = ctx.nav?.screen === 'wall';
+      if (firedForSig === sig && !(live && Date.now() - lastComputed >= LIVE_RECHECK_MS)) return;
       firedForSig = sig; // помечаем сразу, чтобы не дёргать данные каждый тик
+      lastComputed = Date.now();
       void computeContextState(ctx).then(({ suggestion: sug, level, recommendations }) => {
         // За время запроса контекст мог смениться — игнорируем устаревший результат
         if (sigOf(getNav()) !== sig || open) return;
@@ -272,6 +359,20 @@ export function AiLauncher() {
   const fabDim = fabLevel !== 'strong';
   const fabStrong = fabLevel === 'strong';
 
+  // Прыжок «есть идея»: ровно 3 раза (CSS-count), потом замирает — не скачет без конца.
+  // Новая сильная подсказка перезапускает 3 прыжка заново. «Новизну» ловим по сигнатуре
+  // повода (ключ подсказки / id топовой рекомендации): пока он тот же — не дёргаем, класс
+  // уже отыграл; сменился — ре-триггерим анимацию через reflow (снять класс → reflow → надеть).
+  const hopSig = fabStrong && !aiBusy ? (suggestion?.key ?? recs[0]?.id ?? 'strong') : null;
+  useEffect(() => {
+    const el = fabRef.current;
+    if (!el) return;
+    el.classList.remove('cc-fab-hop');
+    if (!hopSig) return;
+    void el.offsetWidth; // форс reflow — анимация начнётся с нуля
+    el.classList.add('cc-fab-hop');
+  }, [hopSig]);
+
   return (
     <>
       {/* Проактивная подсказка (push) — тихий балун у кнопки. При наведении на FAB
@@ -339,10 +440,10 @@ export function AiLauncher() {
       {/* Плавающая кнопка */}
       {!open && (
         <button
+          ref={fabRef}
           onClick={() => { setQ(''); setOpen(true); }}
           aria-label="AI-действия (Ctrl/⌘ + K)"
           title="AI-действия · ⌘K"
-          className={fabStrong && !aiBusy ? 'cc-fab-hop' : undefined}
           style={{
             ...fabStyle,
             // Ореол сохраняем, но нейтральный: SHADOW.fab из fabStyle — accent-свечение
@@ -350,24 +451,38 @@ export function AiLauncher() {
             // логотип), и оранжевый ореол выглядел беспричинным. Цвет свечения должен
             // идти от самой кнопки — отсюда парный токен той же геометрии.
             background: 'none', padding: 0, overflow: 'visible', boxShadow: SHADOW.fabNeutral,
-            ...(isMobile ? { right: 16, width: FAB_MOBILE, height: FAB_MOBILE } : {}),
+            // Размер: базовый из var --cc-fab-size (54 без панели / 36 при распахнутой панели),
+            // при наведении на десктопе — всегда 54. Растёт влево-вверх (угол приклеен к краю).
+            // На мобиле размер фиксирован (36, там наведения и распахнутых панелей нет).
+            // Композер (или футер мастера персон), дошедший до угла, тоже ужимает кнопку:
+            // она остаётся в углу и просто занимает меньше места, а не уезжает вверх.
+            // На «Стене» компактный размер постоянный.
+            ...(fabSmall && !isMobile ? { width: 36, height: 36 } : {}),
+            // Наведение растит кнопку до полного размера — как в компактном режиме панелей.
+            // Исключение — подпёртая композером: там расти некуда, круг накрыл бы поле ввода.
+            ...(fabHover && !isMobile && !obstacleOverlap ? { width: 54, height: 54 } : {}),
+            ...(isMobile ? { right: 16, width: 36, height: 36 } : {}),
+            // Наведение на десктопе: в большом состоянии подъём (--cc-fab-lift = -2px), в
+            // малом подъёма нет (0px) — там кнопка вместо этого растёт до 54.
+            transform: fabHover && !isMobile ? 'translateY(var(--cc-fab-lift, -2px))' : undefined,
           }}
-          onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; enterFab(); }}
-          onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; leaveFab(); }}
+          onMouseEnter={enterFab}
+          onMouseLeave={leaveFab}
         >
           {/* Лицо кнопки: аватар релевантной персоны (фича default-personas-onboarding),
               fallback — логотип «AI Home» (домик с трубой) на весь круг. Покой — серый;
-              идея — подскок (cc-fab-hop на кнопке); работа — «пыхтит» (cc-fab-huff) + дым. */}
+              идея — подскок (cc-fab-hop на кнопке); работа — «пыхтит» (cc-fab-huff) + дым.
+              Размер аватара повторяет геометрию кнопки (36 компакт / 54 полный и hover). */}
           {facePersona ? (
             <span
               aria-hidden
               className={aiBusy ? 'cc-fab-huff' : undefined}
               style={{
                 position: 'absolute', inset: 0, display: 'block', borderRadius: '50%', overflow: 'hidden',
-                ...(fabDim && !aiBusy ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
               }}
             >
-              <PersonaAvatar persona={facePersona} size={isMobile ? FAB_MOBILE : 54} />
+              <PersonaAvatar persona={facePersona} size={isMobile || (fabSmall && !(fabHover && !obstacleOverlap)) ? 36 : 54} />
             </span>
           ) : (
             <img
@@ -376,7 +491,7 @@ export function AiLauncher() {
               style={{
                 position: 'absolute', inset: 0, width: '100%', height: '100%',
                 objectFit: 'cover', borderRadius: '50%', display: 'block',
-                ...(fabDim && !aiBusy ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
+                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.55, filter: 'grayscale(0.9)' } : {}),
               }}
             />
           )}
@@ -486,6 +601,7 @@ function sectionLabelForScreen(screen?: string): string | null {
     case 'project': return 'Проект';
     case 'personas': return 'Персоны';
     case 'knowledge': return 'Знания';
+    case 'wall': return 'Стена';
     default: return null;
   }
 }
@@ -508,22 +624,26 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
-// На мобиле кнопка мельче в полтора раза (54 → 36): на телефоне она ближе к контенту
-// и в полный размер заметно его перекрывала
-const FAB_MOBILE = 36;
-
 const fabStyle: React.CSSProperties = {
-  // --cc-fab-bottom задаёт страница снизу (в чате — высота композера + зазор), чтобы
-  // FAB вставал НАД композером и не сталкивался с кнопкой «вниз». Дефолт — угол 20px.
-  // --cc-fab-right сдвигает FAB влево, когда правую кромку занимают панели
-  // нового интерфейса проекта (ставит RightPanelStack); дефолт — угол 20px
-  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
-  width: 54, height: 54, borderRadius: '50%', border: 'none', cursor: 'pointer',
+  // Всегда в правом нижнем углу экрана. Боковой отступ — var --cc-fab-inset: обычно
+  // 20px (уютный угол), но когда справа открыт остров-панель во всю высоту, PanelZone ставит
+  // 6px и кнопка прижимается плотнее к краю (меньше налезает на остров). Нижний отступ
+  // отдельный (--cc-fab-bottom): в компактном режиме он равен отступу холста островов,
+  // чтобы кнопка стояла на одной линии с их нижней кромкой. Из угла кнопка не уезжает
+  // никогда — на подошедший снизу композер она отвечает не подъёмом, а ужиманием
+  // (см. useFabObstacleOverlap). Снизу ещё safe-area.
+  position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px))',
+  // Базовый размер — var --cc-fab-size: по умолчанию 54 (панель не распахнута), а когда
+  // справа распахнута панель во всю высоту, PanelZone ставит 36 (компактный, не мешает).
+  // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
+  width: 'var(--cc-fab-size, 54px)', height: 'var(--cc-fab-size, 54px)',
+  borderRadius: '50%', border: 'none', cursor: 'pointer',
   background: C.accent, color: C.onAccent, boxShadow: SHADOW.fab,
-  // bottom едет плавно за счёт анимируемой @property --cc-fab-bottom (см. index.css)
   // Ниже выпадающих меню (Z.dropdown): FAB висит в том же углу, что и попапы кнопок
   // композера, и на Z.modal-1 перекрывал их собой. Выше обычного контента остаётся.
-  display: 'grid', placeItems: 'center', zIndex: Z.dropdown - 1, transition: 'transform .16s',
+  display: 'grid', placeItems: 'center', zIndex: Z.dropdown - 1,
+  transition: 'width .18s ease, height .18s ease, transform .16s ease',
 };
 
 const overlayStyle: React.CSSProperties = {
@@ -577,7 +697,9 @@ const toggleThumb: React.CSSProperties = {
 };
 
 const balloonStyle: React.CSSProperties = {
-  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
+  // Над кнопкой в покое — её нижний отступ (var) + текущая высота кнопки (var, −8 нахлёст)
+  position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + var(--cc-fab-size, 54px) - 8px)',
   width: 280, background: C.bgCard, border: `1px solid ${C.accentMuted}`, borderRadius: R.xl,
   boxShadow: SHADOW.modal, padding: '13px 14px 12px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };
@@ -596,7 +718,9 @@ const balloonGhost: React.CSSProperties = {
 
 // Hover-балун со списком рекомендаций (шире проактивного, с прокруткой при длинном списке)
 const hoverBalloonStyle: React.CSSProperties = {
-  position: 'fixed', right: 'var(--cc-fab-right, 20px)', bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 66px)',
+  // Показывается на наведении, когда кнопка выросла до 54 — её нижний отступ (var) + высота
+  position: 'fixed', right: 'var(--cc-fab-inset, 20px)',
+  bottom: 'calc(env(safe-area-inset-bottom, 0px) + var(--cc-fab-bottom, 20px) + 46px)',
   width: 300, maxHeight: '60vh', overflowY: 'auto', background: C.bgCard, border: `1px solid ${C.accentMuted}`,
   borderRadius: R.xl, boxShadow: SHADOW.modal, padding: '12px 12px 10px', zIndex: Z.modal - 1, fontFamily: FONT.sans,
 };

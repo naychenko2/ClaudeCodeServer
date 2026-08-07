@@ -80,6 +80,17 @@ export function fmtTok(n: number): string {
   if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
   return String(n);
 }
+
+// Склонение счётчиков (та же логика, что у локальных plural в виджетах/списках)
+export function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
+}
+// «1 ход», «2 хода», «47 ходов»
+export const fmtTurns = (n: number) => `${n} ${plural(n, 'ход', 'хода', 'ходов')}`;
 export const fmtDate = (d: string) => d.slice(8, 10) + '.' + d.slice(5, 7);
 export const fmtTime = (iso: string) =>
   new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });

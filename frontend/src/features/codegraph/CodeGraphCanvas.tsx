@@ -8,9 +8,15 @@ import { useEffect, useState, type MouseEvent, type ReactNode } from 'react';
 import { C, FONT, FS } from '../../lib/design';
 import type { CodeGraphRelation } from '../../types';
 import type { FocusModel, FocusSide } from './graphFocus';
-import { EDGE_COLOR, KIND_RING, KIND_COLOR, KIND_GLYPH } from './graphTokens';
+import {
+  EDGE_COLOR, KIND_RING, KIND_COLOR, KIND_GLYPH,
+  NODE_STROKE, NODE_STROKE_MAIN, RING_HOVER_GAP, RING_GOD_GAP, HIT_PAD, HIT_MIN, LABEL_HALO,
+} from './graphTokens';
 import type { OverviewScene, OverviewLayout, OverviewItem } from './graphOverview';
 import { bundleWidth } from './graphOverview';
+
+// Радиус кружка-заглушки «+N ещё» — единственный размер холста, не выводимый из данных узла
+const STUB_R = 22;
 
 // Переход между сценами (Обзор ↔ Фокус, перефокус на соседа): узел «уезжает в центр,
 // вокруг разворачивается окрестность» — масштаб + прозрачность за ~200мс. key меняется
@@ -53,6 +59,9 @@ export function CodeGraphFocusCanvas({ focus, onRefocus, onClear, onExpandTail }
   onExpandTail?: (side: FocusSide) => void;
 }) {
   const { viewW, viewH, mobile } = focus;
+  // Узел под курсором подсвечивается кольцом — тем же жестом, что в графе заметок:
+  // без него единственным признаком кликабельности был курсор
+  const [hoverId, setHoverId] = useState<string | null>(null);
 
   const handleBackdropClick = (e: MouseEvent<SVGSVGElement>) => {
     if (e.target === e.currentTarget) onClear();
@@ -95,14 +104,20 @@ export function CodeGraphFocusCanvas({ focus, onRefocus, onClear, onExpandTail }
               <g key={p.node.id} transform={`translate(${p.x.toFixed(1)},${p.y.toFixed(1)})`}
                 opacity={p.second ? 0.85 : 1}
                 style={{ cursor: 'pointer' }}>
-                <circle r={Math.max(p.r + 10, 20)} fill="transparent"
-                  onClick={ev => { ev.stopPropagation(); onRefocus(p.node.id); }} />
+                <circle r={Math.max(p.r + HIT_PAD, HIT_MIN)} fill="transparent"
+                  onClick={ev => { ev.stopPropagation(); onRefocus(p.node.id); }}
+                  onMouseEnter={() => setHoverId(p.node.id)}
+                  onMouseLeave={() => setHoverId(cur => (cur === p.node.id ? null : cur))} />
                 {p.isGod && !main && (
-                  <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
+                  <circle r={p.r + RING_GOD_GAP} fill="none" stroke={C.accent} strokeWidth={NODE_STROKE}
                     strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />
                 )}
+                {hoverId === p.node.id && !main && (
+                  <circle r={p.r + RING_HOVER_GAP} fill="none" stroke={C.accent}
+                    strokeWidth={NODE_STROKE} pointerEvents="none" />
+                )}
                 <circle r={p.r} fill={C.bgCard} stroke={ring}
-                  strokeWidth={main ? 3.5 : 2.4} pointerEvents="none" />
+                  strokeWidth={main ? NODE_STROKE_MAIN : NODE_STROKE} pointerEvents="none" />
                 <text textAnchor="middle" dominantBaseline="central"
                   fontFamily={FONT.mono} fontSize={main ? FS.md : FS.xs} fontWeight={600}
                   fill={glyphFill} pointerEvents="none">{KIND_GLYPH[p.node.kind]}</text>
@@ -114,13 +129,13 @@ export function CodeGraphFocusCanvas({ focus, onRefocus, onClear, onExpandTail }
                   fontSize={main ? FS.base : FS.xs}
                   fontWeight={main ? 600 : 400}
                   fill={main ? C.accent : C.textSecondary}
-                  stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
+                  stroke={C.bgCard} strokeWidth={LABEL_HALO} paintOrder="stroke"
                   pointerEvents="none">
                   {p.label}
                 </text>
                 {main && (
                   <text textAnchor="middle" y={p.r + 29} fontFamily={FONT.mono} fontSize={FS.xs}
-                    fill={C.textMuted} stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
+                    fill={C.textMuted} stroke={C.bgCard} strokeWidth={LABEL_HALO} paintOrder="stroke"
                     pointerEvents="none">
                     {focus.centerDegree} связей
                   </text>
@@ -136,11 +151,11 @@ export function CodeGraphFocusCanvas({ focus, onRefocus, onClear, onExpandTail }
             <g key={stub.side} transform={`translate(${stub.x.toFixed(1)},${stub.y.toFixed(1)})`}
               style={{ cursor: 'pointer' }}
               onClick={ev => { ev.stopPropagation(); onExpandTail?.(stub.side); }}>
-              <circle r={22} fill={C.bgCard} stroke={C.dashed} strokeWidth={2} strokeDasharray="4 3" />
+              <circle r={STUB_R} fill={C.bgCard} stroke={C.dashed} strokeWidth={NODE_STROKE} strokeDasharray="4 3" />
               <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
                 fontSize={FS.xs} fill={C.textMuted} pointerEvents="none">+{stub.hidden}</text>
               <text textAnchor="middle" y={38} fontFamily={FONT.mono} fontSize={FS.xs}
-                fill={C.textMuted} stroke={C.bgCard} strokeWidth={3} paintOrder="stroke"
+                fill={C.textMuted} stroke={C.bgCard} strokeWidth={LABEL_HALO} paintOrder="stroke"
                 pointerEvents="none">{mobile ? 'список' : 'ещё в списке'}</text>
             </g>
           ))}
@@ -177,21 +192,27 @@ function clipOverviewLabel(label: string, max: number): string {
   return label.length > max ? `${label.slice(0, max - 1)}…` : label;
 }
 
-export function CodeGraphOverviewCanvas({ scene, layout, animKey, onItemClick, onItemDblClick }: {
+export function CodeGraphOverviewCanvas({ scene, layout, animKey, selectedId, onItemClick, onItemDblClick }: {
   scene: OverviewScene;
   layout: OverviewLayout;
   animKey: string;
+  // Выбранный тип — подсвечивается кольцом, если он сейчас на холсте отдельным узлом.
+  // Нужно там, где холст и паспорт стоят рядом (панель): иначе непонятно, чей паспорт
+  selectedId?: string | null;
   onItemClick: (item: OverviewItem) => void;
   onItemDblClick: (item: OverviewItem) => void;
 }) {
   const { viewW, viewH, mobile } = layout;
   const maxLabel = mobile ? 11 : 16;
+  const [hoverKey, setHoverKey] = useState<string | null>(null);
 
   return (
     <svg viewBox={`0 0 ${viewW} ${viewH}`} preserveAspectRatio="xMidYMid meet"
       style={{ width: '100%', height: '100%', display: 'block' }}>
       <SceneTransition animKey={animKey}>
-        {/* Подложки слоёв — чередующийся фон + подпись слоя слева */}
+        {/* Подложки слоёв — чередующийся фон + подпись слоя слева. В мини-карте панели
+            подписей нет: на 340px они отъедали левый край и налезали на кружки, а сам
+            порядок слоёв читается по вертикали и без них */}
         <g pointerEvents="none">
           {layout.rows.map((row, i) => (
             <g key={row.layer}>
@@ -199,8 +220,10 @@ export function CodeGraphOverviewCanvas({ scene, layout, animKey, onItemClick, o
                 <rect x={8} y={row.y0} width={viewW - 16} height={row.y1 - row.y0} rx={12}
                   fill={C.bgPanel} opacity={0.5} />
               )}
-              <text x={18} y={row.y0 + 14} fontFamily={FONT.sans} fontSize={FS.xs}
-                fill={C.textMuted} letterSpacing="0.6px">{row.title.toUpperCase()}</text>
+              {layout.size !== 'panel' && (
+                <text x={18} y={row.y0 + 14} fontFamily={FONT.sans} fontSize={FS.xs}
+                  fill={C.textMuted} letterSpacing="0.6px">{row.title.toUpperCase()}</text>
+              )}
             </g>
           ))}
         </g>
@@ -244,16 +267,22 @@ export function CodeGraphOverviewCanvas({ scene, layout, animKey, onItemClick, o
                     уходил насквозь до пучка связи позади. Заглушкам rest/small hit-target
                     не нужен: кликом они не управляются намеренно */}
                 {!soft && (
-                  <circle r={Math.max(p.r + 10, 20)} fill="transparent"
+                  <circle r={Math.max(p.r + HIT_PAD, HIT_MIN)} fill="transparent"
                     onClick={ev => { ev.stopPropagation(); onItemClick(it); }}
-                    onDoubleClick={ev => { ev.stopPropagation(); onItemDblClick(it); }} />
+                    onDoubleClick={ev => { ev.stopPropagation(); onItemDblClick(it); }}
+                    onMouseEnter={() => setHoverKey(it.key)}
+                    onMouseLeave={() => setHoverKey(cur => (cur === it.key ? null : cur))} />
                 )}
                 {it.godCount > 0 && (
-                  <circle r={p.r + 6} fill="none" stroke={C.accent} strokeWidth={2}
+                  <circle r={p.r + RING_GOD_GAP} fill="none" stroke={C.accent} strokeWidth={NODE_STROKE}
                     strokeDasharray="3 3" opacity={0.5} pointerEvents="none" />
                 )}
+                {(hoverKey === it.key || (selectedId && it.node?.id === selectedId)) && (
+                  <circle r={p.r + RING_HOVER_GAP} fill="none" stroke={C.accent}
+                    strokeWidth={NODE_STROKE} pointerEvents="none" />
+                )}
                 <circle r={p.r} fill={C.bgCard} stroke={ring}
-                  strokeWidth={2.2} strokeDasharray={soft ? '4 3' : undefined} pointerEvents="none" />
+                  strokeWidth={NODE_STROKE} strokeDasharray={soft ? '4 3' : undefined} pointerEvents="none" />
                 {it.kind === 'node' ? (
                   <text textAnchor="middle" dominantBaseline="central" fontFamily={FONT.mono}
                     fontSize={FS.base} fontWeight={600} fill={KIND_COLOR[it.node!.kind]} pointerEvents="none">
@@ -265,8 +294,14 @@ export function CodeGraphOverviewCanvas({ scene, layout, animKey, onItemClick, o
                     {soft ? '…' : it.count}
                   </text>
                 )}
-                <text textAnchor="middle" y={p.r + 14} fontFamily={FONT.mono} fontSize={FS.xs}
-                  fill={C.textSecondary} pointerEvents="none">
+                {/* Подпись группы — имя раздела, а не идентификатор кода: обычным
+                    шрифтом, как имена узлов в графе заметок. Моноширинный остаётся
+                    типам (kind === 'node') — там подпись это именно имя класса */}
+                <text textAnchor="middle" y={p.r + 14}
+                  fontFamily={it.kind === 'node' ? FONT.mono : FONT.sans}
+                  fontSize={it.kind === 'node' ? FS.xs : FS.sm}
+                  fill={C.textSecondary} stroke={C.bgCard} strokeWidth={LABEL_HALO} paintOrder="stroke"
+                  pointerEvents="none">
                   {clipOverviewLabel(it.label, maxLabel)}
                 </text>
               </g>

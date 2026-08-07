@@ -3,8 +3,39 @@
 // тестировать без рендера React. Побочные эффекты (загрузка истории, SignalR)
 // остаются в хуке; редьюсер только считает следующее состояние.
 
-import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState } from '../types';
+import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, SessionTeamImplement } from '../types';
 import { isBgLaunchResult } from './agentTail';
+
+// Live-состояние режима «Командная реализация» из REST-гидратации (Session.teamImplement):
+// та же нормализация полей, что у события team_implement в редьюсере. Освежение по REST
+// (переподключение, вход в чат) подменяет live-объект, не ломая держащийся за него UI.
+// null — режим выключен: возвращаем неактивный снимок, а не undefined, чтобы перекрыть
+// устаревший live-объект (undefined означало бы «событий не было» и отдало бы слово
+// живущему в сторе stale-состоянию)
+export function teamImplementSnapshot(ti: SessionTeamImplement | null): TeamImplementState {
+  return {
+    active: ti !== null,
+    stage: ti?.stage ?? 'idle',
+    waveNumber: ti?.waveNumber ?? 0,
+    plannedWaves: ti?.plannedWaves ?? 0,
+    autoWaves: ti?.autoWaves ?? true,
+    coordinatorPersonaId: ti?.coordinatorPersonaId ?? null,
+    plannerPersonaId: ti?.plannerPersonaId ?? null,
+    executorPersonaIds: ti?.executorPersonaIds ?? [],
+    budget: ti?.budget ?? {
+      tasksUsed: 0, wavesUsed: 0, runsUsed: 0, retriesUsed: 0, wakeupsUsed: 0,
+      maxTasks: 0, maxWaves: 0, maxRuns: 0, maxRetries: 0, maxWakeups: 0,
+    },
+    coordinatorNoCode: ti?.coordinatorNoCode ?? true,
+    stopped: ti?.stopped ?? false,
+    planCardId: ti?.planCardId ?? null,
+    // У live-события modeLocked приходит посчитанным; на REST считаем из savedMode —
+    // то же правило, что у teamImplementModeLocked для гидратации до первого события
+    modeLocked: ti?.modeLocked ?? (ti?.savedMode != null),
+    planVersion: ti?.planVersion ?? 0,
+    savedMode: ti?.savedMode ?? null,
+  };
+}
 
 // Часть состояния сессии, которой управляет редьюсер
 export interface ChatState {
@@ -22,6 +53,14 @@ export interface ChatState {
   // Live-состояние режима «Командная реализация» (событие team_implement).
   // undefined — событий ещё не было (UI берёт значение из Session.teamImplement)
   teamImplement?: TeamImplementState;
+  // Живое состояние вызова планировщика (событие team_planning, транзитное — не персистится).
+  // undefined — событий не было в этой сессии (плашка ориентируется только на стадию режима,
+  // как раньше — актуально сразу после REST-гидратации/входа в чат посреди планирования);
+  // { startedAt } — планировщик запущен, момент получения события клиентом (переживает
+  // ремонт плашки, честнее отсчёта от Date.now() при монтировании); null — планировщик уже
+  // закончил (событие приходит раньше, чем стадия team_implement — та ждёт запись файла
+  // плана на диск, и без этого поля плашка «работает» ещё висела бы после готового результата)
+  teamPlanning?: { startedAt: number } | null;
   // Подсказка следующего сообщения — чип в композере.
   // Эфемерная: в историю не пишется, сбрасывается при отправке хода (в хуке).
   promptSuggestion: string | null;
@@ -142,12 +181,19 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
   return items;
 }
 
-// Элементы, живущие только в живой ленте вкладки — в history.json не персистятся.
-// При сверке «история сервера новее?» их надо исключать из длины клиента, иначе
-// live-only элементы завышают её и дозаписанная история никогда не подтягивается.
-const LIVE_ONLY_KINDS = new Set<ChatItem['kind']>([
-  'permission_request', 'interrupted', 'resumed', 'session_ended',
-  'companion_switched', 'truncated', 'redacted_thinking',
+// Виды элементов, которые бэкенд пишет в history.json — дискриминаторы StoredMessage
+// (Protocol/StoredMessage.cs; workflow_progress персистится, но своим элементом ленты
+// не становится — normalizeHistory вливает его в карточку tool_use). Всё остальное живёт
+// только в ленте вкладки и при сверке «история сервера новее?» не считается: иначе
+// live-only элемент завышает длину клиента, серверная история навсегда признаётся
+// не новее, и оборванный посреди хода ответ залипает до перезагрузки страницы.
+// Список белый, а не чёрный, намеренно: новый вид элемента ленты по умолчанию
+// считается live-only и сверку не ломает. Сторож соответствия — chatReducer.test.ts.
+export const PERSISTED_KINDS = new Set<ChatItem['kind']>([
+  'user_message', 'session_started', 'text', 'thinking', 'tool_use',
+  'ask_question', 'plan_review', 'team_plan', 'team_escalation',
+  'file_changed', 'result', 'fal_cost', 'glif_cost', 'compact_boundary', 'error',
+  'work_loop_stopped', 'model_switched',
 ]);
 
 // Стоит ли заменить живую ленту историей с сервера: сравнение длин БЕЗ live-only
@@ -156,7 +202,7 @@ const LIVE_ONLY_KINDS = new Set<ChatItem['kind']>([
 // text-элемент у него длиннее (дозаписанный хвост после флаша буфера).
 // После замены items той же историей проверка даёт false — цикла перезагрузок нет.
 export function serverHistoryNewer(serverItems: ChatItem[], prevItems: ChatItem[]): boolean {
-  const countable = (items: ChatItem[]) => items.filter(i => !LIVE_ONLY_KINDS.has(i.kind));
+  const countable = (items: ChatItem[]) => items.filter(i => PERSISTED_KINDS.has(i.kind));
   const server = countable(serverItems);
   const prev = countable(prevItems);
   if (server.length !== prev.length) return server.length > prev.length;
@@ -174,6 +220,16 @@ export function serverHistoryNewer(serverItems: ChatItem[], prevItems: ChatItem[
   return p === null ? s.length > 0 : s.length > p.length;
 }
 
+// Модель последнего session_started этого чата — точка сравнения для пометки «Ответила …»
+// (провалившаяся попытка перед фолбэк-подменой всегда успевает прислать свой session_started)
+function lastKnownModel(items: ChatItem[]): string | null {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i];
+    if (it.kind === 'session_started' && it.model) return it.model;
+  }
+  return null;
+}
+
 // Последний блок сабагента данного вида у данного родителя — для дедупа эха
 // «история + live» при reconnect (см. case agent_text/agent_thinking)
 function lastAgentBlock(items: ChatItem[], kind: 'text' | 'thinking', parentToolUseId: string) {
@@ -182,6 +238,24 @@ function lastAgentBlock(items: ChatItem[], kind: 'text' | 'thinking', parentTool
     if (it.kind === kind && it.parentToolUseId === parentToolUseId) return it;
   }
   return null;
+}
+
+// Хвостовой дедуп «докладов» (guest_text, user_message-доклад без персоны): сервер
+// рассылает такие события ДВАЖДЫ — в session-группу SignalR и в project_/user_-группу
+// (BroadcastSessionMessageAsync, SessionManager.cs) — клиент открытого чата состоит в обеих
+// и получает одно и то же событие дважды, пока история не перезагрузится. Для этих событий
+// сервер намеренно ставит один и тот же timestamp в обе рассылки (см. reportTs в
+// SessionManager.ReportUpAsync и TaskExecutionService.ReportToDelegatorAsync) — совпадение
+// timestamp + текста надёжно отличает призрачный повтор от двух легитимных сообщений подряд.
+// Смотрим только хвост ленты — полный проход по items не нужен.
+const DEDUP_TAIL_WINDOW = 5;
+
+function hasTailDuplicate(items: ChatItem[], match: (item: ChatItem) => boolean): boolean {
+  const from = Math.max(0, items.length - DEDUP_TAIL_WINDOW);
+  for (let i = items.length - 1; i >= from; i--) {
+    if (match(items[i])) return true;
+  }
+  return false;
 }
 
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
@@ -211,13 +285,21 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems([...prev.items, { kind: 'text', text: msg.text, ts: Date.now() }]);
     }
 
-    case 'user_message':
+    case 'user_message': {
       // Сервер-инициированная отправка (автоматизация/задача) — клиент не добавлял её
-      // оптимистично, поэтому сообщение приходит живьём. Дублей нет: ввод пользователя
-      // (auto=false) этим событием не рассылается.
+      // оптимистично, поэтому сообщение приходит живьём. Ввод пользователя (auto=false)
+      // этим событием не рассылается — дублей у него нет и дедуп его не касается.
+      // «Доклад» без персоны (senderChatName) сервер иногда шлёт эхом дважды — см.
+      // hasTailDuplicate. Дедуп только когда сервер прислал timestamp явно (общий
+      // reportTs для обоих проходов) — на fallback Date.now() полагаться нельзя.
+      const ts = msg.timestamp ?? Date.now();
+      if (msg.timestamp !== undefined && msg.senderChatName
+        && hasTailDuplicate(prev.items, it =>
+          it.kind === 'user_message' && it.ts === ts && it.text === msg.text && it.senderChatName === msg.senderChatName))
+        return prev;
       return withItems([...prev.items, {
         kind: 'user_message', text: msg.text,
-        ts: msg.timestamp ?? Date.now(),
+        ts,
         ...(msg.attachedPaths ? { attachedPaths: msg.attachedPaths } : {}),
         ...(msg.senderPersonaId ? { senderPersonaId: msg.senderPersonaId } : {}),
         ...(msg.senderOrigin ? { senderOrigin: msg.senderOrigin } : {}),
@@ -225,6 +307,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.staffNote ? { staffNote: msg.staffNote } : {}),
         ...(msg.auto ? { auto: true } : {}),
       }]);
+    }
 
     case 'pending_messages':
       // Полный снимок очереди — заменяем целиком. Доставленное сообщение исчезает отсюда
@@ -245,11 +328,18 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         },
       };
 
-    case 'guest_text':
+    case 'guest_text': {
       // Модель Z: гостевая реплика исполнителя-персоны, вставленная без агентского хода.
       // Рендерится как обычная text-реплика с её личностью (personaId) — маркер доклада
-      // распознаётся в ChatItemView (parseDelegationReport), не здесь.
-      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId, ts: msg.timestamp ?? Date.now() }]);
+      // распознаётся в ChatItemView (parseDelegationReport), не здесь. Сервер шлёт такой
+      // «доклад» эхом дважды — см. hasTailDuplicate; дедуп только при явном timestamp.
+      const ts = msg.timestamp ?? Date.now();
+      if (msg.timestamp !== undefined
+        && hasTailDuplicate(prev.items, it =>
+          it.kind === 'text' && it.ts === ts && it.text === msg.text && it.personaId === msg.personaId))
+        return prev;
+      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId, ts }]);
+    }
 
     case 'thinking_delta': {
       const last = prev.items[prev.items.length - 1];
@@ -362,11 +452,15 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         if (it.kind === 'result') break;
         if (it.kind === 'file_changed' && it.path === msg.path) {
           const items = prev.items.slice();
-          items[i] = { ...it, added: it.added + msg.added, removed: it.removed + msg.removed };
+          // external — по И: если хоть один вклад был от модели этого чата, строка в целом не «чужая»
+          items[i] = {
+            ...it, added: it.added + msg.added, removed: it.removed + msg.removed,
+            external: (it.external ?? false) && (msg.external ?? false),
+          };
           return withItems(items);
         }
       }
-      return withItems([...prev.items, { kind: 'file_changed', path: msg.path, added: msg.added, removed: msg.removed }]);
+      return withItems([...prev.items, { kind: 'file_changed', path: msg.path, added: msg.added, removed: msg.removed, external: msg.external }]);
     }
 
     case 'result': {
@@ -509,6 +603,20 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // или чат тихо переехал внутри пула); явная миграция добавляет разделитель
       const items = prev.items.map(it =>
         it.kind === 'provider_limit' && !it.resolved ? { ...it, resolved: true } : it);
+
+      // Автофолбэк сменил МОДЕЛЬ (уровень 2 цепочки — другой провайдер с моделью-эквивалентом):
+      // отдельная пометка «Ответила …», а не пилюля provider_switched. Ротация подписок того
+      // же провайдера (уровень 1) модель не трогает и msg.model не несёт — своей пометки не
+      // получает, остаётся на существующей логике ниже (блок G model-providers-rework.md).
+      // Сверяем с моделью последнего session_started этого чата — она гарантированно есть
+      // к этому моменту (провалившаяся попытка перед подменой уже её прислала)
+      if (msg.auto && msg.model) {
+        const prevModel = lastKnownModel(prev.items);
+        if (prevModel && prevModel !== msg.model)
+          return withItems([...items,
+            { kind: 'model_switched', model: msg.model, previousModel: prevModel, reason: msg.reason, rawLabel: msg.label }]);
+      }
+
       return withItems(msg.auto || !msg.label
         ? items
         : [...items, { kind: 'provider_switched', label: msg.label }]);
@@ -531,6 +639,11 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...prev,
         workLoop: { active: msg.active, iteration: msg.iteration, maxIterations: msg.maxIterations, phase: msg.phase },
       };
+
+    case 'work_loop_stopped':
+      // Явная остановка цикла «до готово» (лимит/ошибка/ручной стоп) — системная строка
+      // в ленту, текст готов с сервера. Персистится в историю (см. PERSISTED_KINDS)
+      return withItems([...prev.items, { kind: 'work_loop_stopped', reason: msg.reason, text: msg.text }]);
 
     case 'team_implement':
       // Режим «Командная реализация»: приходит при каждом изменении (вкл/стадия/волна/авто/стоп).
@@ -566,6 +679,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       const card: ChatItem = {
         kind: 'team_plan', planId: msg.planId, plan: msg.plan,
         resolved: msg.resolved, approved: msg.approved,
+        ...(msg.supersededBy != null ? { supersededBy: msg.supersededBy } : {}),
       };
       if (idx < 0) return withItems([...prev.items, card]);
       const items = prev.items.slice();
@@ -605,9 +719,42 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return withItems(items);
     }
 
+    case 'team_planning':
+      // Жизненный цикл вызова планировщика (транзитное событие, в историю не пишется).
+      // teamPlanning — источник правды для плашки «идёт», НЕ дожидающийся стадии режима
+      // (та переключается отдельным событием team_implement и может отстать на запись
+      // файла плана на диск). success=false — отказ: карточка team_escalation с тем же
+      // текстом причины уже в пути, вторую строку с ним же не добавляем — просто гасим плашку
+      if (msg.start) return { ...prev, teamPlanning: { startedAt: Date.now() } };
+      if (!msg.success) return { ...prev, teamPlanning: null };
+      return {
+        ...prev,
+        teamPlanning: null,
+        items: [...prev.items, {
+          kind: 'team_planning_done',
+          subtaskCount: msg.subtaskCount,
+          waveCount: msg.waveCount,
+          elapsedMs: msg.elapsedMs,
+        }],
+      };
+
     case 'prompt_suggestion':
       // Подсказка следующего сообщения — приходит после result хода; в ленту не попадает
       return { ...prev, promptSuggestion: msg.text };
+
+    case 'prompt_snapshot': {
+      // Снимок промпта записан — цепляем его id к сообщению, которым начался ход:
+      // под ним живёт кнопка «какой промпт ушёл». Сообщение человека клиент добавляет
+      // оптимистично, поэтому событие догоняет уже готовый пузырь.
+      // Нет ни одного user_message (ход-продолжение цикла «до готово», делегированный
+      // ход без live-пузыря) — вешать не на что, лента остаётся как есть.
+      const idx = prev.items.findLastIndex(i => i.kind === 'user_message');
+      const target = idx >= 0 ? prev.items[idx] : null;
+      if (target?.kind !== 'user_message') return prev;
+      const items = prev.items.slice();
+      items[idx] = { ...target, promptSnapshotId: msg.snapshotId };
+      return withItems(items);
+    }
 
     case 'status_changed':
       // Синхронизируем isWaiting по статусу — работает для всех открытых вкладок/браузеров.

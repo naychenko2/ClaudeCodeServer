@@ -1,4 +1,4 @@
-// Контент панелек «Терминал» и «Preview» правой колонки нового интерфейса
+// Контент панелек «Терминал» и «Сервисы» правой колонки нового интерфейса
 // (workspace-cc-panels). Состояние терминалов/сервисов живёт в WorkspacePage —
 // сюда приходит пропсами; эти компоненты только рисуют компактный вид под
 // узкую колонку (280-560px): полоса чипов сверху + рабочая область.
@@ -111,8 +111,8 @@ export function TerminalPanelContent({ terminals, activeTerminalId, onSelect, on
   );
 }
 
-// === Панелька «Preview»: ТОЛЬКО список dev-сервисов ===
-// Тот же список, что во вкладке Preview старого режима (PreviewServiceList из
+// === Панелька «Сервисы»: ТОЛЬКО список dev-сервисов ===
+// Тот же список, что во вкладке «Сервисы» старого режима (PreviewServiceList из
 // ToolsSidebar): группировка по источникам, обновление, форма «Добавить свой…».
 // Само окно превью живёт в центральной области воркспейса: клик по запущенному
 // сервису открывает его там (повторный — закрывает), запуск кнопкой ▶ открывает сразу.
@@ -126,7 +126,7 @@ export function PreviewPanelContent({ projectId, services, activePreviewId, onSe
   onRefresh: () => void;
 }) {
   // Список сервисов подгружается при открытии панельки (как вкладка preview в ToolsSidebar)
-  useEffect(() => { onRefresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
+  useEffect(() => { onRefresh(); }, [onRefresh]);
   return (
     <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
       <PreviewServiceList

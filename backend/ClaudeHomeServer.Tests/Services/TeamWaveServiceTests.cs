@@ -123,6 +123,10 @@ public class TeamWaveServiceTests : IDisposable
             resumeSessionId: resumeSessionId, personaId: coordinator.Id);
         await _sessions.SetTeamImplementAsync(session.Id, enabled: true, coordinatorPersonaId: coordinator.Id,
             userId: UserId);
+        // Этот файл тестирует раздачу волн, а не интервью: дефолтная стадия свежего режима —
+        // Interview (волна 3, спека Э8) — сюда не годится, StartWaveAsync держал бы волну (M2).
+        // Тесты, которым нужна другая стадия, переставляют её сами уже после этого вызова.
+        _sessions.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Planning; return true; });
         return (_sessions.GetById(session.Id)!, backend, frontend);
     }
 
@@ -140,6 +144,11 @@ public class TeamWaveServiceTests : IDisposable
 
     private static void ClearAccumulator(object entry) =>
         entry.GetType().GetField("Accumulator")!.SetValue(entry, null);
+
+    // M7: ходы в тестах завершаются прямым HandleTeamTurnEndAsync, минуя запуск — флаг
+    // «вводная от человека» проставляем явно, как это сделал бы запуск по сообщению человека.
+    private static void SetTeamTurnFromHuman(object entry, bool value) =>
+        entry.GetType().GetField("TeamTurnFromHuman")!.SetValue(entry, value);
 
     // Штаб «после рестарта сервера» с УТВЕРЖДЁННЫМ планом на две под-задачи ОДНОЙ волны:
     // карточка плана лежит в истории на диске, аккумулятора у чата нет (оживает лениво,
@@ -228,6 +237,24 @@ public class TeamWaveServiceTests : IDisposable
         ti.Budget.TasksUsed.Should().Be(1);
         ti.Budget.RunsUsed.Should().Be(1);
         ti.Budget.WavesUsed.Should().Be(1);
+    }
+
+    // B3 приёмки: исполнитель не стартовал (модель недоступна, лимит провайдера, задача
+    // удалена) — раньше это уходило только в лог, и человек видел лишь исчезнувшую задачу.
+    [Fact]
+    public async Task ЗапускИсполнителяУпал_ПубликуетКарточкуВЛентуШтаба()
+    {
+        var (session, backend, frontend) = await MakeStabAsync("wave-launch-fail");
+        var plan = MakePlan(backend, frontend);
+        var created = await _sut.StartWaveAsync(session, plan);
+        var task = created[0];
+
+        await _sut.RaiseLaunchFailedAsync(_sessions.GetById(session.Id)!, task,
+            new InvalidOperationException("Задача удалена"));
+
+        var ti = _sessions.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "карточка эскалации ставит практику на ожидание решения — молчаливых пауз не бывает");
     }
 
     [Fact]
@@ -470,6 +497,23 @@ public class TeamWaveServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task StartWave_ИсчерпанныеВолны_ОстанавливаетДажеПриСвободныхЗадачах()
+    {
+        // MaxWaves — отдельное измерение бюджета от MaxTasks: волна не должна стартовать,
+        // если исчерпан именно потолок числа волн, а не задач/запусков
+        var (session, backend, frontend) = await MakeStabAsync("wave-maxwaves");
+        var plan = MakePlan(backend, frontend);
+        var team = session.TeamImplement!;
+        team.Budget.WavesUsed = team.Budget.MaxWaves;
+
+        var created = await _sut.StartWaveAsync(session, plan);
+
+        created.Should().BeEmpty("потолок числа волн исчерпан");
+        _tasks.GetByProject(session.ProjectId!).Should().BeEmpty();
+        Team(session.Id).Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+    }
+
+    [Fact]
     public async Task StartWave_ПослеОстановкиЧеловеком_НовыеВолныНеСтартуют()
     {
         var (session, backend, frontend) = await MakeStabAsync("wave-stopped");
@@ -545,6 +589,154 @@ public class TeamWaveServiceTests : IDisposable
 
         Team(session.Id).Stage.Should().Be(TeamImplementStage.Checking,
             "волны кончились — координатор проверяет результат и подводит итог");
+    }
+
+    // --- Minor (волна 3): кнопки skip/drop/editRest карточки эскалации двигают бэкенд ---
+
+    [Fact]
+    public async Task RespondEscalation_Skip_ЗакрываетПодЗадачуИЗапускаетСледующуюВолну()
+    {
+        // Раньше кнопка ничего не делала: под-задача оставалась незакрытой, и волна не могла
+        // закрыться до ручного tasks_complete.
+        var (session, plan) = await MakeRunningStabAsync("wave-skip");
+        var first = await _sut.StartWaveAsync(session, plan);
+        var task = first[0];
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.TaskFailed,
+            Title = "Задача провалилась дважды",
+            TaskId = task.Id,
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.TaskFailed),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "skip", userId: UserId);
+
+        ok.Should().BeTrue();
+        _tasks.GetById(task.Id)!.Status.Should().Be(TaskItemStatus.Done,
+            "пропущенная под-задача не должна вечно висеть открытой — иначе волна не закроется");
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(task.Id)!);
+        var wave2 = _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2")).ToList();
+        wave2.Should().ContainSingle("волна 1 закрыта пропуском — авто-волны раздают следующую");
+    }
+
+    [Fact]
+    public async Task RespondEscalation_Drop_ЗакрываетПодЗадачуСПояснением()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-drop", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        var task = first[0];
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Исполнитель застрял",
+            TaskId = task.Id,
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "drop", userId: UserId);
+
+        ok.Should().BeTrue();
+        var dropped = _tasks.GetById(task.Id)!;
+        dropped.Status.Should().Be(TaskItemStatus.Done);
+        dropped.ResultMarkdown.Should().Contain("Снято", "человек должен видеть, что задачу сняли, а не забыли");
+    }
+
+    [Fact]
+    public async Task RespondEscalation_EditRest_ВозвращаетШтабВИнтервьюДляПерепланирования()
+    {
+        // Раньше editRest уводил стадию в Wave без восстановления сторожа (волна уже закрыта,
+        // ClosedWave == WaveNumber — ветка обновления отсечек не срабатывала).
+        var (session, plan) = await MakeRunningStabAsync("wave-editrest", autoWaves: false);
+        _sessions.WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Wave;
+            t.WaveNumber = 1;
+            t.ClosedWave = 1; // волна 1 уже закрыта — ровно ситуация карточки WaveGate
+            return true;
+        });
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.WaveGate,
+            Title = "Волна 1 закрыта. Запустить волну 2?",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.WaveGate),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "editRest", userId: UserId);
+
+        ok.Should().BeTrue();
+        var team = Team(session.Id);
+        team.Stage.Should().Be(TeamImplementStage.Interview,
+            "«Изменить остаток плана» — перепланирование, а не продолжение закрытой волны");
+        team.WaveStartedAt.Should().BeNull("сторож волны не должен тикать в интервью");
+        team.Replanning.Should().BeTrue("план уже был опубликован — следующий будет новой версией");
+    }
+
+    // --- M2: волна не идёт поверх стадий, которые ждут человека ---
+
+    [Theory]
+    [InlineData(TeamImplementStage.Interview)]
+    [InlineData(TeamImplementStage.AwaitingDecision)]
+    public async Task StartWave_СтадияЖдётЧеловека_ВолнаНеСтартуетИСтадиюНеЗатирает(TeamImplementStage stage)
+    {
+        // Окно clarify→vN+1: координатор объявил тупик (версия плана ещё та же, гард версий
+        // пропускает), доехавшие задачи запускали следующую волну — и стадия затиралась в Wave
+        var (session, backend, frontend) = await MakeStabAsync("wave-stage-" + stage);
+        var plan = MakePlan(backend, frontend);
+        _sessions.WithTeamState(session.Id, t => { t.Stage = stage; return true; });
+
+        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan);
+
+        created.Should().BeEmpty("человек сейчас отвечает — конвейер ждёт его");
+        _tasks.GetByProject(session.ProjectId!).Should().BeEmpty();
+        var team = Team(session.Id);
+        team.Stage.Should().Be(stage, "стадия не подменена волной");
+        team.WaveNumber.Should().Be(0);
+        team.Budget.TasksUsed.Should().Be(0, "резерв бюджета не прошёл");
+    }
+
+    [Fact]
+    public async Task ЗакрытиеВолны_ПрактикаВИнтервью_СледующаяНеСтартует()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-close-interview");
+        var first = await _sut.StartWaveAsync(session, plan);
+        // Координатор объявил тупик — волны на паузе, идёт интервью
+        _sessions.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Interview; return true; });
+
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().BeEmpty("волна 2 не стартует поверх интервью");
+        var team = Team(session.Id);
+        team.ClosedWave.Should().Be(1, "работа доделана — волна закрыта честно");
+        team.Stage.Should().Be(TeamImplementStage.Interview, "интервью не сбито");
+    }
+
+    [Fact]
+    public async Task ЗакрытиеПоследнейВолны_ПрактикаЖдётРешения_ВПроверкуНеУводит()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-close-awaiting");
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        var second = _tasks.GetByProject(session.ProjectId!).First(t => t.Labels.Contains("волна 2"));
+        // По второй волне пришёл блокер — практика ждёт решения человека
+        _sessions.WithTeamState(session.Id,
+            t => { t.Stage = TeamImplementStage.AwaitingDecision; return true; });
+
+        _tasks.Update(second.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(second.Id)!);
+
+        var team = Team(session.Id);
+        team.ClosedWave.Should().Be(2);
+        team.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "«проверка» не подменяет стадию, в которой человек как раз отвечает");
     }
 
     [Fact]
@@ -788,7 +980,10 @@ public class TeamWaveServiceTests : IDisposable
         text.Should().Contain("задачи 3/12");
         text.Should().Contain("<escalate:deviation>");
         text.Should().Contain("<escalate:check>");
-        text.Should().Contain("<escalate:decision>");
+        // Продуктовая развилка ушла из маркеров в ASK (единый канал вопросов с интервью):
+        // в живом ходу координатор спрашивает инструментом, а не публикует карточку с полем
+        text.Should().NotContain("<escalate:decision>");
+        text.Should().Contain("AskUserQuestion");
     }
 
     [Fact]
@@ -934,6 +1129,7 @@ public class TeamWaveServiceTests : IDisposable
         // Человек пишет следующую вводную — режим включать заново не нужно
         _sessions.GetById(session.Id)!.Status = SessionStatus.Working;
         await _sessions.SendMessageAsync(session.Id, "теперь добавь выгрузку в XLSX", []);
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
         _plannerAnswer = $$"""
             {"summary":"Выгрузка в XLSX","subtasks":[
               {"title":"XLSX-выгрузка","goal":"Формат xlsx в экспорте",
@@ -964,6 +1160,7 @@ public class TeamWaveServiceTests : IDisposable
     private sealed class StubPlanner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
         public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
 
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>

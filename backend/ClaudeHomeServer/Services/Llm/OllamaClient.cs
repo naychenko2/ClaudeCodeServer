@@ -9,6 +9,12 @@ namespace ClaudeHomeServer.Services.Llm;
 // (фича молча уходит в rule-based фолбэк).
 public sealed class OllamaClient
 {
+    // Именованный клиент, а не безымянный: под этим именем в Program.cs зарегистрирован
+    // тихий логгер (Services/Http/QuietHttpLogger). Иначе непогашенная Ollama печатала
+    // портянку Error со стектрейсом на каждый вызов — при том что здесь недоступность
+    // штатно ловится и уходит в Debug с фолбэком.
+    public const string HttpClientName = "ollama";
+
     private readonly IHttpClientFactory _http;
     private readonly ILogger<OllamaClient> _logger;
     // Сбор расхода бесплатных вызовов (null — в тестах: аналитика выключена)
@@ -56,7 +62,7 @@ public sealed class OllamaClient
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
         try
         {
-            var client = _http.CreateClient();
+            var client = _http.CreateClient(HttpClientName);
             client.Timeout = TimeSpan.FromMilliseconds(timeoutMs ?? TimeoutMs);
 
             // Пустой system не шлём: часть моделей на пустой роли ведёт себя хуже, чем без него.
@@ -138,7 +144,7 @@ public sealed class OllamaClient
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used)) return null;
         try
         {
-            var client = _http.CreateClient();
+            var client = _http.CreateClient(HttpClientName);
             client.Timeout = timeout;
 
             using var resp = await client.PostAsJsonAsync($"{BaseUrl}/api/chat", new
@@ -179,7 +185,7 @@ public sealed class OllamaClient
         if (!Enabled) return;
         try
         {
-            var client = _http.CreateClient();
+            var client = _http.CreateClient(HttpClientName);
             client.Timeout = TimeSpan.FromSeconds(90); // холодный старт грузит веса
             await client.PostAsJsonAsync($"{BaseUrl}/api/chat", new
             {

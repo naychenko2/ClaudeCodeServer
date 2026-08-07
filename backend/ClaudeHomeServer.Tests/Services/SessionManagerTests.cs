@@ -6,6 +6,8 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
+using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Services.TriggerSources;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.Extensions.Configuration;
@@ -22,8 +24,12 @@ public class SessionManagerTests : IDisposable
     private readonly string _tempDir;
     private readonly ProjectManager _projectManager;
     private readonly TeamPlanningService _teamPlanning;
+    private readonly StubCheapRunner _plannerStub;
     // Ответ подставного планировщика для тестов карточки плана (Э2)
     private string _plannerAnswer = "";
+    // Исключение подставного планировщика (null — не бросать): так тесты имитируют
+    // сбой и таймаут планировщика (карточка отказа и повтор по кнопке).
+    private Exception? _plannerException;
     private readonly ChatHistoryService _historyService;
     private readonly UserStore _userStore;
     private readonly PersonaManager _personaManager;
@@ -31,9 +37,15 @@ public class SessionManagerTests : IDisposable
     private readonly ClaudeHomeServer.Services.Llm.LocalActionOverridesStore _actionOverrides;
     private readonly UsageService _usage;
     private readonly SubscriptionActivityTracker _activity;
+    private readonly ClaudeSubscriptionPool _subPool;
     private readonly SessionManager _sut;
     private readonly Mock<IClientProxy> _clientProxy;
     private readonly List<ServerMessage> _sentMessages = new();
+    // Broadcast'ы из фоновых задач (OnMessageAsync запускает HandleTeamTurnEnd fire-and-forget)
+    // пишут в _sentMessages параллельно с чтением из WaitForEscalationCardsAsync — синхронизируем
+    // запись и намеренно параллельное чтение, иначе Add попадает в момент перечисления ToList()
+    // («Collection was modified», плавуче на слабом CI-раннере).
+    private readonly object _sentMessagesLock = new();
 
     public SessionManagerTests()
     {
@@ -66,7 +78,8 @@ public class SessionManagerTests : IDisposable
             .Callback<string, object[], CancellationToken>((method, args, _) =>
             {
                 if (args.Length > 0 && args[0] is ServerMessage msg)
-                    _sentMessages.Add(msg);
+                    lock (_sentMessagesLock)
+                        _sentMessages.Add(msg);
             })
             .Returns(Task.CompletedTask);
         // Захватываем только session-группу; project_/user_-группы дублировали бы сообщения
@@ -80,6 +93,7 @@ public class SessionManagerTests : IDisposable
 
         var llmProviders = new ClaudeHomeServer.Services.Llm.LlmProviderRegistry(config);
         var subPool = new ClaudeSubscriptionPool(config);
+        _subPool = subPool;
         var adapters = new ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory(
             config, new SkillsService(), new WorkspaceKnowledgeStore(config), llmProviders, subPool);
         var falCost = new FalCostService(new Mock<IHttpClientFactory>().Object, config);
@@ -108,8 +122,13 @@ public class SessionManagerTests : IDisposable
         var assignments = new ClaudeHomeServer.Services.Llm.ModelAssignmentResolver(appSettings, _actionOverrides,
             new ClaudeHomeServer.Services.Llm.UserModelTierResolver(userStore, appSettings));
         // Планирование «Командной реализации» (Э2): раннер планировщика подставной —
-        // ответ задаётся тестом через _plannerAnswer
-        _teamPlanning = new TeamPlanningService(personas, new StubCheapRunner(() => _plannerAnswer));
+        // ответ задаётся тестом через _plannerAnswer, сбой — через _plannerException
+        _plannerStub = new StubCheapRunner(() =>
+        {
+            if (_plannerException is not null) throw _plannerException;
+            return _plannerAnswer;
+        });
+        _teamPlanning = new TeamPlanningService(personas, _plannerStub);
         // Git — настоящий CLI: нужен привязке чата к существующему дереву (AttachWorktreeAsync
         // сверяет путь с «git worktree list»); остальные тесты его не трогают
         _sut = new SessionManager(_projectManager, hub.Object, _historyService, config, adapters, falCost, _usage, appSettings, userStore, jwt, server.Object, llmProviders, notesKb, flags, personas, personaMemory, bindings, promptBuilder, subPool, NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox, git: new ClaudeHomeServer.Services.Git.GitService(TestLauncherFactory.Instance), assignments: assignments, teamPlanning: _teamPlanning, activity: _activity);
@@ -556,6 +575,56 @@ public class SessionManagerTests : IDisposable
         session.Model.Should().Be("sonnet");
     }
 
+    // B3 приёмки «Командной реализации» (дыра покрытия №14): смена ГЛОБАЛЬНОГО слота обязана
+    // доезжать до дочерней executor-сессии — она стартует на том же провайдере, что и штаб,
+    // а не на зашитом Claude-фолбэке. Назначения места нет, персона своей модели не задаёт.
+    [Fact]
+    public async Task CreateAsync_ИсполнительЗадачи_БезНазначения_ИдётГлобальнымСлотом()
+    {
+        _appSettings.Save(new AppSettings { ModelTierStrong = "deepseek-v4-pro" });
+        var dir = MkProjectDir("dcm-task-slot");
+        var project = _projectManager.Create("DCMTS", dir, TestUserId, TestUsername);
+        var executor = _personaManager.Create(TestUserId, "Денис-исполнитель", null, null, null,
+            model: null, effort: null, scope: PersonaScope.Project, projectId: project.Id,
+            color: null, greeting: null, memoryEnabled: false);
+
+        // Модель приходит из TaskExecutionService.ResolveExecutorModel: у задачи нет уровня,
+        // у персоны нет ни модели, ни уровня — значит null, решает место tasks-executor
+        var model = TaskExecutionService.ResolveExecutorModel(
+            new TaskItem { Title = "под-задача волны", PersonaId = executor.Id }, executor);
+        model.Should().BeNull();
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits, model: model,
+            personaId: executor.Id, taskExecution: true, taskId: "task-wave-1");
+
+        session.Model.Should().Be("deepseek-v4-pro", "слот «сильная» — дефолтный тир места tasks-executor");
+    }
+
+    // Уровень персоны-исполнителя тоже разворачивается по глобальному слоту, а не в Claude
+    [Fact]
+    public async Task CreateAsync_ИсполнительЗадачи_УровеньПерсоны_ИдётГлобальнымСлотом()
+    {
+        _appSettings.Save(new AppSettings
+        {
+            ModelTierStrong = "deepseek-v4-pro",
+            ModelTierWeak = "deepseek-v4-flash",
+        });
+        var dir = MkProjectDir("dcm-task-tier");
+        var project = _projectManager.Create("DCMTT", dir, TestUserId, TestUsername);
+        var executor = _personaManager.Create(TestUserId, "Клио-исполнитель", null, null, null,
+            model: null, effort: null, scope: PersonaScope.Project, projectId: project.Id,
+            color: null, greeting: null, memoryEnabled: false, modelTier: "weak");
+
+        var model = TaskExecutionService.ResolveExecutorModel(
+            new TaskItem { Title = "под-задача", PersonaId = executor.Id }, executor);
+        model.Should().Be("tier:weak");
+
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.AcceptEdits, model: model,
+            personaId: executor.Id, taskExecution: true, taskId: "task-wave-2");
+
+        session.Model.Should().Be("deepseek-v4-flash", "уровень разворачивается слотом инстанса");
+    }
+
     // --- Слоты тиров в чатах персон ---
 
     private Persona MkPersona(string name, string? model, string projectId) =>
@@ -834,12 +903,152 @@ public class SessionManagerTests : IDisposable
         // «Стоп» замораживает очередь: агентское сообщение остаётся ждать возобновления,
         // а не вычищается (как было раньше) — иначе сразу после прерывания хлынул бы ход
         var session = await MkBusySessionAsync("interrupt");
+        SetProcess(GetEntry(session.Id), StubAdapter(GetEntry(session.Id)).Object);
         await _sut.SendMessageAndWaitAsync(session.Id, "не доставлять", TimeSpan.Zero);
 
         _sut.Interrupt(session.Id);
 
         _sut.GetPending(session.Id).Should().ContainSingle()
             .Which.Text.Should().Be("не доставлять");
+    }
+
+    // --- Гейт протухших ответов и реанимация зависшего чата ---
+
+    private static void SetPendingInteraction(object entry, ServerMessage? msg) =>
+        entry.GetType().GetField("PendingInteraction")!.SetValue(entry, msg);
+
+    private static object? GetProcess(object entry) =>
+        entry.GetType().GetField("Process")!.GetValue(entry);
+
+    [Fact]
+    public async Task RespondPermission_КарточкиУжеНет_НеТрогаетАдаптерИСтатус()
+    {
+        // Гонка: ватчдог оборвал зависший ход (карточку снял обработчик конца хода), а клик
+        // пользователя долетел позже. Раньше такой ответ ставил Working на мёртвом процессе
+        var session = await MkBusySessionAsync("stale-perm", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.RespondPermission(session.Id, "req-1", "allow");
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.RespondPermission(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Error);
+    }
+
+    [Fact]
+    public async Task AnswerQuestion_КарточкиУжеНет_НеТрогаетАдаптерИСтатус()
+    {
+        var session = await MkBusySessionAsync("stale-question", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.AnswerQuestion(session.Id, "tool-1", "{\"answers\":[]}");
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.AnswerQuestion(It.IsAny<string>(), It.IsAny<string>()), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Error);
+    }
+
+    [Fact]
+    public async Task RespondPlan_КарточкиУжеНет_НеТрогаетАдаптерИСтатус()
+    {
+        var session = await MkBusySessionAsync("stale-plan", SessionStatus.Error);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.RespondPlan(session.Id, "req-1", approve: true, feedback: null);
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.RespondPlan(It.IsAny<string>(), It.IsAny<bool>(), It.IsAny<string>()), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Error);
+    }
+
+    [Fact]
+    public async Task RespondPermission_КарточкаЖива_ОтветУходитАдаптеруИЧатВРаботу()
+    {
+        // Контроль гейта: обычный сценарий не задет
+        var session = await MkBusySessionAsync("live-perm", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+
+        _sut.RespondPermission(session.Id, "req-1", "allow");
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Working,
+            TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.RespondPermission("req-1", "allow"), Times.Once());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+    }
+
+    [Fact]
+    public async Task Interrupt_ЗанятыйЧатБезЖивогоПрогона_РеанимируетЧат()
+    {
+        // Working без хода терминален: сообщения уходят в Pending, разбор которой ждёт конца
+        // хода, а хода уже нет. «Стоп» вместо no-op сбрасывает чат в рабочее состояние
+        var session = await MkBusySessionAsync("revive", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false); // ход умер, адаптер осиротел
+        SetProcess(entry, adapter.Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+
+        _sut.Interrupt(session.Id);
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Active,
+            TimeSpan.FromSeconds(2));
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active);
+        GetProcess(entry).Should().BeNull("отравленный адаптер выброшен — следующий ход поднимет свежий");
+        _sut.GetPendingInteraction(session.Id).Should().BeNull();
+        adapter.Verify(a => a.DisposeAsync(), Times.Once());
+        var notice = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        notice.Reason.Should().Be("stuck_reset");
+        notice.Text.Should().Be("Зависший ход сброшен — чат снова доступен.");
+        (await _sut.GetHistoryAsync(session.Id)).OfType<StoredWorkLoopStoppedMessage>()
+            .Should().ContainSingle("карточка сброса переживает перезагрузку страницы");
+    }
+
+    [Fact]
+    public async Task Interrupt_ЗанятыйЧатБезЖивогоПрогона_ОчередьНеЗамораживает()
+    {
+        // Заморозка снимается концом хода, которого не будет — отложенное застряло бы навсегда
+        var session = await MkBusySessionAsync("revive-queue", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAndWaitAsync(session.Id, "от агента", TimeSpan.Zero);
+
+        _sut.Interrupt(session.Id);
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Active,
+            TimeSpan.FromSeconds(2));
+        entry.GetType().GetField("QueueFrozen")!.GetValue(entry).Should().Be(false);
+        _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("от агента");
+    }
+
+    [Fact]
+    public async Task Interrupt_ЖивойПрогон_ПрежнееПоведение()
+    {
+        // Контроль: у честно занятого чата «Стоп» по-прежнему бьёт по адаптеру, статус
+        // синхронно не трогает (его сменит exited убитого хода) и реанимации не устраивает
+        var session = await MkBusySessionAsync("revive-control", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry); // HasLiveTurn = true
+        SetProcess(entry, adapter.Object);
+
+        _sut.Interrupt(session.Id);
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        adapter.Verify(a => a.DisposeAsync(), Times.Never());
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
+        GetProcess(entry).Should().NotBeNull();
+        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty();
     }
 
     [Fact]
@@ -932,6 +1141,7 @@ public class SessionManagerTests : IDisposable
         // «Стоп» замораживает очередь и возвращает в композер ПОСЛЕДНЕЕ пользовательское:
         // оно изымается, агентские и более ранние пользовательские остаются ждать возобновления
         var session = await MkBusySessionAsync("uqfreeze");
+        SetProcess(GetEntry(session.Id), StubAdapter(GetEntry(session.Id)).Object);
         await _sut.SendMessageAndWaitAsync(session.Id, "от агента", TimeSpan.Zero);       // agent
         await _sut.SendMessageAsync(session.Id, "user-1", []);                              // user
         await _sut.SendMessageAsync(session.Id, "user-последнее", []);                      // user (последнее)
@@ -1050,6 +1260,161 @@ public class SessionManagerTests : IDisposable
         adapter.Verify(a => a.Interrupt(), Times.Never());
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("агентское сообщение не трогает цикл");
         _sut.GetPending(session.Id).Should().ContainSingle();
+    }
+
+    // --- Цикл «до готово»: явная остановка в ленту (B3/B5/B6 — ContinueWorkLoopAsync
+    // ни разу не был покрыт тестами: ни лимит итераций, ни LoopTurnFailed, ни verifying) ---
+
+    private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition()) return;
+            await Task.Delay(10);
+        }
+    }
+
+    private static TurnAccumulator GetAccumulator(object entry) =>
+        (TurnAccumulator)entry.GetType().GetField("Accumulator")!.GetValue(entry)!;
+
+    private static void SetLoopTurnInFlight(object entry, bool value) =>
+        entry.GetType().GetField("LoopTurnInFlight")!.SetValue(entry, value);
+
+    [Fact]
+    public async Task ContinueWorkLoop_ЛимитИтераций_ЯвноеСообщениеИСниманиеЦикла()
+    {
+        var session = await MkBusySessionAsync("loop-limit", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.MaxIterations = 3;
+        loop.Iteration = 2; // следующая итерация (после ++) упрётся в лимит
+        var entry = GetEntry(session.Id);
+        SetLoopTurnInFlight(entry, true);
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null, TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("limit");
+        msg.Text.Should().Contain("3 ходов");
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_ОшибкаХода_ЯвноеСообщениеИСниманиеЦикла()
+    {
+        var session = await MkBusySessionAsync("loop-error", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        SetLoopTurnInFlight(entry, true);
+
+        // ErrorMessage выставляет LoopTurnFailed=true (SessionManager.OnMessageAsync) —
+        // именно эта ветка ContinueWorkLoopAsync тестируется
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ErrorMessage("подписка недоступна"), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.WorkLoop is null, TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("error");
+        msg.Text.Should().Be("Цикл остановлен: ход завершился ошибкой.");
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_НайденПромис_ПереходитВVerifying_БезСообщенияОстановки()
+    {
+        // Переход в verifying — штатный шаг цикла (не остановка с неясным исходом), поэтому
+        // WorkLoopStoppedMessage тут не шлётся, а WorkLoop остаётся активным
+        var session = await MkBusySessionAsync("loop-verify", SessionStatus.Working);
+        session.Name = "есть имя";
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true);
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        lock (entry.GetType().GetField("LoopTurnLock")!.GetValue(entry)!)
+        {
+            var buf = (System.Text.StringBuilder)entry.GetType().GetField("LoopTurnText")!.GetValue(entry)!;
+            buf.Append($"готово <promise>{loop.Promise}</promise>");
+        }
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)?.WorkLoop?.Phase == "verifying",
+            TimeSpan.FromSeconds(2));
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull();
+        _sut.GetById(session.Id)!.WorkLoop!.Phase.Should().Be("verifying");
+        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty();
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("ВЕРИФИКАЦИЯ")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+    }
+
+    [Fact]
+    public async Task SetWorkLoop_РучнойСтоп_ШлётЯвноеСообщение()
+    {
+        var session = await MkBusySessionAsync("loop-manual-stop", SessionStatus.Active);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+
+        await _sut.SetWorkLoopAsync(session.Id, enabled: false, userId: TestUserId, manual: true);
+
+        var msg = _sentMessages.OfType<WorkLoopStoppedMessage>().Should().ContainSingle().Subject;
+        msg.Reason.Should().Be("manual");
+        msg.Text.Should().Be("Цикл остановлен вами. Текущий ход продолжает работу.");
+    }
+
+    [Fact]
+    public async Task SetWorkLoop_Включение_НеШлётСообщениеОстановки()
+    {
+        var session = await MkBusySessionAsync("loop-manual-on", SessionStatus.Active);
+
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId, manual: true);
+
+        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty("это включение, а не остановка");
+    }
+
+    // --- Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате ---
+
+    [Fact]
+    public async Task SetWorkLoop_ПриАктивнойКомандаРеализации_Отказ()
+    {
+        var session = await MakeStabForModeAsync("mode-conflict-1");
+        await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
+
+        var act = () => _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+
+        (await act.Should().ThrowAsync<SessionModeConflictException>())
+            .WithMessage("*Командной реализации*");
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SetTeamImplement_ПриАктивномАвтопилоте_Отказ()
+    {
+        var session = await MakeStabForModeAsync("mode-conflict-2");
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+
+        var act = () => _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
+
+        (await act.Should().ThrowAsync<SessionModeConflictException>())
+            .WithMessage("*Автопилот*");
+        _sut.GetById(session.Id)!.TeamImplement.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task SetTeamImplement_БезАктивногоАвтопилота_РаботаетКакРаньше()
+    {
+        var session = await MakeStabForModeAsync("mode-noconflict");
+
+        var updated = await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
+
+        updated!.TeamImplement.Should().NotBeNull();
     }
 
     [Fact]
@@ -1178,6 +1543,12 @@ public class SessionManagerTests : IDisposable
         lock (entry.GetType().GetField("TeamTurnLock")!.GetValue(entry)!) return buffer.ToString();
     }
 
+    // M7: ходы в тестах завершаются прямым вызовом HandleTeamTurnEndAsync, минуя запуск
+    // (SendDirectAsync/SendMessageAndWaitAsync), — флаг «вводная от человека» проставляем явно,
+    // как это сделал бы запуск хода по сообщению человека.
+    private static void SetTeamTurnFromHuman(object entry, bool value) =>
+        entry.GetType().GetField("TeamTurnFromHuman")!.SetValue(entry, value);
+
     // Ждём именно доставку (SendMessageAsync мока): drain — fire-and-forget Task.Run,
     // а Invocations целиком не годятся — там уже лежат Interrupt/Info этого же сценария
     private static async Task WaitForSendAsync(Mock<ILlmSessionAdapter> adapter, TimeSpan timeout)
@@ -1191,20 +1562,34 @@ public class SessionManagerTests : IDisposable
         }
     }
 
-    // --- Режим «Командная реализация» (флаг team-implement-mode): каркас состояния ---
+    // --- Режим «Командная реализация»: каркас состояния ---
+
+    // Чат-штаб под тесты каркаса режима: собеседник-координатор и второй профиль в команде
+    // проекта. Без них включение отклоняет гард на входе (B2 приёмки).
+    private async Task<Session> MakeStabForModeAsync(string suffix, ClaudeMode mode = ClaudeMode.Auto)
+    {
+        var dir = MkProjectDir(suffix);
+        var project = _projectManager.Create(suffix, dir, TestUserId, TestUsername);
+        Persona Mk(string name, string role) =>
+            _personaManager.Create(TestUserId, name, role, null, null, null, null,
+                PersonaScope.Project, project.Id, null, null, memoryEnabled: false);
+
+        var coordinator = Mk("Алекс " + suffix, "Тимлид");
+        Mk("Денис " + suffix, "Backend-разработчик");
+        return await _sut.CreateAsync(project.Id, mode, personaId: coordinator.Id);
+    }
 
     [Fact]
     public async Task SetTeamImplement_Включение_СоздаётСостояниеСДефолтамиИШлётWs()
     {
-        var dir = MkProjectDir("ti-on");
-        var project = _projectManager.Create("TI-ON", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var session = await MakeStabForModeAsync("ti-on");
 
         var updated = await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
 
         var ti = updated!.TeamImplement;
         ti.Should().NotBeNull();
-        ti!.Stage.Should().Be(TeamImplementStage.Planning);
+        ti!.Stage.Should().Be(TeamImplementStage.Interview,
+            "волна 3: по спеке Э8 первая стадия итерации — интервью, а не планирование");
         ti.AutoWaves.Should().BeTrue("авто-волны включены по умолчанию");
         ti.WaveNumber.Should().Be(0);
         ti.ExecutorPersonaIds.Should().BeEmpty("пустой список = вся команда проекта");
@@ -1213,13 +1598,14 @@ public class SessionManagerTests : IDisposable
         ti.Budget.MaxWaves.Should().Be(4);
         ti.Budget.MaxRuns.Should().Be(20);
         ti.Budget.MaxRetries.Should().Be(3);
+        ti.Budget.MaxWakeups.Should().Be(10, "дефолт потолка срочных пробуждений координатора агентом");
         // Поля «израсходовано» стартуют с нуля
         ti.Budget.TasksUsed.Should().Be(0);
         // Рассылка WS-события режима
         var msg = _sentMessages.OfType<TeamImplementMessage>().Single();
         msg.Type.Should().Be("team_implement");
         msg.Active.Should().BeTrue();
-        msg.Stage.Should().Be("planning");
+        msg.Stage.Should().Be("interview");
         msg.AutoWaves.Should().BeTrue();
         // Состояние видно на сессии (wire-контракт)
         _sut.GetById(session.Id)!.TeamImplement.Should().NotBeNull();
@@ -1230,26 +1616,28 @@ public class SessionManagerTests : IDisposable
     {
         var dir = MkProjectDir("ti-cfg");
         var project = _projectManager.Create("TI-CFG", dir, TestUserId, TestUsername);
+        Persona Mk(string name) => _personaManager.Create(TestUserId, name, null, null, null, null, null,
+            PersonaScope.Project, project.Id, null, null, memoryEnabled: false);
+        var coordinator = Mk("Алекс");
+        var planner = Mk("Полина");
+        var executors = new[] { Mk("Денис").Id, Mk("Кира").Id };
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
-        var executors = new[] { "persona-a", "persona-b" };
 
         var updated = await _sut.SetTeamImplementAsync(session.Id, enabled: true,
-            autoWaves: false, coordinatorPersonaId: "coord", plannerPersonaId: "plan",
+            autoWaves: false, coordinatorPersonaId: coordinator.Id, plannerPersonaId: planner.Id,
             executorPersonaIds: executors, userId: TestUserId);
 
         var ti = updated!.TeamImplement!;
         ti.AutoWaves.Should().BeFalse();
-        ti.CoordinatorPersonaId.Should().Be("coord");
-        ti.PlannerPersonaId.Should().Be("plan");
+        ti.CoordinatorPersonaId.Should().Be(coordinator.Id);
+        ti.PlannerPersonaId.Should().Be(planner.Id);
         ti.ExecutorPersonaIds.Should().Equal(executors);
     }
 
     [Fact]
     public async Task SetTeamImplement_Выключение_ОбнуляетПоле()
     {
-        var dir = MkProjectDir("ti-off");
-        var project = _projectManager.Create("TI-OFF", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var session = await MakeStabForModeAsync("ti-off");
         await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
 
         var updated = await _sut.SetTeamImplementAsync(session.Id, enabled: false, userId: TestUserId);
@@ -1268,9 +1656,7 @@ public class SessionManagerTests : IDisposable
     [InlineData(ClaudeMode.Bypass)]
     public async Task SetTeamImplement_НесовместимыйРежимПрав_ПереводитВAuto(ClaudeMode incompatible)
     {
-        var dir = MkProjectDir("ti-mode-force-" + incompatible);
-        var project = _projectManager.Create("TI-MODE-" + incompatible, dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, incompatible);
+        var session = await MakeStabForModeAsync("ti-mode-force-" + incompatible, incompatible);
 
         await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
 
@@ -1283,9 +1669,7 @@ public class SessionManagerTests : IDisposable
     [InlineData(ClaudeMode.Auto)]
     public async Task SetTeamImplement_УжеСовместимыйРежимПрав_НеТрогает(ClaudeMode compatible)
     {
-        var dir = MkProjectDir("ti-mode-keep-" + compatible);
-        var project = _projectManager.Create("TI-MODE-KEEP-" + compatible, dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, compatible);
+        var session = await MakeStabForModeAsync("ti-mode-keep-" + compatible, compatible);
 
         await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
 
@@ -1296,17 +1680,47 @@ public class SessionManagerTests : IDisposable
     [Fact]
     public async Task SetTeamImplementAuto_ПереключаетФлагНаХодуБезВыключенияРежима()
     {
-        var dir = MkProjectDir("ti-auto");
-        var project = _projectManager.Create("TI-AUTO", dir, TestUserId, TestUsername);
-        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var session = await MakeStabForModeAsync("ti-auto");
         await _sut.SetTeamImplementAsync(session.Id, enabled: true, autoWaves: true, userId: TestUserId);
 
         var updated = await _sut.SetTeamImplementAutoAsync(session.Id, autoWaves: false, userId: TestUserId);
 
         var ti = updated!.TeamImplement!;
         ti.AutoWaves.Should().BeFalse("флаг переключён на ходу");
-        ti.Stage.Should().Be(TeamImplementStage.Planning, "сама стадия не тронута");
+        ti.Stage.Should().Be(TeamImplementStage.Interview, "сама стадия не тронута");
         _sut.GetById(session.Id)!.TeamImplement.Should().NotBeNull("режим остался активен");
+    }
+
+    // Minor (волна 3): выключение режима посреди незакрытой волны раньше не оставляло следа —
+    // задачи волны сиротели молча (доисполняются, но никто не подводит итог)
+    [Fact]
+    public async Task SetTeamImplement_ВыключениеПосредиВолны_ОставляетСледВЛенте()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-off-midwave");
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1;
+            t.ClosedWave = 0; // волна ещё не закрыта
+            return true;
+        });
+
+        await _sut.SetTeamImplementAsync(session.Id, enabled: false, userId: TestUserId);
+
+        var note = _sentMessages.OfType<GuestTextMessage>().Should().ContainSingle().Subject;
+        note.Text.Should().Contain("волны 1");
+        note.Text.Should().Contain("выключен");
+    }
+
+    [Fact]
+    public async Task SetTeamImplement_ВыключениеБезЖивойВолны_НичегоНеПишетВЛенту()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-off-idle");
+        // Дефолт: WaveNumber == 0 — волна ещё не стартовала
+
+        await _sut.SetTeamImplementAsync(session.Id, enabled: false, userId: TestUserId);
+
+        _sentMessages.OfType<GuestTextMessage>().Should().BeEmpty(
+            "без незакрытой волны обрывать нечего — лишняя карточка была бы шумом");
     }
 
     [Fact]
@@ -1369,6 +1783,47 @@ public class SessionManagerTests : IDisposable
         ti.Budget.WavesUsed.Should().Be(1);
     }
 
+    // Дыра покрытия (волна 3): рестарт сервера ПОСРЕДИ интервью — SavedMode/PlanVersion/
+    // InterviewRounds обязаны пережить сериализацию, иначе после рестарта чат теряет либо
+    // навязанный план-режим (селектор разблокировался бы посреди интервью), либо счёт раундов
+    // (лимит вопросов обнулился бы и координатор мог бы спрашивать заново).
+    [Fact]
+    public void TeamImplement_РестартПосредиИнтервью_СохраняетSavedModePlanVersionInterviewRounds()
+    {
+        var opts = new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } };
+        var session = new Session
+        {
+            Mode = ClaudeMode.Plan,
+            TeamImplement = new SessionTeamImplement
+            {
+                Stage = TeamImplementStage.Interview,
+                SavedMode = ClaudeMode.Auto,
+                PlanVersion = 1,
+                ApprovedPlanVersion = 0,
+                InterviewRounds = 1,
+                Replanning = true,
+                FirstIterationOpened = true,
+                LastPlanRequest = "экспорт в CSV",
+                LastPlanFeedback = "убери ревью из плана",
+            }
+        };
+
+        var json = JsonSerializer.Serialize(session, opts);
+        var restored = JsonSerializer.Deserialize<Session>(json, opts)!;
+
+        var ti = restored.TeamImplement!;
+        restored.Mode.Should().Be(ClaudeMode.Plan);
+        ti.Stage.Should().Be(TeamImplementStage.Interview);
+        ti.SavedMode.Should().Be(ClaudeMode.Auto, "иначе селектор режима после рестарта разблокировался бы посреди интервью");
+        ti.PlanVersion.Should().Be(1);
+        ti.InterviewRounds.Should().Be(1, "иначе лимит раундов обнулился бы и координатор мог бы спрашивать заново");
+        ti.Replanning.Should().BeTrue();
+        ti.FirstIterationOpened.Should().BeTrue();
+        ti.LastPlanRequest.Should().Be("экспорт в CSV");
+        ti.LastPlanFeedback.Should().Be("убери ревью из плана",
+            "иначе повтор планирования после рестарта потерял бы правку человека");
+    }
+
     // --- Э2: карточка плана в ленте и ответ по ней ---
 
     // Штаб с координатором и командой из двух профилей; возвращает (сессия, бэкендер, фронтендер)
@@ -1428,18 +1883,234 @@ public class SessionManagerTests : IDisposable
         ti.PlanCardId.Should().Be(plan.Id);
     }
 
+    // --- «Замысел в карточке и полный план файлом» (решение владельца 2026-08-02) ---
+
     [Fact]
-    public async Task CreateTeamPlan_ЧатБезПерсоны_ПроситВыбратьКоординатора()
+    public async Task CreateTeamPlan_СЗамыслом_ПишетФайлПланаИКладётПутьВКарточку()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-plan-file");
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт задач в CSV",
+             "intent":"Идём через готовый эндпоинт экспорта и кнопку в тулбаре, сложную фильтрацию не делаем.",
+             "subtasks":[
+               {"title":"Эндпоинт экспорта","goal":"GET /api/tasks/export",
+                "executorPersonaId":"{{backend.Id}}","executorRationale":"Серверная часть — его зона",
+                "files":["backend/Controllers/TasksController.cs"],"wave":1,"doneCriteria":"отдаёт CSV"},
+               {"title":"Кнопка «Экспорт»","goal":"Кнопка в тулбаре",
+                "executorPersonaId":"{{frontend.Id}}","executorRationale":"UI — её зона",
+                "files":["frontend/src/components/Toolbar.tsx"],"wave":2,"doneCriteria":"файл скачивается"}]}
+            """;
+
+        var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Добавить экспорт в CSV", TestUserId);
+
+        reason.Should().BeNull();
+        plan.Should().NotBeNull();
+        plan!.Intent.Should().Contain("Идём через готовый эндпоинт");
+        plan.PlanFilePath.Should().NotBeNull()
+            .And.StartWith("docs/plans/team/").And.EndWith("plan-v1.md");
+
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        var full = Path.Combine(project.RootPath, plan.PlanFilePath!.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(full).Should().BeTrue("сервер рендерит файл при публикации карточки, а не модель");
+        var content = File.ReadAllText(full);
+        content.Should().Contain("Эндпоинт экспорта").And.Contain("Идём через готовый эндпоинт")
+            .And.Contain("Серверная часть — его зона").And.Contain("`backend/Controllers/TasksController.cs`");
+
+        // Путь в карточке совпадает с записанным файлом — контракт для фронта
+        var card = _sentMessages.OfType<TeamPlanMessage>().Single();
+        card.Plan.PlanFilePath.Should().Be(plan.PlanFilePath);
+    }
+
+    [Fact]
+    public async Task CreateTeamPlan_Перепланирование_ДаётВторойФайлПерваяЦела()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-plan-replan");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        var v1Path = plan.PlanFilePath;
+        v1Path.Should().NotBeNull().And.EndWith("plan-v1.md");
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<escalate:clarify>неясен формат</escalate>", failed: false);
+        _plannerAnswer = $$"""
+            {"summary":"Экспорт в XLSX","intent":"Меняем формат на XLSX по просьбе человека.",
+             "subtasks":[{"title":"Выгрузка XLSX","goal":"писать xlsx",
+              "executorPersonaId":"","executorRationale":"серверная часть",
+              "files":["backend/Export.cs"],"wave":1,"doneCriteria":"файл открывается"}]}
+            """;
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>переделать экспорт на XLSX</team>", failed: false);
+
+        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        card.Plan.Version.Should().Be(2, "план vN после уточнений");
+        var v2Path = card.Plan.PlanFilePath;
+        v2Path.Should().NotBeNull().And.EndWith("plan-v2.md").And.NotBe(v1Path,
+            "версия плана — отдельный файл, перепланирование не перезаписывает предыдущий");
+
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        string Full(string rel) => Path.Combine(project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(Full(v1Path!)).Should().BeTrue();
+        File.Exists(Full(v2Path!)).Should().BeTrue();
+        File.ReadAllText(Full(v1Path!)).Should().NotContain("Выгрузка XLSX",
+            "перепланирование не должно перезаписывать первую версию");
+        File.ReadAllText(Full(v2Path!)).Should().Contain("Выгрузка XLSX");
+    }
+
+    // Прод 2026-08-03 (находка Веры): в пятом прогоне того же чата карточка плана ссылалась
+    // на файл ЧЕТВЁРТОГО прогона — слаг папки строится из имени чата (не меняется по ходу
+    // разговора), а версия плана у каждой новой вводной снова стартует с v1. Две вводные
+    // подряд в одном чате обязаны дать два разных файла с рабочими ссылками, и файл первой
+    // вводной не должен быть тронут второй.
+    [Fact]
+    public async Task ДвеВводныеПодряд_ДваРазныхФайлаПлана_ПерваяЦела()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-two-briefs");
+        SetPlannerAnswer(backend, frontend);
+
+        // Первая вводная — настоящим приёмом сообщения (как в проде): ResetTeamIterationOnUserInput
+        // открывает вводную №1 ДО того, как координатор классифицирует её работой.
+        await _sut.SendMessageAsync(session.Id, "добавить экспорт в CSV", []);
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>добавить экспорт в CSV</team>", failed: false);
+
+        var plan1 = _sentMessages.OfType<TeamPlanMessage>().Last();
+        plan1.Plan.PlanFilePath.Should().NotBeNull().And.EndWith("iter1/plan-v1.md");
+        await _sut.RespondTeamPlanAsync(session.Id, plan1.PlanId, TeamPlanDecision.Run, userId: TestUserId);
+
+        // Волна отработала, проверка подведена — режим ждёт следующую вводную (как MakeIdleStabAsync)
+        await _sut.HandleTeamTurnEndAsync(session.Id, "итог: всё готово", failed: false);
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Checking;
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Итерация завершена: 2 задачи, проверка пройдена", failed: false);
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Idle);
+
+        // Вторая вводная — новый запрос в том же чате, то же имя чата (слаг папки не меняется)
+        SetAdditionalPlannerAnswer(backend);
+        session.Status = SessionStatus.Working;
+        await _sut.SendMessageAsync(session.Id, "теперь добавь выгрузку в XLSX", []);
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Понял, беру в работу.\n<team:work>добавить выгрузку в XLSX</team>", failed: false);
+
+        var plan2 = _sentMessages.OfType<TeamPlanMessage>().Last();
+        var path1 = plan1.Plan.PlanFilePath!;
+        var path2 = plan2.Plan.PlanFilePath;
+
+        path2.Should().NotBeNull().And.EndWith("iter2/plan-v1.md")
+            .And.NotBe(path1, "вторая вводная того же чата обязана писать в свой файл");
+
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        string Full(string rel) => Path.Combine(project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar));
+        File.Exists(Full(path1)).Should().BeTrue("ссылка первой карточки обязана вести на существующий файл");
+        File.Exists(Full(path2!)).Should().BeTrue("ссылка второй карточки обязана вести на существующий файл");
+        File.ReadAllText(Full(path1)).Should().Contain("Эндпоинт экспорта")
+            .And.NotContain("XLSX-выгрузка", "файл первой вводной не должен быть тронут второй");
+        File.ReadAllText(Full(path2!)).Should().Contain("XLSX-выгрузка");
+    }
+
+    [Fact]
+    public async Task CreateTeamPlan_ГлобальныйЧатБезПроекта_ПубликуетсяБезФайлаИБезОшибок()
+    {
+        // Чат вне проекта резолвит домашнюю папку через UserStore — нужен настоящий пользователь,
+        // а не голый TestUserId (тот заведён только в data проектов, не в UserStore)
+        var owner = _userStore.Add("ti-global-owner", "password123", "user");
+        Persona MkGlobal(string name, string role, PersonaSpecialty spec = PersonaSpecialty.None) =>
+            _personaManager.Create(owner.Id, name, role, null, null, null, null,
+                PersonaScope.Global, null, null, null, memoryEnabled: false, specialty: spec);
+
+        var coordinator = MkGlobal("Алекс-Г", "Тимлид", PersonaSpecialty.Coordinator);
+        var executor = MkGlobal("Денис-Г", "Бэкенд");
+        var session = await _sut.CreatePersonaChatAsync(owner.Id, coordinator.Id, ClaudeMode.Auto);
+        session.ProjectId.Should().BeNull("персона и чат глобальные — команды проекта нет");
+
+        await _sut.SetTeamImplementAsync(session.Id, enabled: true,
+            executorPersonaIds: [executor.Id], userId: owner.Id);
+        _plannerAnswer = $$"""
+            {"summary":"Сделать штуку","intent":"Коротко и по делу.",
+             "subtasks":[{"title":"Штука","executorPersonaId":"{{executor.Id}}",
+              "executorRationale":"его зона","wave":1}]}
+            """;
+
+        var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Сделай штуку", owner.Id);
+
+        reason.Should().BeNull();
+        plan.Should().NotBeNull();
+        plan!.PlanFilePath.Should().BeNull("вне проекта писать план некуда — практика при этом работает как раньше");
+        _sentMessages.OfType<TeamPlanMessage>().Single().Plan.PlanFilePath.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CreateTeamPlan_ОшибкаЗаписиФайла_ПубликацияНеПадает()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-plan-write-fail");
+        SetPlannerAnswer(backend, frontend);
+        var project = _projectManager.GetById(session.ProjectId!)!;
+        // Занимаем ожидаемый путь файла директорией — запись бросит исключение
+        var rel = TeamPlanFileRenderer.RelativePath(session.Name, session.Id, 1, 1);
+        Directory.CreateDirectory(Path.Combine(project.RootPath, rel.Replace('/', Path.DirectorySeparatorChar)));
+
+        var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);
+
+        reason.Should().BeNull("ошибка записи файла плана не должна ронять публикацию карточки");
+        plan.Should().NotBeNull();
+        plan!.PlanFilePath.Should().BeNull("запись не удалась — ссылки в карточке нет, а не отказ публикации");
+        _sentMessages.OfType<TeamPlanMessage>().Should().ContainSingle();
+    }
+
+    // B2 приёмки: отказ обязан приходить ДО интервью, а не после потраченного хода
+    [Fact]
+    public async Task SetTeamImplement_ЧатБезПерсоны_ОтклоняетНаВходеИНеСоздаётСостояние()
     {
         var dir = MkProjectDir("ti-nocoord");
         var project = _projectManager.Create("TI-NC", dir, TestUserId, TestUsername);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
-        await _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
 
-        var (plan, reason) = await _sut.CreateTeamPlanAsync(session.Id, "сделай фичу", TestUserId);
+        var act = () => _sut.SetTeamImplementAsync(session.Id, enabled: true, userId: TestUserId);
 
-        plan.Should().BeNull();
-        reason.Should().Contain("координатора");
+        var ex = (await act.Should().ThrowAsync<TeamImplementSetupException>()).Which;
+        ex.Code.Should().Be(TeamImplementSetupException.NoCoordinator, "фронт различает отказ машинно");
+        ex.Message.Should().Contain("координатора");
+        _sut.GetById(session.Id)!.TeamImplement.Should().BeNull("режим не включился");
+        _sentMessages.OfType<TeamImplementMessage>().Should().BeEmpty("WS-события режима не было");
+    }
+
+    // Симметричный случай спеки: состава исполнителей нет (в команде только сам координатор,
+    // явный список пуст) — подбирать не из кого. Отказ тоже на входе, а не после интервью.
+    [Fact]
+    public async Task SetTeamImplement_БезСоставаИсполнителей_ОтклоняетНаВходе()
+    {
+        var dir = MkProjectDir("ti-noexec");
+        var project = _projectManager.Create("TI-NOEXEC", dir, TestUserId, TestUsername);
+        var coordinator = _personaManager.Create(TestUserId, "Алекс-один", "Тимлид", null, null, null, null,
+            PersonaScope.Project, project.Id, null, null, memoryEnabled: false);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, personaId: coordinator.Id);
+
+        var act = () => _sut.SetTeamImplementAsync(session.Id, enabled: true,
+            coordinatorPersonaId: coordinator.Id, userId: TestUserId);
+
+        var ex = (await act.Should().ThrowAsync<TeamImplementSetupException>()).Which;
+        ex.Code.Should().Be(TeamImplementSetupException.NoExecutors);
+        ex.Message.Should().Contain("исполнителей");
+        _sut.GetById(session.Id)!.TeamImplement.Should().BeNull();
+    }
+
+    // Тот же чат, но состав задан явно — включается
+    [Fact]
+    public async Task SetTeamImplement_ЯвныйСостав_Включается()
+    {
+        var dir = MkProjectDir("ti-exec-explicit");
+        var project = _projectManager.Create("TI-EXEC", dir, TestUserId, TestUsername);
+        Persona Mk(string name) => _personaManager.Create(TestUserId, name, null, null, null, null, null,
+            PersonaScope.Project, project.Id, null, null, memoryEnabled: false);
+        var coordinator = Mk("Алекс-2");
+        var executor = Mk("Денис-2");
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, personaId: coordinator.Id);
+
+        var updated = await _sut.SetTeamImplementAsync(session.Id, enabled: true,
+            executorPersonaIds: [executor.Id], userId: TestUserId);
+
+        updated!.TeamImplement!.ExecutorPersonaIds.Should().Equal(executor.Id);
     }
 
     [Fact]
@@ -1661,11 +2332,24 @@ public class SessionManagerTests : IDisposable
     // Подставной раннер планировщика: отдаёт заготовленный тестом ответ
     private sealed class StubCheapRunner(Func<string> answer) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
-        public bool UsesLocal(string actionKey) => false;
+        // Сколько раз звали планировщика и какой промпт пришёл последним (повтор по кнопке)
+        public int Calls { get; private set; }
+        public string LastPrompt { get; private set; } = "";
+        // Калитка «долгого планировщика»: RunAsync ждёт её, имитируя живой вызов (потолок
+        // 300 с), пока тест проверяет поведение конца хода на фоне работающего планирования.
+        public Func<Task>? Gate;
 
-        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
-            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
-            Task.FromResult(answer());
+        public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
+
+        public async Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            Calls++;
+            LastPrompt = prompt;
+            if (Gate is not null) await Gate();
+            return answer();
+        }
 
         public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
             CancellationToken ct = default) => Task.FromResult<string?>(answer());
@@ -1779,6 +2463,9 @@ public class SessionManagerTests : IDisposable
         var adapter = new Mock<ILlmSessionAdapter>();
         var info = (Session)entry.GetType().GetField("Info")!.GetValue(entry)!;
         adapter.SetupGet(a => a.Info).Returns(info);
+        // Подставной адаптер изображает занятый чат с идущим ходом: без этого «Стоп»
+        // принял бы его за зависший и пошёл бы в реанимацию (SessionManager.Interrupt)
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>())).Returns(Task.CompletedTask);
         return adapter;
@@ -2039,7 +2726,7 @@ public class SessionManagerTests : IDisposable
     public async Task КвотаЗапуска_ДоПубликацииПлана_Отказ()
     {
         var (session, _, _) = await MakeTeamStabAsync("ti-quota-before-plan");
-        // MakeTeamStabAsync только включает режим — стадия по умолчанию planning,
+        // MakeTeamStabAsync только включает режим — стадия по умолчанию interview,
         // план ещё не публиковался (см. SessionTeamImplement.Stage)
 
         var (verdict, reason) = _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
@@ -2131,6 +2818,40 @@ public class SessionManagerTests : IDisposable
             "молчаливых остановок в режиме не бывает");
     }
 
+    // Дыра покрытия (волна 3): смена координатора не переписывает автора уже опубликованных
+    // карточек — «всё, что штаб говорит человеку, идёт от лица координатора НА МОМЕНТ публикации»
+    [Fact]
+    public async Task ЭскалацияПослеСменыКоординатора_СтараяКарточкаСохраняетИсходногоАвтора()
+    {
+        var (session, backend, _) = await MakeTeamStabAsync("ti-author-change");
+        var originalCoordinatorId = session.PersonaId!;
+        var oldCard = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Первая остановка",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, oldCard);
+
+        await _sut.SetTeamImplementAsync(session.Id, enabled: true, coordinatorPersonaId: backend.Id,
+            userId: TestUserId);
+        var newCard = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Вторая остановка",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, newCard);
+
+        var cards = _sentMessages.OfType<TeamEscalationMessage>().ToList();
+        cards.Single(c => c.Title == "Первая остановка").PersonaId.Should().Be(originalCoordinatorId,
+            "старая карточка не должна переписываться на нового координатора задним числом");
+        cards.Single(c => c.Title == "Вторая остановка").PersonaId.Should().Be(backend.Id,
+            "новая карточка идёт от лица уже смененного координатора");
+    }
+
     [Fact]
     public async Task КарточкаОстановки_ОтветЧеловека_ГаситКарточкуИВозвращаетВРаботу()
     {
@@ -2181,6 +2902,29 @@ public class SessionManagerTests : IDisposable
         ti.Stage.Should().Be(TeamImplementStage.Interview,
             "до первой волны ответ на эскалацию возвращает практику в стадию карточки, " +
             "а не в «волну-призрак» без плана и сторожа");
+    }
+
+    // Дыра покрытия (волна 3): свободный текстовый ответ (без кнопки) доезжает до координатора
+    // дословно — не теряется и не подменяется generic-текстом решения
+    [Fact]
+    public async Task RespondEscalation_СвободныйТекст_ДоезжаетДоКоординатораДословно()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-escalation-freetext");
+        _sut.GetById(session.Id)!.TeamImplement!.WaveNumber = 1;
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Исполнитель застрял: нет доступа",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, escalation);
+
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, null,
+            "доступ выдал вручную, продолжай без кнопки", TestUserId);
+
+        ok.Should().BeTrue();
+        _sentMessages.OfType<UserMessageMessage>().Last().Text
+            .Should().Contain("доступ выдал вручную, продолжай без кнопки");
     }
 
     // Штаб с планом и хуком раздачи: возвращает план и «раздано ли» по клику
@@ -2416,6 +3160,144 @@ public class SessionManagerTests : IDisposable
         card.Kind.Should().Be("productDecision");
     }
 
+    // Волна 6 (живая приёмка волны 5): ход, оборванный технически (рестарт сервера, упавший
+    // процесс), раньше падал в ТУ ЖЕ ветку молчаливого тупика, что и координатор, реально
+    // ответивший без маркера — карточка «Координатор не понял вводную» отправляла человека
+    // переформулировать задачу, хотя причина не в ней. failed=true обязан давать честный текст
+    // про обрыв хода, а не «не понял вводную».
+    [Fact]
+    public async Task КонецХода_ОборванТехническиВPlanning_ДаётЧестнуюКарточкуАНеНеПонялВводную()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-turn-interrupted");
+        // Stage по умолчанию planning, WaveNumber == 0 — до маркера дело не дошло
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "", failed: true);
+
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+        card.Title.Should().Be("Ход прервался");
+        card.Title.Should().NotBe("Координатор не понял вводную",
+            "обрыв хода — техническая причина, а не непонятая вводная");
+        card.Details.Should().Contain("Повторить");
+    }
+
+    // Тот же честный текст обязан вытеснить и «Уточнения так и не пришли» — интервью,
+    // прерванное технически посреди волны, это не тупик clarify-раунда.
+    [Fact]
+    public async Task КонецХода_ОборванТехническиВОжиданииУточнений_ДаётЧестнуюКарточку()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-turn-interrupted-clarify");
+        _sut.WithTeamState(session.Id, t => { t.WaveNumber = 1; return true; });
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "", failed: true);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Title.Should().Be("Ход прервался");
+        card.Title.Should().NotBe("Уточнения так и не пришли");
+    }
+
+    // Прод 2026-08-04 (чат «Второй заход»): гард молчаливого тупика поднял «Координатор не
+    // понял вводную» ПОСРЕДИ живого планирования. Ход закончился маркером работы, планировщик
+    // строил план (потолок 300 с), и за это время в чате закончился ещё один ход — честный
+    // ответ «ждём карточку плана» без маркера: Planning && WaveNumber == 0 совпало с условием
+    // гарда, и тревога повисла красной, хотя через 28 секунд пришёл готовый план. Пока
+    // планировщик жив, конец чужого хода без маркера — не тупик координатора.
+    [Fact]
+    public async Task КонецХода_БезМаркераПокаПланированиеЖиво_НеДаётЛожнойТревоги()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-planning-inflight");
+        SetPlannerAnswer(backend, frontend);
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _plannerStub.Gate = () => gate.Task;
+
+        // Ход с маркером работы запускает планирование; не await — он жив, пока калитка закрыта
+        var markerTurn = _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>добавить экспорт в CSV</team>", failed: false);
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
+        while (_plannerStub.Calls == 0 && DateTime.UtcNow < deadline) await Task.Delay(20);
+        _plannerStub.Calls.Should().Be(1, "маркер работы обязан запустить планировщика");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning);
+
+        // Пока планирование живо, в чате заканывается ещё один ход — без маркера
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Ждём карточку плана команды.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+            "планировщик жив — стадия Planning && WaveNumber == 0 это работа, а не тупик");
+
+        // Планирование завершается планом: человек получает карточку плана, тревоги не было
+        gate.SetResult();
+        await markerTurn;
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty();
+        _sentMessages.OfType<TeamPlanMessage>().Should().ContainSingle();
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
+    }
+
+    // Парная страховка к тесту выше: тот же конец хода без маркера в Planning && WaveNumber == 0,
+    // но планировщик НЕ жив — это настоящий молчаливый тупик, и гард обязан позвать человека.
+    // Защита, ради которой гард делался (Э7-фикс), не теряется.
+    [Fact]
+    public async Task КонецХода_БезМаркераИПланировщикНеЖив_ПоПрежнемуДаётКарточку()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-planning-deadend");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Planning;
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Хорошо, посмотрю что тут можно сделать.", failed: false);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Should().ContainSingle()
+            .Which;
+        card.Title.Should().Be("Координатор не понял вводную");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+    }
+
+    // Minor «дубль уведомления эскалации» (волна 3): ветка is_error в ClaudeSession шлёт
+    // синтетический ErrorMessage(ExpectResultFollows: true) и следом безусловно ResultMessage
+    // того же хода — раньше OnMessageAsync независимо запускал HandleTeamTurnEndAsync на КАЖДОМ
+    // из них, и гонка двух фоновых задач давала две одинаковые карточки/push (GET /api/notifications
+    // с createdAt до миллисекунды — живая приёмка, заходы 1 и 5). Спаренный ResultMessage
+    // должен только погасить флаг SkipNextTeamTurnEnd, а не разобрать ход второй раз.
+    [Fact]
+    public async Task КонецХода_ПарнаяErrorИResultОдногоХода_НеДаётДублирующуюЭскалацию()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-dup-notif");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Interview);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ErrorMessage("You've hit your weekly limit", ExpectResultFollows: true), TestRunId);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+
+        var cards = await WaitForEscalationCardsAsync(session.Id, minCount: 1);
+        cards.Should().ContainSingle(
+            "спаренный ResultMessage не должен второй раз разбирать тот же ход штаба");
+    }
+
+    private async Task<IReadOnlyList<TeamEscalationMessage>> WaitForEscalationCardsAsync(
+        string sessionId, int minCount, TimeSpan? timeout = null)
+    {
+        List<TeamEscalationMessage> Snapshot()
+        {
+            lock (_sentMessagesLock)
+                return _sentMessages.OfType<TeamEscalationMessage>()
+                    .Where(m => m.SessionId == sessionId && !m.Resolved).ToList();
+        }
+
+        var deadline = DateTime.UtcNow + (timeout ?? TimeSpan.FromSeconds(5));
+        while (DateTime.UtcNow < deadline)
+        {
+            if (Snapshot().Count >= minCount)
+            {
+                await Task.Delay(100); // даём догнать возможному второму (дублирующему) разбору
+                return Snapshot();
+            }
+            await Task.Delay(30);
+        }
+        return Snapshot();
+    }
+
     // Регресс-страховка: после хотя бы одной волны marker-less ответ в planning/idle —
     // легитимный разговор по WorkClassificationProtocol («почему выбрали Киру?» и т.п.),
     // а не тупик. Карточка тут была бы навязчивым шумом на каждой обычной реплике.
@@ -2463,10 +3345,152 @@ public class SessionManagerTests : IDisposable
         SessionManager.ParseWorkMarker("Киру выбрал планировщик: фронт — её зона").Should().BeNull();
     }
 
+    // Волна 6 (живая приёмка волны 5, скриншоты w5-02/w5-03): маркеры протокола протекали в
+    // видимый текст координатора — воспроизведено 4 раза, в т.ч. с закрытием тега по имени.
+    // StripTeamProtocolMarkers — общая функция очистки и для сохранённой истории (TurnAccumulator),
+    // и для живой трансляции (OnMessageAsync), поэтому тестируем сам разбор без харнесса сессии.
+    [Theory]
+    [InlineData("Каждый файл — отдельная подзадача.\n\n<team:work>распараллелить по файлам</team:work>",
+        "Каждый файл — отдельная подзадача.\n\n")]
+    // Осиротевший закрывающий тег без пары (прод 2026-08-02, находка Веры) — служебный
+    // синтаксис протокола, человеку не место ни в какой форме, вырезаем и без открывающего
+    [InlineData("Каждый файл — отдельная подзадача, можно запустить параллельно</team:work>",
+        "Каждый файл — отдельная подзадача, можно запустить параллельно")]
+    [InlineData("никакие другие файлы проекта не редактировать. </team>",
+        "никакие другие файлы проекта не редактировать. ")]
+    [InlineData("снимет блокировку запуска.</escalate>", "снимет блокировку запуска.")]
+    [InlineData("<team:work>добавить экспорт</team>", "")]
+    [InlineData("Либо исполнитель не прочитал источник.\n<escalate:check>суффикс не применён</escalate:check>",
+        "Либо исполнитель не прочитал источник.\n")]
+    [InlineData("<escalate:deviation>нужен доступ вне владения</escalate>", "")]
+    [InlineData("Понял, вопросов нет.<team:talk/>", "Понял, вопросов нет.")]
+    [InlineData("Понял, вопросов нет.<team:talk   />", "Понял, вопросов нет.")]
+    [InlineData("обычный текст без маркеров", "обычный текст без маркеров")]
+    public void StripTeamProtocolMarkers_ВырезаетЦеликомЗавершённыйМаркер(string input, string expected)
+    {
+        SessionManager.StripTeamProtocolMarkers(input).Should().Be(expected);
+    }
+
+    // Код-блок — цитата протокола, а не активный вызов (симметрично Parse*/Has* выше): человек
+    // мог явно попросить координатора объяснить формат, такую цитату вырезать нельзя.
+    [Fact]
+    public void StripTeamProtocolMarkers_НеТрогаетМаркерВКодБлоке()
+    {
+        var text = "Протокол:\n```\n<team:work>пример</team:work>\n```\nвот так это выглядит";
+        SessionManager.StripTeamProtocolMarkers(text).Should().Be(text);
+    }
+
+    // Маркер разъехался по нескольким чанкам стрима (закрывающий тег пришёл отдельной
+    // дельтой от открывающего) — функция работает на УЖЕ СКЛЕЕННОМ тексте (TeamTurnText —
+    // один StringBuilder на весь ход), поэтому границы исходных дельт для неё не видны.
+    [Fact]
+    public void StripTeamProtocolMarkers_МаркерСклеенныйИзНесколькихДельт_ВсёРавноВырезается()
+    {
+        var chunk1 = "Готовлю план. <team:wo";
+        var chunk2 = "rk>добавить экспорт";
+        var chunk3 = "</team:work> — всё по делу.";
+        SessionManager.StripTeamProtocolMarkers(chunk1 + chunk2 + chunk3)
+            .Should().Be("Готовлю план.  — всё по делу.");
+    }
+
+    [Theory]
+    [InlineData("текст <team:wo", "текст ")]
+    [InlineData("текст <escalate:che", "текст ")]
+    [InlineData("текст <team:talk", "текст ")]
+    [InlineData("текст <team:talk ", "текст ")]
+    [InlineData("текст <", "текст ")]
+    public void TrimAmbiguousMarkerTail_ПридерживаетНезавершённыйПрефиксМаркера(string input, string expected)
+    {
+        SessionManager.TrimAmbiguousMarkerTail(input).Should().Be(expected);
+    }
+
+    // Обычный текст, включая случайное «<», не должен придерживаться до бесконечности —
+    // иначе живая трансляция обычной прозы координатора зависала бы посреди хода.
+    [Theory]
+    [InlineData("сравнение 5 < 10 верно")]
+    [InlineData("обычный текст без служебных тегов")]
+    [InlineData("html-подобное <div> тоже не наш маркер")]
+    public void TrimAmbiguousMarkerTail_НеТрогаетТекстБезПротоколаНаХвосте(string input)
+    {
+        SessionManager.TrimAmbiguousMarkerTail(input).Should().Be(input);
+    }
+
+    // Открывающий тег напечатан ЦЕЛИКОМ, но закрытие ещё не пришло — IsAmbiguousMarkerTail
+    // такой хвост уже не ловит (он не префикс открывающего тега, он ему равен), поэтому нужна
+    // отдельная проверка «висит незакрытый маркер где-то в тексте».
+    [Theory]
+    [InlineData("Готовлю план. <team:work>", "Готовлю план. ")]
+    [InlineData("Готовлю план. <team:work>постановка ещё пишется", "Готовлю план. ")]
+    [InlineData("Нашёл проблему: <escalate:check>", "Нашёл проблему: ")]
+    [InlineData("Понял. <team:talk", "Понял. ")]
+    [InlineData("обычный текст без маркеров", "обычный текст без маркеров")]
+    public void TrimUnresolvedMarkerOpen_ПрячетТелоЕщёНеЗакрытогоМаркера(string input, string expected)
+    {
+        SessionManager.TrimUnresolvedMarkerOpen(input).Should().Be(expected);
+    }
+
+    // Волна 6: интеграционная проверка живой трансляции через реальный OnMessageAsync — маркер,
+    // разбитый на несколько TextDeltaMessage-чанков (как реально стримит CLI — символ за
+    // символом или короткими группами), не должен долетать до клиента ни целиком, ни частично
+    // ни в одной из дельт.
+    [Fact]
+    public async Task ЖиваяТрансляция_МаркерРазбитПоЧанкам_НеПротекаетНиВОднойДельте()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-stream-filter");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        string[] chunks =
+        [
+            "Каждый файл — отдельная подзадача, ", "можно запустить параллельно.\n\n",
+            "<team:wo", "rk>", "постановка для планировщика ", "с деталями", "</team:work>",
+            " Готово.",
+        ];
+
+        foreach (var chunk in chunks)
+            await InvokeOnMessageAsync(session.Id, acc, new TextDeltaMessage(chunk), TestRunId);
+
+        var deltas = _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text).ToList();
+        deltas.Should().NotBeEmpty();
+        foreach (var d in deltas)
+        {
+            d.Should().NotContain("<team:work>");
+            d.Should().NotContain("</team");
+            d.Should().NotContain("<team:wo");
+        }
+        string.Concat(deltas).Should().Be(
+            "Каждый файл — отдельная подзадача, можно запустить параллельно.\n\n Готово.");
+    }
+
+    // Ход оборвался (рестарт/упавший процесс) СРАЗУ после незавершённого хвоста, похожего на
+    // начало маркера, — живая трансляция придержала его (TrimAmbiguousMarkerTail), а следующей
+    // дельты, которая подтвердила бы или опровергла маркер, уже не будет. Конец хода обязан
+    // довесить придержанный текст, а не потерять его молча.
+    [Fact]
+    public async Task ЖиваяТрансляция_ХодОборванПослеНезавершённогоХвоста_ДовешиваетЕгоНаКонцеХода()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-stream-catchup");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new TextDeltaMessage("Собираю план, минуту <team:wo"), TestRunId);
+        _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text)
+            .Should().ContainSingle().Which.Should().Be("Собираю план, минуту ",
+                "хвост «<team:wo» ещё может дорасти до маркера следующей дельтой, поэтому придержан");
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ErrorMessage("Сервер был перезапущен во время хода — ход прерван"), TestRunId);
+
+        var all = _sentMessages.OfType<TextDeltaMessage>().Select(m => m.Text).ToList();
+        string.Concat(all).Should().Be("Собираю план, минуту <team:wo",
+            "придержанный хвост дальше ничем не резолвится — конец хода обязан довесить его как есть");
+    }
+
     [Fact]
     public async Task ВводнаяЧеловека_ВОжидании_СбрасываетБюджетИтерацииИСнимаетОстановку()
     {
-        var (session, _, _) = await MakeIdleStabAsync("ti-reset");
+        // M6: сброс делает не приём сообщения, а классификация вводной как работы (спека
+        // «Бюджет»). Разговорное сообщение на приёме не трогает ни потолки, ни «Остановить».
+        var (session, backend, _) = await MakeIdleStabAsync("ti-reset");
+        SetAdditionalPlannerAnswer(backend);
         var team = _sut.GetById(session.Id)!.TeamImplement!;
         team.Budget.TasksUsed = 7;
         team.Budget.WavesUsed = 3;
@@ -2474,10 +3498,18 @@ public class SessionManagerTests : IDisposable
         team.Budget.WakeupsUsed = 4;
         team.ClosedWave = 2;
         await _sut.StopTeamImplementAsync(session.Id, TestUserId);
-        // Занятый чат: ход не запускаем — вводная встаёт в очередь, но итерацию открывает уже сейчас
+        // Занятый чат: ход не запускаем — вводная встаёт в очередь
         session.Status = SessionStatus.Working;
 
         await _sut.SendMessageAsync(session.Id, "теперь добавь экспорт в XLSX", []);
+
+        var mid = _sut.GetById(session.Id)!.TeamImplement!;
+        mid.Budget.TasksUsed.Should().Be(7, "на приёме сообщение ещё не классифицировано");
+        mid.Stopped.Should().BeTrue();
+
+        // Координатор классифицировал вводную как работу — итерация открывается заново
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить экспорт в XLSX</team>", failed: false);
 
         var after = _sut.GetById(session.Id)!.TeamImplement!;
         after.Budget.TasksUsed.Should().Be(0);
@@ -2485,7 +3517,6 @@ public class SessionManagerTests : IDisposable
         after.Budget.RunsUsed.Should().Be(0);
         after.Budget.WakeupsUsed.Should().Be(0);
         after.ClosedWave.Should().Be(0, "новый план начинает счёт волн заново");
-        after.PlannedWaves.Should().Be(0);
         after.Stopped.Should().BeFalse("«Остановить» относилось к прошлой итерации");
     }
 
@@ -2539,9 +3570,11 @@ public class SessionManagerTests : IDisposable
         SetAdditionalPlannerAnswer(backend);
         TeamImplementPlan? handed = null;
         _sut.TeamWaveStarter = (_, p) => { handed = p; return Task.CompletedTask; };
-        // Вводная человека открыла новую итерацию (бюджет и счёт волн с нуля)
+        // Вводная человека: классификация работой открыла новую итерацию (бюджет и счёт волн
+        // с нуля — M6: сброс по маркеру, а не по приёму сообщения)
         session.Status = SessionStatus.Working;
         await _sut.SendMessageAsync(session.Id, "теперь добавь выгрузку в XLSX", []);
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
 
         await _sut.HandleTeamTurnEndAsync(session.Id,
             "Понял, беру в работу.\n<team:work>добавить выгрузку в XLSX</team>", failed: false);
@@ -2614,6 +3647,10 @@ public class SessionManagerTests : IDisposable
     [Fact]
     public async Task МаркерРаботы_ПланировщикНеСмог_ЧеловекПолучаетКарточку()
     {
+        // «не понял задачу» — не JSON, без открытой скобки: парсер даёт InvalidJson.
+        // Раньше текст карточки был общий «уточните задачу», теперь — отдельный
+        // «вернул неразборчивый план» (прод 2026-08-05). Сбой планировщика и сбой
+        // парсера — разные вещи: парсер советует «повторите», не «уточните».
         var (session, _, _) = await MakeIdleStabAsync("ti-work-noplan");
         _plannerAnswer = "не понял задачу";
 
@@ -2622,7 +3659,57 @@ public class SessionManagerTests : IDisposable
         var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
         card.Kind.Should().Be("productDecision");
         card.Title.Should().Contain("не построился");
-        card.Details.Should().Contain("Уточните задачу");
+        card.Details.Should().Contain("неразборчивый план");
+        // Повторить планирование можно кнопкой — без повторного интервью
+        card.Actions.Select(a => a.Id).Should().Equal("retryPlan");
+        _sut.GetById(session.Id)!.TeamImplement!.LastPlanRequest.Should().Be("сделай хорошо");
+    }
+
+    [Fact]
+    public async Task МаркерРаботы_ТаймаутПланировщика_ЧестнаяКарточка()
+    {
+        // Прод 2026-08-04: планировщик оборвался по таймауту, а человек прочитал
+        // «уточните задачу» — теперь карточка называет настоящую причину.
+        var (session, _, _) = await MakeTeamStabAsync("ti-work-timeout");
+        _plannerException = new ClaudeHomeServer.Services.Llm.LlmTimeoutException();
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>большая фича с кучей частей</team>", failed: false);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+        card.Title.Should().Contain("не уложился");
+        card.Details.Should().Contain("не уложился во время", "причина отказа — таймаут, а не постановка")
+            .And.NotContain("Уточните задачу");
+        card.Actions.Select(a => a.Id).Should().Equal("retryPlan");
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+        ti.LastPlanRequest.Should().Be("большая фича с кучей частей");
+    }
+
+    [Fact]
+    public async Task КнопкаПовторитьПланирование_СтроитПланБезПовторногоИнтервью()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-work-retry");
+        _plannerException = new ClaudeHomeServer.Services.Llm.LlmTimeoutException();
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>сделай экспорт задач в CSV</team>", failed: false);
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+
+        // Планировщик ожил — человек жмёт «Повторить планирование»
+        _plannerException = null;
+        SetPlannerAnswer(backend, frontend);
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, card.EscalationId, "retryPlan",
+            userId: TestUserId);
+
+        ok.Should().BeTrue();
+        _plannerStub.Calls.Should().Be(2, "первая попытка + один повтор по кнопке");
+        _plannerStub.LastPrompt.Should().Contain("сделай экспорт задач в CSV",
+            "повтор идёт по сохранённой вводной дословно, без нового хода координатору");
+        // Интервью заново не проходится: сразу карточка плана на подтверждение
+        var planCard = _sentMessages.OfType<TeamPlanMessage>().Last();
+        planCard.Resolved.Should().BeFalse();
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.Confirming);
+        ti.LastPlanRequest.Should().BeNull("успешный план обнуляет сохранённую вводную");
     }
 
     [Fact]
@@ -2631,6 +3718,7 @@ public class SessionManagerTests : IDisposable
         var (session, backend, _) = await MakeIdleStabAsync("ti-additional-stop");
         SetAdditionalPlannerAnswer(backend);
         _sut.TeamWaveStarter = (_, _) => Task.CompletedTask;
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
         await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить XLSX</team>", failed: false);
         var info = _sentMessages.OfType<TeamEscalationMessage>().Last();
 
@@ -2691,6 +3779,25 @@ public class SessionManagerTests : IDisposable
         after.Stage.Should().Be(TeamImplementStage.Interview, "ответ не двигает стадию");
     }
 
+    // Дыра покрытия (волна 3): «кристальная» задача — координатор не видит развилок и
+    // сразу закрывает интервью маркером работы, ни разу не спросив ASK-карточкой (подтверждено
+    // живьём, заход 5 живой приёмки). InterviewRounds обязан остаться 0, план строится сразу.
+    [Fact]
+    public async Task Интервью_КристальнаяЗадача_СтроитПланБезЕдиногоВопроса()
+    {
+        var (session, backend, frontend) = await MakeInterviewStabAsync("ti-no-questions",
+            "создай about.html с фиксированным содержимым");
+        SetPlannerAnswer(backend, frontend);
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>about.html, развилок нет</team>", failed: false);
+
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.InterviewRounds.Should().Be(0, "координатор не задал ни одного вопроса");
+        ti.Stage.Should().Be(TeamImplementStage.Confirming, "план построен и ждёт подтверждения человека");
+        _sentMessages.OfType<TeamPlanMessage>().Should().ContainSingle();
+    }
+
     [Fact]
     public async Task ВопросКоординатора_ВИнтервью_СчитаетсяРаундом()
     {
@@ -2701,6 +3808,103 @@ public class SessionManagerTests : IDisposable
 
         _sut.GetById(session.Id)!.TeamImplement!.InterviewRounds.Should().Be(2,
             "протокол разрешает не больше двух раундов на вводную — счёт ведёт бэкенд");
+    }
+
+    // Единый канал вопросов (запрос владельца 2026-08-04): развилку в живом ходу координатор
+    // задаёт ASK-карточкой, а не маркером <escalate:decision> с карточкой-«простынёй». ASK
+    // блокирует ход до ответа, после — работа продолжается с того же места: возврат в
+    // интервью с паузой волн и перепланированием делал бы из любого вопроса пересборку плана
+    // (остался только за явным маркером <escalate:clarify>).
+    [Fact]
+    public async Task ВопросВСерединеВолны_НеВозвращаетВИнтервью_ПрактикаИдётДальше()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-ask-in-wave");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1;
+            t.WaveStartedAt = DateTime.UtcNow;
+            return true;
+        });
+
+        await _sut.OnStabAskQuestionAsync(session.Id);
+
+        var after = _sut.GetById(session.Id)!.TeamImplement!;
+        after.Stage.Should().Be(TeamImplementStage.Wave, "вопрос не останавливает волну");
+        after.Replanning.Should().BeFalse("перепланирование вопросом не запускается");
+        after.InterviewRounds.Should().Be(0, "раунды интервью тратятся только в самом интервью");
+        after.WaveStartedAt.Should().BeNull(
+            "пока человек отвечает на ASK, сторож зависших волн не тикает — ожидание человека не зависание");
+        _sentMessages.OfType<TeamEscalationMessage>()
+            .Should().NotContain(m => m.Kind == "needsClarification",
+                "карточка «нужны уточнения» на вопрос в живом ходу больше не публикуется");
+    }
+
+    [Fact]
+    public async Task КонецХодаПослеВопросаВВолне_ВозвращаетОтсечкиСторожа()
+    {
+        // Иначе после ответа человека волна осталась бы без надзора навсегда: вопрос погасил
+        // отсечки, а настоящий stall волн никто бы больше не поймал
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-ask-restore");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1;
+            t.WaveStartedAt = DateTime.UtcNow;
+            return true;
+        });
+        await _sut.OnStabAskQuestionAsync(session.Id);
+        _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt.Should().BeNull();
+
+        // Человек ответил ASK-карточкой, ход продолжился и завершился без маркера
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Продолжаю по решению человека.", failed: false);
+
+        var after = _sut.GetById(session.Id)!.TeamImplement!;
+        after.Stage.Should().Be(TeamImplementStage.Wave);
+        after.WaveStartedAt.Should().NotBeNull("после конца хода сторож снова тикает");
+    }
+
+    [Fact]
+    public async Task ОбрывХодаБезResult_ПослеВопросаВВолне_ТожеВозвращаетОтсечкиСторожа()
+    {
+        // Прерывание или смерть процесса посреди ASK не шлёт result — HandleTeamTurnEndAsync
+        // по такому ходу не зовётся; без возврата отсечек волна осталась бы без надзора
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-ask-interrupted");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1;
+            t.WaveStartedAt = DateTime.UtcNow;
+            return true;
+        });
+        await _sut.OnStabAskQuestionAsync(session.Id);
+        _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt.Should().BeNull();
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage());
+
+        _sut.GetById(session.Id)!.TeamImplement!.WaveStartedAt.Should().NotBeNull(
+            "обрыв хода возвращает сторожа зависших волн, как и штатный конец хода");
+    }
+
+    // Фолбэк единого канала: маркер <escalate:decision> из протокола координатора ушёл, но
+    // парсер его принимает (старый транскрипт, привычка модели) — карточка с полем свободного
+    // ответа лучше молчаливого зависания.
+    [Fact]
+    public async Task МаркерDecision_КакФолбэк_ПубликуетКарточкуСПолем()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-decision-fallback");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t => { t.WaveNumber = 1; return true; });
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Нужно ваше решение.\n<escalate:decision>CSV или XLSX?</escalate>", failed: false);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+        card.Details.Should().Contain("CSV или XLSX");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "карточка остановки практику ждёт решения — как до единого канала вопросов");
     }
 
     [Fact]
@@ -2832,6 +4036,611 @@ public class SessionManagerTests : IDisposable
         after.Replanning.Should().BeFalse("признак снят публикацией новой версии");
     }
 
+    // --- «Изменить план» как решение по карточке (серверное перепланирование, прод 2026-08-04) ---
+
+    // Ответ планировщика на пересборку по правке: одна под-задача, блок «что изменилось»
+    private void SetReplannedPlannerAnswer(Persona backend, string changes) => _plannerAnswer = $$"""
+        {"summary":"Экспорт в CSV без ревью","intent":"Убираем ревью по просьбе человека.",
+         "assumptions":[],"changes":["{{changes}}"],
+         "subtasks":[{"title":"Выгрузка CSV","goal":"писать csv",
+          "executorPersonaId":"{{backend.Id}}","executorRationale":"серверная часть",
+          "files":["backend/Export.cs"],"wave":1,"doneCriteria":"файл открывается"}]}
+        """;
+
+    [Fact]
+    public async Task ПравкаПлана_ДаётНовуюВерсиюИГаситСтаруюКарточку()
+    {
+        // Критерий приёмки: правка → версия выросла, новая карточка опубликована, старая погашена
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-edit-plan");
+        SetReplannedPlannerAnswer(GetAnyPersona(session), "ревью убрано из плана");
+        var started = false;
+        _sut.TeamWaveStarter = (_, _) => { started = true; return Task.CompletedTask; };
+
+        var updated = await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
+            feedback: "убери ревью из плана", userId: TestUserId);
+
+        updated.Should().NotBeNull();
+        // Новая версия опубликована и ждёт подтверждения (даже при авто-волнах)
+        var newCard = _sentMessages.OfType<TeamPlanMessage>().Last();
+        newCard.PlanId.Should().NotBe(plan.Id, "перепланирование — новая карточка");
+        newCard.Plan.Version.Should().Be(2, "версия плана выросла");
+        newCard.Resolved.Should().BeFalse("новая версия требует подтверждения и при авто-волнах");
+        newCard.SupersededBy.Should().BeNull("свежая карточка ничем не заменена");
+        // Старая карточка погашена как заменённая — живых кнопок запуска у неё больше нет
+        var oldCard = _sentMessages.OfType<TeamPlanMessage>().Last(m => m.PlanId == plan.Id);
+        oldCard.Resolved.Should().BeTrue("устаревшая карточка гаснет сразу при входе в перепланирование");
+        oldCard.Approved.Should().BeFalse();
+        oldCard.SupersededBy.Should().Be(2, "карточка помечена версией, что её заменила");
+        started.Should().BeFalse("до «Запустить» работа не идёт");
+        // Правка дошла до планировщика дословно
+        _plannerStub.LastPrompt.Should().Contain("убери ревью из плана");
+
+        var after = _sut.GetById(session.Id)!.TeamImplement!;
+        after.Stage.Should().Be(TeamImplementStage.Confirming);
+        after.PlanVersion.Should().Be(2);
+        after.ApprovedPlanVersion.Should().Be(0, "новая версия ещё не подтверждена");
+        after.Replanning.Should().BeFalse("признак снят публикацией новой версии");
+        after.LastPlanFeedback.Should().BeNull("успешный план обнуляет сохранённую правку");
+    }
+
+    [Fact]
+    public async Task ПравкаПлана_ЗапуститьПоСтаройКарточке_НеПроходит()
+    {
+        // У устаревшей версии кнопок запуска нет: после публикации v2 клик «Запустить» по v1
+        // не стартует волну (карточка уже разрешена — FindTeamPlan её не находит)
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-edit-stale-run");
+        SetReplannedPlannerAnswer(GetAnyPersona(session), "ревью убрано");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
+            feedback: "убери ревью", userId: TestUserId);
+        var started = false;
+        _sut.TeamWaveStarter = (_, _) => { started = true; return Task.CompletedTask; };
+
+        var result = await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run,
+            userId: TestUserId);
+
+        result.Should().BeNull("решение по устаревшей карточке не проходит");
+        started.Should().BeFalse();
+        _sut.GetById(session.Id)!.TeamImplement!.ApprovedPlanVersion.Should().Be(0,
+            "старая версия не стала подтверждённой");
+    }
+
+    [Fact]
+    public async Task ПравкаПлана_СбойПланировщика_ДаётКарточкуСПричиной()
+    {
+        // Критерий приёмки: правка → сбой планировщика → карточка с причиной (молчаливого тупика нет)
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-edit-fail");
+        _plannerAnswer = "не понял, что менять";
+
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
+            feedback: "убери ревью из плана", userId: TestUserId);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Kind.Should().Be("productDecision");
+        card.Title.Should().Contain("не привела к новой версии");
+        card.Details.Should().Contain("убери ревью из плана", "карточка цитирует правку человека")
+            .And.Contain("Повторить планирование");
+        card.Actions.Select(a => a.Id).Should().Equal("retryPlan");
+        // Старая карточка уже погашена как заменённая — без карточки отказа человек остался бы без плана
+        var oldCard = _sentMessages.OfType<TeamPlanMessage>().Last(m => m.PlanId == plan.Id);
+        oldCard.SupersededBy.Should().Be(2);
+
+        var ti = _sut.GetById(session.Id)!.TeamImplement!;
+        ti.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+        ti.LastPlanFeedback.Should().Be("убери ревью из плана", "правка сохранена для повтора");
+        ti.LastPlanRequest.Should().Be(plan.Request);
+    }
+
+    [Fact]
+    public async Task ПравкаПлана_ТаймаутПланировщика_ЧестнаяКарточка()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-edit-timeout");
+        _plannerException = new ClaudeHomeServer.Services.Llm.LlmTimeoutException();
+
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
+            feedback: "убери ревью", userId: TestUserId);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Title.Should().Contain("не уложился");
+        card.Details.Should().Contain("не уложился во время", "причина — таймаут, а не правка")
+            .And.Contain("убери ревью");
+        card.Actions.Select(a => a.Id).Should().Equal("retryPlan");
+    }
+
+    [Fact]
+    public async Task ПовторитьПланирование_ПослеСбояПравки_СохраняетПравку()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-edit-retry");
+        _plannerException = new ClaudeHomeServer.Services.Llm.LlmTimeoutException();
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
+            feedback: "убери ревью из плана", userId: TestUserId);
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+
+        // Планировщик ожил — человек жмёт «Повторить планирование»
+        _plannerException = null;
+        SetReplannedPlannerAnswer(GetAnyPersona(session), "ревью убрано");
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, card.EscalationId, "retryPlan",
+            userId: TestUserId);
+
+        ok.Should().BeTrue();
+        _plannerStub.LastPrompt.Should().Contain("убери ревью из плана",
+            "повтор идёт по той же правке — иначе она потерялась бы");
+        var newCard = _sentMessages.OfType<TeamPlanMessage>().Last();
+        newCard.Plan.Version.Should().Be(2);
+        newCard.Resolved.Should().BeFalse();
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
+    }
+
+    [Fact]
+    public async Task ПравкаПлана_ПустойФидбек_НичегоНеДелает()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-edit-empty");
+
+        var result = await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Edit,
+            feedback: "   ", userId: TestUserId);
+
+        result.Should().BeNull("пустая правка не запускает перепланирование");
+        _sut.GetById(session.Id)!.TeamImplement!.PlanVersion.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ПравкаТекстомВЧате_МаркерРаботыВПодтверждении_ПересобираетПлан()
+    {
+        // Свободный текстовый путь: координатор получил правку сообщением и обязан отдать её
+        // маркером работы (PlanEditProtocol). Маркер в стадии Confirming теперь не проглатывается.
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-edit-marker");
+        SetPlannerAnswer(backend, frontend);
+        var (plan, _) = await _sut.CreateTeamPlanAsync(session.Id, "Экспорт", TestUserId);
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
+        SetReplannedPlannerAnswer(backend, "ревью убрано");
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Принял правку.\n<team:work>экспорт в CSV без ревью</team>", failed: false);
+
+        var newCard = _sentMessages.OfType<TeamPlanMessage>().Last();
+        newCard.PlanId.Should().NotBe(plan!.Id);
+        newCard.Plan.Version.Should().Be(2, "маркер работы в подтверждении — перепланирование");
+        newCard.Resolved.Should().BeFalse();
+        var oldCard = _sentMessages.OfType<TeamPlanMessage>().Last(m => m.PlanId == plan.Id);
+        oldCard.SupersededBy.Should().Be(2, "старая карточка погашена");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
+    }
+
+    // Любая персона проекта для ответа планировщика (исполнитель не важен в этих тестах)
+    private Persona GetAnyPersona(Session session) =>
+        _personaManager.GetForContext(TestUserId, session.ProjectId!).First();
+
+    // --- Волна 1: машина состояний (B1, M3, M8, M9) ---
+
+    // B1: добавочная вводная при авто-волнах согласования не ждёт — и режим прав человека
+    // обязан вернуться сам. Иначе SavedMode, поставленный входом в план-режим по этой же
+    // вводной, снять было бы негде: селектор навсегда залочен «Штаб планирует…».
+    [Fact]
+    public async Task ДобавочныйПлан_ПриАвтоВолнах_ВозвращаетРежимЧеловека()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-additional-mode");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        // Итерация закончена, режим ждёт следующей вводной
+        _sut.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Idle; return true; });
+        session.Status = SessionStatus.Working;
+
+        await _sut.SendMessageAsync(session.Id, "теперь добавь выгрузку в XLSX", []);
+        _sut.GetById(session.Id)!.TeamImplement!.SavedMode.Should().BeNull(
+            "M6: на приёме план-режим не навязывается — сообщение ещё не классифицировано");
+
+        // Классификация работой (вводная человека, M7) — план-режим на планирование,
+        // а по публикации добавочного плана режим человека возвращается сам
+        SetTeamTurnFromHuman(GetEntry(session.Id), true);
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить XLSX</team>", failed: false);
+
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave, "добавочная волна пошла сразу");
+        after.TeamImplement.SavedMode.Should().BeNull("режим человека возвращён");
+        after.Mode.Should().Be(ClaudeMode.Auto);
+        _sentMessages.OfType<TeamImplementMessage>().Last().ModeLocked.Should().BeFalse(
+            "селектор режима разблокирован");
+    }
+
+    // M3: ответ обычным сообщением — равноправная замена кнопок карточки остановки
+    [Fact]
+    public async Task ТекстВОжиданииРешения_ПослеПервойВолны_ВозвращаетПрактикуВВолну()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-decision-text");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1;
+            t.Budget.TasksUsed = 3;
+            return true;
+        });
+        await _sut.PublishTeamEscalationAsync(session.Id, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Исполнитель встал",
+            Details = "нет доступа к БД",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        });
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+        session.Status = SessionStatus.Working;
+
+        await _sut.SendMessageAsync(session.Id, "возьми доступ из appsettings.Local.json", []);
+
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Stage.Should().Be(TeamImplementStage.Wave, "практика пошла дальше с того же места");
+        team.StageBeforeDecision.Should().BeNull();
+        team.WaveStartedAt.Should().NotBeNull("сторож зависших волн снова тикает");
+        team.Budget.TasksUsed.Should().Be(3, "итерация та же — бюджет не сбрасывается");
+    }
+
+    [Fact]
+    public async Task ТекстВОжиданииРешения_ДоПервойВолны_ВозвращаетВСтадиюДоОжидания()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-decision-text-early");
+        await _sut.PublishTeamEscalationAsync(session.Id, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.ProductDecision,
+            Title = "Координатор не понял вводную",
+            Details = "ответ без маркера",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
+        });
+
+        await _sut.SendMessageAsync(session.Id, "делаем экспорт в CSV, без вариантов", []);
+
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Stage.Should().Be(TeamImplementStage.Interview,
+            "до первой волны возвращаемся туда, откуда ушли в ожидание, а не в «волну-призрак»");
+        team.WaveStartedAt.Should().BeNull("волн ещё не было — сторожу нечего сторожить");
+    }
+
+    // M3: текст отказа квоты обязан быть честным — из «ждёт решения» план как раз подтверждён
+    [Fact]
+    public async Task КвотаЗапуска_ВОжиданииРешения_ОтказНазываетНастоящуюПричину()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-quota-awaiting");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.AwaitingDecision; return true; });
+
+        var (verdict, reason) = _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
+
+        verdict.Should().Be(SessionManager.TeamRunQuota.Exhausted);
+        reason.Should().Contain("ждёт решения");
+        reason.Should().NotContain("не подтверждён", "план подтверждён — врать человеку и модели нельзя");
+    }
+
+    // M8: клик по карточке v1, когда опубликован v2. С фиксом «Изменить план» (2026-08-04)
+    // старая карточка гаснет УЖЕ при входе в перепланирование (кнопок у неё нет), поэтому
+    // решение по ней не находит открытой карточки и молча не проходит; состояние не трогается.
+    [Fact]
+    public async Task RespondTeamPlan_УстаревшаяКарточка_НеМеняетСостояние()
+    {
+        var (session, backend, frontend) = await MakeInterviewStabAsync("ti-stale-card");
+        SetPlannerAnswer(backend, frontend);
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт</team>", failed: false);
+        var stale = _sentMessages.OfType<TeamPlanMessage>().Last().PlanId;
+        // Координатор сказал, что требования неясны → интервью → план v2. Раньше здесь был
+        // ASK-вопрос, но с единым каналом вопросов (2026-08-04) вопрос вне интервью практику
+        // не двигает — в перепланирование ведёт только явный маркер clarify.
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<escalate:clarify>уточнение по формату экспорта</escalate>", failed: false);
+        // Карточка v1 гаснет сразу при входе в перепланирование — до публикации v2
+        _sentMessages.OfType<TeamPlanMessage>().Last(m => m.PlanId == stale)
+            .SupersededBy.Should().Be(2, "устаревшая карточка помечена версией-заменой");
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт, но в XLSX</team>", failed: false);
+        var started = false;
+        _sut.TeamWaveStarter = (_, _) => { started = true; return Task.CompletedTask; };
+
+        var result = await _sut.RespondTeamPlanAsync(session.Id, stale, TeamPlanDecision.Run,
+            userId: TestUserId);
+
+        result.Should().BeNull("решение по устаревшей карточке не проходит");
+        started.Should().BeFalse();
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming, "стадия не тронута");
+        after.TeamImplement.WaveNumber.Should().Be(0, "«волны-призрака» не завелось");
+        after.TeamImplement.ApprovedPlanVersion.Should().Be(0, "старая версия не стала подтверждённой");
+        after.Mode.Should().Be(ClaudeMode.Plan, "план-режим не снят посреди перепланирования");
+        var card = _sentMessages.OfType<TeamPlanMessage>().Last(m => m.PlanId == stale);
+        card.Resolved.Should().BeTrue();
+        card.Approved.Should().BeFalse();
+    }
+
+    // Легаси-вариант M8: устаревшая карточка ещё НЕ погашена (состояние, сохранённое
+    // сервером до фикса) — тогда клик гасит её и объясняет человеку, где свежая.
+    [Fact]
+    public async Task RespondTeamPlan_УстаревшаяНепогашеннаяКарточка_ГаситИОбъясняет()
+    {
+        var (session, backend, frontend) = await MakeInterviewStabAsync("ti-stale-legacy");
+        SetPlannerAnswer(backend, frontend);
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>экспорт</team>", failed: false);
+        var staleId = _sentMessages.OfType<TeamPlanMessage>().Last().PlanId;
+        // Имитация легаси-состояния: опубликована другая карточка, а старая не погашена
+        _sut.WithTeamState(session.Id, t => { t.PlanCardId = "другая-карточка"; t.PlanVersion = 2; return true; });
+
+        var result = await _sut.RespondTeamPlanAsync(session.Id, staleId, TeamPlanDecision.Run,
+            userId: TestUserId);
+
+        result.Should().BeNull("решение по устаревшей карточке не проходит");
+        var card = _sentMessages.OfType<TeamPlanMessage>().Last(m => m.PlanId == staleId);
+        card.Resolved.Should().BeTrue();
+        card.Approved.Should().BeFalse();
+        _sentMessages.OfType<GuestTextMessage>().Last().Text.Should().Contain("устарела",
+            "человек нажал кнопку — обязан узнать, что она больше ни к чему не ведёт");
+    }
+
+    // M9: интервью из волны приходит с WaveNumber > 0 — гард молчаливого тупика обязан
+    // ловить и его, иначе обещанные карточкой вопросы не приходят никогда
+    [Fact]
+    public async Task КонецХода_ИнтервьюИзВолныБезВопросов_ДаётКарточку()
+    {
+        var (session, plan, _) = await MakeStabWithPlanAndStarterAsync("ti-clarify-stall");
+        await _sut.RespondTeamPlanAsync(session.Id, plan.Id, TeamPlanDecision.Run, userId: TestUserId);
+        _sut.WithTeamState(session.Id, t => { t.WaveNumber = 1; return true; });
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<escalate:clarify>неясен формат выгрузки</escalate>", failed: false);
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Interview);
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Подожду ваших уточнений.", failed: false);
+
+        var card = _sentMessages.OfType<TeamEscalationMessage>().Last();
+        card.Title.Should().Be("Уточнения так и не пришли");
+        card.Details.Should().Contain("Подожду ваших уточнений");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "молчаливых тупиков не бывает — карточка зовёт человека");
+    }
+
+    [Fact]
+    public async Task КонецХода_ВопросКоординатораВЭтомХоду_КарточкиТупикаНет()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-stall-asked");
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Уточните два момента.", failed: false, asked: true);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+            "ход закончился вопросами человеку — интервью работает, а не стоит");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Interview);
+    }
+
+    // --- Волна 2: гарды режима и контур (M1, M4, M5, M6, M7) ---
+
+    // M1: селектор режима в стадии волны — тот же гард, что при включении: в acceptEdits/
+    // bypassPermissions CLI не спрашивает разрешений, и CoordinatorWriteGuard молчал бы
+    [Fact]
+    public async Task SetMode_Штаб_НесовместимыйРежимПоднимаетсяДоAuto()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-mode-guard");
+
+        _sut.SetMode(session.Id, "acceptEdits", TestUserId)!.Mode.Should().Be(ClaudeMode.Auto,
+            "в acceptEdits запись через shell проходит мимо сервера — штаб там жить не может");
+        _sut.SetMode(session.Id, "bypass", TestUserId)!.Mode.Should().Be(ClaudeMode.Auto);
+        // Волна 3: dontAsk — тот же класс, что acceptEdits/bypass («не спрашивать разрешение»
+        // по имени режима у CLI) — закрытый вопрос предыдущего аудита
+        _sut.SetMode(session.Id, "dontAsk", TestUserId)!.Mode.Should().Be(ClaudeMode.Auto,
+            "dontAsk тоже не спрашивает разрешений — гард должен поднимать и его");
+        _sut.SetMode(session.Id, "default", TestUserId)!.Mode.Should().Be(ClaudeMode.Default,
+            "совместимые режимы не трогаем");
+    }
+
+    [Fact]
+    public async Task SetMode_ОбычныйЧат_РежимМеняетсяБезГарда()
+    {
+        var dir = MkProjectDir("ti-mode-plain");
+        var project = _projectManager.Create("TI-PLAIN", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        _sut.SetMode(session.Id, "acceptEdits", TestUserId)!.Mode.Should().Be(ClaudeMode.AcceptEdits,
+            "гард — только у чата-штаба");
+    }
+
+    // M1: режим из тела сообщения — четвёртая точка смены, тоже под гардом
+    [Fact]
+    public async Task СообщениеСРежимом_Штаб_НесовместимыйРежимПоднимаетсяДоAuto()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-mode-msg");
+        session.Name = "штаб";
+        // Стадия волны — чтобы приём сообщения не открыл свежую итерацию с план-режимом
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Wave;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        await _sut.SendMessageAsync(session.Id, "продолжай", [], mode: "acceptEdits");
+
+        _sut.GetById(session.Id)!.Mode.Should().Be(ClaudeMode.Auto);
+    }
+
+    // M1: на стадиях интервью/планирования сообщение с mode не сбрасывает навязанный
+    // план-режим — тот же лок, что в SetMode (молча: отказ стоил бы самого сообщения)
+    [Fact]
+    public async Task СообщениеСРежимом_ВПланФазе_НеСбрасываетПланРежим()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-mode-planphase");
+        session.Name = "штаб";
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Stage = TeamImplementStage.Interview;
+        team.SavedMode = ClaudeMode.Auto;
+        session.Mode = ClaudeMode.Plan;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        await _sut.SendMessageAsync(session.Id, "ответ на вопрос", [], mode: "acceptEdits");
+
+        _sut.GetById(session.Id)!.Mode.Should().Be(ClaudeMode.Plan,
+            "план-режим стадий интервью/планирования снимает только согласование плана");
+    }
+
+    // M4: правка состава/тумблера тем же эндпоинтом посреди волны не должна осиротить её
+    [Fact]
+    public async Task SetTeamImplement_ПоверхАктивного_СохраняетСостояниеИтерации()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-reenable");
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Stage = TeamImplementStage.Wave;
+        team.WaveNumber = 2;
+        team.PlanCardId = "plan-card-1";
+        team.PlanVersion = 1;
+        team.SavedMode = ClaudeMode.Default;
+        team.Budget.TasksUsed = 5;
+        team.Budget.RunsUsed = 9;
+
+        var updated = await _sut.SetTeamImplementAsync(session.Id, enabled: true,
+            autoWaves: false, userId: TestUserId);
+
+        var ti = updated!.TeamImplement!;
+        ti.AutoWaves.Should().BeFalse("настраиваемые поля меняются");
+        ti.Stage.Should().Be(TeamImplementStage.Wave, "стадия переживает повторное включение");
+        ti.WaveNumber.Should().Be(2);
+        ti.PlanCardId.Should().Be("plan-card-1", "иначе закрытие волны не нашло бы план");
+        ti.PlanVersion.Should().Be(1);
+        ti.SavedMode.Should().Be(ClaudeMode.Default);
+        ti.Budget.TasksUsed.Should().Be(5, "бюджет итерации не обнуляется");
+        ti.Budget.RunsUsed.Should().Be(9);
+    }
+
+    // M5: хабовый «Стоп» — второй путь прерывания, буфер маркеров чистится так же,
+    // как при прерывании очередью: иначе маркер убитого хода применился бы задним числом
+    [Fact]
+    public async Task Interrupt_Хабовый_ЧиститБуферМаркеровУбитогоХода()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("stab-stop-buffer");
+        session.Status = SessionStatus.Working;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        // Координатор успел написать маркер — он копится в буфере хода штаба
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new TextDeltaMessage("<<<ЭСКАЛАЦИЯ: расхождение с планом>>>"), TestRunId);
+        GetTeamTurnText(entry).Should().NotBeEmpty("предусловие: буфер хода штаба непуст");
+
+        _sut.Interrupt(session.Id);
+
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        GetTeamTurnText(entry).Should().BeEmpty(
+            "маркер убитого «Стоп» хода не доклеивается к следующему — иначе фантомная эскалация");
+    }
+
+    // M6: разговорный вопрос в ожидании — не вводная: потолки, стадия и режим человека
+    // не трогаются, а ответ координатора без маркера — легальный, без ложной эскалации
+    [Fact]
+    public async Task РазговорныйВопрос_ВОжидании_НеТрогаетБюджетСтадиюИРежим()
+    {
+        var (session, _, _) = await MakeIdleStabAsync("ti-talk-idle");
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.Budget.TasksUsed = 7;
+        team.Budget.RunsUsed = 11;
+        session.Status = SessionStatus.Working; // ход не запускаем — сообщение встаёт в очередь
+
+        await _sut.SendMessageAsync(session.Id, "что вы сделали?", []);
+
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Budget.TasksUsed.Should().Be(7, "разговор бюджет не обнуляет");
+        after.TeamImplement.Budget.RunsUsed.Should().Be(11);
+        after.TeamImplement.Stage.Should().Be(TeamImplementStage.Idle,
+            "стадия не двигается до классификации вводной");
+        after.Mode.Should().Be(ClaudeMode.Auto, "план-режим разговору не навязывается");
+        after.TeamImplement.SavedMode.Should().BeNull();
+
+        // Координатор честно ответил без маркера — это легальный ответ, а не тупик
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Сделали экспорт в CSV за 2 задачи.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+            "ложной эскалации «Координатор не понял вводную» быть не должно");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Idle);
+    }
+
+    // M6: маркер разговора — легальный выход из свежего интервью без плана и эскалации
+    [Fact]
+    public async Task МаркерРазговора_ВИнтервью_ЗакрываетИнтервьюБезЭскалации()
+    {
+        var (session, _, _) = await MakeInterviewStabAsync("ti-talk-close");
+        // Предусловие: стадия интервью, чат в план-режиме, режим человека сохранён
+        _sut.GetById(session.Id)!.Mode.Should().Be(ClaudeMode.Plan);
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Это был просто вопрос — отвечаю: экспорт уже есть.\n<team:talk/>", failed: false);
+
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "свежая «итерация» возвращается в ожидание первой вводной");
+        after.Mode.Should().Be(ClaudeMode.Auto, "режим человека возвращён");
+        after.TeamImplement.SavedMode.Should().BeNull();
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty("ложной эскалации нет");
+    }
+
+    // M6: маркер разговора из clarify-интервью (тупик в волне) снимает паузу — волна
+    // продолжается, сторож взведён заново, а признак перепланирования снят: плана не было
+    [Fact]
+    public async Task МаркерРазговора_ИзClarifyИнтервью_ВозвращаетВолну()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-talk-clarify");
+        var team = _sut.GetById(session.Id)!.TeamImplement!;
+        team.WaveNumber = 1;
+        team.PlanCardId = "plan-1";
+        team.Stage = TeamImplementStage.Interview;
+        team.Replanning = true;
+        team.SavedMode = ClaudeMode.Auto;
+        session.Mode = ClaudeMode.Plan;
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Понял, это был вопрос — отвечаю по существу.\n<team:talk/>", failed: false);
+
+        var after = _sut.GetById(session.Id)!;
+        after.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave, "пауза снята — волна продолжается");
+        after.TeamImplement.Replanning.Should().BeFalse("интервью закончилось без нового плана");
+        after.TeamImplement.WaveStartedAt.Should().NotBeNull("сторож волны взведён заново");
+        after.Mode.Should().Be(ClaudeMode.Auto);
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty();
+    }
+
+    // M6: у модели обязан быть легальный путь ответа на каждой стадии, где его ждёт
+    // stall-гард, — в интервью это маркер разговора
+    [Fact]
+    public void ПромптКоординатора_ВИнтервью_ДаётЛегальныйВыходРазговором()
+    {
+        var interview = new SessionTeamImplement { Stage = TeamImplementStage.Interview };
+        TeamImplementPrompts.CoordinatorTurn(interview).Should().Contain("<team:talk/>");
+
+        var idle = new SessionTeamImplement { Stage = TeamImplementStage.Idle };
+        TeamImplementPrompts.CoordinatorTurn(idle).Should().Contain("<team:work>",
+            "в ожидании классификация «работа/разговор» по-прежнему в промпте");
+    }
+
+    // M7: агентская вводная (chats_send в штаб), классифицированная как работа, не получает
+    // авто-подтверждения — единственное согласование остаётся за человеком
+    [Fact]
+    public async Task АгентскаяВводная_ВОжидании_ПланЖдётПодтвержденияЧеловека()
+    {
+        var (session, backend, _) = await MakeIdleStabAsync("ti-agent-input");
+        SetAdditionalPlannerAnswer(backend);
+        var started = false;
+        _sut.TeamWaveStarter = (_, _) => { started = true; return Task.CompletedTask; };
+        // Ход агента: флаг «вводная от человека» не выставлен (по умолчанию false)
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "<team:work>добавить выгрузку в XLSX</team>", failed: false);
+
+        var card = _sentMessages.OfType<TeamPlanMessage>().Last();
+        card.Resolved.Should().BeFalse("авто-подтверждение опирается на вводную ЧЕЛОВЕКА");
+        card.Approved.Should().NotBeTrue();
+        started.Should().BeFalse("волна без согласования человека не стартует");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming);
+    }
+
+    // Рефанд квоты пробуждений: списанная авансом единица возвращается при недоставке
+    [Fact]
+    public async Task РефандПробуждения_ВозвращаетСписаннуюКвоту()
+    {
+        var (stab, _, _) = await MakeTeamStabAsync("ti-wakeup-refund");
+
+        var wake = _sut.TryConsumeTeamWakeup(stab.Id);
+        wake.Allowed.Should().BeTrue();
+        _sut.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(1);
+
+        _sut.RefundTeamWakeup(stab.Id);
+
+        _sut.GetById(stab.Id)!.TeamImplement!.Budget.WakeupsUsed.Should().Be(0,
+            "несостоявшееся пробуждение команде ничего не стоит");
+    }
+
     // --- ReportUpAsync: отчёт в родительский чат ---
 
     // Пара «родитель → ребёнок» в одном проекте (связь ставится ручной группировкой)
@@ -2890,8 +4699,11 @@ public class SessionManagerTests : IDisposable
         history.OfType<Protocol.StoredUserMessage>().Should()
             .Contain(m => m.Text.Contains("нет доступа к тестовой БД") && m.Text.Contains("Блокер"),
                 "доклад помечен как блокер, а не теряется среди обычных отчётов");
-        // Человек видит карточку немедленно, а не в конце волны
-        var card = _sentMessages.OfType<TeamEscalationMessage>().Single();
+        // Человек видит карточку немедленно, а не в конце волны. Ветка блокера идёт с
+        // withTurn:true — ход штаба стартует fire-and-forget и пишет broadcast'ы в
+        // _sentMessages параллельно, поэтому карточку берём через ожидающий снимок под
+        // lock, иначе .Single() ловит Add в момент перечисления («Collection was modified»).
+        var card = (await WaitForEscalationCardsAsync(stab.Id, minCount: 1)).Single();
         card.Kind.Should().Be("blocker");
         card.Details.Should().Contain("нет доступа");
         _sut.GetById(stab.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
@@ -3427,6 +5239,7 @@ public class SessionManagerTests : IDisposable
         // Симулируем прерванный пользовательский ход: задаём CurrentTurnSnapshot напрямую
         var session = await MkBusySessionAsync("freeze", SessionStatus.Working);
         var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // ход идёт — иначе «Стоп» уходит в реанимацию
 
         SetCurrentTurnSnapshot(entry, "текст прерванного хода", ["file.txt"], "plan");
 
@@ -3448,6 +5261,7 @@ public class SessionManagerTests : IDisposable
     {
         var session = await MkBusySessionAsync("freeze2", SessionStatus.Working);
         var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // ход идёт — иначе «Стоп» уходит в реанимацию
 
         SetCurrentTurnSnapshot(entry, "старый текст", ["old.txt"], "auto");
 
@@ -3465,6 +5279,8 @@ public class SessionManagerTests : IDisposable
     public async Task FreezePending_БезSnapshot_ВозвращаетRestoreСNullТекстом()
     {
         var session = await MkBusySessionAsync("freeze3", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object); // ход идёт — иначе «Стоп» уходит в реанимацию
 
         _sut.Interrupt(session.Id);
         var restores = await WaitForComposerRestoresAsync(1);
@@ -3632,6 +5448,57 @@ public class SessionManagerTests : IDisposable
         snap.Source.Should().Be("turn");
         snap.SubscriptionKey.Should().Be(ClaudeSubscriptionPool.PrimaryKey);
         _activity.IsIdle(ClaudeSubscriptionPool.PrimaryKey, TimeSpan.FromMinutes(10)).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_ЗдоровоеОкноНаИсчерпанномАккаунте_СнимаетПометку()
+    {
+        // Самолечение: аккаунт помечен исчерпанным (ложно или окно уже отпустило), но ход
+        // через него проходит — пометка снимается прямо на ходу, не дожидаясь resetsAt.
+        var dir = MkProjectDir("ratelimit-heal");
+        var project = _projectManager.Create("RLH", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        _subPool.MarkExhausted(ClaudeSubscriptionPool.PrimaryKey, DateTime.UtcNow.AddDays(5));
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("five_hour",
+            DateTime.UtcNow.AddHours(2).ToString("o"), "allowed_warning", 0.64, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_RejectedНеизвестногоОкна_НеПомечаетИсчерпанной()
+    {
+        // Инцидент 2026-08-02: одиночное rejected по окну seven_day_overage_included
+        // выводило живой аккаунт из ротации на пять суток. Такое окно только пишется в usage.
+        var dir = MkProjectDir("ratelimit-unknown");
+        var project = _projectManager.Create("RLU", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("seven_day_overage_included",
+            DateTime.UtcNow.AddDays(5).ToString("o"), "rejected", null, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeFalse();
+        _usage.GetAll().Should().Contain(s => s.LimitType == "seven_day_overage_included");
+    }
+
+    [Fact]
+    public async Task RateLimitMessage_НеизвестноеОкно_НеСнимаетПометкуИсчерпания()
+    {
+        // Симметрия белого списка: неизвестное окно не банит и не разбанивает — иначе
+        // транзитное allowed_warning по overage-окну сняло бы реальный бан по неделе.
+        var dir = MkProjectDir("ratelimit-unknown-heal");
+        var project = _projectManager.Create("RLUH", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        _subPool.MarkExhausted(ClaudeSubscriptionPool.PrimaryKey, DateTime.UtcNow.AddDays(2));
+
+        await InvokeOnMessageAsync(session.Id, acc, new RateLimitMessage("seven_day_overage_included",
+            DateTime.UtcNow.AddDays(5).ToString("o"), "allowed_warning", 0.3, false));
+
+        _subPool.IsExhausted(ClaudeSubscriptionPool.PrimaryKey).Should().BeTrue();
     }
 
     // --- Per-persona рубильники MCP-серверов (Off-привязка type: tool, target: <ключ>) ---
@@ -3813,5 +5680,266 @@ public class SessionManagerTests : IDisposable
                 .Should().BeNull($"ход {turn}");
             InvokePrivate("BuildWidgetsContext", TestUserId, persona).Should().NotBeNull($"ход {turn}");
         }
+    }
+
+    // --- Имя чата у командных механик: тема из JSON/строкового вызова вместо сырой обвязки ---
+
+    private static string MakeChatTitle(string text)
+    {
+        var method = typeof(SessionManager).GetMethod("MakeChatTitle",
+            BindingFlags.NonPublic | BindingFlags.Static)!;
+        return (string)method.Invoke(null, [text])!;
+    }
+
+    [Fact]
+    public void MakeChatTitle_TeamImplement_ТемаИзTask()
+    {
+        MakeChatTitle("/team-implement {\"task\":\"добавить экспорт в CSV\",\"worktree\":false,\"verify\":true}")
+            .Should().Be("добавить экспорт в CSV");
+    }
+
+    [Fact]
+    public void MakeChatTitle_PanelOfExperts_ТемаИзTopic()
+    {
+        MakeChatTitle("/panel-of-experts {\"topic\":\"выбрать очередь сообщений\",\"rounds\":2}")
+            .Should().Be("выбрать очередь сообщений");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ReviewConsilium_ТемаИзTarget()
+    {
+        MakeChatTitle("/review-consilium {\"target\":\"текущий дифф\",\"lenses\":[\"security\"]}")
+            .Should().Be("текущий дифф");
+    }
+
+    [Fact]
+    public void MakeChatTitle_RedTeam_ТемаИзTarget()
+    {
+        MakeChatTitle("/red-team {\"target\":\"план миграции БД\",\"angles\":[\"security\"]}")
+            .Should().Be("план миграции БД");
+    }
+
+    [Fact]
+    public void MakeChatTitle_PanelOfExperts_БезTopic_ПадаетНаBrief()
+    {
+        MakeChatTitle("/panel-of-experts {\"topic\":\"\",\"brief\":\"контекст из чата\",\"rounds\":2}")
+            .Should().Be("контекст из чата");
+    }
+
+    [Theory]
+    [InlineData("/oh-my-claudecode:ralplan --interactive \"выбрать подход к кэшу\"", "выбрать подход к кэшу")]
+    [InlineData("/oh-my-claudecode:deep-interview --standard \"формат экспорта\"", "формат экспорта")]
+    [InlineData("/oh-my-claudecode:autopilot \"починить флаки-тест\"", "починить флаки-тест")]
+    [InlineData("/oh-my-claudecode:trace \"почему падает воркер\"", "почему падает воркер")]
+    [InlineData("/oh-my-claudecode:sciomc \"разобрать утечку памяти\"", "разобрать утечку памяти")]
+    public void MakeChatTitle_СтроковыеМеханики_ТемаИзКавычек(string turnText, string expected)
+    {
+        MakeChatTitle(turnText).Should().Be(expected);
+    }
+
+    // B6: путь QuotedTopicRegex не был покрыт пустыми кавычками и переводом строки —
+    // для JSON-пути (JsonTopicKeys) такие тесты уже были (пустая тема/битый JSON), для
+    // строкового — нет
+    [Fact]
+    public void MakeChatTitle_КавычкиПустые_ПадаетНаОбрезкуСырогоТекста()
+    {
+        var turnText = "/oh-my-claudecode:ralplan \"\"";
+        MakeChatTitle(turnText).Should().Be(turnText);
+    }
+
+    [Fact]
+    public void MakeChatTitle_КавычкиСПереводомСтроки_ОбрезаетсяДоПервойСтроки()
+    {
+        MakeChatTitle("/oh-my-claudecode:deep-interview \"первая строка\nвторая строка\"")
+            .Should().Be("первая строка");
+    }
+
+    [Fact]
+    public void MakeChatTitle_Ultraqa_ТемаПослеФлага()
+    {
+        MakeChatTitle("/oh-my-claudecode:ultraqa --frontend починить регрессию формы")
+            .Should().Be("починить регрессию формы");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ПустаяТема_ПадаетНаОбрезкуСырогоТекста()
+    {
+        MakeChatTitle("/team-implement {\"task\":\"\",\"worktree\":false,\"verify\":true}")
+            .Should().StartWith("/team-implement {\"task\"");
+    }
+
+    [Fact]
+    public void MakeChatTitle_БитыйJson_НеПадаетИВозвращаетОбрезку()
+    {
+        MakeChatTitle("/team-implement {\"task\":\"незакрытый")
+            .Should().StartWith("/team-implement {\"task\"");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ОбычноеСообщение_РаботаетКакРаньше()
+    {
+        MakeChatTitle("Помоги разобраться с багом в SessionManager").Should().Be("Помоги разобраться с багом в SessionManager");
+    }
+
+    [Fact]
+    public void MakeChatTitle_ДлинныйJson_ОбрезаетсяДо48Символов()
+    {
+        var longTask = new string('а', 100);
+        MakeChatTitle($"/team-implement {{\"task\":\"{longTask}\"}}")
+            .Should().Be(new string('а', 48) + "…");
+    }
+
+    // --- Фоновые действия идут по маршруту места, а не только «работает только на локали» ---
+
+    // Подставной раннер для действий-«украшений»: response вызывается лениво в RunAsync,
+    // поэтому может как отдать ответ, так и бросить исключение (эмуляция отказа исполнителя).
+    private sealed class StubTitleCheapRunner(bool usesLocal, Func<string> response) : ICheapTextRunner
+    {
+        public bool UsesLocal(string actionKey) => usesLocal;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "claude";
+
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default) =>
+            Task.FromResult(response());
+
+        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+            CancellationToken ct = default) => Task.FromResult<string?>(null);
+
+        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
+
+        public Task<OneShotResult> RunDetailedAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, TimeSpan? timeout = null, int? maxTokens = null, object? jsonFormat = null,
+            CancellationToken ct = default) => throw new NotSupportedException();
+    }
+
+    [Fact]
+    public async Task RefineChatTitle_НеЛокальныйМаршрут_УточняетЗаголовок()
+    {
+        var dir = MkProjectDir("refine-remote");
+        var project = _projectManager.Create("RT", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Name = "обрезка сообщения";
+
+        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false, () => """{"title":"Уточнённый заголовок"}"""));
+
+        await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
+            "обрезка сообщения", TestUserId)!;
+
+        _sut.GetOwned(session.Id, TestUserId)!.Name.Should().Be("Уточнённый заголовок",
+            "заголовок обязан уточняться по маршруту места chat-title, а не только на локали");
+    }
+
+    [Fact]
+    public async Task RefineChatTitle_ОшибкаИсполнителя_ОставляетОбрезкуБезИсключения()
+    {
+        var dir = MkProjectDir("refine-error");
+        var project = _projectManager.Create("RE", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Name = "обрезка сообщения";
+
+        typeof(SessionManager).GetField("_cheap", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(_sut, new StubTitleCheapRunner(usesLocal: false,
+                () => throw new InvalidOperationException("исполнитель недоступен")));
+
+        await (Task)InvokePrivate("RefineChatTitleAsync", session.Id, "первое сообщение чата",
+            "обрезка сообщения", TestUserId)!;
+
+        _sut.GetOwned(session.Id, TestUserId)!.Name.Should().Be("обрезка сообщения",
+            "отказ исполнителя — best-effort: имя остаётся обрезкой, исключение наружу не идёт");
+    }
+
+    // Собирает изолированный PersonaAutomationService поверх уже готового _sut (тот же
+    // SessionManager, что и у остальных тестов файла) — не дублирует его тяжёлую сборку.
+    private (PersonaAutomationService Service, AutomationStateStore State) BuildAutomationService(
+        ICheapTextRunner cheap, [System.Runtime.CompilerServices.CallerMemberName] string suffix = "")
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_tempDir, "automation-" + suffix, "projects.json"),
+            })
+            .Build();
+        var notifStore = new NotificationStore(config, NullLogger<NotificationStore>.Instance);
+        var pushStore = new PushSubscriptionStore(config);
+        var jwt = new JwtService(config, _userStore, NullLogger<JwtService>.Instance);
+        var push = new PushService(config, pushStore, jwt, NullLogger<PushService>.Instance);
+        var clients = new Mock<IHubClients>();
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(new Mock<IClientProxy>().Object);
+        var hub = new Mock<IHubContext<SessionHub>>();
+        hub.Setup(h => h.Clients).Returns(clients.Object);
+        var notif = new NotificationService(notifStore, hub.Object, push, _personaManager, _projectManager,
+            NullLogger<NotificationService>.Instance);
+        var state = new AutomationStateStore(config);
+        var mentions = new MentionTriggerSource(_personaManager);
+        var roots = new AutomationRootResolver(_projectManager, _appSettings);
+
+        var service = new PersonaAutomationService(_personaManager, _sut, push, hub.Object, notif,
+            state, mentions, _projectManager, _userStore, roots, Array.Empty<ITriggerSource>(),
+            config, cheap, NullLogger<PersonaAutomationService>.Instance);
+        return (service, state);
+    }
+
+    [Fact]
+    public async Task PersonaAutomation_ГейтOnlyIf_ОцениваетсяПриНеЛокальномМаршруте()
+    {
+        var dir = MkProjectDir("automation-gate");
+        var project = _projectManager.Create("AG", dir, TestUserId, TestUsername);
+        var persona = _personaManager.Create(TestUserId, "Гейт-персона", role: null, description: null,
+            systemPrompt: null, model: null, effort: null, scope: PersonaScope.Project,
+            projectId: project.Id, color: null, greeting: null, memoryEnabled: false);
+
+        // UsesLocal=false — маршрут места automation-gate НЕ локальный (слот/direct-модель);
+        // раньше это молча пропускало гейт целиком (условие оценивалось только внутри хода)
+        var (automation, state) = BuildAutomationService(
+            new StubTitleCheapRunner(usesLocal: false, () => "нет"));
+
+        var rule = new PersonaAutomationRule
+        {
+            Name = "Только про деплой",
+            Trigger = new AutomationTrigger(),
+            Condition = new AutomationCondition { OnlyIf = "касается деплоя" },
+        };
+        var ev = new TriggerEvent(rule.Id, AutomationTriggerType.Timer, "Обновлена документация README");
+
+        var fireAsync = typeof(PersonaAutomationService).GetMethod("FireAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        await (Task)fireAsync.Invoke(automation, [persona, rule, TimeZoneInfo.Utc, ev, CancellationToken.None, false])!;
+
+        state.GetRule(persona.Id, rule.Id).LastResult.Should().Be("gated",
+            "гейт OnlyIf обязан оцениваться (и отсекать) при любом маршруте места automation-gate, не только на локали");
+    }
+
+    [Fact]
+    public async Task PersonaAutomation_СводкаУведомления_СтроитсяПриНеЛокальномМаршруте()
+    {
+        var dir = MkProjectDir("automation-summary");
+        var project = _projectManager.Create("AS", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        // Форсируем чтение истории с диска (как после рестарта сервера) — accumulator=null
+        var sessionsDict = typeof(SessionManager).GetField("_sessions", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .GetValue(_sut)!;
+        var args = new object?[] { session.Id, null };
+        ((bool)sessionsDict.GetType().GetMethod("TryGetValue")!.Invoke(sessionsDict, args)!).Should().BeTrue();
+        var entry = args[1]!;
+        entry.GetType().GetField("Accumulator", BindingFlags.Public | BindingFlags.Instance)!.SetValue(entry, null);
+
+        var claudeSessionId = "csid-" + Guid.NewGuid().ToString("N");
+        session.ClaudeSessionId = claudeSessionId;
+        await _historyService.SaveAsync(claudeSessionId,
+            [new Protocol.StoredTextMessage("Готово: обновил конфиг и перезапустил сервис.")]);
+
+        // UsesLocal=false — маршрут места notification-summary НЕ локальный
+        var (automation, _) = BuildAutomationService(
+            new StubTitleCheapRunner(usesLocal: false, () => "Обновил конфиг и перезапустил сервис."));
+
+        var summarize = typeof(PersonaAutomationService).GetMethod("TrySummarizeLastReplyAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var result = await (Task<string?>)summarize.Invoke(automation, [session.Id, TestUserId])!;
+
+        result.Should().Be("Обновил конфиг и перезапустил сервис.",
+            "суть уведомления обязана строиться по маршруту места notification-summary, не только на локали");
     }
 }

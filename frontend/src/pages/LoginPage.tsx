@@ -3,8 +3,8 @@ import { AlertTriangle } from 'lucide-react';
 import type { AuthState } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
-import { C, R, FONT } from '../lib/design';
-import { IconField, Toggle, Button } from '../components/ui';
+import { C, R, FONT, SHADOW } from '../lib/design';
+import { IconField, Toggle, Button, PageCanvas } from '../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../components/ui/icons';
 
 interface LoginPageProps {
@@ -87,17 +87,22 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
   const isDisabled = isLoading || !username.trim() || !password.trim();
 
   return (
-    <div
+    // Тот же дудл-холст, что и у разделов: продукт узнаётся с первого экрана.
+    // Высота — по контенту с минимумом в экран, скролл разрешён: на мобиле
+    // поднятая клавиатура ужимает вьюпорт, и форму нельзя обрезать.
+    <PageCanvas
       style={{
-        minHeight: '100vh', background: C.bgMain,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '24px 20px', boxSizing: 'border-box', fontFamily: FONT.sans,
+        height: 'auto', minHeight: '100dvh', overflow: 'auto',
+        alignItems: 'center', justifyContent: 'center',
+        padding: '24px 20px', boxSizing: 'border-box',
       }}
     >
       <div style={{ width: '100%', maxWidth: 440 }}>
-        {/* Логотип */}
+        {/* Логотип с той же островной тенью, но по КОНТУРУ знака: box-shadow
+            обвёл бы прямоугольник картинки, поэтому здесь filter-вариант токена */}
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 28 }}>
-          <img src="/favicon.svg" alt="" width={54} height={54} style={{ display: 'block' }} />
+          <img src="/favicon.svg" alt="" width={54} height={54}
+               style={{ display: 'block', filter: SHADOW.islandDrop }} />
         </div>
 
         {/* Заголовок */}
@@ -112,8 +117,9 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           Введите логин и пароль для доступа к проектам.
         </p>
 
-        {/* Поле: логин */}
-        <div style={{ marginBottom: 12 }}>
+        {/* Поля в островной тени. Тень на обёртке, а не на самом поле: у поля
+            box-shadow занят focus-ring'ом, и своя тень его бы затёрла */}
+        <div style={{ marginBottom: 12, borderRadius: R.xxl, boxShadow: SHADOW.island }}>
           <IconField
             type="text"
             value={username}
@@ -131,7 +137,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
         </div>
 
         {/* Поле: пароль */}
-        <div style={{ marginBottom: 18 }}>
+        <div style={{ marginBottom: 18, borderRadius: R.xxl, boxShadow: SHADOW.island }}>
           <IconField
             type="password"
             value={password}
@@ -155,14 +161,18 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           onClick={() => !isLoading && setRemember(!remember)}
           style={{ display: 'flex', alignItems: 'center', gap: 11, cursor: isLoading ? 'default' : 'pointer', marginBottom: 28, userSelect: 'none' }}
         >
-          <Toggle
-            ref={toggleRef}
-            checked={remember}
-            onChange={setRemember}
-            disabled={isLoading}
-            focusable
-            onEnter={() => { if (!isDisabled) handleConnect(); }}
-          />
+          {/* Тень на обёртке в форме пилюли: у самого тумблера box-shadow занят
+              бегунком, и своя тень затёрла бы его */}
+          <span style={{ display: 'inline-flex', borderRadius: R.max, boxShadow: SHADOW.island }}>
+            <Toggle
+              ref={toggleRef}
+              checked={remember}
+              onChange={setRemember}
+              disabled={isLoading}
+              focusable
+              onEnter={() => { if (!isDisabled) handleConnect(); }}
+            />
+          </span>
           <span style={{ fontSize: 14, color: C.textSecondary }}>
             Запомнить меня на этом устройстве
           </span>
@@ -171,7 +181,10 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
         {/* Кнопка «Войти» */}
         {!isError && (
           <Button
-            variant="primary" size="lg" fullWidth glow
+            variant="primary" size="lg" fullWidth
+            // Островная тень вместо accent-свечения: на форме теперь один
+            // язык подъёма — свечение спорило бы с ним двойным ореолом
+            style={{ boxShadow: SHADOW.island }}
             loading={isLoading} disabled={isDisabled} onClick={handleConnect}
             leftIcon={
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
@@ -189,6 +202,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
             <div style={{
               background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: R.xl,
               padding: '12px 14px', display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 16,
+              boxShadow: SHADOW.island,
             }}>
               <span style={{ flexShrink: 0, marginTop: 1, color: C.danger, display: 'flex' }}><AlertTriangle size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} /></span>
               <span style={{ fontSize: 13.5, color: C.danger, lineHeight: 1.45 }}>
@@ -196,10 +210,11 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
               </span>
             </div>
             <div style={{ display: 'flex', gap: 10 }}>
-              <Button variant="ghostAccent" fullWidth onClick={() => { setPageState('idle'); setErrorMessage(''); }}>
+              <Button variant="ghostAccent" fullWidth style={{ boxShadow: SHADOW.island }}
+                onClick={() => { setPageState('idle'); setErrorMessage(''); }}>
                 Изменить данные
               </Button>
-              <Button variant="primary" fullWidth onClick={handleRetry}>Повторить</Button>
+              <Button variant="primary" fullWidth style={{ boxShadow: SHADOW.island }} onClick={handleRetry}>Повторить</Button>
             </div>
           </>
         )}
@@ -210,6 +225,6 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onConnect }) => {
           </div>
         )}
       </div>
-    </div>
+    </PageCanvas>
   );
 };

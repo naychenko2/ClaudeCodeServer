@@ -46,7 +46,21 @@ public class FileService(
     // Предохранитель от патологически больших деревьев
     private const int TreeMaxEntries = 20000;
 
-    // Защита от path traversal
+    // .claude/worktrees/<имя> — полные копии репозитория (git worktree). При showHidden=true
+    // рекурсия в них раздувает дерево и вытесняет настоящие файлы проекта из TreeMaxEntries.
+    // Проверка по относительному пути, а не по имени "worktrees" — обычная папка с таким
+    // именем в другом месте проекта исключаться не должна.
+    private static bool IsWorktreesPath(string relativePath) =>
+        relativePath.Equals(".claude/worktrees", StringComparison.OrdinalIgnoreCase) ||
+        relativePath.StartsWith(".claude/worktrees/", StringComparison.OrdinalIgnoreCase);
+
+    // Защита от path traversal.
+    // ВАЖНО: второй аргумент — путь ОТНОСИТЕЛЬНО корня; ведущие разделители срезаются.
+    // Абсолютный путь сюда передавать нельзя: на Linux «/a/b» станет относительным «a/b»
+    // и приклеится к корню — вместо отказа получится путь внутри проекта, то есть проверка
+    // «ссылка наружу» молча исчезнет. На Windows подмена незаметна (Path.Combine отдаёт
+    // приоритет второму абсолютному пути), поэтому такое ловится только в CI на Linux.
+    // Есть абсолютный путь — сначала Path.GetRelativePath(root, full).
     internal static string SafeJoin(string root, string relativePath)
     {
         var full = Path.GetFullPath(Path.Combine(root, relativePath.TrimStart('/', '\\')));
@@ -149,8 +163,9 @@ public class FileService(
                 var info = new DirectoryInfo(d);
                 if (TreeExcludes.Contains(info.Name)) continue;
                 if (!showHidden && info.Name.StartsWith('.')) continue;
-                result.Add(new FileEntry(info.Name, Path.GetRelativePath(rootPath, d).Replace('\\', '/'),
-                    true, null, info.LastWriteTimeUtc, false));
+                var relDir = Path.GetRelativePath(rootPath, d).Replace('\\', '/');
+                if (IsWorktreesPath(relDir)) continue;
+                result.Add(new FileEntry(info.Name, relDir, true, null, info.LastWriteTimeUtc, false));
                 Walk(d);
             }
 

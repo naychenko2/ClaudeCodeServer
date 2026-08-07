@@ -49,9 +49,9 @@ import { EmptyState } from '../components/EmptyState';
 import type {
   ButtonVariant, ButtonSize,
   IconButtonSize, IconButtonTone, IconButtonVariant,
+  FileStatus,
 } from '../components/ui';
 
-  FileStatus,
 import { ColorsSection } from './ColorsSection';
 
 // Опции переключателя темы: ключи — значения ThemeMode, лейблы на русском.
@@ -82,8 +82,6 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
 // (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
 const FILE_TILE_SAMPLES = ['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
 
-// добавь её сюда и повесь rootProps={{ id }} на её Island.
-const TOC_SECTIONS: { id: string; label: string }[] = [
 // Состояния файла для FileStatusBadge — коды git, как их отдаёт статус репозитория
 const FILE_STATUS_SAMPLES: { status: FileStatus; label: string }[] = [
   { status: 'M', label: 'изменён'       },
@@ -94,6 +92,8 @@ const FILE_STATUS_SAMPLES: { status: FileStatus; label: string }[] = [
 
 // Оглавление витрины: id секции (для якоря) + короткий лейбл в кнопке.
 // Порядок соответствует основному flow ниже. При добавлении новой секции —
+// добавь её сюда и повесь rootProps={{ id }} на её Island.
+const TOC_SECTIONS: { id: string; label: string }[] = [
   { id: 'sec-toggles',    label: 'Переключатели'     },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -381,8 +381,6 @@ function TogglesSection() {
             ))}
           </div>
         </SubBlock>
-  );
-}
 
         {/* FileStatusBadge: состояние файла — общий значок дерева «Файлов» и панели
             «Изменения». Цветом имени состояние не кодируется нигде: цвет там занят
@@ -399,6 +397,8 @@ function TogglesSection() {
         </SubBlock>
       </div>
     </Island>
+  );
+}
 
 // === Секция «Примитивы — оверлеи и меню» ==========================
 // Modal / ConfirmDialog / Menu+MenuItem / BackButton / WaitingIndicator.

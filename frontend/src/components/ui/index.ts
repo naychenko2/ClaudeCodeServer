@@ -38,8 +38,6 @@ export { LoadingScreen } from './LoadingScreen';
 export { FileTypeTile } from './FileTypeTile';
 export { FileStatusBadge } from './FileStatusBadge';
 export type { FileStatus } from './FileStatusBadge';
-export { ProgressRing } from './ProgressRing';
-export type { RingArc } from './ProgressRing';
 export { Dot } from './Dot';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';

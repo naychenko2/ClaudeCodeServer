@@ -41,4 +41,34 @@ public class TitleExtractionTests
         Assert.Null(TitleExtraction.Extract("   "));
         Assert.Null(TitleExtraction.Extract(null));
     }
+
+    // Значок темы: набор свободный, но форма жёсткая — ровно одна эмодзи-графема
+    [Fact]
+    public void ExtractEmoji_Simple()
+        => Assert.Equal("🐛", TitleExtraction.ExtractEmoji("{\"title\":\"Правка\",\"emoji\":\"🐛\"}"));
+
+    [Fact]
+    public void ExtractEmoji_ZwjSequenceIsOneElement()
+        => Assert.Equal("👨‍💻", TitleExtraction.ExtractEmoji("{\"title\":\"Код\",\"emoji\":\"👨‍💻\"}"));
+
+    [Fact]
+    public void ExtractEmoji_RejectsTextAndNoise()
+    {
+        Assert.Null(TitleExtraction.ExtractEmoji("{\"title\":\"Х\",\"emoji\":\"баг\"}"));      // слово
+        Assert.Null(TitleExtraction.ExtractEmoji("{\"title\":\"Х\",\"emoji\":\":bug:\"}"));   // шорткод
+        Assert.Null(TitleExtraction.ExtractEmoji("{\"title\":\"Х\",\"emoji\":\"🐛🚀\"}"));     // два значка
+        Assert.Null(TitleExtraction.ExtractEmoji("{\"title\":\"Х\",\"emoji\":\"→\"}"));       // текстовая стрелка
+        Assert.Null(TitleExtraction.ExtractEmoji("{\"title\":\"Х\",\"emoji\":\"\"}"));        // пусто
+        Assert.Null(TitleExtraction.ExtractEmoji("{\"title\":\"Х\"}"));                       // поля нет
+        Assert.Null(TitleExtraction.ExtractEmoji("Просто текст без JSON"));
+    }
+
+    [Fact]
+    public void WithEmoji_PrependsOnce()
+    {
+        Assert.Equal("🐛 Правка авторизации", TitleExtraction.WithEmoji("Правка авторизации", "🐛"));
+        Assert.Equal("Правка авторизации", TitleExtraction.WithEmoji("Правка авторизации", null));
+        // Модель уже поставила значок в сам заголовок — второй не клеим
+        Assert.Equal("🚀 Деплой", TitleExtraction.WithEmoji("🚀 Деплой", "🐛"));
+    }
 }

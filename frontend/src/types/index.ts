@@ -440,6 +440,9 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   name?: string;
+  // Тема чата — ИМЯ компонента lucide-react (PascalCase: Cat, Bug, User). Фронт рисует
+  // иконку через icons[topic] (lib/lucideIcon.ts). Отсутствует/незнакомое — значка нет
+  topic?: string | null;
   model?: string;
   // "claude" | "deepseek" | "glm" | ключ из подписок ClaudeSubscriptionPool
   provider?: string;
@@ -693,7 +696,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'chat_deleted' }
-  | { type: 'chat_renamed'; name: string }
+  | { type: 'chat_renamed'; name: string; topic?: string | null }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }

@@ -94,7 +94,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
       }
       // Авто-заголовок уточнён локальной моделью — обновляем имя в списке на лету
       if (msg.type === 'chat_renamed') {
-        setChats(prev => prev.map(c => c.id === msg.sessionId ? { ...c, name: msg.name } : c));
+        // Событие несёт и тему: она меняется тем же ходом, что уточняет заголовок
+        setChats(prev => prev.map(c => c.id === msg.sessionId
+          ? { ...c, name: msg.name, topic: msg.topic ?? c.topic }
+          : c));
       }
     });
     return () => {

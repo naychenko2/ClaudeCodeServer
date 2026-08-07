@@ -18,7 +18,7 @@ import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
-import { BackButton, Modal, ModalActions } from '../ui';
+import { BackButton, ChatTopicIcon, Modal, ModalActions } from '../ui';
 import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
@@ -1095,8 +1095,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     const fs = hero ? 12 : 11.5;
     const slots: ReactNode[] = [];
     if (metaChatName) slots.push(
-      <span key="name" style={{ minWidth: 0, fontSize: fs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {metaChatName}
+      // Тема идёт со своим именем: у чата с собеседником имя живёт здесь, в мете
+      <span key="name" style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        <ChatTopicIcon topic={session.topic} size={14} />
+        <span style={{ minWidth: 0, fontSize: fs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {metaChatName}
+        </span>
       </span>
     );
     // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
@@ -1172,16 +1176,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     >
       {identity(hero)}
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{
-          fontFamily: FONT.serif, fontSize: hero ? 28 : 16, fontWeight: hero ? 500 : 600,
-          color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: hero ? 1.25 : 1.3,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          textDecoration: persona && personaHover ? 'underline' : undefined,
-        }}>
-          {titleText}
-          {titleSuffix && (
-            <span style={{ color: C.textMuted, fontSize: hero ? 21 : 13.5 }}> · {titleSuffix}</span>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: hero ? 8 : 6, minWidth: 0 }}>
+          {/* Значок темы — только когда титул занят именем чата: у персоны и группы
+              там собеседник, и тема уезжает в мета-строку вместе со своим именем.
+              Стоит ВНЕ текстового блока, иначе flex снял бы с него обрезку многоточием */}
+          {!metaChatName && <ChatTopicIcon topic={session.topic} size={hero ? 20 : 15} />}
+          <div style={{
+            fontFamily: FONT.serif, fontSize: hero ? 28 : 16, fontWeight: hero ? 500 : 600,
+            color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: hero ? 1.25 : 1.3,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+            textDecoration: persona && personaHover ? 'underline' : undefined,
+          }}>
+            {titleText}
+            {titleSuffix && (
+              <span style={{ color: C.textMuted, fontSize: hero ? 21 : 13.5 }}> · {titleSuffix}</span>
+            )}
+          </div>
         </div>
         {metaRow(hero)}
       </div>

@@ -11,7 +11,7 @@ import {
   GitBranch, GitCompare, FileClock, MessageCircleQuestion, BookPlus, ListChecks, MessagesSquare,
   CalendarClock, CalendarX2, Users, Columns3,
   ShieldCheck, Copy, Zap, Network, UserPlus, LayoutDashboard, RotateCcw, ListPlus, PenLine,
-  Sticker,
+  Shapes,
 } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import type { NavSnapshot } from '../nav';
@@ -99,7 +99,7 @@ const IcOverview = <LayoutDashboard {...ico} />;
 const IcResume = <RotateCcw {...ico} />;
 const IcCapture = <ListPlus {...ico} />;
 const IcRetitle = <PenLine {...ico} />;
-const IcEmoji = <Sticker {...ico} />;
+const IcTopic = <Shapes {...ico} />;
 const IcToc = <List {...ico} />;
 const IcTranslate = <Sparkles {...ico} />;
 const IcWall = <Columns3 {...ico} />;
@@ -291,17 +291,19 @@ export const AI_ACTIONS: AiAction[] = [
     run: () => dispatchAiRun('chat.retitle'),
   },
   {
-    // Проставить значок темы всем чатам без него — batch-прогон (по образцу note.annotationsAll).
+    // Определить тему всем чатам без неё — batch-прогон (по образцу note.annotationsAll).
     // Не требует открытого чата: действует по всем сессиям владельца сразу.
-    id: 'chat.emojiAll', title: 'Проставить значки тем', hint: 'эмодзи-маркер всем чатам без него',
-    section: 'chat', sectionLabel: 'Чат', icon: IcEmoji,
+    // Id действия исторический (значок был эмодзи) — переименование ключа ломало бы
+    // сохранённые подсказки, как с preview/«Сервисы»
+    id: 'chat.emojiAll', title: 'Проставить значки тем', hint: 'определить тему каждого чата без неё',
+    section: 'chat', sectionLabel: 'Чат', icon: IcTopic,
     when: c => c.online,
     run: async () => {
       try {
-        const r = await api.chats.emojiBatch();
+        const r = await api.chats.iconBatch();
         showToast('Значки тем', r.processed > 0
           ? `Проставлено ${r.processed}, пропущено ${r.skipped}`
-          : 'Нечего проставлять — все чаты уже со значком или без переписки',
+          : 'Нечего проставлять — у всех чатов значок уже есть или в них нет переписки',
           'claude');
       } catch (e) {
         showToast('Значки тем', e instanceof Error ? e.message : 'Сервер недоступен', 'info');

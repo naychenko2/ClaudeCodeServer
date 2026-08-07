@@ -21,6 +21,7 @@ export type { RailItem } from './PanelRail';
 export { PanelDropGuide } from './PanelDropGuide';
 export { Menu, MenuItem, MenuSep } from './Menu';
 export { TocRow } from './TocRow';
+export { ChatTopicIcon, ChatTopicBackdrop } from './ChatTopicIcon';
 export { Modal } from './Modal';
 export { ModalActions, useIsMobileModal } from './ModalActions';
 export { ConfirmDialog } from './ConfirmDialog';

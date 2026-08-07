@@ -8,6 +8,7 @@ import {
   sanitizeZones, emptyZones, zoneOf, openPanelIn, togglePanelIn, closePanel,
   swapAcross, moveAcrossAt, moveAcrossToNewColumn, isZoneCollapsed, migrateZones, revealPanel,
   enforceZoneInvariant, homeOf, trackHome, parseHome, closePanelTo, evictForeign, replacePanelWith,
+  markActiveSide,
   isTucked, tuckPanel, untuckPanel, parseKeyList, sortRail, reorderRail, mergeTuckDefaults,
   railSequence, COL_DEFAULT, COL_MIN, COL_MAX,
   type PanelZones,
@@ -859,5 +860,69 @@ describe('normalizeWeights', () => {
     const w = normalizeWeights(['plan'], { plan: 2, terminal: 0.7 });
     expect(w.terminal).toBeCloseTo(0.7);
     expect(w.plan).toBeCloseTo(1);
+  });
+});
+
+// Эксклюзив боковых сторон на планшете: открытие панели в зоне сворачивает
+// противоположную в stash. Логика изолирована в чистой markActiveSide — здесь
+// проверяем её и обнуление runtime-полей при чтении из localStorage.
+describe('markActiveSide', () => {
+  it('без exclusive — только activeSide, раскладку не трогает', () => {
+    const z = zones([['chats']], [['files']]);
+    const r = markActiveSide(z, 'right');
+    expect(r.activeSide).toBe('right');
+    expect(r.left.layout).toEqual([['chats']]);    // левая не свернулась
+    expect(r.right.layout).toEqual([['files']]);   // правая не тронута
+  });
+
+  it('при exclusive сворачивает противоположную сторону в stash', () => {
+    const z = { ...zones([['chats']], [['files', 'tasks']]), exclusive: true };
+    const r = markActiveSide(z, 'right');
+    expect(r.activeSide).toBe('right');
+    expect(r.left.layout).toEqual([]);                   // левая свернулась
+    expect(r.left.stash).toEqual([['chats']]);           // набор помнится
+    expect(r.right.layout).toEqual([['files', 'tasks']]); // правая цела
+  });
+
+  it('при exclusive разворачивает stash активной стороны (возврат набора)', () => {
+    const base = zones([], [['files']]);
+    // левая была свёрнута в stash вручную
+    const z = { ...base, exclusive: true, left: { ...base.left, layout: [], stash: [['chats']] } };
+    const r = markActiveSide(z, 'left');
+    expect(r.left.layout).toEqual([['chats']]);   // набор вернулся
+    expect(r.left.stash).toEqual([]);
+    expect(r.right.layout).toEqual([]);           // правая свернулась
+    expect(r.right.stash).toEqual([['files']]);
+  });
+
+  it('повторный вызов для активной стороны — раскладку не дёргает', () => {
+    const z = { ...zones([['chats']], [['files']]), exclusive: true };
+    const once = markActiveSide(z, 'left');
+    const twice = markActiveSide(once, 'left');
+    expect(twice.left.layout).toEqual([['chats']]);   // цела
+    expect(twice.right.layout).toEqual([]);           // уже свёрнута — пусто
+    expect(twice.right.stash).toEqual([['files']]);   // набор на месте
+  });
+
+  it('пустую противоположную сторону не трогает', () => {
+    const z = { ...zones([['chats']], []), exclusive: true };
+    const r = markActiveSide(z, 'left');
+    expect(r.right.layout).toEqual([]);
+    expect(r.right.stash).toEqual([]);   // сворачивать нечего — stash пуст
+    expect(r.left.layout).toEqual([['chats']]);
+  });
+});
+
+describe('sanitizeZones — runtime-поля эксклюзива', () => {
+  it('exclusive/activeSide из сырого состояния обнуляются (не утекают из localStorage)', () => {
+    const z = sanitizeZones({ exclusive: true, activeSide: 'right', left: { layout: [['chats']] } });
+    expect(z.exclusive).toBe(false);
+    expect(z.activeSide).toBeNull();
+  });
+
+  it('emptyZones стартует с выключенным эксклюзивом', () => {
+    const z = emptyZones();
+    expect(z.exclusive).toBe(false);
+    expect(z.activeSide).toBeNull();
   });
 });

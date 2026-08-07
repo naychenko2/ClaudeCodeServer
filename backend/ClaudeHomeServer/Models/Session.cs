@@ -55,6 +55,12 @@ public class SessionWorkLoop
     public int MaxIterations { get; set; } = 20;
     // working — рабочие итерации; verifying — финальный верификационный ход после маркера
     public string Phase { get; set; } = "working";
+    // Сколько раз в цикле уже запущены задачи на исполнение: счёт ведёт бэкенд в точке
+    // запуска (гейт DenyOnDelegatedTurn), а не модель — как у TeamImplementBudget. Квота
+    // заменяет запрет на ходу доклада, иначе «доклад → запуск → доклад» — бесконечный цикл.
+    public int ExecutionsStarted { get; set; }
+    // Потолок запусков задач за цикл (дефолт из конфига Loop:MaxTaskExecutions)
+    public int MaxExecutions { get; set; } = 20;
 }
 
 // Стадии режима «Командная реализация» — непрерывный контур.

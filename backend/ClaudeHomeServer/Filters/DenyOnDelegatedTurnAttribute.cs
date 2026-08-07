@@ -49,11 +49,24 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
     /// </summary>
     public bool AllowInTeamImplement { get; init; }
 
+    /// <summary>
+    /// Цикл «До готово» (work-loop): как AllowInTeamImplement, но для обычного чата с
+    /// включённым тумблером — запрет хода доклада заменяется КВОТОЙ запусков, иначе
+    /// «доклад → запуск → доклад» — бесконечный платный цикл. Квота принадлежит самой
+    /// сессии цикла (вверх по родителям не поднимаемся); делегированного хода
+    /// (agentDepth ≥ 1) исключение не касается — анти-рекурсия не ослабляется режимом.
+    /// Guard B4 запрещает оба режима в одном чате, так что двойного списания нет.
+    /// </summary>
+    public bool AllowInWorkLoop { get; init; }
+
     // Ключ HttpContext.Items: квота расходуется здесь, в OnActionExecuting, ДО того как
     // действие реально что-то сделало — храним, за какую (сессия, владелец) она списана,
     // чтобы OnActionExecuted мог вернуть единицу, если действие не состоялось (m3, второй
     // проход Глеба: 404/400 не должны жечь бюджет команды быстрее, чем идёт реальная работа).
     private const string ConsumedRunKey = "TeamImplementRunConsumed";
+
+    // Отдельный ключ квоты цикла: возврат обязан идти ровно в ту квоту, что была списана
+    private const string ConsumedWorkLoopRunKey = "WorkLoopRunConsumed";
 
     public void OnActionExecuting(ActionExecutingContext context)
     {
@@ -91,6 +104,30 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
             }
         }
 
+        // Квота вместо запрета в цикле «до готово» — на ЛЮБОМ неделегированном ходу чата
+        // с циклом: ход доклада исполнителя — тот самый случай, ради которого снимается
+        // запрет, а «чистый» ход не должен обходить счётчик. Вердикт NotInLoop = чат не
+        // в цикле: проваливаемся в прежний запрет.
+        if (!delegated && AllowInWorkLoop)
+        {
+            var (verdict, reason) = sessions.TryConsumeWorkLoopRun(callerSessionId, userId);
+            if (verdict == SessionManager.WorkLoopRunQuota.Allowed)
+            {
+                http.Items[ConsumedWorkLoopRunKey] = (callerSessionId, userId);
+                return;
+            }
+            if (verdict == SessionManager.WorkLoopRunQuota.Exhausted)
+            {
+                context.Result = new ObjectResult(new
+                {
+                    error = $"{action} недоступно: {reason}. Доложи человеку сводку и дождись "
+                        + "его решения (остановить цикл или запустить оставшиеся задачи руками).",
+                })
+                { StatusCode = StatusCodes.Status403Forbidden };
+                return;
+            }
+        }
+
         if (!delegated && !IsSuppressedExecutorTurn(turn, AlsoWhenExecutorSuppressed)) return;
 
         context.Result = new ObjectResult(new
@@ -111,7 +148,6 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
         // Единица списана авансом в OnActionExecuting — вернуть её, если действие не
         // состоялось: контроллер отдал 4xx (задача не найдена, неверное состояние) или упал
         // исключением. Успех (обычно 200 Ok) единицу не трогает — она честно расходована.
-        if (context.HttpContext.Items[ConsumedRunKey] is not (string sessionId, string userId)) return;
         var statusCode = context.Result switch
         {
             ObjectResult obj => obj.StatusCode,
@@ -119,8 +155,12 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
             _ => null,
         };
         if (context.Exception is null && statusCode is null or < 400) return;
-        if (context.HttpContext.RequestServices.GetService<SessionManager>() is { } sessions)
+        if (context.HttpContext.RequestServices.GetService<SessionManager>() is not { } sessions) return;
+
+        if (context.HttpContext.Items[ConsumedRunKey] is (string sessionId, string userId))
             sessions.RefundTeamImplementRun(sessionId, userId);
+        if (context.HttpContext.Items[ConsumedWorkLoopRunKey] is (string loopSessionId, string loopUserId))
+            sessions.RefundWorkLoopRun(loopSessionId, loopUserId);
     }
 
     // Решение вынесено из фильтра, чтобы проверяться таблицей без HttpContext и DI

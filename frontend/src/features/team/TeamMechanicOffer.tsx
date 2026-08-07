@@ -99,12 +99,36 @@ export function stripTeamMechanicMarkers(text: string, streaming?: boolean): str
   return out;
 }
 
+// Минимальный срез элемента ленты, нужный для детекта отказа (ChatItem не импортируем,
+// чтобы фича не тащила весь тип ленты)
+export interface FeedTurnLike {
+  kind: string;
+  systemDirective?: boolean;
+  staffNote?: string;   // в ChatItem это текст заметки штаба — важна сама наличность
+  auto?: boolean;
+}
+
+// «Отказались от механики»: после карточки в ленте появился новый живой ход пользователя
+// (не служебная директива цикла, не заметка штаба, не авто-продолжение work-loop) —
+// диалог пошёл дальше, а механику так и не запустили. Сам запуск — не отказ: он ловится
+// launched (детект хода механики) и у этого признака приоритет.
+export function hasUserTurnAfter(items: readonly FeedTurnLike[], index: number): boolean {
+  for (let j = index + 1; j < items.length; j++) {
+    const it = items[j];
+    if (it.kind === 'user_message' && !it.systemDirective && !it.staffNote && !it.auto) return true;
+  }
+  return false;
+}
+
 // Карточка предложения механики: имя/иконка/ориентир цены + «Запустить» (C.accent —
 // главное действие). После запуска кнопка гаснет; одна механика — одна карточка на чат
-// (дедуп по ленте делает ChatPanel).
-export function TeamMechanicOfferCard({ offer, launched, onRun }: {
+// (дедуп по ленте делает ChatPanel). Отказ (диалог ушёл дальше без запуска) гасит кнопку
+// так же, но с подписью «Вы отказались» — карточка остаётся честной историей разговора,
+// а случайный дорогой клик спустя время становится невозможен.
+export function TeamMechanicOfferCard({ offer, launched, declined, onRun }: {
   offer: TeamMechanicOffer;
   launched: boolean;
+  declined?: boolean;
   onRun: () => void;
 }) {
   const mech = TEAM_MECHANICS.find(m => m.id === offer.id);
@@ -144,6 +168,16 @@ export function TeamMechanicOfferCard({ offer, launched, onRun }: {
           <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           Запущено
         </span>
+      ) : declined ? (
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0 }}>
+          <Button
+            variant="primary" size="sm" disabled
+            title="Вы отказались от этой механики. Попросите заново, если передумали"
+          >
+            Запустить
+          </Button>
+          <span style={{ fontSize: FS.xs, color: C.textMuted }}>Вы отказались</span>
+        </div>
       ) : (
         <Button variant="primary" size="sm" onClick={onRun}>Запустить</Button>
       )}

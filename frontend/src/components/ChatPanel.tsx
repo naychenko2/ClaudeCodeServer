@@ -14,7 +14,7 @@ import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
-import { parseTeamMechanicOffer, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
+import { parseTeamMechanicOffer, hasUserTurnAfter, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
@@ -1088,6 +1088,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     if (teamImplementState) s.add('implementMode');
     return s;
   }, [items, clickedMechanics, teamImplementState]);
+  // «Отказались»: после карточки диалог пошёл дальше (новый живой ход пользователя),
+  // а механику так и не запустили — кнопку гасим с подписью, чтобы спустя время не
+  // купить случайным кликом дорогой прогон. Индексы карточек, не id: дедуп «одна
+  // механика — одна карточка» уже гарантирует взаимно-однозначность.
+  const declinedMechanicOffers = useMemo(() => {
+    const s = new Set<number>();
+    for (const [i, offer] of mechanicOffers) {
+      if (launchedMechanics.has(offer.id)) continue;
+      if (hasUserTurnAfter(items, i)) s.add(i);
+    }
+    return s;
+  }, [items, mechanicOffers, launchedMechanics]);
   const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer) => {
     setClickedMechanics(prev => new Set(prev).add(offer.id));
     try {
@@ -1145,6 +1157,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
         ? {
             offer: mechanicOffers.get(i)!,
             launched: launchedMechanics.has(mechanicOffers.get(i)!.id),
+            declined: declinedMechanicOffers.has(i),
             onRun: () => void runTeamMechanic(mechanicOffers.get(i)!),
           }
         : undefined}
@@ -1157,7 +1170,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
-    mechanicOffers, launchedMechanics, runTeamMechanic,
+    mechanicOffers, launchedMechanics, declinedMechanicOffers, runTeamMechanic,
     turnMeta,
   ]);
 

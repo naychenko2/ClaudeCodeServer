@@ -636,7 +636,7 @@ interface ItemProps {
   // Предложение командной механики (маркер <team-mechanic/> в этом тексте; фича
   // default-personas-onboarding): карточка с кнопкой запуска. Дедуп «одна механика —
   // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда
-  teamMechanicOffer?: { offer: TeamMechanicOffer; launched: boolean; onRun: () => void };
+  teamMechanicOffer?: { offer: TeamMechanicOffer; launched: boolean; declined?: boolean; onRun: () => void };
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
@@ -1051,6 +1051,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <TeamMechanicOfferCard
               offer={teamMechanicOffer.offer}
               launched={teamMechanicOffer.launched}
+              declined={teamMechanicOffer.declined}
               onRun={teamMechanicOffer.onRun}
             />
           )}

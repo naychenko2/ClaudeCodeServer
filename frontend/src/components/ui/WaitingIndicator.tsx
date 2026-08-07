@@ -68,8 +68,12 @@ export function WaitingIndicator({ planning, hint, awaitingResponse }: {
             <span className="cc-smoke"><i /><i /><i /><i /></span>
           )}
         </span>
-        <span style={{ display: 'inline-flex', alignItems: 'baseline', minHeight: 17 }}>
-          <span className="cc-shimmer-text" style={{ fontSize: 13, fontWeight: 600, fontFamily: 'inherit' }}>
+        {/* Высота строки ЖЁСТКАЯ (height, не minHeight) и line-height задан явно: текст
+            печатается и стирается посимвольно, и на пустом тексте span схлопывался в
+            ноль, а на непустом занимал line-height шрифта — строка «дышала» на пиксель,
+            и вся лента над индикатором подпрыгивала на каждом цикле стирания. */}
+        <span style={{ display: 'inline-flex', alignItems: 'center', height: 18 }}>
+          <span className="cc-shimmer-text" style={{ fontSize: 13, lineHeight: '18px', fontWeight: 600, fontFamily: 'inherit' }}>
             {text}
           </span>
           <span style={{

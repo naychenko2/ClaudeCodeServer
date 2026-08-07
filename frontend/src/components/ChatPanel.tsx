@@ -25,8 +25,8 @@ import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, modelProvider } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
-import { C, R, SHADOW, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
-import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
+import { C, R, SHADOW, CHAT_MAX_W } from '../lib/design';
+import { VAR_PAD, VAR_W, useChatBox } from '../lib/chatBox';
 import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -463,11 +463,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
     showScrollDown, atBottomRef, handleMessagesScroll, scrollToBottom,
   } = useChatScroll(session.id, items, isHistoryLoading, online);
-  // Жёлоб под значок ожидания слева от ленты (на мобиле его роль играет обычный
-  // боковой отступ) — см. lib/chatGutter
-  // На стене жёлоб не считаем: там лента прокручивается во всю ширину колонки
-  // (полоса у её правого края), и компенсировать перекос нечему
-  useChatGutter(scrollRef, CHAT_MAX_W, !isMobile && !embedded);
+  // Отступ слева, равный полосе прокрутки справа: держит колонку сообщений по
+  // центру окна (на мобиле его роль играет обычный боковой отступ) — см. lib/chatBox
+  // На стене не считаем: там лента прокручивается во всю ширину колонки
+  // (полоса у её правого края), и выравнивать нечего
+  useChatBox(scrollRef, CHAT_MAX_W, !isMobile && !embedded);
   // Композер — нижнее препятствие для круглешка AI: тот остаётся в углу, но ужимается,
   // когда композер доходит до него (замер пересечения — в AiLauncher). Публикуем узел
   // САМОГО композера, а не растянутую обёртку: та шириной во всю область чата, и по ней
@@ -1395,18 +1395,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
           только центрирует колонку и сама не скроллится. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center' }}>
       <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, minWidth: 0,
-        // Область прокрутки = жёлоб под значок ожидания слева + колонка сообщений +
-        // место под полосу справа. Полоса идёт вплотную к правому краю сообщений (не
-        // по краю широкого центра), а сама колонка остаётся по центру окна — иначе она
+        // Область прокрутки = колонка сообщений + место под полосу справа + равный ему
+        // отступ слева. Полоса идёт вплотную к правому краю сообщений (не по краю
+        // широкого центра), а сама колонка остаётся по центру окна — иначе она
         // разошлась бы с композером, который центрируется отдельно. Ширину коробки и
-        // компенсацию перекоса считает useChatGutter (они зависят от ширины полосы, а
-        // её приходится мерить) и кладёт в переменные, которые читают эти два свойства.
+        // отступ считает useChatBox (они зависят от ширины полосы, а её приходится
+        // мерить) и кладёт в переменные, которые читают эти два свойства.
         // embedded (колонка стены): колонка узкая, центрировать ленту внутри неё
         // незачем — прокрутка идёт по ВСЕЙ ширине, и полоса встаёт у правого края
-        // самой колонки, как в любом списке. Компенсация перекоса тут не нужна.
-        maxWidth: isMobile ? CHAT_MAX_W + 12 * 2 : embedded ? undefined : `var(${VAR_W}, ${CHAT_MAX_W + CHAT_GUTTER_L}px)`,
-        marginRight: isMobile || embedded ? undefined : `var(${VAR_SHIFT}, 0px)`,
-        paddingLeft: isMobile ? 12 : CHAT_GUTTER_L,
+        // самой колонки, как в любом списке. Выравнивание тут не нужно.
+        maxWidth: isMobile ? CHAT_MAX_W + 12 * 2 : embedded ? undefined : `var(${VAR_W}, ${CHAT_MAX_W}px)`,
+        paddingLeft: isMobile ? 12 : embedded ? 0 : `var(${VAR_PAD}, 0px)`,
         scrollbarGutter: isMobile ? undefined : 'stable',
         overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingRight: isMobile ? 12 : 0, paddingBottom: 8,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был

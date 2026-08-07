@@ -78,8 +78,9 @@ describe('computeCenterShift', () => {
     expect(splash.shift).toBe(348);
     expect(splash.areaMid).toBe(splash.winMid);
 
-    // Та же раскладка, но с бюджетом ленты — компенсации не остаётся ни пикселя
-    expect(layout(1440, 396, 48, CHAT_COLUMN_W).shift).toBe(0);
+    // Та же раскладка, но с бюджетом ленты — компенсации остаётся ровно свободный
+    // запас центра (996 − потребность ленты), то есть считанные пиксели против 348
+    expect(layout(1440, 396, 48, CHAT_COLUMN_W).shift).toBe(1440 - 396 - 48 - CHAT_COLUMN_W);
   });
 
   it('координаты корня не обязаны начинаться с нуля', () => {

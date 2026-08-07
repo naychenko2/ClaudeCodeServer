@@ -40,6 +40,41 @@ function transcriptToPrompt(raw: unknown[], kind: 'user' | 'project'): string {
   return `По этому разговору-интервью придумай ${goal}: имя, роль, характер, приветствие.\n\n${talk}`;
 }
 
+// Вводная плашка в пустой ленте онбординга: объясняет, что сейчас произойдёт,
+// пока первый ход мастера (kickoff-затравка) в пути. Идёт как greetingBubble —
+// чисто визуальная: уходит с первой репликой и не мелькает при резюме
+// прерванного интервью (там в ленте уже есть история). Иконка и подложка — те
+// же, что в шапке гейта, чтобы связь «плашка сверху ⇆ чат» читалась.
+function IntroPlaque({ kind, isMobile }: { kind: 'user' | 'project'; isMobile: boolean }) {
+  const title = kind === 'user' ? 'Давайте познакомимся' : 'Расскажите о проекте';
+  const body = kind === 'user'
+    ? 'Сейчас помощник задаст несколько вопросов — о вас и о том, чем вы занимаетесь. По ответам появится ваш личный ассистент: он останется с вами в системе и будет помнить контекст.'
+    : 'Ваш ассистент задаст несколько вопросов о проекте. По ответам появится руководитель проекта — персона, которая знает контекст и ведёт команду.';
+  return (
+    <div style={{
+      flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
+      padding: isMobile ? SP.lg : SP.xl,
+    }}>
+      <div style={{
+        maxWidth: 420, width: '100%',
+        padding: isMobile ? SP.lg : SP.xl,
+        background: C.accentLight, border: `1px solid ${C.border}`, borderRadius: R.xxl,
+        display: 'flex', flexDirection: 'column', gap: SP.md,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, color: C.accent }}>
+          <Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          <div style={{ fontFamily: FONT.serif, fontSize: FS.xl, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
+            {title}
+          </div>
+        </div>
+        <div style={{ fontSize: FS.md, lineHeight: 1.55, color: C.textPrimary }}>
+          {body}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Общий каркас онбординг-чата: старт/резюм сессии, чат-стек, завершение, страховки
 function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: {
   kind: 'user' | 'project';
@@ -209,6 +244,7 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
             onSessionUpdated={setSession}
             attachedFiles={attachedFiles}
             onAttachedFilesChange={setAttachedFiles}
+            greetingBubble={<IntroPlaque kind={kind} isMobile={isMobile} />}
           />
         ) : error ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: SP.md, padding: SP.xl, textAlign: 'center' }}>
@@ -218,7 +254,7 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
           </div>
         ) : (
           <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.textMuted, fontSize: FS.sm }}>
-            Готовим интервью…
+            Открываем интервью…
           </div>
         )}
       </div>

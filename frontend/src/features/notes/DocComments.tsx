@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Check, MessageCircle, Pin, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
+import { Check, MessageCircle, Pin, Sparkles, Trash2, TriangleAlert, Undo2, User, X } from 'lucide-react';
 import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
@@ -8,7 +8,9 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useNotesVersion } from '../../lib/notes';
 import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
-import { ConfirmDialog } from '../../components/ui';
+import { Button, ConfirmDialog } from '../../components/ui';
+import { startChatFromPanel } from '../../lib/ai/startChat';
+import { docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from '../../lib/ai/annotationsPrompt';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
 import type { ResolvedNote } from '../../components/MarkdownViewer';
 
@@ -396,15 +398,46 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           <MessageCircle size={14} style={{ color: C.accent }} /> Комментарии
           <span style={{ color: C.textMuted, fontWeight: 400 }}>· {items.length}{openCount > 0 && ` · ${openCount} откр.`}</span>
         </span>
-        <div style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden', marginLeft: 'auto' }}>
-          {([['all', 'Все'], ['open', 'Открытые'], ['none', 'Скрыть']] as const).map(([key, label]) => (
-            <button key={key} onClick={() => setFilter(key)} style={{
-              padding: '3px 9px', fontSize: 11.5, border: 'none', cursor: 'pointer',
-              background: filter === key ? C.accentLight : 'transparent',
-              color: filter === key ? C.textHeading : C.textMuted,
-              fontWeight: filter === key ? 600 : 400, fontFamily: FONT.sans,
-            }}>{label}</button>
-          ))}
+        {/* Кнопка «Разобрать» и переключатель фильтра — в одном flex-ряду, всегда на
+            одном уровне (не разъезжаются по вертикали при переносе). Группа прижимается
+            к правому краю заголовка; не помещается с заголовком — переносится целиком. */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto',
+          // wrap — страховка на утянутый до минимума сайдбар: вместо обрезки контролы
+          // встанут друг под другом (в штатной ширине они всегда в одной строке)
+          flexWrap: 'wrap', justifyContent: 'flex-end',
+        }}>
+          {openCount > 0 && (
+            // Разбор всех открытых комментариев этого документа одним чатом: путь и область
+            // здесь известны, поэтому AI не ищет документ, а сразу читает notes_annotations.
+            <Button
+              size="xs" variant="secondary" leftIcon={<Sparkles size={12} />}
+              title="Открыть чат и разобрать открытые комментарии этого документа"
+              onClick={() => void startChatFromPanel(
+                docAnnotationsPrompt(scope, docPath), { requiredTool: ANNOTATIONS_TOOL_KEY })}
+              // nowrap + flexShrink:0 — текст «Разобрать N» не должен ломиться по строкам,
+              // а сама кнопка не сжиматься под соседний сегментед на узкой панели.
+              // Зазор с иконкой поджат (базовый gap кнопки — 8): вместе с сегментедом
+              // группа обязана уложиться в ширину панели (~276px в сайдбаре)
+              style={{ whiteSpace: 'nowrap', flexShrink: 0, gap: 5, padding: '0 8px' }}
+            >Разобрать {openCount}</Button>
+          )}
+          <div style={{
+            display: 'flex', flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden',
+          }}>
+            {/* Метки короткие («Откр.» вместо «Открытые»): сайдбар заметок резиновый
+                (usePanelWidth, минимум 230px), и с полными подписями группа
+                «Разобрать N» + фильтр не укладывалась в его ширину */}
+            {([['all', 'Все', 'Все комментарии'], ['open', 'Откр.', 'Только открытые'],
+               ['none', 'Скрыть', 'Скрыть комментарии']] as const).map(([key, label, hint]) => (
+              <button key={key} onClick={() => setFilter(key)} title={hint} style={{
+                padding: '3px 7px', fontSize: 11.5, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+                background: filter === key ? C.accentLight : 'transparent',
+                color: filter === key ? C.textHeading : C.textMuted,
+                fontWeight: filter === key ? 600 : 400, fontFamily: FONT.sans,
+              }}>{label}</button>
+            ))}
+          </div>
         </div>
       </div>
       {assignedMsg && (

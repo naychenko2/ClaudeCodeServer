@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CSSProperties, MouseEvent, ReactNode } from 'react';
-import { Folder, Info, MessageSquare, Plug, Plus, User } from 'lucide-react';
+import { AlertTriangle, Folder, Info, MessageSquare, Plug, Plus, User } from 'lucide-react';
 import { Button, EmptyState, Menu, Modal, TextField, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { groupHeaderStyle } from '../../lib/modelProvidersShared';
@@ -18,10 +18,12 @@ import type { McpServer, Persona, Project } from '../../types';
 //    исключения);
 //  - включён — новый экран v2 (allow-list: сервер не едет никуда, пока не выдан явно).
 // Обе поверхности честны о своей модели — настройки одной не действуют в другой.
-export function McpAccessTab({ data, onClose, onAdd }: { data: McpData; onClose: () => void; onAdd: () => void }) {
+export function McpAccessTab({ data, onClose, onAdd, onEdit }: {
+  data: McpData; onClose: () => void; onAdd: () => void; onEdit: (server: McpServer) => void;
+}) {
   const allowlist = useFeature(FLAGS.mcpAllowlist);
   return allowlist
-    ? <AllowAccessView data={data} onClose={onClose} onAdd={onAdd} />
+    ? <AllowAccessView data={data} onClose={onClose} onAdd={onAdd} onEdit={onEdit} />
     : <LegacyAccessMatrix data={data} onClose={onClose} />;
 }
 
@@ -190,7 +192,9 @@ const allowHintStyle: CSSProperties = {
   fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45, padding: '0 2px',
 };
 
-function AllowAccessView({ data, onClose, onAdd }: { data: McpData; onClose: () => void; onAdd: () => void }) {
+function AllowAccessView({ data, onClose, onAdd, onEdit }: {
+  data: McpData; onClose: () => void; onAdd: () => void; onEdit: (server: McpServer) => void;
+}) {
   const { servers, projects, personas } = data;
 
   if (servers === null) {
@@ -227,7 +231,7 @@ function AllowAccessView({ data, onClose, onAdd }: { data: McpData; onClose: () 
         этого чата. Чат вне проекта — по отдельной настройке сервера «Чаты вне проектов».
       </div>
       {servers.map(server => (
-        <ServerAccessCard key={server.id} server={server} data={data} projects={projects} personas={personas} onClose={onClose} />
+        <ServerAccessCard key={server.id} server={server} data={data} projects={projects} personas={personas} onClose={onClose} onEdit={onEdit} />
       ))}
     </div>
   );
@@ -260,8 +264,9 @@ function summaryLabel(rows: AccessRow[]): string {
   return parts.join(' · ');
 }
 
-function ServerAccessCard({ server, data, projects, personas, onClose }: {
+function ServerAccessCard({ server, data, projects, personas, onClose, onEdit }: {
   server: McpServer; data: McpData; projects: Project[]; personas: Persona[]; onClose: () => void;
+  onEdit: (server: McpServer) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
@@ -339,6 +344,7 @@ function ServerAccessCard({ server, data, projects, personas, onClose }: {
               projects={projects}
               grantedProjectIds={grantedProjectIds}
               onClose={onClose}
+              onEdit={onEdit}
             />
           ))}
           {hiddenCount > 0 && (
@@ -379,7 +385,7 @@ function ServerAccessCard({ server, data, projects, personas, onClose }: {
       {anchor && (
         isMobile ? (
           <Modal title={`Кому выдать доступ к «${server.label || server.key}»?`} onClose={() => setAnchor(null)} width={MODAL_W.form}>
-            <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} />
+            <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} onEdit={onEdit} />
           </Modal>
         ) : (
           <Menu anchor={anchor} onClose={() => setAnchor(null)} minWidth={330} maxWidth={330} maxHeight={420}>
@@ -387,7 +393,7 @@ function ServerAccessCard({ server, data, projects, personas, onClose }: {
               <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, padding: '2px 3px' }}>
                 Кому выдать доступ к «{server.label || server.key}»?
               </div>
-              <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} />
+              <GrantPickerBody server={server} data={data} projects={projects} personas={personas} onDone={() => setAnchor(null)} onEdit={onEdit} />
             </div>
           </Menu>
         )
@@ -402,9 +408,9 @@ function rowKey(row: AccessRow): string {
   return `persona:${row.persona.id}`;
 }
 
-function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose }: {
+function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose, onEdit }: {
   row: AccessRow; server: McpServer; data: McpData; projects: Project[];
-  grantedProjectIds: Set<string>; onClose: () => void;
+  grantedProjectIds: Set<string>; onClose: () => void; onEdit: (server: McpServer) => void;
 }) {
   const rowStyle: CSSProperties = {
     display: 'flex', alignItems: 'center', gap: SP.sm, padding: '9px 13px',
@@ -454,6 +460,7 @@ function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose
   const { persona } = row;
   const coveredViaProject = !!persona.projectId && grantedProjectIds.has(persona.projectId);
   const project = persona.projectId ? projects.find(p => p.id === persona.projectId) : undefined;
+  const roBlocked = persona.access === 'readOnly' && !server.allowReadOnlyPersonas;
   return (
     <div style={rowStyle}>
       <span style={iconBoxStyle}><User size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></span>
@@ -468,6 +475,26 @@ function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose
             }}>есть через проект</span>
           )}
         </div>
+        {roBlocked && (
+          <div style={{
+            marginTop: 3, display: 'flex', gap: 5, alignItems: 'flex-start',
+            fontSize: FS.xs, color: C.warningText, lineHeight: 1.4,
+          }}>
+            <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />
+            <span>
+              Не приедет: у персоны профиль «Только чтение», а на сервере не разрешён доступ таким
+              персонам.{' '}
+              <button
+                type="button"
+                onClick={() => onEdit(server)}
+                style={{
+                  font: 'inherit', color: 'inherit', background: 'transparent', border: 'none',
+                  padding: 0, cursor: 'pointer', textDecoration: 'underline',
+                }}
+              >Разрешить в настройках сервера →</button>
+            </span>
+          </div>
+        )}
       </div>
       <button
         type="button"
@@ -484,8 +511,9 @@ function AccessRowView({ row, server, data, projects, grantedProjectIds, onClose
 
 // === Пикер выдачи: один на две оси (сегменты «Проекты | Персоны») ===
 
-function GrantPickerBody({ server, data, projects, personas, onDone }: {
+function GrantPickerBody({ server, data, projects, personas, onDone, onEdit }: {
   server: McpServer; data: McpData; projects: Project[]; personas: Persona[]; onDone: () => void;
+  onEdit: (server: McpServer) => void;
 }) {
   const [segment, setSegment] = useState<'projects' | 'personas'>('projects');
   const [query, setQuery] = useState('');
@@ -568,6 +596,7 @@ function GrantPickerBody({ server, data, projects, personas, onDone }: {
             const granted = personaGrantedFor(persona, server.key);
             const covered = !granted && !!persona.projectId && grantedProjectIds.has(persona.projectId);
             const project = persona.projectId ? projects.find(p => p.id === persona.projectId) : undefined;
+            const roBlocked = persona.access === 'readOnly' && !server.allowReadOnlyPersonas;
             return (
               <PickerRow
                 key={persona.id}
@@ -576,6 +605,7 @@ function GrantPickerBody({ server, data, projects, personas, onDone }: {
                 subtitle={`${persona.role || 'без роли'} · ${project ? project.name : 'глобальная'}`}
                 granted={granted}
                 covered={covered}
+                warning={roBlocked ? 'Не приедет: профиль «Только чтение» не разрешён на сервере' : undefined}
                 onClick={() => togglePersona(persona)}
               />
             );
@@ -587,6 +617,22 @@ function GrantPickerBody({ server, data, projects, personas, onDone }: {
           ? 'Выданное помечено — повторный клик уберёт доступ. Проект отдаёт сервер всем своим чатам и персонам.'
           : 'Выданное помечено — повторный клик уберёт доступ.'}
       </div>
+      {segment === 'personas' && !server.allowReadOnlyPersonas && personas.some(p => p.access === 'readOnly') && (
+        <div style={{ display: 'flex', gap: 5, alignItems: 'flex-start', fontSize: FS.xs, color: C.warningText, lineHeight: 1.4 }}>
+          <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            Персонам с профилем «Только чтение» сервер не приедет, пока это не разрешено на сервере.{' '}
+            <button
+              type="button"
+              onClick={() => { onEdit(server); onDone(); }}
+              style={{
+                font: 'inherit', color: 'inherit', background: 'transparent', border: 'none',
+                padding: 0, cursor: 'pointer', textDecoration: 'underline',
+              }}
+            >Разрешить в настройках сервера →</button>
+          </span>
+        </div>
+      )}
       {isMobile && (
         <Button variant="ghost" size="sm" fullWidth onClick={onDone}>Готово</Button>
       )}
@@ -594,8 +640,9 @@ function GrantPickerBody({ server, data, projects, personas, onDone }: {
   );
 }
 
-function PickerRow({ icon, title, subtitle, granted, covered, onClick }: {
-  icon: ReactNode; title: string; subtitle?: string; granted: boolean; covered?: boolean; onClick: () => void;
+function PickerRow({ icon, title, subtitle, granted, covered, warning, onClick }: {
+  icon: ReactNode; title: string; subtitle?: string; granted: boolean; covered?: boolean;
+  warning?: string; onClick: () => void;
 }) {
   return (
     <button
@@ -620,6 +667,12 @@ function PickerRow({ icon, title, subtitle, granted, covered, onClick }: {
             display: 'block', fontSize: FS.xs, color: C.textMuted,
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}>{subtitle}</span>
+        )}
+        {warning && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: 3, fontSize: 10, color: C.warningText, marginTop: 1 }}>
+            <AlertTriangle size={10} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{warning}</span>
+          </span>
         )}
       </span>
       {granted ? (

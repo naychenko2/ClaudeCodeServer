@@ -106,7 +106,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
                 onCancel={() => { setEditing(null); setTab('servers'); }}
               />
             )}
-            {tab === 'access' && <McpAccessTab data={data} onClose={onClose} onAdd={openAdd} />}
+            {tab === 'access' && <McpAccessTab data={data} onClose={onClose} onAdd={openAdd} onEdit={openEdit} />}
             {tab === 'diag' && isAdmin && <McpDiagnosticsTab />}
           </div>
         </div>

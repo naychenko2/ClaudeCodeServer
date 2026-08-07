@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Wait-индикатор: выбор анимации</title>
+  <style>
+    /* === Дизайн-система AI Home (значения из theme.css) === */
+    :root {
+      /* Светлая тема */
+      --c-bg-main: #F4F0E8;
+      --c-bg-card: #FBF8F2;
+      --c-bg-selected: #E8E1D4;
+      --c-text-heading: #2A251F;
+      --c-text-primary: #39332B;
+      --c-text-secondary: #756B5E;
+      --c-text-muted: #9A8F7E;
+      --c-accent: #D97757;
+      --c-smoke: #B4A899;
+      --c-plan: #6C5CB0;
+      --c-border: #E0D7C8;
+      --c-on-dark: #FFFFFF;
+      --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+      --anim-color: #D97757;       /* базовый цвет анимации (дыхание) */
+      --secondary-anim: #B4A899;   /* цвет для мыслей/эха */
+    }
+    [data-theme="dark"] {
+      --c-bg-main: #201C18;
+      --c-bg-card: #2E2A25;
+      --c-bg-selected: #38332D;
+      --c-text-heading: #F2ECE1;
+      --c-text-primary: #EDE6DB;
+      --c-text-secondary: #B3A897;
+      --c-text-muted: #8A8072;
+      --c-accent: #E38A6A;
+      --c-smoke: #7E7566;
+      --c-plan: #9385D8;
+      --c-border: #3D3830;
+      --anim-color: #E38A6A;
+      --secondary-anim: #7E7566;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--c-bg-main);
+      color: var(--c-text-heading);
+      padding: 32px;
+      min-height: 100vh;
+      transition: background 0.2s, color 0.2s;
+    }
+    h1 { font-family: 'PT Serif', Georgia, serif; font-size: 28px; margin-bottom: 6px; }
+    .subtitle { font-size: 13px; color: var(--c-text-secondary); margin-bottom: 24px; }
+
+    /* === Переключатели === */
+    .controls { display: flex; gap: 24px; margin-bottom: 24px; flex-wrap: wrap; }
+    .control-group { display: flex; align-items: center; gap: 8px; }
+    .control-group label { font-size: 13px; font-weight: 500; color: var(--c-text-secondary); }
+    .toggle-btn {
+      padding: 6px 12px; border: 1px solid var(--c-border); border-radius: 8px;
+      background: var(--c-bg-card); color: var(--c-text-primary); font-size: 13px;
+      cursor: pointer; transition: all 0.15s; font-family: inherit;
+    }
+    .toggle-btn:hover { background: var(--c-bg-selected); }
+    .toggle-btn.active { background: var(--c-accent); color: #FFFFFF; border-color: var(--c-accent); }
+
+    .variant-tabs { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+    .variant-tab {
+      padding: 8px 16px; border: 1px solid var(--c-border); border-radius: 8px;
+      background: var(--c-bg-card); color: var(--c-text-secondary); font-size: 14px;
+      font-weight: 500; cursor: pointer; transition: all 0.15s; font-family: inherit;
+    }
+    .variant-tab:hover { background: var(--c-bg-selected); }
+    .variant-tab.active { background: var(--c-accent); color: #FFFFFF; border-color: var(--c-accent); }
+
+    /* === Превью === */
+    .preview-section {
+      background: var(--c-bg-card); border-radius: 12px; padding: 24px;
+      box-shadow: var(--shadow-card); margin-bottom: 16px;
+    }
+    .preview-row { display: flex; align-items: center; gap: 32px; margin-bottom: 20px; }
+    .preview-row:last-child { margin-bottom: 0; }
+    .preview-label {
+      font-size: 12px; font-weight: 600; color: var(--c-text-muted);
+      text-transform: uppercase; letter-spacing: 0.5px; min-width: 80px;
+    }
+
+    /* === Реалистичный индикатор (лицо + текст) === */
+    .indicator-real { display: flex; align-items: center; gap: 10px; }
+    .avatar-wrapper { position: relative; width: 19px; height: 18px; flex-shrink: 0; display: inline-block; }
+    .avatar-wrapper > .avatar-inner { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; z-index: 2; }
+
+    /* Два состояния лица */
+    .avatar-initials {
+      width: 19px; height: 18px; background: #C2385B; color: #FFFFFF;
+      border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      font-family: 'Hanken Grotesk', sans-serif; font-weight: 700; font-size: 9px; line-height: 1;
+    }
+    .avatar-photo {
+      width: 19px; height: 18px; border-radius: 50%; object-fit: cover; display: none;
+    }
+
+    /* Текст-шуммер + курсор */
+    .shimmer-text {
+      background: linear-gradient(90deg, var(--c-text-muted) 0%, var(--c-text-muted) 35%,
+        var(--anim-color) 50%, var(--c-text-muted) 65%, var(--c-text-muted) 100%);
+      background-size: 200% 100%;
+      -webkit-background-clip: text; background-clip: text;
+      -webkit-text-fill-color: transparent; color: transparent;
+      animation: cc-shimmer-text 1.8s linear infinite;
+      font-size: 13px; font-weight: 600;
+    }
+    @keyframes cc-shimmer-text { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+    .cursor {
+      display: inline-block; width: 2px; height: 0.95em; margin-left: 2px;
+      background: var(--anim-color); border-radius: 1px; animation: blink 1s step-start infinite;
+    }
+    @keyframes blink { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
+
+    /* === В1: Дыхание (тепло-ареол) === */
+    .breathing-glow {
+      position: absolute; top: 50%; left: 50%; width: 100%; height: 100%;
+      transform: translate(-50%, -50%); border-radius: 50%;
+      background: radial-gradient(circle, var(--anim-color) 0%, transparent 70%);
+      opacity: 0.2; animation: breathing 3s ease-in-out infinite; pointer-events: none;
+    }
+    @keyframes breathing {
+      0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.2; }
+      50%      { transform: translate(-50%, -50%) scale(1.15); opacity: 0.5; }
+    }
+
+    /* === В2: Мысли (3 облачка вверх-вправо) === */
+    .thought-bubbles { position: absolute; top: 1px; left: 13px; width: 0; height: 0; z-index: 3; }
+    .thought-bubbles i {
+      position: absolute; width: 4px; height: 4px; border-radius: 50%;
+      background: var(--secondary-anim); opacity: 0;
+      animation: thought 2.4s ease-out infinite;
+    }
+    .thought-bubbles i:nth-child(2) { animation-delay: 0.8s; }
+    .thought-bubbles i:nth-child(3) { animation-delay: 1.6s; }
+    @keyframes thought {
+      0%   { opacity: 0; transform: translate(0, 0) scale(0.6); }
+      20%  { opacity: 0.6; }
+      60%  { opacity: 0.4; }
+      100% { opacity: 0; transform: translate(8px, -16px) scale(1.2); }
+    }
+
+    /* === В3: Эхо (2 кольца) === */
+    .echo-rings { position: absolute; top: 50%; left: 50%; width: 100%; height: 100%;
+      transform: translate(-50%, -50%); pointer-events: none; }
+    .echo-ring {
+      position: absolute; top: 50%; left: 50%; width: 100%; height: 100%;
+      border: 2px solid var(--secondary-anim); border-radius: 50%; opacity: 0.5;
+      transform: translate(-50%, -50%); animation: echo 2.5s ease-out infinite;
+    }
+    .echo-ring:nth-child(2) { animation-delay: 1.25s; }
+    @keyframes echo {
+      0%   { transform: translate(-50%, -50%) scale(1); opacity: 0.5; }
+      100% { transform: translate(-50%, -50%) scale(1.85); opacity: 0; }
+    }
+
+    /* === Укрупнённый вид === */
+    .avatar-large { width: 48px; height: 48px; position: relative; display: inline-block; }
+    .avatar-large > .avatar-inner { position: absolute; inset: 0; border-radius: 50%; overflow: hidden; z-index: 2; }
+    .avatar-large .avatar-initials { width: 48px; height: 48px; font-size: 20px; }
+    .avatar-large .avatar-photo { width: 48px; height: 48px; }
+    .avatar-large .breathing-glow,
+    .avatar-large .echo-rings { width: 100%; height: 100%; }
+    .avatar-large .thought-bubbles { top: 3px; left: 34px; }
+    .avatar-large .thought-bubbles i { width: 8px; height: 8px; }
+    .avatar-large .thought-bubbles i { animation-name: thought-lg; }
+    @keyframes thought-lg {
+      0%   { opacity: 0; transform: translate(0, 0) scale(0.6); }
+      20%  { opacity: 0.6; }
+      60%  { opacity: 0.4; }
+      100% { opacity: 0; transform: translate(12px, -24px) scale(1.2); }
+    }
+
+    .variant-content { display: none; }
+    .variant-content.active { display: block; }
+    .note {
+      font-size: 12.5px; color: var(--c-text-secondary); margin-top: 4px;
+      padding: 12px 14px; background: var(--c-bg-selected); border-radius: 8px; line-height: 1.5;
+    }
+    .note strong { color: var(--c-text-heading); }
+    .note code { background: var(--c-bg-card); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>Wait-индикатор: выбор анимации</h1>
+  <p class="subtitle">Переключай тему, аватар и режим — превью обновляется мгновенно. В продукте аватар = персона чата.</p>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Тема:</label>
+      <button class="toggle-btn active" data-type="theme" data-value="light">☀ Светлая</button>
+      <button class="toggle-btn" data-type="theme" data-value="dark">☾ Тёмная</button>
+    </div>
+    <div class="control-group">
+      <label>Аватар:</label>
+      <button class="toggle-btn active" data-type="avatar" data-value="initials">Инициалы</button>
+      <button class="toggle-btn" data-type="avatar" data-value="photo">Фото</button>
+    </div>
+    <div class="control-group">
+      <label>Режим:</label>
+      <button class="toggle-btn active" data-type="mode" data-value="normal">Обычный</button>
+      <button class="toggle-btn" data-type="mode" data-value="planning">Планирование</button>
+    </div>
+  </div>
+
+  <div class="variant-tabs">
+    <button class="variant-tab active" data-variant="breathing">1. Дыхание</button>
+    <button class="variant-tab" data-variant="thoughts">2. Мысли</button>
+    <button class="variant-tab" data-variant="echo">3. Эхо</button>
+  </div>
+
+  <!-- В1: Дыхание -->
+  <div class="variant-content active" id="breathing">
+    <div class="preview-section">
+      <div class="preview-row">
+        <span class="preview-label">В строке</span>
+        <div class="indicator-real">
+          <div class="avatar-wrapper">
+            <div class="avatar-inner">
+              <div class="avatar-initials">С</div>
+              <img class="avatar-photo" src="sofya-avatar.jpg" alt="">
+            </div>
+            <div class="breathing-glow"></div>
+          </div>
+          <span class="shimmer-text">Думаю…</span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="preview-row">
+        <span class="preview-label">Крупно</span>
+        <div class="avatar-large">
+          <div class="avatar-inner">
+            <div class="avatar-initials">С</div>
+            <img class="avatar-photo" src="sofya-avatar.jpg" alt="">
+          </div>
+          <div class="breathing-glow"></div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><strong>Дыхание</strong> — тёплое свечение вокруг лица (radial-gradient, scale 1↔1.15, 3s).
+      Обычный режим = accent (оранжевый), планирование = plan (индиго). Самое спокойное движение.</div>
+  </div>
+
+  <!-- В2: Мысли -->
+  <div class="variant-content" id="thoughts">
+    <div class="preview-section">
+      <div class="preview-row">
+        <span class="preview-label">В строке</span>
+        <div class="indicator-real">
+          <div class="avatar-wrapper">
+            <div class="avatar-inner">
+              <div class="avatar-initials">С</div>
+              <img class="avatar-photo" src="sofya-avatar.jpg" alt="">
+            </div>
+            <div class="thought-bubbles"><i></i><i></i><i></i></div>
+          </div>
+          <span class="shimmer-text">Думаю…</span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="preview-row">
+        <span class="preview-label">Крупно</span>
+        <div class="avatar-large">
+          <div class="avatar-inner">
+            <div class="avatar-initials">С</div>
+            <img class="avatar-photo" src="sofya-avatar.jpg" alt="">
+          </div>
+          <div class="thought-bubbles"><i></i><i></i><i></i></div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><strong>Мысли</strong> — три облачка уходят вверх-вправо, как дымок из трубы (2.4s).
+      Ближе всего к текущему <code>cc-smoke</code>. Обычный = smoke (тёплый серый), планирование = индиго.</div>
+  </div>
+
+  <!-- В3: Эхо -->
+  <div class="variant-content" id="echo">
+    <div class="preview-section">
+      <div class="preview-row">
+        <span class="preview-label">В строке</span>
+        <div class="indicator-real">
+          <div class="avatar-wrapper">
+            <div class="avatar-inner">
+              <div class="avatar-initials">С</div>
+              <img class="avatar-photo" src="sofya-avatar.jpg" alt="">
+            </div>
+            <div class="echo-rings"><div class="echo-ring"></div><div class="echo-ring"></div></div>
+          </div>
+          <span class="shimmer-text">Думаю…</span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="preview-row">
+        <span class="preview-label">Крупно</span>
+        <div class="avatar-large">
+          <div class="avatar-inner">
+            <div class="avatar-initials">С</div>
+            <img class="avatar-photo" src="sofya-avatar.jpg" alt="">
+          </div>
+          <div class="echo-rings"><div class="echo-ring"></div><div class="echo-ring"></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="note"><strong>Эхо</strong> — два кольца расходятся от лица, как ментальная волна (2.5s).
+      Минималистично и контрастно. Обычный = smoke, планирование = индиго.</div>
+  </div>
+
+  <p class="note">В проде при <code>prefers-reduced-motion: reduce</code> любая анимация глушится (статичный аватар).
+    В этой витрине анимация работает всегда — это демонстрация для выбора.</p>
+
+  <script>
+    const state = { theme: 'light', avatar: 'initials', mode: 'normal', variant: 'breathing' };
+
+    function bindGroup(type, fn) {
+      document.querySelectorAll('[data-type="' + type + '"]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          state[type] = btn.dataset.value;
+          document.querySelectorAll('[data-type="' + type + '"]').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+          fn();
+        });
+      });
+    }
+    bindGroup('theme', updateColors);
+    bindGroup('mode', updateColors);
+    bindGroup('avatar', updateAvatars);
+
+    document.querySelectorAll('.variant-tab').forEach(btn => {
+      btn.addEventListener('click', () => {
+        state.variant = btn.dataset.variant;
+        document.querySelectorAll('.variant-tab').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.variant-content').forEach(c => c.classList.remove('active'));
+        document.getElementById(state.variant).classList.add('active');
+      });
+    });
+
+    function updateColors() {
+      document.documentElement.setAttribute('data-theme', state.theme);
+      const dark = state.theme === 'dark';
+      const plan = dark ? '#9385D8' : '#6C5CB0';
+      const accent = dark ? '#E38A6A' : '#D97757';
+      const smoke = dark ? '#7E7566' : '#B4A899';
+      const root = document.documentElement;
+      // planning → все варианты индиго; иначе дыхание=accent, мысли/эхо=smoke
+      root.style.setProperty('--anim-color', state.mode === 'planning' ? plan : accent);
+      root.style.setProperty('--secondary-anim', state.mode === 'planning' ? plan : smoke);
+    }
+
+    function updateAvatars() {
+      const isPhoto = state.avatar === 'photo';
+      document.querySelectorAll('.avatar-initials').forEach(el => { el.style.display = isPhoto ? 'none' : 'flex'; });
+      document.querySelectorAll('.avatar-photo').forEach(el => { el.style.display = isPhoto ? 'block' : 'none'; });
+    }
+
+    updateColors();
+    updateAvatars();
+  </script>
+</body>
+</html>

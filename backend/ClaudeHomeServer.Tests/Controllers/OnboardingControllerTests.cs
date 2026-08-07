@@ -261,6 +261,36 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
     }
 
     [Fact]
+    public async Task Финализация_УжеПоднятаяДоСoordinatorFull_ДосеваетТолькоПривязки()
+    {
+        await EnsureHomeConfiguredAsync();
+
+        var onboarding = await PostJsonAsync("/api/onboarding/user/start");
+        var sessionId = onboarding.GetProperty("id").GetString()!;
+        // Персона создана в онбординге (OnboardingCreatedPersonaId проставлен) — досев разрешён.
+        var personaId = await CreateGlobalPersonaFromSessionAsync("Поднятая мастером", sessionId);
+
+        // Пользователь сам поднял профиль до Coordinator+Full ЕЩЁ ВНУТРИ онбординга, до make-default:
+        // имитация краевого случая — ужеSeeded=true, казалось бы «досевать нечего».
+        var update = await _client.PutAsJsonAsync($"/api/personas/{personaId}",
+            new { specialty = "coordinator", access = "full" });
+        update.EnsureSuccessStatusCode();
+
+        (await MakeDefaultFromSessionAsync(personaId, sessionId)).StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var persona = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync($"/api/personas/{personaId}")).Content.ReadAsStringAsync());
+        // Права не перетёрты — как были Coordinator+Full, так и остались (повторный досев идемпотентен)
+        persona.GetProperty("specialty").GetString().Should().Be("coordinator");
+        persona.GetProperty("access").GetString().Should().Be("full");
+        // ...но Tool-привязки добавились ВОПРЕКИ ужеSeeded — без них персона выглядела бы
+        // настроенной, но без инструментов. Это и есть баг Major 1, который закрываем.
+        var targets = persona.GetProperty("bindings").EnumerateArray()
+            .Select(b => b.GetProperty("target").GetString()).ToList();
+        targets.Should().Contain(["personas-manage", "tasks", "notes"]);
+    }
+
+    [Fact]
     public async Task MakeDefault_ИзОбычногоЧата_400()
     {
         await EnsureHomeConfiguredAsync();

@@ -383,12 +383,24 @@ public class PersonaBindingsService
     // добавлять нечего).
     public Persona SeedProjectDefaults(string ownerId, Persona persona)
     {
-        if (persona.Scope != PersonaScope.Project || string.IsNullOrEmpty(persona.ProjectId))
-            return persona;
-        var project = _projects.GetById(persona.ProjectId);
-        if (project is null || project.OwnerId != ownerId) return persona;
-
         var bindings = new List<PersonaBinding>(persona.Bindings ?? []);
+        return CollectProjectDefaults(persona, ownerId, bindings).Added
+            ? _personas.UpdateBindings(persona.Id, ownerId, bindings)
+            : persona;
+    }
+
+    // Собрать недостающие дефолтные привязки проектной персоны к данным её проекта в переданный
+    // список (без сохранения) — чтобы вызывающий слил их с другими привязками в одну запись.
+    // Глобальных персон не касается. Идемпотентно: существующие привязки того же типа+цели
+    // не дублируются. Возвращает дополненный список и признак, было ли добавлено что-то.
+    private (List<PersonaBinding> Bindings, bool Added) CollectProjectDefaults(
+        Persona persona, string ownerId, List<PersonaBinding> bindings)
+    {
+        if (persona.Scope != PersonaScope.Project || string.IsNullOrEmpty(persona.ProjectId))
+            return (bindings, false);
+        var project = _projects.GetById(persona.ProjectId);
+        if (project is null || project.OwnerId != ownerId) return (bindings, false);
+
         bool Missing(PersonaBindingType type, string target) =>
             !bindings.Any(b => b.Type == type
                 && string.Equals(b.Target, target, StringComparison.OrdinalIgnoreCase));
@@ -413,22 +425,25 @@ public class PersonaBindingsService
             bindings.Add(new PersonaBinding { Type = PersonaBindingType.Knowledge, Target = dataset.Id });
             added = true;
         }
-
-        return added ? _personas.UpdateBindings(persona.Id, ownerId, bindings) : persona;
+        return (bindings, added);
     }
 
     // --- Профиль дефолт-персоны (онбординг) ---
 
     // Досев профиля дефолт-персоны по итогам онбординга (фича default-personas-onboarding):
     // Specialty=Coordinator, Access=Full, Tool-привязки personas-manage/tasks/notes (Mode=Auto);
-    // проектной — плюс дефолтные привязки к данным её проекта (SeedProjectDefaults).
+    // проектной — плюс дефолтные привязки к данным её проекта (CollectProjectDefaults).
     // Автопривязка «персоны проекта» из спеки покрыта модулем personas-manage (scoped по
     // проекту) — отдельный тип привязки не нужен. Вызывается ТОЛЬКО из онбординг-финализации
     // (make-default из онбординг-сессии): ручная смена дефолта из настроек существующую
     // персону не трогает — молчаливая дозапись Access=Full+manage была бы тихой эскалацией
-    // прав. Идемпотентно по Access/Specialty и Tool-привязкам: уже-посеянный профиль
-    // (Coordinator+Full) не перетираем — пользовательские правки Access/Specialty между
-    // повторными финализациями сохраняются; Tool-привязки тех же ключей не дублируются.
+    // прав (гейт «только созданная в онбординге» — в FinalizeOnboardingAsync).
+    //
+    // Идемпотентность РАЗДЕЛЬНА по правам и привязкам: alreadySeeded (Coordinator+Full) гейтит
+    // только запись прав (не перетираем пользовательские Specialty/Access между финализациями),
+    // а Tool-привязки собираются и пишутся ВСЕГДА — иначе персона, поднятая пользователем до
+    // Coordinator+Full вручную ещё внутри онбординга, осталась бы без инструментов: выглядела
+    // настроенной, а manage/tasks/notes не получила. Привязки того же ключа не дублируются.
     public Persona SeedDefaultPersonaProfile(string ownerId, Persona persona)
     {
         var alreadySeeded = persona.Access == PersonaAccess.Full
@@ -441,6 +456,8 @@ public class PersonaBindingsService
                 access: PersonaAccess.Full, specialty: PersonaSpecialty.Coordinator);
         }
 
+        // Tool-привязки + проектные собираем в один список и пишем ОДНИМ UpdateBindings
+        // (а не двумя-тремя записями): это одна логическая операция досева привязок.
         var bindings = new List<PersonaBinding>(persona.Bindings ?? []);
         var added = false;
         foreach (var key in new[] { "personas-manage", "tasks", "notes" })
@@ -451,9 +468,10 @@ public class PersonaBindingsService
             bindings.Add(new PersonaBinding { Type = PersonaBindingType.Tool, Target = key });
             added = true;
         }
+        added |= CollectProjectDefaults(persona, ownerId, bindings).Added;
         if (added) persona = _personas.UpdateBindings(persona.Id, ownerId, bindings);
 
-        return SeedProjectDefaults(ownerId, persona);
+        return persona;
     }
 
     // --- Каталог целей ---

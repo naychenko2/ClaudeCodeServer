@@ -876,6 +876,11 @@ const windowWidth = useWindowWidth();
   // гейт активируется только по подтверждённому null, без ложной вспышки.
   const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
   const [projectDefaultId, setProjectDefaultId] = useState<string | null | undefined>(project.defaultPersonaId);
+  // Актуальное значение для колбэков создания чата: у них deps осознанно сужены,
+  // и без ref они держат дефолт на момент монтирования (тост «пройдите онбординг»
+  // на первом чате после гейта даже с уже обновлённым стейтом)
+  const projectDefaultIdRef = useRef(projectDefaultId);
+  projectDefaultIdRef.current = projectDefaultId;
   useEffect(() => {
     if (project.defaultPersonaId !== undefined) setProjectDefaultId(project.defaultPersonaId);
   }, [project.defaultPersonaId]);
@@ -916,7 +921,7 @@ const windowWidth = useWindowWidth();
     try {
       // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
       const s = await createChatWithContextPersona(
-        { id: project.id, defaultPersonaId: projectDefaultId ?? null }, { mode: 'auto' });
+        { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null }, { mode: 'auto' });
       // Панель чатов скрыта, пока чатов нет, — считаем сами: её SessionList ещё
       // не смонтирован и сообщить о появлении первого чата некому
       setChatCount(n => (n ?? 0) + 1);
@@ -937,7 +942,7 @@ const windowWidth = useWindowWidth();
         if (where === 'chat' && activeSession) { handleSelectSession(activeSession, msg); return; }
         // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
         const s = await createChatWithContextPersona(
-          { id: project.id, defaultPersonaId: projectDefaultId ?? null }, { mode: 'auto' });
+          { id: project.id, defaultPersonaId: projectDefaultIdRef.current ?? null }, { mode: 'auto' });
         handleSelectSession(s, msg);
       } catch (e) {
         showToast('Чат', e instanceof Error ? e.message : 'Не удалось открыть чат');

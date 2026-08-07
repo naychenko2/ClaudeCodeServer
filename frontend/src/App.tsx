@@ -22,7 +22,7 @@ import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { showToast } from './lib/toast'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
-import { onFilesChanged } from './lib/signalr'
+import { onFilesChanged, onMessage } from './lib/signalr'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
@@ -266,6 +266,25 @@ export default function App() {
   // Текущий проект — приоритет для снапшота при выходе из офлайна (без ре-триггера при смене проекта)
   const projectIdRef = useRef<string | undefined>(undefined)
   projectIdRef.current = project?.id
+
+  // Инвалидация DTO открытого проекта при смене дефолт-персоны: бэк шлёт
+  // personas_changed action='default' из PersonasController.MakeDefault — и при
+  // онбординге проекта (любой путь: из сессии и «из разговора»), и при смене
+  // руководителя в настройках. Перечитываем проект, иначе defaultPersonaId в
+  // клиентском стейте протухает и «Новый чат» требует перезагрузку страницы.
+  useEffect(() => onMessage(msg => {
+    if (msg.type !== 'personas_changed' || msg.action !== 'default') return
+    const pid = projectIdRef.current
+    if (!pid) return
+    api.projects.list()
+      .then(list => {
+        const fresh = list.find(p => p.id === pid)
+        if (!fresh) return
+        localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
+        setProject(fresh)
+      })
+      .catch(() => { /* офлайн — доосвежится эффектом сверки по project.id */ })
+  }), [])
 
   // Toast «Связь восстановлена» — только на переходе offline → online (старт офлайн
   // и первый онлайн не озвучиваем; прогрев кэша и drain очередей делается эффектом ниже)

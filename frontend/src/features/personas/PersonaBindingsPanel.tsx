@@ -13,6 +13,7 @@ import { SkillSearchDialog } from '../../components/SkillSearchDialog';
 import { SkillGenerateDialog } from '../../components/SkillGenerateDialog';
 import { PillSwitch } from '../../components/Toolbar';
 import { SectionLabel } from '../tasks/bits';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import {
   BINDING_ICONS, BINDING_TYPE_META, BINDING_TYPE_ORDER, MODE_HINT,
   BindingModeBadge, BindingTypeIcon, bindingsCounter,
@@ -183,8 +184,15 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
   const localBindings = list.filter(b => !CROSS_PROJECT_TYPES.includes(b.type));
   const crossBindings = list.filter(b => CROSS_PROJECT_TYPES.includes(b.type));
 
-  // Сводка «MCP: N из M доступны» — каталог тот же, что у пикера инструментов (статический
-  // + серверы личного реестра владельца, ключи «mcp:»). Доступен — нет Off-привязки на ключ.
+  // Сводка по серверам личного MCP-реестра — каталог тот же, что у пикера инструментов
+  // (статический + серверы владельца, ключи «mcp:»). Семантика читается по флагу
+  // mcp-allowlist (та же граница, что развёл бэк в GetToolDefaultState/McpDelivery):
+  // без флага (deny-list) — доступен, если нет Off-привязки на ключ; с флагом
+  // (allow-list) — доступен ТОЛЬКО при личной привязке с Mode != Off. Сервер, выданный
+  // персоне через проект (Project.McpServersOn), в счётчике не участвует — у панели
+  // студии нет данных о проектных выдачах, поэтому подпись явно называет счётчик
+  // «личным», а не «доступен», чтобы не соврать про серверы, работающие через проект.
+  const allowlistOn = useFeature(FLAGS.mcpAllowlist);
   const [toolCatalog, setToolCatalog] = useState<BindingTarget[] | null>(null);
   useEffect(() => {
     let alive = true;
@@ -200,8 +208,11 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
       if (!key.startsWith('mcp:')) continue;
       lastMode.set(key, b.mode);
     }
-    return mcpServers.filter(t => lastMode.get(t.id.toLowerCase()) !== 'off').length;
-  }, [mcpServers, list]);
+    return mcpServers.filter(t => {
+      const mode = lastMode.get(t.id.toLowerCase());
+      return allowlistOn ? mode != null && mode !== 'off' : mode !== 'off';
+    }).length;
+  }, [mcpServers, list, allowlistOn]);
 
   // === Мутации (мгновенное сохранение) ===
 
@@ -660,10 +671,13 @@ export function PersonaBindingsPanel({ persona, accent, isMobile }: {
           </Button>
         </div>
 
-        {/* Сводка по серверам личного MCP-реестра — сколько из них сейчас не выключены */}
+        {/* Сводка по серверам личного MCP-реестра: без флага — сколько не выключены,
+            с флагом mcp-allowlist — сколько выдано лично (проектные выдачи сюда не входят) */}
         {mcpServers.length > 0 && (
           <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 6 }}>
-            MCP: {mcpAvailableCount} из {mcpServers.length} доступны
+            {allowlistOn
+              ? `MCP: ${mcpAvailableCount} из ${mcpServers.length} выдано лично (плюс доступ через проект, если есть)`
+              : `MCP: ${mcpAvailableCount} из ${mcpServers.length} доступны`}
           </div>
         )}
 

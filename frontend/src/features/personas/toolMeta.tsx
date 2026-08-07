@@ -77,12 +77,17 @@ export function toolIcon(key: string): LucideIcon {
 
 // Подпись дефолтного состояния (без привязки) — по полям defaultEnabled/defaultOrigin
 // из binding-targets?type=tool&personaId=. null — данных нет (старый бэк / без personaId).
-export function toolDefaultCaption(t: { defaultEnabled?: boolean | null; defaultOrigin?: 'settings' | 'role' | null }): { text: string; fg: string } | null {
+// Ключи «mcp:» под флагом mcp-allowlist дефолтятся в false не потому, что их кто-то
+// выключил, а потому что сервер персоне ещё не выдан (см. GetToolDefaultState на бэке) —
+// им отдельная формулировка, иначе подпись врёт про причину отсутствия доступа.
+export function toolDefaultCaption(t: { id: string; defaultEnabled?: boolean | null; defaultOrigin?: 'settings' | 'role' | null }): { text: string; fg: string } | null {
   if (t.defaultEnabled == null) return null;
   if (t.defaultEnabled) {
     return t.defaultOrigin === 'role'
       ? { text: 'включён по роли', fg: C.successText }
       : { text: 'включён по умолчанию', fg: C.successText };
   }
-  return { text: 'выключен', fg: C.textMuted };
+  return isMcpUserKey(t.id)
+    ? { text: 'не выдан', fg: C.textMuted }
+    : { text: 'выключен', fg: C.textMuted };
 }

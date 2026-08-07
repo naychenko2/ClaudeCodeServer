@@ -168,4 +168,65 @@ public class ProviderBalanceKimiTests
     {
         Parse("""{"user":{"userId":"x"}}""").Should().BeNull();
     }
+
+    // ── Параллельные сессии и уровень подписки (дособрано 07.08.2026) ─────────────────
+
+    [Fact]
+    public void ЖивойОтвет_УровеньПодписки_ВNote()
+    {
+        // В снимке 26.07 membership.level = LEVEL_ADVANCED; parallel без details (окна нет),
+        // но подписку показываем
+        Parse(RealPayload)!.Note.Should().Be("Подписка: Advanced");
+    }
+
+    [Fact]
+    public void ПараллельныеСессии_CountОкноПоследним()
+    {
+        // parallel.limit — строка, занятость — длина details: окно «2/30» последним, count, без сброса
+        const string json = """
+            {"usage":{"limit":"100","used":"6","remaining":"94","resetTime":"2026-08-02T00:00:00Z"},
+            "limits":[{"window":{"duration":300,"timeUnit":"TIME_UNIT_MINUTE"},
+              "detail":{"limit":"100","used":"31","remaining":"69","resetTime":"2026-07-26T00:00:00Z"}}],
+            "parallel":{"limit":"30","details":["a","b"]},
+            "user":{"membership":{"level":"LEVEL_STANDARD"}}}
+            """;
+        var b = Parse(json);
+
+        b!.Windows.Should().HaveCount(3); // 5 часов + неделя + параллельные
+        var par = b.Windows![2];
+        par.Label.Should().Be("Параллельные сессии");
+        par.Value.Should().Be("2/30");
+        par.Unit.Should().Be("count");
+        par.ResetsAt.Should().BeNull();
+        b.Note.Should().Be("Подписка: Standard");
+        // Квотные окна и история не изменились — доп. окно лишь добавилось последним
+        b.Windows[0].Unit.Should().Be("percent");
+        b.TrackHistory.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ПараллельныеБезDetails_ОкнаНет()
+    {
+        // limit без details — занятость неизвестна, count-окно не добавляем (как в снимке 26.07)
+        const string json = """
+            {"usage":{"limit":"100","remaining":"94","resetTime":"2026-08-02T00:00:00Z"},
+            "parallel":{"limit":"30"}}
+            """;
+        var b = Parse(json);
+
+        b!.Windows.Should().HaveCount(1);
+        b.Windows![0].Unit.Should().Be("percent");
+        b.Note.Should().BeNull(); // уровня подписки в ответе нет
+    }
+
+    [Fact]
+    public void УровеньПодписки_НеСLEVEL_НеПоказываем()
+    {
+        // Чужой формат уровня (не LEVEL_*) — не угадываем, Note не ставим
+        const string json = """
+            {"usage":{"limit":"100","remaining":"94","resetTime":"2026-08-02T00:00:00Z"},
+            "user":{"membership":{"level":"VIP_GOLD"}}}
+            """;
+        Parse(json)!.Note.Should().BeNull();
+    }
 }

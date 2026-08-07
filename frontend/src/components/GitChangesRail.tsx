@@ -528,8 +528,12 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </span>
         )}
         {/* Состояние файла — крайним справа: бросается в глаза и не путается с
-            плиткой типа (та слева). Тот же значок, что в дереве «Файлов» */}
-        <FileStatusBadge status={f.status} />
+            плиткой типа (та слева). Тот же значок, что в дереве «Файлов».
+            В рабочем скоупе по наведению уступает место кнопке отката: прозрачным,
+            а не display:none — место держится, строка не дёргается */}
+        <span style={{ display: 'flex', opacity: isWorking && hovered && !st.busy ? 0 : 1, transition: 'opacity 0.1s' }}>
+          <FileStatusBadge status={f.status} />
+        </span>
       </div>
     );
   };

@@ -171,7 +171,10 @@ public class LlmProviderRegistry
         Provider = p.Key,
         DisplayName = string.IsNullOrWhiteSpace(p.DisplayName) ? p.Key : p.DisplayName,
         SupportsImages = p.SupportsImages,
-        HasBalance = !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl),
+        // ApiBaseUrl либо BalanceUrl: у alibabacloud ApiBaseUrl пуст (ход идёт через
+        // AnthropicBaseUrl, а квота — на отдельном хосте консоли в BalanceUrl)
+        HasBalance = !string.IsNullOrWhiteSpace(p.Balance)
+            && (!string.IsNullOrWhiteSpace(p.ApiBaseUrl) || !string.IsNullOrWhiteSpace(p.BalanceUrl)),
         Configured = p.Enabled,
         TierStrong = p.TierStrong,
         TierMedium = p.TierMedium,

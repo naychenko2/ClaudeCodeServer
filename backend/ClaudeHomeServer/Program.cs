@@ -399,6 +399,13 @@ builder.Services.AddQuietHttpClient("llm-provider", new QuietHttpClientProfile(
     Category: "ClaudeHomeServer.Llm.Provider",
     Subject: "API стороннего провайдера моделей",
     Consequence: "Баланс и каталог моделей не обновятся, фоновое действие уйдёт другой модели."));
+// Шлюз квоты Alibaba Coding Plan: авторизация по cookie консоли, а не по ApiKey (публичного
+// API квоты у Token Plan нет). Неавторизованную (протухшую) сессию шлюз редиректит 302 на
+// err.taobao.com — редиректы отключаем, иначе получим HTML вместо JSON. Логирование протухания
+// (одна строка Warning, троттлинг) — в ProviderBalanceService.LogAlibabaExpiry, без QuietHttpLogger,
+// чтобы не дублировать жалобы: протухание видно и на уровне тела (code != SUCCESS / NotAuthorised)
+builder.Services.AddHttpClient("alibaba-console")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddHttpClient("anthropic-oauth");
 builder.Services.AddHttpForwarder();
 // Раздел «Телеметрия»: опции проброса SigNoz UI (Telemetry:Ui) + короткий HTTP-клиент

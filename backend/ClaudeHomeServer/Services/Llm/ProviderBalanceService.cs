@@ -7,8 +7,8 @@ namespace ClaudeHomeServer.Services.Llm;
 // временем того успешного обновления — фронт показывает свежесть данных).
 // ResetsAt — момент сброса ОСНОВНОГО (самого короткого) окна квоты, null — не применимо.
 // Windows — все окна квоты подписки списком произвольной длины (GLM — три: 5 часов + неделя
-// + месячный лимит веб-инструментов; Kimi/MiniMax — два; Alibaba, если когда-нибудь отдаст
-// квоту, — три); у провайдеров с денежным балансом (deepseek/moonshot/openrouter) остаётся
+// + месячный лимит веб-инструментов; Kimi/MiniMax — два; Alibaba — одно (неделя Token Plan));
+// у провайдеров с денежным балансом (deepseek/moonshot/openrouter) остаётся
 // пустым — там TotalBalance и есть весь ответ.
 // TrackHistory — годится ли TotalBalance точкой в историю графика: false, когда основным
 // стало НЕ то окно, что обычно (провайдер не отдал короткое), иначе в один ряд попали бы
@@ -34,7 +34,9 @@ public sealed record ProviderBalanceSnapshot(DateTime Timestamp, double Balance,
 // "deepseek" — GET {ApiBaseUrl}/user/balance; "moonshot" — GET {ApiBaseUrl}/users/me/balance;
 // "openrouter" — GET {ApiBaseUrl}/credits (деньги); "glm" — GET {BalanceUrl} (квота подписки
 // Coding Plan: окна токенов 5 часов + неделя в %, плюс месячный лимит вызовов веб-инструментов
-// count "currentValue/usage", все три в Windows); "kimi" — GET {ApiBaseUrl}/usages (квота подписки
+// count "currentValue/usage", все три в Windows); "alibaba" — POST {BalanceUrl} шлюза bailian
+// консоли с авторизацией по Cookie (ConsoleCookie), а не ApiKey: квота Token Plan одно окно
+// (неделя) в %; "kimi" — GET {ApiBaseUrl}/usages (квота подписки
 // Kimi for Coding: 5-часовое окно + недельное, оба в Windows); "minimax" — GET {BalanceUrl}
 // с фолбэком на https://www.minimax.io/v1/token_plan/remains (квота Token Plan: интервальное
 // окно + недельное, оба в Windows). Провайдер без источника — баланс недоступен (UI скрывает блок). Кэш 5 мин;
@@ -64,10 +66,13 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         Path.GetDirectoryName(config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
             ?? Path.Combine(AppContext.BaseDirectory, "data");
 
-    // Провайдер с настроенным источником баланса (и ключом) — иначе null
+    // Провайдер с настроенным источником баланса (и ключом) — иначе null.
+    // ApiBaseUrl либо BalanceUrl: у alibabacloud ApiBaseUrl пуст (ход идёт через
+    // AnthropicBaseUrl, а квота — на отдельном хосте консоли в BalanceUrl)
     public LlmProviderConfig? GetSupported(string key) =>
         providers.GetByKey(key) is { Enabled: true } p
-        && !string.IsNullOrWhiteSpace(p.Balance) && !string.IsNullOrWhiteSpace(p.ApiBaseUrl)
+        && !string.IsNullOrWhiteSpace(p.Balance)
+        && (!string.IsNullOrWhiteSpace(p.ApiBaseUrl) || !string.IsNullOrWhiteSpace(p.BalanceUrl))
             ? p : null;
 
     public async Task<ProviderBalance?> GetAsync(string key, CancellationToken ct)
@@ -94,6 +99,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
                 "moonshot" => await FetchMoonshotAsync(p, ct),
                 "openrouter" => await FetchOpenRouterAsync(p, ct),
                 "glm" => await FetchGlmAsync(p, ct),
+                "alibaba" => await FetchAlibabaAsync(p, ct),
                 "kimi" => await FetchKimiAsync(p, ct),
                 "minimax" => await FetchMiniMaxAsync(p, ct),
                 "freellm" => await FetchFreeLlmAsync(p, ct),
@@ -435,6 +441,125 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             _ => (double?)null    // неизвестный код — длительность не выдумываем
         };
         return perUnit is { } m ? (m * number, unit == 3) : (null, false);
+    }
+
+    // Формат Alibaba Cloud Model Studio (Coding Plan / Token Plan, шлюз консоли bailian):
+    // публичного API квоты у Token Plan нет — эндпоинт отдаёт 200 {"code":"ConsoleNeedLogin"}
+    // на любую авторизацию ApiKey. Квоту видит только web-сессия консоли, поэтому авторизация —
+    // по Cookie (ConsoleCookie из appsettings.Local.json), а не по ApiKey. POST {BalanceUrl} с
+    // query-хвостом шлюза и form-телом params=<JSON>&region=ap-southeast-1, заголовки Cookie/Origin/
+    // Referer. Ответ — глубокая обёртка data.DataV2.data.{code, data:{per1WeekResetTime,
+    // per1WeekPercentage}}; окно ровно одно (пятичасового у тарифа pro нет — не выдумывать).
+    // Cookie рано или поздно протухает — это штатная деградация: null → плашка скрывается, отрабатывает
+    // FailureBackoff. Редиректы отключены у клиента «alibaba-console»: шлюз редиректит неавторизованную
+    // сессию 302 на err.taobao.com, и следование даст HTML. Разбор — ParseAlibabaUsage (фиксируется тестами)
+    private const string AlibabaUsageApi = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage";
+
+    private async Task<ProviderBalance?> FetchAlibabaAsync(LlmProviderConfig p, CancellationToken ct)
+    {
+        // Cookie консоли — отдельный секрет; без него квоту не прочитать (ApiKey здесь ни при чём).
+        // Нет cookie → молча без плашки, как «нет источника»
+        if (string.IsNullOrWhiteSpace(p.ConsoleCookie)) return null;
+        var url = $"{p.BalanceUrl.TrimEnd('/')}" +
+            "?action=IntlBroadScopeAspnGateway&product=sfm_bailian" +
+            $"&api={AlibabaUsageApi}&_v=undefined";
+        try
+        {
+            var client = httpFactory.CreateClient("alibaba-console");
+            using var req = new HttpRequestMessage(HttpMethod.Post, url);
+            req.Headers.TryAddWithoutValidation("Cookie", p.ConsoleCookie);
+            req.Headers.TryAddWithoutValidation("Origin", "https://modelstudio.console.alibabacloud.com");
+            req.Headers.TryAddWithoutValidation("Referer", "https://modelstudio.console.alibabacloud.com/ap-southeast-1");
+            // params — JSON-объект запроса (Api/V/Data); region — ап-саут-ист (Сингапур, Coding Plan intl)
+            var payload = "{\"Api\":\"" + AlibabaUsageApi + "\",\"V\":\"1.0\",\"Data\":{}}";
+            req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["params"] = payload,
+                ["region"] = "ap-southeast-1",
+            });
+            using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(10));
+            using var resp = await client.SendAsync(req, timeoutCts.Token);
+            // 302/4xx/5xx — протухшая сессия (шлюз редиректит на err.taobao.com) или сбой шлюза:
+            // для пользователя это «квота недоступна», а не ошибка продукта
+            if (!resp.IsSuccessStatusCode)
+            {
+                LogAlibabaExpiry($"HTTP {(int)resp.StatusCode}");
+                return null;
+            }
+            var body = await resp.Content.ReadAsStringAsync(timeoutCts.Token);
+            // Явный отказ авторизации в теле (200 OK) — cookie протух/не тот аккаунт
+            if (body.Contains("BailianGateway.Workspace.NotAuthorised", StringComparison.Ordinal))
+            {
+                LogAlibabaExpiry("NotAuthorised");
+                return null;
+            }
+            using var doc = JsonDocument.Parse(body);
+            var parsed = ParseAlibabaUsage(doc.RootElement);
+            if (parsed is null)
+                // code != SUCCESS / нет per1WeekPercentage / сломана обёртка — почти всегда то же
+                // протухание; логируем как деградацию одной строкой, не роняя консоль
+                LogAlibabaExpiry("ответ без квоты");
+            return parsed;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ProviderBalance] Не удалось получить баланс {p.Key}: {ex.Message}");
+            return null;
+        }
+    }
+
+    // Разбор ответа шлюза bailian Alibaba (internal — под тестами). Обёртка глубокая:
+    // data.DataV2.data.{code, success, data:{per1WeekResetTime, per1WeekPercentage}}.
+    // per1WeekPercentage — доля ИЗРАСХОДОВАННОГО (0..1), показываем остаток (1 − pct)·100 —
+    // НЕ перепутать направление с соседними парсерами, где percentage уже остаток.
+    // null — нет data/DataV2/внутреннего data, code != SUCCESS, success=false, либо нет per1WeekPercentage.
+    internal static ProviderBalance? ParseAlibabaUsage(JsonElement root)
+    {
+        if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object) return null;
+        if (!data.TryGetProperty("DataV2", out var dataV2) || dataV2.ValueKind != JsonValueKind.Object) return null;
+        if (!dataV2.TryGetProperty("data", out var inner) || inner.ValueKind != JsonValueKind.Object) return null;
+
+        // Шлюз отвечает 200 даже на отказ: code != SUCCESS / success=false — протухшая или
+        // неавторизованная сессия (NotAuthorised приходит как code), квоты в ответе нет
+        if (inner.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.False) return null;
+        if (inner.TryGetProperty("code", out var codeEl) && codeEl.ValueKind == JsonValueKind.String
+            && !string.Equals(codeEl.GetString(), "SUCCESS", StringComparison.OrdinalIgnoreCase))
+            return null;
+
+        if (!inner.TryGetProperty("data", out var usage) || usage.ValueKind != JsonValueKind.Object) return null;
+        var pct = ReadNumber(usage, "per1WeekPercentage");
+        if (double.IsNaN(pct)) return null;
+
+        var remaining = Math.Clamp((1 - pct) * 100, 0, 100)
+            .ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+        var window = new ProviderQuotaWindow("Неделя", remaining,
+            ReadUnixTime(usage, "per1WeekResetTime"), "percent");
+        // Окно расходное (Token Plan): точки в историю графика пишем — TrackHistory=true
+        return new ProviderBalance(true, "%", remaining, ResetsAt: window.ResetsAt,
+            Windows: [window], TrackHistory: true);
+    }
+
+    // Протухание cookie консоли Alibaba — штатная деградация, не ошибка продукта. Логируем одной
+    // строкой не чаще раза в 5 мин (по образцу QuietHttpLogger): кэш + FailureBackoff и так гасят
+    // частоту, но несколько заходов на экран подряд без троттлера давали бы дубли. Скрытие плашки
+    // обратимо — оживёт с новым ConsoleCookie, без вмешательства в код
+    private static readonly TimeSpan AlibabaExpiryReportInterval = TimeSpan.FromMinutes(5);
+    private static readonly object _alibabaExpiryGate = new();
+    private static DateTime? _alibabaExpiryLastReport;
+
+    private static void LogAlibabaExpiry(string reason)
+    {
+        var now = DateTime.UtcNow;
+        lock (_alibabaExpiryGate)
+        {
+            if (_alibabaExpiryLastReport is { } last && now - last < AlibabaExpiryReportInterval) return;
+            _alibabaExpiryLastReport = now;
+        }
+        Console.Error.WriteLine(
+            $"[ProviderBalance] Alibaba: cookie консоли протух или квота недоступна ({reason}). " +
+            "Плашка скрыта до обновления ConsoleCookie в appsettings.Local.json.");
     }
 
     // Формат Kimi for Coding (подписка kimi.com, недокументированный эндпоинт):

@@ -2,6 +2,7 @@ using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.Dossiers;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -13,7 +14,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class DossiersController(ProjectManager projects, DossierStore store, FeatureFlagService flags) : ControllerBase
+public class DossiersController(ProjectManager projects, DossierStore store, FeatureFlagService flags,
+    CodeGraphService graphs) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -27,6 +29,14 @@ public class DossiersController(ProjectManager projects, DossierStore store, Fea
         var result = string.IsNullOrWhiteSpace(file) && string.IsNullOrWhiteSpace(symbol) && string.IsNullOrWhiteSpace(commit)
             ? store.List(UserId, id).OrderByDescending(d => d.CommittedAt).ToList()
             : store.Find(UserId, id, file, symbol, commit);
+
+        // Символы в досье якорятся по снимку кодографа (DossierCaptureService.AnchorAsync):
+        // пока граф корня не построен, свежие досье остаются на файловом уровне. Сигналим
+        // фронту тем же заголовком, что и CodeGraphController на «граф строится» — дешёвым
+        // mtime-чеком (GetCacheSignature, без загрузки graph.json). Заголовок аддитивен:
+        // фронт, не использующий его, ничего не замечает.
+        if (graphs.GetCacheSignature(p.RootPath) is null)
+            Response.Headers["X-CodeGraph-Building"] = "true";
 
         return Ok(result);
     }

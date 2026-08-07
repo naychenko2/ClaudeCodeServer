@@ -2882,6 +2882,48 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "успех — единица расходуется честно");
     }
 
+    // Регресс Major (ревью Глеба, страховочное 07.08.2026): квота списана авансом, а вернуть
+    // её обязан детерминированный путь Refund при ЛЮБОМ неуспехе. Действие выбросило — единица
+    // обязана вернуться, иначе session-abort/exception между TryConsume и Refund вешает её навсегда.
+    [Fact]
+    public async Task ГейтЦикла_ДействиеВыбросилоИсключение_ВозвращаетСписаннуюКвоту()
+    {
+        var session = await MakeWorkLoopChatAsync("refund-exc");
+        var context = MakeMcpCallContext(session.Id);
+        var filter = ExecuteFilter();
+        filter.OnActionExecuting(context);
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "квота списана авансом");
+
+        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
+            context, [], controller: new object())
+        { Exception = new System.InvalidOperationException("действие упало") };
+        filter.OnActionExecuted(executed);
+
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
+            "исключение в действии — запуск не состоялся, единица вернулась");
+    }
+
+    // Регресс Major (тот же ревью): до правки refund смотрел только на Exception и статус
+    // результата — и промахивался на замыкании хода другим фильтром ДО запуска действия
+    // (Canceled=true без результата-ошибки): квота списана, запуск не шёл, а возврата нет.
+    [Fact]
+    public async Task ГейтЦикла_ХодЗамкнутДоЗапуска_ВозвращаетСписаннуюКвоту()
+    {
+        var session = await MakeWorkLoopChatAsync("refund-canceled");
+        var context = MakeMcpCallContext(session.Id);
+        var filter = ExecuteFilter();
+        filter.OnActionExecuting(context);
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "квота списана авансом");
+
+        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
+            context, [], controller: new object())
+        { Canceled = true }; // другой фильтр замкнул пайплайн до действия — результата-ошибки нет
+        filter.OnActionExecuted(executed);
+
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
+            "действие не запускалось (Canceled) — платить не за что, единица вернулась");
+    }
+
     [Fact]
     public async Task КвотаЦикла_ВыключитьИВключить_СчётчикиОбнуляются()
     {

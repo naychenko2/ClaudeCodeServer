@@ -40,7 +40,9 @@ public static partial class SecretRedactor
     private static partial Regex ConnectionStringRegex();
 
     // Строка из diff'а, похожая на присваивание секрета: api_key = "…", TOKEN: xyz…
-    [GeneratedRegex(@"(?i)\b(api[_-]?key|token|secret|password)\s*[=:]\s*\S+", RegexOptions.Compiled)]
+    // Группа 2 — само значение: оно нужно, чтобы отличить реальный секрет от очевидной
+    // заглушки (пустые кавычки, null/true, маска ***) и не плодить визуальный мусор.
+    [GeneratedRegex(@"(?i)\b(api[_-]?key|token|secret|password)\s*[=:]\s*(\S+)", RegexOptions.Compiled)]
     private static partial Regex AssignmentRegex();
 
     /// <summary>
@@ -69,8 +71,35 @@ public static partial class SecretRedactor
         result = BearerRegex().Replace(result, "Bearer [REDACTED:token]");
         result = KnownPrefixRegex().Replace(result, "[REDACTED:token]");
         result = ConnectionStringRegex().Replace(result, "[REDACTED:connection-string]");
-        result = AssignmentRegex().Replace(result, m => m.Groups[1].Value + "=[REDACTED:secret]");
+        result = AssignmentRegex().Replace(result, m =>
+        {
+            // Присваивание найдено — но значение может быть очевидно НЕ секретом: пустые
+            // кавычки, null/true/false, маска *** или уже [REDACTED] с прошлого прохода.
+            // Их маскировать — плодить визуальный мусор без пользы для защиты. Реальный
+            // секрет (непрозрачный токен) режем по-прежнему — fail-closed: лучше перебдеть,
+            // чем недобдеть (ревью Глеба: over-redaction).
+            if (LooksLikePlaceholder(m.Groups[2].Value)) return m.Value;
+            return m.Groups[1].Value + "=[REDACTED:secret]";
+        });
 
         return result;
+    }
+
+    // Очевидно не-секретное значение присваивания. Список намеренно узкий и консервативный:
+    // пропускаем только то, что секретом не является ни при каком прочтении. Всё спорное
+    // (короткие/словарные значения) остаётся под маской — защита не жертвуется ради чистоты.
+    private static bool LooksLikePlaceholder(string rawValue)
+    {
+        // <…> — шаблон-плейсхолдер: внутри могут быть слова, но angle-brackets в конфиге/diff
+        // означают «подставь сюда», а не реальный секрет (реальный ловят точные значения и
+        // KnownPrefix ещё до этого прохода).
+        if (rawValue.StartsWith('<') && rawValue.EndsWith('>') && rawValue.Length >= 3) return true;
+        // Снимаем окружающие кавычки — суть в значении внутри
+        var v = rawValue.Trim('"', '\'');
+        if (v.Length == 0) return true;                          // "" '' — пустое значение
+        var lower = rawValue.ToLowerInvariant();
+        if (lower.StartsWith("[redacted", StringComparison.Ordinal)) return true;   // уже замаскировано выше
+        if (v.Length >= 3 && v.All(c => c == '*' || c == 'x' || c == 'X')) return true;  // *** xxx XXX
+        return lower is "null" or "none" or "nil" or "true" or "false" or "undefined";
     }
 }

@@ -145,16 +145,21 @@ public sealed class DenyOnDelegatedTurnAttribute(string action) : Attribute, IAc
 
     public void OnActionExecuted(ActionExecutedContext context)
     {
-        // Единица списана авансом в OnActionExecuting — вернуть её, если действие не
-        // состоялось: контроллер отдал 4xx (задача не найдена, неверное состояние) или упал
-        // исключением. Успех (обычно 200 Ok) единицу не трогает — она честно расходована.
-        var statusCode = context.Result switch
-        {
-            ObjectResult obj => obj.StatusCode,
-            StatusCodeResult sc => sc.StatusCode,
-            _ => null,
-        };
-        if (context.Exception is null && statusCode is null or < 400) return;
+        // Возврат списанной единицы гарантирован при ЛЮБОМ исходе, кроме чистого успеха
+        // (2xx — запуск состоялся, платить честно). Раньше условие смотрело лишь на
+        // Exception и статус результата — и промахивалось на обрыве/замыкании: если ход
+        // замкнулся другим фильтром ДО запуска действия (Canceled=true, без результата-
+        // ошибки) или запрос оборвался без результата, единица «зависала» навсегда
+        // (ревью Глеба: квота work-loop между TryConsume и Refund).
+        var failed = context.Exception is not null
+            || context.Canceled
+            || context.Result switch
+            {
+                ObjectResult obj => obj.StatusCode >= 400,
+                StatusCodeResult sc => sc.StatusCode >= 400,
+                _ => false,
+            };
+        if (!failed) return;
         if (context.HttpContext.RequestServices.GetService<SessionManager>() is not { } sessions) return;
 
         if (context.HttpContext.Items[ConsumedRunKey] is (string sessionId, string userId))

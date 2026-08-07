@@ -18,7 +18,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/onboarding")]
 public class OnboardingController(SessionManager sessions, UserStore users,
-    ProjectManager projects, PersonaManager personas) : ControllerBase
+    ProjectManager projects, PersonaManager personas, ILogger<OnboardingController> log)
+    : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -39,7 +40,7 @@ public class OnboardingController(SessionManager sessions, UserStore users,
     public async Task<IActionResult> StartUser()
     {
         var gate = LockFor("user:" + UserId);
-        await gate.WaitAsync();
+        await gate.WaitAsync(HttpContext.RequestAborted);
         Session? chat = null;
         var created = false;
         IActionResult? earlyReturn = null;
@@ -79,7 +80,7 @@ public class OnboardingController(SessionManager sessions, UserStore users,
         if (project is null || project.OwnerId != UserId) return NotFound();
 
         var gate = LockFor("project:" + projectId);
-        await gate.WaitAsync();
+        await gate.WaitAsync(HttpContext.RequestAborted);
         Session? session = null;
         var created = false;
         IActionResult? earlyReturn = null;
@@ -133,7 +134,9 @@ public class OnboardingController(SessionManager sessions, UserStore users,
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Onboarding] Сбой kickoff сессии {sessionId}: {ex.Message}");
+            // Сбой kickoff не должен рушить start (сессия уже создана — резюм при повторном
+            // входе), но молчание недопустимо: в проде без лога причину не найти
+            log.LogError(ex, "Сбой kickoff онбординг-сессии {SessionId}", sessionId);
         }
     }
 }

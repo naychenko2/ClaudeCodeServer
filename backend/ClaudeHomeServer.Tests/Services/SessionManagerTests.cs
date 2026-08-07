@@ -774,16 +774,69 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task SetExpiry_ПерезапускаетОтсчёт_UpdatedAt()
+    public async Task SetExpiry_ПерезапускаетОтсчёт_ЯкоремАНеUpdatedAt()
     {
+        // Смена срока — настройка, а не активность: UpdatedAt (сортировка списка и
+        // непрочитанность) не двигается, отсчёт стартует от ExpiryAnchor
         var dir = MkProjectDir("ex2");
         var project = _projectManager.Create("EX2", dir, TestUserId, TestUsername);
         var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.UpdatedAt = DateTime.UtcNow.AddDays(-5);
+        var updatedAtBefore = session.UpdatedAt;
         var before = DateTime.UtcNow;
 
         var updated = _sut.SetExpiry(session.Id, 60);
 
-        updated!.UpdatedAt.Should().BeOnOrAfter(before);
+        updated!.UpdatedAt.Should().Be(updatedAtBefore);
+        updated.ExpiryAnchor.Should().NotBeNull().And.Subject.As<DateTime>().Should().BeOnOrAfter(before);
+    }
+
+    [Fact]
+    public async Task SetExpiry_Снятие_ОбнуляетЯкорь()
+    {
+        var dir = MkProjectDir("ex3");
+        var project = _projectManager.Create("EX3", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        _sut.SetExpiry(session.Id, 60);
+        var updated = _sut.SetExpiry(session.Id, null);
+
+        updated!.ExpiryAnchor.Should().BeNull("без срока якорю нечего держать");
+    }
+
+    // --- SetNotificationsMuted ---
+
+    [Fact]
+    public async Task SetNotificationsMuted_МеняетФлагИНеТрогаетUpdatedAt()
+    {
+        var dir = MkProjectDir("mute");
+        var project = _projectManager.Create("MUTE", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.UpdatedAt = DateTime.UtcNow.AddDays(-2);
+        var before = session.UpdatedAt;
+
+        var muted = _sut.SetNotificationsMuted(session.Id, true);
+        muted!.NotificationsMuted.Should().BeTrue();
+        muted.UpdatedAt.Should().Be(before, "тумблер уведомлений не активность чата");
+
+        _sut.SetNotificationsMuted(session.Id, false)!.NotificationsMuted.Should().BeFalse();
+        _sut.SetNotificationsMuted("nonexistent", true).Should().BeNull();
+    }
+
+    [Fact]
+    public async Task Update_БезПолей_НеТрогаетUpdatedAt()
+    {
+        // PUT приходит и с одними настройками (срок, мьют) — все поля тогда null.
+        // Безусловная отметка времени поднимала бы чат в списке за смену настройки
+        var dir = MkProjectDir("upd-none");
+        var project = _projectManager.Create("UPDN", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.UpdatedAt = DateTime.UtcNow.AddDays(-3);
+        var before = session.UpdatedAt;
+
+        _sut.Update(session.Id, null, null, null)!.UpdatedAt.Should().Be(before);
+        _sut.Update(session.Id, "Имя", null, null)!.UpdatedAt.Should()
+            .BeAfter(before, "правка имени — обычное изменение чата");
     }
 
     [Fact]

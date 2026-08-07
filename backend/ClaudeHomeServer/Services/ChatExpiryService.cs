@@ -47,5 +47,12 @@ public class ChatExpiryService(SessionManager sessions, ILogger<ChatExpiryServic
     internal static bool ShouldExpire(Session s, DateTime nowUtc) =>
         s.ExpiresAfterMinutes is int ttl && ttl > 0
         && s.Status is not (SessionStatus.Working or SessionStatus.Waiting)
-        && nowUtc - s.UpdatedAt >= TimeSpan.FromMinutes(ttl);
+        && nowUtc - CountFrom(s) >= TimeSpan.FromMinutes(ttl);
+
+    // Точка отсчёта срока: последняя активность, но не раньше момента, когда срок задали
+    // (Session.ExpiryAnchor) — иначе короткий срок на давно неактивном чате означал бы
+    // удаление на ближайшем тике. Якоря нет (срок выставлен до появления поля) — считаем
+    // от активности, как раньше.
+    internal static DateTime CountFrom(Session s) =>
+        s.ExpiryAnchor is DateTime anchor && anchor > s.UpdatedAt ? anchor : s.UpdatedAt;
 }

@@ -13,11 +13,13 @@ public class ChatExpiryServiceTests
     private static Session Chat(
         int? expiresAfterMinutes = null,
         SessionStatus status = SessionStatus.Finished,
-        DateTime? updatedAt = null) => new()
+        DateTime? updatedAt = null,
+        DateTime? expiryAnchor = null) => new()
         {
             ExpiresAfterMinutes = expiresAfterMinutes,
             Status = status,
             UpdatedAt = updatedAt ?? Now.AddHours(-2),
+            ExpiryAnchor = expiryAnchor,
         };
 
     [Fact]
@@ -80,6 +82,35 @@ public class ChatExpiryServiceTests
     {
         // Дедлайн включительно: прошло ровно TTL
         var chat = Chat(expiresAfterMinutes: 60, updatedAt: Now.AddMinutes(-60));
+        ChatExpiryService.ShouldExpire(chat, Now).Should().BeTrue();
+    }
+
+    [Fact]
+    public void ShouldExpire_СрокЗадалиТолькоЧтоНаСтаромЧате_False()
+    {
+        // Активности не было пять дней, но час хранения выбран минуту назад: отсчёт идёт
+        // от якоря, иначе чат исчез бы на ближайшем тике сразу после выбора срока
+        var chat = Chat(expiresAfterMinutes: 60,
+            updatedAt: Now.AddDays(-5), expiryAnchor: Now.AddMinutes(-1));
+        ChatExpiryService.ShouldExpire(chat, Now).Should().BeFalse();
+    }
+
+    [Fact]
+    public void ShouldExpire_ЯкорьСтарееАктивности_СчитаемОтАктивности()
+    {
+        // Срок задали давно, а переписка шла 10 минут назад — якорь роли не играет
+        var chat = Chat(expiresAfterMinutes: 60,
+            updatedAt: Now.AddMinutes(-10), expiryAnchor: Now.AddDays(-3));
+        ChatExpiryService.ShouldExpire(chat, Now).Should().BeFalse();
+        ChatExpiryService.CountFrom(chat).Should().Be(Now.AddMinutes(-10));
+    }
+
+    [Fact]
+    public void ShouldExpire_ПослеЯкоряСрокПрошёл_True()
+    {
+        // Якорь двухчасовой давности, TTL час — чат просрочен и без новой активности
+        var chat = Chat(expiresAfterMinutes: 60,
+            updatedAt: Now.AddDays(-5), expiryAnchor: Now.AddHours(-2));
         ChatExpiryService.ShouldExpire(chat, Now).Should().BeTrue();
     }
 }

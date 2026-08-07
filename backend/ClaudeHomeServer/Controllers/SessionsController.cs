@@ -46,6 +46,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
+        if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         if (req.ExpiresAfterMinutes is not -1)
         {
             if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
@@ -103,4 +104,5 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
 // N > 0 — временная, авто-удаление через N минут после последней активности
-public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null);
+// NotificationsMuted: null — не менять; true — заглушить уведомления чата
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? NotificationsMuted = null);

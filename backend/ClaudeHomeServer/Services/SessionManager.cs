@@ -716,12 +716,27 @@ public class SessionManager : IDisposable
     }
 
     // Включить/выключить временность чата: minutes > 0 — авто-удаление через N минут
-    // после последней активности, null — обычный чат. Включение перезапускает отсчёт (UpdatedAt)
+    // после последней активности, null — обычный чат.
+    //
+    // UpdatedAt намеренно НЕ обновляется (как в SetParent): по нему сортируется список и
+    // считается непрочитанность, а смена настройки хранения — не активность чата. Отсчёт
+    // срока при этом не должен стартовать в прошлом, поэтому включение ставит ExpiryAnchor —
+    // дедлайн считается от него, если он позже последней активности.
     public Session? SetExpiry(string sessionId, int? minutes)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.ExpiresAfterMinutes = minutes;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        entry.Info.ExpiryAnchor = minutes is null ? null : DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Заглушить/включить уведомления по чату (браузерные «нужно решение» / «ход завершён»).
+    // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
+    public Session? SetNotificationsMuted(string sessionId, bool muted)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.NotificationsMuted = muted;
         SaveSessions();
         return entry.Info;
     }
@@ -3085,7 +3100,12 @@ public class SessionManager : IDisposable
         if (tags is not null)
             entry.Info.Tags = tags;
 
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Отметка времени — только когда что-то реально правили. PUT приходит и с одними
+        // настройками (срок хранения, тумблер уведомлений — их применяет контроллер до этого
+        // вызова, сюда все поля доезжают как null): безусловный UpdatedAt поднимал бы чат
+        // в списке и метил непрочитанным просто за смену настройки.
+        if (name is not null || model is not null || effort is not null || tags is not null)
+            entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
     }

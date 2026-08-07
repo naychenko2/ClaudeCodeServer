@@ -398,12 +398,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   );
 
   // Приветственный пузырь персоны для пустого чата (если у персоны задан greeting).
-  // Явный greetingBubble-проп имеет приоритет.
+  // Идёт НАД empty state, не вместо него (ряд персон и пилюли настройки нужны и с
+  // приветствием); явный greetingBubble-проп по-прежнему занимает пустую ленту целиком.
   const personaGreeting = useMemo(
     () => (persona && persona.greeting?.trim() ? <PersonaGreeting persona={persona} /> : undefined),
     [persona]
   );
-  const effectiveGreeting = greetingBubble ?? personaGreeting;
 
   // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
   const artifactFileCount = useMemo(
@@ -1594,14 +1594,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
           </div>
         )}
 
-        {/* Empty state: для персоны с приветствием — её бабл, иначе обычный empty state
-            (с рядом персон «Поговорить с…») */}
+        {/* Empty state: приветствие персоны (если задано) + сам empty state с рядом
+            персон «Поговорить с…» и пилюлями настройки будущего чата. Собственный
+            greetingBubble (гейт онбординга) заменяет пустую ленту целиком */}
         {items.length === 0 && !isHistoryLoading && online && (
-          effectiveGreeting ?? (
-            <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
-              session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
-              personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange}
-              compact={embedded} />
+          greetingBubble ?? (
+            <>
+              {personaGreeting}
+              <ChatEmptyState hasProject={!!project} hasCLAUDEmd={hasCLAUDEmd} onHint={handleHint}
+                session={session} project={project} onSessionUpdated={onSessionUpdated} isMobile={isMobile}
+                personas={ctxPersonas} selectedPersonaId={session.personaId} onPickPersona={handlePersonaChange}
+                compact={embedded} greetingAbove={!!personaGreeting} />
+            </>
           )
         )}
 

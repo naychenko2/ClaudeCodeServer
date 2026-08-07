@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { Session, Persona, Project } from '../../types';
-import { C, R, FONT } from '../../lib/design';
+import { C, R, SP, FONT } from '../../lib/design';
 import { NewChatSetup } from './NewChatSetup';
 import { useAssistantName } from './contexts';
 import { personaLabel, personaTitleLines } from '../../lib/personas';
@@ -15,7 +15,7 @@ const CHAT_HINTS = ['Найди информацию в интернете', 'Н
 
 // Empty state пустого чата: приветствие/чипы-подсказки; для проекта без CLAUDE.md — CTA /init.
 // Внизу — настройка будущего чата (модель, усилие, время жизни, теги), пока не отправлено первое сообщение.
-export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona, compact }: {
+export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, project, onSessionUpdated, isMobile, personas, selectedPersonaId, onPickPersona, compact, greetingAbove }: {
   hasProject: boolean;
   hasCLAUDEmd: boolean | null;
   onHint: (hint: string) => void;
@@ -30,6 +30,9 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   onPickPersona?: (p: Persona) => void;
   // Узкая колонка (стена): без пилюль настройки чата
   compact?: boolean;
+  // Выше в ленте уже стоит приветствие персоны (аватар + имя + реплика):
+  // своё «лицо» не рисуем, чтобы не было двух аватаров подряд
+  greetingAbove?: boolean;
 }) {
   const asstName = useAssistantName();
   // Лицо пустого чата (фича default-personas-onboarding): аватар персоны чата
@@ -42,26 +45,33 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
           <div style={{
             flex: 1, display: 'flex', flexDirection: 'column',
             alignItems: 'center', justifyContent: 'center',
-            gap: 12, paddingTop: 40,
+            gap: 12, paddingTop: greetingAbove ? SP.lg : 40,
           }}>
-            {/* Лицо чата: аватар релевантной персоны, fallback — нейтральный логотип */}
-            {facePersona
+            {/* Лицо чата: аватар релевантной персоны, fallback — нейтральный логотип.
+                С приветствием сверху аватар там уже есть — второй не нужен */}
+            {!greetingAbove && (facePersona
               ? <PersonaAvatar persona={facePersona} size={46} />
-              : <img src="/favicon.svg" alt="" width={46} height={46} style={{ display: 'block' }} />}
+              : <img src="/favicon.svg" alt="" width={46} height={46} style={{ display: 'block' }} />)}
 
             {!hasProject ? (
               <>
-                {/* Приветствие чата вне проекта — general-purpose ассистент */}
-                <div style={{
-                  fontFamily: FONT.serif,
-                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
-                }}>
-                  Чем помочь?
-                </div>
+                {/* Приветствие чата вне проекта — general-purpose ассистент.
+                    С приветствием персоны сверху свой заголовок/подзаголовок не нужен:
+                    остаётся только затравка-чипы, чтобы не было двух приветствий подряд */}
+                {!greetingAbove && (
+                  <>
+                    <div style={{
+                      fontFamily: FONT.serif,
+                      fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                    }}>
+                      Чем помочь?
+                    </div>
 
-                <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 320 }}>
-                  Спросите что угодно — тексты и идеи, поиск в интернете, генерация картинок
-                </div>
+                    <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 320 }}>
+                      Спросите что угодно — тексты и идеи, поиск в интернете, генерация картинок
+                    </div>
+                  </>
+                )}
 
                 {/* Чипы */}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>
@@ -85,13 +95,16 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
               </>
             ) : hasCLAUDEmd === false ? (
               <>
-                {/* Заголовок */}
-                <div style={{
-                  fontFamily: FONT.serif,
-                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
-                }}>
-                  Новый проект
-                </div>
+                {/* Заголовок-приветствие: с персоной сверху не нужен.
+                    Подзаголовок и CTA /init — это действие, их оставляем */}
+                {!greetingAbove && (
+                  <div style={{
+                    fontFamily: FONT.serif,
+                    fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                  }}>
+                    Новый проект
+                  </div>
+                )}
 
                 {/* Подзаголовок */}
                 <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center', maxWidth: 260 }}>
@@ -116,18 +129,22 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
               </>
             ) : (
               <>
-                {/* Заголовок */}
-                <div style={{
-                  fontFamily: FONT.serif,
-                  fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
-                }}>
-                  Чем помочь?
-                </div>
+                {/* С приветствием персоны сверху заголовок/подзаголовок не рисуем:
+                    чипы-подсказки остаются как затравка */}
+                {!greetingAbove && (
+                  <>
+                    <div style={{
+                      fontFamily: FONT.serif,
+                      fontWeight: 500, fontSize: 20, color: C.textHeading, letterSpacing: '-0.01em',
+                    }}>
+                      Чем помочь?
+                    </div>
 
-                {/* Подзаголовок */}
-                <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center' }}>
-                  Опишите задачу или начните с подсказки
-                </div>
+                    <div style={{ fontSize: 13, color: C.textMuted, textAlign: 'center' }}>
+                      Опишите задачу или начните с подсказки
+                    </div>
+                  </>
+                )}
 
                 {/* Чипы */}
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center', marginTop: 4 }}>

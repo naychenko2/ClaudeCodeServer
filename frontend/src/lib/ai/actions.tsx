@@ -20,6 +20,7 @@ import { showToast } from '../toast';
 import { openNoteById } from '../../features/notes/saveToNote';
 import { addChatsToWall } from '../../features/wall/wallSuggest';
 import { startChatWithPrompt } from './startChat';
+import { allAnnotationsPrompt, docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from './annotationsPrompt';
 
 // Событие для контекстных действий: «владелец» (открытый компонент — NoteView,
 // ChatHeaderBar, TaskDetailsPane, NotesPage) слушает его и выполняет действие над
@@ -199,9 +200,30 @@ export const AI_ACTIONS: AiAction[] = [
     id: 'note.annotations', title: 'Разобрать комментарии документа', hint: 'обработать open-комментарии',
     section: 'notes', sectionLabel: 'Заметки', icon: IcComments,
     when: c => noteOpen(c) && c.online && c.flag('doc-annotations'), contextual: noteOpen,
+    // notes_annotations адресует документ парой path+scope, а не id заметки — подставляем их
+    // в затравку сразу, иначе AI выясняет путь лишним ходом. Заметка не прочиталась (офлайн) —
+    // разбираем всё накопившееся: это по-прежнему про комментарии, просто шире.
+    run: async c => {
+      const id = c.nav?.note;
+      if (!id) return;
+      let prompt = allAnnotationsPrompt();
+      try {
+        const note = await api.notes.get(id);
+        prompt = docAnnotationsPrompt(note.source, note.path);
+      } catch { /* офлайн/ошибка — уходим с общей затравкой */ }
+      await startChatWithPrompt(prompt, c, { requiredTool: ANNOTATIONS_TOOL_KEY });
+    },
+  },
+  {
+    id: 'note.annotationsAll', title: 'Разобрать комментарии', hint: 'все необработанные, по всем документам',
+    section: 'notes', sectionLabel: 'Заметки', icon: IcComments,
+    // Доступно везде, а не только при открытом документе: комментарии оставляются и в файлах
+    // проекта, где действие выше не показывается вовсе. Область — открытый проект, вне
+    // проекта все источники.
+    when: c => c.online && c.flag('doc-annotations'),
     run: c => startChatWithPrompt(
-      `Разбери необработанные (open) комментарии документа (заметка id ${c.nav?.note}): прочитай их (notes_annotations), `
-      + `по каждому внеси правку или ответь (notes_reply), затем закрой (notes_set_status). Сначала покажи план.`, c),
+      allAnnotationsPrompt(c.nav?.screen === 'project' ? c.nav.project : undefined),
+      c, { requiredTool: ANNOTATIONS_TOOL_KEY }),
   },
   {
     id: 'note.toc', title: 'Собрать оглавление', hint: 'вставить оглавление по заголовкам',

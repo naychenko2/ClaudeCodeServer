@@ -1438,11 +1438,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
         <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{renderedItems}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {online && showWaiting && (
-          // Текст индикатора ставим по левому краю чата (как пузыри), а домик уезжает
-          // в жёлоб перед ним: домик 19px + зазор 10px = 29px сдвига. Под левым краем
-          // пузырей дым из трубы (вверх-влево) наезжал на контент сверху; в жёлобе над
-          // домиком и слева пузырей нет — дым пыхтит в пустоту.
-          <div style={{ marginLeft: isMobile ? -12 : -29, marginTop: 5 }}>
+          // Домик стоит по левому краю чата — в одну линию с пузырями.
+          // Дым из трубы при этом уходит вверх-влево над контентом,
+          // поэтому он намеренно короткий и мелкий (--smoke-* у .cc-smoke в index.css):
+          // на пузырь сверху налезает лёгкая дымка, а не облако.
+          <div style={{ marginTop: 5 }}>
             <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
           </div>
         )}

@@ -466,7 +466,11 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           // Размеры и отступы — общие с деревом «Файлов» (см. ROW_H выше)
           display: 'flex', alignItems: 'center', gap: 5, position: 'relative',
           ...(showParent ? { minHeight: ROW_H_TWO_LINE } : { height: ROW_H }),
-          padding: `1px ${SP.sm}px`, paddingLeft: SP.sm + depth * INDENT,
+          // По hover в рабочем скоупе правый отступ ужится до 4px: кнопка отката
+          // встаёт у края, но не вплотную. flex:1 у имени абсорбирует разницу —
+          // содержимое не прыгает, меняется лишь обрезка длинных имён
+          padding: `1px ${isWorking && hovered && !st.busy ? SP.xs : SP.sm}px`,
+          paddingLeft: SP.sm + depth * INDENT,
           borderRadius: R.md, cursor: 'pointer', boxSizing: 'border-box',
           // Отклик на удержание: строка притухает, пока палец держат
           opacity: pressingKey === rowKey ? 0.6 : 1,
@@ -528,12 +532,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           </span>
         )}
         {/* Состояние файла — крайним справа: бросается в глаза и не путается с
-            плиткой типа (та слева). Тот же значок, что в дереве «Файлов».
-            В рабочем скоупе по наведению уступает место кнопке отката: прозрачным,
-            а не display:none — место держится, строка не дёргается */}
-        <span style={{ display: 'flex', opacity: isWorking && hovered && !st.busy ? 0 : 1, transition: 'opacity 0.1s' }}>
-          <FileStatusBadge status={f.status} />
-        </span>
+            плиткой типа (та слева). Тот же значок, что в дереве «Файлов». В рабочем
+            скоупе по наведению уступает место кнопке отката целиком: flex:1 у имени
+            забирает освободившееся, и кнопка встаёт у самого правого края */}
+        {!(isWorking && hovered && !st.busy) && <FileStatusBadge status={f.status} />}
       </div>
     );
   };

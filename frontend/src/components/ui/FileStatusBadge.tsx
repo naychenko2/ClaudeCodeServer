@@ -11,16 +11,16 @@ import { C } from '../../lib/design';
 
 export type FileStatus = 'M' | 'A' | 'D' | 'R' | '?';
 
-// Знак, цвета и подсказка по коду состояния. Знаки читаются без знания git: плюс —
-// добавился, минус — удалён, стрелка — переехал; M за годы стала общим обозначением
-// правки. Новый файл в индексе (A) и незнакомый рабочему дереву (?) для глаза одно
-// и то же — «этого файла раньше не было»
+// Знак, цвета и подсказка по коду состояния. Знаки — однобуквенные коды git
+// (как в `git status --porcelain`): M/A/D/R. Untracked git помечает «??», но семантически
+// это новый файл, поэтому ему отдаём ту же букву A. Так набор однообразен: ни плюсов,
+// ни стрелок, только буквы, и каждая — привычное программисту сокращение
 const META: Record<FileStatus, { sign: string; fg: string; bg: string; title: string }> = {
   M: { sign: 'M', fg: C.accent,      bg: C.accentLight, title: 'Изменён' },
-  A: { sign: '+', fg: C.successText, bg: C.successBg,   title: 'Новый' },
-  '?': { sign: '+', fg: C.successText, bg: C.successBg, title: 'Новый (вне истории)' },
-  D: { sign: '−', fg: C.dangerText,  bg: C.dangerBg,    title: 'Удалён' },
-  R: { sign: '→', fg: C.info,        bg: C.infoBg,      title: 'Переименован' },
+  A: { sign: 'A', fg: C.successText, bg: C.successBg,   title: 'Новый' },
+  '?': { sign: 'A', fg: C.successText, bg: C.successBg, title: 'Новый (вне истории)' },
+  D: { sign: 'D', fg: C.dangerText,  bg: C.dangerBg,    title: 'Удалён' },
+  R: { sign: 'R', fg: C.info,        bg: C.infoBg,      title: 'Переименован' },
 };
 
 /** Значок состояния файла. Неизвестный код не рисуется вовсе. */

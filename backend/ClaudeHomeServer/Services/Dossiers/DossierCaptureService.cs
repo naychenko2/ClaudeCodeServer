@@ -162,8 +162,10 @@ public sealed class DossierCaptureService : BackgroundService
         var session = _sessions.GetById(sessionIdRaw);
         if (session is null) return;
         var sessionOwnerId = _sessions.ResolveOwnerId(session);
-        // §1: трейлер — заявка, а не ключ. fail-closed: совпадение владельца и проекта обязательно.
-        if (!SessionBelongsToProject(sessionOwnerId, session.ProjectId, ownerId, project.Id)) return;
+        // §1 guard + §6 opt-out: трейлер — заявка; fail-closed по принадлежности, и чат мог явно
+        // попросить «не сохранять решения» (ExcludeFromDossiers) — паспорт тогда молча не создаётся.
+        var belongs = SessionBelongsToProject(sessionOwnerId, session.ProjectId, ownerId, project.Id);
+        if (!ShouldCaptureSession(belongs, session.ExcludeFromDossiers)) return;
 
         string? taskId = null;
         var taskIdRaw = CommitTrailers.ExtractTaskId(fullMessage);
@@ -279,6 +281,12 @@ public sealed class DossierCaptureService : BackgroundService
     internal static bool SessionBelongsToProject(string? sessionOwnerId, string? sessionProjectId,
         string ownerId, string projectId) =>
         sessionOwnerId == ownerId && sessionProjectId == projectId;
+
+    // §6 opt-out + §1 guard (композит): паспорт создаётся, только если сессия принадлежит проекту
+    // этого владельца И чат не помечен «не сохранять решения» (ExcludeFromDossiers, ADR-004 §6).
+    // Тестируется без тяжёлых зависимостей — как и SessionBelongsToProject.
+    internal static bool ShouldCaptureSession(bool belongsToProject, bool optedOut) =>
+        belongsToProject && !optedOut;
 
     // §7: переякорение при squash — ОБА условия вместе. subject старого коммита есть в новом
     // сообщении И старый sha недостижим от HEAD. Одной недостижимости мало (коммит в невлитой

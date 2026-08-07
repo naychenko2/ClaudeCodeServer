@@ -771,6 +771,17 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
+    // Opt-out «Истории решений» (ADR-004 §6): тумблер «Не сохранять решения из этого чата».
+    // Персистится в sessions.json; DossierCaptureService проверяет его при захвате коммита.
+    public Session? SetExcludeFromDossiers(string sessionId, bool value)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.ExcludeFromDossiers = value;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
     // Все сессии (для планировщика авто-удаления временных чатов)
     public IReadOnlyCollection<Session> GetAll() =>
         _sessions.Values.Select(e => e.Info).ToList();

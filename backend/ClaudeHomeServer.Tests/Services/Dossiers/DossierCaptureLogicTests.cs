@@ -31,6 +31,23 @@ public class DossierCaptureLogicTests
             .Should().Be(expected);
     }
 
+    // §6 opt-out: тумблер «Не сохранять решения из этого чата». Коммит из чата с opt-out → паспорта
+    // нет; коммит из того же проекта без opt-out → паспорт есть. Композит с guard принадлежности.
+    public static IEnumerable<object[]> OptOutCases() => new[]
+    {
+        new object[] { true,  false, true,  "свой чат, opt-out выкл — паспорт создаётся" },
+        new object[] { true,  true,  false, "opt-out вкл — паспорта нет, даже если чат наш" },
+        new object[] { false, true,  false, "чужой чат + opt-out — паспорта нет" },
+        new object[] { false, false, false, "чужой чат без opt-out — паспорта нет (guard принадлежности)" },
+    };
+
+    [Theory]
+    [MemberData(nameof(OptOutCases))]
+    public void OptOutЧата_БлокируетЗахват(bool belongsToProject, bool optedOut, bool expected, string _)
+    {
+        DossierCaptureService.ShouldCaptureSession(belongsToProject, optedOut).Should().Be(expected);
+    }
+
     // §7: переякорение — ОБА условия вместе (subject старого в новом сообщении И старый sha
     // недостижим). Одной недостижимости мало (коммит в невлитой ветке), одного subject-матча
     // мало (amend без переписи предков).

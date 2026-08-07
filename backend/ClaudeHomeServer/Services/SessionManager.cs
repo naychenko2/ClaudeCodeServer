@@ -3063,8 +3063,16 @@ public class SessionManager : IDisposable
         }
     }
 
+    // Дефолт лимитов цикла «до готово». Невалидное значение конфига (не число или ≤ 0)
+    // сваливается в дефолт, а не молча отрубает цикл: MaxTaskExecutions=0 иначе даёт
+    // Exhausted с первой попытки, MaxIterations=0 — немедленную остановку по лимиту.
+    // internal — тестируется напрямую (SessionManagerTests).
+    internal static int LoopLimitOrDefault(string? raw, int defaultValue = 20) =>
+        int.TryParse(raw, out var v) && v > 0 ? v : defaultValue;
+
     // Включение/выключение цикла «до готово» (флаг work-loop). Включение сбрасывает
-    // счётчик итераций; лимит — из конфига Loop:MaxIterations (дефолт 20).
+    // счётчик итераций и счётчик запусков задач; лимиты — из конфига Loop:MaxIterations
+    // и Loop:MaxTaskExecutions (дефолт 20, при ≤0 — тоже дефолт, см. LoopLimitOrDefault).
     // userId задан (вызов из API) — сверяется с владельцем; null — внутренний вызов.
     // Режим прав, выбранный в Composer. Раньше он доезжал до сессии только вместе с
     // сообщением (см. SendMessageAsync), и выбор, сделанный до первого хода, терялся при
@@ -3120,13 +3128,21 @@ public class SessionManager : IDisposable
                 "Автопилот недоступен в чате «Командной реализации» — здесь работа идёт через задачи исполнителям.");
 
         var wasEnabled = entry.Info.WorkLoop is not null;
-        entry.Info.WorkLoop = enabled
+        // Присвоение WorkLoop и очистку буфера хода держим под одним локом: иначе обнуление
+        // поля состязается с чтением в TryConsumeWorkLoopRun/RefundWorkLoopRun/ContinueWorkLoopAsync,
+        // и потребитель может инкрементировать уже выключенный объект (мусорный Allowed).
+        var newLoop = enabled
             ? new SessionWorkLoop
             {
-                MaxIterations = int.TryParse(_config["Loop:MaxIterations"], out var m) ? m : 20,
+                MaxIterations = LoopLimitOrDefault(_config["Loop:MaxIterations"]),
+                MaxExecutions = LoopLimitOrDefault(_config["Loop:MaxTaskExecutions"]),
             }
             : null;
-        lock (entry.LoopTurnLock) entry.LoopTurnText.Clear();
+        lock (entry.LoopTurnLock)
+        {
+            entry.Info.WorkLoop = newLoop;
+            entry.LoopTurnText.Clear();
+        }
         SaveSessions();
         await BroadcastWorkLoopAsync(sessionId, entry);
 
@@ -3932,6 +3948,57 @@ public class SessionManager : IDisposable
             cur = GetOwned(parentId, ownerId);
         }
         return null;
+    }
+
+    // Вердикт квоты запуска задач в цикле «до готово» (work-loop-аналог командной Э4).
+    // NotInLoop — чат не в цикле: работает прежний запрет DenyOnDelegatedTurn.
+    public enum WorkLoopRunQuota { NotInLoop, Allowed, Exhausted }
+
+    // Гейт лавины запусков: на ходу доклада исполнителя (SuppressTasksExecute) чату
+    // с включённым циклом запуск разрешён, ПОКА цел лимит — запрет заменён квотой, а не
+    // снят, иначе «доклад → запуск → доклад» уходит в бесконечный платный круг.
+    // Разрешение сразу расходует единицу: счёт ведёт бэкенд в точке запуска. Квота
+    // принадлежит самой сессии цикла — в отличие от командной, вверх по родителям не
+    // поднимаемся: чат исполнения под циклом не живёт (Guard B4).
+    public (WorkLoopRunQuota Verdict, string? Reason) TryConsumeWorkLoopRun(string sessionId, string ownerId)
+    {
+        // Владельческую проверку (сессия существует + владелец тот) держим до лока: она не
+        // зависит от WorkLoop. Но сам loop достаём под локом — иначе обнуление поля в
+        // SetWorkLoopAsync оставит нас со ссылкой на уже выключенный объект, инкремент уйдёт
+        // в мусор, а вердикт будет Allowed у чата, где цикл уже погашен.
+        if (GetOwned(sessionId, ownerId) is null) return (WorkLoopRunQuota.NotInLoop, null);
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return (WorkLoopRunQuota.NotInLoop, null);
+
+        lock (entry.LoopTurnLock)
+        {
+            if (entry.Info.WorkLoop is not { } loop) return (WorkLoopRunQuota.NotInLoop, null);
+            if (loop.ExecutionsStarted >= loop.MaxExecutions)
+                return (WorkLoopRunQuota.Exhausted,
+                    $"запуски задач в цикле исчерпаны: {loop.ExecutionsStarted} из {loop.MaxExecutions}");
+            loop.ExecutionsStarted++;
+        }
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        return (WorkLoopRunQuota.Allowed, null);
+    }
+
+    // Компенсация квоты запуска цикла: TryConsumeWorkLoopRun списывает единицу авансом,
+    // ДО реальной попытки запуска. Если запуск не состоялся (404/400, исключение), платить
+    // не за что — фильтр DenyOnDelegatedTurn.OnActionExecuted возвращает единицу сюда.
+    public void RefundWorkLoopRun(string sessionId, string ownerId)
+    {
+        // Симметрично TryConsumeWorkLoopRun: loop достаём под локом, чтобы возврат не ушёл
+        // в обнулённый SetWorkLoopAsync'ом объект.
+        if (GetOwned(sessionId, ownerId) is null) return;
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+
+        lock (entry.LoopTurnLock)
+        {
+            if (entry.Info.WorkLoop is not { } loop) return;
+            if (loop.ExecutionsStarted > 0) loop.ExecutionsStarted--;
+        }
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
     }
 
     // Квота пробуждения штаба агентом (Э4): любой платный ход чата-штаба, поднятый НЕ

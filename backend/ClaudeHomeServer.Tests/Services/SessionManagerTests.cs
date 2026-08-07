@@ -2403,6 +2403,7 @@ public class SessionManagerTests : IDisposable
         {
             AlsoWhenExecutorSuppressed = true,
             AllowInTeamImplement = true,
+            AllowInWorkLoop = true,
         };
 
     [Fact]
@@ -2545,6 +2546,246 @@ public class SessionManagerTests : IDisposable
 
         verdict.Should().Be(SessionManager.TeamRunQuota.NotTeamMode);
         _sut.GetById(session.Id)!.TeamImplement!.Budget.RunsUsed.Should().Be(0);
+    }
+
+    // --- Квота запусков задач цикла «до готово» (work-loop: тот же паттерн Э4 для обычного чата) ---
+
+    // Чат с включённым циклом «до готово» (work-loop-аналог MakeTeamStabAsync)
+    private async Task<Session> MakeWorkLoopChatAsync(string suffix)
+    {
+        var dir = MkProjectDir("wl-" + suffix);
+        var project = _projectManager.Create("WL-" + suffix, dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, TestUserId);
+        return _sut.GetById(session.Id)!;
+    }
+
+    [Fact]
+    public async Task КвотаЦикла_РежимВключён_РазрешаетИСразуСчитаетРасход()
+    {
+        var session = await MakeWorkLoopChatAsync("quota-ok");
+
+        var (verdict, reason) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+
+        verdict.Should().Be(SessionManager.WorkLoopRunQuota.Allowed,
+            "в цикле запрет хода доклада заменён квотой — иначе автономное продолжение невозможно");
+        reason.Should().BeNull();
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1,
+            "счёт ведёт бэкенд в точке запуска, а не модель");
+    }
+
+    [Fact]
+    public async Task КвотаЦикла_ВнеЦикла_ГейтРаботаетКакРаньше()
+    {
+        var dir = MkProjectDir("wl-plain");
+        var project = _projectManager.Create("WL-P", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        var (verdict, _) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+
+        verdict.Should().Be(SessionManager.WorkLoopRunQuota.NotInLoop,
+            "обычный чат без цикла остаётся под прежним запретом");
+    }
+
+    [Fact]
+    public async Task КвотаЦикла_ЧужойВладелец_НеРаспознаётРежим()
+    {
+        var session = await MakeWorkLoopChatAsync("quota-alien");
+
+        var (verdict, _) = _sut.TryConsumeWorkLoopRun(session.Id, "another-user");
+
+        verdict.Should().Be(SessionManager.WorkLoopRunQuota.NotInLoop);
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task КвотаЦикла_ИсчерпанныйЛимит_ОтказСПричиной()
+    {
+        var session = await MakeWorkLoopChatAsync("quota-out");
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted = 20;
+
+        var (verdict, reason) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+
+        verdict.Should().Be(SessionManager.WorkLoopRunQuota.Exhausted);
+        reason.Should().Contain("исчерпаны");
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(20, "отказ ничего не расходует");
+    }
+
+    [Fact]
+    public async Task ГейтЦикла_ХодДоклада_РазрешёнПокаЦелЛимит()
+    {
+        // Случай, ради которого делается фича: ход доклада (SuppressTasksExecute) в чате
+        // с включённым циклом раньше давал 403 и ломал автономное продолжение
+        var session = await MakeWorkLoopChatAsync("report-turn");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.CurrentTurnSuppressTasksExecute).Returns(true);
+        SetProcess(entry, adapter.Object);
+        var context = MakeMcpCallContext(session.Id);
+
+        ExecuteFilter().OnActionExecuting(context);
+
+        context.Result.Should().BeNull("цикл заменяет запрет хода доклада квотой запусков");
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task ГейтЦикла_ОбычныйХод_ТожеРасходуетКвоту()
+    {
+        var session = await MakeWorkLoopChatAsync("human-turn");
+        var context = MakeMcpCallContext(session.Id);
+
+        ExecuteFilter().OnActionExecuting(context);
+
+        context.Result.Should().BeNull();
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1,
+            "квота расходуется на любом неделегированном ходу чата с циклом — иначе обход по «чистому» ходу");
+    }
+
+    [Fact]
+    public async Task ГейтЦикла_ХодДокладаВнеЦикла_ЗапретКакРаньше()
+    {
+        var dir = MkProjectDir("wl-report-plain");
+        var project = _projectManager.Create("WL-RP", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.CurrentTurnSuppressTasksExecute).Returns(true);
+        SetProcess(entry, adapter.Object);
+        var context = MakeMcpCallContext(session.Id);
+
+        ExecuteFilter().OnActionExecuting(context);
+
+        var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
+        result.StatusCode.Should().Be(403, "без цикла запрет хода доклада сохраняется");
+    }
+
+    [Fact]
+    public async Task ГейтЦикла_ДелегированныйХод_ОтказКакРаньше()
+    {
+        var session = await MakeWorkLoopChatAsync("delegated");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.CurrentTurnAgentDepth).Returns(1);
+        SetProcess(entry, adapter.Object);
+        var context = MakeMcpCallContext(session.Id);
+
+        ExecuteFilter().OnActionExecuting(context);
+
+        var result = context.Result.Should().BeOfType<Microsoft.AspNetCore.Mvc.ObjectResult>().Subject;
+        result.StatusCode.Should().Be(403, "цепочка делегирования не идёт дальше независимо от режима");
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task ГейтЦикла_ДействиеВернуло404_ВозвращаетСписаннуюКвоту()
+    {
+        var session = await MakeWorkLoopChatAsync("refund-404");
+        var context = MakeMcpCallContext(session.Id);
+        var filter = ExecuteFilter();
+        filter.OnActionExecuting(context);
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "квота списана авансом");
+
+        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
+            context, [], controller: new object())
+        { Result = new Microsoft.AspNetCore.Mvc.NotFoundResult() };
+        filter.OnActionExecuted(executed);
+
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
+            "действие не состоялось (404) — впустую списанная единица вернулась");
+    }
+
+    [Fact]
+    public async Task ГейтЦикла_ДействиеУспешно_КвотаОстаётсяСписанной()
+    {
+        var session = await MakeWorkLoopChatAsync("refund-ok");
+        var context = MakeMcpCallContext(session.Id);
+        var filter = ExecuteFilter();
+        filter.OnActionExecuting(context);
+
+        var executed = new Microsoft.AspNetCore.Mvc.Filters.ActionExecutedContext(
+            context, [], controller: new object())
+        { Result = new Microsoft.AspNetCore.Mvc.OkObjectResult(new { }) };
+        filter.OnActionExecuted(executed);
+
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1, "успех — единица расходуется честно");
+    }
+
+    [Fact]
+    public async Task КвотаЦикла_ВыключитьИВключить_СчётчикиОбнуляются()
+    {
+        var session = await MakeWorkLoopChatAsync("reset");
+        _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(1);
+
+        await _sut.SetWorkLoopAsync(session.Id, enabled: false, TestUserId);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, TestUserId);
+
+        var loop = _sut.GetById(session.Id)!.WorkLoop!;
+        loop.ExecutionsStarted.Should().Be(0, "новый цикл — новая квота");
+        loop.MaxExecutions.Should().Be(20);
+    }
+
+    // Регресс Major (ревью work-loop): ссылку на WorkLoop фильтр брал ДО входа в лок, а
+    // SetWorkLoopAsync обнулял поле без лока — в окне между ними инкремент уходил в мусорный
+    // объект, вердикт Allowed у чата с уже выключенным циклом. Симуляция последовательностью
+    // вызовов (без потоков): consume → отключение → consume должен дать NotInLoop, а счётчик
+    // обнулённого объекта не дорасти.
+    [Fact]
+    public async Task КвотаЦикла_ВыключениеПослеРасхода_ЗапрещаетИНеНакручиваетСчётчик()
+    {
+        var session = await MakeWorkLoopChatAsync("race-off");
+        _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+        var loopBefore = _sut.GetById(session.Id)!.WorkLoop!;
+        loopBefore.ExecutionsStarted.Should().Be(1);
+
+        // UI гасит цикл; к этому моменту потребитель уже мог держать ссылку на старый объект
+        await _sut.SetWorkLoopAsync(session.Id, enabled: false, TestUserId);
+
+        var (verdict, _) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+        verdict.Should().Be(SessionManager.WorkLoopRunQuota.NotInLoop,
+            "после отключения цикла расход невозможен — мусорная ссылка не даёт Allowed");
+        loopBefore.ExecutionsStarted.Should().Be(1,
+            "обнулённый в сессии объект цикла не получил инкремент");
+    }
+
+    [Fact]
+    public async Task КвотаЦикла_НулевойЛимитЗапусков_СразуИсчерпанБезРасхода()
+    {
+        // MaxExecutions мог оказаться 0 через протухшие данные/миграцию (валидация конфига
+        // в SetWorkLoopAsync тут ни при чём) — квота должна честно отчитать исчерпание.
+        var session = await MakeWorkLoopChatAsync("zero-max");
+        _sut.GetById(session.Id)!.WorkLoop!.MaxExecutions = 0;
+
+        var (verdict, reason) = _sut.TryConsumeWorkLoopRun(session.Id, TestUserId);
+
+        verdict.Should().Be(SessionManager.WorkLoopRunQuota.Exhausted);
+        reason.Should().Contain("исчерпаны");
+        _sut.GetById(session.Id)!.WorkLoop!.ExecutionsStarted.Should().Be(0,
+            "отказ при исчерпанной квоте ничего не расходует");
+    }
+
+    // Minor (ревью work-loop): невалидное значение лимита в конфиге (≤0 / не число) не должно
+    // молча отрубать цикл — сваливаемся в дефолт. LoopLimitOrDefault internal — покрыт напрямую.
+    [Theory]
+    [InlineData(null, 20)]
+    [InlineData("", 20)]
+    [InlineData("0", 20)]
+    [InlineData("-5", 20)]
+    [InlineData("abc", 20)]
+    [InlineData("1", 1)]
+    [InlineData("5", 5)]
+    [InlineData("100", 100)]
+    public void LoopLimitOrDefault_НевалидноеИлиНоль_Дефолт_ПоложительноеКакЕсть(string? raw, int expected)
+    {
+        SessionManager.LoopLimitOrDefault(raw).Should().Be(expected);
+    }
+
+    [Fact]
+    public void LoopLimitOrDefault_СвойДефолтУважается()
+    {
+        SessionManager.LoopLimitOrDefault("0", 7).Should().Be(7);
+        SessionManager.LoopLimitOrDefault("3", 7).Should().Be(3);
     }
 
     // Э7-фикс (находка Веры Major №2): координатор до публикации плана вызывал

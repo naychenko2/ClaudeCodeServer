@@ -302,8 +302,11 @@ public class TasksController(
     // чередование обычного и делегированного хода перезапускало процесс CLI со всеми MCP.
     // AllowInTeamImplement: у чата-штаба «Командной реализации» запрет заменён квотой —
     // автономный цикл волн иначе невозможен, а лавину держит бюджет итерации (Э4).
+    // AllowInWorkLoop: тот же паттерн в обычном чате с включённым циклом «до готово» —
+    // запрет хода доклада заменён квотой запусков, иначе агент в цикле не запустит
+    // собственные задачи (лавину держит лимит Loop:MaxTaskExecutions).
     [DenyOnDelegatedTurn("Запуск задачи на исполнение",
-        AlsoWhenExecutorSuppressed = true, AllowInTeamImplement = true)]
+        AlsoWhenExecutorSuppressed = true, AllowInTeamImplement = true, AllowInWorkLoop = true)]
     public async Task<IActionResult> Execute(string taskId)
     {
         var task = tasks.GetById(taskId);

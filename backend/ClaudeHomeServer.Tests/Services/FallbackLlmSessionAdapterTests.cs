@@ -72,6 +72,33 @@ public class FallbackLlmSessionAdapterTests
         return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
     }
 
+    // Пул с DisplayName у части подписок: ключ → имя (пустое имя — подписка без DisplayName,
+    // в ленте остаётся ключ). Для проверки, что пользовательский текст показывает имя, а не ключ.
+    private static ClaudeSubscriptionPool BuildPoolWithNames(params (string Key, string DisplayName)[] subs)
+    {
+        var dict = new Dictionary<string, string?>();
+        foreach (var (key, name) in subs)
+        {
+            dict[$"ClaudeSubscriptions:{key}:OAuthToken"] = $"token-{key}";
+            if (!string.IsNullOrWhiteSpace(name))
+                dict[$"ClaudeSubscriptions:{key}:DisplayName"] = name;
+        }
+        return new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Провайдер с DisplayName и моделью — чтобы проверить, что в ленту идёт имя провайдера.
+    private static LlmProviderRegistry BuildProviderWithName(string key, string displayName, string modelId)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            [$"LlmProviders:{key}:ApiKey"] = "sk-test",
+            [$"LlmProviders:{key}:AnthropicBaseUrl"] = "https://api.example.com",
+            [$"LlmProviders:{key}:DisplayName"] = displayName,
+            [$"LlmProviders:{key}:Models:0:Id"] = modelId,
+        };
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
     private (FallbackLlmSessionAdapter Sut, FakeInnerAdapter Inner) BuildSut(
         ClaudeSubscriptionPool pool, LlmProviderRegistry? providers = null,
         string model = "sonnet", string provider = "acc-a",
@@ -253,8 +280,11 @@ public class FallbackLlmSessionAdapterTests
         var final = Downstream().OfType<ResultMessage>().Should().ContainSingle().Subject;
         final.Subtype.Should().Be("error");
         var error = Downstream().OfType<ErrorMessage>().Should().ContainSingle().Subject;
-        error.Text.Should().Contain("Фолбэк моделей исчерпан");
+        error.Text.Should().Contain("Ни одна из доступных моделей не ответила");
+        // У подписок пула без DisplayName в ленте остаётся ключ (имя пустое → ключ)
         error.Text.Should().Contain("acc-a").And.Contain("acc-b");
+        error.Text.Should().Contain("слишком много запросов", "429 → RateLimit → человекочитаемая причина");
+        error.Text.Should().Contain("Попробуйте позже или выберите другую модель в настройках чата.");
     }
 
     [Fact]
@@ -298,7 +328,7 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("error");
         Downstream().OfType<ErrorMessage>().Should().ContainSingle()
-            .Which.Text.Should().Contain("потолок 4");
+            .Which.Text.Should().Contain("Ни одна из доступных моделей не ответила");
     }
 
     [Fact]
@@ -719,5 +749,67 @@ public class FallbackLlmSessionAdapterTests
         // переход acc-a → acc-b внутри пула Claude прошёл без маркера.
         Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
             .Which.Provider.Should().Be("deepseek");
+    }
+
+    // Постановка «Человеческий текст ошибки»: в ленте нет служебных терминов
+    // («фолбэк», «подмена», «потолок», «пара»), есть заголовок, подсказка и перенос
+    // частей через « · » (перенос строк в error-сообщении не рендерится). Модель в
+    // тексте не упоминается — только поставщик и причина.
+    [Fact]
+    public async Task Исчерпание_ЧеловеческийТекст_БезСлужебныхТерминов()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        var error = Downstream().OfType<ErrorMessage>().Should().ContainSingle().Subject;
+        error.Text.Should().Contain("Ни одна из доступных моделей не ответила");
+        error.Text.Should().Contain("Попробуйте позже или выберите другую модель в настройках чата.");
+        // Служебных терминов и технических деталей в ленте нет — они ушли в лог
+        error.Text.Should().NotContain("фолбэк");
+        error.Text.Should().NotContain("Фолбэк");
+        error.Text.Should().NotContain("подмен");
+        error.Text.Should().NotContain("потолок");
+        error.Text.Should().NotContain("пар:");
+        error.Text.Should().NotContain("Последняя ошибка");
+        // Модель попытки (sonnet) в пользовательском тексте не упоминается
+        error.Text.Should().NotContain("sonnet");
+        // По строке на попытку: обе подписки видны, разделены « · »
+        error.Text.Should().Contain("acc-a").And.Contain("acc-b");
+        error.Text.Should().Contain(" · ");
+    }
+
+    // Имя поставщика вместо ключа: подписка с DisplayName показывается именем (ключ
+    // acc-a не виден), без DisplayName — ключом (acc-b). DisplayName провайдера тоже
+    // подставляется. Проверка постановки «Имя поставщика вместо ключа».
+    [Fact]
+    public async Task Исчерпание_ИмяПоставщикаВместоКлюча()
+    {
+        var pool = BuildPoolWithNames(("acc-a", "Claude 2 (Max)"), ("acc-b", ""));
+        var providers = BuildProviderWithName("deepseek", "DeepSeek", "deepseek-chat");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a");
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a (Claude 2 Max) — RateLimit
+        inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));// acc-b (без имени) — обрыв, Unreachable
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // deepseek (DeepSeek) — RateLimit
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        var error = Downstream().OfType<ErrorMessage>().Should().ContainSingle().Subject;
+        // Подписка с DisplayName → имя, ключа acc-a в ленте нет
+        error.Text.Should().Contain("Claude 2 (Max)");
+        error.Text.Should().NotContain("acc-a");
+        // Подписка без DisplayName → ключ
+        error.Text.Should().Contain("acc-b");
+        // Провайдер с DisplayName → имя
+        error.Text.Should().Contain("DeepSeek");
+        // Человекочитаемые причины: 429 → RateLimit → «слишком много запросов»,
+        // обрыв (ExitedMessage) → Unreachable → «сервис не отвечает»
+        error.Text.Should().Contain("слишком много запросов").And.Contain("сервис не отвечает");
+        inner.Attempts.Should().HaveCount(3);
     }
 }

@@ -245,8 +245,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         // Учёт попыток «модель × подписка»: пара не пробуется дважды за ход (ADR §4)
         var attempted = new HashSet<(string Model, string Key)>();
-        // След перепробованных пар — в финальную ошибку (виден в ленте/карточке задачи)
-        var trace = new List<string>();
+        // След перепробованных пар — в финальную ошибку (виден в ленте/карточке задачи).
+        // Хранится структурой: для ленты берём поставщика и причину, для лога — модель и ключ.
+        var trace = new List<AttemptTrace>();
         var substitutions = 0;
         AttemptEnd? lastEnd = null;
 
@@ -305,7 +306,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
                 if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
 
-                trace.Add(TraceLine(currentModel, currentKey, cls));
+                trace.Add(new AttemptTrace(currentModel, currentKey, cls));
                 if (substitutions >= EffectiveMaxSubstitutions())
                 {
                     await FailExhaustedAsync(turn, trace, substitutions, end);
@@ -608,18 +609,28 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return string.IsNullOrEmpty(parent) ? null : Path.Combine(parent, folder);
     }
 
-    // Финал при исчерпании цепочки: след пар + последняя причина — в ленту, финальный
-    // result — ошибочный (у задачи исполнителя существующий путь пометит сбой и уведомит
-    // постановщика; в исходный статус задача не возвращается)
-    private async Task FailExhaustedAsync(FallbackTurn turn, IReadOnlyList<string> trace,
+    // Финал при исчерпании цепочки: человекочитаемый текст в ленту, финальный result —
+    // ошибочный (у задачи исполнителя существующий путь пометит сбой и уведомит
+    // постановщика; в исходный статус задача не возвращается). Счётчик подмен, потолок,
+    // модель/ключ и текст последней ошибки — в LogInfo для разбора, человеку они не нужны.
+    private async Task FailExhaustedAsync(FallbackTurn turn, IReadOnlyList<AttemptTrace> trace,
         int substitutions, AttemptEnd lastEnd)
     {
+        // Заголовок + по строке на попытку (поставщик и причина) + подсказка. Перенос
+        // строки в ленте error не рендерится (flex-span без pre-wrap), поэтому строки
+        // попыток для читаемости делим « · ». Служебные термины и ключи сюда не попадают.
+        var attempts = string.Join(" · ", trace.Select(t => $"{ProviderLabel(t.Key)} — {UserClassLabel(t.Class)}"));
+        await _downstream(new ErrorMessage(
+            "Ни одна из доступных моделей не ответила.\n"
+            + attempts + "\n"
+            + "Попробуйте позже или выберите другую модель в настройках чата."));
+
         var reason = string.IsNullOrEmpty(lastEnd.Result?.ApiErrorStatus)
             ? lastEnd.ErrorText ?? "поток прерван"
             : lastEnd.Result!.ApiErrorStatus!;
-        await _downstream(new ErrorMessage(
-            $"Фолбэк моделей исчерпан (подмен: {substitutions}, потолок {EffectiveMaxSubstitutions()}). "
-            + $"Пробованные пары: {string.Join("; ", trace)}. Последняя ошибка: {Truncate(reason, 300)}"));
+        LogInfo($"Исчерпание фолбэка: подмен {substitutions}, потолок {EffectiveMaxSubstitutions()}. "
+            + $"Пары: {string.Join("; ", trace.Select(t => TraceLine(t.Model, t.Key, t.Class)))}. "
+            + $"Последняя ошибка: {Truncate(reason, 300)}");
 
         List<ServerMessage> held;
         lock (turn.Sync)
@@ -660,6 +671,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private static string TraceLine(string model, string key, FallbackErrorClass cls) =>
         $"{(string.IsNullOrEmpty(model) ? "модель по умолчанию" : $"модель «{model}»")} × «{KeyLabel(key)}» — {ClassLabel(cls)}";
 
+    // Технические метки классов — в лог (для разбора), не в ленту. С человеческими
+    // формулировками для пользователя см. UserClassLabel.
     private static string ClassLabel(FallbackErrorClass cls) => cls switch
     {
         FallbackErrorClass.RateLimit => "лимит запросов",
@@ -669,8 +682,33 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _ => "ошибка",
     };
 
+    // Человекочитаемые причины для ленты (постановка задачи). Wire-имена классов и
+    // технические метки (ClassLabel/WireName) не трогаем — они для разбора и фронта.
+    private static string UserClassLabel(FallbackErrorClass cls) => cls switch
+    {
+        FallbackErrorClass.RateLimit => "слишком много запросов",
+        FallbackErrorClass.UsageLimit => "закончился лимит",
+        FallbackErrorClass.ProviderError => "поставщик вернул ошибку",
+        FallbackErrorClass.Unreachable => "сервис не отвечает",
+        _ => "не удалось выполнить",
+    };
+
     private static string KeyLabel(string key) =>
         key == ClaudeSubscriptionPool.PrimaryKey ? "claude" : key;
+
+    // Имя поставщика для пользовательского текста: DisplayName подписки пула, затем
+    // DisplayName провайдера, иначе — ключ (через KeyLabel). Ключ сырым — только когда
+    // имени нет вовсе (нет ни подписки, ни провайдера, либо пустой DisplayName).
+    private string ProviderLabel(string key)
+    {
+        var sub = _pool.All.FirstOrDefault(s => s.Key == key);
+        if (sub is not null && !string.IsNullOrWhiteSpace(sub.DisplayName))
+            return sub.DisplayName;
+        var provider = _providers?.GetByKey(key);
+        if (provider is not null && !string.IsNullOrWhiteSpace(provider.DisplayName))
+            return provider.DisplayName;
+        return KeyLabel(key);
+    }
 
     private static string Truncate(string s, int max) =>
         s.Length <= max ? s : s[..max] + "…";
@@ -683,6 +721,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         ResultMessage? Result,
         string? ErrorText,
         string? RateLimitResetsAt);
+
+    // След одной попытки для финального сообщения: модель и ключ — в лог (через
+    // TraceLine), поставщик (ProviderLabel) и причина (UserClassLabel) — в ленту.
+    private sealed record AttemptTrace(string Model, string Key, FallbackErrorClass Class);
 
     private sealed record FallbackTarget(
         string Key, string? Model, string? Label, string? ProfileRoot, bool IsProviderSwitch,

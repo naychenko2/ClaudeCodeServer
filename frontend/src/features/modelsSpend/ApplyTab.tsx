@@ -9,7 +9,7 @@ import { resolvePlacePreset, stepsWord, usePresets, useSpecialtySettings } from 
 import { C, FS, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { loadModels, type ModelOption } from '../../lib/models';
-import type { AppSettings, OllamaActionInfo } from '../../types';
+import type { AppSettings, OllamaActionInfo, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
 
 // Вкладка «Применение» (макет models-spend-v3.html §3): стратегия («Автоматически» /
 // «Бесплатно · локальная») + таблица «Кто что выполняет» — группы мест, выбор маршрута
@@ -23,9 +23,12 @@ interface ApplyTabProps {
   data: ProviderData;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
+  settings: SpecialtySettingsResponse | null;
+  savingScope: 'global' | 'owner' | null;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
 }
 
-export function ApplyTab({ isAdmin, data, models, tierModels }: ApplyTabProps) {
+export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingScope, onSaveLayer }: ApplyTabProps) {
   const { info, setInfo, globalSettings, setGlobalSettings } = data;
   const [busy, setBusy] = useState<string | null>(null);
   const [presetBusy, setPresetBusy] = useState<'tiers' | 'tiers-local' | null>(null);
@@ -130,6 +133,9 @@ export function ApplyTab({ isAdmin, data, models, tierModels }: ApplyTabProps) {
                 tierModels={tierModels}
                 ollamaModel={info.model ?? undefined}
                 models={models}
+                settings={settings}
+                savingScope={savingScope}
+                onSaveLayer={onSaveLayer}
                 onPick={route => pick(a, route)}
                 onReset={() => reset(a)}
                 enabled={a.key === BRIEFING_KEY ? briefingOn : undefined}
@@ -185,14 +191,17 @@ function StrategyCard({ active, disabled, loading, title, desc, onClick }: {
 }
 
 // === Строка места каталога ===
-function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, onPick, onReset,
-  enabled, onToggleEnabled, toggleBusy }: {
+function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, settings, savingScope,
+  onSaveLayer, onPick, onReset, enabled, onToggleEnabled, toggleBusy }: {
   action: OllamaActionInfo;
   first: boolean;
   busy: boolean;
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   models: ModelOption[];
+  settings: SpecialtySettingsResponse | null;
+  savingScope: 'global' | 'owner' | null;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
   onPick: (route: string) => void;
   onReset: () => void;
   enabled?: boolean;
@@ -250,6 +259,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, on
           allowLocal={!a.agentic}
           showTiers
           showPresets
+          presetCreation={{ settings, savingScope, onSaveLayer }}
           busy={busy}
           onChange={onPick}
         />

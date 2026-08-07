@@ -161,6 +161,7 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
                         layer={layer} anyKey scope={scope} canEdit={canEdit} savingScope={savingScope}
                         models={models} tierModels={tierModels} ollamaModel={ollamaModel}
                         cellOf={cellOf} presets={presets} labelCtx={labelCtx}
+                        settings={settings} onSaveLayer={onSaveLayer}
                         onCell={(t, v) => setCell(ANY_SPECIALTY, t, v)}
                       />
                     )}
@@ -176,6 +177,7 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
                           layer={layer} specKey={e.key} scope={scope} canEdit={canEdit} savingScope={savingScope}
                           models={models} tierModels={tierModels} ollamaModel={ollamaModel}
                           cellOf={cellOf} presets={presets} labelCtx={labelCtx}
+                          settings={settings} onSaveLayer={onSaveLayer}
                           onCell={(t, v) => setCell(e.key, t, v)}
                         />
                       );
@@ -205,7 +207,7 @@ function Th({ children, style }: { children: React.ReactNode; style?: React.CSSP
 }
 
 function MatrixRow({ name, hint, mark, layer, anyKey, specKey, scope, canEdit, savingScope, models,
-  tierModels, ollamaModel, cellOf, presets, labelCtx, onCell }: {
+  tierModels, ollamaModel, cellOf, presets, labelCtx, settings, onSaveLayer, onCell }: {
   name: string;
   hint?: string;
   mark?: boolean;
@@ -221,6 +223,8 @@ function MatrixRow({ name, hint, mark, layer, anyKey, specKey, scope, canEdit, s
   cellOf: (rec: SpecialtyTemplateSettings | null | undefined, t: TierKey) => string;
   presets: ReturnType<typeof usePresets>;
   labelCtx: { tierModels: Record<TierKey, string>; ollamaModel?: string };
+  settings: SpecialtySettingsResponse;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
   onCell: (t: TierKey, v: string) => void;
 }) {
   const rec = anyKey ? layer?.defaultSpecialty : (specKey ? layer?.specialties[specKey] : null);
@@ -244,6 +248,7 @@ function MatrixRow({ name, hint, mark, layer, anyKey, specKey, scope, canEdit, s
               ollamaModel={ollamaModel}
               showTiers={false}
               showPresets
+              presetCreation={{ settings, savingScope, onSaveLayer }}
               readOnly={!canEdit}
               busy={savingScope === scope}
               cardTitle={`${['Сильная', 'Средняя', 'Слабая'][TIER_ORDER.indexOf(t)]} · ${scope === 'owner' ? 'только для меня' : 'для всех'}`}

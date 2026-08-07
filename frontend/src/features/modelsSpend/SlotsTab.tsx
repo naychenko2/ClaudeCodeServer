@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, ChevronDown, Link2, Plus, X } from 'lucide-react';
-import { Button, IconButton } from '../../components/ui';
+import { ChevronDown, Link2 } from 'lucide-react';
+import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import {
   TIERS, TIER_ORDER, routeTier, routeLabel,
   type ProviderData, type TierKey,
 } from '../../lib/modelProvidersShared';
 import { RoutePicker } from '../../components/RoutePicker';
+import { ChainStepsEditor } from '../../components/ChainStepsEditor';
 import {
-  chainStepLabel, chainSummary, isPresetRoute, presetIdOf, presetRoute,
+  chainSummary, isPresetRoute, presetIdOf, presetRoute,
   presetValueLabel, usePresets, invalidateEffectiveLines,
 } from '../../lib/presets';
 import { api, type ModelTiers } from '../../lib/api';
@@ -370,7 +371,6 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
   onPickRoute: (v: string) => void;
 }) {
-  const labelCtx = { tierModels, ollamaModel };
   // Черновик шагов: правится локально, пока не «Сохранить». Инициализируем шагами пресета.
   const presetSteps = preset?.steps ?? [];
   const [draft, setDraft] = useState<string[]>(presetSteps);
@@ -379,13 +379,6 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
 
   // Самоссылка: шаг «уровень T» внутри пресета, разворачивающегося из этого же слота
   const selfRef = preset ? preset.steps.some(s => routeTier(s) === t) : false;
-
-  const moveStep = (i: number, dir: -1 | 1) =>
-    setDraft(steps => { const j = i + dir; if (j < 0 || j >= steps.length) return steps;
-      const next = [...steps]; [next[i], next[j]] = [next[j], next[i]]; return next; });
-  const removeStep = (i: number) => setDraft(steps => steps.filter((_, j) => j !== i));
-  const setStep = (i: number, v: string) => setDraft(steps => steps.map((s, j) => j === i ? v : s));
-  const addStep = () => setDraft(steps => [...steps, TIERS.medium.route]);
 
   // Сохранить: записать обновлённые шаги в пресет (если он свой/админ правит общий)
   const canSavePreset = preset != null && (preset.scope === 'owner' || isAdmin);
@@ -423,48 +416,15 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           </div>
 
           {preset && preset.steps.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {draft.map((step, i) => (
-                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: FS.xs, color: C.textMuted, width: 14, textAlign: 'right', flexShrink: 0 }}>{i + 1}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <RoutePicker
-                      route={step}
-                      label={chainStepLabel(step, labelCtx)}
-                      models={models}
-                      tierModels={tierModels}
-                      ollamaModel={ollamaModel}
-                      allowLocal
-                      readOnly={!canSavePreset}
-                      busy={savingScope === preset.scope}
-                      onChange={v => setStep(i, v)}
-                    />
-                  </div>
-                  {canSavePreset && (
-                    <span style={{ display: 'flex', gap: 2, flexShrink: 0 }}>
-                      <IconButton size="xs" tone="muted" title="Выше" disabled={savingScope !== null || i === 0} onClick={() => moveStep(i, -1)}>
-                        <ArrowUp size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                      </IconButton>
-                      <IconButton size="xs" tone="muted" title="Ниже" disabled={savingScope !== null || i === draft.length - 1} onClick={() => moveStep(i, 1)}>
-                        <ArrowDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                      </IconButton>
-                      <IconButton size="xs" tone="muted" title={draft.length === 1 ? 'Пустая цепочка не сохранится' : 'Убрать шаг'}
-                        disabled={savingScope !== null || draft.length === 1} onClick={() => removeStep(i)}>
-                        <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                      </IconButton>
-                    </span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-
-          {canSavePreset && preset && (
-            <button type="button" disabled={savingScope !== null || draft.length >= 5}
-              onClick={addStep}
-              style={addStepBtnStyle}>
-              <Plus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> Добавить модель
-            </button>
+            <ChainStepsEditor
+              steps={draft}
+              onChange={setDraft}
+              models={models}
+              tierModels={tierModels}
+              ollamaModel={ollamaModel}
+              readOnly={!canSavePreset}
+              busy={savingScope === preset.scope}
+            />
           )}
 
           {selfRef && (
@@ -498,6 +458,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           tierModels={tierModels}
           ollamaModel={ollamaModel}
           showPresets
+          presetCreation={{ settings, savingScope, onSaveLayer }}
           busy={savingScope !== null}
           placeholder="не задана — решает CLI"
           onChange={onPickRoute}
@@ -510,13 +471,6 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
 const linkBtnStyle = {
   font: 'inherit', fontSize: FS.xs, fontWeight: 600, color: C.accent, background: 'none',
   border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'none',
-} as const;
-
-const addStepBtnStyle = {
-  display: 'inline-flex', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
-  font: 'inherit', fontSize: FS.xs, fontWeight: 600, color: C.accent,
-  background: C.accentLight, border: `1px dashed ${C.accentMuted}`, borderRadius: R.md,
-  padding: '6px 10px', cursor: 'pointer',
 } as const;
 
 function pluralPlaces(n: number): string {

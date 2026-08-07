@@ -43,6 +43,11 @@ public static class FeatureFlagKeys
     // и подмешивание серверов реестра в ход (гейт стоит в резолвере доставки — снятие
     // флага честно убирает серверы, а не оставляет их работать втихую).
     public const string McpRegistry = "mcp-registry";
+
+    // Паспорта изменений, этап 1 (ADR-004): захват (DossierCaptureService) + стор + REST
+    // просмотра. Recall в промпт персон и MCP dossier_lookup/get — отдельный флаг
+    // change-dossiers-recall, заводится отдельным решением после оценки качества выжимки.
+    public const string ChangeDossiers = "change-dossiers";
 }
 
 /// <summary>
@@ -108,6 +113,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.McpRegistry,
             Title: "MCP-серверы",
             Description: "Свой список внешних MCP-серверов: видно, какие подключены и работают ли они, можно добавить новый и выдать доступ конкретной персоне.",
+            Default: false,
+            Stage: "dev"),
+
+        // Паспорта изменений (ADR-004), этап 1: у коммита из чата/задачи появляется
+        // AI-выжимка «зачем, что решили, что отвергли, какие грабли» — панель просмотра
+        // по файлу/символу/коммиту. Recall в промпт персон — отдельный флаг, следующим шагом.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ChangeDossiers,
+            Title: "История решений",
+            Description: "У коммита из чата или задачи появляется AI-выжимка: зачем менялся код, что решили, что отвергли и какие грабли встретились. Захват — на каждый новый коммит; просмотр — по файлу, символу или коммиту.",
             Default: false,
             Stage: "dev"),
     ];

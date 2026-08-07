@@ -97,6 +97,8 @@ public static class LocalActionCatalog
     public const string PersonaAiTeam = "persona-ai-team";
     public const string Changelog = "changelog";
     public const string PromptAudit = "prompt-audit";
+    // Паспорта изменений (ADR-004, этап 1): выжимка «зачем/решения/отказы/грабли» на коммит
+    public const string DossierSummary = "dossier-summary";
 
     // Дефолты профилей. Переопределяются
     // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs|CloudNumPredict}.
@@ -190,6 +192,10 @@ public static class LocalActionCatalog
         // таймаут Changelog:TimeoutMs) — потребитель передаёт timeout/maxTokens поверх профиля.
         // Дефолт claude: на бесплатной модели показ стоимости отпадает (она 0), что корректно.
         new(Changelog, "Сводка «Что нового»", "Продукт", CheapProfile.Large, DefaultLocal: false),
+        // Паспорта изменений: сырьё как у ChatExtractTasks (реплики хода целиком) — Large
+        // обязателен, Text/Small молча обрежут хвост промпта (num_ctx Ollama) и дадут
+        // выдуманную выжимку, ради борьбы с которой заведён отдельный флаг recall.
+        new(DossierSummary, "Выжимка паспорта изменения", "Паспорта изменений", CheapProfile.Large, DefaultLocal: true),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

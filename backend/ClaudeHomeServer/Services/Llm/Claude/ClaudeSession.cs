@@ -333,6 +333,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly WidgetsMcpContext? _widgetsMcp;
     // MCP-сервер графа кода (codegraph_find/neighbors/hubs): null — чат вне проекта
     private readonly CodeGraphMcpContext? _codeGraphMcp;
+    // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004): null — флаг выключен/вне проекта
+    private readonly string? _dossierTrailerHint;
     // Файловые сабагенты-персоны: план хода — папки --add-dir
     // + pmem-серверы памяти консультантов; вычисляется на каждый ход
     private readonly Func<PersonaAgentsContext?>? _personaAgentsProvider;
@@ -408,6 +410,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _modulesMcp = context.ModulesMcp;
         _widgetsMcp = context.WidgetsMcp;
         _codeGraphMcp = context.CodeGraphMcp;
+        _dossierTrailerHint = context.DossierTrailerHint;
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
@@ -1728,6 +1731,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
                 Add("mcp-tasks", "Как работать с задачами", tasksHint, group: "mcp");
             }
+
+            // Трейлер истории решений (ADR-004) — рядом с конвенцией Co-Authored-By: одной
+            // строкой, только когда флаг change-dossiers включён владельцу и чат в проекте
+            Add("dossier-trailer", "Трейлер истории решений", _dossierTrailerHint, group: "project");
 
             // Подсказка про базу заметок — только когда notes-server подключён
             if (_notesMcp is not null)

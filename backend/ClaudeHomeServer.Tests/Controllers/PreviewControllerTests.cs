@@ -251,6 +251,81 @@ public class PreviewControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
     }
 
+    /// <summary>
+    /// Составная конфигурация Rider из одного участника, чей порт слушается снаружи.
+    /// Своего порта у группы нет — превью обязано взять его у участника, иначе прокси
+    /// отдаёт «Dev-сервер не запущен».
+    /// </summary>
+    private static async Task WriteExternalGroupAsync(string dir, int port)
+    {
+        Directory.CreateDirectory(Path.Combine(dir, "src", "App", "Properties"));
+        await File.WriteAllTextAsync(Path.Combine(dir, "src", "App", "App.csproj"),
+            "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        await File.WriteAllTextAsync(Path.Combine(dir, "src", "App", "Properties", "launchSettings.json"),
+            $$"""{ "profiles": { "http": { "applicationUrl": "http://localhost:{{port}}" } } }""");
+
+        Directory.CreateDirectory(Path.Combine(dir, ".run"));
+        await File.WriteAllTextAsync(Path.Combine(dir, ".run", "Backend.run.xml"), """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Backend" type="LaunchSettings" factoryName=".NET Launch Settings Profile">
+                <option name="LAUNCH_PROFILE_PROJECT_FILE_PATH" value="$PROJECT_DIR$/src/App/App.csproj" />
+                <option name="LAUNCH_PROFILE_NAME" value="http" />
+              </configuration>
+            </component>
+            """);
+        await File.WriteAllTextAsync(Path.Combine(dir, ".run", "Compound.run.xml"), """
+            <component name="ProjectRunConfigurationManager">
+              <configuration default="false" name="Всё сразу" type="com.intellij.execution.configurations.multilaunch" factoryName="MultiLaunchConfiguration">
+                <rows>
+                  <ExecutableRowSnapshot>
+                    <option name="executable">
+                      <ExecutableSnapshot>
+                        <option name="id" value="runConfig:.NET Launch Settings Profile.Backend" />
+                      </ExecutableSnapshot>
+                    </option>
+                  </ExecutableRowSnapshot>
+                </rows>
+              </configuration>
+            </component>
+            """);
+    }
+
+    [Fact]
+    public async Task Services_GroupOfExternalMembers_IsExternal()
+    {
+        var (projectId, dir) = await CreateProjectAsync();
+        using var listener = StartListener(out var port);
+        await WriteExternalGroupAsync(dir, port);
+
+        var json = await (await _owner.GetAsync($"/api/projects/{projectId}/services"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var group = json.GetProperty("services").EnumerateArray()
+            .First(s => s.TryGetProperty("members", out var m) && m.ValueKind == JsonValueKind.Array);
+
+        // Не «started»: своего процесса у группы нет, и назначать её надо внешним эндпоинтом
+        group.GetProperty("status").GetString().Should().Be("external");
+    }
+
+    [Fact]
+    public async Task ActiveExternal_GroupWithoutOwnPort_TakesMemberPort()
+    {
+        var (projectId, dir) = await CreateProjectAsync();
+        using var listener = StartListener(out var port);
+        await WriteExternalGroupAsync(dir, port);
+
+        var services = await (await _owner.GetAsync($"/api/projects/{projectId}/services"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        var groupId = services.GetProperty("services").EnumerateArray()
+            .First(s => s.TryGetProperty("members", out var m) && m.ValueKind == JsonValueKind.Array)
+            .GetProperty("id").GetString();
+
+        var response = await _owner.PostAsJsonAsync(
+            $"/api/projects/{projectId}/preview/active-external", new { serviceId = groupId });
+        response.EnsureSuccessStatusCode();
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>();
+        json.GetProperty("port").GetInt32().Should().Be(port);
+    }
+
     [Fact]
     public async Task ActiveExternal_UnknownService_ReturnsNotFound()
     {

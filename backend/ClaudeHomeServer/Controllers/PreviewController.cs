@@ -99,6 +99,10 @@ public class PreviewController : ControllerBase
         var status = states.Count == 0 ? "idle"
             : states.Any(s => s == "error") ? "error"
             : states.Any(s => s == "starting") ? "starting"
+            // Все участники подняты вне продукта — группе тоже нечего запускать и останавливать,
+            // а превью ей назначается внешним эндпоинтом: своего процесса в реестре у неё нет,
+            // и обычный active вернул бы прокси пустоту («Dev-сервер не запущен»)
+            : states.All(s => s == "external") ? "external"
             : states.All(s => s is "started" or "external") ? "started"
             // Часть поднята, часть нет — это не «запускается»: без своего статуса
             // группа выглядела бы вечно стартующей
@@ -148,18 +152,30 @@ public class PreviewController : ControllerBase
         if (string.IsNullOrWhiteSpace(req.ServiceId))
             return BadRequest(new { error = "serviceId не указан" });
 
-        var svc = (await _discovery.DiscoverAsync(project)).FirstOrDefault(s => s.Id == req.ServiceId);
+        var known = await _discovery.DiscoverAsync(project);
+        var svc = known.FirstOrDefault(s => s.Id == req.ServiceId);
         if (svc is null) return NotFound(new { error = "Сервис не найден" });
-        if (svc.SuggestedPort is not > 0)
+
+        // У составной конфигурации своего порта нет — берём первого участника, которому
+        // есть что показать (тем же правилом группе считается порт в GroupDto)
+        var port = svc.SuggestedPort;
+        if (svc.Members is { Length: > 0 })
+        {
+            var byId = known.ToDictionary(s => s.Id);
+            port = svc.Members
+                .Select(id => byId.TryGetValue(id, out var m) ? m.SuggestedPort : null)
+                .FirstOrDefault(p => p is > 0);
+        }
+        if (port is not > 0)
             return BadRequest(new { error = "У сервиса не задан порт — непонятно, где он слушает" });
 
-        if (!await DevServerService.IsPortListeningAsync(svc.SuggestedPort.Value))
-            return BadRequest(new { error = $"На порту {svc.SuggestedPort} никто не слушает" });
+        if (!await DevServerService.IsPortListeningAsync(port.Value))
+            return BadRequest(new { error = $"На порту {port} никто не слушает" });
 
-        _devServer.SetActiveExternal(projectId, svc.Id, svc.SuggestedPort.Value);
+        _devServer.SetActiveExternal(projectId, svc.Id, port.Value);
         _log.LogInformation("Проект {ProjectId}: превью указывает на внешний сервис {ServiceId} (:{Port})",
-            projectId, svc.Id, svc.SuggestedPort);
-        return Ok(new { activeServiceId = svc.Id, port = svc.SuggestedPort });
+            projectId, svc.Id, port);
+        return Ok(new { activeServiceId = svc.Id, port });
     }
 
     [HttpPost("/api/projects/{projectId}/preview/start")]

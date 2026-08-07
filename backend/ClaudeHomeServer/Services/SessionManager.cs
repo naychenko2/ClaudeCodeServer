@@ -596,6 +596,9 @@ public class SessionManager : IDisposable
                 abortedMidTurn.Add(session.ClaudeSessionId);
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
+        // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
+        // Идемпотентно: на уже перенесённых сессиях это no-op без записи на диск
+        if (Llm.ChatTopicMigration.Apply(list)) SaveSessions();
         // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт
         if (abortedMidTurn.Count > 0)
             _ = Task.Run(async () =>
@@ -2922,18 +2925,24 @@ public class SessionManager : IDisposable
         {
             var prompt =
                 "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) для чата " +
-                "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHintWithEmoji + "\n\n" +
+                "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHintWithIcon + "\n\n" +
                 (firstMessage.Length > 1500 ? firstMessage[..1500] : firstMessage);
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
-                ownerId: ownerId, jsonFormat: Llm.TitleExtraction.SchemaWithEmoji);
+                ownerId: ownerId, jsonFormat: Llm.TitleExtraction.SchemaWithIcon);
             var line = Llm.TitleExtraction.Extract(raw);
             if (line is null || line.Length > 80) return;
-            line = Llm.TitleExtraction.WithEmoji(line, Llm.TitleExtraction.ExtractEmoji(raw));
+            // Значок темы — имя lucide-компонента (PascalCase): имя остаётся чистым текстом,
+            // иконку рисует фронт по icons[iconName]
+            var iconName = Llm.TitleExtraction.ExtractIconName(raw);
 
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
             // Пользователь мог переименовать вручную, пока модель думала — тогда не трогаем
             if (entry.Info.Name != expectedTitle) return;
             entry.Info.Name = line;
+            if (iconName is not null) entry.Info.Topic = iconName;
+            entry.Info.UpdatedAt = DateTime.UtcNow;
+            SaveSessions();
+            await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
@@ -2973,78 +2982,74 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
-    // Поставить значок темы ОДНОМУ чату, не трогая само название и не лоча его. В отличие от
-    // RetitleAsync (переименовывает + NameLocked) — клеит только эмодзи в начало имени по
-    // транскрипту. Чаты со значком пропускаются. null — значок поставить не вышло (нет
-    // переписки, модель не вернула эмодзи, чат исчез). Используется и пакетным прогоном.
-    public async Task<Session?> SetChatEmojiAsync(string userId, string sessionId, CancellationToken ct)
+    // Подобрать значок-иконку ОДНОМУ чату по переписке. Имя не трогает и NameLocked не ставит —
+    // в отличие от RetitleAsync (тот переименовывает). null — значок поставить не вышло
+    // (нет переписки, модель не дала имя, чат исчез). Зовётся и пакетным прогоном.
+    public async Task<Session?> SetChatIconAsync(string userId, string sessionId, CancellationToken ct)
     {
         var session = GetOwned(sessionId, userId);
         if (session is null) return null;
         if (_cheap is null) throw new InvalidOperationException("ИИ недоступен");
 
-        // Транскрипт короткий: для значка темы сути разговора хватает, лишние токены ни к чему
+        // Транскрипт короткий: для темы разговора сути хватает, лишние токены ни к чему
         var history = await GetHistoryAsync(sessionId);
         var transcript = SessionSummaryService.BuildTranscript(history, 1500);
         if (string.IsNullOrWhiteSpace(transcript)) return null;
 
-        var prompt = Llm.TitleExtraction.EmojiHint + "\n\n" + transcript;
+        var prompt = Llm.TitleExtraction.IconHint + "\n\n" + transcript;
         var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
-            ownerId: userId, jsonFormat: Llm.TitleExtraction.SchemaEmoji, ct: ct);
-        var emoji = Llm.TitleExtraction.ExtractEmoji(raw);
-        if (emoji is null) return null;
+            ownerId: userId, jsonFormat: Llm.TitleExtraction.SchemaIcon, ct: ct);
+        var iconName = Llm.TitleExtraction.ExtractIconName(raw);
+        if (iconName is null) return null;
 
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        var current = entry.Info.Name?.Trim() ?? "";
-        // Повторная проверка: за время хода модели чат мог получить значок (авто-заголовок
-        // нового чата или ручное действие) — не перезаписываем то, что уже стоит
-        if (Llm.TitleExtraction.HasEmoji(current)) return entry.Info;
-        // Имя пустое — значок без текста бессмысленен, пропускаем
-        if (current.Length == 0) return null;
-        var name = Llm.TitleExtraction.WithEmoji(current, emoji);
-        entry.Info.Name = name;
+        // Повторная проверка: пока модель думала, значок мог поставить авто-заголовок нового
+        // чата — не перезаписываем то, что уже стоит
+        if (!string.IsNullOrEmpty(entry.Info.Topic)) return entry.Info;
+        entry.Info.Topic = iconName;
         entry.Info.UpdatedAt = DateTime.UtcNow;
-        // NameLocked НЕ ставим: значок — не явное переименование, авто-заголовок и ретайтл
-        // по-прежнему могут менять имя (ретайтл при желании значок перебьёт)
         SaveSessions();
-        await BroadcastChatRenamedAsync(sessionId, entry.Info, name);
+        // Имя не менялось — шлём его же: событие переносит и значок, отдельного не заводим
+        await BroadcastChatRenamedAsync(sessionId, entry.Info, entry.Info.Name ?? "");
         return entry.Info;
     }
 
-    // Результат пакетного прогона значков: сколько чатов получили значок и сколько пропущено
-    // (уже со значком, без переписки, модель не дала эмодзи). Идёт в тост действия палитры.
-    public sealed record EmojiBatchResult(int Processed, int Skipped);
+    // Результат пакетного прогона значков: сколько чатов получили иконку и сколько пропущено
+    // (значок уже стоит, нет переписки, модель не дала имя). Идёт в тост палитры.
+    public sealed record IconBatchResult(int Processed, int Skipped);
 
-    // Проставить значки темы ВСЕМ своим чатам без него. Действие AI-палитры «Проставить
-    // значки тем» — разовый проход по чатам владельца. Чаты, где значок уже стоит, и чаты
-    // без переписки (нечего разбирать) пропускаются. Каждый чат — отдельный вызов модели,
-    // поэтому прогон может занять десятки секунд на десятках чатов.
-    public async Task<EmojiBatchResult> SetChatEmojisAsync(string userId, CancellationToken ct)
+    // Подобрать значки ВСЕМ своим чатам без него. Действие AI-палитры «Проставить значки тем» —
+    // разовый проход по чатам владельца. Чаты со значком отсеиваются ДО вызова модели (экономия
+    // вызовов), поэтому в processed попадают только реально размеченные этим прогоном.
+    // Каждый оставшийся чат — отдельный вызов модели: на десятках чатов это десятки секунд.
+    public async Task<IconBatchResult> SetChatIconsAsync(string userId, CancellationToken ct)
     {
-        var mine = _sessions.Values
+        var all = _sessions.Values
             .Where(e => ResolveOwnerId(e.Info) == userId)
-            .Select(e => e.Info.Id)
+            .Select(e => e.Info)
             .ToList();
+        // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём
+        var pending = all.Where(s => string.IsNullOrEmpty(s.Topic)).Select(s => s.Id).ToList();
         var processed = 0;
-        var skipped = 0;
-        foreach (var id in mine)
+        var skipped = all.Count - pending.Count;
+        foreach (var id in pending)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
-                var updated = await SetChatEmojiAsync(userId, id, ct);
+                var updated = await SetChatIconAsync(userId, id, ct);
                 if (updated is not null) processed++; else skipped++;
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception ex) { _log.LogDebug(ex, "Простановка значка чата {Session}", id); skipped++; }
+            catch (Exception ex) { _log.LogDebug(ex, "Определение значка чата {Session}", id); skipped++; }
         }
-        return new EmojiBatchResult(processed, skipped);
+        return new IconBatchResult(processed, skipped);
     }
 
     // Уведомить клиентов об авто-переименовании чата (адресация как у BroadcastChatDeletedAsync)
     private async Task BroadcastChatRenamedAsync(string sessionId, Session info, string name)
     {
-        var msg = new ChatRenamedMessage(name) with { SessionId = sessionId };
+        var msg = new ChatRenamedMessage(name, info.Topic) with { SessionId = sessionId };
         var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
         if (info.ProjectId is string pid)
             tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));

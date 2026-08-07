@@ -252,6 +252,9 @@ public class Session
     // Имя задано явно (вручную/MCP/действие «Обновить название») — авто-заголовок по первому
     // сообщению его НЕ перезаписывает. Очистка имени снимает лок.
     public bool NameLocked { get; set; }
+    // Тема чата — ИМЯ компонента lucide-react в PascalCase (Cat, Bug, User, MousePointerClick).
+    // Фронт рисует иконку по нему: icons[Topic]. null — темы нет (значок не рисуется).
+    public string? Topic { get; set; }
     // Имя агента (.claude/agents/<name>.md), чей промпт инжектируется в системный контекст
     public string? AgentName { get; set; }
     // Персона, от лица которой ведётся чат: задаёт характер,

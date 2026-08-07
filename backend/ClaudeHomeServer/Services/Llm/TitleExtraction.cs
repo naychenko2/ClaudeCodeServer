@@ -1,5 +1,5 @@
-using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -22,38 +22,50 @@ public static class TitleExtraction
     // Единый контракт ответа для промпта (локаль/claude/direct — все возвращают один JSON).
     public const string JsonHint = "Ответь СТРОГО одним JSON-объектом вида {\"title\": \"…\"} и ничем больше.";
 
-    // Вариант со значком темы: {"title": "…", "emoji": "…"} — заголовок чата ставится в
-    // списке рядом с десятками других, и один эмодзи впереди даёт узнавание быстрее текста.
-    // Значок не required: модель, которая его не осилила, всё равно отдаёт годный заголовок.
-    public static readonly object SchemaWithEmoji = new
+    // Вариант со значком темы: {"title": "…", "iconName": "Cat"} — iconName это ИМЯ компонента
+    // lucide-react в PascalCase. Каталога тем больше нет: модель свободно выбирает иконку под
+    // предмет разговора (Cat, Dog, Bug, User, MousePointerClick…), фронт рисует icons[iconName].
+    // Не required: без иконки заголовок всё равно годен.
+    public static readonly object SchemaWithIcon = new
     {
         type = "object",
-        properties = new { title = new { type = "string" }, emoji = new { type = "string" } },
+        properties = new
+        {
+            title = new { type = "string" },
+            iconName = new { type = "string" },
+        },
         required = new[] { "title" },
     };
 
-    public const string JsonHintWithEmoji =
-        "Ответь СТРОГО одним JSON-объектом вида {\"title\": \"…\", \"emoji\": \"…\"} и ничем больше. " +
-        "В emoji — ровно один эмодзи, подходящий теме разговора (без текста и пояснений).";
-
-    // Вариант «только значок»: для ручного проставления эмодзи-темы существующим чатам,
-    // где переименовывать не нужно (имя уже сложилось). Модель читает переписку и выбирает
-    // один эмодзи темы, не трогая заголовок.
-    public static readonly object SchemaEmoji = new
+    // Вариант «только значок»: для проставления иконки существующим чатам, где имя уже сложилось
+    // и переименовывать не нужно.
+    public static readonly object SchemaIcon = new
     {
         type = "object",
-        properties = new { emoji = new { type = "string" } },
-        required = new[] { "emoji" },
+        properties = new { iconName = new { type = "string" } },
+        required = new[] { "iconName" },
     };
 
-    public const string EmojiHint =
-        "Прочитай переписку и выбери ОДИН эмодзи, отражающий тему разговора " +
-        "(напр. 🐛 баг, ⚙️ код/настройка, 🎨 дизайн, 🚀 деплой, 📄 доки, 🔍 разбор, " +
-        "🧪 тесты, 💬 разговор, 💰 деньги, 📊 данные). " +
-        "Ответь СТРОГО одним JSON-объектом вида {\"emoji\": \"…\"} и ничем больше.";
+    // Модель выбирает имя lucide-компонента под предмет разговора. Доступны все ~1700 иконок
+    // lucide-react (модели знают их по обучению). Примеры помогают попасть в формат PascalCase.
+    public static string JsonHintWithIcon =>
+        "Ответь СТРОГО одним JSON-объектом вида {\"title\": \"…\", \"iconName\": \"…\"} и ничем больше. " +
+        "iconName — имя компонента иконок lucide-react в PascalCase, подходящее предмету разговора " +
+        "(напр. Bug для бага, Code для кода, Cat для кошки, Dog для собаки, User для человека, " +
+        "Palette для дизайна, Rocket для деплоя, Settings для настройки, FileText для документов, " +
+        "Search для поиска, Database для данных, Wallet для денег). Если подходящей иконки нет — " +
+        "опусти iconName.";
 
-    // Начинается ли имя с эмодзи (значок темы уже стоит). Для batch-прогона: чаты со
-    // значком пропускаем, чтобы не перезаписывать то, что уже расставлено.
+    public static string IconHint =>
+        "Определи предмет разговора и подбери ИМЯ компонента иконок lucide-react в PascalCase, " +
+        "которое его изображает (Bug — баг, Code — код, Cat — кошка, Dog — собака, User — человек, " +
+        "Palette — дизайн, Rocket — деплой, Settings — настройка, FileText — документы, Search — " +
+        "поиск, Database — данные, Wallet — деньги, MessageCircle — разговор, и т.п.; всего доступно " +
+        "~1700 имён). Ответь СТРОГО одним JSON-объектом вида {\"iconName\": \"…\"} и ничем больше. " +
+        "Если подходящей иконки нет — ответь пустым {}.";
+
+    // Начинается ли имя с эмодзи. Осталось от прежней реализации значка (эмодзи в самом
+    // имени) — нужно миграции, которая чистит такие имена.
     public static bool HasEmoji(string? title)
         => !string.IsNullOrEmpty(title) && IsEmojiStart(title.Trim());
 
@@ -70,25 +82,17 @@ public static class TitleExtraction
         return title.Length == 0 ? null : title;
     }
 
-    // Значок темы из того же ответа. Набор свободный (что модель придумала, то и берём),
-    // но форма жёсткая: ровно одна графема, начинающаяся с эмодзи-символа. Слабая модель
-    // на просьбу «один эмодзи» присылает и слово, и «:smile:», и пустую строку — всё это
-    // отсекается, и чат остаётся с обычным заголовком. null — значка нет.
-    public static string? ExtractEmoji(string? raw)
+    // Имя lucide-иконки из ответа модели. Белого списка НЕТ (всё ~1700 имён): бэк доверяет
+    // модели, а фронт проверит icons[iconName] и не нарисует то, чего нет. Sanity отсекает
+    // явный мусор — не PascalCase (Cat, MousePointerClick), с пробелами, слишком длинное.
+    // null — имени нет (поле отсутствует, пустое или не похоже на имя компонента).
+    private static readonly Regex IconNamePattern = new(@"^[A-Z][A-Za-z0-9]{1,39}$", RegexOptions.Compiled);
+    public static string? ExtractIconName(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
-        var value = TryJsonProp(raw.Trim(), "emoji")?.Trim();
-        if (string.IsNullOrEmpty(value)) return null;
-        // Одна графема: составные значки (флаги, 👨‍💻 через ZWJ) — это тоже один элемент
-        var elements = new StringInfo(value);
-        if (elements.LengthInTextElements != 1) return null;
-        return IsEmojiStart(value) ? value : null;
+        var value = TryJsonProp(raw.Trim(), "iconName")?.Trim();
+        return !string.IsNullOrEmpty(value) && IconNamePattern.IsMatch(value) ? value : null;
     }
-
-    // Значок перед заголовком. Модель, которую попросили про emoji отдельным полем, нередко
-    // ставит его ещё и в сам title — тогда второй не приклеиваем, иначе выйдет «🐛 🐛 Правка».
-    public static string WithEmoji(string title, string? emoji)
-        => emoji is null || IsEmojiStart(title) ? title : emoji + " " + title;
 
     // Первый кодпоинт — из блоков, где живут эмодзи. Диапазоны отсекают обычный текст любого
     // языка и «текстовые» знаки вроде стрелок U+2190…U+21FF или троеточия — их модель иногда

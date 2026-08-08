@@ -35,7 +35,8 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
         try
         {
             var p = GetProject(projectId);
-            return Ok(docs.GetIndex(p.RootPath, docs.ResolveScope(p)));
+            var (scope, types) = docs.ResolveScopeAndTypes(p);
+            return Ok(docs.GetIndex(p.RootPath, scope, types));
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
@@ -49,7 +50,8 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
         try
         {
             var p = GetProject(projectId);
-            var detail = docs.GetDoc(p.RootPath, path, docs.ResolveScope(p));
+            var (scope, types) = docs.ResolveScopeAndTypes(p);
+            var detail = docs.GetDoc(p.RootPath, path, scope, types);
             return detail is null ? NotFound() : Ok(detail);
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -183,6 +185,69 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
         catch (KeyNotFoundException) { return NotFound(); }
         catch (IOException e) { return StatusCode(500, new { error = $"Не удалось создать документ: {e.Message}" }); }
         catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к папке: {e.Message}" }); }
+    }
+
+    // Значение свойства в шапке документа («**Статус:** Принято»). Правка репозитория,
+    // поэтому только по явному жесту пользователя.
+    //
+    // value = null — снять свойство, «» — оставить пустой слот. Ответ — свежий индекс по
+    // конвенции панели: метка в списке документов обязана приехать вместе с подтверждением,
+    // а не вторым запросом. touched перечисляет ключи, которые изменились фактически, —
+    // их больше одного, когда вместе со свойством переписалась «дата смены»
+    [HttpPut("property")]
+    public IActionResult SetProperty(string projectId, [FromBody] SetDocPropertyRequest req)
+    {
+        try
+        {
+            var p = GetProject(projectId);
+            var (scope, types) = docs.ResolveScopeAndTypes(p);
+            var result = docs.WriteProperty(p.RootPath, req.Path, req.Key, req.Value, scope, types);
+            return result.Status switch
+            {
+                DocsIndexService.PropertyWriteStatus.NotFound => NotFound(new { error = result.Error }),
+                DocsIndexService.PropertyWriteStatus.BadKey => BadRequest(new { error = result.Error }),
+                DocsIndexService.PropertyWriteStatus.BadValue => BadRequest(new { error = result.Error }),
+                DocsIndexService.PropertyWriteStatus.Failed => StatusCode(500, new { error = result.Error }),
+                _ => Ok(new
+                {
+                    properties = result.Properties,
+                    touched = result.Touched,
+                    index = docs.GetIndex(p.RootPath, scope, types),
+                }),
+            };
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось записать документ: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к документу: {e.Message}" }); }
+    }
+
+    // Схема типов документов. Живёт ТОЛЬКО в .docs: у соседей по папке владельцы разные, а
+    // тип документа — свойство репозитория, а не человека. Поэтому, в отличие от PUT /scope,
+    // писать больше некуда — файла нет, значит он создаётся вместе с действующей областью.
+    // Это не «молча»: описать тип документа — уже явный жест, такой же, как POST /scope-file.
+    [HttpPut("types")]
+    public IActionResult SetTypes(string projectId, [FromBody] SetDocTypesRequest req)
+    {
+        try
+        {
+            var project = GetProject(projectId);
+            var normalized = DocTypeSchema.Normalize(req.Types);
+            // Область передаём, только когда файла ещё нет: он создаётся вместе с ней.
+            // В существующий файл пишем ОДНУ секцию типов — иначе правка схемы переписала бы
+            // область нормализованными значениями и срезала бы то, что написано в файле руками
+            var initialScope = docs.ReadScopeFile(project.RootPath).Scope is null
+                ? docs.ResolveScope(project)
+                : null;
+            if (docs.WriteScopeFile(project.RootPath, initialScope, normalized)
+                == DocsIndexService.ScopeFileWriteStatus.Broken)
+                return Conflict(new { error = $"Файл {DocsIndexService.ScopeFileName} не разобран — исправьте его вручную" });
+
+            var (scope, types) = docs.ResolveScopeAndTypes(project);
+            return Ok(new { scope = docs.Describe(project), index = docs.GetIndex(project.RootPath, scope, types) });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (IOException e) { return StatusCode(500, new { error = $"Не удалось записать {DocsIndexService.ScopeFileName}: {e.Message}" }); }
+        catch (UnauthorizedAccessException e) { return StatusCode(500, new { error = $"Нет доступа к {DocsIndexService.ScopeFileName}: {e.Message}" }); }
     }
 
     // Переименовать документ или раздел. Раздел переезжает парой «страница + папка», и
@@ -343,7 +408,12 @@ public class DocsController(DocsIndexService docs, ProjectManager projects,
         try
         {
             var project = GetProject(projectId);
-            docs.WriteScopeFile(project.RootPath, docs.ResolveScope(project));
+            // Единственная из пяти точек записи, которая пишет безусловно: остальные сперва
+            // убеждаются, что файл разобран. Перезаписать неразобранный — уничтожить чужую
+            // ручную правку, о содержимом которой мы ничего не знаем
+            if (docs.WriteScopeFile(project.RootPath, docs.ResolveScope(project))
+                == DocsIndexService.ScopeFileWriteStatus.Broken)
+                return Conflict(new { error = $"Файл {DocsIndexService.ScopeFileName} не разобран — исправьте его вручную" });
             return Ok(docs.Describe(project));
         }
         catch (KeyNotFoundException) { return NotFound(); }
@@ -373,3 +443,11 @@ public record DeleteDocRequest(string? Path);
 // поддеревом). UpdateLinks — чинить ли ссылки: при переносе меняется глубина, и ломаются
 // не только чужие ссылки на переехавшее, но и его собственные на всё остальное
 public record MoveDocRequest(string? Path, string? TargetFolder, bool UpdateLinks = true);
+
+// Key — ключ свойства ровно как он записан в схеме типа. Value: null — снять свойство,
+// «» — оставить пустой слот под значение
+public record SetDocPropertyRequest(string? Path, string? Key, string? Value);
+
+// Схема целиком: типы перезаписывают секцию docTypes файла .docs. Частичной правки нет —
+// редактор всегда присылает весь список, и он же отвечает за сохранность незнакомых полей
+public record SetDocTypesRequest(List<DocTypeDef>? Types);

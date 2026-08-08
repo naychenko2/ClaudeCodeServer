@@ -11,7 +11,7 @@ import { updateSpecialtySettings } from '../../lib/presets';
 import { QuotasTab } from './QuotasTab';
 import { SlotsTab } from './SlotsTab';
 import { ApplyTab } from './ApplyTab';
-import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import type { SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult } from '../../types';
 
 // Раздел «Модели и расход» (редизайн v3, макет docs/mockups/models-spend-v3.html):
 // одна модалка с тремя вкладками — «Квоты и деньги», «Модели по умолчанию», «Применение».
@@ -101,6 +101,24 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
     return req.catch(e => { fail(e); throw e; }).finally(settle);
   };
 
+  // Сброс исключений/слотов (серверный reset): busy держится до конца перезагрузки
+  // настроек, а не до ответа POST — иначе клик по ячейке в этом окне уйдёт PUT'ом
+  // старого слоя и воскресит только что удалённые записи.
+  const [resettingScope, setResettingScope] = useState<'global' | 'owner' | null>(null);
+
+  // Перечитать настройки после сброса и обновить модульный стор пресетов (без него
+  // подписи в ячейках останутся от старого снимка); invalidateEffectiveLines дёргать
+  // отдельно не нужно — updateSpecialtySettings делает это сама.
+  const onReloadSettings = (): Promise<void> =>
+    api.specialties.getSettings().then(s => { setSettings(s); updateSpecialtySettings(s); });
+
+  const onReset = (scope: 'global' | 'owner', key?: string): Promise<ResetResult> => {
+    setResettingScope(scope);
+    return api.specialties.reset(scope, key)
+      .then(res => onReloadSettings().then(() => res))
+      .finally(() => setResettingScope(null));
+  };
+
   const tierModels = useMemo<Record<TierKey, string>>(() => ({
     strong: data.effectiveTierModel('strong'),
     medium: data.effectiveTierModel('medium'),
@@ -151,6 +169,7 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
           {tab === 'slots' && (
             <SlotsTab
               isAdmin={isAdmin}
+              meUserId={me?.userId ?? null}
               data={data}
               contextUserId={contextUserId}
               onContextUserId={setContextUserId}
@@ -161,6 +180,9 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               savingScope={savingScope}
               onSaveLayer={handleSaveLayer}
               onGoApply={() => setTab('apply')}
+              onReloadSettings={onReloadSettings}
+              resettingScope={resettingScope}
+              onReset={onReset}
             />
           )}
           {tab === 'apply' && (

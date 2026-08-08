@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // presets.test.ts, тестируем чистую логику сборки слоя
 vi.mock('../api', () => ({ api: {} }));
 
-import { emptyLayer, mergePresetIntoCell, withNewPreset, withTierCell } from '../specialties';
+import { effectiveSpecialtyRecord, emptyLayer, mergePresetIntoCell, withNewPreset, withTierCell } from '../specialties';
 import { presetRoute } from '../presets';
 
 // Регрессия ревью 65d8df66 (CRITICAL 1): inline-сборка цепочки в матрице «Исключений»
@@ -54,6 +54,42 @@ describe('inline-сборка цепочки в ячейке матрицы — 
     expect(onSaveLayer).toHaveBeenCalledTimes(2);
     const secondSaved = onSaveLayer.mock.calls[1][1] as ReturnType<typeof emptyLayer>;
     expect(secondSaved.presets).toEqual([]); // пресет потерян — воспроизводит найденный дефект
+  });
+});
+
+// План model-settings-reset.md (шаг 3, MINOR 5): маркер строки «есть запись без уровней»
+// в ExceptionsBlock (recShadowed/recConfigured) считается ИЗ ДАННЫХ слоя — запись есть,
+// все три ячейки уровня пусты, — а не из shadowed-ответа серверного reset. Ответ reset
+// живёт один рендер и пропадает при переоткрытии модалки; данные слоя переживают его.
+// Именно такую «пустую» запись оставляет серверный reset у специальности с расходящимися
+// правами (шаг 2 плана) — она обязана попасть и в счётчик, и в фильтр «С настройками»,
+// а не потеряться как «неотличима от отсутствия записи».
+describe('shadowed-запись (есть запись, все три ячейки уровня пусты) — отличима от «записи нет»', () => {
+  it('effectiveSpecialtyRecord возвращает объект записи (не null) для owner-слоя без единой заполненной ячейки', () => {
+    const owner = emptyLayer();
+    // Права сохранены (как оставляет их серверный reset), но ни один уровень не задан —
+    // ровно то состояние, из которого ExceptionsBlock считает маркер «запись без уровней»
+    owner.specialties.coding = { access: 'full', tools: null, disallowedTools: null };
+    const global = emptyLayer();
+
+    const rec = effectiveSpecialtyRecord(global, owner, 'coding');
+
+    // Запись «есть» в слое — не унаследована к null, значит попадает и в счётчик исключений,
+    // и (при её включении в предикат configured) в фильтр «С настройками»
+    expect(rec).not.toBeNull();
+    // …но ни одна ячейка уровня не заполнена — это и есть «запись без уровней»
+    expect(rec?.tierStrong).toBeFalsy();
+    expect(rec?.tierMedium).toBeFalsy();
+    expect(rec?.tierWeak).toBeFalsy();
+  });
+
+  it('специальность без записи в обоих слоях отличима от shadowed-записи — эффективная запись null', () => {
+    const owner = emptyLayer();
+    owner.specialties.coding = { access: 'full', tools: null, disallowedTools: null };
+    const global = emptyLayer();
+
+    // Соседняя специальность без записи вовсе — не должна ложно получить маркер
+    expect(effectiveSpecialtyRecord(global, owner, 'reviewer')).toBeNull();
   });
 });
 

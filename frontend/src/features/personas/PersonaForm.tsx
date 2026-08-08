@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Pencil, Trash2 } from 'lucide-react';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project } from '../../types';
+import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project, UpdatePersonaDto } from '../../types';
 import { api } from '../../lib/api';
 import { useSpecialtyCatalog } from '../../lib/specialties';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
@@ -131,6 +131,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const [tierMedium, setTierMedium] = useState(persona?.tierMedium ?? '');
   const [tierWeak, setTierWeak] = useState(persona?.tierWeak ?? '');
   const [tierCellsOpen, setTierCellsOpen] = useState(false);
+  // Точечный сброс уровней персоны (план model-settings-reset.md, шаг 3) — отдельный
+  // busy от общего сохранения формы, бьёт сразу PUT'ом, не дожидаясь кнопки «Сохранить»
+  const [tiersResetBusy, setTiersResetBusy] = useState(false);
   const [effort, setEffort] = useState(persona?.effort ?? initial?.effort ?? '');
   // Специальность (функциональная роль) для оркестрации — конвейер/брифинг/статус/память
   const [specialty, setSpecialty] = useState<PersonaSpecialty>(
@@ -561,6 +564,33 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       setError(e instanceof Error ? e.message : 'Не удалось сохранить персону');
     } finally {
       setBusy(false);
+    }
+  };
+
+  // Вернуть наследование уровней персоны: три пустых значения существующим PUT
+  // (тот же контракт, что и обычное сохранение) — Model/ModelTier не трогаем, это другие
+  // оси настройки. Бьёт сразу, не дожидаясь общего «Сохранить» — уровни в форме и так
+  // независимы от остальных полей (пусто = наследование от специальности/слотов).
+  const resetPersonaTiers = async () => {
+    if (!persona || tiersResetBusy) return;
+    setTiersResetBusy(true);
+    setError(null);
+    try {
+      // tierStrong/… не входят в типаж CreatePersonaDto/UpdatePersonaDto (только в Persona
+      // и SpecialtyTemplateSettings), хотя бэкенд их принимает — тот же неполный тип уже
+      // обходит save() ниже, посылая их в общем dto среди полей, которые в типе есть
+      const dto = { tierStrong: '', tierMedium: '', tierWeak: '' } as unknown as UpdatePersonaDto;
+      const saved = await api.personas.update(persona.id, dto);
+      setTierStrong('');
+      setTierMedium('');
+      setTierWeak('');
+      bumpPersonas();
+      invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
+      onSaved(saved);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось сбросить уровни');
+    } finally {
+      setTiersResetBusy(false);
     }
   };
 
@@ -1077,6 +1107,24 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           {tierCellsOpen ? (
             <Field label="Свои модели по уровням">
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {isEdit && (tierStrong || tierMedium || tierWeak) && (
+                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                    <button
+                      type="button"
+                      onClick={resetPersonaTiers}
+                      disabled={tiersResetBusy}
+                      title="Вернуть наследование"
+                      style={{
+                        font: 'inherit', fontSize: 11.5, fontWeight: 600, color: C.accent,
+                        background: 'transparent', border: 'none', padding: 0,
+                        cursor: tiersResetBusy ? 'default' : 'pointer', textDecoration: 'underline',
+                        opacity: tiersResetBusy ? 0.5 : 1,
+                      }}
+                    >
+                      {tiersResetBusy ? 'Сбрасываю…' : 'Вернуть наследование'}
+                    </button>
+                  </div>
+                )}
                 {TIER_ORDER.map(t => {
                   const cell = tierCell(t);
                   return (

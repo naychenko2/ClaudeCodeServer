@@ -312,6 +312,7 @@ public class PersonasController : ControllerBase
         var templated = _specialtyTemplates.Apply(UserId, req.Specialty ?? current.Specialty, current.Specialty,
             access, req.Tools, req.DisallowedTools);
 
+        var isAssistantDraft = _users.GetById(UserId)?.AssistantPersonaId == id;
         Persona persona;
         try
         {
@@ -322,8 +323,42 @@ public class PersonasController : ControllerBase
                 req.TierStrong, req.TierMedium, req.TierWeak);
         }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        // Ручная правка заготовки снимает её статус (план 2.8): если у нетронутой заготовки
+        // меняется Name/Role/Greeting или любой слот характера — обнуляем AssistantPersonaId.
+        // Иначе карточка-приглашение «ассистент пока стандартный» горела бы над персоной,
+        // которую человек только что настроил руками, а «Познакомиться» предлагало бы интервью,
+        // перезаписывающее его правки. Посторонние поля (цвет, модель, аватар, привязки) не снимают.
+        if (isAssistantDraft && IsCharacterRelevantChange(current, persona))
+            _users.SetAssistantPersona(UserId, null);
         await Broadcast("updated", id);
         return Ok(persona);
+    }
+
+    // Превращение заготовки в «своего» ассистента (план 2.8): Name/Role/Greeting или любой слот
+    // характера поменян → статус нетронутой заготовки снимается. Посторонние поля (цвет, модель,
+    // аватар, привязки) статус не трогают — карточка-приглашение не должна гаснуть от косметики.
+    private static bool IsCharacterRelevantChange(Persona before, Persona after) =>
+        !string.Equals(before.Name, after.Name, StringComparison.Ordinal)
+        || !string.Equals(before.Role ?? "", after.Role ?? "", StringComparison.Ordinal)
+        || !string.Equals(before.Greeting ?? "", after.Greeting ?? "", StringComparison.Ordinal)
+        || !SameCharacterContract(before.Contract, after.Contract);
+
+    // Сравнение только слотов характера контракта (Character/Tone/MustDo/MustNot/OutputFormat/
+    // SpeechExamples/Instructions); null-контракт трактуем как пустой. Списки — пословно.
+    private static bool SameCharacterContract(PersonaContract? a, PersonaContract? b)
+    {
+        var ca = a ?? new PersonaContract();
+        var cb = b ?? new PersonaContract();
+        return Slot(ca.Character) == Slot(cb.Character)
+            && Slot(ca.Tone) == Slot(cb.Tone)
+            && Slot(ca.OutputFormat) == Slot(cb.OutputFormat)
+            && Slot(ca.Instructions) == Slot(cb.Instructions)
+            && ListSlot(ca.MustDo).SequenceEqual(ListSlot(cb.MustDo))
+            && ListSlot(ca.MustNot).SequenceEqual(ListSlot(cb.MustNot))
+            && ListSlot(ca.SpeechExamples).SequenceEqual(ListSlot(cb.SpeechExamples));
+
+        static string Slot(string? s) => s ?? "";
+        static IReadOnlyList<string> ListSlot(List<string>? xs) => xs is null ? Array.Empty<string>() : xs;
     }
 
     [HttpDelete("{id}")]

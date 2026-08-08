@@ -56,7 +56,12 @@ public sealed class DossierStore
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!;
         _dataDir = Path.Combine(dataRoot, "dossiers");
         _knowledgeStorePath = Path.Combine(_dataDir, "knowledge.json");
-        _maxEntries = int.TryParse(config["Dossiers:MaxEntries"], out var me) && me > 0 ? me : 5000;
+        // Дефолт поднят с 5000 до 20000 (замер прода 2026-08-08): ~62 коммита/день, при фильтре
+        // захвата — ~600 паспортов/мес, так что 5000 исчерпались бы за ~8 мес вместо «запаса на
+        // годы». 20000 ≈ 2.7 года, ~30 МБ JSON на проект — приемлемо для редкого пути записи.
+        // Точка пересмотра (>10k) на SQLite (ADR-004 §4) — на горизонте, но Add редок (на коммит),
+        // чтение in-memory; до фактических тормозов JSON достаточен.
+        _maxEntries = int.TryParse(config["Dossiers:MaxEntries"], out var me) && me > 0 ? me : 20_000;
         _kStore = JsonFileStore.Load<Dictionary<string, KnowledgeState>>(_knowledgeStorePath, JsonOpts) ?? new();
     }
 

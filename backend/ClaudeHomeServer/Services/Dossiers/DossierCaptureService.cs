@@ -30,14 +30,13 @@ public sealed class DossierCaptureService : BackgroundService
     private readonly DossierStore _store;
     private readonly DossierCaptureState _state;
     private readonly ICheapTextRunner _cheap;
-    private readonly FeatureFlagService _flags;
     private readonly CodeGraph.CodeGraphService _codeGraph;
     private readonly InstanceSecretsProvider _secrets;
     private readonly ILogger<DossierCaptureService> _log;
 
     public DossierCaptureService(SessionManager sessions, ProjectManager projects, TaskManager tasks,
         FileService files, Git.GitService git, DossierStore store, DossierCaptureState state,
-        ICheapTextRunner cheap, FeatureFlagService flags, CodeGraph.CodeGraphService codeGraph,
+        ICheapTextRunner cheap, CodeGraph.CodeGraphService codeGraph,
         InstanceSecretsProvider secrets, ILogger<DossierCaptureService> log)
     {
         _sessions = sessions;
@@ -48,7 +47,6 @@ public sealed class DossierCaptureService : BackgroundService
         _store = store;
         _state = state;
         _cheap = cheap;
-        _flags = flags;
         _codeGraph = codeGraph;
         _secrets = secrets;
         _log = log;
@@ -87,7 +85,6 @@ public sealed class DossierCaptureService : BackgroundService
         if (msg is not ResultMessage || string.IsNullOrEmpty(session.ProjectId)) return Task.CompletedTask;
         var project = _projects.GetById(session.ProjectId);
         if (project is null || string.IsNullOrEmpty(project.OwnerId)) return Task.CompletedTask;
-        if (!_flags.IsEnabled(project.OwnerId, FeatureFlagKeys.ChangeDossiers)) return Task.CompletedTask;
 
         var root = session.WorktreePath ?? project.RootPath;
         _ = Task.Run(() => TickRootSafeAsync(project, root));
@@ -101,7 +98,6 @@ public sealed class DossierCaptureService : BackgroundService
         foreach (var project in _projects.GetAll())
         {
             if (string.IsNullOrEmpty(project.OwnerId)) continue;
-            if (!_flags.IsEnabled(project.OwnerId, FeatureFlagKeys.ChangeDossiers)) continue;
 
             var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { project.RootPath };
             foreach (var s in _sessions.GetAll())

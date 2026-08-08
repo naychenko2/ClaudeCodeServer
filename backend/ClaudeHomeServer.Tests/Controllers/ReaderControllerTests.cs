@@ -12,10 +12,10 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Эндпоинты POST /api/reader/read и POST /api/reader/embed-check (ADR-006 §1): авторизация,
-// гейт фич-флага link-reader, счастливый путь. Сетевую часть подменяем StubHandler на
-// именованном клиенте "link-reader" — редиректы, SSRF-рубежи и вердикты встраиваемости уже
-// покрыты ReaderServiceTests/ReaderEmbedCheckTests без реального HTTP.
+// Эндпоинты POST /api/reader/read и POST /api/reader/embed-check (ADR-006 §1): авторизация
+// и счастливый путь. Сетевую часть подменяем StubHandler на именованном клиенте "link-reader" —
+// редиректы, SSRF-рубежи и вердикты встраиваемости уже покрыты ReaderServiceTests/ReaderEmbedCheckTests
+// без реального HTTP.
 public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFixture<TestWebApplicationFactory>
 {
     private sealed class StubHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
@@ -55,9 +55,6 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
         return client;
     }
 
-    private static Task EnableFlagAsync(HttpClient client) =>
-        client.PutAsJsonAsync($"/api/feature-flags/{FeatureFlagKeys.LinkReader}", new { enabled = true });
-
     [Fact]
     public async Task Read_БезАвторизации_401()
     {
@@ -70,23 +67,11 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
     }
 
     [Fact]
-    public async Task Read_ФлагВыключен_403()
-    {
-        using var f = WithStubReader(_ => throw new InvalidOperationException("не должно дойти"));
-        using var client = await AuthenticatedClientAsync(f);
-
-        var resp = await client.PostAsJsonAsync("/api/reader/read", new { url = "http://example.com/" });
-
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-    }
-
-    [Fact]
-    public async Task Read_ФлагВключён_ВозвращаетMarkdown()
+    public async Task Read_ВозвращаетMarkdown()
     {
         using var f = WithStubReader(_ => new HttpResponseMessage(HttpStatusCode.OK)
         { Content = new StringContent(ReadableArticleHtml, Encoding.UTF8, "text/html") });
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         var resp = await client.PostAsJsonAsync("/api/reader/read", new { url = "http://example.com/article" });
 
@@ -97,12 +82,11 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
     }
 
     [Fact]
-    public async Task Image_ФлагВключён_ВозвращаетБайтыКартинки()
+    public async Task Image_ВозвращаетБайтыКартинки()
     {
         using var f = WithStubReader(_ => new HttpResponseMessage(HttpStatusCode.OK)
         { Content = new ByteArrayContent([1, 2, 3]) { Headers = { ContentType = new("image/png") } } });
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         var resp = await client.GetAsync("/api/reader/image?url=" + Uri.EscapeDataString("http://example.com/pic.png"));
 
@@ -116,7 +100,6 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
     {
         using var f = WithStubReader(_ => throw new InvalidOperationException("не должно дойти"));
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         var resp = await client.GetAsync("/api/reader/image?url=" + Uri.EscapeDataString("http://127.0.0.1/pic.png"));
 
@@ -128,7 +111,6 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
     {
         using var f = WithStubReader(_ => throw new InvalidOperationException("SSRF-рубеж должен остановить раньше сети"));
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         var resp = await client.PostAsJsonAsync("/api/reader/read", new { url = "http://127.0.0.1/" });
 
@@ -151,24 +133,11 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
     }
 
     [Fact]
-    public async Task EmbedCheck_ФлагВыключен_403()
-    {
-        // Чек-лист ADR-006: флаг link-reader гейтит сам эндпоинт, а не только кнопку.
-        using var f = WithStubReader(_ => throw new InvalidOperationException("не должно дойти"));
-        using var client = await AuthenticatedClientAsync(f);
-
-        var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/" });
-
-        resp.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-    }
-
-    [Fact]
-    public async Task EmbedCheck_ФлагВключён_ВстраиваемБезReason()
+    public async Task EmbedCheck_ВстраиваемБезReason()
     {
         using var f = WithStubReader(_ => new HttpResponseMessage(HttpStatusCode.OK)
         { Content = new StringContent(ReadableArticleHtml, Encoding.UTF8, "text/html") });
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/article" });
 
@@ -191,7 +160,6 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
             return resp;
         });
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "http://example.com/article" });
 
@@ -206,7 +174,6 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
     {
         using var f = WithStubReader(_ => throw new InvalidOperationException("не должно дойти"));
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         var resp = await client.PostAsJsonAsync("/api/reader/embed-check", new { url = "" });
 
@@ -224,7 +191,6 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
         using var f = WithStubReader(_ => new HttpResponseMessage(HttpStatusCode.OK)
         { Content = new StringContent(ReadableArticleHtml, Encoding.UTF8, "text/html") });
         using var client = await AuthenticatedClientAsync(f);
-        await EnableFlagAsync(client);
 
         for (var i = 0; i < ReaderQuotaService.MaxPerMinutePerOwner; i++)
         {

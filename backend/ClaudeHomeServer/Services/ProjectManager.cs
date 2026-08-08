@@ -139,7 +139,7 @@ public class ProjectManager
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
-        string? color = null, List<string>? mcpServersOff = null, List<string>? mcpServersOn = null)
+        string? color = null, List<string>? mcpServersOn = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -166,15 +166,8 @@ public class ProjectManager
         // color: null = не менять; "" = сброс цвета (дефолтный фолбэк на фронте); иначе — ключ палитры.
         // Смена цвета картинку НЕ сбрасывает — она приоритетнее инициалов при Kind==Image.
         if (color is not null) project.Icon.Color = color.Length == 0 ? null : color;
-        // mcpServersOff: null = не менять; пустой список = «в проекте не выключен никто».
+        // mcpServersOn: allow-смысл. null = не менять; пустой список = «в проекте не включён никто».
         // Ключи нормализуем как в реестре (нижний регистр) — сравнение при доставке идёт по ним
-        if (mcpServersOff is not null)
-            project.McpServersOff = mcpServersOff.Count == 0
-                ? null
-                : [.. mcpServersOff.Select(k => k.Trim().ToLowerInvariant())
-                    .Where(k => k.Length > 0).Distinct(StringComparer.Ordinal)];
-        // mcpServersOn: та же нормализация и семантика null/пусто, но allow-смысл:
-        // null = не менять; пустой список = «в проекте не включён никто» (флаг mcp-allowlist)
         if (mcpServersOn is not null)
             project.McpServersOn = mcpServersOn.Count == 0
                 ? null
@@ -340,9 +333,8 @@ public class ProjectManager
     }
 
     // Подмести ключ сервера из McpServersOn всех проектов владельца — вызывается при
-    // удалении сервера из реестра и смене его ключа. Протухший deny (McpServersOff)
-    // безвреден, а протухшая выдача — нет: новый сервер под старым ключом молча унаследовал
-    // бы чужие права. Возвращает число тронутых проектов.
+    // удалении сервера из реестра и смене его ключа: новый сервер под старым ключом
+    // молча унаследовал бы чужие права. Возвращает число тронутых проектов.
     public int PurgeMcpKey(string ownerId, string serverKey)
     {
         var key = serverKey.Trim().ToLowerInvariant();

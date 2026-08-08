@@ -25,7 +25,6 @@ public sealed class TeamMemoryAutolearnService : IHostedService
     private readonly TeamMemoryService _memory;
     private readonly TeamMemoryConsolidationService _consolidation;
     private readonly Llm.ICheapTextRunner _cheap;
-    private readonly FeatureFlagService _flags;
     private readonly IConfiguration _config;
     private readonly ILogger<TeamMemoryAutolearnService> _log;
     private readonly IHubContext<SessionHub> _hub;
@@ -40,7 +39,7 @@ public sealed class TeamMemoryAutolearnService : IHostedService
 
     public TeamMemoryAutolearnService(SessionManager sessions, ProjectManager projects,
         TeamMemoryService memory, TeamMemoryConsolidationService consolidation,
-        Llm.ICheapTextRunner cheap, FeatureFlagService flags,
+        Llm.ICheapTextRunner cheap,
         IConfiguration config, ILogger<TeamMemoryAutolearnService> log, IHubContext<SessionHub> hub,
         ProjectEventLogService? events = null)
     {
@@ -49,7 +48,6 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         _memory = memory;
         _consolidation = consolidation;
         _cheap = cheap;
-        _flags = flags;
         _config = config;
         _log = log;
         _hub = hub;
@@ -77,9 +75,6 @@ public sealed class TeamMemoryAutolearnService : IHostedService
         // Владелец проектной сессии резолвится через проект (Session.OwnerId у проектных сессий = null)
         var ownerId = _projects.GetById(session.ProjectId)?.OwnerId;
         if (string.IsNullOrEmpty(ownerId)) return Task.CompletedTask;
-
-        // Гейт флага — внутри хука (переключается без рестарта, как recall-провайдеры)
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.TeamMemoryAutolearn)) return Task.CompletedTask;
 
         var skipReason = Memory.AutolearnGate.CheckSession(session);
         if (skipReason != Memory.AutolearnSkipReason.None)

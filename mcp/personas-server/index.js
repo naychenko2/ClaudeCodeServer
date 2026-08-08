@@ -84,11 +84,6 @@ const WRITE = process.env.PERSONAS_WRITE !== '0';
 // явным "0"; без переменной включены (совместимость с прямыми запусками и старым конфигом).
 const MANAGE = WRITE && process.env.PERSONAS_MANAGE !== '0';
 const AUTOMATION = WRITE && process.env.PERSONAS_AUTOMATION !== '0';
-// Allow-модель доступа серверов личного реестра (флаг mcp-allowlist владельца): сервер по
-// умолчанию НЕ выдан ни одной персоне — его нужно выдать явно. Определяет фолбэк
-// enabledForPersona и тексты инструментов. Состав tools/list от флага не зависит, поэтому
-// процесс от него не «мерцает» между ходами (флаг — свойство владельца, как MANAGE/AUTOMATION).
-const MCP_ALLOWLIST = process.env.PERSONAS_MCP_ALLOWLIST === '1';
 // Кросс-проектные привязки ProjectPersonas: доступ к команде/точечным персонам ДРУГОГО проекта
 const EXTRA_PROJECT_IDS = (process.env.PERSONAS_EXTRA_PROJECT_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 const EXTRA_PERSONA_IDS = (process.env.PERSONAS_EXTRA_PERSONA_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -333,9 +328,7 @@ const INSTRUCTIONS = [
   '  type → target/path: project — проект целиком (projectId); projectPath — папка/файл проекта',
   '  (projectId; path обязателен); knowledge — база знаний (datasetId); notes — заметки',
   '  ("personal"|projectId; path: папка); tool — рубильник (tasks/…; mcp:<ключ> — сервер',
-  MCP_ALLOWLIST
-    ? '  реестра, по умолчанию НЕ выдан — personas_mcp_grant); skill; projectPersonas —'
-    : '  реестра, включён по умолчанию); skill; projectPersonas —',
+  '  реестра, по умолчанию НЕ выдан — personas_mcp_grant); skill; projectPersonas —',
   '  ЧУЖОГО проекта для persona_ask (projectId; path: id персоны = сужение, пусто = вся команда);',
   '  projectTasks — задачи ЧУЖОГО проекта (projectId; path "readonly" = чтение, иначе полный доступ).',
   '  condition — когда применять (пусто = всегда). mode — auto (дефолт) | always | off.',
@@ -459,12 +452,10 @@ const TOOLS = [
     {
       name: 'personas_mcp_list',
       description: 'MCP-серверы личного реестра владельца: key, label, транспорт, статус, ' +
-        'выдан ли персоне (поле enabledForPersona при id). ' + (MCP_ALLOWLIST
-          ? 'Сервер по умолчанию НЕ выдан ни одной персоне — его нужно выдать явно. ' +
-            'Выдать/отозвать один сервер точечно (не трогая остальные привязки) — personas_mcp_grant; ' +
-            'полная замена набора привязок — personas_bindings_set/bindings с target "mcp:<ключ>".'
-          : 'Сервер по умолчанию включён всем; выключить конкретной персоне — personas_bindings_set ' +
-            'с target "mcp:<ключ>" и mode "off" (или personas_mcp_grant с revoke=true).'),
+        'выдан ли персоне (поле enabledForPersona при id). ' +
+        'Сервер по умолчанию НЕ выдан ни одной персоне — его нужно выдать явно. ' +
+        'Выдать/отозвать один сервер точечно (не трогая остальные привязки) — personas_mcp_grant; ' +
+        'полная замена набора привязок — personas_bindings_set/bindings с target "mcp:<ключ>".',
       inputSchema: {
         type: 'object',
         properties: { id: { type: 'string', description: 'ID персоны — проверить, выдан ли ей каждый сервер (без id — только список серверов)' } },
@@ -493,11 +484,10 @@ const TOOLS = [
       name: 'personas_mcp_grant',
       description: 'Выдать или отозвать персоне один MCP-сервер личного реестра — точечно, ' +
         'не затрагивая остальные её привязки (в отличие от personas_bindings_set, который ' +
-        'заменяет весь набор). ' + (MCP_ALLOWLIST
-          ? 'Сервер по умолчанию НЕ выдан: выдай его (revoke=false), чтобы персона получила ' +
-            'инструменты сервера в своих чатах.'
-          : 'Сервер по умолчанию включён всем; отзовите его (revoke=true), чтобы выключить этой персоне.') +
-        ' Свои собственные доступы персона менять не может.',
+        'заменяет весь набор). ' +
+        'Сервер по умолчанию НЕ выдан: выдай его (revoke=false), чтобы персона получила ' +
+        'инструменты сервера в своих чатах. ' +
+        'Свои собственные доступы персона менять не может.',
       inputSchema: {
         type: 'object',
         required: ['id', 'key'],
@@ -824,11 +814,11 @@ async function callTool(name, args) {
         label: s.label,
         transport: s.transport,
         status: s.status?.status ?? null,
-        // defaultEnabled приходит с бэка уже с учётом флага; фолбэк — только если сервера
-        // вдруг нет в каталоге привязок (рассинхрон). В allow-модели «нет записи = не выдан»,
-        // в deny — «включён». Каталог и реестр синхронны (оба из McpRegistry.GetByOwner),
-        // так что фолбэк фактически не достигается — но семантику держим верной в обеих моделях.
-        ...(enabledByKey ? { enabledForPersona: enabledByKey.get(s.key) ?? (MCP_ALLOWLIST ? false : true) } : {}),
+        // defaultEnabled приходит с бэка уже с учётом allow-семантики; фолбэк — только если
+        // сервера вдруг нет в каталоге привязок (рассинхрон). Allow-модель: «нет записи = не выдан».
+        // Каталог и реестр синхронны (оба из McpRegistry.GetByOwner), так что фолбэк фактически
+        // не достигается — но семантику держим верной.
+        ...(enabledByKey ? { enabledForPersona: enabledByKey.get(s.key) ?? false } : {}),
       })));
     }
 

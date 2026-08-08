@@ -18,5 +18,8 @@ public static class BackupSchema
     //     не знает их и уронил бы десериализацию personas.json при восстановлении
     // 5 — SpecialtySettingsStore.FormatVersion 1→2 (пресет-цепочки Steps, матрицы уровней у
     //     специальности/персоны): старый код не знает полей и обнулил бы стор при восстановлении
-    public const int Version = 5;
+    // 6 — из Project удалено поле McpServersOff (deny-модель MCP умерла вместе с флагом
+    //     mcp-allowlist): старый код при сериализации писал бы его обратно, а проверка
+    //     целостности формата держится на этом инкременте
+    public const int Version = 6;
 }

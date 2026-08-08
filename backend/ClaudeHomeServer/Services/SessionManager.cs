@@ -512,12 +512,10 @@ public class SessionManager : IDisposable
     }
 
     // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004, «Паспорта изменений»): только
-    // проектные сессии владельца с включённым флагом change-dossiers — без него DossierCaptureService
-    // всё равно не захватит коммит, и лишняя строка в промпте не нужна.
+    // проектные сессии владельца — DossierCaptureService захватит коммит с этим трейлером.
     private string? BuildDossierTrailerHint(string? ownerId, Session session)
     {
         if (ownerId is null || session.ProjectId is null) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiers)) return null;
         var taskLine = session.TaskId is null ? "" : $"\nCCS-Task: {session.TaskId}";
         return "Если делаешь `git commit` в этом проекте — добавь в сообщение коммита трейлер " +
             $"отдельной строкой (рядом с Co-Authored-By):\nCCS-Session: {session.Id}{taskLine}\n" +
@@ -1757,15 +1755,11 @@ public class SessionManager : IDisposable
         var automation = _bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
         var token = GetServiceToken(ownerId);
-        // Флаг allow-модели серверов реестра — свойство владельца: серверу персон нужен для
-        // фолбэка enabledForPersona и allow-текстов (deafultEnabled с бэка уже учитывает флаг,
-        // но фолбэк и описания инструментов живут в самом MCP). Детерминирован на сессию.
-        var mcpAllowlist = _flags.IsEnabled(ownerId!, FeatureFlagKeys.McpAllowlist);
         return new PersonasMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, selfPersonaId,
             mentionsHint, BindingsEnabled: true,
             extraProjectIds.Count > 0 ? extraProjectIds : null,
             extraPersonaIds.Count > 0 ? extraPersonaIds : null,
-            ManageEnabled: manage, AutomationEnabled: automation, McpAllowlist: mcpAllowlist);
+            ManageEnabled: manage, AutomationEnabled: automation);
     }
 
     // Контекст MCP-сервера рабочего пространства: доступ ко всем проектам владельца
@@ -1884,22 +1878,16 @@ public class SessionManager : IDisposable
     // (иначе сигнатура запуска мерцает и процесс CLI перезапускается со всеми MCP).
     // Провайдер, а не готовое значение: правка реестра применяется со следующего хода
     // без пересоздания адаптера. Секреты разворачиваются здесь и живут только во
-    // временном конфиге хода. Фич-флаг гейтит саму доставку — снятие флага честно
-    // убирает серверы, а не оставляет их работать втихую.
-    // projectId — ось каскада «выключено в проекте» (deny-list Project.McpServersOff, волна 2).
+    // временном конфиге хода.
     private Func<ExternalMcpContext?>? BuildExternalMcpProvider(string? ownerId, string? projectId, Persona? persona)
     {
         if (ownerId is null || _mcpRegistry is null || _mcpSecrets is null) return null;
-        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.McpRegistry)) return null;
         // Профиль «Только чтение»: имён инструментов чужого сервера мы не знаем, а гасить их
         // deny-правилами нельзя — список живёт на стороне сервера и меняется, а неизвестное имя
         // в правиле роняет запуск CLI (см. историю MultiEdit в PersonaAccessPolicy). Поэтому
         // решение принимается ЦЕЛИКОМ по серверу: такая персона получает только записи с явным
         // разрешением AllowReadOnlyPersonas. Свойство персоны, не хода — состав не мерцает.
         var readOnly = persona?.Access == PersonaAccess.ReadOnly;
-        // Флаг allow-модели — свойство владельца, читается при построении провайдера
-        // (не в лямбде хода): детерминирован на сессию, состав tools/list не мерцает.
-        var allowlist = _flags.IsEnabled(ownerId, FeatureFlagKeys.McpAllowlist);
         var registry = _mcpRegistry;
         var secretStore = _mcpSecrets;
         return () =>
@@ -1911,36 +1899,19 @@ public class SessionManager : IDisposable
                 // применяется со следующего хода, без пересоздания адаптера.
                 // Чат вне проекта каскад проекта пропускает.
                 var project = projectId is null ? null : _projects.GetById(projectId);
-                var offInProject = project?.McpServersOff;   // deny-модель (без флага)
-                var onInProject = project?.McpServersOn;     // allow-модель (за флагом)
+                var onInProject = project?.McpServersOn;     // allow-модель доступа
                 var isProjectChat = projectId is not null;
                 foreach (var record in registry.GetByOwner(ownerId))
                 {
                     if (!record.Enabled) continue;
-                    if (allowlist)
-                    {
-                        // allow-модель: сервер едет, если включён «здесь» (проект этого чата
-                        // по McpServersOn либо, вне проектов, AllowOutsideProjects записи) ИЛИ
-                        // выдан персоне (McpServerGranted). Чистое условие — McpDelivery.ShouldDeliver,
-                        // его OR-матрицу гоняем юнитами без SessionManager. Все входы — свойства
-                        // owner/project/persona/записи, ни один не смотрит на ход.
-                        var granted = _bindings.McpServerGranted(persona, "mcp:" + record.Key);
-                        if (!Mcp.McpDelivery.ShouldDeliver(record, onInProject, isProjectChat, granted, readOnly))
-                            continue;
-                    }
-                    else
-                    {
-                        // deny-модель (умирает со снятием флага mcp-allowlist)
-                        if (readOnly && !record.AllowReadOnlyPersonas) continue;
-                        // Выключен в этом проекте — второй шаг каскада реестр → проект → персона
-                        if (offInProject is { Count: > 0 }
-                            && offInProject.Contains(record.Key, StringComparer.OrdinalIgnoreCase)) continue;
-                        // Персона выключает сервер Off-привязкой на ключ каталога "mcp:<ключ>";
-                        // дефолт — включён (ServerToolEnabled), обычный чат получает всё
-                        // (префикс тот же, что McpRegistry.ToolKeyPrefix; литералом — его видит
-                        // сторож состава McpToolsetStabilityTests)
-                        if (!_bindings.ServerToolEnabled(ownerId, persona, "mcp:" + record.Key)) continue;
-                    }
+                    // allow-модель: сервер едет, если включён «здесь» (проект этого чата
+                    // по McpServersOn либо, вне проектов, AllowOutsideProjects записи) ИЛИ
+                    // выдан персоне (McpServerGranted). Чистое условие — McpDelivery.ShouldDeliver,
+                    // его OR-матрицу гоняем юнитами без SessionManager. Все входы — свойства
+                    // owner/project/persona/записи, ни один не смотрит на ход.
+                    var granted = _bindings.McpServerGranted(persona, "mcp:" + record.Key);
+                    if (!Mcp.McpDelivery.ShouldDeliver(record, onInProject, isProjectChat, granted, readOnly))
+                        continue;
                     var stdio = record.Transport == McpTransport.Stdio;
                     // OAuth: токен, доживающий последние секунды, обновляем ДО сборки конфига —
                     // заголовок запекается на старте CLI и живому процессу уже не доедет.

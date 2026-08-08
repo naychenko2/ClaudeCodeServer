@@ -109,6 +109,25 @@ public class TurnErrorClassifierTests
             .Should().Be(FallbackErrorClass.ContextOverflow,
                 "413 — куда OpenAI-совместимые эндпоинты кладут overflow; с маркером в тексте это ContextOverflow");
 
+    // Страховка на провайдеров, кладущих в поле статуса не код, а ТИП ошибки (invalid_request_error,
+    // request_too_large) — при overflow-тексте это тот же класс. Видели на проде: в инциденте
+    // kimi-k3 статус пришёл пустым, а эта ветка ловит провайдеров, заполняющих поле типом ошибки.
+    [Theory]
+    [InlineData("invalid_request_error")]
+    [InlineData("request_too_large")]
+    public void ПереполнениеКонтекста_ТипОшибкиВместоКода_КлассContextOverflow(string status)
+        => TurnErrorClassifier.Classify(Result(status, "Prompt is too long."))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "некоторые провайдеры кладут в статус тип ошибки, а не HTTP-код; с overflow-текстом это ContextOverflow");
+
+    [Theory]
+    [InlineData("invalid_request_error")]
+    [InlineData("request_too_large")]
+    public void ТипОшибкиВместоКода_БезOverflowТекста_ОстаётсяNone(string status)
+        => TurnErrorClassifier.Classify(Result(status, "malformed request body"))
+            .Should().Be(FallbackErrorClass.None,
+                "ярлык без overflow-маркера — содержательная ошибка, fail-closed сохраняется");
+
     // Minor-review: overflow-фразы ищутся в тексте ошибки, поэтому ход, ЦИТИРУЮЩИЙ «Prompt is
     // too long» (разбор таких инцидентов в чатах), при прочем сбое классифицировался бы ложно.
     // Маркеры в тексте трактуем как overflow ТОЛЬКО при пустом статусе или 400/413 — куда

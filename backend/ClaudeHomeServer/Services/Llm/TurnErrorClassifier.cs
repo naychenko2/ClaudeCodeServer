@@ -99,12 +99,16 @@ public static class TurnErrorClassifier
         if (int.TryParse(status, out var code) && code is >= 500 and <= 599) return FallbackErrorClass.ProviderError;
         // Сетевые маркеры в статусе или тексте ошибки
         if (LooksUnreachable(status) || LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
-        // Контекст не помещается в окно модели. Провайдеры кладут эту ошибку на 400/413 (Anthropic
-        // «Prompt is too long», OpenAI-совместимые «context_length_exceeded»). Маркеры в ErrorText
-        // трактуем как overflow ТОЛЬКО при этих статусах: иначе ход, ЦИТИРУЮЩИЙ «Prompt is too long»
-        // (разбор таких инцидентов в чатах), при прочем сбое классифицировался бы ложно как overflow.
+        // Контекст не помещается в окно модели. Anthropic шлёт «Prompt is too long» (видели на проде:
+        // kimi-k3 с заявленным окном 1M), OpenAI-совместимые — «context_length_exceeded». Провайдеры
+        // кладут это на 400/413, а иные — в поле статуса ТИП ошибки: invalid_request_error,
+        // request_too_large. Маркеры в ErrorText трактуем как overflow ТОЛЬКО при этих статусах:
+        // иначе ход, ЦИТИРУЮЩИЙ «Prompt is too long» (разбор таких инцидентов в чатах), при прочем
+        // сбое классифицировался бы ложно как overflow. Без overflow-текста любой из этих статусов —
+        // содержательная ошибка (None): fail-closed сохраняется и для новых ярлыков.
         // Пустой статус (когда маркеры в тексте — единственный сигнал) разобран отдельной веткой выше.
-        if (status is "400" or "413" && LooksContextOverflow(outcome.ErrorText))
+        if (status is "400" or "413" or "invalid_request_error" or "request_too_large"
+            && LooksContextOverflow(outcome.ErrorText))
             return FallbackErrorClass.ContextOverflow;
 
         // Неизвестный статус, прочие 4xx (400/401), содержательные отказы — фолбэк НЕ запускается

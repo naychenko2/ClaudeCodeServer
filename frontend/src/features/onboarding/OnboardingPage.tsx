@@ -1,33 +1,40 @@
-// Обязательные онбординги (фича default-personas-onboarding): полноэкранный гейт
-// первого входа (личная дефолт-персона) и гейт проекта (персона-руководитель).
-// Если персоны зоны уже есть — первым идёт шаг выбора готовой персоны, интервью
-// стартует только по кнопке «Создать новую в разговоре» (без персон — сразу интервью).
+// Знакомство (фича default-personas-onboarding): личное интервью дорабатывает уже
+// провижнутую заготовку-ассистента «Ассистент» (вторую персону не создаёт), проектное —
+// собирает руководителя проекта с нуля. Больше не гейт: overlay-страница поверх обычной
+// навигации (маршрут — App.tsx, событие OPEN_INTRO_EVENT, план §4, п.4.5), выйти можно
+// в любой момент кнопкой «Позже» — разговор сохранится и продолжится с этого же места.
 // Внутри — существующий чат-стек (ChatPanel/useSession) поверх сессии из
-// POST /api/onboarding/*/start. Пропустить нельзя; детерминированный выход из гейта:
-// «Начать заново» (новая сессия) и fallback «Создать персону из разговора»
-// (ai/quick-create по транскрипту + подтверждение + make-default REST-ом).
-// Гейт снимается ПО КОНЦУ ХОДА (result после onboarding_completed) или кнопкой
-// «Перейти в систему» — не размонтируем чат посреди стрима и приветствия персоны.
+// POST /api/onboarding/*/start. Гейт снимается ПО КОНЦУ ХОДА (result после
+// onboarding_completed) или кнопкой «Перейти в систему» — не размонтируем чат посреди
+// стрима и приветствия персоны.
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowRight, RotateCcw, Sparkles, UserRound, Users } from 'lucide-react';
-import type { Persona, Project, Session } from '../../types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ArrowLeft, ArrowRight, Info, RotateCcw, Sparkles, UserRound } from 'lucide-react';
+import type { AuthState, Persona, Project, Session } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, FS, R, SP, Z } from '../../lib/design';
+import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Modal, ModalActions, ConfirmDialog } from '../../components/ui';
-import { CanvasBackdrop } from '../../components/ui/CanvasBackdrop';
+import { PageCanvas } from '../../components/ui/PageCanvas';
+import { HubHeader } from '../../components/HubHeader';
+import type { HubTabValue } from '../../components/HubTabs';
 import { ChatPanel } from '../../components/ChatPanel';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
 import { refreshMe } from '../../lib/defaultPersona';
-import { bumpPersonas, ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
+import { bumpPersonas, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
 
-// Транскрипт сессии → текстовый промпт для quick-create (fallback «из разговора»).
+// Событие открытия оверлея знакомства: без detail — личное, с { projectId } — проектное.
+// Диспетчеры — карточка-приглашение в «Персонах» и строка в настройках проекта (волна 5);
+// слушатель — App.tsx (план §4, п.4.5).
+export const OPEN_INTRO_EVENT = 'cc-open-intro';
+
+// Транскрипт сессии → текстовый промпт для quick-create (fallback «из разговора»,
+// только для проектного знакомства — у него нет готовой заготовки для доработки).
 // История приходит сырыми записями бэка; берём только реплики человека и ассистента.
-function transcriptToPrompt(raw: unknown[], kind: 'user' | 'project'): string {
+function transcriptToPrompt(raw: unknown[]): string {
   const lines: string[] = [];
   for (const entry of raw) {
     const e = entry as { kind?: string; text?: string } | null;
@@ -36,29 +43,35 @@ function transcriptToPrompt(raw: unknown[], kind: 'user' | 'project'): string {
     else if (e.kind === 'text') lines.push(`Интервьюер: ${e.text}`);
   }
   const talk = lines.join('\n').slice(0, 12_000);
-  const goal = kind === 'user'
-    ? 'личного ассистента-координатора пользователя (его персону по умолчанию)'
-    : 'персону-руководителя этого проекта';
-  return `По этому разговору-интервью придумай ${goal}: имя, роль, характер, приветствие.\n\n${talk}`;
+  return `По этому разговору-интервью придумай персону-руководителя этого проекта: имя, роль, характер, приветствие.\n\n${talk}`;
 }
 
-// Вводная плашка в пустой ленте онбординга: объясняет, что сейчас произойдёт,
-// пока первый ход мастера (kickoff-затравка) в пути. Идёт как greetingBubble —
-// чисто визуальная: уходит с первой репликой и не мелькает при резюме
-// прерванного интервью (там в ленте уже есть история). Иконка и подложка — те
-// же, что в шапке гейта, чтобы связь «плашка сверху ⇆ чат» читалась.
+const PLAQUE_TEXTS = {
+  user: {
+    title: 'Давайте познакомимся',
+    body: 'Ваш ассистент уже работает — просто пока без имени. Сейчас несколько вопросов о вас и ваших делах: по ответам он получит имя, характер и аватар и будет помнить контекст.',
+    footnote: 'Новое имя появится и в чатах, которые вы уже с ним начали. Прервать можно в любой момент — разговор продолжится с этого же места.',
+  },
+  project: {
+    title: 'Расскажите о проекте',
+    body: 'Ваш ассистент задаст несколько вопросов о проекте. По ответам появится руководитель проекта — персона, которая знает контекст и ведёт команду.',
+    footnote: 'Прервать можно в любой момент — разговор продолжится с этого же места.',
+  },
+} as const;
+
+// Вводная плашка в пустой ленте: объясняет, что сейчас произойдёт, пока первый ход
+// мастера (kickoff-затравка) в пути. Идёт как greetingBubble — чисто визуальная: уходит
+// с первой репликой и не мелькает при резюме прерванного интервью (там в ленте уже есть
+// история). Разбита на обещание и сноску — оговорки не должны стоять вровень с приглашением.
 function IntroPlaque({ kind, isMobile }: { kind: 'user' | 'project'; isMobile: boolean }) {
-  const title = kind === 'user' ? 'Давайте познакомимся' : 'Расскажите о проекте';
-  const body = kind === 'user'
-    ? 'Сейчас помощник задаст несколько вопросов — о вас и о том, чем вы занимаетесь. По ответам появится ваш личный ассистент: он останется с вами в системе и будет помнить контекст.'
-    : 'Ваш ассистент задаст несколько вопросов о проекте. По ответам появится руководитель проекта — персона, которая знает контекст и ведёт команду.';
+  const texts = PLAQUE_TEXTS[kind];
   return (
     <div style={{
       flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
       padding: isMobile ? SP.lg : SP.xl,
     }}>
       <div style={{
-        maxWidth: 420, width: '100%',
+        maxWidth: 460, width: '100%',
         padding: isMobile ? SP.lg : SP.xl,
         background: C.accentLight, border: `1px solid ${C.border}`, borderRadius: R.xxl,
         display: 'flex', flexDirection: 'column', gap: SP.md,
@@ -66,75 +79,29 @@ function IntroPlaque({ kind, isMobile }: { kind: 'user' | 'project'; isMobile: b
         <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, color: C.accent }}>
           <Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
           <div style={{ fontFamily: FONT.serif, fontSize: FS.xl, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
-            {title}
+            {texts.title}
           </div>
         </div>
         <div style={{ fontSize: FS.md, lineHeight: 1.55, color: C.textPrimary }}>
-          {body}
+          {texts.body}
+        </div>
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+          paddingTop: SP.md, borderTop: `1px solid ${C.accentMuted}`,
+          fontSize: FS.sm, lineHeight: 1.5, color: C.textMuted,
+        }}>
+          <Info size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, marginTop: 2 }} />
+          <span>{texts.footnote}</span>
         </div>
       </div>
     </div>
   );
 }
 
-// Тексты шага выбора готовой персоны (он идёт ПЕРЕД интервью, когда персоны зоны уже есть)
-const PICK_TEXTS = {
-  user: {
-    title: 'Кто будет вашим ассистентом?',
-    subtitle: 'У вас уже есть персоны — выберите одну, она станет ассистентом по умолчанию. Или создайте новую: помощник задаст несколько вопросов и соберёт её.',
-    confirm: 'Сделать ассистентом',
-    create: 'Создать новую в разговоре',
-  },
-  project: {
-    title: 'Кто ведёт этот проект?',
-    subtitle: 'Выберите руководителя из персон проекта — он будет вести чаты и предлагать командные механики. Или создайте нового в коротком разговоре.',
-    confirm: 'Назначить руководителем',
-    create: 'Создать нового в разговоре',
-  },
-} as const;
-
-// Строка персоны в списке выбора — общая для шага выбора и модалки-страховки
-function PersonaChoiceRow({ p, selected, busy, disabled, onClick }: {
-  p: Persona;
-  selected?: boolean;
-  busy?: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      disabled={disabled}
-      onClick={onClick}
-      onMouseEnter={e => { if (!disabled && !selected) e.currentTarget.style.background = C.accentLight; }}
-      onMouseLeave={e => { e.currentTarget.style.background = selected ? C.accentLight : 'transparent'; }}
-      style={{
-        display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left',
-        padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.lg, fontFamily: FONT.sans,
-        background: selected ? C.accentLight : 'transparent',
-        border: `1px solid ${selected ? C.accent : C.border}`,
-        cursor: disabled ? 'default' : 'pointer',
-        opacity: disabled && !busy && !selected ? 0.55 : 1,
-        transition: 'background 0.15s, opacity 0.15s, border-color 0.15s',
-      }}
-    >
-      <PersonaAvatar persona={p} size={32} />
-      <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xxs }}>
-        <span style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {personaLabel(p)}
-        </span>
-        {p.description && (
-          <span style={{ fontSize: FS.xs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {p.description}
-          </span>
-        )}
-      </span>
-      {busy && <div className="tool-spinner" style={{ width: ICON_SIZE.sm, height: ICON_SIZE.sm, flexShrink: 0 }} />}
-    </button>
-  );
-}
-
-// Общий каркас онбординг-чата: старт/резюм сессии, чат-стек, завершение, страховки
-function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: {
+// Общий каркас чата знакомства: старт/резюм сессии, чат-стек, завершение, страховки.
+// kind='user' дорабатывает существующую заготовку-ассистента через apply-transcript;
+// kind='project' создаёт персону-руководителя с нуля через quick-create (заготовки нет).
+function IntroChatShell({ kind, title, subtitle, project, start, onDone }: {
   kind: 'user' | 'project';
   title: string;
   subtitle: string;
@@ -146,54 +113,38 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
   const [session, setSession] = useState<Session | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
-  // Онбординг завершён (дефолт назначен из сессии) — ждём конца хода или кнопки
+  // Знакомство завершено (дефолт назначен) — ждём конца хода или кнопки
   const [completed, setCompleted] = useState(false);
   const completedRef = useRef(false);
   const [restartConfirm, setRestartConfirm] = useState(false);
   const [restarting, setRestarting] = useState(false);
-  // Fallback «Создать персону из разговора»: черновик на подтверждении
+  // Личное знакомство: «Применить итоги разговора» дорабатывает заготовку сервером,
+  // без предпросмотра черновика — финал приходит тем же broadcast'ом, что и обычное
+  // завершение интервью (эффект на sessionId ниже переводит гейт в completed).
+  const [applyConfirm, setApplyConfirm] = useState(false);
+  const [applying, setApplying] = useState(false);
+  // Проектное знакомство: «Создать персону из разговора» — старый путь через quick-create
+  // (заготовки-руководителя не существует, применять итоги не к чему) + подтверждение черновика.
   const [draft, setDraft] = useState<Persona | null>(null);
   const [drafting, setDrafting] = useState(false);
-  // Страховка «Выбрать из существующих»: готовая персона зоны вместо интервью
-  const [pickOpen, setPickOpen] = useState(false);
-  const [pickingId, setPickingId] = useState<string | null>(null);
-
-  // Шаг выбора готовой персоны — ПЕРЕД интервью; интервью стартует по явной кнопке
-  const [interviewing, setInterviewing] = useState(false);
-  const [pickChoiceId, setPickChoiceId] = useState<string | null>(null);
-
-  // Кандидаты зоны гейта: личный — глобальные персоны, проектный — персоны проекта.
-  // Шаг выбора и кнопка-страховка показываются, только когда парк не пуст
-  const allPersonas = usePersonas();
-  const [personasReady, setPersonasReady] = useState(false);
-  useEffect(() => { void ensurePersonasLoaded().finally(() => setPersonasReady(true)); }, []);
-  const candidates = useMemo(
-    () => allPersonas.filter(p => kind === 'user'
-      ? p.scope === 'global'
-      : p.scope === 'project' && p.projectId === project?.id),
-    [allPersonas, kind, project?.id],
-  );
-  // Пока список персон не загружен — не решаем: иначе на первом кадре candidates пуст
-  // и интервью успевало бы стартовать мимо шага выбора
-  const showPicker = personasReady && candidates.length > 0 && !interviewing;
 
   const load = useCallback(() => {
     setError(null);
     start()
       .then(setSession)
-      .catch(e => setError(e instanceof Error ? e.message : 'Не удалось запустить онбординг'));
+      .catch(e => setError(e instanceof Error ? e.message : 'Не удалось запустить знакомство'));
   }, [start]);
-  // Сессию интервью заводим ровно один раз и только когда шаг выбора пройден или не нужен:
-  // лишняя сессия = лишний ход модели. Перезапуск идёт через restart(), не через этот эффект
+  // Сессию знакомства заводим ровно один раз при монтировании; перезапуск — через restart()
   const startedRef = useRef(false);
   useEffect(() => {
-    if (startedRef.current || !personasReady || showPicker) return;
+    if (startedRef.current) return;
     startedRef.current = true;
     load();
-  }, [personasReady, showPicker, load]);
+  }, [load]);
 
-  // Завершение: onboarding_completed помечает (и освежает me/персон), гейт снимаем
-  // по концу хода (result) — приветствие персоны успевает прозвучать в этом же чате
+  // Завершение: onboarding_completed помечает (и освежает me/персон) — источник события
+  // не важен: и конец обычного интервью, и apply-transcript шлют один и тот же тип.
+  // Гейт снимаем по концу хода (result), чтобы приветствие персоны успело прозвучать.
   const sessionId = session?.id;
   useEffect(() => {
     if (!sessionId) return;
@@ -220,14 +171,28 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
       setSession(null);
       load();
     } catch (e) {
-      showToast('Онбординг', e instanceof Error ? e.message : 'Не удалось перезапустить интервью');
+      showToast('Знакомство', e instanceof Error ? e.message : 'Не удалось перезапустить интервью');
     } finally {
       setRestarting(false);
       setRestartConfirm(false);
     }
   };
 
-  // Fallback: персона из транскрипта разговора (quick-create) + подтверждение
+  // Личное знакомство: применить итоги разговора к заготовке, не дожидаясь конца интервью
+  const applyTranscript = async () => {
+    if (applying) return;
+    setApplying(true);
+    try {
+      await api.onboarding.applyTranscript();
+    } catch (e) {
+      showToast('Знакомство', e instanceof Error ? e.message : 'Не удалось применить итоги разговора');
+    } finally {
+      setApplying(false);
+      setApplyConfirm(false);
+    }
+  };
+
+  // Проектное знакомство: персона из транскрипта разговора (quick-create) + подтверждение
   const createFromTalk = async () => {
     if (!session || drafting) return;
     setDrafting(true);
@@ -236,36 +201,19 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
         ? await api.sessions.getHistory(session.projectId, session.id)
         : await api.chats.getHistory(session.id);
       const persona = await api.personas.quickCreate({
-        prompt: transcriptToPrompt(raw, kind),
-        scope: kind === 'project' ? 'project' : 'global',
-        projectId: kind === 'project' ? project?.id : undefined,
+        prompt: transcriptToPrompt(raw),
+        scope: 'project',
+        projectId: project?.id,
       });
       setDraft(persona);
     } catch (e) {
-      showToast('Онбординг', e instanceof Error ? e.message : 'Не удалось создать персону из разговора');
+      showToast('Знакомство', e instanceof Error ? e.message : 'Не удалось создать персону из разговора');
     } finally {
       setDrafting(false);
     }
   };
 
-  // Выбор существующей персоны: назначаем дефолтом и сразу выходим из гейта.
-  // Права/профиль дефолта персона не получает — это гарантирует бэкенд
-  // (OnboardingCreatedPersonaId сессии остаётся пустым), фронт ничего не досевает
-  const pickExisting = async (p: Persona) => {
-    if (pickingId) return;
-    setPickingId(p.id);
-    try {
-      await api.personas.makeDefault(p.id);
-      await refreshMe();
-      bumpPersonas();
-      onDone();
-    } catch (e) {
-      showToast('Онбординг', e instanceof Error ? e.message : 'Не удалось назначить персону по умолчанию');
-      setPickingId(null);
-    }
-  };
-
-  // Подтверждение черновика: назначаем дефолтом REST-ом и выходим из гейта
+  // Подтверждение черновика: назначаем дефолтом REST-ом и выходим
   const confirmDraft = async () => {
     if (!draft) return;
     try {
@@ -275,7 +223,7 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
       setDraft(null);
       onDone();
     } catch (e) {
-      showToast('Онбординг', e instanceof Error ? e.message : 'Не удалось назначить персону по умолчанию');
+      showToast('Знакомство', e instanceof Error ? e.message : 'Не удалось назначить персону по умолчанию');
     }
   };
   // Отказ от черновика — удаляем, интервью продолжается
@@ -288,18 +236,19 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
 
   return (
     <div style={{
-      position: 'fixed', inset: 0, zIndex: Z.modal, background: C.bgMain,
-      fontFamily: FONT.sans, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      flex: 1, minHeight: 0,
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
     }}>
-      <CanvasBackdrop />
-      {/* Шапка гейта: что происходит и зачем; навигации и «Пропустить» нет намеренно */}
+      {/* Шапка: что происходит и зачем; «Позже» — детерминированный выход в любой момент.
+          Обычная навигация хаба выше (HubHeader из IntroChatPage/ProjectIntroChatPage) —
+          уйти можно и кликом по любому разделу, «Позже» — явная подсказка того же выхода. */}
       <div style={{
         flex: 'none', display: 'flex', alignItems: 'center', gap: SP.md,
-        // На узком экране три кнопки-страховки не влезают в ряд с заголовком —
+        // На узком экране кнопки-страховки не влезают в ряд с заголовком —
         // переносим их на вторую строку вместо overflow
         flexWrap: 'wrap', rowGap: SP.sm,
         padding: isMobile ? `${SP.md}px ${SP.lg}px` : `${SP.lg}px ${SP.xl}px`,
-        borderBottom: `1px solid ${C.border}`, position: 'relative',
+        borderBottom: `1px solid ${C.border}`,
       }}>
         <div style={{
           width: 38, height: 38, borderRadius: R.lg, background: C.accentLight, color: C.accent,
@@ -311,28 +260,28 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
           <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? FS.lg : FS.xl, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
             {title}
           </div>
-          {/* На шаге выбора подзаголовок про интервью неуместен — экран объясняет себя сам */}
-          {!isMobile && !showPicker && (
+          {!isMobile && (
             <div style={{ fontSize: FS.sm, color: C.textSecondary, marginTop: 2 }}>{subtitle}</div>
           )}
         </div>
         {/* Страховки от «незавершаемого» интервью */}
         {!completed && session && (
           <>
-            {candidates.length > 0 && (
-              <Button variant="ghost" size="sm"
-                leftIcon={<Users size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                title="Не проходить интервью — назначить дефолтом одну из уже существующих персон"
-                onClick={() => setPickOpen(true)}>
-                {isMobile ? 'Выбрать' : 'Выбрать из существующих'}
+            {kind === 'user' ? (
+              <Button variant="ghost" size="sm" loading={applying}
+                leftIcon={<UserRound size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                title="Применить то, что уже рассказано, не дожидаясь конца интервью"
+                onClick={() => setApplyConfirm(true)}>
+                {isMobile ? 'Применить итоги' : 'Применить итоги разговора'}
+              </Button>
+            ) : (
+              <Button variant="ghost" size="sm" loading={drafting}
+                leftIcon={<UserRound size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+                title="Создать персону по уже состоявшемуся разговору, не дожидаясь финала интервью"
+                onClick={() => void createFromTalk()}>
+                {isMobile ? 'Из разговора' : 'Создать персону из разговора'}
               </Button>
             )}
-            <Button variant="ghost" size="sm" loading={drafting}
-              leftIcon={<UserRound size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-              title="Создать персону по уже состоявшемуся разговору, не дожидаясь финала интервью"
-              onClick={() => void createFromTalk()}>
-              {isMobile ? 'Из разговора' : 'Создать персону из разговора'}
-            </Button>
             <Button variant="ghost" size="sm" loading={restarting}
               leftIcon={<RotateCcw size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
               onClick={() => setRestartConfirm(true)}>
@@ -347,71 +296,19 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
             Перейти в систему
           </Button>
         )}
+        {/* «Позже» — не зависит от session/completed: выйти можно и пока идёт загрузка,
+            и при ошибке старта. Разговор сохранён, продолжится с этого же места. */}
+        <span style={{ width: 1, height: 20, background: C.border, flexShrink: 0 }} />
+        <Button variant="ghost" size="sm"
+          leftIcon={<ArrowLeft size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
+          title="Выйти — разговор сохранится и продолжится с этого места"
+          onClick={onDone}>
+          Позже
+        </Button>
       </div>
 
-      {/* Шаг выбора готовой персоны (когда персоны зоны есть) — иначе чат интервью */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflowY: 'auto' }}>
-        {showPicker ? (
-          <div style={{
-            flex: 1, display: 'flex', alignItems: isMobile ? 'flex-start' : 'center', justifyContent: 'center',
-            padding: isMobile ? SP.lg : SP.xl,
-          }}>
-            <div style={{
-              width: '100%', maxWidth: 480,
-              display: 'flex', flexDirection: 'column', gap: SP.lg,
-            }}>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, color: C.accent }}>
-                  <Users size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                  <div style={{ fontFamily: FONT.serif, fontSize: isMobile ? FS.xl : FS.h2, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em' }}>
-                    {PICK_TEXTS[kind].title}
-                  </div>
-                </div>
-                <div style={{ fontSize: FS.md, lineHeight: 1.55, color: C.textSecondary }}>
-                  {PICK_TEXTS[kind].subtitle}
-                </div>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
-                {candidates.map(p => (
-                  <PersonaChoiceRow
-                    key={p.id}
-                    p={p}
-                    selected={pickChoiceId === p.id}
-                    busy={pickingId === p.id}
-                    disabled={!!pickingId}
-                    onClick={() => setPickChoiceId(p.id)}
-                  />
-                ))}
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: SP.sm }}>
-                <Button
-                  variant="primary" size="md" glow
-                  fullWidth={isMobile}
-                  disabled={!pickChoiceId}
-                  loading={!!pickingId}
-                  leftIcon={<ArrowRight size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                  onClick={() => {
-                    const p = candidates.find(c => c.id === pickChoiceId);
-                    if (p) void pickExisting(p);
-                  }}
-                >
-                  {PICK_TEXTS[kind].confirm}
-                </Button>
-                <Button
-                  variant="ghost" size="md"
-                  fullWidth={isMobile}
-                  disabled={!!pickingId}
-                  leftIcon={<Sparkles size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />}
-                  onClick={() => setInterviewing(true)}
-                >
-                  {PICK_TEXTS[kind].create}
-                </Button>
-              </div>
-            </div>
-          </div>
-        ) : session ? (
+        {session ? (
           <ChatPanel
             key={session.id}
             session={session}
@@ -424,7 +321,7 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
           />
         ) : error ? (
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: SP.md, padding: SP.xl, textAlign: 'center' }}>
-            <div style={{ fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading }}>Не удалось запустить онбординг</div>
+            <div style={{ fontFamily: FONT.serif, fontSize: FS.lg, color: C.textHeading }}>Не удалось запустить знакомство</div>
             <div style={{ fontSize: FS.sm, color: C.textSecondary, maxWidth: 420 }}>{error}</div>
             <Button variant="primary" size="md" onClick={load}>Повторить</Button>
           </div>
@@ -446,34 +343,21 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
         />
       )}
 
-      {/* Выбор существующей персоны зоны — детерминированная развилка вместо интервью */}
-      {pickOpen && (
-        <Modal
-          title={kind === 'user' ? 'Кто станет основным собеседником?' : 'Кто будет руководителем проекта?'}
-          subtitle={kind === 'user'
-            ? 'Новые чаты будут начинаться с ним. Остальные помощники останутся на месте — их можно позвать в любой момент.'
-            : 'Он ведёт чаты проекта и знает контекст целиком. Остальная команда остаётся на месте.'}
-          onClose={() => { if (!pickingId) setPickOpen(false); }}
-        >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, maxHeight: 320, overflowY: 'auto' }}>
-            {candidates.map(p => (
-              <PersonaChoiceRow
-                key={p.id}
-                p={p}
-                busy={pickingId === p.id}
-                disabled={!!pickingId}
-                onClick={() => void pickExisting(p)}
-              />
-            ))}
-          </div>
-        </Modal>
+      {applyConfirm && (
+        <ConfirmDialog
+          title="Применить итоги разговора?"
+          subtitle="Ассистент получит имя, характер и аватар по уже сказанному, не дожидаясь конца интервью."
+          confirmLabel="Применить"
+          onConfirm={applyTranscript}
+          onCancel={() => setApplyConfirm(false)}
+        />
       )}
 
-      {/* Подтверждение персоны, созданной из разговора */}
+      {/* Подтверждение персоны, созданной из разговора (только проектное знакомство) */}
       {draft && (
         <Modal
           title="Персона готова"
-          subtitle="Проверьте, кто получился по разговору — она станет персоной по умолчанию."
+          subtitle="Проверьте, кто получился по разговору — она станет руководителем проекта."
           onClose={() => void discardDraft()}
           footer={
             <ModalActions
@@ -501,29 +385,44 @@ function OnboardingChatShell({ kind, title, subtitle, project, start, onDone }: 
   );
 }
 
-// Гейт первого входа: обязательное интервью «Мастера настройки» → личная дефолт-персона
-export function OnboardingPage({ onDone }: { onDone: () => void }) {
+interface IntroPageProps {
+  auth: AuthState;
+  onLogout: () => void;
+  onHubTab: (t: HubTabValue) => void;
+  onDone: () => void;
+}
+
+// Личное знакомство: интервью дорабатывает уже провижнутую заготовку-ассистента.
+// Overlay-страница по образцу ProductHistory: обычная навигация хаба сверху — видно,
+// что мир на месте, уйти можно кликом по любому разделу (тот же жест закрывает overlay).
+export function IntroChatPage({ auth, onLogout, onHubTab, onDone }: IntroPageProps) {
   return (
-    <OnboardingChatShell
-      kind="user"
-      title="Знакомство"
-      subtitle="Короткое интервью: расскажите о себе и своих задачах — по нему появится ваш личный ассистент. Это обязательный шаг, он проходится один раз."
-      start={() => api.onboarding.startUser()}
-      onDone={onDone}
-    />
+    <PageCanvas style={{ position: 'fixed', inset: 0, zIndex: 1000 }}>
+      <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} />
+      <IntroChatShell
+        kind="user"
+        title="Знакомство"
+        subtitle="Несколько вопросов — и ваш ассистент получит имя, характер и ваш контекст. Выйти можно в любой момент."
+        start={() => api.onboarding.startUser()}
+        onDone={onDone}
+      />
+    </PageCanvas>
   );
 }
 
-// Гейт проекта: интервью личной дефолт-персоны → персона-руководитель проекта
-export function ProjectOnboardingGate({ project, onDone }: { project: Project; onDone: () => void }) {
+// Проектное знакомство: интервью собирает персону-руководителя проекта
+export function ProjectIntroChatPage({ project, auth, onLogout, onHubTab, onDone }: IntroPageProps & { project: Project }) {
   return (
-    <OnboardingChatShell
-      kind="project"
-      title={`Знакомство с проектом «${project.name}»`}
-      subtitle="Расскажите о проекте — по интервью появится его руководитель, персона по умолчанию для чатов проекта. Рабочее пространство откроется после завершения."
-      project={project}
-      start={() => api.onboarding.startProject(project.id)}
-      onDone={onDone}
-    />
+    <PageCanvas style={{ position: 'fixed', inset: 0, zIndex: 1000 }}>
+      <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} project={project} />
+      <IntroChatShell
+        kind="project"
+        title={`Знакомство с проектом «${project.name}»`}
+        subtitle="Расскажите о проекте — по интервью появится его руководитель, персона по умолчанию для чатов проекта."
+        project={project}
+        start={() => api.onboarding.startProject(project.id)}
+        onDone={onDone}
+      />
+    </PageCanvas>
   );
 }

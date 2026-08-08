@@ -336,6 +336,15 @@ public class PersonasController : ControllerBase
             access, req.Tools, req.DisallowedTools);
 
         var isAssistantDraft = _users.GetById(UserId)?.AssistantPersonaId == id;
+        // Снимок характер-релевантных полей ДО мутации: _personas.Get отдаёт живую ссылку
+        // (не копию), а _personas.Update правит персону in-place — current и persona ниже
+        // оказались бы ОДНИМ объектом, и сравнение «после == после» никогда не показало бы
+        // изменений (дефект нашли тесты AssistantStatusTests). Строки/объект контракта снимаем
+        // заранее — сама строка/контракт не мутируется, его лишь переприсваивают новым значением.
+        var beforeName = current.Name;
+        var beforeRole = current.Role;
+        var beforeGreeting = current.Greeting;
+        var beforeContract = current.Contract;
         Persona persona;
         try
         {
@@ -351,7 +360,7 @@ public class PersonasController : ControllerBase
         // Иначе карточка-приглашение «ассистент пока стандартный» горела бы над персоной,
         // которую человек только что настроил руками, а «Познакомиться» предлагало бы интервью,
         // перезаписывающее его правки. Посторонние поля (цвет, модель, аватар, привязки) не снимают.
-        if (isAssistantDraft && IsCharacterRelevantChange(current, persona))
+        if (isAssistantDraft && IsCharacterRelevantChange(beforeName, beforeRole, beforeGreeting, beforeContract, persona))
             _users.SetAssistantPersona(UserId, null);
         await Broadcast("updated", id);
         return Ok(persona);
@@ -360,11 +369,12 @@ public class PersonasController : ControllerBase
     // Превращение заготовки в «своего» ассистента (план 2.8): Name/Role/Greeting или любой слот
     // характера поменян → статус нетронутой заготовки снимается. Посторонние поля (цвет, модель,
     // аватар, привязки) статус не трогают — карточка-приглашение не должна гаснуть от косметики.
-    private static bool IsCharacterRelevantChange(Persona before, Persona after) =>
-        !string.Equals(before.Name, after.Name, StringComparison.Ordinal)
-        || !string.Equals(before.Role ?? "", after.Role ?? "", StringComparison.Ordinal)
-        || !string.Equals(before.Greeting ?? "", after.Greeting ?? "", StringComparison.Ordinal)
-        || !SameCharacterContract(before.Contract, after.Contract);
+    private static bool IsCharacterRelevantChange(string beforeName, string? beforeRole, string? beforeGreeting,
+        PersonaContract? beforeContract, Persona after) =>
+        !string.Equals(beforeName, after.Name, StringComparison.Ordinal)
+        || !string.Equals(beforeRole ?? "", after.Role ?? "", StringComparison.Ordinal)
+        || !string.Equals(beforeGreeting ?? "", after.Greeting ?? "", StringComparison.Ordinal)
+        || !SameCharacterContract(beforeContract, after.Contract);
 
     // Сравнение только слотов характера контракта (Character/Tone/MustDo/MustNot/OutputFormat/
     // SpeechExamples/Instructions); null-контракт трактуем как пустой. Списки — пословно.

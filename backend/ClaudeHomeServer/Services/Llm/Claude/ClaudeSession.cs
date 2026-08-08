@@ -120,6 +120,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // Цена расширения — лишнее ожидание только в аварийном случае (CLI сам не вышел).
     private static readonly TimeSpan PromptSuggestionExitGrace = TimeSpan.FromSeconds(45);
 
+    // Грейс на старт хода-продолжения после завершения последней фоновой задачи. Между
+    // task_notification и первым stream_event продолжения ContinuationActive ещё не взведён,
+    // а ResultExitGrace (15с) мог бы рубить разгон продолжения под нагрузкой/ретраях провайдера.
+    // Состояние «result отдан, фоновых задач нет, stdin ещё открыт» бывает ТОЛЬКО в этом окне:
+    // при результате хода без фоновых задач stdin закрывается сразу (case "result"), а здесь он
+    // открыт именно потому, что доживали bg-агенты — их task_notification запускает продолжение.
+    private static readonly TimeSpan ContinuationStartGrace = TimeSpan.FromMinutes(2);
+
     // Потолок доживания процесса с работающими фоновыми агентами после конца хода.
     // Агенты (Agent run_in_background, Workflow) живут ВНУТРИ процесса CLI: убить его
     // по грейсу — значит убить их на середине (наблюдалось на проде: task-notification
@@ -1234,7 +1242,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // ExitPlanMode → согласование плана, прочие инструменты → permission-пайплайн.
     // Актуальные CLI шлют permission-запросы именно этим каналом (не sdk_control_request) —
     // авто-allow здесь означал бы исполнение любых команд без карточек.
-    private async Task HandleControlRequestAsync(JsonElement root)
+    private async Task HandleControlRequestAsync(CliRun run, JsonElement root)
     {
         var requestId = root.TryGetProperty("request_id", out var rid) ? rid.GetString() ?? "" : "";
         if (!root.TryGetProperty("request", out var req)) return;
@@ -1263,7 +1271,7 @@ public class ClaudeSession : ILlmSessionAdapter
                     message = $"Лимит раундов интервью ({TeamImplementPrompts.MaxInterviewRounds}) уже " +
                               "исчерпан — больше не спрашивай, оформи остаток неясностей допущениями " +
                               "и заверши интервью маркером работы."
-                });
+                }, run.Process);
                 return;
             }
             // Ждём выбор пользователя — control_response отправит AnswerQuestion.
@@ -1298,7 +1306,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // подвергается), и резолвнутый script именованного workflow её не проходил.
         SendControlResponse(requestId, behavior == "allow"
             ? new { behavior = "allow" }
-            : (object)new { behavior = "deny", message = "Пользователь отклонил действие" });
+            : (object)new { behavior = "deny", message = "Пользователь отклонил действие" }, run.Process);
     }
 
     // Решение по инструменту: правила проекта → «всегда разрешать» этой сессии → карточка
@@ -1367,14 +1375,14 @@ public class ClaudeSession : ILlmSessionAdapter
         return behavior;
     }
 
-    private void SendControlResponse(string requestId, object responsePayload)
+    private void SendControlResponse(string requestId, object responsePayload, Process? target = null)
     {
         var msg = JsonSerializer.Serialize(new
         {
             type = "control_response",
             response = new { subtype = "success", request_id = requestId, response = responsePayload }
         });
-        WriteLineToStdin(msg);
+        WriteLineToStdin(msg, target);
     }
 
     // Смена режима прав на лету: пишем control_request set_permission_mode в stdin живого
@@ -1415,9 +1423,13 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Единая точка записи в stdin процесса — под _stdinLock, чтобы параллельные
     // control_response (SignalR-потоки + памп) не перемешали JSON-строки
-    private void WriteLineToStdin(string line)
+    private void WriteLineToStdin(string line, Process? target = null)
     {
-        var proc = _currentProcess;
+        // target — процесс прогона, приславшего запрос: control_request/can_use_tool приходит
+        // из stdout конкретного прогона, и ответ должен вернуться в НЕГО, а не в _currentProcess,
+        // которым к моменту ответа мог стать уже новый прогон. public-точки входа без контекста
+        // прогона (AnswerQuestion/RespondPlan из SignalR-потока) передают null → пишем в текущий.
+        var proc = target ?? _currentProcess;
         if (proc is null || proc.HasExited) return;
         _stdinLock.Wait();
         try
@@ -2337,9 +2349,21 @@ public class ClaudeSession : ILlmSessionAdapter
     // клиенту), а IdleTimeout — лишь крайняя защита от вечно висящего процесса.
     // Доживание с фоновыми агентами — потолок BgLingerTimeout; иначе — короткий грейс выхода CLI.
     private TimeSpan WatchdogFor(CliRun run) =>
-        !run.TurnDone ? IdleTimeout
-        : run.HasPendingBg ? _bgLingerTimeout
-        : run.PromptSuggestionsActive ? PromptSuggestionExitGrace
+        ResolveWatchdog(run.TurnDone, run.ContinuationActive, run.HasPendingBg, run.StdinClosed,
+            run.PromptSuggestionsActive, _bgLingerTimeout);
+
+    // Чистое отображение состояния прогона → допустимой тишины stdout. Вынесено из WatchdogFor
+    // ради прямого тестирования веток. Активный ход ИЛИ ход-продолжение CLI (ответ на
+    // task_notification) — щедрый IdleTimeout: продолжение это полноценный агентный ход, и его
+    // долгие инструменты (npx tsc, dotnet build) не должны гибнуть по короткому грейсу молчания.
+    // result без фоновых задач, но stdin ещё открыт — окно старта продолжения (ContinuationStartGrace).
+    internal static TimeSpan ResolveWatchdog(
+        bool turnDone, bool continuationActive, bool hasPendingBg, bool stdinClosed,
+        bool promptSuggestions, TimeSpan bgLinger) =>
+        !turnDone || continuationActive ? IdleTimeout
+        : hasPendingBg ? bgLinger
+        : !stdinClosed ? ContinuationStartGrace
+        : promptSuggestions ? PromptSuggestionExitGrace
         : ResultExitGrace;
 
     // Финализация прогона: единственная точка уборки после смерти процесса
@@ -2894,11 +2918,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 break;
 
             case "sdk_control_request":
-                await HandlePermissionAsync(root);
+                await HandlePermissionAsync(run, root);
                 break;
 
             case "control_request":
-                await HandleControlRequestAsync(root);
+                await HandleControlRequestAsync(run, root);
                 break;
 
             case "rate_limit_event":
@@ -3154,8 +3178,11 @@ public class ClaudeSession : ILlmSessionAdapter
     // Уведомление CLI о завершении фоновых задач: user-ход со строковым content
     // <task-notification>…<task-id>X</task-id>… Вычёркиваем задачи из pending и шлём клиентам
     // bg_agent_done (карточки агентов переключаются из «работает» в «ответ готов» только
-    // по этому событию); если прогон между ходами и pending опустел — закрываем stdin:
-    // CLI дообработает хвост (свой ход-продолжение с ответом на уведомление) и выйдет сам.
+    // по этому событию). Stdin НЕ закрываем: task_notification запускает ход-продолжение CLI,
+    // которому нужен живой stdin для permission-канала (can_use_tool → control_response) —
+    // преждевременное закрытие роняло все tool-запросы продолжения с «Stream closed». Закрытие
+    // выполнит result самого продолжения (case "result" → CloseStdinIfIdle); не начнётся —
+    // процесс умрёт по ватчдогу (ContinuationStartGrace тишины).
     // Текстовый путь статус не несёт — завершение всегда считается успешным (Aborted: false);
     // структурный task_notification (HandleStructuredTaskNotification) точнее.
     private void HandleTaskNotification(string? text)
@@ -3186,7 +3213,6 @@ public class ClaudeSession : ILlmSessionAdapter
                     Console.Error.WriteLine($"[ClaudeSession] bg_agent_done не разослан: {ex.Message}");
                 }
             });
-        CloseStdinIfIdle(run);
     }
 
     // Завершение фоновой задачи, замеченное по tool_result инструмента TaskOutput (модели,
@@ -3217,7 +3243,6 @@ public class ClaudeSession : ILlmSessionAdapter
                 Console.Error.WriteLine($"[ClaudeSession] bg_agent_done (TaskOutput) не разослан: {ex.Message}");
             }
         });
-        CloseStdinIfIdle(run);
     }
 
     // Структурное событие CLI: старт фоновой задачи. Первичный (точный) источник учёта —
@@ -3282,7 +3307,6 @@ public class ClaudeSession : ILlmSessionAdapter
                 Console.Error.WriteLine($"[ClaudeSession] bg_agent_done (structured) не разослан: {ex.Message}");
             }
         });
-        CloseStdinIfIdle(run);
     }
 
     // Структурное событие CLI: снэпшот живых фоновых задач. Единственное безопасное
@@ -3451,7 +3475,7 @@ public class ClaudeSession : ILlmSessionAdapter
             : [WorkflowMetaResolver.GlobalWorkflowsDir];
 
     // Permission-запрос старого канала (sdk_control_request) — общий пайплайн DecidePermissionAsync
-    private async Task HandlePermissionAsync(JsonElement root)
+    private async Task HandlePermissionAsync(CliRun run, JsonElement root)
     {
         // Используем request_id из CLI — именно его ждёт claude в control_response
         var requestId = root.TryGetProperty("request_id", out var rid)
@@ -3472,7 +3496,7 @@ public class ClaudeSession : ILlmSessionAdapter
             type = "control_response",
             behavior
         });
-        WriteLineToStdin(response);
+        WriteLineToStdin(response, run.Process);
     }
 
     // Размер контекста последнего запроса к API. usage у assistant-сообщения относится к ОДНОМУ

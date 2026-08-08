@@ -1440,6 +1440,12 @@ public class SessionManager : IDisposable
             return (() =>
             {
                 var owner = _users.GetById(ownerId);
+                // Резолв заготовки: id и имя подставляем ТОЛЬКО когда AssistantPersonaId резолвится
+                // в ЖИВУЮ персону. Мёртвый id (заготовку удалили) → промпт деградирует к «создай
+                // персону», и серверный предохранитель в этом состоянии create разрешает — план 2.9.
+                var assistantId = owner?.AssistantPersonaId;
+                if (assistantId is { } aid && _personas.Get(aid, ownerId) is { } draft)
+                    return Prompts.OnboardingPrompts.UserMaster(owner?.DisplayName ?? owner?.Username, draft.Id, draft.Name);
                 return Prompts.OnboardingPrompts.UserMaster(owner?.DisplayName ?? owner?.Username);
             }, null, null, null);
         }

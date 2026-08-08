@@ -220,6 +220,24 @@ public class PersonasController : ControllerBase
         if (PersonaManager.ExceedsContractLimit(req.Contract, req.SystemPrompt, 0, out var tooBig))
             return BadRequest(new { error = tooBig });
 
+        // Серверный предохранитель знакомства (план 2.9): в личном знакомстве (сессия с
+        // OnboardingKind == "user") нельзя создавать НОВУЮ персону — интервью дорабатывает
+        // заготовку через personas_update. Срабатывает ТОЛЬКО когда вызов пришёл из
+        // user-онбординг-сессии И AssistantPersonaId резолвится в ЖИВУЮ персону. Резолв, а не
+        // проверка на непустоту: иначе висячий id запирал бы знакомство навсегда (создать нельзя,
+        // обновить некого). Проектное знакомство создаёт руководителя штатно — его не трогаем.
+        if (Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault() is { Length: > 0 } guardCsid
+            && _sessions.GetOwned(guardCsid, UserId) is { OnboardingKind: OnboardingKinds.User }
+            && _users.GetById(UserId)?.AssistantPersonaId is { } liveAssistantId
+            && _personas.Get(liveAssistantId, UserId) is not null)
+        {
+            return BadRequest(new
+            {
+                error = $"В знакомстве нельзя создавать новую персону — дорабатывай существующего " +
+                    $"ассистента через personas_update (id: {liveAssistantId})",
+            });
+        }
+
         // Явные привязки валидируем ДО создания персоны — ошибка не оставляет полусозданную.
         // Персона ещё не существует — для само-проверки ProjectPersonas/ProjectTasks передаём
         // лёгкую заглушку с планируемыми Scope/ProjectId (полноценная персона не нужна).

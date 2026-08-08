@@ -73,6 +73,13 @@ public class SessionManager : IDisposable
         // при живых фоновых агентах). Чужие ходы (REST-канал агентов, /compact,
         // ходы-продолжения CLI) протокола не несут и цикл не двигают.
         public volatile bool LoopTurnInFlight;
+        // Разбор очереди (DrainNextPendingAsync) вне цикла идёт по одному сообщению за раз —
+        // следующее уйдёт по result уже этого хода. Параллельные drain (выключение цикла из
+        // SetWorkLoopAsync + штатный drain из OnMessageAsync по result) без этого флага
+        // вытащили бы ДВА сообщения и послали два хода. Взводится атомарно с извлечением,
+        // гасится по концу доставки — второй drain в окне видит его и уступает (сообщение
+        // не теряется: по result хода отработает следующий drain).
+        public volatile bool DrainInFlight;
         // Ожидающая карточка взаимодействия (разрешение/вопрос/план) — replay при
         // JoinSession: без него клиент после F5 видел бы «Claude печатает…» без
         // возможности ответить, а CLI ждал бы до часового таймаута
@@ -2910,8 +2917,16 @@ public class SessionManager : IDisposable
             }
             else
             {
+                // Параллельный drain уже вытащил сообщение и отправляет — уступаем, чтобы не
+                // запустить второй ход. Сообщение не теряется: по result этого хода отработает
+                // следующий drain (DrainInFlight к тому моменту уже погашен).
+                if (entry.DrainInFlight) return;
                 next = entry.Pending.FirstOrDefault();
-                if (next is not null) entry.Pending.RemoveAt(0);
+                if (next is not null)
+                {
+                    entry.Pending.RemoveAt(0);
+                    entry.DrainInFlight = true;
+                }
             }
         }
         if (scheduleContinue)
@@ -2926,7 +2941,14 @@ public class SessionManager : IDisposable
         if (next is null) return;
 
         await BroadcastPendingAsync(sessionId, entry);
-        await DeliverPendingAsync(sessionId, entry, next);
+        try
+        {
+            await DeliverPendingAsync(sessionId, entry, next);
+        }
+        finally
+        {
+            entry.DrainInFlight = false;
+        }
     }
 
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
@@ -3644,10 +3666,14 @@ public class SessionManager : IDisposable
             await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "manual",
                 "Цикл остановлен вами. Текущий ход продолжает работу.");
 
-        // Minor 5: агентские сообщения, скопившиеся за время цикла (они ждали конца ВСЕГО цикла),
-        // при выключении не должны дожидаться следующего пользовательского хода — запускаем разбор
-        // очереди. В фоне: SetWorkLoopAsync вызывается в т.ч. из ContinueWorkLoopAsync по result.
-        if (wasEnabled && !enabled)
+        // Агентские сообщения, скопившиеся за время цикла (они ждали конца ВСЕГО цикла),
+        // при выключении не должны дожидаться следующего пользовательского хода — запускаем
+        // разбор очереди. В фоне: SetWorkLoopAsync вызывается в т.ч. из ContinueWorkLoopAsync
+        // по result. НО только когда текущий ход цикла уже завершился (статус не Working/Waiting):
+        // ручной стоп приходит ВО ВРЕМЯ хода, и drain миновал бы гейт занятости SendMessageAsync(auto)
+        // → второй ход в живой процесс. Ничего не теряется — по result текущего хода отработает
+        // штатный drain (там WorkLoop уже null).
+        if (wasEnabled && !enabled && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting))
             _ = Task.Run(async () =>
             {
                 try { await DrainNextPendingAsync(sessionId); }

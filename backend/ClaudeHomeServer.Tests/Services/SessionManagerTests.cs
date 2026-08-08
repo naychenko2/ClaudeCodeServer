@@ -1308,6 +1308,15 @@ public class SessionManagerTests : IDisposable
             0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
     }
 
+    // Агентское сообщение напрямую в очередь — для сценариев drain (доклады персон ждут
+    // конца цикла, разбираются по его выключении / концу хода).
+    private static void EnqueueAgent(object entry, string text)
+    {
+        var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
+        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.Agent));
+    }
+
     [Fact]
     public async Task ContinueWorkLoop_ПользовательскоеСообщениеВОчереди_НеШлётДирективуПродолжения()
     {
@@ -1335,6 +1344,70 @@ public class SessionManagerTests : IDisposable
             It.Is<string>(t => t.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл продолжается на сообщении пользователя");
+    }
+
+    [Fact]
+    public async Task SetWorkLoop_СтопВоВремяХодаСАгентскимВОчереди_НеЗапускаетВторойХод()
+    {
+        // Major: ручной стоп цикла приходит ВО ВРЕМЯ хода (Status=Working). В очереди лежит
+        // агентское сообщение (ждало конца цикла). Без гейта статуса SetWorkLoopAsync завёл бы
+        // drain → голова очереди ушла бы вторым ходом в ЖИВОЙ процесс (SendMessageAsync(auto)
+        // минует гейт занятости). Гейт: drain запускается только когда чат уже свободен.
+        var session = await MkBusySessionAsync("loop-stop-busy", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true); // ход-итерация цикла в полёте
+        EnqueueAgent(entry, "доклад из параллельного чата");
+
+        await _sut.SetWorkLoopAsync(session.Id, enabled: false, userId: TestUserId, manual: true);
+
+        // Drain запускается в фоне; подставной адаптер синхронен, поэтому, будь гейт снят,
+        // SendMessageAsync прилетел бы за доли секунды. Ждём окно и проверяем, что вызова НЕ было.
+        await WaitForSendAsync(adapter, TimeSpan.FromMilliseconds(500));
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never(),
+            "стоп цикла во время хода не должен пускать второй ход в живой процесс");
+        _sut.GetPending(session.Id).Should().ContainSingle(
+            "агентское сообщение остаётся ждать штатного drain по result текущего хода");
+    }
+
+    [Fact]
+    public async Task DrainNextPending_ПараллельныеВызовыВне_ОтправляютТолькоОдно()
+    {
+        // Minor 1: два параллельных drain (выключение цикла из SetWorkLoopAsync + штатный
+        // из OnMessageAsync по result) без сериализации вытащили бы по сообщению каждый → два
+        // хода. DrainInFlight сериализует разбор вне цикла: второй drain уступает, сообщение
+        // ждёт result первого. Чтобы смоделировать реальную параллельность (на ThreadPool),
+        // задерживаем отправку первого drain на gate — он висит со взведённым DrainInFlight.
+        var session = await MkBusySessionAsync("drain-dedup", SessionStatus.Active);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        EnqueueAgent(entry, "доклад-1");
+        EnqueueAgent(entry, "доклад-2");
+
+        var sendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>())).Returns(() => sendGate.Task);
+
+        var drain = typeof(SessionManager).GetMethod("DrainNextPendingAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+        var t1 = Task.Run(async () => await (Task)drain.Invoke(_sut, [session.Id])!);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(1)); // t1 дошёл до отправки, DrainInFlight=true
+
+        var t2 = Task.Run(async () => await (Task)drain.Invoke(_sut, [session.Id])!);
+        await Task.WhenAny(t2, Task.Delay(TimeSpan.FromSeconds(1))); // t2 уступил по DrainInFlight
+
+        sendGate.SetResult(); // отпустить первый drain — finally погасит DrainInFlight
+        await t1;
+
+        // Отправлено ровно одно — второе сообщение осталось ждать своего хода.
+        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _sut.GetPending(session.Id).Should().ContainSingle("второе сообщение осталось в очереди");
     }
 
     [Fact]

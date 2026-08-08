@@ -975,13 +975,18 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 2");
     }
 
-    // Стартовый провайдер в кулдауне → стартуем сразу с первого живого шага цепочки (маркер
-    // provider_switched, Reason=unreachable), не тратя попытку на мёртвый эндпоинт.
+    // Стартовый СТОРОННИЙ провайдер в кулдауне → стартуем сразу с первого живого шага цепочки
+    // (маркер provider_switched, Reason=unreachable), не тратя попытку на мёртвый эндпоинт.
+    // Подписки пула Claude кулдауном не помечаются (Major 2) — стартовую подмену проверяем
+    // на стороннем провайдере, как и бывает в проде после фикса.
     [Fact]
     public async Task КулдаунСтартовогоПровайдера_СтартСЖивогоШага()
     {
         var dict = new Dictionary<string, string?>
         {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
             ["LlmProviders:p-alive:ApiKey"] = "sk-a",
             ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
             ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",

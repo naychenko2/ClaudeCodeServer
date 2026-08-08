@@ -359,7 +359,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // Кулдаун недоступности (волна 2): провайдер, вернувший Unreachable/ProviderError,
                 // помечаем недоступным на TTL — следующие ходы и шаги цепочки пропустят его сразу.
                 // Лимитные классы (429/usage) сюда не попадают: это квота аккаунта, не мёртвый эндпоинт.
-                if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError)
+                // ТОЛЬКО для сторонних провайдеров: ключи подписок пула Claude НЕ помечаем — их
+                // здоровье уже ведёт ClaudeSubscriptionPool (исчерпание/ротация). Иначе один
+                // транзитный 529 на «claude» уводил бы все новые ходы с цепочкой на сторонний шаг 2
+                // мимо живой «claude-2» (Major 2 ревью). Стартовая подмена для нативного ключа тогда
+                // не срабатывает (IsUnavailable всегда false) — пул отработает уровень 1 штатно.
+                if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError
+                    && IsExternalProvider(currentKey))
                     _health?.MarkUnavailable(currentKey);
 
                 trace.Add(new AttemptTrace(currentModel, currentKey, cls));
@@ -570,6 +576,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return byModel ?? (string.IsNullOrEmpty(Info.Provider)
             ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider);
     }
+
+    // Сторонний ли провайдер (есть в реестре LlmProviderRegistry), а не подписка пула Claude.
+    // Кулдаун недоступности помечает только сторонние эндпоинты — здоровье подписок пула ведёт
+    // ClaudeSubscriptionPool (Major 2).
+    private bool IsExternalProvider(string? key) =>
+        _providers is not null && _providers.GetByKey(key ?? "") is not null;
 
     // Кандидаты уровня 1: сначала штатный Pick (с учётом исчерпания, SupportsModel,
     // тарифа и утилизации), затем последовательно остальные подписки пула

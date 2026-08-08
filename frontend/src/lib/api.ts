@@ -662,9 +662,11 @@ export const api = {
     createChat: (id: string, body: { mode?: string; resumeSessionId?: string; name?: string; projectId?: string }) =>
       request<Session>(`/personas/${encodeURIComponent(id)}/chats`, { method: 'POST', body: JSON.stringify(body) }),
     // Подобрать максимально релевантную персону под задачу (для чат-действий AI-хаба). null — нет подходящей.
-    match: (task: string, projectId?: string | null) =>
+    // requiredTool — ключ инструментов, без которого действие не выполнить: персоны без него
+    // в подборе не участвуют (иначе ответят «инструмент недоступен»).
+    match: (task: string, projectId?: string | null, requiredTool?: string) =>
       request<{ personaId: string | null }>('/personas/match', {
-        method: 'POST', body: JSON.stringify({ task, projectId: projectId ?? null }),
+        method: 'POST', body: JSON.stringify({ task, projectId: projectId ?? null, requiredTool: requiredTool ?? null }),
       }),
 
     // Пантеон OmO: каталог ролей-специалистов с бэкенда + идемпотентное подключение
@@ -937,12 +939,15 @@ export const api = {
 
   sessions: {
     list: (projectId: string) => request<Session[]>(`/projects/${projectId}/sessions`),
+    // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки тем»)
+    iconBatch: (projectId: string) =>
+      request<{ processed: number; skipped: number }>(`/projects/${encodeURIComponent(projectId)}/sessions/icon-batch`, { method: 'POST' }),
     create: (projectId: string, mode = 'acceptEdits', resumeSessionId?: string, name?: string, model?: string, agentName?: string, effort?: string) =>
       request<Session>(`/projects/${projectId}/sessions`, {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, agentName, effort }),
       }),
-    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null }) =>
+    update: (projectId: string, sessionId: string, data: { name?: string | null; model?: string | null; effort?: string | null; expiresAfterMinutes?: number | null; tags?: string[]; excludeFromDossiers?: boolean | null; notificationsMuted?: boolean }) =>
       request<Session>(`/projects/${projectId}/sessions/${sessionId}`, {
         method: 'PUT',
         body: JSON.stringify(data),
@@ -1004,7 +1009,7 @@ export const api = {
         method: 'POST',
         body: JSON.stringify({ mode, resumeSessionId, name, model, effort }),
       }),
-    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null }) =>
+    update: (id: string, data: { name?: string | null; model?: string | null; effort?: string | null; pinned?: boolean; expiresAfterMinutes?: number | null; notificationsMuted?: boolean }) =>
       request<Session>(`/chats/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),

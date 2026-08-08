@@ -30,7 +30,7 @@ import { relTime } from '../lib/gitFormat';
 import { toggleSyncMark, useSyncMarks, computeSyncState, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
 import { onFilesChanged } from '../lib/signalr';
 import { useOnline } from '../hooks/useOnline';
-import { useHeadings, useHeadingSpy, resolveHeadingEl, type DocToc, type Heading } from '../hooks/useHeadings';
+import { useHeadings, useHeadingSpy, scrollToHeading, type DocToc, type Heading } from '../hooks/useHeadings';
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
@@ -42,7 +42,6 @@ import { NoteConnections } from '../features/notes/NoteConnections';
 import { NoteView } from '../features/notes/NoteView';
 import type { NoteDetail } from '../types';
 import { MermaidDiagram } from './MermaidDiagram';
-import { getExtMeta } from './FileExplorer';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
@@ -51,7 +50,7 @@ import { C, FONT, FS, MODAL_W, SHADOW, SP, TB } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch } from './Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
-import { BackButton, Modal, ModalActions, Button, ConfirmDialog, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
+import { BackButton, Modal, ModalActions, Button, ConfirmDialog, FileTypeTile, useIsMobileModal, Menu as UiMenu, MenuItem } from './ui';
 import { DiffView } from './DiffView';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectionScope';
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
@@ -469,15 +468,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // искался бы в чужом оглавлении. В ref, а не в состоянии: значение нужно эффекту.
   const pendingAnchorRef = useRef<{ path: string; anchor: string } | null>(null);
 
-  // Скролл заголовка в зону просмотра. scrollIntoView здесь ненадёжен: md лежит внутри
-  // DocCommentedMarkdown (flex-рядок со sticky-сайдбаром комментариев), и нативный
-  // scrollIntoView на этом layout молчит. Скроллим контейнер руками по смещению элемента
-  // от верха зоны (минус padding, чтобы заголовок не прилипал под самый тулбар).
-  const scrollDocTo = useCallback((el: HTMLElement) => {
-    const container = contentAreaRef.current;
-    if (!container) return;
-    const delta = el.getBoundingClientRect().top - container.getBoundingClientRect().top - 16;
-    container.scrollBy({ top: delta, behavior: 'smooth' });
+  // Переход к разделу — общим scrollToHeading: он сам находит скроллер, удерживает цель,
+  // пока md дорисовывается, и мигает ею по приезде. Свой одноразовый прыжок тут был
+  // ненадёжен вдвойне: nativeScrollIntoView на раскладке DocCommentedMarkdown (flex-рядок
+  // со sticky-сайдбаром комментариев) молчит, а прыжок по смещению недоматывал на тяжёлых
+  // документах — комментарии и подсветка кода доезжают уже после него.
+  const scrollDocTo = useCallback((h: Heading) => {
+    scrollToHeading(contentAreaRef.current, h);
   }, []);
 
   // Открытие файла по md-ссылке с якорем: WorkspacePage ставит scrollToAnchor, здесь
@@ -487,14 +484,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollToAnchor]);
 
+  // Живого узла цели ещё нет (md перерисовывается) — ждём следующего пересбора оглавления,
+  // якорь не гасим: иначе переход молча терялся бы
   useEffect(() => {
     const pending = pendingAnchorRef.current;
     if (!pending || pending.path !== filePath || !content || headings.length === 0) return;
     const target = headings.find(h => slugify(h.text) === pending.anchor);
-    if (!target) return;
-    scrollDocTo(target.el);
+    if (!target || !scrollToHeading(contentAreaRef.current, target)) return;
     pendingAnchorRef.current = null;
-  }, [filePath, content, headings, scrollDocTo]);
+  }, [filePath, content, headings]);
 
   // Клик по ссылке в md (режим документации MarkdownViewer): резолв относительного пути
   // и якоря. Якорь текущего документа — скролл; другой файл — onOpenFile (с якорем);
@@ -505,7 +503,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     if (!link || link.kind === 'external') return;
     if (link.kind === 'doc' && link.target === filePath && link.anchor) {
       const target = headings.find(h => slugify(h.text) === link.anchor);
-      if (target) scrollDocTo(target.el);
+      if (target) scrollDocTo(target);
       return;
     }
     onOpenFile?.(link.target, link.anchor ?? undefined);
@@ -947,12 +945,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Зависимости — на сами функции, а не на объект хука: объект в зависимостях
   // пересобирал бы оглавление на каждом рендере (см. useHeadingSpy)
   const jumpToHeading = useCallback((h: Heading) => {
-    const el = resolveHeadingEl(contentAreaRef.current, h);
-    if (!el) return;
     // Сначала подсветка цели, потом прокрутка: клик по строке обязан отзываться
     // мгновенно, а не после того, как документ доедет
     pinHeading(h);
-    scrollDocTo(el);
+    scrollDocTo(h);
   }, [scrollDocTo, pinHeading]);
 
   // Заметка vault рисуется отдельным NoteView (ранний return ниже) — её markdown в
@@ -1089,9 +1085,6 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const dotAt = fileName.lastIndexOf('.');
   const nameBase = dotAt > 0 ? fileName.slice(0, dotAt) : fileName;
   const nameExt = dotAt > 0 ? fileName.slice(dotAt) : '';
-  // Плитка расширения перед именем — как в списке файлов (getExtMeta: фон/цвет/лейбл)
-  const extMeta = getExtMeta(fileName);
-
   // --- Вкладки (включая «Просмотр | Код» для HTML) ---
   const htmlSplit = isHtml && !editing && !isOfficeFile && !fileContent?.isBinary;
   const tabValue: TabKey = htmlSplit && tab === 'file' && htmlTab === 'code' ? 'code' : tab;
@@ -1473,12 +1466,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
         </div>
 
         {/* Плитка расширения перед именем — как в списке файлов */}
-        <span style={{
-          width: 16, height: 16, borderRadius: 4, flexShrink: 0,
-          background: extMeta.bg, color: extMeta.fg,
-          fontFamily: "'JetBrains Mono', monospace", fontSize: 7.5, fontWeight: 700,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', letterSpacing: '-0.02em',
-        }}>{extMeta.label}</span>
+        <FileTypeTile name={fileName} />
 
         {/* Имя файла — единственный гибкий элемент строки. Расширение отдельным span'ом:
             ellipsis режет хвост, а по нему и узнают файл. title — полный путь. */}

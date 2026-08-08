@@ -67,7 +67,11 @@ export function ListDateDivider({
 }) {
   const [hover, setHover] = useState(false);
   const lineColor = flash ? C.accent : C.divider;
-  const line = { flex: 1, height: 1, background: lineColor };
+  // Линия рисуется границей, а не блоком высотой 1: блок центрируется по дробной
+  // координате (высота строки нечётная), браузер размазывает его на два пикселя, и
+  // черта то тонкая, то толстая — заметнее всего при сворачивании, когда высота
+  // разделителя меняется. Граница же всегда ложится на целый пиксель
+  const line = { flex: 1, height: 0, borderTop: `1px solid ${lineColor}` };
   const body = (
     <>
       {leading}
@@ -132,7 +136,11 @@ export function ListDateDivider({
   );
   const layout = {
     display: 'flex', alignItems: 'center', gap: 8,
-    padding: dense ? '5px 4px 3px' : '10px 4px 7px',
+    // Плотный вариант стоит в колонке строк списка (группы документации), поэтому
+    // его высота считается по строке файла: 3 + бейдж 16 + 3 = 22, ровно ROW_H
+    // соседних документов. С прежними 5/3 подпись была на два пикселя выше их и
+    // читалась как более крупный элемент — особенно под заливкой выделения
+    padding: dense ? '3px 4px' : '10px 4px 7px',
   };
   if (!onClick) return <div style={layout}>{body}</div>;
   return (
@@ -144,10 +152,14 @@ export function ListDateDivider({
       style={{
         ...layout,
         width: '100%', border: 'none',
-        // Порядок как у строки документа: выделение сильнее наведения — иначе подсветка
-        // открытого раздела гасла под курсором, будто документ закрылся
-        background: active ? C.bgSelected : highlightOnHover && hover ? C.bgInset : 'transparent',
+        // Порядок и цвета как у строки документа: выделение сильнее наведения — иначе
+        // подсветка открытого раздела гасла под курсором, будто документ закрылся
+        background: active ? C.accentMuted : highlightOnHover && hover ? C.bgSelected : 'transparent',
         borderRadius: highlightOnHover || active ? R.md : undefined,
+        // Полоска выделения — та же и тем же способом, что у строки документа: по
+        // левому краю СВОЕЙ заливки. Отдельным слоем по краю всей строки она уже
+        // пробовалась и читалась чужеродно — раздел выделяется как документ, и точка
+        boxShadow: active ? `inset 2px 0 0 ${C.accent}` : undefined,
         cursor: 'pointer', font: 'inherit', textAlign: 'left',
       }}
     >

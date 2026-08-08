@@ -1,7 +1,7 @@
 // Дев-сервисы проекта (панель «Сервисы»): список + запуск/остановка + live-статусы.
 // Вынесено из WorkspacePage; воркспейсная навигация (переключение вкладки
 // инструментов при старте) осталась у вызывающего — колбэк opts.onStarted.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ProjectService } from '../types';
 import { api } from '../lib/api';
 import { onMessage } from '../lib/signalr';
@@ -10,6 +10,9 @@ export function useProjectServices(projectId: string, opts?: { onStarted?: (svc:
   const [services, setServices] = useState<ProjectService[]>([]);
   const [activePreviewId, setActivePreviewId] = useState<string | null>(null);
   const onStarted = opts?.onStarted;
+  // Свежий список для activate: колбэк не должен пересоздаваться на каждый статус
+  const servicesRef = useRef<ProjectService[]>([]);
+  servicesRef.current = services;
 
   const refresh = useCallback(async () => {
     try {
@@ -36,6 +39,24 @@ export function useProjectServices(projectId: string, opts?: { onStarted?: (svc:
     }
   }, [projectId, onStarted]);
 
+  // Открыть сервис в превью. Назначение активного идёт НА БЭКЕНД и обязательно ДО показа
+  // окна: прокси /preview/* берёт порт у DevServerService, а не у фронта, и смонтированный
+  // раньше iframe получил бы 503 «Dev-сервер не запущен» — сам он уже не перезагрузится.
+  const activate = useCallback(async (serviceId: string | null) => {
+    if (!serviceId) { setActivePreviewId(null); return; }
+    // Сервис, поднятый вне продукта, реестр процессов не знает — у него свой эндпоинт,
+    // где порт берётся из конфигурации сервиса
+    const external = servicesRef.current.find(s => s.id === serviceId)?.status === 'external';
+    try {
+      await (external
+        ? api.projects.previewActiveExternal(projectId, serviceId)
+        : api.projects.previewActive(projectId, serviceId));
+    } catch {
+      // Назначение не прошло — окно всё равно открываем: в нём видно статус и ошибку
+    }
+    setActivePreviewId(serviceId);
+  }, [projectId]);
+
   const stop = useCallback(async (serviceId: string) => {
     try { await api.projects.previewStop(projectId, serviceId); } catch { /* ignore */ }
     setServices(prev => prev.map(s => s.id === serviceId ? { ...s, status: 'stopped', runningPort: null } : s));
@@ -52,5 +73,5 @@ export function useProjectServices(projectId: string, opts?: { onStarted?: (svc:
     });
   }, []);
 
-  return { services, activePreviewId, setActivePreviewId, refresh, start, stop };
+  return { services, activePreviewId, setActivePreviewId, activate, refresh, start, stop };
 }

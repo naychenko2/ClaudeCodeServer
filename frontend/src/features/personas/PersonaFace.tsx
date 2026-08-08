@@ -34,12 +34,17 @@ function veilStop(color: string, alpha: number, pos: number): string {
  * Прозрачность у фото и инициалов разная: буквы визуально легче фотографии
  * и при равной прозрачности выглядели бы бледнее.
  */
-export function PersonaBackdrop({ persona, width = 84, fontSize = 38 }: {
+export function PersonaBackdrop({ persona, width = 84, fontSize = 38, neutral = false }: {
   persona: Persona;
   // Ширина полосы лица у правого края
   width?: number;
   // Кегль инициалов-фолбэка без фото
   fontSize?: number;
+  // Убрать цветную вуаль персоны. Нужно, когда по карточке идёт статусный перелив
+  // или пульсация непрочитанности: цвет персоны на текстовой области конфликтовал
+  // бы с ними, два сигнала на одном фоне. Фото/инициалы остаются — нейтральна
+  // только заливка-растяжка
+  neutral?: boolean;
 }) {
   const color = agentDotColor(persona.avatar?.color);
   const hasPhoto = persona.avatar?.kind === 'image';
@@ -48,19 +53,23 @@ export function PersonaBackdrop({ persona, width = 84, fontSize = 38 }: {
     <>
       {/* Вуаль цветом персоны: подхватывает лицо у его края и длинной мягкой
           растяжкой уводит цвет влево — стык картинки с фоном не читается.
-          Ступени по альфе, а не один линейный переход: так спад плавнее */}
-      <div aria-hidden style={{
-        position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.22,
-        background: 'linear-gradient(to left, '
-          + [
-            veilStop(color, 1, 0),
-            veilStop(color, 0.82, 16),
-            veilStop(color, 0.5, 38),
-            veilStop(color, 0.22, 62),
-            veilStop(color, 0.06, 82),
-            veilStop(color, 0, 100),
-          ].join(', ') + ')',
-      }} />
+          Ступени по альфе, а не один линейный переход: так спад плавнее.
+          neutral — вуаль не рисуется: текстовая область остаётся чистым фоном,
+          чтобы не драться со статусным переливом/пульсацией */}
+      {!neutral && (
+        <div aria-hidden style={{
+          position: 'absolute', inset: 0, pointerEvents: 'none', opacity: 0.22,
+          background: 'linear-gradient(to left, '
+            + [
+              veilStop(color, 1, 0),
+              veilStop(color, 0.82, 16),
+              veilStop(color, 0.5, 38),
+              veilStop(color, 0.22, 62),
+              veilStop(color, 0.06, 82),
+              veilStop(color, 0, 100),
+            ].join(', ') + ')',
+        }} />
+      )}
       <PersonaFace
         persona={persona} align="right" fontSize={fontSize}
         style={{

@@ -41,8 +41,8 @@ export function ExpiryButton({ session, isMobile, onSessionUpdated }: {
     }
   };
 
-  // Сохранение перезапускает отсчёт от «сейчас», поэтому дату считаем от последней
-  // активности только когда срок не меняется
+  // Отсчёт идёт от последней активности, но не раньше момента установки срока
+  // (expiryAnchor) — это уже учтено в expiresAt
   const at = expiresAt(session);
 
   return (

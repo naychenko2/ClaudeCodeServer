@@ -153,7 +153,9 @@ function WallServicesPanel({ projectId, onOpenPreview }: { projectId: string; on
       projectId={projectId}
       services={s.services}
       activePreviewId={s.activePreviewId}
-      onSelect={id => { s.setActivePreviewId(id); if (id) onOpenPreview(id); }}
+      // Оверлей открываем только после назначения активного сервиса на бэкенде —
+      // иначе его iframe уедет в прокси раньше и получит «Dev-сервер не запущен»
+      onSelect={async id => { await s.activate(id); if (id) onOpenPreview(id); }}
       onStart={s.start}
       onStop={s.stop}
       onRefresh={s.refresh}

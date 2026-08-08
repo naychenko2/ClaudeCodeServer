@@ -35,7 +35,7 @@ describe('buildChatTreeRows', () => {
   it('без parentSessionId все чаты — корни, связей нет', () => {
     const r = build([mk('a'), mk('b')]);
     expect(r.rows.map(x => x.depth)).toEqual([0, 0]);
-    expect(r.linkCount).toBe(0);
+    expect(r.rows.every(x => !x.hasChildren)).toBe(true);
     expect(r.renderedCount).toBe(2);
   });
 
@@ -51,7 +51,7 @@ describe('buildChatTreeRows', () => {
     expect(r.rows[1].depth).toBe(1);
     expect(r.rows[1].isLast).toBe(true);
     expect(r.rows[0].hasChildren).toBe(true);
-    expect(r.linkCount).toBe(1);
+    expect(r.renderedCount).toBe(3);
   });
 
   it('дети внутри родителя отсортированы по updatedAt desc', () => {
@@ -69,7 +69,7 @@ describe('buildChatTreeRows', () => {
     const r = build([mk('orphan', { parentSessionId: 'gone' })]);
     expect(r.rows).toHaveLength(1);
     expect(r.rows[0].depth).toBe(0);
-    expect(r.linkCount).toBe(0);
+    expect(r.rows[0].hasChildren).toBe(false);
   });
 
   it('цикл ссылок разрывается, оба чата в списке', () => {
@@ -117,7 +117,7 @@ describe('buildChatTreeRows', () => {
     expect(r.renderedCount).toBe(2);
   });
 
-  it('свёрнутое поддерево не рендерится, счётчик считает всю спрятанную ветку', () => {
+  it('свёрнутое поддерво остаётся в массиве (для DOM-анимации), счётчик считает всю ветку', () => {
     const chats = [
       mk('p'),
       mk('c1', { parentSessionId: 'p' }),
@@ -125,8 +125,11 @@ describe('buildChatTreeRows', () => {
       mk('g', { parentSessionId: 'c1' }),
     ];
     const r = build(chats, { collapsedIds: new Set(['p']) });
-    expect(r.rows.map(x => x.chat.id)).toEqual(['p']);
+    // Дети свёрнутого узла НЕ вырезаются из rows: рендер прячет их контейнером
+    // grid 0fr↔1fr, чтобы анимировать схлопывание высоты. Раньше их здесь не было.
+    expect(r.rows.map(x => x.chat.id)).toEqual(['p', 'c1', 'g', 'c2']);
     expect(r.rows[0].collapsed).toBe(true);
+    expect(r.rows[1].collapsed).toBe(false);
     // Внук g тоже спрятан — счётчик обязан его учесть (не 2 прямых ребёнка)
     expect(r.rows[0].groupCount).toBe(3);
     expect(r.rows[0].groupRunningCount).toBe(0);

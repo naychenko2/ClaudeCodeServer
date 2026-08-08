@@ -4,7 +4,7 @@
 // со стеком панелей (RightPanelStack): План, Файлы, Задачи, Команда, Терминал, Preview.
 // WorkspacePage остаётся владельцем состояния и обработчиков — сюда всё приходит
 // пропсами (контент панелек тоже собирается там); HubHeader и диалоги тоже там.
-import { useState, useRef, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
+import { useState, useRef, useEffect, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
 import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
 import { C, FONT, ISLAND, CHAT_COLUMN_W, SPLASH_W } from '../../lib/design';
@@ -31,6 +31,7 @@ import type { PanelKey } from './panelCatalog';
 import { ReaderHeaderBar } from './reader/ReaderHeaderBar';
 import { ReaderBody } from './reader/ReaderBody';
 import type { ReaderPanelActions, ReaderPanelState } from './reader/useReaderPanel';
+import { wsPanels } from './panelStackState';
 
 export type SidebarMode = 'pinned' | 'collapsed';
 
@@ -141,6 +142,20 @@ export function DesktopWorkspace(p: Props) {
   const [chatFlex, setChatFlex] = useState(1);
   const splitContainerRef = useRef<HTMLDivElement>(null);
 
+  // Эксклюзив боковых сторон на планшете: гейтит режим флагом exclusive в сторе
+  // (его читают обе PanelZone + reveal из FileViewer/GitBar). При входе в планшет
+  // активной становится левая («Чаты») — её stash разворачивается, правая compact
+  // чистится эффектом в PanelZone. При выходе/unmount флаг снимается — на WallPage
+  // и разделах хаба эксклюзива нет (там compact и так не передаётся).
+  const { setExclusive, markActive } = wsPanels.use();
+  useEffect(() => {
+    setExclusive(!!p.isTablet);
+    if (p.isTablet) markActive('left');
+    return () => setExclusive(false);
+    // setExclusive/markActive стабильны (useCallback в сторе) — в deps не нужны
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.isTablet]);
+
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {
     e.preventDefault();
@@ -241,7 +256,7 @@ export function DesktopWorkspace(p: Props) {
   // поэтому только ему нужна компенсация перекоса зон (файл, доска, граф и превью
   // резиновые: им положено занимать всю колонку целиком).
   // Ширина — CHAT_COLUMN_W, а не CHAT_MAX_W: компенсации отдаётся только то, что
-  // остаётся сверх ПОЛНОЙ потребности ленты (колонка + жёлоб + полоса прокрутки).
+  // остаётся сверх ПОЛНОЙ потребности ленты (колонка + полоса прокрутки + отступ).
   // Но ленты может и не быть: пока чат не выбран, в центре стоит заставка вдвое уже,
   // и её потребность — SPLASH_W. Дашь тут CHAT_COLUMN_W — на окне ноутбука запаса
   // не останется вовсе, компенсация выродится в ноль и заставку перекосит.

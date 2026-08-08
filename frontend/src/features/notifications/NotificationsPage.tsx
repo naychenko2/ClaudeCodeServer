@@ -4,7 +4,7 @@ import { C, FONT, FS, R, SP, SHADOW, CONTENT_MAX_W } from '../../lib/design';
 import { NotificationAvatar, hasPersona, notifAccentColor } from './NotificationAvatar';
 import { HubHeader } from '../../components/HubHeader';
 import { PageCanvas } from '../../components/ui/PageCanvas';
-import { ConfirmDialog } from '../../components/ui';
+import { ConfirmDialog, Toggle } from '../../components/ui';
 import { ToolbarOverflowMenu, type OverflowItem } from '../../components/ToolbarOverflowMenu';
 import { useIsMobile } from '../../lib/breakpoints';
 import type { HubTabValue } from '../../components/HubTabs';
@@ -21,6 +21,7 @@ import {
   deleteNotification,
   deleteReadAll,
 } from '../../lib/notifications';
+import { isNotifySupported, setNotifyEnabled, useNotifyEnabled } from '../../lib/notify';
 import { AgentKanban } from '../agent-kanban/AgentKanban';
 import { KIND_META, KIND_LABELS, eventContext, formatTime, openNotificationUrl } from './kindMeta';
 
@@ -185,6 +186,26 @@ const FILTERS = [
   { key: 'success', label: '✓ Выполнено' },
 ];
 
+// Тумблер браузерных уведомлений о ходе в чате («нужно решение» / «ход завершён»).
+// Живёт в разделе «Уведомления» перед строкой поиска — это глобальная настройка
+// (localStorage + разрешение браузера), отдельная от серверной ленты выше. Запрос
+// разрешения браузер отдаёт только по жесту клика, поэтому клик идёт прямо в onClick
+function BrowserNotifyToggle() {
+  const on = useNotifyEnabled();
+  // Браузер без Notification API (или iOS-Safari вне PWA) — тумблеру нечем управлять
+  if (!isNotifySupported()) return null;
+  return (
+    <label
+      title="Браузерные уведомления: сигнал, когда в чате нужно решение или ход завершён (только когда вкладка не в фокусе)"
+      style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0,
+        fontFamily: FONT.sans, fontSize: FS.sm, color: on ? C.textPrimary : C.textSecondary }}
+    >
+      <Toggle checked={on} onChange={v => { void setNotifyEnabled(v); }} />
+      Сигналы хода
+    </label>
+  );
+}
+
 // ====== NotificationsPage ======
 export function NotificationsPage({ auth, onLogout, onHubTab }: {
   auth: AuthState;
@@ -320,6 +341,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
             {!isMobile && mode === 'notifications' && (
               <div style={{ display: 'flex', gap: SP.md, alignItems: 'center', justifyContent: 'flex-end', minHeight: 34, marginTop: SP.lg }}>
                 {(<>
+                <BrowserNotifyToggle />
                 {/* Search */}
                 <div style={{ position: 'relative', width: 200 }}>
                   <Search size={14} style={{
@@ -385,6 +407,7 @@ export function NotificationsPage({ auth, onLogout, onHubTab }: {
           {/* Мобильная строка toolbar: поиск (primary) + «Фильтр» (overflow) + «⋯» действия */}
           {mode === 'notifications' && isMobile && (
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', maxWidth: 680, margin: `0 auto ${SP.lg}px` }}>
+              <BrowserNotifyToggle />
               <div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
                 <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: C.textMuted, pointerEvents: 'none' }} />
                 <input

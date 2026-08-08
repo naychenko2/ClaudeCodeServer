@@ -117,11 +117,18 @@ public class PersonasController : ControllerBase
     // Подбор максимально релевантной персоны под задачу (для чат-действий AI-хаба, которые
     // открывают новый чат). Локальная модель выбирает из доступных персон; нет подходящей /
     // нет персон / ошибка → personaId=null (чат создаётся без персоны, как раньше).
+    // requiredTool — ключ инструментов, без которого действие не выполнить (напр.
+    // notes-annotations у разбора комментариев): персоны без него из выбора выбывают,
+    // иначе подобранная персона ответила бы «инструмент недоступен». Пустой остаток —
+    // personaId=null, то есть обычный чат, у которого есть всё.
     [HttpPost("match")]
     public async Task<IActionResult> MatchPersona([FromBody] MatchPersonaRequest req)
     {
         var task = (req?.Task ?? "").Trim();
         var personas = _personas.GetForContext(UserId, req?.ProjectId);
+        var requiredTool = (req?.RequiredTool ?? "").Trim();
+        if (requiredTool.Length > 0)
+            personas = personas.Where(p => _bindings.ToolKeyAvailable(UserId, p, requiredTool)).ToList();
         if (task.Length == 0 || personas.Count == 0) return Ok(new { personaId = (string?)null });
 
         var sb = new System.Text.StringBuilder();
@@ -2239,7 +2246,7 @@ public record CreatePersonaChatRequest(string Mode = "auto", string? ResumeSessi
     string? ProjectId = null);
 
 public record ConnectPantheonRequest(List<string>? Keys = null);
-public record MatchPersonaRequest(string? Task = null, string? ProjectId = null);
+public record MatchPersonaRequest(string? Task = null, string? ProjectId = null, string? RequiredTool = null);
 
 // Правило автоматизации персоны (CRUD /automation). TriggerArgs — гибкий JSON-мешок
 // (ключи зависят от TriggerType, см. комментарий к AutomationTrigger).

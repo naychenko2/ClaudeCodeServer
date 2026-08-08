@@ -482,6 +482,9 @@ export interface Session {
   createdAt: string;
   updatedAt: string;
   name?: string;
+  // Тема чата — ИМЯ компонента lucide-react (PascalCase: Cat, Bug, User). Фронт рисует
+  // иконку через icons[topic] (lib/lucideIcon.ts). Отсутствует/незнакомое — значка нет
+  topic?: string | null;
   model?: string;
   // "claude" | "deepseek" | "glm" | ключ из подписок ClaudeSubscriptionPool
   provider?: string;
@@ -489,6 +492,11 @@ export interface Session {
   agentName?: string;
   // Временный чат: авто-удаление через N минут после последней активности (updatedAt)
   expiresAfterMinutes?: number | null;
+  // Момент установки срока: отсчёт идёт от него, если он позже последней активности
+  // (иначе короткий срок на давно неактивном чате означал бы удаление сразу)
+  expiryAnchor?: string | null;
+  // Чат заглушён: браузерные уведомления по нему не показываются
+  notificationsMuted?: boolean;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
   // Режим «Командная реализация»; null/отсутствует — режим выключен
@@ -534,8 +542,17 @@ export interface HomeSessionInfo {
   lastMessage?: string | null;
   personaId?: string | null;
   taskId?: string | null;
+  taskDone?: boolean;
   messageCount: number;
   updatedAt: string;
+  // Поля фильтрации: точка активности проекта считает unread только по чатам,
+  // видимым в фильтре этого проекта (matchChatFilter). Без них скрытое фильтром
+  // неприбытие светилось бы в рельсе зря
+  origin: Session['origin'];
+  isPinned?: boolean;
+  tags?: string[];
+  participants?: string[] | null;
+  expiresAfterMinutes?: number | null;
 }
 
 export interface HomeSummaryResponse {
@@ -738,7 +755,7 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'exited' }
   | { type: 'status_changed'; status: string; lastMessage?: string; messageCount?: number }
   | { type: 'chat_deleted' }
-  | { type: 'chat_renamed'; name: string }
+  | { type: 'chat_renamed'; name: string; topic?: string | null }
   | { type: 'workflow_progress'; toolUseId: string; agents: WorkflowAgentInfo[]; isDone: boolean }
   | { type: 'task_changed'; action: 'created' | 'updated' | 'deleted'; task: Task }
   | { type: 'notes_changed'; action: 'created' | 'updated' | 'deleted'; noteId?: string }

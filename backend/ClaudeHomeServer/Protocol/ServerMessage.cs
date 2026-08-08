@@ -178,8 +178,10 @@ public record TerminalStatusMessage(string Status, int? ExitCode = null, string?
 public record TerminalRenamedMessage(string TerminalId, string Name)
     : ServerMessage("terminal_renamed");
 
-// Чат авто-переименован (локальная модель уточнила заголовок по первому сообщению)
-public record ChatRenamedMessage(string Name)
+// Чат авто-переименован (локальная модель уточнила заголовок по первому сообщению).
+// Topic — имя lucide-компонента (PascalCase), фронт рисует по нему иконку. Смена ТОЛЬКО
+// значка шлёт это же сообщение с прежним Name — отдельного события не заводим.
+public record ChatRenamedMessage(string Name, string? Topic = null)
     : ServerMessage("chat_renamed");
 
 // Preview dev-server: смена статуса конкретного сервиса

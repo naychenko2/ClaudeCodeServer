@@ -26,6 +26,12 @@ function subscribe(fn: () => void): () => void {
   listeners.add(fn);
   return () => { listeners.delete(fn); };
 }
+
+// Подписка для сторонних сторов (агрегат активности проектов): им нужно
+// пересчитаться, когда чат отметили прочитанным
+export function subscribeReadState(fn: () => void): () => void {
+  return subscribe(fn);
+}
 function getSnapshot(): number {
   return version;
 }
@@ -113,6 +119,14 @@ export function countUnreadChats(chats: { id: string; updatedAt: string }[]): nu
 export function useUnreadChatCount(chats: { id: string; updatedAt: string }[]): number {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return countUnreadChats(chats);
+}
+
+// То же для одного чата — подсветка непрочитанности на его карточке. Через ту же
+// подписку: иначе метка гасла бы не при открытии чата, а на случайном ререндере
+// списка (в лучшем случае — на ближайшем поллинге, до 5с спустя).
+export function useHasUnread(updatedAt: string, chatId: string): boolean {
+  useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  return hasUnread(updatedAt, chatId);
 }
 
 // Очистка состояния прочтённости (напр. при logout).

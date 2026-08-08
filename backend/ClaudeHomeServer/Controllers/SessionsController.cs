@@ -54,6 +54,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         if (!OwnsProject(projectId)) return NotFound();
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
+        if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
         if (req.ExpiresAfterMinutes is not -1)
         {
             if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
@@ -127,6 +128,20 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         await sessions.DeleteAsync(sessionId);
         return NoContent();
     }
+
+    // Подобрать значки-иконки чатам проекта без них (действие AI-палитры «Проставить значки
+    // тем» в разделе проекта). Возвращает счётчики для тоста.
+    [HttpPost("icon-batch")]
+    public async Task<IActionResult> IconBatch(string projectId, CancellationToken ct)
+    {
+        if (!OwnsProject(projectId)) return NotFound();
+        try
+        {
+            var result = await sessions.SetChatIconsAsync(UserId, ct, projectId);
+            return Ok(result);
+        }
+        catch (InvalidOperationException ex) { return StatusCode(502, new { error = ex.Message }); }
+    }
 }
 
 // PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
@@ -137,4 +152,5 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 // N > 0 — временная, авто-удаление через N минут после последней активности
 // ExcludeFromDossiers: null (поле не прислано) — не менять; иначе — признак opt-out
 // «Истории решений» (ADR-004 §6, тумблер «Не сохранять решения из этого чата»)
-public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null);
+// NotificationsMuted: null — не менять; true — заглушить уведомления чата
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null, bool? NotificationsMuted = null);

@@ -1,87 +1,39 @@
-import { useRef, useState, type ReactNode } from 'react'
-import { createPortal } from 'react-dom'
-import { C, FONT, SHADOW } from '../lib/design'
+import { C } from '../lib/design'
 
-type SessionStatus = 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error'
+export type SessionStatus = 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error'
 
-const STATUS_CONFIG: Record<SessionStatus, { label: string; dot: string }> = {
-  starting: { label: 'запуск',     dot: C.info      },
-  working:  { label: 'работает',   dot: C.accent    },
-  active:   { label: 'активна',    dot: C.success   },
-  waiting:  { label: 'ждёт ввода', dot: C.plan      },
-  orphaned: { label: 'прервана',   dot: C.warning   },
-  finished: { label: 'готово',     dot: C.textMuted },
-  error:    { label: 'ошибка',     dot: C.danger    },
+// Легенда статусов: подпись и цвет. Цвет — на основных (землистых) токенах;
+// его же читает перелив фона карточки (STATUS_GLOW не несёт отдельного цвета).
+// Цветные — те, по чьей карточке идёт движение: starting и working (accent —
+// работа), waiting (warning — медовый, «нужен человек»), error (danger).
+// Спокойные (active/orphaned/finished) — нейтрально-серые (textMuted): ход
+// завершён, фон они не красят, и цвет им ни на что не влияет
+export const STATUS_CONFIG: Record<SessionStatus, { label: string; color: string }> = {
+  starting: { label: 'запуск',     color: C.accent    },
+  working:  { label: 'работает',   color: C.accent    },
+  active:   { label: 'активна',    color: C.textMuted },
+  waiting:  { label: 'ждёт ввода', color: C.warning   },
+  orphaned: { label: 'прервана',   color: C.textMuted },
+  finished: { label: 'готово',     color: C.textMuted },
+  error:    { label: 'ошибка',     color: C.danger    },
 }
 
-// Мигают только статусы «прямо сейчас что-то происходит» — иначе список рябит
-const PULSE_STATUSES = new Set<SessionStatus>(['starting', 'working', 'waiting'])
-
-const DOT = 7
-const PULSE_CSS = '@keyframes sb-pulse{0%,100%{opacity:1}50%{opacity:0.25}} .sb-pulse{animation:sb-pulse 1.2s ease-in-out infinite}'
-
-interface Props {
-  status: SessionStatus
-  // Шапка тултипа — кто собеседник. Единственное место, где он назван словами:
-  // в самой карточке имя и роль не показываются, чтобы не съедать строку
-  title?: ReactNode
+// Внешний glow-ореол карточки: alpha — сила свечения (0 = не светится, обычная
+// карточка). В релевантном списке у большинства чатов active/finished — им glow
+// не нужен, иначе список превратится в скопище колец. Светятся только те, что
+// требуют внимания: живые (запуск/работа/ожидание) и ошибка. orphaned приравнен
+// к finished — серо-бежевый без glow (различают только подписью).
+// Цвет свечения берётся из STATUS_CONFIG (основной землистый токен) — отдельного
+// насыщенного glow-цвета нет: точки и аура одного цвета
+export const STATUS_GLOW: Record<SessionStatus, { alpha: number; breath: boolean; slow?: boolean }> = {
+  starting: { alpha: 55, breath: true },
+  working:  { alpha: 60, breath: true },
+  waiting:  { alpha: 55, breath: true, slow: true },
+  error:    { alpha: 72, breath: false },
+  orphaned: { alpha: 0,  breath: false },
+  active:   { alpha: 0,  breath: false },
+  finished: { alpha: 0,  breath: false },
 }
 
-/**
- * Индикатор статуса чата: точка цветом статуса, подпись — в тултипе над ней.
- * Тултип рендерится порталом в body: карточка чата обрезает содержимое (overflow: hidden).
- */
-export function StatusIndicator({ status, title }: Props) {
-  const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.finished
-  const pulse = PULSE_STATUSES.has(status)
-  const ref = useRef<HTMLSpanElement>(null)
-  // Координаты фиксируем в момент наведения — тултип живёт вне потока карточки
-  const [tip, setTip] = useState<{ left: number; top: number } | null>(null)
-
-  const bind = {
-    ref,
-    'aria-label': cfg.label,
-    onMouseEnter: () => {
-      const r = ref.current?.getBoundingClientRect()
-      if (r) setTip({ left: r.left, top: r.top - 7 })
-    },
-    onMouseLeave: () => setTip(null),
-  }
-
-  const tooltip = tip && createPortal(
-    <span style={{
-      position: 'fixed', left: tip.left, top: tip.top, transform: 'translateY(-100%)', zIndex: 200,
-      display: 'flex', flexDirection: 'column', gap: 3, maxWidth: 280,
-      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8,
-      boxShadow: SHADOW.dropdown, padding: '6px 10px',
-      fontSize: 12, fontWeight: 500, color: C.textHeading,
-      fontFamily: FONT.sans, pointerEvents: 'none',
-    }}>
-      {title && <span style={{ fontWeight: 600 }}>{title}</span>}
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap',
-        color: title ? C.textMuted : C.textHeading,
-      }}>
-        <span
-          className={pulse ? 'sb-pulse' : undefined}
-          style={{ width: DOT, height: DOT, borderRadius: '50%', background: cfg.dot, flexShrink: 0 }}
-        />
-        {cfg.label}
-      </span>
-    </span>,
-    document.body,
-  )
-
-  return (
-    <>
-      <span {...bind} style={{ display: 'inline-flex', flexShrink: 0, width: DOT, height: DOT }}>
-        {pulse && <style>{PULSE_CSS}</style>}
-        <span
-          className={pulse ? 'sb-pulse' : undefined}
-          style={{ width: DOT, height: DOT, borderRadius: '50%', background: cfg.dot, flexShrink: 0 }}
-        />
-      </span>
-      {tooltip}
-    </>
-  )
-}
+// Сам box-shadow карточки управляется классами cc-glow-* в index.css (анимация
+// требует управления им целиком), здесь — только источник легенды (цвет + сила)

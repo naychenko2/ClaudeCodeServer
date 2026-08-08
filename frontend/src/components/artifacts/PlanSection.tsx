@@ -84,7 +84,7 @@ export function PlanSection({ plans, projectId }: { plans: PlanArtifact[]; proje
   const headings = useHeadings(planContentRef, curPlan?.plan);
 
   const goToHeading = (h: Heading) => {
-    scrollToHeading(h);
+    scrollToHeading(planContentRef.current, h);
     setTocOpen(false);
   };
 

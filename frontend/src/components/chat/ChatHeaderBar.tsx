@@ -1,7 +1,8 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Plus, Menu, FileText } from 'lucide-react';
-import type { Project, Session, ClaudeBilling, Persona } from '../../types';
+import { Plus, Menu, FileText, Tags } from 'lucide-react';
+import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
+import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
 import { ExpiryButton } from './ExpiryButton';
@@ -17,9 +18,9 @@ import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
-import { C, FONT, R, SHADOW, TB, CHAT_MAX_W } from '../../lib/design';
+import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
-import { BackButton, Modal, ModalActions } from '../ui';
+import { BackButton, ChatTopicIcon, Modal, ModalActions } from '../ui';
 import { bumpNotes } from '../../lib/notes';
 import { createTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
@@ -922,6 +923,42 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 }
 
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
+  // Теги чата: реестр проекта (для чата вне проекта тегов нет — кнопки тоже нет).
+  // Локальная копия, чтобы создание тега сразу отражалось в меню без перезагрузки
+  const [tagRegistry, setTagRegistry] = useState<ProjectTag[]>(() => project?.tagRegistry ?? []);
+  useEffect(() => { setTagRegistry(project?.tagRegistry ?? []); }, [project?.id, project?.tagRegistry]);
+  const [tagMenu, setTagMenu] = useState<DOMRect | null>(null);
+  const projectId = project?.id;
+  const canTag = online && !!projectId;
+
+  // Переключить тег на чате: optimistic через onSessionUpdated, PUT, откат при сбое
+  const toggleTag = (name: string) => {
+    if (!projectId) return;
+    const cur = session.tags ?? [];
+    const has = cur.some(t => t.toLowerCase() === name.toLowerCase());
+    const next = has ? cur.filter(t => t.toLowerCase() !== name.toLowerCase()) : [...cur, name];
+    onSessionUpdated?.({ ...session, tags: next });
+    api.sessions.update(projectId, session.id, { tags: next })
+      .then(updated => onSessionUpdated?.(updated))
+      .catch(() => onSessionUpdated?.({ ...session, tags: cur }));
+  };
+
+  // Новый тег: в реестр проекта (цвет — следующий из палитры по кругу) и сразу на чат
+  const createTag = (name: string) => {
+    if (!projectId) return;
+    const color = GROUP_COLORS[tagRegistry.length % GROUP_COLORS.length];
+    const nextReg = [...tagRegistry, { name, order: tagRegistry.length, color }];
+    setTagRegistry(nextReg);
+    api.projects.updateTags(projectId, nextReg)
+      .then(p => setTagRegistry(p.tagRegistry ?? nextReg))
+      .catch(() => setTagRegistry(tagRegistry));
+    if (!(session.tags ?? []).some(t => t.toLowerCase() === name.toLowerCase())) {
+      const next = [...(session.tags ?? []), name];
+      onSessionUpdated?.({ ...session, tags: next });
+      api.sessions.update(projectId, session.id, { tags: next }).catch(() => {});
+    }
+  };
+
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
   const dossiersFlag = useFeature(FLAGS.changeDossiers);
@@ -1027,6 +1064,18 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     </div>
   ) : null;
 
+  // Меню маркировки тегами (портал — рендерится в обоих return ниже)
+  const tagMenuEl = tagMenu ? (
+    <TagAssignMenu
+      anchor={tagMenu}
+      registry={tagRegistry}
+      selected={session.tags ?? []}
+      onToggle={toggleTag}
+      onCreate={createTag}
+      onClose={() => setTagMenu(null)}
+    />
+  ) : null;
+
   // На десктопе заголовок держит минимум ~20 символов (не ужимается в «З…»);
   // при нехватке места правый кластер бейджей уходит второй строкой (flexWrap ряда)
   const titleMinW = isMobile ? 0 : 180;
@@ -1066,8 +1115,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     const fs = hero ? 12 : 11.5;
     const slots: ReactNode[] = [];
     if (metaChatName) slots.push(
-      <span key="name" style={{ minWidth: 0, fontSize: fs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {metaChatName}
+      // Тема идёт со своим именем: у чата с собеседником имя живёт здесь, в мете
+      <span key="name" style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
+        <ChatTopicIcon topic={session.topic} size={14} />
+        <span style={{ minWidth: 0, fontSize: fs, color: C.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {metaChatName}
+        </span>
       </span>
     );
     // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
@@ -1143,16 +1196,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     >
       {identity(hero)}
       <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{
-          fontFamily: FONT.serif, fontSize: hero ? 28 : 16, fontWeight: hero ? 500 : 600,
-          color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: hero ? 1.25 : 1.3,
-          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-          textDecoration: persona && personaHover ? 'underline' : undefined,
-        }}>
-          {titleText}
-          {titleSuffix && (
-            <span style={{ color: C.textMuted, fontSize: hero ? 21 : 13.5 }}> · {titleSuffix}</span>
-          )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: hero ? 8 : 6, minWidth: 0 }}>
+          {/* Значок темы — только когда титул занят именем чата: у персоны и группы
+              там собеседник, и тема уезжает в мета-строку вместе со своим именем.
+              Стоит ВНЕ текстового блока, иначе flex снял бы с него обрезку многоточием */}
+          {!metaChatName && <ChatTopicIcon topic={session.topic} size={hero ? 20 : 15} />}
+          <div style={{
+            fontFamily: FONT.serif, fontSize: hero ? 28 : 16, fontWeight: hero ? 500 : 600,
+            color: personaAccent ?? C.textHeading, letterSpacing: '-0.01em', lineHeight: hero ? 1.25 : 1.3,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+            textDecoration: persona && personaHover ? 'underline' : undefined,
+          }}>
+            {titleText}
+            {titleSuffix && (
+              <span style={{ color: C.textMuted, fontSize: hero ? 21 : 13.5 }}> · {titleSuffix}</span>
+            )}
+          </div>
         </div>
         {metaRow(hero)}
       </div>
@@ -1252,10 +1311,25 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       </div>
     </ToolbarIconButton>
   ) : null;
-  // Тумблер браузерных уведомлений — сигнал о завершённом ходе, когда вкладка не в фокусе.
-  // compact (колонка стены): не показываем — настройка глобальная, и повторять её
-  // в каждой из нескольких колонок незачем (срок жизни у колонок свой, он остаётся)
-  const notifyBtn = online && !compact ? <NotifyButton isMobile={isMobile} /> : null;
+  // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
+  // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
+  // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
+  // живёт в разделе «Уведомления»
+  const notifyBtn = online && !compact
+    ? <NotifyButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
+    : null;
+  // Теги чата — тот же TagAssignMenu, что в меню карточки списка. Только для проектных
+  // чатов: теги живут в реестре проекта, у чата вне проекта их нет
+  const tagsBtn = canTag && !compact ? (
+    <ToolbarIconButton
+      onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setTagMenu(r); }}
+      active={!!tagMenu}
+      isMobile={isMobile}
+      title="Теги чата"
+    >
+      <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+    </ToolbarIconButton>
+  ) : null;
 
   // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
   // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
@@ -1263,10 +1337,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isMobile
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
@@ -1302,6 +1376,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
           {heroTitle}
           {rightCluster}
         </div>
+        {tagMenuEl}
       </div>
     );
   }
@@ -1316,6 +1391,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         ...(isMobile ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
       }}>
       {openBtn}{titleEl}{rightCluster}
+      {tagMenuEl}
     </Toolbar>
   );
 }

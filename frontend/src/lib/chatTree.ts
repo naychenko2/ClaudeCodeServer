@@ -82,8 +82,6 @@ export interface ChatTreeRowData {
 
 export interface ChatTreeResult {
   rows: ChatTreeRowData[];
-  // Связей родитель→ребёнок в отрисованном лесу нет — показать подсказку-empty-state
-  linkCount: number;
   // Всего чатов в отрисованном лесу (без учёта collapse) — для счётчика «скрыто фильтрами»
   renderedCount: number;
 }
@@ -91,10 +89,10 @@ export interface ChatTreeResult {
 const activity = (c: Session) => new Date(c.updatedAt).getTime();
 
 // Чат «в работе» прямо сейчас: агент думает/выполняет (starting, working) либо ждёт ответа
-// пользователя на разрешение или вопрос (waiting). Набор совпадает с PULSE_STATUSES из
-// StatusIndicator (там по нему мигает точка) — при правке держать синхронно.
-// Статус active сюда НЕ входит: ход уже завершён, процесс просто жив, и точка статуса
-// красит его зелёным именно как «не работу».
+// пользователя на разрешение или вопрос (waiting). Набор совпадает с «дышащими» статусами
+// из STATUS_GLOW (breath: true — по ним переливается ореол карточки в StatusIndicator) —
+// при правке держать синхронно. Статус active сюда НЕ входит: ход уже завершён, процесс
+// просто жив, и ореола у него нет вовсе — ровно как «не работа».
 const RUNNING_STATUSES = new Set<Session['status']>(['starting', 'working', 'waiting']);
 
 export const isChatRunning = (c: Session) => RUNNING_STATUSES.has(c.status);
@@ -219,11 +217,9 @@ export function buildChatTreeRows(
     return pin !== 0 ? pin : dir * (a.maxActivity - b.maxActivity);
   });
 
-  let linkCount = 0;
   let renderedCount = 0;
   const countNode = (n: TreeNode) => {
     renderedCount++;
-    linkCount += n.children.length;
     n.children.forEach(countNode);
   };
   roots.forEach(countNode);
@@ -241,11 +237,14 @@ export function buildChatTreeRows(
   }
   const onPath = (id: string) => id === opts.activeId || activeAncestors.has(id);
 
-  // Флаттен с collapse: свёрнутое поддерево не рендерится вовсе.
-  // ancestors строки — сквозные вертикали осей 0..depth-2 (ось своей seg-линии
-  // depth-1 в массив не входит); passBelow — продолжение родительской оси через
-  // ПОДдерево узла (у узла есть следующие сиблинги) — становится записью
-  // ancestors у его детей.
+  // Флаттен. В отличие от прежнего поведения, свёрнутое поддерево НЕ вырезается
+  // из массива: дети свёрнутого узла остаются в rows, а их видимость решает
+  // рендер — контейнер-аниматор grid 0fr↔1fr вокруг детей узла. Без этого React
+  // размонтировал бы детей мгновенно, и двусторонняя анимация схлопывания высоты
+  // была бы невозможна. ancestors строки — сквозные вертикали осей 0..depth-2
+  // (ось своей seg-линии depth-1 в массив не входит); passBelow — продолжение
+  // родительской оси через ПОДдерево узла (у узла есть следующие сиблинги) —
+  // становится записью ancestors у его детей.
   const rows: ChatTreeRowData[] = [];
   const emit = (
     node: TreeNode, depth: number, isLast: boolean, segAccent: boolean,
@@ -268,7 +267,6 @@ export function buildChatTreeRows(
       stubAccent: activeAncestors.has(node.chat.id),
       ancestors,
     });
-    if (collapsed) return;
     // Индекс ребёнка на пути к активному чату — до него (включительно) ось accent
     const qIndex = node.children.findIndex(k => onPath(k.chat.id));
     const childAncestors = depth === 0 ? [] : [...ancestors, passBelow];
@@ -283,7 +281,7 @@ export function buildChatTreeRows(
   };
   roots.forEach(r => emit(r, 0, true, false, { show: false, accent: false }, []));
 
-  return { rows, linkCount, renderedCount };
+  return { rows, renderedCount };
 }
 
 // Нарезка плоских строк дерева на сегменты по корням: depth 0 открывает новый

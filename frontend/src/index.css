@@ -205,6 +205,121 @@ body {
 }
 .cc-pulse-ring { animation: cc-pulse-ring 1.6s ease-out infinite; }
 
+/* === Статусный перелив фона карточки чата ===
+   Ауры (свечения вокруг) нет — статус несёт САМ ФОН карточки: по нему слева
+   направо проходит еле уловимая волна статусного цвета --cc-status-c (из
+   ChatCard). Мягкость здесь про КОНТРАСТ, а не про скорость: подмешиваем
+   считаные проценты цвета, чтобы движение угадывалось краем глаза и не мешало
+   читать список. У живых волна идёт, у error — ровная подкраска. Спокойные
+   (active/orphaned/finished) фон не красят вовсе. */
+.cc-card-shadow { box-shadow: var(--cc-card-shadow); }
+
+/* Слой перелива поверх фона карточки, но ПОД её содержимым (z-index:0 против
+   position:relative у текста и лица). Карточка с overflow:hidden сама обрежет
+   его по скруглению — отдельная маска не нужна.
+   --cc-tint-a: пик подмешивания цвета (сколько статуса в ядре волны). Ниже ~10%
+   разница с фоном уходит в 2-3 единицы на канал и глазом уже не ловится, поэтому
+   рабочий диапазон — 25..35%: волна читается, но текст не глушит */
+.cc-tint::after {
+  content: '';
+  position: absolute;
+  /* Слой ШИРЕ карточки на её ширину в каждую сторону (left/right: -100%) — волна
+     ездит внутри него transform'ом и уходит за края целиком, а overflow:hidden
+     карточки прячет хвосты. Раньше ездил background-position в процентах, но он
+     считается от СВОБОДНОГО места (ширина − размер пятна), а не от ширины
+     карточки: на «-130%» волна была ещё наполовину видна, и на стыке цикла её
+     рывком отбрасывало назад. С transform проценты — от собственной ширины
+     слоя, поэтому границы точные и склейка незаметна */
+  top: 0;
+  bottom: 0;
+  left: -100%;
+  right: -100%;
+  z-index: 0;
+  pointer-events: none;
+  /* Ядро волны — плато (45..55%), а не одна точка: иначе пик держится мгновение
+     и подкраска не успевает прочитаться. Края уходят в прозрачность плавно.
+     ВАЖНО: пятно ограничено ТРЕТЬЮ слоя (background-size), то есть ровно шириной
+     карточки, и стоит по центру. Без этого ограничения градиент растягивался бы
+     на весь тройной слой, его пологие скаты накрывали бы карточку даже в крайних
+     кадрах — и цикл склеивался бы рывком */
+  background-image: linear-gradient(100deg,
+    transparent 0%,
+    color-mix(in srgb, var(--cc-status-c) var(--cc-tint-a, 25%), transparent) 45%,
+    color-mix(in srgb, var(--cc-status-c) var(--cc-tint-a, 25%), transparent) 55%,
+    transparent 100%);
+  background-size: 33.34% 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+/* Живые: волна идёт по фону слева направо. Слой втрое шире карточки, пятно —
+   ровно треть слоя (= ширина карточки) по центру, поэтому сдвиг на ±33.34%
+   ширины слоя уводит его точно за край: на старте волна целиком слева от
+   карточки, в конце — целиком справа. Оба крайних кадра показывают чистую
+   карточку, и цикл склеивается незаметно */
+.cc-tint--flow::after { animation: cc-tint-flow var(--cc-tint-dur, 2s) linear infinite; }
+@keyframes cc-tint-flow {
+  0%   { transform: translateX(-33.34%); }
+  100% { transform: translateX(33.34%); }
+}
+/* «Ждёт ввода» течёт медленнее: ожидание — не работа, оно не торопит */
+.cc-tint--slow::after { animation-duration: var(--cc-tint-dur-slow, 4s); }
+/* error: ровная подкраска фона без движения. Гасим и картинку-градиент, и её
+   размер — иначе от базового правила осталось бы пятно в треть слоя */
+.cc-tint--static::after {
+  background-image: none;
+  background-color: color-mix(in srgb, var(--cc-status-c) var(--cc-tint-a, 25%), transparent);
+  background-size: auto;
+}
+
+/* === Точка проекта в доке: мерцание заливки ===
+   Цветом точка различает только «ждёт ответа» (медовый) от остального (серое),
+   а работу от непрочитанного отличает ДВИЖЕНИЕ: работа мерцает, непрочитанное
+   стоит ровно.
+   Точка — два слоя. Сам span держит ободок и НЕПРОЗРАЧНУЮ подложку цвета холста:
+   она закрывает иконку проекта под точкой. Цветная заливка живёт в ::after, и
+   мерцает только она — ободок остаётся сплошным, сквозь точку ничего не видно.
+   Цвет приходит инлайн-переменной --cc-dot-c из ProjectRail */
+.cc-dot::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--cc-dot-c);
+}
+.cc-dot-pulse::after { animation: cc-dot-pulse 1.8s ease-in-out infinite; }
+/* «Ждёт ответа» мерцает медленнее: сигнал тревожный, но дёргать глаз не должен */
+.cc-dot-pulse--slow::after { animation-duration: 3.4s; }
+@keyframes cc-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .25; }
+}
+
+/* === Непрочитанный чат: перелив фона серый → accent ===
+   Только когда по карточке НЕ идёт статусный перелив (ChatCard вешает класс с
+   оглядкой на hasGlow) — два движения на одной карточке дрались бы за внимание.
+   Цвет перетекает от нейтрально-серого (textMuted — «просто пометка, не событие»)
+   к контрастному accent («обрати внимание»), opacity фиксирован и лёгкий:
+   заливка не глушит текст, меняется только её оттенок. Слой под содержимым,
+   скруглён по карточке */
+.cc-unread::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: var(--c-text-muted);
+  opacity: .12;
+  animation: cc-unread-breath 3s ease-in-out infinite;
+}
+/* Серый ↔ тёмно-серый, поровну по времени: 1.5с разгорание к тёмному, 1.5с спад
+   к светлому. Пик — textSecondary (на ступень темнее покоя textMuted), без цвета:
+   непрочитанность — пометка, а не событие */
+@keyframes cc-unread-breath {
+  0%, 100% { background: var(--c-text-muted);     opacity: .10; }
+  50%      { background: var(--c-text-secondary); opacity: .22; }
+}
+
 /* === «Панель уже открыта»: двойная вспышка карточки правой рельсы ===
    Внешняя кнопка (git-бар над композером) шлёт cc-panel-flash, панель мигает
    акцентным кольцом — быстро и в два удара, чтобы глаз её точно поймал. */
@@ -217,17 +332,23 @@ body {
 }
 .cc-panel-flash { animation: cc-panel-flash 0.55s ease-out; }
 
-/* Дымок из трубы значка ожидания: 4 частицы поднимаются и растут кверху */
-.cc-smoke { position: absolute; top: 1px; left: 15px; width: 0; height: 0; }
-.cc-smoke i { position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--c-smoke); opacity: 0; animation: cc-smoke 2.8s ease-out infinite; }
+/* Дымок из трубы значка ожидания: 4 частицы поднимаются и растут кверху.
+   Размах задаётся переменными --smoke-*, чтобы дым был по размеру своего домика:
+   у значка в ленте (19px, стоит в одну линию с сообщениями) он мелкий и короткий —
+   иначе облако наползает на пузырь сверху; у FAB (36–54px) размах прежний. */
+.cc-smoke {
+  position: absolute; top: 1px; left: 15px; width: 0; height: 0;
+  --smoke-d: 3px; --smoke-x: -4px; --smoke-y: -13px; --smoke-s: 1.5;
+}
+.cc-smoke i { position: absolute; width: var(--smoke-d); height: var(--smoke-d); border-radius: 50%; background: var(--c-smoke); opacity: 0; animation: cc-smoke 2.8s ease-out infinite; }
 .cc-smoke i:nth-child(2) { animation-delay: .7s; }
 .cc-smoke i:nth-child(3) { animation-delay: 1.4s; }
 .cc-smoke i:nth-child(4) { animation-delay: 2.1s; }
 @keyframes cc-smoke {
   0%   { opacity: 0; transform: translate(0, 0) scale(.6); }
-  15%  { opacity: .6; }
-  60%  { opacity: .4; }
-  100% { opacity: 0; transform: translate(-7px, -22px) scale(2.1); }
+  15%  { opacity: .5; }
+  60%  { opacity: .3; }
+  100% { opacity: 0; transform: translate(var(--smoke-x), var(--smoke-y)) scale(var(--smoke-s)); }
 }
 
 @keyframes cc-shimmer-text {
@@ -351,6 +472,13 @@ body {
 
 @media (prefers-reduced-motion: reduce) {
   .cc-pulse-ring { animation: none; }
+  /* Волна по фону замирает — статус читается ровной подкраской */
+  .cc-tint--flow::after { animation: none; }
+  /* Точка проекта перестаёт мерцать, но остаётся видимой */
+  .cc-dot-pulse::after { animation: none; }
+  /* Непрочитанность остаётся видимой, просто перестаёт переливаться: фон и
+     плотность фиксируются на покое (серый, .12) */
+  .cc-unread::after { animation: none; opacity: .22; }
   .cc-smoke i { animation: none; }
   .cc-shimmer-text { animation: none; -webkit-text-fill-color: var(--c-text-muted); color: var(--c-text-muted); }
   /* Скелетон перестаёт бежать, но подложка обязана остаться видимой — иначе на месте

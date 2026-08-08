@@ -58,10 +58,18 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
         s.TaskId,
         s.TaskDone,
         s.MessageCount,
-        s.UpdatedAt);
+        s.UpdatedAt,
+        s.Origin,
+        s.IsPinned,
+        s.Tags,
+        s.Participants,
+        s.ExpiresAfterMinutes);
 }
 
-// Строка сводки: сессия + имя проекта (чтобы фронт не тянул список проектов отдельно)
+// Строка сводки: сессия + имя проекта (чтобы фронт не тянул список проектов отдельно).
+// Поля фильтрации (Origin/IsPinned/Tags/Participants/ExpiresAfterMinutes) нужны, чтобы
+// клиентский фильтр чатов (chatFilters.ts → matchChatFilter) можно было применить к
+// сводке — без них точка активности проекта неверно горела бы по чатам, скрытым фильтром
 public record HomeSessionDto(
     string Id,
     string? ProjectId,
@@ -73,4 +81,9 @@ public record HomeSessionDto(
     string? TaskId,
     bool TaskDone,
     int MessageCount,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    ChatOrigin Origin,
+    bool IsPinned,
+    List<string> Tags,
+    List<string>? Participants,
+    int? ExpiresAfterMinutes);

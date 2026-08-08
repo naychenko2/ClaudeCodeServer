@@ -24,7 +24,7 @@ import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
 import { getDraft } from '../lib/drafts';
-import { useModelCaps, assistantName, modelProvider } from '../lib/models';
+import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { C, R, SHADOW, SP, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
@@ -549,21 +549,24 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     return s;
   }, [items]);
 
-  // Браузерные уведомления (только когда вкладка не в фокусе) — нужно решение / ход завершён
+  // Браузерные уведомления (только когда вкладка не в фокусе) — нужно решение / ход завершён.
+  // Заглушённый чат (notificationsMuted) молчит; счётчики при этом ведём как обычно,
+  // иначе снятие мьюта выстрелило бы уведомлением о давно прошедшем событии
+  const muted = session.notificationsMuted === true;
   const prevWaitingRef = useRef(false);
   useEffect(() => {
-    if (isWaiting && !prevWaitingRef.current)
+    if (isWaiting && !prevWaitingRef.current && !muted)
       notify('Нужно решение', `${session.name ?? 'Чат'} ждёт вашего ответа`);
     prevWaitingRef.current = isWaiting;
-  }, [isWaiting, session.name]);
+  }, [isWaiting, session.name, muted]);
 
   const resultCountRef = useRef<number | null>(null);
   useEffect(() => {
     const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
-    if (resultCountRef.current !== null && rc > resultCountRef.current)
+    if (resultCountRef.current !== null && rc > resultCountRef.current && !muted)
       notify(`${asstName} закончил`, `${session.name ?? 'Чат'}: ход завершён`);
     resultCountRef.current = rc;
-  }, [items, session.name, asstName]);
+  }, [items, session.name, asstName, muted]);
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
   // «Свежие» значения для стабильных колбэков (useCallback без лишних пересозданий):
@@ -665,14 +668,15 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     })();
   }, [project, send, mode, atBottomRef]);
 
-  // «Только этот чат»: список затронутых в диалоге файлов (из ленты file_changed)
-  // даём явно, чтобы Claude не захватил чужие изменения рабочего дерева.
+  // «Только этот чат»: просим закоммитить свои правки, не захватывая чужие.
+  // Список файлов НЕ подставляем — он брался из ленты file_changed, а туда попадают
+  // и внешние правки (external: человек в IDE, форматтер, другая сессия), помеченные
+  // именно чтобы отличать «не наше». Подмешанные в промпт, они выглядели инструкцией
+  // закоммитить чужую работу — Claude сам сверься с git diff по ходу диалога.
   const handleCommitOwn = useCallback(() => {
-    const own = [...new Set(items.filter(i => i.kind === 'file_changed').map(i => i.path))];
-    const list = own.length ? ` Файлы, которые ты менял в этом чате: ${own.join(', ')} — закоммить только их.` : '';
     commitViaChat(style =>
-      `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева.${list} Сам придумай осмысленное сообщение коммита по сути изменений.${style}`);
-  }, [items, commitViaChat]);
+      `Зафиксируй (git commit) изменения, сделанные в рамках этого чата — только то, что ты правил в этом диалоге, не затрагивая остальные изменения рабочего дерева. Сам придумай осмысленное сообщение коммита по сути изменений.${style}`);
+  }, [commitViaChat]);
 
   // «Всё рабочее дерево»: коммитим все незафиксированные изменения без ограничения
   // диалогом (staged + unstaged, включая правки не из этого чата).
@@ -735,13 +739,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // эндпоинта), поэтому идёт миграцией — тот же путь, что в «Настройках чата».
   // У ещё не начатого чата (нет claudeSessionId) update проходит и на чужого провайдера.
   const handleModelChange = useCallback(async (model: string) => {
-    const crossProvider = modelProvider(model) !== modelProvider(session.model);
-    // «По умолчанию» — пустой value каталога, и слать его надо именно пустой строкой:
-    // на бэкенде null означает «поле не менять», а сброс модели — это IsNullOrWhiteSpace.
+    // Выбор пути (update или миграция) — в planModelChange, под тестом: там же разворот
+    // пункта «По умолчанию» в конкретную модель назначения места. В update уходит
+    // исходное значение — пустая строка сбрасывает Model=null в рамках того же провайдера.
+    const plan = planModelChange(model, session);
     const payload = { model };
     try {
-      const updated = crossProvider && session.claudeSessionId
-        ? await api.chats.migrateProvider(session.id, model)
+      const updated = plan.kind === 'migrate'
+        ? await api.chats.migrateProvider(session.id, plan.model)
         : session.projectId
           ? await api.sessions.update(session.projectId, session.id, payload)
           : await api.chats.update(session.id, payload);

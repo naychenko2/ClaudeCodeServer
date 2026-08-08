@@ -1,15 +1,21 @@
-import { useState, useRef, useEffect } from 'react';
-import { AlertCircle, CheckCircle2, Clock, Columns3, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
+import { useState, useRef, useEffect, type CSSProperties } from 'react';
+import { AlertCircle, Bell, BellOff, CheckCircle2, Clock, Columns3, Hourglass, MoreVertical, Pencil, Pin, Tags, Trash2, Users, Wrench } from 'lucide-react';
 import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
-import { IconButton, Menu, MenuItem } from './ui';
+import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_STROKE } from './ui/icons';
-import { StatusIndicator } from './StatusIndicator';
+import { STATUS_CONFIG, STATUS_GLOW } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
+import { ExpiryPicker } from './chat/ExpiryPicker';
+import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
+import { updateChatFields } from '../lib/chatUpdate';
+import { isNotifySupported, setChatNotifyEnabled, useChatNotifyOn } from '../lib/notify';
+import { showToast } from '../lib/toast';
 import { ChatOriginBadge } from './ChatOriginBadge';
 import { TagChip } from './TagChip';
 import { describeTaskChat, resolveChatOrigin, type TaskChatInfo, type TaskChatStatusKind } from '../lib/chatOrigin';
-import { getPersonaById, personaLabel } from '../lib/personas';
+import { useHasUnread } from '../lib/chatReadState';
+import { getPersonaById } from '../lib/personas';
 import { useTasks } from '../lib/tasks';
 import { agentDotColor } from './AgentSelector';
 import { PersonaBackdrop } from '../features/personas/PersonaFace';
@@ -130,6 +136,14 @@ interface Props {
   onRename?: (name: string) => Promise<unknown>;
   // «На стену» (воркспейс): добавить чат в набор стены. Не задан — пункта нет
   onAddToWall?: () => void;
+  // Изменение чата из меню карточки (мьют уведомлений, срок хранения) — обновлённую
+  // сессию возвращает бэкенд, список обновляет ею своё состояние. Не задан — пунктов нет
+  onEdited?: (s: Session) => void;
+  // Доп. отступ содержимого слева (px). В дереве чатов контрол ветки садится в шов
+  // на левый край карточки — под ним нужно освободить место, иначе он ляжет на
+  // первые буквы названия. Кромка состояния и лицо собеседника позиционированы
+  // абсолютно и на месте остаются.
+  leadingInset?: number;
 }
 
 /**
@@ -142,6 +156,7 @@ interface Props {
 export function ChatCard({
   session: s, isActive, isMobile, fallbackName, online, hovered, workflowRunning,
   onSelect, onHover, onDelete, onTogglePin, tags, onRemoveTag, onAssignTags, onRename, onAddToWall,
+  onEdited, leadingInset = 0,
 }: Props) {
   // Чат от лица персоны: мини-аватар в строке названия и акцент её цвета
   const persona = s.personaId ? getPersonaById(s.personaId) : undefined;
@@ -164,6 +179,44 @@ export function ChatCard({
   const mechanic = getLastMechanic(s.id);
   // Открытое меню действий: rect кнопки-триггера (null — закрыто)
   const [menu, setMenu] = useState<DOMRect | null>(null);
+
+  // Long-press на мобиле открывает меню действий карточки — аналог кнопки «⋮»,
+  // который на тач-экране виден только у активного чата. Долгий тап работает на
+  // любой карточке, не выбирая её: флаг longPressFired гасит клик, чтобы menu
+  // не закрывалось открытием чата
+  const lpTimer = useRef<number | null>(null);
+  const lpFired = useRef(false);
+  const lpStart = useRef<{ x: number; y: number } | null>(null);
+  const beginLongPress = (e: React.TouchEvent) => {
+    if (!isMobile || !online || editing) return;
+    const t = e.touches[0];
+    lpStart.current = { x: t.clientX, y: t.clientY };
+    lpFired.current = false;
+    lpTimer.current = window.setTimeout(() => {
+      lpFired.current = true;
+      // Якорь — правый край карточки, там же где «⋮»: меню встанет как от кнопки
+      const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+      setMenu(new DOMRect(r.right - ACTIONS_RIGHT - ACTION_BOX, r.top + (r.height - ACTION_BOX) / 2, ACTION_BOX, ACTION_BOX));
+    }, 500);
+  };
+  const killLongPress = () => {
+    if (lpTimer.current != null) { clearTimeout(lpTimer.current); lpTimer.current = null; }
+  };
+  const onTpMove = (e: React.TouchEvent) => {
+    if (!lpStart.current) return;
+    const t = e.touches[0];
+    if (Math.abs(t.clientX - lpStart.current.x) > 10 || Math.abs(t.clientY - lpStart.current.y) > 10) killLongPress();
+  };
+  // Выбор срока хранения — второе меню по тому же якорю (приём пункта «Теги»):
+  // пикер сроков не пункт списка, поэтому живёт в своём поповере
+  const [expiryMenu, setExpiryMenu] = useState<DOMRect | null>(null);
+  // Срок хранения правится только при живом колбэке обновления сессии (online + onEdited)
+  const canEditChat = !!onEdited && online;
+  // Мьют чата: тумблер пишет notificationsMuted. Пункт прячем в браузерах без
+  // Notification API — глушить там нечего
+  const notifyOn = useChatNotifyOn(s);
+  const canMute = canEditChat && isNotifySupported();
+  const expiryAt = expiresAt(s);
   // Правка названия прямо в карточке: пункт меню превращает заголовок в поле ввода —
   // ради одного имени открывать форму настроек чата не надо. У чата-исполнителя задачи
   // переименования нет: там в заголовке стоит имя ЗАДАЧИ (taskChat.title), и правка
@@ -204,6 +257,30 @@ export function ChatCard({
     } catch { /* сохранить не вышло — остаёмся в правке, набранный текст на месте */ }
     setSaving(false);
   };
+
+  // Заглушить/включить уведомления по чату. Включение может дёрнуть запрос разрешения
+  // браузера — поэтому идёт прямо из обработчика клика, без промежуточных эффектов
+  const toggleNotify = async () => {
+    try {
+      const res = await setChatNotifyEnabled(s, !notifyOn);
+      if (res.session) onEdited?.(res.session);
+      // Просили включить, а разрешение не выдано — иначе пункт выглядит нерабочим
+      if (!notifyOn && !res.enabled) showToast('Уведомления', 'Браузер не дал разрешение на уведомления', 'info');
+    } catch {
+      showToast('Уведомления', 'Не удалось изменить уведомления чата', 'info');
+    }
+  };
+
+  // Срок хранения из меню карточки — тот же набор пресетов, что у часов в шапке чата
+  const pickExpiry = async (minutes: number | null) => {
+    setExpiryMenu(null);
+    if (minutes === (s.expiresAfterMinutes ?? null)) return;
+    try {
+      onEdited?.(await updateChatFields(s, { expiresAfterMinutes: minutes }));
+    } catch {
+      showToast('Время жизни', 'Не удалось изменить срок жизни чата', 'info');
+    }
+  };
   // Действия: с мышью — по наведению, на тач-устройствах — у выбранного чата.
   // Показывать их на тач всегда нельзя: они висели бы поверх лица собеседника на
   // каждой карточке. Тап по чату и открывает его, и раскрывает кнопки.
@@ -213,42 +290,71 @@ export function ChatCard({
   // и её меню (закрепить/теги/удалить) применялось бы к чату, имя которого ещё не
   // сохранено. Уходит вся кнопка, а не только меню — раскладку она не двигает (absolute)
   const showActions = online && !editing && (CAN_HOVER ? hovered : isActive);
-  const cardBg = isActive ? C.accentLight : C.bgWhite;
+
+  // Статус несёт перелив ФОНА карточки (.cc-tint): по фону слева направо идёт
+  // еле заметная волна статусного цвета. Ауры вокруг и цветного бордюра нет.
+  // У живых (breath) волна движется, у error — ровная подкраска. Цвет и силу
+  // подмешивания отдаём в CSS переменных --cc-status-c / --cc-tint-a
+  const glow = STATUS_GLOW[s.status];
+  const hasGlow = glow.alpha > 0;
+  const glowClass = !hasGlow ? ''
+    : glow.breath
+      ? ' cc-tint cc-tint--flow' + (glow.slow ? ' cc-tint--slow' : '')
+      : ' cc-tint cc-tint--static';
+
+  // Непрочитанный чат мягко мерцает фоном нейтральным серым — но только если
+  // статусного перелива нет: приоритет у него, два движения на карточке дрались
+  // бы. Слой у обоих один и тот же (::after), так что классы взаимоисключающие.
+  // Хук, а не голая функция: по подписке метка гаснет сразу при открытии чата
+  const unread = useHasUnread(s.updatedAt, s.id);
+  const unreadClass = !hasGlow && unread ? ' cc-unread' : '';
+  const statusVars = {
+    '--cc-status-c': STATUS_CONFIG[s.status].color,
+    // Сила подмешивания в фон: alpha из STATUS_GLOW (45..72) задумана под
+    // свечение — для заливки её ужимаем втрое и добавляем 10 п.п. Даёт 25..34%:
+    // ниже ~10% подкраска на кремовом фоне уже неразличима
+    '--cc-tint-a': `${Math.round(glow.alpha / 3) + 10}%`,
+  } as CSSProperties;
+
+  // У выбранного чата фон обычно подкрашен accentLight, но если по карточке идёт
+  // статусный перелив — оставляем белый: волна статусного цвета поверх оранжевой
+  // заливки читается грязно, цвет статуса перестаёт быть собой. Что чат выбран,
+  // и без заливки видно по акцентной полосе слева и рамке
+  const cardBg = isActive && !hasGlow ? C.accentLight : C.bgWhite;
   // Лицо для подложки: у группы — ведущая (первая в составе)
   const backdropPersona = group.length > 1 ? group[0] : persona;
   const padV = isMobile ? 14 : 11;
   const minHeight = Math.max(padV * 2 + TWO_LINES, ACTION_BOX + 8);
-  // Собеседник назван словами только в тултипе точки статуса — в самой карточке
-  // его показывает подложка, строку под текст он не занимает
-  const companionTitle = group.length > 1 ? (
-    <>
-      Групповой · {group.length} участника
-      <span style={{ display: 'block', fontWeight: 400, color: C.textMuted, marginTop: 2 }}>
-        {group.map(p => personaLabel(p!)).join(' · ')}
-      </span>
-    </>
-  ) : persona ? personaLabel(persona) : undefined;
 
   return (
     <div
-      onClick={onSelect}
+      onClick={() => { if (lpFired.current) { lpFired.current = false; return; } onSelect(); }}
       onMouseEnter={() => onHover(true)}
       onMouseLeave={() => onHover(false)}
+      onTouchStart={beginLongPress}
+      onTouchMove={onTpMove}
+      onTouchEnd={killLongPress}
+      onTouchCancel={killLongPress}
+      className={'cc-card-shadow' + glowClass + unreadClass}
       style={{
         position: 'relative',
         // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left
         paddingTop: padV,
         paddingBottom: padV,
         paddingRight: isMobile ? 16 : 12,
-        // у активной карточки добавляем слева место под акцентную полосу
-        paddingLeft: (isMobile ? 16 : 12) + (isActive ? 6 : 0),
+        // у активной карточки добавляем слева место под акцентную полосу,
+        // плюс отступ под контрол ветки в дереве (leadingInset)
+        paddingLeft: (isMobile ? 16 : 12) + (isActive ? 6 : 0) + leadingInset,
         borderRadius: isMobile ? 16 : R.xl,
         marginBottom: 5,
         cursor: 'pointer',
         overflow: 'hidden',
         background: cardBg,
         border: '1px solid ' + (isActive ? accent : C.borderLight),
-        boxShadow: isActive ? SHADOW.button : SHADOW.card,
+        // box-shadow задаётся классом cc-card-shadow; цвет и сила ауры — переменными
+        // (statusVars), их читают и steady box-shadow, и слой-аура в обёртке
+        '--cc-card-shadow': isActive ? SHADOW.button : SHADOW.card,
+        ...statusVars,
         display: 'flex',
         flexDirection: 'column',
         justifyContent: 'center',
@@ -256,11 +362,27 @@ export function ChatCard({
         // единая высота карточек в списке: короткий чат не выше длинного
         minHeight,
         boxSizing: 'border-box',
-      }}
+      } as CSSProperties}
     >
       {/* Собеседник — в правом углу; в группе лицо даёт ведущая.
           Рисуется до акцентной полосы, иначе накрыла бы её собой */}
-      {backdropPersona && <PersonaBackdrop persona={backdropPersona} width={COMPANION_W} />}
+      {backdropPersona && (
+        <PersonaBackdrop
+          persona={backdropPersona}
+          width={COMPANION_W}
+          // Цветная вуаль персоны мешает статусному переливу/пульсации — гасим её,
+          // чтобы текстовая область оставалась чистым фоном. Фото/инициалы остаются
+          neutral={hasGlow || unread}
+        />
+      )}
+
+      {/* Тема чата — крупный полупрозрачный водяной знак на месте персоны, когда
+          собеседника нет (правый угол свободен). У чата с персоной значка темы тут
+          не нужно: идентификатор правого угла — лицо. Низ уходит за срез карточки и
+          обрезается её overflow:hidden — метафора «значок вырастает из нижней панели» */}
+      {!backdropPersona && (
+        <ChatTopicBackdrop topic={s.topic} align="right" />
+      )}
 
       {/* Акцентная полоса слева — явный маркер текущего чата (у чатов персоны — её цветом) */}
       {isActive && (
@@ -275,15 +397,20 @@ export function ChatCard({
         position: 'relative', display: 'flex', flexDirection: 'column', gap: 3, minWidth: 0,
         paddingRight: backdropPersona ? COMPANION_W - (isMobile ? 16 : 12) : 0,
       }}>
-        {/* Строка 1: статус точкой, признак задачи, название, метки срока и закрепления */}
+        {/* Строка 1: признак задачи, название, метки срока и закрепления. Состояние
+            чата больше не точкой здесь — его несёт внешний glow-ореол карточки, а
+            подпись всплывает тултипом по наведению на правую часть (hotspot ниже) */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-          <StatusIndicator status={s.status} title={companionTitle} />
           {/* Тихий ключ-признак задачи: «Задача» уходит в иконку, весь текст — в тултип */}
           {taskChat && (
             <span title={taskChat.fullLabel} aria-label={taskChat.fullLabel} style={{ display: 'flex', flexShrink: 0, color: C.textMuted }}>
               <Wrench size={12} strokeWidth={2.2} />
             </span>
           )}
+          {/* Тема чата — значок перед именем: быстрый ориентир в строке, дополняет
+              водяной знак в правом углу. У чатов-задач тоже рисуется: имя там своё,
+              но тема разговора остаётся полезной приметой */}
+          <ChatTopicIcon topic={s.topic} size={14} />
           {editing ? (
             // Поле правки стоит ровно на месте заголовка: строка карточки не
             // перестраивается, соседние метки не прыгают. Клики гасим — иначе
@@ -414,7 +541,8 @@ export function ChatCard({
       {menu && !editing && (
         <Menu anchor={menu} onClose={() => setMenu(null)} minWidth={158}
           // Высота меню решает, куда его раскрыть (вверх/вниз) — считаем по составу
-          maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0) + (onAddToWall ? 1 : 0)) * 34 + 10}
+          maxHeight={(1 + (canRename ? 1 : 0) + (onTogglePin ? 1 : 0) + (onAssignTags ? 1 : 0)
+            + (onAddToWall ? 1 : 0) + (canEditChat ? (canMute ? 2 : 1) : 0)) * 34 + 10}
           gap={4}>
           {canRename && (
             <MenuItem
@@ -446,12 +574,46 @@ export function ChatCard({
               onClick={e => { e.stopPropagation(); setMenu(null); onAddToWall(); }}
             />
           )}
+          {/* Настройки чата, раньше доступные только из шапки открытого чата: мьют
+              уведомлений и срок хранения. Ни то, ни другое не двигает чат в списке —
+              бэкенд намеренно не обновляет UpdatedAt на этих правках */}
+          {canMute && (
+            <MenuItem
+              icon={notifyOn ? <Bell size={15} strokeWidth={2} /> : <BellOff size={15} strokeWidth={2} />}
+              label={notifyOn ? 'Заглушить' : 'Уведомления'}
+              onClick={e => { e.stopPropagation(); setMenu(null); void toggleNotify(); }}
+            />
+          )}
+          {canEditChat && (
+            <MenuItem
+              icon={<Hourglass size={15} strokeWidth={2} />}
+              label={s.expiresAfterMinutes ? `Хранить: ${expiryOptionLabel(s.expiresAfterMinutes)}` : 'Срок хранения'}
+              // Пикер сроков открывается по тому же якорю, что и это меню: кнопка «⋮»
+              // исчезнет вместе с ним, и её rect брать будет неоткуда (приём пункта «Теги»)
+              onClick={e => { e.stopPropagation(); const anchor = menu; setMenu(null); setExpiryMenu(anchor); }}
+            />
+          )}
           <MenuItem
             icon={<Trash2 size={15} strokeWidth={2} />}
             label="Удалить"
             danger
             onClick={e => { e.stopPropagation(); setMenu(null); onDelete(); }}
           />
+        </Menu>
+      )}
+
+      {expiryMenu && !editing && (
+        <Menu anchor={expiryMenu} onClose={() => setExpiryMenu(null)}
+          minWidth={isMobile ? 260 : 300} maxHeight={190} gap={4}>
+          {/* Клики гасим на обёртке: иначе выбор срока открывал бы чат (onClick карточки) */}
+          <div style={{ padding: '6px 8px 8px' }} onClick={e => e.stopPropagation()}>
+            <ExpiryPicker value={s.expiresAfterMinutes} onChange={pickExpiry} columns={isMobile ? 2 : 3} />
+            {expiryAt && (
+              <p style={{ margin: '8px 0 0', fontSize: 11.5, color: C.textMuted, lineHeight: 1.4 }}>
+                Удалится ~{formatExpiryDate(expiryAt)}, если не будет активности.
+              </p>
+            )}
+          </div>
         </Menu>
       )}
     </div>

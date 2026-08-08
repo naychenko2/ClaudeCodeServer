@@ -267,4 +267,50 @@ public class SessionManagerSubscriptionMigrationTests : IDisposable
 
         await act.Should().ThrowAsync<InvalidOperationException>();
     }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task MigrateProvider_ПустаяМодель_БросаетОшибку(string? model)
+    {
+        // Миграции нужна конкретная модель целевого провайдера (перевоз транскрипта + --resume),
+        // пустую/whitespace она не принимает — фронт обязан резолвить её из назначения места
+        // chat-new ДО вызова (handleModelChange), иначе «Не указана модель» тостом в чат.
+        var (sut, _, _, users, _) = BuildSut(new Dictionary<string, string?>
+        {
+            [$"{ClaudeSubscriptionPool.Section}:acc-a:OAuthToken"] = "token-a",
+        });
+        var user = users.Add("u9", "password123", "user");
+        var session = await sut.CreateChatAsync(user.Id, ClaudeMode.Auto, model: "sonnet");
+
+        var act = () => sut.MigrateProviderAsync(session.Id, user.Id, model!);
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Не указана модель");
+    }
+
+    [Fact]
+    public async Task MigrateProvider_НеизвестнаяМодельСПодписки_БросаетВнятнуюОшибку()
+    {
+        // Регрессия ложного «Чат уже на этом провайдере»: чат на подписке, фронт зовёт
+        // миграцию на id, которого реестр не знает (рассинхрон каталога /api/models и
+        // LlmProviderRegistry — напр. id сторонней модели, не прописанной в Models/префиксах).
+        // Раньше target=null молча подменялся аккаунтом пула (Pick), совпадавшим с текущим,
+        // и пользователь видел бессмысленное «уже на этом провайдере» вместо правды.
+        var (sut, _, _, users, _) = BuildSut(new Dictionary<string, string?>
+        {
+            [$"{ClaudeSubscriptionPool.Section}:acc-a:OAuthToken"] = "token-a",
+            [$"{ClaudeSubscriptionPool.Section}:acc-a:Tier"] = "max",
+            [$"{ClaudeSubscriptionPool.Section}:acc-b:OAuthToken"] = "token-b",
+        });
+        var user = users.Add("u10", "password123", "user");
+        var session = await sut.CreateChatAsync(user.Id, ClaudeMode.Auto, model: "sonnet");
+        session.Provider.Should().Be("acc-a", "чуточку контекста: текущий провайдер — подписка пула");
+
+        var act = () => sut.MigrateProviderAsync(session.Id, user.Id, "glm-9.99-несуществующая");
+
+        (await act.Should().ThrowAsync<InvalidOperationException>())
+            .WithMessage("Модель*не найдена среди настроенных провайдеров*");
+    }
 }

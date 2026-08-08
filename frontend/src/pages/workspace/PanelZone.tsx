@@ -108,7 +108,7 @@ export function PanelZone({
   railFooter, floating, centerFileOpen,
 }: Props) {
   const usePanels = (panelStack ?? wsPanels).use;
-  const { zones, toggle, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, registerOpener } = usePanels();
+  const { zones, toggle, openIn, closeTo, tuck, untuck, reorder, evict, setMode, setWidth, setWeights, setColFlex, toggleCollapsed, swapWith, replaceWith, moveAt, moveToNewColumn, markActive, registerOpener } = usePanels();
   const zoneState = zones[side];
   const { layout, mode, width, colFlex } = zoneState;
   const windowWidth = useWindowWidth();
@@ -350,6 +350,10 @@ export function PanelZone({
   // Вызывать только для НЕ показанной панели: toggle показанную закроет. Проверка на
   // стороне вызывающих — у каждого она своя (openKeys здесь, zoneOf в сторе).
   const placeHere = (k: PanelKey) => {
+    // Эксклюзив сторон: открытие панели делает эту сторону активной — соседняя
+    // (на планшете compact) схлопнется эффектом ниже. Зовём ДО ветвей: и compact,
+    // и обычное открытие должны отметить сторону.
+    markActive(side);
     if (compact) {
       // До двух панелей: третья вытесняет самую старую (FIFO)
       setTabletPanels(cur => [...cur.filter(x => x !== k), k].slice(-2));
@@ -367,7 +371,9 @@ export function PanelZone({
       // от ЭТОГО места, а не последняя панель колонки.
       if (!at.newColumn) keepHeightsOnInsert(k, at.ci, at.ri);
     }
-    toggle(side, k, cap, railSeq);
+    // openIn, не toggle: markActive выше мог развернуть stash текущей стороны, и
+    // панель уже в layout — toggle бы её закрыл («открыта»), openIn оставит открытой.
+    openIn(side, k, cap, railSeq);
   };
 
   // Стору правило недоступно (пикселей он не знает), поэтому зона объявляет его сама.
@@ -405,6 +411,14 @@ export function PanelZone({
   useEffect(() => {
     evict(side, allowedKeys);
   }, [evict, side, allowedKeys, layout, zoneState.stash]);
+
+  // Эксклюзив сторон на планшете: активность ушла в соседнюю зону — compact-стек
+  // этой очищаем (открыли чат слева → правая compact схлопнулась). Набор compact
+  // эфемерен по природе, возврат — переоткрытием по иконкам рельсы.
+  useEffect(() => {
+    if (!compact || !zones.exclusive || !zones.activeSide || zones.activeSide === side) return;
+    setTabletPanels([]);
+  }, [compact, zones.exclusive, zones.activeSide, side]);
 
   // Плавающие панели закрываются кликом мимо: слой висит поверх контента, и
   // «убрать его с глаз» должно быть так же дёшево, как открыть. Клик по самой

@@ -16,6 +16,8 @@ import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
+import { markChatRead } from '../lib/chatReadState';
+import { refreshProjectActivity } from '../lib/projectActivity';
 import { C, FONT } from '../lib/design';
 import { MOBILE_MAX, MOBILE_QUERY, TABLET_MAX } from '../lib/breakpoints';
 import { PillSwitch } from '../components/Toolbar';
@@ -371,7 +373,7 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
 
   const onServiceStarted = useCallback(() => setToolsTab('preview'), []);
   const {
-    services: previewServices, activePreviewId, setActivePreviewId,
+    services: previewServices, activePreviewId, setActivePreviewId, activate: activatePreview,
     refresh: refreshServices, start: startService, stop: stopService,
   } = useProjectServices(project.id, { onStarted: onServiceStarted });
 
@@ -839,6 +841,11 @@ const windowWidth = useWindowWidth();
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
     setPendingMessage(firstMessage);
+    // Открытый чат — прочитанный. Отмечаем и при autoSelect (восстановление чата
+    // после перезагрузки): он тоже показан на экране. Без этого в проектных
+    // списках метка непрочитанности не гасла никогда — markChatRead звался
+    // только в глобальном ChatsPage
+    markChatRead(session.id);
     if (!autoSelect) {
       // явный выбор — закрываем файл, просмотр коммита, открытую задачу и граф, показываем чат во весь экран
       setOpenFile(null);
@@ -943,6 +950,29 @@ const windowWidth = useWindowWidth();
     handleSelectSession(session);
   };
 
+  // Пока чат открыт, приходящие в него сообщения не копят непрочитанность —
+  // следим за updatedAt, а не только за смену чата (приём из ChatsPage)
+  const activeSessionId = activeSession?.id;
+  const activeSessionUpdatedAt = activeSession?.updatedAt;
+  useEffect(() => {
+    if (activeSessionId) markChatRead(activeSessionId);
+  }, [activeSessionId, activeSessionUpdatedAt]);
+
+  // activeSession.updatedAt при ходе агента НЕ обновляется (status_changed несёт
+  // только status, user_message/exited не трогают activeSession вовсе) — поэтому
+  // эффект выше не срабатывает на новом ходе, и карточка помечалась непрочитанной,
+  // хотя юзер прямо в этом чате. Гасим напрямую: любое событие хода в активном
+  // чате → он прочитан. Переподписка при смене чата — нормально
+  useEffect(() => {
+    if (!activeSessionId) return;
+    return onMessage(msg => {
+      if (msg.sessionId !== activeSessionId) return;
+      if (msg.type === 'user_message' || msg.type === 'exited' || msg.type === 'status_changed') {
+        markChatRead(activeSessionId);
+      }
+    });
+  }, [activeSessionId]);
+
   // Создание чата только по клику (кнопка в центре пустого состояния и «Новый чат»
   // в сайдбаре) — авто-создание при заходе убрано. Открываем созданный чат сразу;
   // SessionList подхватит его в список через activeSession.
@@ -1022,12 +1052,21 @@ const windowWidth = useWindowWidth();
   // Обновляем статус activeSession при status_changed — иначе session.status в ChatPanel frozen
   useEffect(() => {
     return onMessage(msg => {
-      if (msg.type !== 'status_changed') return;
-      setActiveSession(prev =>
-        prev?.id === msg.sessionId
-          ? { ...prev, status: msg.status as Session['status'] }
-          : prev
-      );
+      if (msg.type === 'status_changed') {
+        setActiveSession(prev =>
+          prev?.id === msg.sessionId
+            ? { ...prev, status: msg.status as Session['status'] }
+            : prev
+        );
+      }
+      // Статусы и сообщения проектных чатов не доходят до агрегата точек (он в
+      // user-группе, те — в session/project). Мы в project-группе и видим события —
+      // пнём точку, иначе она догонит только поллингом через 15с. status_changed —
+      // смена состояния (waiting/working/...), user_message/exited — новый ход, а
+      // значит возможный unread у непрочитанного чата проекта
+      if (msg.type === 'status_changed' || msg.type === 'user_message' || msg.type === 'exited') {
+        refreshProjectActivity();
+      }
     });
   }, []);
 
@@ -1218,18 +1257,11 @@ const windowWidth = useWindowWidth();
   // Инструменты (терминал/preview): выбор в сайдбаре → на мобиле уходим в контент;
   // «назад» в шапке контента вернёт к сайдбару инструментов (двухуровневая навигация).
   const handleSelectTerminal = (id: string | null) => { setActiveTerminalId(id); if (isMobile && id) setMobileView('chat'); };
-  const handleSelectPreview = (id: string | null) => {
-    setActivePreviewId(id);
+  const handleSelectPreview = async (id: string | null) => {
     setToolsTab('preview');
+    // activate сам назначает сервис активным на бэкенде и лишь потом открывает окно
+    await activatePreview(id);
     if (isMobile && id) setMobileView('chat');
-    if (!id) return;
-    // Внешний сервис (поднят вне продукта) наш реестр не знает — у него свой эндпоинт,
-    // где порт берётся из конфигурации сервиса
-    const external = previewServices.find(s => s.id === id)?.status === 'external';
-    const call = external
-      ? api.projects.previewActiveExternal(project.id, id)
-      : api.projects.previewActive(project.id, id);
-    void call.catch(() => {});
   };
 
   const handleToggleFileFullscreen = () => setFileFullscreen(v => !v);
@@ -1555,7 +1587,7 @@ const windowWidth = useWindowWidth();
             // видна в подсказке сразу, без перезагрузки страницы
             skills: <SkillsPanel projectId={project.id} onChanged={setSkillsData} />,
             terminal: <TerminalPanelContent terminals={terminals} activeTerminalId={activeTerminalId} onSelect={handleSelectTerminal} onCreate={handleCreateTerminal} onStop={handleStopTerminal} onActivity={setTerminalBusy} />,
-            preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={setActivePreviewId} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
+            preview: <PreviewPanelContent projectId={project.id} services={previewServices} activePreviewId={activePreviewId} onSelect={handleSelectPreview} onStart={startService} onStop={stopService} onRefresh={refreshServices} />,
           }}
         />
       </div>

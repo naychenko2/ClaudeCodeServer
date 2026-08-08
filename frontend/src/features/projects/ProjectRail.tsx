@@ -1,15 +1,15 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
-import { Pin, Plus, Search } from 'lucide-react';
+import { ArrowDownToLine, Pin, Plus, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
 import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
 import { PanelDropLine } from '../../components/ui/PanelDropGuide';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { ProjectIcon, type ProjectIconOutline } from './ProjectIcon';
+import { ProjectIcon } from './ProjectIcon';
 import { ProjectPalette } from './ProjectPalette';
 import { useAllProjects, openProjectViaEvent, openNewProjectFlow } from './useAllProjects';
-import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore } from '../../lib/pinnedProjects';
+import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore, removeFromDock } from '../../lib/pinnedProjects';
 import { useProjectActivity, type ProjectActivity } from '../../lib/projectActivity';
 
 // Вертикальный док проектов — ВТОРАЯ левая рельса, под рельсой панелей. Раньше те же
@@ -40,14 +40,29 @@ const FIXED_H = 100;
 const MAX_SLOTS = 12;
 const DRAG_THRESHOLD = 5;     // порог в px: клик → перетаскивание
 
+// Цвет несёт смысл: waiting — медовый warning («брось дело, нужен ответ»),
+// working — контрастный accent (прямо сейчас идёт работа), unread — нейтрально-
+// серый (сюда не заходили, не событие). Движение добавляет второй канал: working
+// мерцает, unread стоит ровно, waiting мерцает медленнее
 const STATUS_COLOR: Record<ProjectActivity['status'], string> = {
-  waiting: C.accent,
-  working: C.success,
+  waiting: C.warning,
+  working: C.accent,
+  unread: C.textMuted,
 };
 
 const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
   waiting: 'агент ждет ответа',
   working: 'агент работает',
+  unread: 'есть непрочитанные чаты',
+};
+
+// Мерцание точки: waiting дышит медленно (тревожить, но не дёргать), working —
+// живее (там прямо сейчас идёт работа), unread не мерцает вовсе. cc-dot нужен
+// всем: он рисует цветную заливку (::after), ободок и непрозрачную подложку
+const STATUS_PULSE: Record<ProjectActivity['status'], string> = {
+  waiting: ' cc-dot cc-dot-pulse cc-dot-pulse--slow',
+  working: ' cc-dot cc-dot-pulse',
+  unread: ' cc-dot',
 };
 
 // Кнопка проекта в доке. Тот же примитив, что у всех кнопок рельсы (IconButton):
@@ -55,14 +70,15 @@ const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
 // внутри вместо lucide-иконки квадратик проекта. Перетаскивание и контекст-меню
 // ловит span-обёртка (как dragProps у иконок панелей): pointer-события кнопке не
 // принадлежат, а прокидывать их сквозь примитив значило бы дырявить его API.
-function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, side, onPointerDown, onClick, onContextMenu }: {
+function ProjectDockIcon({ p, activity, active, muted, dragging, dragActive, side, onPointerDown, onClick, onContextMenu, onHide }: {
   p: Project;
   activity?: ProjectActivity;
   active: boolean;
-  // Как рисовать иконку в покое: выбранный — акцентным контуром, прочие —
-  // приглушённым. Не задано — обычная картинка в цвете (курсор в рельсе).
+  // Приглушить иконку (спящая рельса, НЕ выбранный проект): обесцветить картинку
+  // или заменить плашку бледным контуром. Активный muted не получает — он всегда
+  // цветной и помечен кольцом кнопки; на фоне спящих он и читается как выбранный.
   // Решает док: состояние общее для всего ряда, кнопке о нём знать неоткуда.
-  outline?: ProjectIconOutline;
+  muted?: boolean;
   dragging: boolean;
   // В доке кого-то тащат: подписи не показываем никому — они лезли бы поверх места
   // вставки и подсказывали не про то, чем человек сейчас занят
@@ -71,6 +87,9 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
   onPointerDown: (e: React.PointerEvent, p: Project) => void;
   onClick: (p: Project) => void;
   onContextMenu: (e: React.MouseEvent, p: Project) => void;
+  // Убрать иконку из дока — кнопка в подписи. Не задана (открытый проект) — подпись
+  // просто называет иконку.
+  onHide?: (p: Project) => void;
 }) {
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => () => { if (pressTimer.current) clearTimeout(pressTimer.current); }, []);
@@ -95,31 +114,46 @@ function ProjectDockIcon({ p, activity, active, outline, dragging, dragActive, s
       }}
     >
       {/* Кнопка-картинка: иконка проекта занимает бокс ЦЕЛИКОМ (штриховым иконкам
-          панелей нужен воздух вокруг глифа, картинке — нет). В фокусе только текущий
-          проект — он в полном цвете; остальные до наведения показаны контуром с
-          инициалами, чтобы весить не больше служебных значков рельсы.
-          Кольцо выбранного нужно только когда иконка нарисована картинкой: в покое
-          выбранный и так помечен акцентным контуром, и второй знак поверх него был
-          бы шумом. */}
+          панелей нужен воздух вокруг глифа, картинке — нет). Активный проект ВСЕГДА
+          цветной — картинка в цвете или цветная плашка, — а в покое рельсы спят
+          остальные (muted: grayscale/контур). Выбранный при этом помечен кольцом
+          кнопки (variant="media" + active); ring включается именно когда иконка не
+          приглушена, т.е. у активного в любом состоянии рельсы (см. ProjectIcon). */}
       <RailIconButton
         side={side}
         label={label}
         variant="media"
-        active={active && !outline}
+        active={active && !muted}
         hoverSuppressed={dragActive}
         onClick={() => onClick(p)}
+        // Действие живёт в подписи, а не отдельной кнопкой рельсы: убирают ОДИН
+        // проект, и целятся при этом в его иконку. Знак — тот же, что у иконок рельсы
+        // панелей (ArrowDownToLine / item.onTuck): стрелка ВНИЗ к черте, иконка
+        // уезжает в конец столбца — под лупу. Пока иконку тащат, подписи нет вовсе —
+        // значит и кнопка не мешает дропу.
+        action={onHide && !dragActive ? {
+          Icon: ArrowDownToLine,
+          title: 'Убрать из дока',
+          onClick: () => onHide(p),
+        } : undefined}
       >
-        <ProjectIcon project={p} size={ICON_BOX} radius={R.md} outline={outline} />
+        <ProjectIcon project={p} size={ICON_BOX} radius={R.md} muted={muted} />
       </RailIconButton>
       {/* Точка статуса живёт НАД кнопкой, а не внутри неё: обесцвечивание невыбранных
           красит всё содержимое кнопки, а «агент ждёт ответа» обязан оставаться
           оранжевым именно у чужого проекта — ради этого сигнала док и смотрят. */}
       {activity && (
-        <span style={{
+        <span className={STATUS_PULSE[activity.status]} style={{
           position: 'absolute', right: -2, top: -2, width: 8, height: 8, borderRadius: R.full,
-          background: STATUS_COLOR[activity.status], border: `2px solid ${C.bgMain}`,
+          // Подложка = цвет холста: она непрозрачна и закрывает иконку проекта под
+          // точкой. Цветная заливка живёт в ::after и мерцает, ободок (border) —
+          // сплошной, сквозь точку ничего не просвечивает
+          background: C.bgMain, border: `2px solid ${C.bgMain}`,
+          // Цвет заливки ::after. Подаём переменной: классы cc-dot-* в index.css
+          // читают её, а инлайн-фон на ::after анимация бы перебила
+          '--cc-dot-c': STATUS_COLOR[activity.status],
           boxSizing: 'content-box', pointerEvents: 'none',
-        }} />
+        } as CSSProperties} />
       )}
     </span>
   );
@@ -308,6 +342,8 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
     window.removeEventListener('pointerup', onDragUp);
   }, [onDragMove, onDragUp]);
 
+  const onIconHide = useCallback((p: Project) => { removeFromDock(p.id); }, []);
+
   const onIconClick = useCallback((p: Project) => {
     if (suppressClick.current) { suppressClick.current = false; return; }
     openCandidate(p);
@@ -372,13 +408,14 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
           <div style={{ position: 'relative', display: 'flex' }}>
             <Search size={17} strokeWidth={ICON_STROKE} />
             {/* Счётчик спрятанных проектов — нейтральный: это справка о размере списка,
-                а не событие. Акцент он берёт только когда среди скрытых кто-то ЖДЁТ
-                ответа — вот на это оторваться от дела стоит. */}
+                а не событие. Цвет он берёт только когда среди скрытых кто-то ЖДЁТ
+                ответа — вот на это оторваться от дела стоит. Тон — тот же warning,
+                что у точки waiting и у статуса «ждёт ввода» на карточке чата. */}
             {hiddenCount > 0 && (
               <span style={{
                 position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
                 borderRadius: 7,
-                background: hiddenWaiting ? C.accent : C.bgSelected,
+                background: hiddenWaiting ? C.warning : C.bgSelected,
                 color: hiddenWaiting ? C.onAccent : C.textSecondary,
                 fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
               }}>
@@ -403,12 +440,17 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
                   p={p}
                   side={side}
                   active={p.id === project?.id}
-                  // Курсор в рельсе (или там тащат иконку) — ряд просыпается целиком
-                  // и показывает проекты как есть, картинками в цвете
-                  outline={railHover || dragView ? undefined : (p.id === project?.id ? 'strong' : 'muted')}
+                  // Курсор в рельсе (или там тащат иконку) — ряд просыпается целиком:
+                  // все иконки расцвечиваются. Активный цветной ВООБЩЕ ВСЕГДА, даже в
+                  // покое — на фоне спящих он и читается как выбранный; плюс кольцо
+                  // кнопки. Поэтому muted достаётся только неактивным в спящей рельсе.
+                  muted={!railHover && !dragView && p.id !== project?.id}
                   activity={activity.get(p.id)}
                   dragging={dragView?.id === p.id}
                   dragActive={!!dragView}
+                  // У открытого проекта кнопки нет: его иконка возвращается в док
+                  // как активная (см. items), и нажатие ничего бы не изменило
+                  onHide={p.id === project?.id ? undefined : onIconHide}
                   onPointerDown={onIconPointerDown}
                   onClick={onIconClick}
                   onContextMenu={openMenu}
@@ -505,6 +547,18 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
               onClick={() => { togglePin(menu.p.id); setMenu(null); }}>
               {isPinned(menu.p.id) ? 'Открепить' : 'Закрепить'}
             </button>
+            {/* Второй вход в то же действие, что и кнопка в подписи. Обязателен: пальцем
+                наведения нет, подпись с кнопкой на планшете не показывается вовсе (см.
+                RailIconButton), и меню по долгому нажатию — там единственный путь.
+                У открытого проекта пункта нет по той же причине, что и кнопки. */}
+            {menu.p.id !== project?.id && (
+              <button style={menuItemStyle}
+                onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                onClick={() => { removeFromDock(menu.p.id); setMenu(null); }}>
+                Убрать из дока
+              </button>
+            )}
           </div>
         </div>,
         document.body,

@@ -12,6 +12,10 @@ const SWITCHER_KEY = 'cc_switcher_order';  // СТАБИЛЬНЫЙ порядо�
 export const PINNED_ZONE_MAX = 4;
 const RECENT_MAX = 8;
 
+function hasKey(key: string): boolean {
+  try { return localStorage.getItem(key) !== null; } catch { return true; }
+}
+
 function readList(key: string): string[] {
   try {
     const raw = localStorage.getItem(key);
@@ -25,8 +29,11 @@ let pinned = readList(PINNED_KEY);
 let recent = readList(RECENT_KEY);
 // Стабильный порядок незакреплённых значков плашки. Сеем из MRU-recent при первом
 // запуске (чтобы у существующих юзеров сразу были иконки), дальше — append-only.
+// Условие сева — ОТСУТСТВИЕ ключа, а не пустой список: пустой список бывает и
+// осмысленным (убрали из дока последнее, что там было), и сев по «пусто» воскрешал
+// бы весь MRU при следующей загрузке страницы.
 let switcherOrder = readList(SWITCHER_KEY);
-if (switcherOrder.length === 0 && recent.length > 0) {
+if (!hasKey(SWITCHER_KEY) && recent.length > 0) {
   switcherOrder = [...recent];
   try { localStorage.setItem(SWITCHER_KEY, JSON.stringify(switcherOrder)); } catch { /* приватный режим */ }
 }
@@ -133,6 +140,25 @@ export function switcherInsertBefore(id: string, beforeId: string | null) {
   switcherOrder = next;
   persist(SWITCHER_KEY, switcherOrder);
   emit();
+}
+
+// Убрать проект из дока: снимаем закрепление и вычёркиваем из порядка плашки. Сам
+// проект никуда не девается — он остаётся в палитре под лупой («+N») и вернётся в
+// док, когда его снова откроют. MRU-историю (recent) не трогаем: она про «что я
+// открывал», а не про состав дока, и на ней держится порядок в палитре.
+export function removeFromDock(id: string) {
+  let changed = false;
+  if (pinned.includes(id)) {
+    pinned = pinned.filter(x => x !== id);
+    persist(PINNED_KEY, pinned);
+    changed = true;
+  }
+  if (switcherOrder.includes(id)) {
+    switcherOrder = switcherOrder.filter(x => x !== id);
+    persist(SWITCHER_KEY, switcherOrder);
+    changed = true;
+  }
+  if (changed) emit();
 }
 
 // === Подписка ===

@@ -29,13 +29,14 @@ import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
+import { STATUS_CONFIG, STATUS_GLOW, type SessionStatus } from '../components/StatusIndicator';
 import { ProviderLimitCard } from '../components/chat/ChatItemView';
 import type { Session, ChatItem } from '../types';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
-  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot,
+  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
@@ -49,6 +50,7 @@ import { EmptyState } from '../components/EmptyState';
 import type {
   ButtonVariant, ButtonSize,
   IconButtonSize, IconButtonTone, IconButtonVariant,
+  FileStatus,
 } from '../components/ui';
 
 import { ColorsSection } from './ColorsSection';
@@ -75,6 +77,18 @@ const DOT_SAMPLES: { color: string; label: string }[] = [
   { color: C.danger,       label: 'danger'       },
   { color: C.info,         label: 'info'         },
   { color: C.textMuted,    label: 'textMuted'    },
+];
+
+// Демо-файлы для FileTypeTile: код, разметка, документ, картинка и незнакомый тип
+// (последний показывает фолбэк — первые три знака расширения на нейтральной плитке).
+const FILE_TILE_SAMPLES = ['App.tsx', 'Program.cs', 'README.md', 'schema.json', 'shot.png', 'notes.rtf'];
+
+// Состояния файла для FileStatusBadge — коды git, как их отдаёт статус репозитория
+const FILE_STATUS_SAMPLES: { status: FileStatus; label: string }[] = [
+  { status: 'M', label: 'изменён'       },
+  { status: 'A', label: 'новый'         },
+  { status: 'D', label: 'удалён'        },
+  { status: 'R', label: 'переименован'  },
 ];
 
 // Оглавление витрины: id секции (для якоря) + короткий лейбл в кнопке.
@@ -352,6 +366,34 @@ function TogglesSection() {
               <Dot color={C.accent} size={14} />
               <span style={{ fontSize: FS.sm, color: C.textMuted }}>size=14</span>
             </div>
+          </div>
+        </SubBlock>
+
+        {/* FileTypeTile: плитка типа файла — одна на все списки файлов продукта
+            («Файлы», «Документы», «Изменения», шапка просмотрщика). Габарит и
+            палитра живут внутри примитива, снаружи задаётся только имя файла */}
+        <SubBlock label="FileTypeTile — тип файла перед именем">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+            {FILE_TILE_SAMPLES.map((name) => (
+              <div key={name} style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
+                <FileTypeTile name={name} />
+                <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{name}</span>
+              </div>
+            ))}
+          </div>
+        </SubBlock>
+
+        {/* FileStatusBadge: состояние файла — общий значок дерева «Файлов» и панели
+            «Изменения». Цветом имени состояние не кодируется нигде: цвет там занят
+            другими смыслами (заметки, база знаний) */}
+        <SubBlock label="FileStatusBadge — состояние файла после имени">
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.md, alignItems: 'center' }}>
+            {FILE_STATUS_SAMPLES.map((s) => (
+              <div key={s.status} style={{ display: 'flex', alignItems: 'center', gap: SP.xs }}>
+                <FileStatusBadge status={s.status} />
+                <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{s.label}</span>
+              </div>
+            ))}
           </div>
         </SubBlock>
       </div>
@@ -1468,6 +1510,7 @@ const DEMO_SESSIONS: Session[] = [
     name: 'Рефакторинг модуля авторизации',
     lastMessage: 'Готово, накатил миграцию и прогнал тесты',
     origin: 'manual',
+    topic: 'refactor',
   },
   {
     id: 'demo-2',
@@ -1480,6 +1523,7 @@ const DEMO_SESSIONS: Session[] = [
     lastMessage: 'Сейчас ищу, где лежит BackupSchema…',
     origin: 'manual',
     isPinned: true,
+    topic: 'arch',
   },
   {
     id: 'demo-3',
@@ -1492,6 +1536,21 @@ const DEMO_SESSIONS: Session[] = [
     origin: 'manual',
   },
 ];
+
+// Порядок состояний для витрины ореола: сначала светящиеся (живые, потом ошибка),
+// следом спокойные. Подписи и цвета не дублируем — берём боевые таблицы
+// STATUS_CONFIG / STATUS_GLOW, чтобы витрина не разъезжалась с карточкой.
+const GLOW_STATES: SessionStatus[] = [
+  'starting', 'working', 'waiting', 'error', 'active', 'orphaned', 'finished',
+];
+
+// Чем состояние себя ведёт — подпись под демо-карточкой
+const glowBehaviour = (st: SessionStatus) => {
+  const g = STATUS_GLOW[st];
+  if (g.alpha === 0) return 'без свечения';
+  if (!g.breath) return `ровный контур · ${g.alpha}%`;
+  return `переливается${g.slow ? ' (медленно)' : ''} · ${g.alpha}%`;
+};
 
 // Демо карточки лимита: полная (аккаунты пула + сторонние провайдеры) и короткая
 // (только сторонние — когда здоровых аккаунтов в пуле не осталось). resetsAt —
@@ -2360,6 +2419,51 @@ function PanelsSection() {
           </p>
         </SubBlock>
 
+        {/* Состояние чата в списке несёт ореол самой карточки — точки статуса в ней
+            больше нет. Ниже боевой ChatCard во всех 7 состояниях: он рисует ореол сам
+            по таблицам STATUS_CONFIG / STATUS_GLOW (StatusIndicator.tsx) классами
+            cc-glow-* из index.css. Цвет отвечает «что происходит», переливание —
+            «происходит прямо сейчас», сила (alpha) — насколько это требует внимания. */}
+        <SubBlock label="ChatCard — ореол статуса, все 7 состояний">
+          <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
+            <div style={{
+              padding: SP.md, display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: SP.md,
+            }}>
+              {GLOW_STATES.map(st => (
+                <div key={st}>
+                  <ChatCard
+                    session={{ ...DEMO_SESSIONS[1], id: `demo-glow-${st}`, status: st, isPinned: false }}
+                    isActive={false}
+                    isMobile={false}
+                    fallbackName="Новый чат"
+                    online={true}
+                    hovered={false}
+                    workflowRunning={false}
+                    onSelect={() => {}}
+                    onHover={() => {}}
+                    onDelete={() => {}}
+                  />
+                  <div style={{ fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>
+                    {STATUS_CONFIG[st].label} — {glowBehaviour(st)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Island>
+
+          <p style={{ margin: `${SP.sm}px 0 0`, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono, lineHeight: 1.5 }}>
+            Светятся только те состояния, что требуют внимания: живые (запуск, работа,
+            ожидание — у него бег медленнее) и ошибка. «Активна», «прервана» и «готово»
+            не светятся вовсе — иначе список превращается в гирлянду. Цвет ауры — основной
+            статусный токен из <code>STATUS_CONFIG</code> (info / accent / success / plan /
+            warning / danger / textMuted): точки и ореол одного цвета, без отдельной
+            насыщенной палитры. «Работает» — на <code style={{ color: C.accent }}>C.accent</code>,
+            «ждёт ввода» — на <code style={{ color: C.plan }}>C.plan</code>.
+            При <code>prefers-reduced-motion</code> переливание гаснет, ровный контур остаётся.
+          </p>
+        </SubBlock>
+
         {/* Карточка лимита подписки из ленты чата: секция аккаунтов пула (та же
             модель, своя предоплата) идёт перед сторонними провайдерами; когда
             здоровых аккаунтов нет — карточка выглядит как раньше. onMigrate не
@@ -2649,8 +2753,8 @@ function HeadersSection() {
 
             {/* Закреплённые, затем недавние. Кнопка — IconButton md variant="media":
                 картинка занимает бокс целиком, а состояние показывает сама — текущий
-                проект в полном цвете, прочие до наведения контурные (ProjectIcon
-                outline: рамка и инициалы, даже если у проекта картинка). */}
+                проект в полном цвете, прочие до наведения приглушённые (ProjectIcon
+                muted: grayscale-картинка либо бледный контур с инициалами). */}
             {[
               { initials: 'CC', color: AGENT_COLORS.blue,   active: true,  status: undefined, sepBefore: false },
               { initials: 'B',  color: AGENT_COLORS.green,  active: false, status: 'working', sepBefore: false },

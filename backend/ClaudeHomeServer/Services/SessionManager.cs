@@ -646,6 +646,9 @@ public class SessionManager : IDisposable
                 abortedMidTurn.Add(session.ClaudeSessionId);
             _sessions[session.Id] = new SessionEntry { Info = session };
         }
+        // Значок темы переехал из имени в Session.Topic — переносим старые эмодзи-имена.
+        // Идемпотентно: на уже перенесённых сессиях это no-op без записи на диск
+        if (Llm.ChatTopicMigration.Apply(list)) SaveSessions();
         // Маркер обрыва в историю оборванных ходов — фоном, чтобы не тормозить старт
         if (abortedMidTurn.Count > 0)
             _ = Task.Run(async () =>
@@ -766,12 +769,27 @@ public class SessionManager : IDisposable
     }
 
     // Включить/выключить временность чата: minutes > 0 — авто-удаление через N минут
-    // после последней активности, null — обычный чат. Включение перезапускает отсчёт (UpdatedAt)
+    // после последней активности, null — обычный чат.
+    //
+    // UpdatedAt намеренно НЕ обновляется (как в SetParent): по нему сортируется список и
+    // считается непрочитанность, а смена настройки хранения — не активность чата. Отсчёт
+    // срока при этом не должен стартовать в прошлом, поэтому включение ставит ExpiryAnchor —
+    // дедлайн считается от него, если он позже последней активности.
     public Session? SetExpiry(string sessionId, int? minutes)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
         entry.Info.ExpiresAfterMinutes = minutes;
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        entry.Info.ExpiryAnchor = minutes is null ? null : DateTime.UtcNow;
+        SaveSessions();
+        return entry.Info;
+    }
+
+    // Заглушить/включить уведомления по чату (браузерные «нужно решение» / «ход завершён»).
+    // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
+    public Session? SetNotificationsMuted(string sessionId, bool muted)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.NotificationsMuted = muted;
         SaveSessions();
         return entry.Info;
     }
@@ -1078,8 +1096,28 @@ public class SessionManager : IDisposable
         }
         else
         {
-            // Цель: сторонний провайдер — его ключ; родной Claude — доступный аккаунт пула
-            targetKey = target?.Key ?? _subscriptionPool.Pick(newModel);
+            // Цель: сторонний провайдер — его ключ; родной Claude — доступный аккаунт пула.
+            if (target is null)
+            {
+                // null от ResolveByModel = родной Claude (подписка, без env-оверрайдов). Но тот же
+                // null получается и для неизвестной модели: её id не нашёлся ни в Models, ни по
+                // префиксу ни одного провайдера — фронт и реестр рассинхронизированы (каталог
+                // /api/models отдал id, которого текущий LlmProviderRegistry не знает). Молчаливый
+                // фолбэк на Pick давал ложное «Чат уже на этом провайдере» (Pick выбирал тот же
+                // аккаунт пула, что текущий). Если чат сейчас на подписке и модель РЕАЛЬНО другая —
+                // это не смена аккаунта, а неизвестная модель, говорим правду. Совпадает с текущей
+                // моделью — значит и правда та же подписка, корректное «уже на провайдере» ниже.
+                var currentIsSubscription = _subscriptionPool.All.Any(s => s.Key == currentKey);
+                if (currentIsSubscription
+                    && !string.Equals(newModel, entry.Info.Model, StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        $"Модель «{newModel}» не найдена среди настроенных провайдеров");
+                targetKey = _subscriptionPool.Pick(newModel);
+            }
+            else
+            {
+                targetKey = target.Key;
+            }
         }
 
         if (string.Equals(targetKey, currentKey, StringComparison.OrdinalIgnoreCase))
@@ -3170,17 +3208,24 @@ public class SessionManager : IDisposable
         {
             var prompt =
                 "Придумай короткий заголовок (3-6 слов, по-русски, без кавычек и точки в конце) для чата " +
-                "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHint + "\n\n" +
+                "по первому сообщению пользователя. " + Llm.TitleExtraction.JsonHintWithIcon + "\n\n" +
                 (firstMessage.Length > 1500 ? firstMessage[..1500] : firstMessage);
             var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
-                ownerId: ownerId, jsonFormat: Llm.TitleExtraction.Schema);
+                ownerId: ownerId, jsonFormat: Llm.TitleExtraction.SchemaWithIcon);
             var line = Llm.TitleExtraction.Extract(raw);
             if (line is null || line.Length > 80) return;
+            // Значок темы — имя lucide-компонента (PascalCase): имя остаётся чистым текстом,
+            // иконку рисует фронт по icons[iconName]
+            var iconName = Llm.TitleExtraction.ExtractIconName(raw);
 
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
             // Пользователь мог переименовать вручную, пока модель думала — тогда не трогаем
             if (entry.Info.Name != expectedTitle) return;
             entry.Info.Name = line;
+            if (iconName is not null) entry.Info.Topic = iconName;
+            entry.Info.UpdatedAt = DateTime.UtcNow;
+            SaveSessions();
+            await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
@@ -3220,10 +3265,83 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
+    // Подобрать значок-иконку ОДНОМУ чату по переписке. Имя не трогает и NameLocked не ставит —
+    // в отличие от RetitleAsync (тот переименовывает). null — значок поставить не вышло
+    // (нет переписки, модель не дала имя, чат исчез). Зовётся и пакетным прогоном.
+    public async Task<Session?> SetChatIconAsync(string userId, string sessionId, CancellationToken ct)
+    {
+        var session = GetOwned(sessionId, userId);
+        if (session is null) return null;
+        if (_cheap is null) throw new InvalidOperationException("ИИ недоступен");
+
+        // Транскрипт короткий: для темы разговора сути хватает, лишние токены ни к чему
+        var history = await GetHistoryAsync(sessionId);
+        var transcript = SessionSummaryService.BuildTranscript(history, 1500);
+        if (string.IsNullOrWhiteSpace(transcript)) return null;
+
+        var prompt = Llm.TitleExtraction.IconHint + "\n\n" + transcript;
+        var raw = await _cheap.RunAsync(Llm.LocalActionCatalog.ChatTitle, prompt,
+            ownerId: userId, jsonFormat: Llm.TitleExtraction.SchemaIcon, ct: ct);
+        var iconName = Llm.TitleExtraction.ExtractIconName(raw);
+        if (iconName is null)
+        {
+            // Диагностика: модель не дала валидное PascalCase-имя. Логируем сырой ответ,
+            // чтобы понять — пустой {} (отступила), не-PascalCase (опечатка/пробел) или мусор.
+            // Обрезаем: модели иногда шлют длинные рассуждения вслух
+            _log.LogInformation("Значок чата {Session} («{Name}»): модель не дала имя. Ответ: {Raw}",
+                sessionId, session.Name, raw is null ? "<null>" : (raw.Length > 300 ? raw[..300] + "…" : raw));
+            return null;
+        }
+
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        // Повторная проверка: пока модель думала, значок мог поставить авто-заголовок нового
+        // чата — не перезаписываем то, что уже стоит
+        if (!string.IsNullOrEmpty(entry.Info.Topic)) return entry.Info;
+        entry.Info.Topic = iconName;
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        // Имя не менялось — шлём его же: событие переносит и значок, отдельного не заводим
+        await BroadcastChatRenamedAsync(sessionId, entry.Info, entry.Info.Name ?? "");
+        return entry.Info;
+    }
+
+    // Результат пакетного прогона значков: сколько чатов получили иконку и сколько пропущено
+    // (значок уже стоит, нет переписки, модель не дала имя). Идёт в тост палитры.
+    public sealed record IconBatchResult(int Processed, int Skipped);
+
+    // Подобрать значки чатам без него в рамках проекта (projectId) или, если проект не задан,
+    // по всем чатам владельца. Действие AI-палитры «Проставить значки тем» в разделе проекта —
+    // разовый проход. Чаты со значком отсеиваются ДО вызова модели (экономия вызовов), поэтому
+    // в processed попадают только реально размеченные этим прогоном. Каждый оставшийся чат —
+    // отдельный вызов модели: на десятках чатов это десятки секунд.
+    public async Task<IconBatchResult> SetChatIconsAsync(string userId, CancellationToken ct, string? projectId = null)
+    {
+        var all = _sessions.Values
+            .Where(e => ResolveOwnerId(e.Info) == userId && (projectId is null || e.Info.ProjectId == projectId))
+            .Select(e => e.Info)
+            .ToList();
+        // Предфильтр: у кого значок уже есть — сразу в пропущенные, модель не зовём
+        var pending = all.Where(s => string.IsNullOrEmpty(s.Topic)).Select(s => s.Id).ToList();
+        var processed = 0;
+        var skipped = all.Count - pending.Count;
+        foreach (var id in pending)
+        {
+            ct.ThrowIfCancellationRequested();
+            try
+            {
+                var updated = await SetChatIconAsync(userId, id, ct);
+                if (updated is not null) processed++; else skipped++;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception ex) { _log.LogDebug(ex, "Определение значка чата {Session}", id); skipped++; }
+        }
+        return new IconBatchResult(processed, skipped);
+    }
+
     // Уведомить клиентов об авто-переименовании чата (адресация как у BroadcastChatDeletedAsync)
     private async Task BroadcastChatRenamedAsync(string sessionId, Session info, string name)
     {
-        var msg = new ChatRenamedMessage(name) with { SessionId = sessionId };
+        var msg = new ChatRenamedMessage(name, info.Topic) with { SessionId = sessionId };
         var tasks = new List<Task> { _hub.Clients.Group(sessionId).SendAsync("message", msg) };
         if (info.ProjectId is string pid)
             tasks.Add(_hub.Clients.Group("project_" + pid).SendAsync("message", msg));
@@ -3299,7 +3417,12 @@ public class SessionManager : IDisposable
         if (tags is not null)
             entry.Info.Tags = tags;
 
-        entry.Info.UpdatedAt = DateTime.UtcNow;
+        // Отметка времени — только когда что-то реально правили. PUT приходит и с одними
+        // настройками (срок хранения, тумблер уведомлений — их применяет контроллер до этого
+        // вызова, сюда все поля доезжают как null): безусловный UpdatedAt поднимал бы чат
+        // в списке и метил непрочитанным просто за смену настройки.
+        if (name is not null || model is not null || effort is not null || tags is not null)
+            entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         return entry.Info;
     }

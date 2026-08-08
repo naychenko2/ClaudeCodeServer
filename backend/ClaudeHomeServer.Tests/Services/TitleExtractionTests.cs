@@ -41,4 +41,49 @@ public class TitleExtractionTests
         Assert.Null(TitleExtraction.Extract("   "));
         Assert.Null(TitleExtraction.Extract(null));
     }
+
+    // Имя lucide-компонента: PascalCase, любого имени из ~1700 (белого списка нет — фронт
+    // проверит icons[iconName]). Sanity отсекает явный мусор
+    [Fact]
+    public void ExtractIconName_PascalCase()
+        => Assert.Equal("Cat", TitleExtraction.ExtractIconName("{\"title\":\"Кошка\",\"iconName\":\"Cat\"}"));
+
+    [Fact]
+    public void ExtractIconName_MultiWordPascalCase()
+        => Assert.Equal("MousePointerClick", TitleExtraction.ExtractIconName("{\"iconName\":\"MousePointerClick\"}"));
+
+    [Fact]
+    public void ExtractIconName_FromProseAndFence()
+    {
+        Assert.Equal("Bug", TitleExtraction.ExtractIconName("Вот: {\"iconName\": \"Bug\"}"));
+        Assert.Equal("Dog", TitleExtraction.ExtractIconName("```json\n{\"iconName\": \"Dog\"}\n```"));
+    }
+
+    [Fact]
+    public void ExtractIconName_TrimsSpaces()
+        => Assert.Equal("User", TitleExtraction.ExtractIconName("{\"iconName\": \"  User \"}"));
+
+    [Fact]
+    public void ExtractIconName_RejectsNonPascalCaseAndNoise()
+    {
+        Assert.Null(TitleExtraction.ExtractIconName("{\"iconName\":\"cat\"}"));      // с маленькой — не PascalCase
+        Assert.Null(TitleExtraction.ExtractIconName("{\"iconName\":\"bug report\"}"));// с пробелом
+        Assert.Null(TitleExtraction.ExtractIconName("{\"iconName\":\":cat:\"}"));     // шорткод
+        Assert.Null(TitleExtraction.ExtractIconName("{\"iconName\":\"\"}"));          // пусто
+        Assert.Null(TitleExtraction.ExtractIconName("{\"title\":\"Х\"}"));            // поля нет
+        Assert.Null(TitleExtraction.ExtractIconName("Просто текст без JSON"));
+        Assert.Null(TitleExtraction.ExtractIconName(null));
+    }
+
+    // Проверка «имя начинается со значка» — нужна миграции старых эмодзи-имён
+    [Fact]
+    public void HasEmoji_DetectsLeadingEmoji()
+    {
+        Assert.True(TitleExtraction.HasEmoji("🐛 Правка авторизации"));
+        Assert.True(TitleExtraction.HasEmoji("🚀 Деплой"));
+        Assert.False(TitleExtraction.HasEmoji("Правка авторизации"));
+        Assert.False(TitleExtraction.HasEmoji("→ стрелка не значок"));
+        Assert.False(TitleExtraction.HasEmoji(""));
+        Assert.False(TitleExtraction.HasEmoji(null));
+    }
 }

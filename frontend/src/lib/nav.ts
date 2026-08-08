@@ -60,6 +60,7 @@ export interface HashTarget {
   knowledgeId?: string;
   chatId?: string;   // диплинк на конкретный чат: #/chats/{id} — глобальный, #/project/{id}/chat/{chatId} — проектный
   history?: boolean; // #/history — открыть overlay «Что нового» (поверх дашборда)
+  intro?: boolean;   // #/intro — открыть overlay знакомства (фича default-personas-onboarding)
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {
@@ -69,6 +70,8 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     case 'home': return { screen: 'home' };
     // Overlay «Что нового»: открывается поверх дашборда (App диспатчит событие открытия)
     case 'history': return { screen: 'home', history: true };
+    // Overlay знакомства: открывается поверх дашборда (App диспатчит событие открытия)
+    case 'intro': return { screen: 'home', intro: true };
     case 'chats': {
       const target: HashTarget = { screen: 'chats' };
       // #/chats/{id} — диплинк на конкретный чат (уведомления проактивных персон)

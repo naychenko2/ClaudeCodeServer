@@ -155,6 +155,7 @@ export const SHADOW = {
   button:   'var(--shadow-button)',     // свечение основной кнопки
   fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB) с accent-заливкой
   fabNeutral: 'var(--shadow-fab-neutral)', // тот же ореол, но нейтральный — FAB без заливки
+  alert:      'var(--shadow-alert)',       // янтарный ореол «нужен ответ» (редуцированное движение)
   thumb:    'var(--shadow-thumb)',      // бегунок переключателя
 } as const
 

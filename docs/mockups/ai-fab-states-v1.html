@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI-хаб: состояния плавающей кнопки</title>
+<style>
+  /* === Токены дизайн-системы AI Home (значения из theme.css) === */
+  :root {
+    --c-bg-main: #F4F0E8;
+    --c-bg-panel: #EDE7DC;
+    --c-bg-card: #FBF8F2;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset: #E7E0D2;
+    --c-text-heading: #2A251F;
+    --c-text-primary: #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted: #9A8F7E;
+    --c-on-accent: #FBF8F2;
+    --c-on-dark: #FFFFFF;
+    --c-accent: #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-border: #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-smoke: #B4A899;
+    --c-warning: #C9923E;
+    --c-warning-bg: #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-fab-neutral: 0 6px 18px rgba(60, 50, 35, 0.22);
+    --shadow-button: 0 4px 14px rgba(217, 119, 87, 0.30);
+    /* ПРЕДЛАГАЕМЫЙ НОВЫЙ ТОКЕН: янтарный ореол «нужен ответ» (SHADOW.alert) */
+    --shadow-alert: 0 0 0 4px rgba(201, 146, 62, 0.26), 0 6px 18px rgba(60, 50, 35, 0.22);
+    --canvas-ink: 42, 37, 31;
+    --canvas-alpha: 0.05;
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18;
+    --c-bg-panel: #272320;
+    --c-bg-card: #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset: #1B1815;
+    --c-text-heading: #F2ECE1;
+    --c-text-primary: #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted: #8A8072;
+    --c-on-accent: #201C18;
+    --c-accent: #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-border: #3D3830;
+    --c-border-light: #34302A;
+    --c-smoke: #7E7566;
+    --c-warning: #E0AC5A;
+    --c-warning-bg: #322717;
+    --c-warning-text: #E7B96E;
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-fab-neutral: 0 6px 20px rgba(0, 0, 0, 0.50);
+    --shadow-button: 0 4px 16px rgba(227, 138, 106, 0.34);
+    --shadow-alert: 0 0 0 4px rgba(224, 172, 90, 0.30), 0 6px 20px rgba(0, 0, 0, 0.50);
+    --canvas-ink: 237, 230, 219;
+    --canvas-alpha: 0.06;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    background: var(--c-bg-main); color: var(--c-text-primary);
+    padding: 28px 28px 60px; min-height: 100vh; transition: background .2s, color .2s;
+  }
+  h1 { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin-bottom: 5px; }
+  h2 { font-family: 'PT Serif', Georgia, serif; font-size: 18px; color: var(--c-text-heading); margin: 28px 0 12px; }
+  .sub { font-size: 13px; color: var(--c-text-secondary); margin-bottom: 20px; max-width: 760px; line-height: 1.5; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+
+  /* === Панель управления витриной === */
+  .controls {
+    display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px;
+    padding: 12px 14px; margin-bottom: 22px; box-shadow: var(--shadow-card);
+  }
+  .grp { display: flex; align-items: center; gap: 7px; }
+  .grp > span {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; text-transform: uppercase;
+    letter-spacing: .6px; color: var(--c-text-muted);
+  }
+  .btn {
+    padding: 6px 11px; border: 1px solid var(--c-border); border-radius: 8px;
+    background: var(--c-bg-card); color: var(--c-text-primary); font: inherit; font-size: 12.5px;
+    cursor: pointer; transition: background .15s, border-color .15s, color .15s;
+  }
+  .btn:hover { background: var(--c-bg-selected); }
+  .btn.on { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+
+  /* ============================================================
+     ЯДРО МАКЕТА: кнопка AI-хаба с оправой-носителем статуса
+     ============================================================ */
+
+  /* Геометрия. Толщина оправы и зазор НЕ масштабируются вместе с кнопкой:
+     на 36px пропорциональная оправа выродилась бы в нитку. */
+  .fab {
+    --fab-size: 54px;
+    --ring-w: 2px;    /* толщина оправы */
+    --ring-gap: 3px;  /* зазор между лицом и оправой — оправа растёт НАРУЖУ */
+    --ring-c: var(--c-smoke);
+    position: relative; width: var(--fab-size); height: var(--fab-size);
+    border-radius: 50%; border: none; padding: 0; background: none; cursor: pointer;
+    box-shadow: var(--shadow-fab-neutral);
+    transition: width .18s ease, height .18s ease, transform .16s ease, box-shadow .2s ease;
+  }
+  .fab--sm { --fab-size: 36px; }
+
+  /* Лицо: аватар персоны на весь круг. Ужимается ТОЛЬКО оправой наружу — никогда внутрь. */
+  .face {
+    position: absolute; inset: 0; border-radius: 50%; overflow: hidden;
+    display: grid; place-items: center; z-index: 2;
+    background: linear-gradient(145deg, #C88BA8, #9C6E93);
+    color: var(--c-on-dark); font-weight: 700; letter-spacing: .5px;
+    font-size: calc(var(--fab-size) * .4);
+  }
+
+  /* Оправа — отдельный слой, лежит СНАРУЖИ лица */
+  .ring {
+    position: absolute; inset: calc(-1 * var(--ring-gap)); border-radius: 50%;
+    border: var(--ring-w) solid var(--ring-c); pointer-events: none; z-index: 3;
+    transition: border-color .22s ease, border-width .22s ease;
+  }
+  /* Бегущая дуга поверх оправы — только состояние «AI работает» */
+  .arc {
+    position: absolute; inset: calc(-1 * var(--ring-gap)); border-radius: 50%;
+    border: var(--ring-w) solid transparent; border-top-color: var(--c-text-secondary);
+    pointer-events: none; z-index: 4; display: none;
+    animation: cc-fab-arc 1.1s linear infinite;
+  }
+  /* Кольца «Эхо» — общий язык «идёт работа AI» (тот же приём, что в ленте чата) */
+  .echo {
+    position: absolute; inset: 0; border-radius: 50%;
+    border: 2px solid var(--c-smoke); pointer-events: none; z-index: 1; display: none;
+    animation: cc-echo-ring 2.5s ease-out infinite;
+  }
+  .echo--2 { animation-delay: 1.25s; }
+
+  @keyframes cc-fab-arc { to { transform: rotate(360deg); } }
+  @keyframes cc-echo-ring { 0% { transform: scale(1); opacity: .5; } 100% { transform: scale(1.85); opacity: 0; } }
+  @keyframes cc-fab-hop {
+    0%, 100% { transform: translateY(0); }
+    30%      { transform: translateY(-7px); }
+    45%      { transform: translateY(0); }
+    55%      { transform: translateY(-2px); }
+    68%      { transform: translateY(0); }
+  }
+  @keyframes cc-fab-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.04); } }
+  /* Маячок «нужен ответ»: два удара и пауза — ритм, который не спутать с ровным
+     вращением дуги и с однократным подскоком */
+  @keyframes cc-fab-alert {
+    0%   { box-shadow: 0 0 0 0 rgba(201,146,62,.42), var(--shadow-fab-neutral); }
+    12%  { box-shadow: 0 0 0 7px rgba(201,146,62,0), var(--shadow-fab-neutral); }
+    24%  { box-shadow: 0 0 0 0 rgba(201,146,62,.42), var(--shadow-fab-neutral); }
+    36%  { box-shadow: 0 0 0 7px rgba(201,146,62,0), var(--shadow-fab-neutral); }
+    40%, 100% { box-shadow: 0 0 0 0 rgba(201,146,62,0), var(--shadow-fab-neutral); }
+  }
+  [data-theme="dark"] .fab[data-state="awaiting"] { animation-name: cc-fab-alert-dark; }
+  @keyframes cc-fab-alert-dark {
+    0%   { box-shadow: 0 0 0 0 rgba(224,172,90,.46), var(--shadow-fab-neutral); }
+    12%  { box-shadow: 0 0 0 7px rgba(224,172,90,0), var(--shadow-fab-neutral); }
+    24%  { box-shadow: 0 0 0 0 rgba(224,172,90,.46), var(--shadow-fab-neutral); }
+    36%  { box-shadow: 0 0 0 7px rgba(224,172,90,0), var(--shadow-fab-neutral); }
+    40%, 100% { box-shadow: 0 0 0 0 rgba(224,172,90,0), var(--shadow-fab-neutral); }
+  }
+
+  /* --- Состояния --- */
+  /* Покой: нейтральная дымчатая оправа, лицо чуть приглушено. Ничего не движется.
+     Серый = «реагировать не нужно» — тот же язык, что у работы; их разводит движение. */
+  .fab[data-state="idle"] { --ring-c: var(--c-smoke); }
+  .fab[data-state="idle"] .face { opacity: .85; }
+
+  /* Есть идея: оправа акцентом + accent-ореол ОСТАЁТСЯ после того, как подскоки
+     отыграли. Механика движения — вертикальный транспорт (подскок), не круговая. */
+  .fab[data-state="idea"] { --ring-c: var(--c-accent); box-shadow: var(--shadow-button); }
+  .fab[data-state="idea"].hop { animation: cc-fab-hop 1.6s ease-in-out 3; }
+
+  /* AI работает: серая оправа + бегущая по ней дуга (круговая механика) +
+     кольца «Эхо» + дыхание лица. */
+  .fab[data-state="busy"] { --ring-c: var(--c-smoke); }
+  .fab[data-state="busy"] .arc { display: block; }
+  .fab[data-state="busy"] .echo { display: block; }
+  .fab[data-state="busy"] .face { animation: cc-fab-breathe 2.2s ease-in-out infinite; }
+
+  /* Нужен ответ человека: янтарная оправа + маячок из двух ударов (радиальная
+     механика с паузой). Приоритет выше работы — ход стоит, ждут человека. */
+  .fab[data-state="awaiting"] { --ring-c: var(--c-warning); animation: cc-fab-alert 2.6s ease-in-out infinite; }
+
+  /* --- Наведение (десктоп): 36 → 54 + подъём. Статус-цвет НЕ меняется --- */
+  body.hover .fab--sm { --fab-size: 54px; transform: translateY(-2px); }
+  body.hover .fab:not(.fab--sm) { transform: translateY(-2px); }
+
+  /* --- prefers-reduced-motion: движение выключено, статус остаётся читаемым ---
+     Разводим характером линии и толщиной: покой — тонкая сплошная, идея — сплошная
+     акцентная + ореол, работа — ПУНКТИР, ответ — утолщённая + постоянный ореол. */
+  body.reduced .fab,
+  body.reduced .fab .face,
+  body.reduced .arc,
+  body.reduced .echo { animation: none !important; }
+  body.reduced .fab[data-state="busy"] .arc { display: none; }
+  body.reduced .fab[data-state="busy"] .echo { display: none; }
+  body.reduced .fab[data-state="busy"] .ring { border-style: dashed; --ring-c: var(--c-text-muted); }
+  body.reduced .fab[data-state="awaiting"] { box-shadow: var(--shadow-alert); }
+  body.reduced .fab[data-state="awaiting"] .ring { border-width: 3px; }
+
+  /* === Сетка состояний === */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 14px; }
+  .card {
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 14px;
+    padding: 16px; box-shadow: var(--shadow-card);
+  }
+  .card h3 { font-size: 14.5px; color: var(--c-text-heading); margin-bottom: 3px; }
+  .card .cond {
+    font-family: 'JetBrains Mono', monospace; font-size: 10.5px; color: var(--c-text-muted);
+    margin-bottom: 14px; word-break: break-word;
+  }
+  .stage {
+    display: flex; align-items: center; justify-content: center; gap: 34px;
+    background: var(--c-bg-main); border-radius: 10px; padding: 26px 12px; margin-bottom: 12px;
+    /* дудл-фон холста, на котором кнопка живёт в проде */
+    background-image:
+      repeating-linear-gradient(45deg, rgba(var(--canvas-ink), var(--canvas-alpha)) 0 1px, transparent 1px 12px),
+      repeating-linear-gradient(-45deg, rgba(var(--canvas-ink), var(--canvas-alpha)) 0 1px, transparent 1px 12px);
+  }
+  .slot { display: flex; flex-direction: column; align-items: center; gap: 9px; }
+  .slot .cap {
+    font-family: 'JetBrains Mono', monospace; font-size: 9.5px; color: var(--c-text-muted);
+    text-transform: uppercase; letter-spacing: .5px;
+  }
+  .card p { font-size: 12.5px; color: var(--c-text-secondary); line-height: 1.5; }
+  .tokens { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px; }
+  .tok {
+    font-family: 'JetBrains Mono', monospace; font-size: 10px; padding: 2px 7px; border-radius: 6px;
+    background: var(--c-bg-selected); color: var(--c-text-secondary);
+  }
+  .tok--new { background: var(--c-warning-bg); color: var(--c-warning-text); }
+
+  /* === Живой угол экрана === */
+  .corner {
+    position: relative; height: 260px; border: 1px solid var(--c-border); border-radius: 14px;
+    background: var(--c-bg-main); overflow: hidden;
+    background-image:
+      repeating-linear-gradient(45deg, rgba(var(--canvas-ink), var(--canvas-alpha)) 0 1px, transparent 1px 12px),
+      repeating-linear-gradient(-45deg, rgba(var(--canvas-ink), var(--canvas-alpha)) 0 1px, transparent 1px 12px);
+  }
+  .corner .island {
+    position: absolute; inset: 12px 12px 76px 12px; background: var(--c-bg-panel);
+    border: 1px solid var(--c-border-light); border-radius: 14px;
+  }
+  .corner .composer {
+    position: absolute; left: 12px; right: 96px; bottom: 12px; height: 52px;
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px;
+    display: flex; align-items: center; padding: 0 14px; font-size: 13px; color: var(--c-text-muted);
+  }
+  .corner .fab { position: absolute; right: 20px; bottom: 20px; }
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; font-size: 12px; color: var(--c-text-secondary); }
+  .legend b { color: var(--c-text-heading); font-weight: 600; }
+
+  /* === Таблица приоритета === */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--c-border); }
+  th { font-family: 'JetBrains Mono', monospace; font-size: 10px; text-transform: uppercase;
+       letter-spacing: .5px; color: var(--c-text-muted); font-weight: 500; }
+  td { color: var(--c-text-secondary); }
+  td:first-child { color: var(--c-text-heading); font-weight: 600; white-space: nowrap; }
+
+  @media (max-width: 640px) {
+    body { padding: 18px 14px 48px; }
+    .stage { gap: 22px; padding: 22px 8px; }
+    .corner .composer { right: 78px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>AI-хаб: состояния плавающей кнопки</h1>
+  <p class="sub">
+    Оправа вокруг лица персоны — постоянный носитель статуса: она есть всегда и меняет цвет,
+    характер линии и ритм. Движение у каждого состояния своей механики: подскок (вертикаль) ·
+    бегущая дуга (круг) · маячок из двух ударов (радиально). Кольца «Эхо» остаются
+    закреплены за работой AI — единый язык с лентой чата.
+  </p>
+
+  <div class="controls">
+    <div class="grp"><span>Тема</span>
+      <button class="btn on" data-theme-btn="light">Светлая</button>
+      <button class="btn" data-theme-btn="dark">Тёмная</button>
+    </div>
+    <div class="grp"><span>Наведение</span>
+      <button class="btn" id="hoverBtn">Симулировать hover</button>
+    </div>
+    <div class="grp"><span>Движение</span>
+      <button class="btn" id="reducedBtn">prefers-reduced-motion</button>
+    </div>
+    <div class="grp"><span>Идея</span>
+      <button class="btn" id="hopBtn">Повторить подскоки</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <!-- ПОКОЙ -->
+    <div class="card">
+      <h3>Покой</h3>
+      <div class="cond">fabLevel !== 'strong' &amp;&amp; !aiBusy &amp;&amp; !aiAwaiting</div>
+      <div class="stage">
+        <div class="slot">
+          <button class="fab" data-state="idle"><span class="face">М</span><span class="ring"></span></button>
+          <span class="cap">54 px</span>
+        </div>
+        <div class="slot">
+          <button class="fab fab--sm" data-state="idle"><span class="face">М</span><span class="ring"></span></button>
+          <span class="cap">36 px</span>
+        </div>
+      </div>
+      <p>Дымчатая оправа — рамка портрета, а не сигнал: серый в этой системе значит
+        «от тебя ничего не требуется». Лицо приглушено (opacity&nbsp;.85, без grayscale).
+        Движения нет вовсе.</p>
+      <div class="tokens"><span class="tok">C.smoke</span><span class="tok">SHADOW.fabNeutral</span><span class="tok">opacity .85</span></div>
+    </div>
+
+    <!-- ЕСТЬ ИДЕЯ -->
+    <div class="card">
+      <h3>Есть идея</h3>
+      <div class="cond">fabLevel === 'strong'</div>
+      <div class="stage">
+        <div class="slot">
+          <button class="fab hop" data-state="idea"><span class="face">М</span><span class="ring"></span></button>
+          <span class="cap">54 px</span>
+        </div>
+        <div class="slot">
+          <button class="fab fab--sm hop" data-state="idea"><span class="face">М</span><span class="ring"></span></button>
+          <span class="cap">36 px</span>
+        </div>
+      </div>
+      <p>Три подскока по вертикали — и замирает, но <b>акцентная оправа с ореолом остаётся</b>.
+        Сегодня после трёх прыжков состояние визуально сваливалось в покой; теперь сигнал
+        живёт, пока жив повод. Колец здесь больше нет.</p>
+      <div class="tokens"><span class="tok">C.accent</span><span class="tok">SHADOW.button</span><span class="tok">cc-fab-hop ×3</span></div>
+    </div>
+
+    <!-- AI РАБОТАЕТ -->
+    <div class="card">
+      <h3>AI работает</h3>
+      <div class="cond">aiBusy</div>
+      <div class="stage">
+        <div class="slot">
+          <button class="fab" data-state="busy">
+            <span class="echo"></span><span class="echo echo--2"></span>
+            <span class="face">М</span><span class="ring"></span><span class="arc"></span>
+          </button>
+          <span class="cap">54 px</span>
+        </div>
+        <div class="slot">
+          <button class="fab fab--sm" data-state="busy">
+            <span class="echo"></span><span class="echo echo--2"></span>
+            <span class="face">М</span><span class="ring"></span><span class="arc"></span>
+          </button>
+          <span class="cap">36 px</span>
+        </div>
+      </div>
+      <p>Та же дымчатая оправа, что в покое, но по ней бежит плотная дуга (C.textSecondary) +
+        кольца «Эхо» + дыхание лица. Движение круговое и непрерывное — ни с подскоком,
+        ни с маячком не спутать.</p>
+      <div class="tokens"><span class="tok">C.smoke</span><span class="tok">C.textSecondary</span><span class="tok">cc-echo-ring</span><span class="tok">cc-fab-arc</span><span class="tok">cc-fab-breathe</span></div>
+    </div>
+
+    <!-- НУЖЕН ОТВЕТ -->
+    <div class="card">
+      <h3>Нужен ответ человека</h3>
+      <div class="cond">aiAwaiting — permission_request / ask_question без ответа</div>
+      <div class="stage">
+        <div class="slot">
+          <button class="fab" data-state="awaiting"><span class="face">М</span><span class="ring"></span></button>
+          <span class="cap">54 px</span>
+        </div>
+        <div class="slot">
+          <button class="fab fab--sm" data-state="awaiting"><span class="face">М</span><span class="ring"></span></button>
+          <span class="cap">36 px</span>
+        </div>
+      </div>
+      <p>Янтарная оправа и маячок: два удара — пауза. Прерывистый ритм читается как «требуется
+        действие», а не «идёт процесс». Перебивает работу: ход стоит, ждут человека.</p>
+      <div class="tokens"><span class="tok">C.warning</span><span class="tok tok--new">SHADOW.alert (новый)</span><span class="tok">cc-fab-alert</span></div>
+    </div>
+  </div>
+
+  <h2>Живой угол экрана</h2>
+  <p class="sub" style="margin-bottom:14px">
+    Кнопка приклеена к правому-нижнему углу и растёт влево-вверх. Проверь состояние на фоне
+    острова и композера — и переключи тему, размер и reduced-motion сверху.
+  </p>
+  <div class="controls" style="margin-bottom:14px">
+    <div class="grp"><span>Состояние</span>
+      <button class="btn on" data-state-btn="idle">Покой</button>
+      <button class="btn" data-state-btn="idea">Есть идея</button>
+      <button class="btn" data-state-btn="busy">AI работает</button>
+      <button class="btn" data-state-btn="awaiting">Нужен ответ</button>
+    </div>
+    <div class="grp"><span>Размер</span>
+      <button class="btn on" data-size-btn="lg">54 px</button>
+      <button class="btn" data-size-btn="sm">36 px (панель / мобилка)</button>
+    </div>
+  </div>
+  <div class="corner">
+    <div class="island"></div>
+    <div class="composer">Что сделать…</div>
+    <button class="fab" id="liveFab" data-state="idle">
+      <span class="echo"></span><span class="echo echo--2"></span>
+      <span class="face">М</span><span class="ring"></span><span class="arc"></span>
+    </button>
+  </div>
+  <div class="legend">
+    <span><b>Приоритет:</b> нужен ответ → работа → идея → покой</span>
+    <span><b>36 px:</b> оправа не масштабируется (2 px + зазор 3 px) — лицо не съедается</span>
+  </div>
+
+  <h2>Что читается без наведения</h2>
+  <table>
+    <thead><tr><th>Состояние</th><th>Оправа</th><th>Движение</th><th>reduced-motion</th></tr></thead>
+    <tbody>
+      <tr><td>Покой</td><td>2 px сплошная, C.smoke</td><td>нет</td><td>без изменений</td></tr>
+      <tr><td>Есть идея</td><td>2 px сплошная, C.accent + ореол</td><td>подскок ×3, затем оправа остаётся</td><td>оправа + ореол статично</td></tr>
+      <tr><td>AI работает</td><td>2 px сплошная C.smoke + дуга C.textSecondary</td><td>вращение дуги, «Эхо», дыхание</td><td>оправа <b>пунктирная</b>, C.textMuted</td></tr>
+      <tr><td>Нужен ответ</td><td>2 px сплошная, C.warning</td><td>маячок: 2 удара + пауза</td><td>оправа 3 px + постоянный ореол</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<script>
+  const body = document.body;
+
+  // Тема
+  document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-theme-btn]').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    document.documentElement.setAttribute('data-theme', b.dataset.themeBtn);
+  }));
+
+  // Симуляция наведения (в макете нет курсора над каждой кнопкой сразу)
+  document.getElementById('hoverBtn').addEventListener('click', e => {
+    body.classList.toggle('hover');
+    e.currentTarget.classList.toggle('on', body.classList.contains('hover'));
+  });
+
+  // Имитация prefers-reduced-motion (медиазапрос из витрины не переключить)
+  document.getElementById('reducedBtn').addEventListener('click', e => {
+    body.classList.toggle('reduced');
+    e.currentTarget.classList.toggle('on', body.classList.contains('reduced'));
+  });
+
+  // Перезапуск трёх подскоков — в проде их ре-триггерит новая сильная подсказка
+  function replayHop() {
+    document.querySelectorAll('.fab[data-state="idea"]').forEach(el => {
+      el.classList.remove('hop');
+      void el.offsetWidth;   // форс reflow — анимация стартует заново
+      el.classList.add('hop');
+    });
+  }
+  document.getElementById('hopBtn').addEventListener('click', replayHop);
+  setInterval(replayHop, 9000);   // в витрине повторяем сами, чтобы было видно
+
+  // Живой угол
+  const live = document.getElementById('liveFab');
+  document.querySelectorAll('[data-state-btn]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-state-btn]').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    live.dataset.state = b.dataset.stateBtn;
+    live.classList.remove('hop');
+    if (b.dataset.stateBtn === 'idea') { void live.offsetWidth; live.classList.add('hop'); }
+  }));
+  document.querySelectorAll('[data-size-btn]').forEach(b => b.addEventListener('click', () => {
+    document.querySelectorAll('[data-size-btn]').forEach(x => x.classList.remove('on'));
+    b.classList.add('on');
+    live.classList.toggle('fab--sm', b.dataset.sizeBtn === 'sm');
+  }));
+</script>
+</body>
+</html>

@@ -36,13 +36,20 @@ public class ClaudeSession : ILlmSessionAdapter
         _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
-    // Явный тир хода для фолбэка (ADR-007 §5.1): дефолт места каталога, когда модель выбирается
-    // по месту (Info.Model пуст). При явной модели (персона/задача/выбор) тир не известен надёжно
-    // — отдаём null, и адаптер использует реверс-эвристику по слотам (как раньше, без регрессии).
-    internal ModelTier? EffectiveTurnTier =>
-        string.IsNullOrEmpty(Info.Model) && LocalActionCatalog.Find(UsageKey) is { } action
-            ? LocalActionCatalog.EffectiveDefaultTier(action)
-            : null;
+    // Явный тир хода для фолбэка (ADR-007 §5.1): при пустой Info.Model — дефолт места каталога
+    // (модель идёт по месту); при явной модели — её тир по членству в развёрнутых цепочках слотов
+    // владельца (TierOfModel, волна 1). null — тир не определён (модель вне слотов / нет резолвера):
+    // адаптер использует реверс-эвристику по слотам (волна 2 её уберёт).
+    internal ModelTier? EffectiveTurnTier
+    {
+        get
+        {
+            if (!string.IsNullOrEmpty(Info.Model))
+                return _assignments?.TierOfModel(Info.Model, Info.OwnerId);
+            return LocalActionCatalog.Find(UsageKey) is { } action
+                ? LocalActionCatalog.EffectiveDefaultTier(action) : null;
+        }
+    }
 
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>

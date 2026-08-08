@@ -73,13 +73,79 @@ public sealed class ModelAssignmentResolver(
     /// Разворачивает preset:{id} через ExpandChain, tier:*-шаги по слотам владельца (БЕЗ
     /// матриц — пресет не знает, откуда на него сослались, §1), local/direct агентному
     /// месту непригодны и пропускаются. Защита от цикла «слот ↔ пресет» — набор посещённых.
+    ///
+    /// Волна 1 (ADR-007 §4): у ЛЮБОГО хода есть цепочка. Явная КОНКРЕТНАЯ модель M (не preset:,
+    /// не tier:*) достраивает хвост тира своего слота — шаги развёрнутой цепочки слота ПОСЛЕ
+    /// позиции M (или вся цепочка, если M в ней не найдена). Пресет/tier-маршруты уже разворачиваются
+    /// в полную цепочку выше, хвост им не нужен. Без хвоста (пустой слот) после пула — честная
+    /// ошибка, автоподбора больше нет.
     /// </summary>
     public IReadOnlyList<string> ResolveChain(string usageKey, string? explicitModel = null, string? ownerId = null)
     {
         var action = LocalActionCatalog.Find(usageKey);
         var agentic = action?.Agentic ?? false;
         var route = ResolveRawRoute(usageKey, explicitModel, ownerId, action);
-        return ExpandRouteToModels(route, ownerId, agentic);
+        var chain = ExpandRouteToModels(route, ownerId, agentic);
+
+        // Явная конкретная модель → достроить хвост тира (волна 1): цепочка есть у любого хода.
+        if (IsConcreteModelRoute(route))
+        {
+            var tier = TierOfModel(route, ownerId)
+                ?? (action is null ? ModelTier.Medium : LocalActionCatalog.EffectiveDefaultTier(action));
+            AppendSlotTail(chain, route!, tier, ownerId, agentic);
+        }
+
+        return chain;
+    }
+
+    /// <summary>
+    /// Тир модели по членству в развёрнутых цепочках слотов владельца (ADR-007 §5 п.1, волна 1):
+    /// обходит тири strong → medium → weak, разворачивает слот каждого (через ExpandRouteToModels —
+    /// слот может быть preset:{id}) и возвращает первый, в чьей цепочке найдена модель (без учёта
+    /// регистра). null — модель не принадлежит ни одному слоту. Чинит дефект «слот-пресет ломает
+    /// реверс-эвристику тира»: сравнение идёт по развёрнутым шагам, а не по литералу слота.
+    /// </summary>
+    public ModelTier? TierOfModel(string? model, string? ownerId)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        var m = model.Trim();
+        foreach (var tier in TierOrder)
+        {
+            var slot = userTiers?.ModelFor(tier, ownerId) ?? appSettings.TierModel(tier);
+            if (string.IsNullOrWhiteSpace(slot)) continue;
+            var slotChain = ExpandRouteToModels(slot, ownerId, agentic: false);
+            if (slotChain.Any(s => string.Equals(s, m, StringComparison.OrdinalIgnoreCase)))
+                return tier;
+        }
+        return null;
+    }
+
+    // Порядок проверки тиров при определении принадлежности модели (ADR-007 §2).
+    private static readonly ModelTier[] TierOrder = [ModelTier.Strong, ModelTier.Medium, ModelTier.Weak];
+
+    // Истинная конкретная модель (id провайдера), а не маркер tier:/preset:, не легаси
+    // local/claude/default и не direct:-адаптер. Только такие маршруты достраивают хвост тира.
+    private static bool IsConcreteModelRoute(string? route) =>
+        !string.IsNullOrWhiteSpace(route)
+        && LocalActionOverridesStore.ParseTierRoute(route) is null
+        && !LocalActionOverridesStore.IsPresetRoute(route)
+        && !CloudCheapClient.IsDirectRoute(route)
+        && route!.Trim() is not (LocalActionOverridesStore.LocalRoute
+            or LocalActionOverridesStore.ClaudeRoute
+            or LocalActionOverridesStore.DefaultRoute);
+
+    // Хвост цепочки тира после явной модели (волна 1): шаги развёрнутой цепочки слота тира ПОСЛЕ
+    // позиции модели (если она в цепочке) либо вся цепочка (если модели в ней нет). Пустой слот —
+    // хвоста нет: после пула честная ошибка, без магии автоподбора. Дедуп — существующий AddIfNew.
+    private void AppendSlotTail(List<string> chain, string model, ModelTier tier, string? ownerId, bool agentic)
+    {
+        var slot = userTiers?.ModelFor(tier, ownerId) ?? appSettings.TierModel(tier);
+        if (string.IsNullOrWhiteSpace(slot)) return;
+        var slotChain = ExpandRouteToModels(slot, ownerId, agentic);
+        var m = model.Trim();
+        var start = slotChain.FindIndex(s => string.Equals(s, m, StringComparison.OrdinalIgnoreCase));
+        var tail = start >= 0 ? slotChain.Skip(start + 1) : slotChain;
+        foreach (var t in tail) AddIfNew(chain, t);
     }
 
     // Сырой маршрут места (что выбрано, до разворачивания маркеров): явная модель →

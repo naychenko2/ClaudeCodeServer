@@ -1140,6 +1140,96 @@ public class LocalActionRoutingTests
         Assert.NotNull(error);
     }
 
+    // --- Волна 1: цепочка хода есть всегда (явная модель + хвост тира, ADR-007 §4) ---
+    // Инцидент 2026-08-08: чат с явной моделью персоны (opus) не имел цепочки → алфавитный
+    // автоподбор. Теперь явная конкретная модель M = [M] + хвост цепочки слота её тира.
+
+    // Сильный слот = пресет «Основной — Сильный» (5 шагов). Образец инцидента Софьи.
+    private static (ModelAssignmentResolver Resolver, string OwnerId) BuildChainResolver()
+    {
+        var (resolver, appSettings, users, _, spec, _) = BuildResolverWithSpecialty();
+        appSettings.Save(new AppSettings { ModelTierStrong = "preset:main-strong" });
+        spec.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("main-strong", "opus", "kimi-k3", "glm-5.2", "qwen3.8-max", "deepseek-v4-pro") },
+        });
+        var owner = users.Add("u1", "p", "user");
+        return (resolver, owner.Id);
+    }
+
+    [Fact]
+    public void ResolveChain_ЯвнаяМодельПервыйШагПресета_ПолнаяЦепочка()
+    {
+        // (а) opus — первый шаг сильного пресета → TierOfModel=Strong, хвост = остаток пресета.
+        var (resolver, ownerId) = BuildChainResolver();
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.ChatPersona, "opus", ownerId);
+
+        chain.Should().BeEquivalentTo(
+            new[] { "opus", "kimi-k3", "glm-5.2", "qwen3.8-max", "deepseek-v4-pro" },
+            opts => opts.WithStrictOrdering(),
+            "явная модель = первый шаг пресета сильного слота → цепочка = пресет целиком");
+    }
+
+    [Fact]
+    public void ResolveChain_МодельИзСерединыПресета_ХвостПослеПозиции()
+    {
+        // (б) glm-5.2 — третий шаг пресета → хвост = шаги после неё, без opus/kimi-k3.
+        var (resolver, ownerId) = BuildChainResolver();
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.ChatPersona, "glm-5.2", ownerId);
+
+        chain.Should().BeEquivalentTo(
+            new[] { "glm-5.2", "qwen3.8-max", "deepseek-v4-pro" },
+            opts => opts.WithStrictOrdering(),
+            "модель из середины пресета → хвост после её позиции");
+    }
+
+    [Fact]
+    public void ResolveChain_МодельВнеПресетов_ВсяЦепочкаДефолтногоТираМеста()
+    {
+        // (в) модель не принадлежит ни одному слоту → тир = дефолт места (chat-persona = Strong),
+        // модель не найдена в цепочке слота → хвост = вся цепочка слота.
+        var (resolver, ownerId) = BuildChainResolver();
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.ChatPersona, "stranger-model", ownerId);
+
+        chain.Should().ContainInOrder(
+            new[] { "stranger-model", "opus", "kimi-k3", "glm-5.2", "qwen3.8-max", "deepseek-v4-pro" },
+            "модель вне пресетов → тир места Strong, хвост = вся цепочка сильного слота");
+        chain.First().Should().Be("stranger-model", "явная модель всегда первая");
+    }
+
+    [Fact]
+    public void ResolveChain_ПустыеСлоты_ЦепочкаИзОдногоЭлемента()
+    {
+        // (г) ни слотов, ни пресетов → TierOfModel=null, слот пуст → хвоста нет, цепочка = [M].
+        var (resolver, _, _, _, _, _) = BuildResolverWithSpecialty();
+        var owner = Guid.NewGuid().ToString(); // слотов не настроено
+
+        var chain = resolver.ResolveChain(LocalActionCatalog.ChatPersona, "opus", owner);
+
+        chain.Should().BeEquivalentTo(new[] { "opus" },
+            "пустые слоты → без хвоста, цепочка из одного элемента (после пула честная ошибка)");
+    }
+
+    [Fact]
+    public void TierOfModel_НаходитТирЧерезСлотПресет()
+    {
+        // (д) TierOfModel определяет тир по членству в развёрнутых шагах слота-пресета
+        // (чинит дефект «слот-пресет ломает реверс-эвристику»): литерал слота — preset:main-strong,
+        // а сравнение идёт по развёрнутым моделям [opus, kimi-k3, …].
+        var (resolver, ownerId) = BuildChainResolver();
+
+        Assert.Equal(ModelTier.Strong, resolver.TierOfModel("opus", ownerId));
+        Assert.Equal(ModelTier.Strong, resolver.TierOfModel("deepseek-v4-pro", ownerId));
+        // Регистронезависимо
+        Assert.Equal(ModelTier.Strong, resolver.TierOfModel("KIMI-K3", ownerId));
+        // Модель вне слота → null
+        Assert.Null(resolver.TierOfModel("stranger-model", ownerId));
+        Assert.Null(resolver.TierOfModel(null, ownerId));
+    }
+
     [Fact]
     public void ExecutorModel_ЗадачаБерётМатрицуПерсоны()
     {

@@ -11,12 +11,11 @@ namespace ClaudeHomeServer.Controllers;
 /// <summary>
 /// Режим чтения ссылок (ADR-005): сервер сам идёт по внешнему URL и возвращает markdown статьи;
 /// проба встраиваемости для iframe-режима панели (ADR-006, §1).
-/// За флагом <see cref="FeatureFlagKeys.LinkReader"/> — гейтит эндпоинты, а не только кнопку.
 /// </summary>
 [ApiController]
 [Authorize]
 [Route("api/reader")]
-public class ReaderController(ReaderService reader, ReaderQuotaService quota, FeatureFlagService flags) : ControllerBase
+public class ReaderController(ReaderService reader, ReaderQuotaService quota) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -25,7 +24,6 @@ public class ReaderController(ReaderService reader, ReaderQuotaService quota, Fe
     {
         var userId = UserId;
         if (userId is null) return Unauthorized();
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.LinkReader)) return Forbid();
 
         if (string.IsNullOrWhiteSpace(req.Url))
             return Ok(new { error = new { code = "invalid-url", httpStatus = (int?)null } });
@@ -55,7 +53,6 @@ public class ReaderController(ReaderService reader, ReaderQuotaService quota, Fe
     {
         var userId = UserId;
         if (userId is null) return Unauthorized();
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.LinkReader)) return Forbid();
 
         if (string.IsNullOrWhiteSpace(req.Url))
             return Ok(new { embeddable = false, reason = "invalid-url" });
@@ -77,7 +74,6 @@ public class ReaderController(ReaderService reader, ReaderQuotaService quota, Fe
     {
         var userId = UserId;
         if (userId is null) return Unauthorized();
-        if (!flags.IsEnabled(userId, FeatureFlagKeys.LinkReader)) return Forbid();
         if (string.IsNullOrWhiteSpace(url)) return BadRequest();
 
         var result = await reader.ReadImageAsync(url, ct);

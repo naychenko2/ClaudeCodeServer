@@ -40,8 +40,8 @@ export async function computeContextState(ctx: AiActionCtx): Promise<ContextStat
   const nav = ctx.nav;
   if (!nav) return EMPTY;
 
-  // LLM-путь: только при флаге и сконфигурированной Ollama
-  if (ctx.flag('ai-local-suggest') && await aiOllamaAvailable()) {
+  // LLM-путь: только при сконфигурированной Ollama
+  if (await aiOllamaAvailable()) {
     try {
       const r = await rankContext(ctx);
       if (r && r.available) {
@@ -86,14 +86,12 @@ async function computeRuleSuggestion(ctx: AiActionCtx): Promise<Suggestion | nul
       // Есть незавершённые чекбоксы — предложить превратить их в задачи
       if (/(^|\n)\s*[-*]\s+\[ \]\s+\S/.test(note.content))
         return { key: `note-tasks:${nav.note}`, actionId: 'note.promoteTasks', text: 'Превратить пункты заметки в задачи?', level: 'medium' };
-      // Документ с необработанными комментариями (флаг doc-annotations) — разобрать
-      if (ctx.flag('doc-annotations')) {
-        try {
-          const anns = await api.notes.annotations(note.source, note.path);
-          if (anns.some(a => a.status === 'open'))
-            return { key: `note-annot:${nav.note}`, actionId: 'note.annotations', text: 'Есть необработанные комментарии — разобрать?', level: 'medium' };
-        } catch { /* нет комментариев/офлайн */ }
-      }
+      // Документ с необработанными комментариями — разобрать
+      try {
+        const anns = await api.notes.annotations(note.source, note.path);
+        if (anns.some(a => a.status === 'open'))
+          return { key: `note-annot:${nav.note}`, actionId: 'note.annotations', text: 'Есть необработанные комментарии — разобрать?', level: 'medium' };
+      } catch { /* нет комментариев/офлайн */ }
     } catch { /* офлайн/ошибка — без подсказки */ }
     return null;
   }

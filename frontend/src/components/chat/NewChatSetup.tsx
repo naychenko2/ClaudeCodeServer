@@ -6,7 +6,6 @@ import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE
 import { effortsForProvider, effortLabel } from '../../lib/effort';
 import { expiryOptionLabel } from '../../lib/expiry';
 import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ExpiryPicker } from './ExpiryPicker';
 import { DossierOptOutRow } from './DossierOptOutRow';
 import { ModelPicker } from '../ModelPicker';
@@ -51,7 +50,6 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   const modelName = useModelLabel(session.model);
   const [panel, setPanel] = useState<Panel>(null);
   const [saving, setSaving] = useState(false);
-  const dossiersFlag = useFeature(FLAGS.changeDossiers);
 
   // Реестр тегов — optimistic state поверх project.tagRegistry (тот же паттерн, что в
   // SessionList): создание тега здесь видно сразу, не дожидаясь обновления project сверху.
@@ -150,8 +148,8 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
         {pill('model', IconModel, 'Модель', modelName)}
         {caps.supportsEffort && pill('effort', IconEffort, 'Усилие', effortLabel(session.effort))}
         {pill('expiry', IconExpiry, 'Время жизни', expiryOptionLabel(session.expiresAfterMinutes))}
-        {/* История решений — только у проектных чатов (личные в неё не пишутся) и за флагом */}
-        {project && dossiersFlag && pill('dossiers', IconDossiers, 'История решений', session.excludeFromDossiers ? 'Не сохраняются' : 'Сохраняются')}
+        {/* История решений — только у проектных чатов (личные в неё не пишутся) */}
+        {project && pill('dossiers', IconDossiers, 'История решений', session.excludeFromDossiers ? 'Не сохраняются' : 'Сохраняются')}
         {/* Теги — только у проектных чатов (реестр тегов per-project) */}
         {project && pill('tags', IconTags, 'Теги', session.tags?.length ? session.tags.join(', ') : 'Без тегов')}
       </div>

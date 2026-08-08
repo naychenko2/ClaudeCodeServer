@@ -10,7 +10,6 @@ import { rankedActions, runActionById, AI_ACTIONS, type AiAction, type AiActionC
 import { getChatContext, AI_RECOMPUTE_EVENT } from '../../lib/ai/chatContext';
 import { getFabObstacle, subscribeFabObstacle } from '../../lib/ai/fabObstacle';
 import { useIsMobile } from '../../lib/breakpoints';
-import { FLAGS } from '../../lib/featureFlags';
 import { shouldSurface, levelLabel, type SuggestionLevel } from '../../lib/ai/levels';
 import { rankContext } from '../../lib/ai/suggest';
 import { aiOllamaAvailable } from '../../lib/ai/ollama';
@@ -83,9 +82,8 @@ export function AiLauncher() {
   const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
   const [proactiveOn, setProactiveOn] = useState(isProactiveEnabled());
   // Агрегатный уровень контекста — определяет вид FAB (бледный/яркий/анимация), даже
-  // когда балун подавлен дозировкой. Активна градация только при флаге ai-local-suggest.
+  // когда балун подавлен дозировкой.
   const [fabLevel, setFabLevel] = useState<SuggestionLevel>('none');
-  const gradedFab = getFlag(FLAGS.aiLocalSuggest);
   // Доступность семантики (Dify) — для действия «Поиск по смыслу»
   const [semanticCaps, setSemanticCaps] = useState(false);
   // Мобильный вид — палитра становится нижней шторкой
@@ -198,9 +196,9 @@ export function AiLauncher() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, q, online, semanticCaps, recs, gitRepo]);
 
-  // При открытии палитры — обновить рекомендации под текущее содержание (при флаге+Ollama)
+  // При открытии палитры — обновить рекомендации под текущее содержание
   useEffect(() => {
-    if (!open || !gradedFab) return;
+    if (!open) return;
     let alive = true;
     void aiOllamaAvailable().then(ok => {
       if (!ok || !alive) return;
@@ -210,7 +208,7 @@ export function AiLauncher() {
     });
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, gradedFab]);
+  }, [open]);
 
   // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс активного пункта на 0 при смене поиска
   useEffect(() => { setIdx(0); }, [q, open]);
@@ -302,7 +300,7 @@ export function AiLauncher() {
     const h = setInterval(tick, 1500);
     return () => { clearInterval(h); window.removeEventListener(AI_RECOMPUTE_EVENT, onRecompute); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, online, gradedFab]);
+  }, [open, online]);
 
   const acceptSuggestion = () => {
     if (!suggestion) return;
@@ -403,14 +401,12 @@ export function AiLauncher() {
           <div style={balloonHead}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>
             <b style={{ fontSize: 12.5, color: C.textHeading }}>AI может помочь</b>
-            {gradedFab && (
-              <span style={{
-                fontFamily: FONT.mono, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 0.4,
-                color: suggestion.level === 'strong' ? C.onAccent : C.accent,
-                background: suggestion.level === 'strong' ? C.accent : C.accentLight,
-                borderRadius: R.sm, padding: '2px 6px',
-              }}>{levelLabel(suggestion.level)}</span>
-            )}
+            <span style={{
+              fontFamily: FONT.mono, fontSize: 9.5, textTransform: 'uppercase', letterSpacing: 0.4,
+              color: suggestion.level === 'strong' ? C.onAccent : C.accent,
+              background: suggestion.level === 'strong' ? C.accent : C.accentLight,
+              borderRadius: R.sm, padding: '2px 6px',
+            }}>{levelLabel(suggestion.level)}</span>
             <button onClick={dismissSuggestion} aria-label="Скрыть" style={balloonClose}>×</button>
           </div>
           <p style={{ margin: '0 0 11px', fontSize: 13, color: C.textPrimary, lineHeight: 1.4 }}>{suggestion.text}</p>
@@ -422,8 +418,8 @@ export function AiLauncher() {
       )}
 
       {/* Hover-балун: наведение на FAB → список рекомендованных действий, клик запускает.
-          Показываем при наведении, если есть рекомендации и активна градация (флаг). */}
-      {!open && fabHover && gradedFab && recActions.length > 0 && !isMobile && (
+          Показываем при наведении, если есть рекомендации. */}
+      {!open && fabHover && recActions.length > 0 && !isMobile && (
         <div style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
           <div style={{ ...balloonHead, marginBottom: 8 }}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>

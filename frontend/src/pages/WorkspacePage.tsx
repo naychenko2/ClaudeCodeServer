@@ -324,7 +324,6 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   const [graphOpen, setGraphOpen] = useState(false);
   // Ридер ссылок: живёт как просмотр файла — сплит с чатом либо на всю контентную
   // зону (см. DesktopWorkspace). Один экземпляр состояния на страницу.
-  const readerFlag = useFeature(FLAGS.linkReader);
   const reader = useReaderPanel();
   // «История решений»: реветь панель по клику на файл в файловом менеджере — той
   // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
@@ -1567,7 +1566,7 @@ const windowWidth = useWindowWidth();
           onClosePreview={() => setActivePreviewId(null)}
           graphOpen={graphOpen}
           graphArea={<CodeGraphDocument projectId={project.id} isMobile={false} onClose={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />}
-          onOpenReader={readerFlag ? handleOpenReader : undefined}
+          onOpenReader={handleOpenReader}
           panels={{
             files: <FileExplorer project={project} activeFilePath={openFile} isMobile={false} onOpenFile={handleOpenFileFromTree} onAddToKnowledge={handleAddToKnowledge} onAddFolderToKnowledge={handleAddFolderToKnowledge} onRemoveFromKnowledge={handleRemoveFromKnowledge} indexedFileNames={indexedFileNames} indexingFiles={indexingFiles} indexingFolders={indexingFolders} onAttachToChat={activeSession && !fileFullscreen ? handleAttachToChat : undefined} onOpenDossiers={handleOpenDossiers} />,
             knowledge: <KnowledgePanel project={project} isMobile={false} />,

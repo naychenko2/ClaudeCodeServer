@@ -53,15 +53,11 @@ public record WorkspaceMcpContext(string ApiUrl, string Token, string? ProjectId
 // ai_team), AutomationEnabled — модуль automation (personas_automation_*): секции сервера
 // за отдельными tool-ключами personas-manage/personas-automation с дефолтом по роли персоны.
 // Ядро сервера (personas_list/get, привязки, persona_ask) от них не зависит.
-// McpAllowlist — у владельца включён флаг mcp-allowlist: серверы личного реестра по умолчанию
-// НЕ выданы (allow-модель). Серверу флаг нужен для фолбэка enabledForPersona и текстов: пикер
-// «выдан ли сервер персоне» обязан совпадать с действующей семантикой доступа. Свойство
-// владельца, не хода — в сигнатуру запуска не входит (состав tools/list от него не зависит).
 // Не Claude-специфичен, как и остальные контексты.
 public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
     string? SelfPersonaId = null, string? MentionsHint = null, bool BindingsEnabled = false,
     IReadOnlyList<string>? ExtraProjectIds = null, IReadOnlyList<string>? ExtraPersonaIds = null,
-    bool ManageEnabled = true, bool AutomationEnabled = true, bool McpAllowlist = false);
+    bool ManageEnabled = true, bool AutomationEnabled = true);
 
 // Элемент манифеста recall — что персона подтянула в ход (память/заметка/база/команда) для
 // атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team
@@ -214,7 +210,6 @@ public sealed record LlmSessionContext(
     // null — фича выключена, нет владельца или реестр пуст.
     Func<ExternalMcpContext?>? ExternalMcpProvider = null,
     // Подсказка про трейлер CCS-Session/CCS-Task в системный промпт (ADR-004, «Паспорта
-    // изменений»): null — флаг change-dossiers выключен или чат вне проекта. Вычисляется
-    // при построении контекста (не Func — как WorkspaceMcp/NotificationsMcp, тоже не
-    // живёт мид-сессию без пересоздания адаптера).
+    // изменений»): null — чат вне проекта. Вычисляется при построении контекста (не Func —
+    // как WorkspaceMcp/NotificationsMcp, тоже не живёт мид-сессию без пересоздания адаптера).
     string? DossierTrailerHint = null);

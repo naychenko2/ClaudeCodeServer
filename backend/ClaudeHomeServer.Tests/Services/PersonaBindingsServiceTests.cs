@@ -19,7 +19,6 @@ public class PersonaBindingsServiceTests : IDisposable
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _sut;
     private readonly ClaudeHomeServer.Services.Mcp.McpRegistry _mcp;
-    private readonly FeatureFlagService _flags;
     private readonly string _userId;
 
     public PersonaBindingsServiceTests()
@@ -48,10 +47,9 @@ public class PersonaBindingsServiceTests : IDisposable
 
         _mcp = new ClaudeHomeServer.Services.Mcp.McpRegistry(config,
             new ClaudeHomeServer.Services.Mcp.McpSecretStore(config));
-        _flags = new FeatureFlagService(_users);
         _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), _users, config,
-            NullLogger<PersonaBindingsService>.Instance, _mcp, _flags);
+            NullLogger<PersonaBindingsService>.Instance, _mcp);
     }
 
     public void Dispose()
@@ -225,27 +223,7 @@ public class PersonaBindingsServiceTests : IDisposable
         _sut.ToolCatalogFor("другой-владелец").Should().NotContainKey("mcp:context7");
     }
 
-    [Fact]
-    public void McpКлюч_ДефолтВключён_ВыключаетТолькоOffПривязка()
-    {
-        MakeServer("context7");
-        var persona = MakePersona();
-
-        _sut.GetToolDefaultState(_userId, persona, "mcp:context7").Should().Be((true, (string?)null));
-        _sut.ServerToolEnabled(_userId, persona, "mcp:context7").Should().BeTrue();
-
-        // суженный список возможностей на mcp-ключи не влияет (как и у прочих ServerKeys)
-        var narrow = MakePersona(tools: ["tasks"]);
-        _sut.ServerToolEnabled(_userId, narrow, "mcp:context7").Should().BeTrue();
-
-        var off = MakePersona(bindings: [ToolBinding("mcp:context7", PersonaBindingMode.Off)]);
-        _sut.ServerToolEnabled(_userId, off, "mcp:context7").Should().BeFalse();
-        // Auto-привязка ничего не выключает — сервер и так включён
-        var auto = MakePersona(bindings: [ToolBinding("mcp:context7", PersonaBindingMode.Auto)]);
-        _sut.ServerToolEnabled(_userId, auto, "mcp:context7").Should().BeTrue();
-    }
-
-    // --- McpServerGranted (allow-модель, флаг mcp-allowlist) ---
+    // --- McpServerGranted (allow-модель доступа) ---
 
     [Fact]
     public void McpServerGranted_БезПерсоны_НеВыдан()
@@ -272,29 +250,15 @@ public class PersonaBindingsServiceTests : IDisposable
     }
 
     [Fact]
-    public void GetToolDefaultState_McpКлюч_БезФлага_ВключёнПоУмолчанию()
+    public void GetToolDefaultState_McpКлюч_ВыключенПоУмолчанию()
     {
         MakeServer("context7");
         var persona = MakePersona();
-        // Флаг mcp-allowlist выключен — прежний дефолт «включён» (deny-модель)
-        var (enabled, origin) = _sut.GetToolDefaultState(_userId, persona, "mcp:context7");
-        enabled.Should().BeTrue();
-        origin.Should().BeNull();
-        // Подсказка каталога — deny-текст («ВЫКЛЮЧИТЬ»)
-        _sut.ToolCatalogFor(_userId)["mcp:context7"].Hint.Should().Contain("ВЫКЛЮЧИТЬ");
-    }
-
-    [Fact]
-    public void GetToolDefaultState_McpКлюч_ЗаФлагом_ВыключенПоУмолчанию()
-    {
-        MakeServer("context7");
-        var persona = MakePersona();
-        _users.SetFeatureFlag(_userId, FeatureFlagKeys.McpAllowlist, true);
 
         var (enabled, origin) = _sut.GetToolDefaultState(_userId, persona, "mcp:context7");
-        enabled.Should().BeFalse("за флагом mcp-allowlist сервер по умолчанию выключен");
+        enabled.Should().BeFalse("allow-модель: сервер личного реестра по умолчанию выключен");
         origin.Should().BeNull();
-        // Подсказка каталога перевернулась в allow-текст («ВКЛЮЧАЕТ»)
+        // Подсказка каталога — allow-текст («ВКЛЮЧАЕТ»)
         _sut.ToolCatalogFor(_userId)["mcp:context7"].Hint.Should().Contain("ВКЛЮЧАЕТ");
     }
 

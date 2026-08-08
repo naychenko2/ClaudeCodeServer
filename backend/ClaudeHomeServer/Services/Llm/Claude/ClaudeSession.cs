@@ -778,10 +778,6 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_SESSION_ID"] = Info.Id,
                         ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
-                        // Флаг allow-модели серверов реестра: серверу персон нужен для фолбэка
-                        // enabledForPersona (allow: нет записи = не выдан) и allow-текстов.
-                        // Состав tools/list от него не зависит → в отпечаток запуска не входит.
-                        ["PERSONAS_MCP_ALLOWLIST"] = _personasMcp.McpAllowlist ? "1" : "0",
                         ["PERSONAS_WRITE"] = personaWrite,
                         ["PERSONAS_MANAGE"] = personaManage,
                         ["PERSONAS_AUTOMATION"] = personaAutomation,
@@ -1765,7 +1761,7 @@ public class ClaudeSession : ILlmSessionAdapter
             }
 
             // Трейлер истории решений (ADR-004) — рядом с конвенцией Co-Authored-By: одной
-            // строкой, только когда флаг change-dossiers включён владельцу и чат в проекте
+            // строкой, только для проектных чатов владельца
             Add("dossier-trailer", "Трейлер истории решений", _dossierTrailerHint, group: "project");
 
             // Подсказка про базу заметок — только когда notes-server подключён

@@ -143,10 +143,7 @@ export interface McpData {
   remove: (server: McpServer) => Promise<void>;
   save: (id: string | null, data: McpServerUpsert) => Promise<McpServer>;
   importJson: (fragment: unknown) => Promise<{ created: McpServer[]; skipped: { key: string; reason: string }[] }>;
-  setProjectOff: (project: Project, serverKey: string, off: boolean) => void;
-  personasOffCount: (serverKey: string) => number;
-  projectsOffCount: (serverKey: string) => number;
-  // Allow-модель (флаг mcp-allowlist): выдача доступа, а не исключение из него
+  // Allow-модель: выдача доступа, а не исключение из него
   setProjectOn: (project: Project, serverKey: string, on: boolean) => void;
   projectsOnCount: (serverKey: string) => number;
   personasOnCount: (serverKey: string) => number;
@@ -348,35 +345,7 @@ export function useMcpData(): McpData {
     return result;
   };
 
-  // Deny-list проекта правится тем же PUT /api/projects/{id}, что и остальные настройки
-  const setProjectOff = (project: Project, serverKey: string, off: boolean) => {
-    const current = project.mcpServersOff ?? [];
-    const next = off
-      ? [...current.filter(k => k !== serverKey), serverKey]
-      : current.filter(k => k !== serverKey);
-    const seq = (saveSeq.current[project.id] ?? 0) + 1;
-    saveSeq.current[project.id] = seq;
-    setProjects(list => list.map(p => (p.id === project.id ? { ...p, mcpServersOff: next } : p)));
-    setError(null);
-    api.projects.update(project.id, { mcpServersOff: next })
-      .then(saved => {
-        if (saveSeq.current[project.id] !== seq) return;
-        setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
-      })
-      .catch(e => {
-        if (saveSeq.current[project.id] !== seq) return;
-        setProjects(list => list.map(p => (p.id === project.id ? project : p)));
-        setError(msg(e, 'Не удалось сохранить'));
-      });
-  };
-
-  const personasOffCount = (serverKey: string) =>
-    personas.filter(p => personaOffFor(p, serverKey)).length;
-
-  const projectsOffCount = (serverKey: string) =>
-    projects.filter(p => (p.mcpServersOff ?? []).includes(serverKey)).length;
-
-  // Allow-list проекта правится тем же PUT /api/projects/{id}, что и deny-list
+  // Allow-list проекта правится тем же PUT /api/projects/{id}, что и остальные настройки
   const setProjectOn = (project: Project, serverKey: string, on: boolean) => {
     const current = project.mcpServersOn ?? [];
     const next = on
@@ -434,8 +403,7 @@ export function useMcpData(): McpData {
   return {
     servers, builtin, projects, personas, error, setError,
     checking, probes, reload: loadServers,
-    setEnabled, probe, remove, save, importJson, setProjectOff,
-    personasOffCount, projectsOffCount,
+    setEnabled, probe, remove, save, importJson,
     setProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
     oauthPending, oauthNotice, startOAuth, completeOAuth, dismissOAuthNotice,
   };

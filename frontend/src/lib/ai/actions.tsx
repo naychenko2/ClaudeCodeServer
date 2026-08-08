@@ -199,7 +199,7 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'note.annotations', title: 'Разобрать комментарии документа', hint: 'обработать open-комментарии',
     section: 'notes', sectionLabel: 'Заметки', icon: IcComments,
-    when: c => noteOpen(c) && c.online && c.flag('doc-annotations'), contextual: noteOpen,
+    when: c => noteOpen(c) && c.online, contextual: noteOpen,
     // notes_annotations адресует документ парой path+scope, а не id заметки — подставляем их
     // в затравку сразу, иначе AI выясняет путь лишним ходом. Заметка не прочиталась (офлайн) —
     // разбираем всё накопившееся: это по-прежнему про комментарии, просто шире.
@@ -220,7 +220,7 @@ export const AI_ACTIONS: AiAction[] = [
     // Доступно везде, а не только при открытом документе: комментарии оставляются и в файлах
     // проекта, где действие выше не показывается вовсе. Область — открытый проект, вне
     // проекта все источники.
-    when: c => c.online && c.flag('doc-annotations'),
+    when: c => c.online,
     run: c => startChatWithPrompt(
       allAnnotationsPrompt(c.nav?.screen === 'project' ? c.nav.project : undefined),
       c, { requiredTool: ANNOTATIONS_TOOL_KEY }),

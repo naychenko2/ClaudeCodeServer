@@ -116,16 +116,14 @@ public class McpToolsetStabilityTests
     }
 
     /// <summary>
-    /// Каскад доступности серверов личного реестра в теле BuildExternalMcpProvider.
-    /// На период флага mcp-allowlist в методе живут ОБЕ модели — deny (реестр →
-    /// Project.McpServersOff → Off-привязка ServerToolEnabled) и allow (реестр →
-    /// Project.McpServersOn → выдача персоне McpServerGranted, чистое условие McpDelivery).
-    /// Все оси — свойства owner/project/persona, ни одна не смотрит на ход; выпадение
-    /// любой означало бы, что настройка молча перестала действовать. При зачистке deny-ветки
-    /// ассерты на McpServersOff/ServerToolEnabled уходят вместе с ней.
+    /// Каскад доступности серверов личного реестра в теле BuildExternalMcpProvider —
+    /// allow-модель (единственная): реестр → Project.McpServersOn → выдача персоне
+    /// McpServerGranted, чистое условие McpDelivery. Все оси — свойства owner/project/persona,
+    /// ни одна не смотрит на ход; выпадение любой означало бы, что настройка молча перестала
+    /// действовать.
     /// </summary>
     [SkippableFact]
-    public void КаскадРеестра_ТриОсиНаМесте()
+    public void КаскадРеестра_AllowОсиНаМесте()
     {
         var path = FindSource("Services", "SessionManager.cs");
         Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
@@ -133,11 +131,11 @@ public class McpToolsetStabilityTests
         var body = MethodBody(File.ReadAllText(path!),
             "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
-        // Общая ось 0 (рубильник записи) и оси deny-модели
+        // Общая ось 0 — рубильник самой записи реестра
         body.Should().Contain("record.Enabled", "первая ось каскада — рубильник самой записи реестра");
-        body.Should().Contain("McpServersOff",
-            "deny-модель: сервер, выключенный в проекте (McpServersOff), в ход не едет");
-        body.Should().Contain("ServerToolEnabled(", "deny-модель: Off-привязка персоны");
+        // deny-модель умерла вместе с флагом mcp-allowlist
+        body.Should().NotContain("McpServersOff", "deny-модель McpServersOff зачищена");
+        body.Should().NotContain("ServerToolEnabled(", "deny-ветка Off-привязки зачищена");
         // Оси allow-модели
         body.Should().Contain("McpServersOn",
             "allow-модель: сервер включается в проекте через McpServersOn");
@@ -201,9 +199,10 @@ public class McpToolsetStabilityTests
 
     /// <summary>
     /// Профиль «Только чтение» режет серверы реестра ЦЕЛИКОМ (кроме записей с явным
-    /// AllowReadOnlyPersonas), а не запретами на отдельные инструменты: имена инструментов
-    /// чужого сервера мы не знаем, они меняются на его стороне, а неизвестное имя в
-    /// deny-правиле роняет запуск CLI (история MultiEdit в PersonaAccessPolicy).
+    /// AllowReadOnlyPersonas — это условие живёт в McpDelivery.ShouldDeliver и проверяется
+    /// тестом AllowМодель_ЧистоеУсловиеДоставки_СодержитВсеоси), а не запретами на отдельные
+    /// инструменты: имена инструментов чужого сервера мы не знаем, они меняются на его стороне,
+    /// а неизвестное имя в deny-правиле роняет запуск CLI (история MultiEdit в PersonaAccessPolicy).
     /// </summary>
     [SkippableFact]
     public void ПрофильReadOnly_РежетСерверЦеликом_АНеЕгоИнструменты()
@@ -215,9 +214,7 @@ public class McpToolsetStabilityTests
             "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
         body.Should().Contain("PersonaAccess.ReadOnly",
-            "персона «только чтение» не получает серверы реестра по умолчанию");
-        body.Should().Contain("AllowReadOnlyPersonas",
-            "исключение — только явное разрешение в самой записи реестра");
+            "профиль персоны доезжает до резолвера доставки (McpDelivery режет RO-персону)");
 
         // Список запретов профиля не смеет обрастать именами чужих инструментов
         var policy = FindSource("Services", "PersonaAccessPolicy.cs");

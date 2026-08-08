@@ -107,28 +107,6 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Update_McpServersOff_PersistedAndReturnedByGet()
-    {
-        var project = await CreateProjectAsync("McpOff");
-        var id = project.GetProperty("id").GetString()!;
-
-        var putResponse = await _client.PutAsJsonAsync($"/api/projects/{id}", new
-        {
-            name = (string?)null,
-            rootPath = (string?)null,
-            mcpServersOff = new[] { "bad-server" }
-        });
-        putResponse.StatusCode.Should().Be(HttpStatusCode.OK);
-        var putBody = JsonSerializer.Deserialize<JsonElement>(await putResponse.Content.ReadAsStringAsync());
-        putBody.GetProperty("mcpServersOff").EnumerateArray().Select(e => e.GetString()).Should().Equal("bad-server");
-
-        var getResponse = await _client.GetAsync($"/api/projects/{id}");
-        getResponse.StatusCode.Should().Be(HttpStatusCode.OK);
-        var getBody = JsonSerializer.Deserialize<JsonElement>(await getResponse.Content.ReadAsStringAsync());
-        getBody.GetProperty("mcpServersOff").EnumerateArray().Select(e => e.GetString()).Should().Equal("bad-server");
-    }
-
-    [Fact]
     public async Task Update_McpServersOn_PersistedAndReturnedByGet()
     {
         var project = await CreateProjectAsync("McpOn");

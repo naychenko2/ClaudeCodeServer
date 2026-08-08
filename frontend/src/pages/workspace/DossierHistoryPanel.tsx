@@ -11,18 +11,16 @@
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  AlertTriangle, Ban, Bot, ChevronDown, ChevronRight, ClipboardList, File as FileIcon, GitCompare, History, Info,
+  AlertTriangle, Bot, ChevronDown, ChevronRight, ClipboardList, File as FileIcon, GitCompare, History, Info,
   Lightbulb, MessageCircle, Search, X,
 } from 'lucide-react';
 import type { DossierEntry, Persona } from '../../types';
 import { displayNameOf, type AuthState } from '../../types';
 import { api } from '../../lib/api';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { basename } from '../../lib/paths';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { Button, Dot, EmptyState, TextField } from '../../components/ui';
-import { FeatureFlagsModal } from '../../components/FeatureFlagsModal';
 import { useNow } from '../../lib/useNow';
 
 interface Props {
@@ -278,8 +276,6 @@ const chipStyle: CSSProperties = {
 };
 
 export function DossierHistoryPanel({ project, auth, activeFilePath, chatExcludedFromDossiers, onOpenChat, onOpenTask, onOpenCommit }: Props) {
-  const flagOn = useFeature(FLAGS.changeDossiers);
-  const [showFlags, setShowFlags] = useState(false);
 
   // Заметка-объяснение для чата-исключения: первым блоком тела панели, спокойным
   // нейтральным тоном (не warning) — это выбранный человеком режим, а не неполадка.
@@ -320,7 +316,6 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   const [query, setQuery] = useState('');
 
   useEffect(() => {
-    if (!flagOn) return;
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс перед новым запросом (сменился фильтр/проект) — иначе список чужого фильтра мигнёт перед загрузкой
     setEntries(null);
@@ -336,16 +331,15 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       })
       .catch(() => { if (!cancelled) { setEntries([]); setLoadError(true); } });
     return () => { cancelled = true; };
-  }, [flagOn, project.id, fileFilter, reloadTick]);
+  }, [project.id, fileFilter, reloadTick]);
 
   useEffect(() => {
-    if (!flagOn) return;
     let cancelled = false;
     api.personas.list({ scope: 'context', projectId: project.id })
       .then(list => { if (!cancelled) setPersonas(new Map(list.map(p => [p.id, p]))); })
       .catch(() => { /* без имён персон — покажем «Персона» */ });
     return () => { cancelled = true; };
-  }, [flagOn, project.id]);
+  }, [project.id]);
 
   const authorOf = (entry: DossierEntry): Author => {
     if (entry.personaId) return { name: personas.get(entry.personaId)?.name ?? 'Персона', persona: true };
@@ -393,21 +387,6 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   };
 
   const clearFilter = () => setFileFilter(null);
-
-  if (!flagOn) {
-    return (
-      <>
-        <EmptyState
-          compact
-          icon={<Ban size={20} strokeWidth={ICON_STROKE} />}
-          title="История решений выключена"
-          subtitle="Включите её в «Экспериментальных функциях», чтобы AI Home начал сохранять, зачем меняется код."
-          action={<Button variant="secondary" size="sm" onClick={() => setShowFlags(true)}>Открыть настройки</Button>}
-        />
-        {showFlags && <FeatureFlagsModal onClose={() => setShowFlags(false)} />}
-      </>
-    );
-  }
 
   const subheader = (
     <div style={{ padding: `${SP.sm}px ${SP.md}px ${SP.xs}px`, borderBottom: `1px solid ${C.borderLight}`, flexShrink: 0 }}>

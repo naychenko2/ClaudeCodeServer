@@ -3,8 +3,8 @@ using ClaudeHomeServer.Models;
 namespace ClaudeHomeServer.Services.Mcp;
 
 /// <summary>
-/// Чистое правило доставки сервера личного реестра в ход при allow-модели
-/// (флаг <c>mcp-allowlist</c>). Вынесено отдельно от <see cref="SessionManager"/>,
+/// Чистое правило доставки сервера личного реестра в ход (allow-модель — единственная).
+/// Вынесено отдельно от <see cref="SessionManager"/>,
 /// чтобы OR-матрицу комбинаций гонять юнитами без поднимания сессии.
 ///
 /// Правило (docs/research/mcp-allowlist-plan.md, раздел «Правило доставки»):

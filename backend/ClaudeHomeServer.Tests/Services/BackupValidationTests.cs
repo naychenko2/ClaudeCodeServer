@@ -132,8 +132,9 @@ public class BackupValidationTests : IDisposable
     // Шесть новых полей онбординга/дефолт-персоны (User.DefaultPersonaId,
     // User.OnboardingSessionId, Project.DefaultPersonaId, Project.OnboardingSessionId,
     // Session.OnboardingKind, Session.OnboardingCreatedPersonaId) — все string?.
-    // Поскольку схема не бампалась (поля добавлены без increment BackupSchema.Version),
-    // архив со старой SchemaVersion=5 ОБЯЗАН продолжать валидироваться как пригодный.
+    // Поскольку схема для этих полей не бампалась (они добавлены без increment BackupSchema.Version;
+    // текущий инкремент 5→6 относится к удалению Project.McpServersOff), архив со старой
+    // SchemaVersion ОБЯЗАН продолжать валидироваться как пригодный.
     [Fact]
     public void НовыеПоляОнбординга_ПроходятВалидацию()
     {

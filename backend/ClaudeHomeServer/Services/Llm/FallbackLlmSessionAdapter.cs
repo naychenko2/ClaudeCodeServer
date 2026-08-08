@@ -49,6 +49,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
     private readonly ILogger? _log;
+    // Колбэк персиста сессий (SessionManager.SaveSessions через фабрику/контекст): нужен,
+    // чтобы переписать sessions.json ВОССТАНОВЛЕННЫМИ значениями после restore в finally —
+    // иначе финальный result успевает сохранить подменённую модель (ApplyStatusAsync →
+    // SaveSessions ДО restore), и рестарт сервера в этом окне залипил бы чат на подмене
+    // (возврат инцидента 2026-08-07). null (тесты без DI) — персист не вызывается.
+    private readonly Action? _persist;
     // Корень профиля CLI на момент старта сессии (хостовый путь): источник для
     // переноса транскрипта и, у container-пользователя, способ вывести раскладку
     // песочных профилей (родитель = data/sandbox-profiles/{ownerId}).
@@ -77,7 +83,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         FallbackSettingsStore? fallbackSettings = null,
         Func<IReadOnlyList<string>>? effectiveChain = null,
         ProviderHealthRegistry? health = null,
-        ILogger? log = null)
+        ILogger? log = null,
+        Action? persist = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -91,6 +98,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _effectiveChain = effectiveChain;
         _health = health;
         _log = log;
+        _persist = persist;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
     }
 
@@ -421,19 +429,29 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         finally
         {
             // Восстановить модель/провайдер, сохранённые на старте хода, — подмена не должна
-            // переписывать модель чата навсегда (инцидент 2026-08-07). CAS: восстанавливаем,
-            // только если текущее значение всё ещё равно последнему подменённому (applied).
-            // Если пользователь сменил модель руками во время хода (Info != applied) — его
-            // выбор не перетираем. Без подмен applied == orig и восстановление — no-op.
-            if (Info.Model == appliedModel && Info.Provider == appliedProvider)
-            {
-                Info.Model = origModel;
-                Info.Provider = origProvider;
-            }
+            // переписывать модель чата навсегда (инцидент 2026-08-07). Восстановление ПОКОМПОНЕНТНОЕ
+            // (CAS по каждому полю отдельно): модель возвращаем, только если Info всё ещё равна
+            // последней подменённой (appliedModel), провайдер — аналогично. Так ручная смена одного
+            // поля во время хода не блокирует восстановление другого. ABA (пользователь руками выбрал
+            // ровно подменённое значение — Info совпало с applied случайно) принят осознанно: редкий
+            // случай, а различить «подмена» от «совпадение» без версионирования нельзя. Без подмен
+            // applied == orig и восстановление — no-op.
+            var modelRestored = false;
+            var providerRestored = false;
+            if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }
+            if (Info.Provider == appliedProvider) { Info.Provider = origProvider; providerRestored = true; }
             // Счётчик сообщений пользователя: реальный ClaudeSession инкрементирует
             // MessageCount на каждую отправку — после подмен восстановим так, чтобы
             // одно user-сообщение с N попытками считалось одним сообщением
             Info.MessageCount = _snapshotMessageCount + 1;
+            // ПЕРСИСТ ПОСЛЕ RESTORE (Major 1): финальный result уже ушёл downstream и успел
+            // сохранить sessions.json с ПОДМЕНЁННОЙ моделью (ApplyStatusAsync → SaveSessions
+            // ДО finally). Если была подмена — переписываем персист восстановленными значениями,
+            // иначе рестарт сервера в этом окне залипил бы чат на подмене. Без подмены persist
+            // не дёргаем —ApplyStatus уже сохранил корректное состояние.
+            if ((modelRestored || providerRestored)
+                && (appliedModel != origModel || appliedProvider != origProvider))
+                _persist?.Invoke();
             lock (_gate) if (ReferenceEquals(_turn, turn)) _turn = null;
         }
     }

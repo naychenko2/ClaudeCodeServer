@@ -124,7 +124,8 @@ public class FallbackLlmSessionAdapterTests
         int? modelFallbackMax = null, string? ownerId = null,
         string[]? chain = null,
         Func<string?>? effectiveModel = null,
-        ProviderHealthRegistry? health = null)
+        ProviderHealthRegistry? health = null,
+        Action? persist = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -148,7 +149,8 @@ public class FallbackLlmSessionAdapterTests
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
             fallbackSettings: store,
             effectiveChain: chain is null ? null : () => chain,
-            health: health);
+            health: health,
+            persist: persist);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }
@@ -987,19 +989,126 @@ public class FallbackLlmSessionAdapterTests
         var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
         var pool = BuildPool("acc-a");
         var health = new ProviderHealthRegistry();
-        health.MarkUnavailable("acc-a");   // стартовый провайдер sonnet (нативный claude, acc-a) в кулдауне
-        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
-            chain: ["sonnet", "m-alive"], health: health);
+        health.MarkUnavailable("p-dead");   // стартовый сторонний провайдер в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead", "m-alive"], health: health);
         inner.Scripts.Enqueue(() => inner.Emit(Success()));   // старт на m-alive через стартовую подмену
 
         await sut.SendMessageAsync("сделай");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
 
-        // Стартовая подмена: acc-a в кулдауне → одна попытка сразу на m-alive, без расхода на acc-a.
+        // Стартовая подмена: p-dead в кулдауне → одна попытка сразу на m-alive, без расхода на p-dead.
         inner.Attempts.Should().ContainSingle();
-        inner.Attempts[0].Should().Be(("p-alive", "m-alive"), "старт с живого шага, а не с кулдаунного acc-a");
+        inner.Attempts[0].Should().Be(("p-alive", "m-alive"), "старт с живого шага, а не с кулдаунного p-dead");
         var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
         marker.Reason.Should().Be("unreachable");
         marker.Provider.Should().Be("p-alive");
+    }
+
+    // --- Фиксы ревью Глеба (Major 1/2, Minor 4) ---
+
+    // Major 1: restore модели в finally должен сопровождаться персистом — иначе финальный
+    // result успевает сохранить sessions.json с ПОДМЕНЁННОЙ моделью (ApplyStatusAsync →
+    // SaveSessions ДО finally), и рестарт сервера в окне залипил бы чат на подмене. Здесь
+    // persist-колбэк пишет «стор» — проверяем, что после хода с подменой в нём исходная модель.
+    [Fact]
+    public async Task ПодменаМодели_PersistПослеВосстановления_ПишетИсходную()
+    {
+        var providers = BuildProviders();   // deepseek/deepseek-chat — сторонний шаг цепочки
+        var pool = BuildPool("acc-a");
+        var persisted = new List<(string? Model, string? Provider)>();
+        FakeInnerAdapter? innerRef = null;
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"],
+            persist: () => { if (innerRef is { } i) persisted.Add((i.Info.Model, i.Info.Provider)); });
+        innerRef = inner;
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // deepseek-chat — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "restore в finally");
+
+        // Ход действительно уходил на подмену deepseek-chat…
+        inner.Attempts[1].Should().Be(("deepseek", "deepseek-chat"));
+        // …но persist после restore записал ИСХОДНУЮ модель (не подмену).
+        persisted.Should().NotBeEmpty("restore в finally должен персистить восстановленные значения");
+        persisted[^1].Model.Should().Be("sonnet", "persist пишет восстановленную модель, а не подмену");
+        persisted[^1].Provider.Should().Be("acc-a");
+        inner.Info.Model.Should().Be("sonnet");
+    }
+
+    // Major 2: кулдаун недоступности НЕ помечает подписки пула Claude — один 529 на нативной
+    // подписке не должен уводить следующие ходы на сторонний шаг 2 мимо живой подписки пула.
+    // Здесь: первый ход на opus/claude ловит 529 (ProviderError), ротация на claude-2 — успех.
+    // Кулдаун на «claude» НЕ ставится → второй ход стартует с opus/claude, а не с шага цепочки.
+    [Fact]
+    public async Task Кулдаун_НеТрогаетПодпискиПула_СледующийХодНачинаетсяСНей()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("claude", "claude-2");
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude",
+            chain: ["opus", "kimi-k3"], effectiveModel: () => "opus", health: health);
+        // Ход 1: claude × opus — 529 (ProviderError), ротация на claude-2 — успех.
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("529")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал хода 1");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение хода 1");
+
+        // Кулдаун на ключе подписки пула НЕ поставлен (Major 2) — иначе второй ход ушёл бы на kimi.
+        health.IsUnavailable("claude").Should().BeFalse("подписки пула не помечаются кулдауном");
+
+        // Ход 2: стартовая подмена проверяет кулдаун «claude» → false → старт с opus/claude.
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        await sut.SendMessageAsync("ещё");
+        await WaitForAsync(() => inner.Attempts.Count >= 3, "старт хода 2");
+
+        // Последняя попытка — старт второго хода с claude × opus (через пул), а не kimi-k3.
+        inner.Attempts[^1].Should().Be(("claude", "opus"),
+            "второй ход стартует с исходной модели через пул, а не со шага 2 цепочки");
+    }
+
+    // Minor 4: покомпонентный CAS restore. Пользователь сменил во время хода ТОЛЬКО модель
+    // (провайдер остался подменённым) — модель не восстанавливаем (ручной выбор), а провайдер
+    // восстанавливаем. Раньше попарный CAS блокировал восстановление провайдера из-за модели.
+    [Fact]
+    public async Task Restore_ПокомпонентныйCAS_ПровайдерВосстанавливаетсяНезависимо()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        var session = inner.Info;
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() =>
+        {
+            // Во время успешной попытки пользователь сменил ТОЛЬКО модель (провайдер deepseek
+            // остался подменённым applied). Покомпонентный CAS: модель не трогаем, провайдер вернём.
+            session.Model = "manual-choice";   // ≠ deepseek-chat → модель не восстанавливается
+            inner.Emit(Success());
+        });
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "restore в finally");
+
+        // Модель — ручной выбор пользователя (не перетёрта), провайдер — восстановлен в acc-a.
+        session.Model.Should().Be("manual-choice", "ручная модель не перетёрта (CAS по модели не прошёл)");
+        session.Provider.Should().Be("acc-a", "провайдер восстановлен покомпонентно (CAS по провайдеру прошёл)");
     }
 }

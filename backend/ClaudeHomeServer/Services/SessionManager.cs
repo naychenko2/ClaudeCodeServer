@@ -2230,7 +2230,8 @@ public class SessionManager : IDisposable
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
-            DossierTrailerHint: BuildDossierTrailerHint(ownerId, session)));
+            DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
+            PersistSessions: SaveSessions));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -3077,7 +3078,8 @@ public class SessionManager : IDisposable
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
-                ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona));
+                ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
+                PersistSessions: SaveSessions);
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -3113,7 +3115,8 @@ public class SessionManager : IDisposable
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
-                DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info));
+                DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info),
+                PersistSessions: SaveSessions);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

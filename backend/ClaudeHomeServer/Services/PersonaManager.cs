@@ -574,6 +574,36 @@ public class PersonaManager
         return persona;
     }
 
+    // Массовый сброс СВОИХ уровней персон владельца («Сбросить исключения», scope=owner):
+    // снимает TierStrong/TierMedium/TierWeak там, где они заданы. Model и ModelTier не трогает —
+    // это другая ось настройки. UpdatedAt НЕ бампается: по нему сортируется список персон,
+    // иначе массовый жест перетасовал бы его человеку. apply = false — предпросмотр.
+    // Возвращает изменённые персоны (у предпросмотра — те, что изменятся).
+    public IReadOnlyList<Persona> ResetTierMatrices(string userId, bool apply)
+    {
+        var changed = new List<Persona>();
+        // Мутации — под _saveLock (как Update/Delete), Save и события — вне его
+        lock (_saveLock)
+        {
+            foreach (var p in GetByOwner(userId))
+            {
+                if (string.IsNullOrWhiteSpace(p.TierStrong) && string.IsNullOrWhiteSpace(p.TierMedium)
+                    && string.IsNullOrWhiteSpace(p.TierWeak)) continue;
+                changed.Add(p);
+                if (!apply) continue;
+                p.TierStrong = null;
+                p.TierMedium = null;
+                p.TierWeak = null;
+            }
+        }
+        if (!apply || changed.Count == 0) return changed;
+        Save();
+        foreach (var p in changed) OnPersonaChanged?.Invoke(p);
+        _log?.LogInformation("Сброшены свои уровни моделей у {Count} персон (owner={Owner})",
+            changed.Count, userId);
+        return changed;
+    }
+
     // Установить сгенерированный аватар-картинку. Оригинал/кроп загруженного файла
     // при этом теряют смысл — чистим (и файл оригинала тоже).
     public Persona SetAvatarImage(string id, string userId, string imageFile)

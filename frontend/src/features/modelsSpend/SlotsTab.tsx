@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, Link2 } from 'lucide-react';
+import { ChevronDown, Link2, RotateCcw } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import {
@@ -16,8 +16,10 @@ import { api, type ModelTiers } from '../../lib/api';
 import { cloneLayer, newPresetId } from '../../lib/specialties';
 import { loadModels, modelLabel, providerLabel, modelProvider, type ModelOption } from '../../lib/models';
 import { C, FS, R, SP } from '../../lib/design';
-import type { AppSettings, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import { showToast } from '../../lib/toast';
+import type { AppSettings, ResetResult, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
 import { ExceptionsBlock } from './ExceptionsBlock';
+import { ResetConfirmDialog } from './ResetConfirmDialog';
 
 // Вкладка «Модели по умолчанию» (макет models-spend-v3.html §2). Три слота strong/medium/weak:
 // маршрутная карточка уровня — название слева, стрелка, чип выбранной модели/пресета,
@@ -37,10 +39,15 @@ interface SlotsTabProps {
   savingScope: 'global' | 'owner' | null;
   onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onGoApply: () => void;
+  meUserId: string | null;
+  onReloadSettings: () => Promise<void>;
+  resettingScope: 'global' | 'owner' | null;
+  onReset: (scope: 'global' | 'owner', key?: string) => Promise<ResetResult>;
 }
 
 export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settings, models,
-  tierModels, ollamaModel, savingScope, onSaveLayer, onGoApply }: SlotsTabProps) {
+  tierModels, ollamaModel, savingScope, onSaveLayer, onGoApply, meUserId,
+  onReloadSettings, resettingScope, onReset }: SlotsTabProps) {
   const presets = usePresets();
   const { selectedTiers, globalTiers, globalSettings, setGlobalSettings, setOwnTiers, setUserTiers } = data;
 
@@ -48,6 +55,10 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
   const [error, setError] = useState<string | null>(null);
   const [tierBusy, setTierBusy] = useState<TierKey | null>(null);
   const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  // resetBusy — отдельно от tierBusy: reset пишет патч на три поля разом,
+  // а tierBusy типизирован как TierKey | null и жест на три слота не выражает
+  const [resetBusy, setResetBusy] = useState(false);
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
 
   const tierModel = (t: TierKey): string => selectedTiers?.[t] ?? '';
   const globalTierModel = (t: TierKey): string => globalTiers?.[t] ?? '';
@@ -106,11 +117,74 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
     return u?.displayName?.trim() || u?.username || 'Пользователь';
   })();
 
+  // Имя пользователя текущего контекста (без префикса «Общие · для всех» из ctxLabel) —
+  // нужно отдельно для текста диалога подтверждения чужого сброса
+  const contextUserName = (() => {
+    if (!contextUserId) return null;
+    const u = data.users.find(x => x.id === contextUserId);
+    return u?.displayName?.trim() || u?.username || 'Пользователь';
+  })();
+
+  // Сброс всей тройки контекста: пустой патч на три поля разом, тем же ветвлением каналов,
+  // что и saveTier. Инвариант — сброс ВСЕГДА шлёт "", никогда не вписывает имя модели.
+  const resetTiers = () => {
+    const prev = selectedTiers;
+    const globalPrev = globalSettings;
+    setResetBusy(true);
+    setError(null);
+
+    const emptyTiers: ModelTiers = { strong: '', medium: '', weak: '' };
+    const emptyGlobalPatch = Object.fromEntries(TIER_ORDER.map(t => [TIERS[t].field, ''])) as Partial<AppSettings>;
+
+    if (!isAdmin) setOwnTiers(emptyTiers);
+    else if (contextUserId) setUserTiers(emptyTiers);
+    else setGlobalSettings(s => s ? { ...s, ...emptyGlobalPatch } : s);
+
+    const rollback = () => {
+      if (!isAdmin) setOwnTiers(prev);
+      else if (contextUserId) setUserTiers(prev);
+      else setGlobalSettings(globalPrev);
+    };
+
+    const ok = () => {
+      void loadModels();
+      invalidateEffectiveLines();
+      showToast('Модели', 'Вернули к настройке по умолчанию');
+    };
+    const fail = (e: unknown) => { rollback(); setError(e instanceof Error ? e.message : 'Не удалось сбросить'); };
+    const done = () => { setResetBusy(false); setResetConfirmOpen(false); };
+
+    if (!isAdmin) {
+      api.meModelTiers.save(emptyTiers).then(ok).catch(fail).finally(done);
+    } else if (contextUserId) {
+      api.adminUserModelTiers.save(contextUserId, emptyTiers).then(ok).catch(fail).finally(done);
+    } else {
+      api.settings.save(emptyGlobalPatch).then(ok).catch(fail).finally(done);
+    }
+  };
+
+  // Диалог — только когда сбрасывают не своё: у рядового пользователя contextUserId
+  // всегда null и это его личные слоты, поэтому isAdmin обязателен в условии
+  const resetIsForeign = isAdmin && (contextUserId === null || contextUserId !== meUserId);
+  const resetAllEmpty = !selectedTiers || (!selectedTiers.strong && !selectedTiers.medium && !selectedTiers.weak);
+
+  const handleResetClick = () => {
+    if (resetIsForeign) setResetConfirmOpen(true);
+    else resetTiers();
+  };
+
+  const resetDialogTitle = !contextUserId
+    ? 'Сбросить общие модели по умолчанию?'
+    : `Сбросить модели по умолчанию у ${contextUserName}?`;
+  const resetDialogBody = !contextUserId
+    ? 'Три поля опустеют, и все, у кого нет своих настроек, вернутся к тому, что выбирает место применения.'
+    : 'Это чужие настройки — человек увидит изменение у себя.';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
-      {/* Контекст уровня: общие / конкретный пользователь (админ) */}
-      {isAdmin && (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.md, flexWrap: 'wrap' }}>
+      {/* Контекст уровня (общие / конкретный пользователь — только у админа) + сброс тройки слотов */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.md, flexWrap: 'wrap' }}>
+        {isAdmin && (
           <div style={{ position: 'relative' }}>
             <Button variant="ghost" size="sm"
               leftIcon={<ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.textMuted, flexShrink: 0 }} />}
@@ -127,11 +201,32 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
               />
             )}
           </div>
+        )}
+        <span style={{ flex: 1 }} />
+        {isAdmin && (
           <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, maxWidth: 340 }}>
             Личная цепочка перекрывает общую, пустая — «как у всех». Пресеты остаются в списках выбора модели — и здесь, и в исключениях.
           </span>
-        </div>
-      )}
+        )}
+        <Button variant="ghost" size="sm" disabled={resetAllEmpty || resetBusy}
+          loading={resetBusy}
+          leftIcon={<RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          title="Вернуть поля к настройке по умолчанию"
+          onClick={handleResetClick}
+        >
+          Сбросить
+        </Button>
+      </div>
+
+      <ResetConfirmDialog
+        open={resetConfirmOpen}
+        title={resetDialogTitle}
+        body={resetDialogBody}
+        confirmLabel="Сбросить"
+        busy={resetBusy}
+        onCancel={() => setResetConfirmOpen(false)}
+        onConfirm={resetTiers}
+      />
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
         {TIER_ORDER.map(t => (
@@ -174,6 +269,9 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
         ollamaModel={ollamaModel}
         savingScope={savingScope}
         onSaveLayer={onSaveLayer}
+        onReloadSettings={onReloadSettings}
+        resettingScope={resettingScope}
+        onReset={onReset}
       />
     </div>
   );

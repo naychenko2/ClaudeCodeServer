@@ -1798,6 +1798,17 @@ export interface SpecialtySettingsResponse {
   presets: ScopedPreset[];
 }
 
+// Ответ серверного сброса исключений (GET .../reset/{scope}/preview, POST .../reset/{scope}):
+// specialties/personas — число ФАКТИЧЕСКИ изменённых записей (у preview — сколько изменится);
+// shadowed — состояние слоя ПОСЛЕ операции (ключи специальностей, оставшихся ради своих прав,
+// а не дельта вызова); personaNames — имена изменённых персон (только scope=owner)
+export interface ResetResult {
+  specialties: number;
+  shadowed: string[];
+  personas: number;
+  personaNames: string[];
+}
+
 // Ответ GET /api/models/preview — эффективный резолв для строки «Сейчас пойдёт»
 // (спека, блок 4). model — первая развёрнутая модель хода (null — пустой резолв или
 // битый пресет); source — где выбрано значение; tier/tierOrigin — эффективный уровень

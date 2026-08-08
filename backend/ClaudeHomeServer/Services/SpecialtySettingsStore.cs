@@ -66,6 +66,11 @@ public class SpecialtySettingsLayer
     public bool IsEmpty => Specialties.Count == 0 && Presets.Count == 0 && DefaultSpecialty is null;
 }
 
+// Итог сброса настроек моделей в слое: Changed — число ФАКТИЧЕСКИ изменённых записей
+// (у предпросмотра — сколько изменится), Shadowed — состояние слоя ПОСЛЕ операции: ключи
+// записей, оставшихся ради собственных прав (уровней не несут, нижний слой затеняют).
+public sealed record SpecialtyResetResult(int Changed, IReadOnlyList<string> Shadowed);
+
 // Файл стора на диске (data/specialty-settings.json)
 public class SpecialtySettingsFile
 {
@@ -284,6 +289,134 @@ public sealed class SpecialtySettingsStore
         }
         _log?.LogInformation("Личные настройки специальностей обновлены (owner={Owner})", ownerId);
         return null;
+    }
+
+    // --- Сброс уровней к наследованию ---
+
+    // Сброс настроек моделей в слое: возврат наследования, а не запись значений.
+    // ownerId = null — глобальный слой, иначе личный слой владельца; key — ключ одной
+    // специальности («any» — «Любая специальность»), null — весь слой; apply = false —
+    // предпросмотр (файл не трогаем, счёт тот же).
+    //
+    // Предикат «запись ничего своего не несёт»: права эквивалентны нижнему слою →
+    // запись УДАЛЯЕТСЯ (это и есть возврат наследования). Иначе снимаются три уровня
+    // и DefaultTier, а права сохраняются — такая запись продолжает затенять нижний слой
+    // и попадает в Shadowed.
+    public SpecialtyResetResult ResetModelSettings(string? ownerId, string? key, bool apply)
+    {
+        lock (_writeLock)
+        {
+            // Мутируем клон, не Snapshot (он отдаёт живой объект читателям)
+            var next = Clone(_file);
+            var layer = ownerId is null ? next.Global : next.Owners.GetValueOrDefault(ownerId);
+            if (layer is null) return new SpecialtyResetResult(0, []);
+
+            var all = key is null;
+            var anyOnly = !all && IsAnyKey(key!);
+            var changed = 0;
+
+            if (all || !anyOnly)
+            {
+                foreach (var specKey in layer.Specialties.Keys.ToList())
+                {
+                    if (!all && !string.Equals(specKey, key, StringComparison.OrdinalIgnoreCase)) continue;
+                    var record = layer.Specialties[specKey];
+                    if (RightsEquivalent(record, LowerRights(next, ownerId, specKey)))
+                    {
+                        layer.Specialties.Remove(specKey);
+                        changed++;
+                    }
+                    else if (StripTiers(record)) changed++;
+                }
+            }
+
+            if ((all || anyOnly) && layer.DefaultSpecialty is { } ds)
+            {
+                if (RightsEquivalent(ds, LowerRights(next, ownerId, SpecialtyCatalog.AnySpecialtyKey)))
+                {
+                    layer.DefaultSpecialty = null;
+                    changed++;
+                }
+                else if (StripTiers(ds)) changed++;
+            }
+
+            // Shadowed — СОСТОЯНИЕ слоя после операции: записи, оставшиеся ради собственных
+            // прав (уровней не несут, но затеняют нижний слой), а не дельта этого вызова
+            var shadowed = new List<string>();
+            if (layer.DefaultSpecialty is { } after && !CarriesTier(after))
+                shadowed.Add(SpecialtyCatalog.AnySpecialtyKey);
+            shadowed.AddRange(layer.Specialties.Where(kv => !CarriesTier(kv.Value))
+                .Select(kv => kv.Key).OrderBy(k => k, StringComparer.Ordinal));
+
+            if (!apply || changed == 0) return new SpecialtyResetResult(changed, shadowed);
+
+            // Пустой личный слой убираем из файла — как это делает SetOwner
+            if (ownerId is not null && layer.IsEmpty) next.Owners.Remove(ownerId);
+            next.Version = FormatVersion;
+            Persist(next);
+            _log?.LogInformation(
+                "Сброс настроек моделей специальностей: слой={Layer}, ключ={Key}, изменено={Changed}",
+                ownerId ?? "global", key ?? "*", changed);
+            return new SpecialtyResetResult(changed, shadowed);
+        }
+    }
+
+    public static bool IsAnyKey(string key) =>
+        string.Equals(key, SpecialtyCatalog.AnySpecialtyKey, StringComparison.OrdinalIgnoreCase);
+
+    // Запись адресует модель: непустая ячейка уровня или заданный DefaultTier
+    private static bool CarriesTier(SpecialtyTemplateSettings s) =>
+        !string.IsNullOrWhiteSpace(s.TierStrong) || !string.IsNullOrWhiteSpace(s.TierMedium)
+        || !string.IsNullOrWhiteSpace(s.TierWeak) || s.DefaultTier is not null;
+
+    // Снять уровни и DefaultTier (у DefaultTier интерфейса нет — оставленный, он остался бы
+    // невидимым остатком, который продолжает гонять персон прежним уровнем)
+    private static bool StripTiers(SpecialtyTemplateSettings s)
+    {
+        if (!CarriesTier(s)) return false;
+        s.TierStrong = null;
+        s.TierMedium = null;
+        s.TierWeak = null;
+        s.DefaultTier = null;
+        return true;
+    }
+
+    // Права нижнего слоя для записи: для owner — глобальный слой, для global — каталожный
+    // дефолт. Нижней записи нет и каталожного дефолта нет → «полный доступ без ограничений»
+    // (Access=Full, Tools=null, DisallowedTools=null) — именно к нему возвращается наследование.
+    private static (PersonaAccess Access, List<string>? Tools, List<string>? Disallowed) LowerRights(
+        SpecialtySettingsFile file, string? ownerId, string specKey)
+    {
+        if (ownerId is not null)
+        {
+            var lower = IsAnyKey(specKey)
+                ? file.Global.DefaultSpecialty
+                : file.Global.Specialties.GetValueOrDefault(specKey);
+            if (lower is not null) return (lower.Access, lower.Tools, lower.DisallowedTools);
+        }
+        if (!IsAnyKey(specKey) && SpecialtyCatalog.TryGetByKey(specKey, out var entry)
+            && entry.DefaultTemplate is { } tmpl)
+            return (tmpl.Access, tmpl.Tools?.ToList(), tmpl.DisallowedTools?.ToList());
+        return (PersonaAccess.Full, null, null);
+    }
+
+    // Права эквивалентны нижнему слою — по НОРМАЛИЗОВАННЫМ значениям: NormalizeTools схлопывает
+    // полный набор в null, а записи из миграции v1 легли без нормализации. Tools/DisallowedTools
+    // сравниваются как множества (порядок в JSON не значим), запреты значимы только при Custom.
+    private static bool RightsEquivalent(SpecialtyTemplateSettings s,
+        (PersonaAccess Access, List<string>? Tools, List<string>? Disallowed) lower)
+    {
+        if (s.Access != lower.Access) return false;
+        if (!SameSet(NormalizeTools(s.Tools), NormalizeTools(lower.Tools))) return false;
+        if (s.Access != PersonaAccess.Custom) return true;
+        return SameSet(CleanList(s.DisallowedTools), CleanList(lower.Disallowed));
+    }
+
+    private static bool SameSet(List<string>? a, List<string>? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        return a.ToHashSet(StringComparer.OrdinalIgnoreCase)
+            .SetEquals(b.ToHashSet(StringComparer.OrdinalIgnoreCase));
     }
 
     // --- Валидация и нормализация ---

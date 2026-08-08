@@ -14,7 +14,10 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/specialties")]
-public class SpecialtiesController(SpecialtySettingsStore settings, FallbackSettingsStore fallback) : ControllerBase
+public class SpecialtiesController(
+    SpecialtySettingsStore settings,
+    FallbackSettingsStore fallback,
+    PersonaManager personas) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -96,5 +99,70 @@ public class SpecialtiesController(SpecialtySettingsStore settings, FallbackSett
         if (layer is null) return BadRequest(new { error = "Не задан слой настроек" });
         if (settings.SetOwner(UserId, layer) is { } error) return BadRequest(new { error });
         return Ok(new { owner = settings.Snapshot.Owners.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer() });
+    }
+
+    // --- Сброс настроек моделей к наследованию (scope — в ПУТИ) ---
+    //
+    // Scope нельзя брать из тела: атрибут роли на значение тела не повесить, а глобальный
+    // слой правит только админ. Предпросмотр глобального scope НЕ гейтится ролью осознанно —
+    // GetSettings и так отдаёт весь global любому, секретом счёт по нему не является.
+    // key — ключ одной специальности («any» — «Любая специальность»); не задан — весь слой.
+
+    public class SpecialtyResetRequest
+    {
+        public string? Key { get; set; }
+    }
+
+    [HttpGet("settings/reset/owner/preview")]
+    public IActionResult PreviewResetOwner([FromQuery] string? key) => Reset(UserId, key, apply: false);
+
+    [HttpPost("settings/reset/owner")]
+    public IActionResult ResetOwner([FromBody] SpecialtyResetRequest? body = null) =>
+        Reset(UserId, body?.Key, apply: true);
+
+    [HttpGet("settings/reset/global/preview")]
+    public IActionResult PreviewResetGlobal([FromQuery] string? key) => Reset(null, key, apply: false);
+
+    [HttpPost("settings/reset/global")]
+    [Authorize(Roles = "admin")]
+    public IActionResult ResetGlobal([FromBody] SpecialtyResetRequest? body = null) =>
+        Reset(null, body?.Key, apply: true);
+
+    // Общий счёт предпросмотра и сброса: одна и та же ветка, apply решает, писать ли.
+    // Персоны — сущность per-owner, «общих» персон нет: их уровни чистятся только у scope=owner.
+    private IActionResult Reset(string? ownerId, string? key, bool apply)
+    {
+        string? resolvedKey = null;
+        if (key is not null && !TryNormalizeKey(key, out resolvedKey))
+            return BadRequest(new { error = $"Неизвестная специальность: {key}" });
+
+        var result = settings.ResetModelSettings(ownerId, resolvedKey, apply);
+        // Точечный сброс одной специальности персон не касается — он про строку матрицы
+        IReadOnlyList<Persona> touched = ownerId is not null && key is null
+            ? personas.ResetTierMatrices(ownerId, apply)
+            : [];
+        return Ok(new
+        {
+            specialties = result.Changed,
+            shadowed = result.Shadowed,
+            personas = touched.Count,
+            personaNames = touched.Select(p => p.Name),
+        });
+    }
+
+    // Ключ точечного сброса в канонический вид каталога; «any» — «Любая специальность».
+    // Пустой ключ ключом не считается (ValidateLayer в этот путь не заходит).
+    private static bool TryNormalizeKey(string key, out string? normalized)
+    {
+        normalized = null;
+        if (string.IsNullOrWhiteSpace(key)) return false;
+        if (SpecialtySettingsStore.IsAnyKey(key.Trim()))
+        {
+            normalized = SpecialtyCatalog.AnySpecialtyKey;
+            return true;
+        }
+        if (!SpecialtyCatalog.TryGetByKey(key, out var entry)) return false;
+        normalized = entry.Key;
+        return true;
     }
 }

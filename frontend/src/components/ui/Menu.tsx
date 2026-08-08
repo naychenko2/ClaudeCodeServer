@@ -70,14 +70,19 @@ export function Menu({ onClose, align = 'right', top = 30, bottom, minWidth = 20
   } else {
     pos = { position: 'absolute', ...(bottom != null ? { bottom } : { top }), [align]: 0 };
   }
+  // Слой: обычное меню живёт внутри своего родителя и обходится Z.dropdown, а меню
+  // в anchor-режиме уходит ПОРТАЛОМ в body — то есть наружу контекста наложения того,
+  // из чего его открыли. Открытое из модалки, на слое dropdown оно оказывалось ПОД ней
+  // (модалка — Z.modal): попап был кликабелен, но не виден
+  const layer = anchor ? Z.modal + 1 : Z.dropdown;
   const card = (
     <>
       <div
-        style={{ position: 'fixed', inset: 0, zIndex: Z.dropdown, pointerEvents: inertBackdrop ? 'none' : undefined }}
+        style={{ position: 'fixed', inset: 0, zIndex: layer, pointerEvents: inertBackdrop ? 'none' : undefined }}
         onClick={onClose}
       />
       <div style={{
-        zIndex: Z.dropdown + 1,
+        zIndex: layer + 1,
         background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
         boxShadow: SHADOW.dropdown, padding: 5, minWidth, display: 'flex', flexDirection: 'column',
         // Общий потолок ширины: карточка растёт по содержимому, и длинная строка внутри

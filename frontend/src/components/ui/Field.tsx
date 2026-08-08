@@ -54,11 +54,19 @@ interface TextFieldProps {
   disabled?: boolean;
   letterSpacing?: string;
   onEnter?: () => void;
+  // Поля с черновиком (значение уезжает в файл по завершении правки, а не по каждой букве)
+  // должны знать о фокусе: пока поле в работе, его нельзя перезаписывать пришедшими данными
+  onFocus?: () => void;
+  onBlur?: () => void;
+  onEscape?: () => void;
+  // Подсказка при наведении: нужна там, где под полем нет места для строки-пояснения
+  // (поле в ряду чипов — вторая строка растянула бы ряд)
+  title?: string;
   style?: CSSProperties;
 }
 
 // === Однострочное поле ввода с focus-ring ===
-export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, style }: TextFieldProps) {
+export function TextField({ value, onChange, placeholder, type = 'text', mono, autoFocus, disabled, letterSpacing, onEnter, onFocus, onBlur, onEscape, title, style }: TextFieldProps) {
   const [focused, setFocused] = useState(false);
   return (
     <input
@@ -66,11 +74,15 @@ export function TextField({ value, onChange, placeholder, type = 'text', mono, a
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
+      title={title}
       autoFocus={autoFocus}
       disabled={disabled}
-      onFocus={() => setFocused(true)}
-      onBlur={() => setFocused(false)}
-      onKeyDown={onEnter ? (e: KeyboardEvent) => { if (e.key === 'Enter') onEnter(); } : undefined}
+      onFocus={() => { setFocused(true); onFocus?.(); }}
+      onBlur={() => { setFocused(false); onBlur?.(); }}
+      onKeyDown={onEnter || onEscape ? (e: KeyboardEvent) => {
+        if (e.key === 'Enter') onEnter?.();
+        if (e.key === 'Escape') onEscape?.();
+      } : undefined}
       style={controlStyle(focused, mono, { letterSpacing, ...style })}
     />
   );

@@ -36,7 +36,8 @@ import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
-  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge,
+  Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
+  SidebarSection,
   Button, IconButton, Modal, ModalActions, ConfirmDialog,
   Menu, MenuItem, BackButton, WaitingIndicator,
   IslandScaffold, Splitter, SidebarSplitter, IslandSplitter, IslandSidebarSplitter,
@@ -50,7 +51,7 @@ import { EmptyState } from '../components/EmptyState';
 import type {
   ButtonVariant, ButtonSize,
   IconButtonSize, IconButtonTone, IconButtonVariant,
-  FileStatus,
+  FileStatus, BadgeTone,
 } from '../components/ui';
 
 import { ColorsSection } from './ColorsSection';
@@ -90,6 +91,9 @@ const FILE_STATUS_SAMPLES: { status: FileStatus; label: string }[] = [
   { status: 'D', label: 'удалён'        },
   { status: 'R', label: 'переименован'  },
 ];
+
+// Тоны плашки — роли дизайн-системы, а не цвета
+const BADGE_TONES: BadgeTone[] = ['neutral', 'accent', 'success', 'warning', 'danger', 'info', 'plan'];
 
 // Оглавление витрины: id секции (для якоря) + короткий лейбл в кнопке.
 // Порядок соответствует основному flow ниже. При добавлении новой секции —
@@ -394,6 +398,42 @@ function TogglesSection() {
                 <span style={{ fontSize: FS.sm, color: C.textSecondary }}>{s.label}</span>
               </div>
             ))}
+          </div>
+        </SubBlock>
+
+        {/* Badge: плашка с текстом. Тон — роль, а не цвет: набор ограничен парами
+            токенов, которые уже есть в обеих темах. Кликабельная плашка (есть onClick)
+            становится кнопкой — так открывается меню смены значения свойства */}
+        <SubBlock label="Badge — плашка состояния (7 тонов, 2 размера, кликабельная)">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+              {BADGE_TONES.map((t) => <Badge key={t} tone={t}>{t}</Badge>)}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+              {BADGE_TONES.map((t) => <Badge key={t} tone={t} size="xs" dot>{t}</Badge>)}
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, alignItems: 'center' }}>
+              <Badge tone="success" dot onClick={() => {}}>Принято</Badge>
+              <Badge tone="info" dot onClick={() => {}} active>Предложено (меню открыто)</Badge>
+              <Badge tone="danger" icon={<X size={11} />}>С иконкой</Badge>
+            </div>
+          </div>
+        </SubBlock>
+
+        {/* SidebarSection: сворачиваемая секция колонки. Заголовок капсом со счётчиком,
+            правый слот действий виден только у раскрытой. Свёрнутая занимает ровно
+            строку заголовка — колонка из двух закрытых секций не оставляет пустоты */}
+        <SubBlock label="SidebarSection — сворачиваемая секция колонки">
+          <div style={{ maxWidth: 290, display: 'flex', flexDirection: 'column' }}>
+            <SidebarSection title="Свойства" count={3} defaultOpen={false}>
+              <div style={{ fontSize: FS.sm, color: C.textSecondary }}>Содержимое секции</div>
+            </SidebarSection>
+            <SidebarSection
+              title="Комментарии" count={2} hint="2 откр."
+              actions={<Button size="xs" variant="secondary">Разобрать</Button>}
+            >
+              <div style={{ fontSize: FS.sm, color: C.textSecondary }}>Список комментариев</div>
+            </SidebarSection>
           </div>
         </SubBlock>
       </div>

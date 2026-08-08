@@ -5885,66 +5885,83 @@ public class SessionManager : IDisposable
         // drain). Системную директиву продолжения/верификации в этом случае не шлём — иначе
         // два хода подряд ушли бы в один процесс. Проверка атомарна с извлечением drain'а:
         // LoopTurnInFlight=true означает, что drain уже вытащил пользовательское сообщение и
-        // запускает итерацию. До всей логики цикла (phase/iteration) — чтобы не оставлять
-        // изменённое состояние при уступке.
+        // запуска итерацию. Маркер взводим ПОД ТЕМ ЖЕ PendingLock, что и гейт (Major 3): иначе
+        // в окне до BuildCliTurnText (SaveSessions/Broadcast/EnsureProcess, сотни мс) параллельный
+        // drain успевал вытащить пользовательское сообщение и пустить второй ход в тот же процесс.
+        // До всей логики цикла (phase/iteration) — чтобы не оставлять изменённое состояние при уступке.
         lock (entry.PendingLock)
         {
             if (entry.Pending.Any(p => p.Kind == PendingKind.User)) return;
             if (entry.LoopTurnInFlight) return;
+            entry.LoopTurnInFlight = true;
         }
 
-        // Буфер потребляем и чистим здесь (а не при постановке хода): очистка на постановке
-        // стирала бы текст стримящегося хода при параллельной отправке пользователя
-        string turnText;
-        lock (entry.LoopTurnLock)
+        try
         {
-            turnText = entry.LoopTurnText.ToString();
-            entry.LoopTurnText.Clear();
-        }
+            // Буфер потребляем и чистим здесь (а не при постановке хода): очистка на постановке
+            // стирала бы текст стримящегося хода при параллельной отправке пользователя
+            string turnText;
+            lock (entry.LoopTurnLock)
+            {
+                turnText = entry.LoopTurnText.ToString();
+                entry.LoopTurnText.Clear();
+            }
 
-        if (entry.LoopTurnFailed)
-        {
-            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "error", "Цикл остановлен: ход завершился ошибкой.");
-            await SetWorkLoopAsync(sessionId, false);
-            return;
-        }
+            if (entry.LoopTurnFailed)
+            {
+                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "error", "Цикл остановлен: ход завершился ошибкой.");
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
 
-        var promiseFound = ContainsPromiseMarker(turnText, loop.Promise);
+            var promiseFound = ContainsPromiseMarker(turnText, loop.Promise);
 
-        if (loop.Phase == "verifying")
-        {
-            // Верификационный ход отработал — цикл завершён независимо от исхода (штатное
-            // окончание, свидетельства уже в самом верификационном посте — отдельное
-            // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа)
-            await SetWorkLoopAsync(sessionId, false);
-            return;
-        }
+            if (loop.Phase == "verifying")
+            {
+                // Верификационный ход отработал — цикл завершён независимо от исхода (штатное
+                // окончание, свидетельства уже в самом верификационном посте — отдельное
+                // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа)
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
 
-        if (promiseFound)
-        {
-            loop.Phase = "verifying";
+            if (promiseFound)
+            {
+                loop.Phase = "verifying";
+                SaveSessions();
+                await BroadcastWorkLoopAsync(sessionId, entry);
+                if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
+                await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
+                return;
+            }
+
+            loop.Iteration++;
+            if (loop.Iteration >= loop.MaxIterations)
+            {
+                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
+                    $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} ходов. " +
+                    "Работа могла остаться незавершённой — проверьте результат.");
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
+
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
             if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
-            await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
-            return;
+            await SendMessageAsync(sessionId,
+                OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
         }
-
-        loop.Iteration++;
-        if (loop.Iteration >= loop.MaxIterations)
+        catch
         {
-            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
-                $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} ходов. " +
-                "Работа могла остаться незавершённой — проверьте результат.");
-            await SetWorkLoopAsync(sessionId, false);
-            return;
+            // Директива так и не ушла (сбой до/в отправке) — ход result не пришлёт, и взведённый
+            // выше маркер повис бы, заблокировав разбор очереди (drain уступает, пока он взведён).
+            // Пути остановки снимают цикл через SetWorkLoop(false) — та сбрасывает маркер сама;
+            // здесь ловим только исключение до отправки. Перебрасываем — вызывающий (Task.Run по
+            // result) залогирует.
+            if (entry.Info.WorkLoop is not null)
+                entry.LoopTurnInFlight = false;
+            throw;
         }
-
-        SaveSessions();
-        await BroadcastWorkLoopAsync(sessionId, entry);
-        if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
-        await SendMessageAsync(sessionId,
-            OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
     }
 
     // Маркер завершения ищем вне код-блоков и с точным регистром: модель часто цитирует

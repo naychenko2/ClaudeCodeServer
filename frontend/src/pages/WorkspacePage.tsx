@@ -972,6 +972,16 @@ const windowWidth = useWindowWidth();
             : prev
         );
       }
+      // Имя (и значок) чата уточнила модель — авто-заголовок нового чата или
+      // «Обновить название» из AI-хаба. Обновляем открытый чат на лету: иначе
+      // activeSession держит старое имя до переключения чата, и шапка врёт
+      if (msg.type === 'chat_renamed') {
+        setActiveSession(prev =>
+          prev?.id === msg.sessionId
+            ? { ...prev, name: msg.name, topic: msg.topic ?? prev.topic }
+            : prev
+        );
+      }
       // Статусы и сообщения проектных чатов не доходят до агрегата точек (он в
       // user-группе, те — в session/project). Мы в project-группе и видим события —
       // пнём точку, иначе она догонит только поллингом через 15с. status_changed —

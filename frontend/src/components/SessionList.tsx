@@ -224,6 +224,16 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
         });
         return;
       }
+      // Чат переименован моделью (авто-заголовок или «Обновить название») — правим имя
+      // и значок в списке сразу, а не ждём поллинга через 5с
+      if (msg.type === 'chat_renamed') {
+        setSessions(prev => prev.map(s =>
+          s.id === msg.sessionId
+            ? { ...s, name: msg.name, topic: msg.topic ?? s.topic }
+            : s
+        ));
+        return;
+      }
       if (msg.type !== 'status_changed') return;
       setSessions(prev => prev.map(s =>
         s.id === msg.sessionId

@@ -215,16 +215,15 @@ available». Ограничения по ходу — на бэкенде: се�
 инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов
 при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md).
 
-**Личный реестр MCP-серверов** (флаг `mcp-registry`) — раздел «MCP-серверы»: свои внешние
-серверы владельца (не встроенные продуктовые выше) со статусом, пробой, входом по OAuth и
-доступом по проектам/персонам. Хранение — `McpServerRecord` в `data/mcp-servers.json` (без
-секретов) + `data/mcp-secrets.json` (значения, в `BackupPaths.SecretFileNames`) +
-`data/mcp-status.json` (наблюдения, в бэкап не едет). Каскад доступности реестр →
-`Project.McpServersOff` (deny-list) → Off-привязка персоны `mcp:<ключ>` (без `condition` —
-тот же инвариант состава хода). **Разворачивается на allow-list** (флаг `mcp-allowlist`):
-сервер не едет никуда, пока не включён в проекте чата (`Project.McpServersOn`) ИЛИ
-у персоны чата (привязка `mcp:<ключ>` с `Mode != Off`); чат вне проекта без персоны —
-по `McpServerRecord.AllowOutsideProjects`. Deny-ветка живёт до снятия флага; план —
+**Личный реестр MCP-серверов** — раздел «MCP-серверы»: свои внешние серверы владельца (не
+встроенные продуктовые выше) со статусом, пробой, входом по OAuth и доступом по
+проектам/персонам. Хранение — `McpServerRecord` в `data/mcp-servers.json` (без секретов) +
+`data/mcp-secrets.json` (значения, в `BackupPaths.SecretFileNames`) + `data/mcp-status.json`
+(наблюдения, в бэкап не едет). Каскад доступности — allow-list (единственная модель): сервер
+не едет никуда, пока не включён в проекте чата (`Project.McpServersOn`) ИЛИ выдан персоне
+чата (привязка `mcp:<ключ>` с `Mode != Off`, без `condition` — тот же инвариант состава
+хода); чат вне проекта без персоны — по `McpServerRecord.AllowOutsideProjects`. Чистое
+OR-правило — `McpDelivery.ShouldDeliver`. История перехода с прежней deny-модели —
 [mcp-allowlist-plan.md](docs/research/mcp-allowlist-plan.md).
 Доставка в ход — `SessionManager.BuildExternalMcpProvider` →
 `ClaudeSession.BuildTurnMcpConfig`, `AuthVersion` в отпечатке запуска. Известное ограничение:
@@ -354,8 +353,8 @@ CSP), артефакты сессии (панель, derived из ленты), �
 «Сервисы» (дев-серверы проекта: инференс запусков из манифестов и конфигураций Rider,
 включая составные; страница в iframe через прокси `/preview/**`, живые логи, распознавание
 сервисов, поднятых вне продукта). **Ключи и эндпоинты панели «Сервисы» остались `preview`**
-— переименована только подпись. Ридер ссылок (панель «Чтение» рядом с чатом, за флагом
-`link-reader`): `POST /api/reader/read` сам идёт по внешнему URL (рубежи адресов на каждом
+— переименована только подпись. Ридер ссылок (панель «Чтение» рядом с чатом):
+`POST /api/reader/read` сам идёт по внешнему URL (рубежи адресов на каждом
 хопе редиректа, только markdown на проводе, без кук/креденшалов/кеша — [ADR-005](docs/adr/ADR-005-link-reader-server.md)),
 `GET /api/reader/image` тем же SsrfGuard проксирует картинки статьи, чтобы браузер не ходил
 на CDN сайта напрямую.
@@ -367,8 +366,10 @@ Dark launch: фича коммитится выключенной и включ�
 функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All`
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs)); хранение —
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
-хук `useFeature(FLAGS.key)`. Каталог опустошён (2026-07): все старые флажные фичи включены
-безусловно, пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
+хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
+(2026-08); в каталоге осталось два флага — `workspace-destructive` (постоянный
+предохранитель от необратимого удаления) и `default-personas-onboarding` (dark-launch
+онбординга). Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
 
 **Как добавить новый флаг (3 шага):**
 1. Бэк: добавить строку в `FeatureFlagCatalog.All` (`key`, `title`, `description`, `Default: false`, `stage`).

@@ -99,6 +99,25 @@ public class FallbackLlmSessionAdapterTests
         return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
     }
 
+    // N сторонних провайдеров p1..pN с моделями m1..mN — цепочка шагов, у каждого свой
+    // провайдер и нет пула подписок. Каждый шаг цепочки = одна попытка = одна подмена
+    // (IsProviderSwitch), поэтому потолок подмен здесь проверяется переходами по цепочке,
+    // а не бесплатными ротациями пула (волна 2: только IsProviderSwitch тратит потолок).
+    private static LlmProviderRegistry BuildChainProviders(int count)
+    {
+        var dict = new Dictionary<string, string?>();
+        for (var i = 1; i <= count; i++)
+        {
+            dict[$"LlmProviders:p{i}:ApiKey"] = $"sk-{i}";
+            dict[$"LlmProviders:p{i}:AnthropicBaseUrl"] = $"https://p{i}.example.com";
+            dict[$"LlmProviders:p{i}:Models:0:Id"] = $"m{i}";
+        }
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    private static string[] ChainModels(int count) =>
+        Enumerable.Range(1, count).Select(i => $"m{i}").ToArray();
+
     private (FallbackLlmSessionAdapter Sut, FakeInnerAdapter Inner) BuildSut(
         ClaudeSubscriptionPool pool, LlmProviderRegistry? providers = null,
         string model = "sonnet", string provider = "acc-a",
@@ -274,23 +293,27 @@ public class FallbackLlmSessionAdapterTests
         error.Text.Should().Contain("Попробуйте позже или выберите другую модель в настройках чата.");
     }
 
+    // Волна 2: потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки), а
+    // ротации подписок пула бесплатны. Поэтому потолок проверяется на цепочке сторонних
+    // провайдеров (каждый шаг — отдельная подмена), а не на ротациях пула.
     [Fact]
     public async Task ПотолокПятьПодмен_ШестаяПопыткаНеЗапускается()
     {
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6", "s7" };
-        var pool = BuildPool(keys);
-        var (sut, inner) = BuildSut(pool, provider: "s1", modelFallbackMax: 5);
+        var providers = BuildChainProviders(7);
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "m1", provider: "p1",
+            chain: ChainModels(7), modelFallbackMax: 5);
         for (var i = 0; i < 7; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));   // обрыв — не помечает пул
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
-        inner.Attempts.Should().HaveCount(6, "1 исходная + максимум 5 подмен");
+        inner.Attempts.Should().HaveCount(6, "1 стартовая + максимум 5 подмен (переходов по цепочке)");
         inner.Attempts.Select(a => a.Provider).Distinct().Should().HaveCount(6,
             "пара «модель × подписка» пробуется не более одного раза");
-        // Все подмены — уровень 1 (ротация подписок того же пула): без маркеров в ленте
-        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        // Каждый переход по цепочке — маркер; 5 переходов до упора в потолок
+        Downstream().OfType<ProviderSwitchedMessage>().Should().HaveCount(5);
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("error");
     }
@@ -299,19 +322,19 @@ public class FallbackLlmSessionAdapterTests
     public async Task ПотолокНеЗадан_ДефолтЧетыреПодмены()
     {
         // Без стора (modelFallbackMax = null) потолок — дефолт 4 (FallbackSettingsStore.DefaultMaxSubstitutions).
-        // 6 подписок в пуле, но больше 5 попыток (1 стартовая + 4 подмены) не пройдёт.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
-        var (sut, inner) = BuildSut(pool, provider: "s1");
+        // Цепочка из 6 сторонних шагов, но больше 5 попыток (1 стартовая + 4 подмены) не пройдёт.
+        var providers = BuildChainProviders(6);
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "m1", provider: "p1",
+            chain: ChainModels(6));
         for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
-        inner.Attempts.Should().HaveCount(5, "1 исходная + максимум 4 подмены по дефолту");
-        // Все подмены — уровень 1 (ротация подписок того же пула): без маркеров в ленте
-        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        inner.Attempts.Should().HaveCount(5, "1 стартовая + максимум 4 подмены по дефолту");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().HaveCount(4);
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("error");
         Downstream().OfType<ErrorMessage>().Should().ContainSingle()
@@ -321,23 +344,24 @@ public class FallbackLlmSessionAdapterTests
     [Fact]
     public async Task ВнеДиапазона_КлампитсяКДефолту()
     {
-        // Потолок 99 в файле выходит за жёсткий 1..5 — адаптер должен игнорировать
-        // (клампится к дефолту 4), иначе жёсткий потолок ADR был бы обойдён.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
+        // Потолок 99 в файле выходит за жёсткий 1..5 — стор отвергает значение (валидация),
+        // global остаётся null, и читается дефолт 4. Иначе жёсткий потолок ADR был бы обойдён.
+        var providers = BuildChainProviders(6);
+        var chain = ChainModels(6);
+        var pool = BuildPool("acc-a");
         var store = new FallbackSettingsStore(BuildTempConfiguration(out _));
         Assert.Equal("Потолок подмен должен быть в диапазоне 1..5", store.SetGlobal(99));
-        // global остаётся null → читается дефолт 4 (FallbackSettingsStore.DefaultMaxSubstitutions)
-        var session = new Session { Provider = "s1", OwnerId = null };
+        var session = new Session { Model = "m1", Provider = "p1", OwnerId = null };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
-            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
-            fallbackSettings: store);
+            pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            fallbackSettings: store,
+            effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
         for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
@@ -349,21 +373,23 @@ public class FallbackLlmSessionAdapterTests
     public async Task ЛичныйПотолокВладельцаБьётГлобальный()
     {
         // Глобально потолок 1, лично у владельца — 5. per-owner слой перебивает глобальный.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
+        var providers = BuildChainProviders(7);
+        var chain = ChainModels(7);
+        var pool = BuildPool("acc-a");
         var store = new FallbackSettingsStore(BuildTempConfiguration(out _));
         Assert.Null(store.SetGlobal(1));
         Assert.Null(store.SetOwner("owner-x", 5));
-        var session = new Session { Provider = "s1", OwnerId = "owner-x" };
+        var session = new Session { Model = "m1", Provider = "p1", OwnerId = "owner-x" };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
-            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
-            fallbackSettings: store);
+            pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            fallbackSettings: store,
+            effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
         for (var i = 0; i < 7; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
@@ -376,27 +402,61 @@ public class FallbackLlmSessionAdapterTests
     {
         // Личный потолок owner-x — 1, у другого владельца должна быть глобальная 5.
         // per-owner изоляция: значения одного владельца не должны просачиваться к другому.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
+        var providers = BuildChainProviders(7);
+        var chain = ChainModels(7);
+        var pool = BuildPool("acc-a");
         var store = new FallbackSettingsStore(BuildTempConfiguration(out _));
         Assert.Null(store.SetGlobal(5));
         Assert.Null(store.SetOwner("owner-x", 1));
-        var session = new Session { Provider = "s1", OwnerId = "owner-y" };
+        var session = new Session { Model = "m1", Provider = "p1", OwnerId = "owner-y" };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
-            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
-            fallbackSettings: store);
+            pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            fallbackSettings: store,
+            effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
         for (var i = 0; i < 7; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
         inner.Attempts.Should().HaveCount(6,
             "owner-y не имеет своей записи → global=5 → 1 + 5 подмен");
+    }
+
+    // Волна 2: ротации подписок того же пула бесплатны — потолок подмен на них не тратится.
+    // Пул из 3 подписок, потолок 1, цепочка [sonnet, deepseek-chat]. Все три sonnet-подписки
+    // перепробуются (ротации, бесплатно), и лишь переход к deepseek тратит единственную
+    // подмену. Если бы ротации считались, после acc-b (sub=1>=1) ход упал бы, и acc-c/deepseek
+    // не позвались бы — а они зовутся.
+    [Fact]
+    public async Task РотацияПулаБесплатна_ПотолокТолькоНаШагЦепочки()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a", "acc-b", "acc-c");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"], modelFallbackMax: 1);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a — исчерпан → ротация acc-b (бесплатно)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-b — исчерпан → ротация acc-c (бесплатно)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-c — исчерпан → шаг цепочки deepseek (sub=1)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // deepseek — substitutions=1>=1 → финал
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // 4 попытки: 3 бесплатных ротации пула + 1 платный переход к deepseek.
+        inner.Attempts.Should().HaveCount(4);
+        inner.Attempts[3].Should().Be(("deepseek", "deepseek-chat"), "единственная подмена — шаг цепочки");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle();
     }
 
     // --- Цепочка пресета (ADR-007 §4, §8) ---

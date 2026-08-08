@@ -348,7 +348,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // _effectiveModel() — поэтому именно эта пара попадает в attempted и в след.
                 currentModel = next.Model ?? currentModel;
                 currentKey = next.Key;
-                substitutions++;
+                // Потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки /
+                // переход к стороннему провайдеру). Тихие ротации подписок того же пула
+                // Claude бесплатны — это та же модель на другом аккаунте, а не подмена.
+                if (next.IsProviderSwitch) substitutions++;
             }
         }
         catch (Exception ex)

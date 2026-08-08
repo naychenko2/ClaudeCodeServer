@@ -51,6 +51,16 @@ function load(force = false): Promise<Project[]> {
 // Сбросить кэш и оповестить подписчиков (напр. после создания/удаления проекта)
 export function invalidateProjectsCache() { fetchedAt = 0; void load(true); }
 
+// Прогреть кэш (если ещё не свежий) и дождаться списка. Вне React — напр. для навигации
+// в проект по id из глобального стора, когда готового Project-объекта нет под рукой.
+export function ensureProjectsLoaded(): Promise<Project[]> { return load(); }
+
+// Синхронный доступ к кэшу по id (без запроса). null/undefined, если кэш пуст или не прогрет —
+// тогда вызывающий идёт через ensureProjectsLoaded().
+export function getCachedProject(id: string): Project | undefined {
+  return cache.find(p => p.id === id);
+}
+
 export function useAllProjects(): Project[] {
   const [list, setList] = useState<Project[]>(cache);
   useEffect(() => {

@@ -3,7 +3,9 @@ import { createPortal } from 'react-dom';
 import { C, FONT, R, Z, SHADOW } from '../../lib/design';
 import { getNav, NAV_CHANGE_EVENT } from '../../lib/nav';
 import { useAiBusy } from '../../lib/ai/busy';
-import { useAiAwaiting, type AiAwaitingRec } from '../../lib/ai/awaiting';
+import { useAiAwaiting, ensureAiAwaitingLoaded, type AiAwaitingRec } from '../../lib/ai/awaiting';
+import { getCachedProject, ensureProjectsLoaded } from '../../features/projects/useAllProjects';
+import type { Project } from '../../types';
 import { getFlag } from '../../lib/featureFlags';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
@@ -113,6 +115,9 @@ export function AiLauncher() {
   // зовёт useContextPersona() без аргументов — там персона чата правильна.)
   const facePersona = useContextPersona({ personaId: null });
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
+  // Глобальный стор «ждём ответа» живёт на потоке статусов сессий, не на ChatPanel:
+  // запускаем подписку + первичную загрузку при монтировании хаба (он рендерится везде).
+  useEffect(() => { void ensureAiAwaitingLoaded(); }, []);
 
   // Git-статус текущего проекта — чтобы git-действия (разбор коммитов, ревью diff, история
   // файла) не предлагались в проекте без git ни в палитре, ни в LLM-рекомендациях. Опрашиваем
@@ -355,15 +360,24 @@ export function AiLauncher() {
   // Клик по пункту hover-балуна — сразу запустить действие
   const runRec = (id: string) => { setFabHover(false); setSuggestion(null); runActionById(id, buildCtx()); };
 
-  // Сигнал «ждём ответа» должен не только звать, но и вести туда, где ждут. Каналы — те же,
-  // что у «зума» со стены и создания группового чата: проектный чат открывает воркспейс
-  // (сессия лежит в sessionStorage, её поднимает WorkspacePage), внепроектный — раздел «Чаты».
+  // Сигнал «ждём ответа» должен не только звать, но и вести туда, где ждут. Проектный чат
+  // открывает воркспейс (cc-open-session) и выбирает сессию (cc_pending_project_chat —
+  // WorkspacePage сам найдёт её в списке проекта); внепроектный — раздел «Чаты» по id.
+  // Адрес важнее подписи: навигация работает по одним id, без полной Session/Project в записи.
   const openWaitingChat = (rec: AiAwaitingRec) => {
     setFabHover(false);
     setAwaitingBalloon(false);
-    if (rec.project) {
-      sessionStorage.setItem('cc_pending_session', JSON.stringify(rec.session));
-      window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: rec.project } }));
+    if (rec.projectId) {
+      const go = (p: Project) => {
+        sessionStorage.setItem('cc_pending_project_chat', `${p.id}|${rec.chatId}`);
+        window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: p } }));
+      };
+      const cached = getCachedProject(rec.projectId);
+      if (cached) go(cached);
+      else void ensureProjectsLoaded().then(list => {
+        const p = list.find(x => x.id === rec.projectId);
+        if (p) go(p);
+      });
     } else {
       localStorage.setItem('cc_open_chat', rec.chatId);
       window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: rec.chatId } }));

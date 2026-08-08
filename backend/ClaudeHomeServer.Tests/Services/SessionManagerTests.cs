@@ -1250,30 +1250,35 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task SendMessage_User_ВЦиклеДоГотово_СнимаетЦиклИПрерываетХод()
+    public async Task SendMessage_User_ВЦиклеДоГотово_НеСнимаетЦиклИПрерываетХод()
     {
-        // Пользовательское прерывает ВСЁ, включая цикл «до готово»: цикл снимается
-        // синхронно (как по «Стоп»), текущий ход прерывается, сообщение доставится по exited
+        // Сообщение пользователя в чат с активным циклом НЕ снимает цикл (решение владельца
+        // 2026-08-08): ход прерывается, сообщение встаёт в очередь, цикл остаётся активным.
+        // WorkLoopMessage(active:false) не рассылается — цикл не выключен.
         var session = await MkBusySessionAsync("preempt-loop", SessionStatus.Working);
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
         var entry = GetEntry(session.Id);
         var adapter = StubAdapter(entry);
         SetProcess(entry, adapter.Object);
+        ClearSent();
 
         var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться в цикл", []);
 
         outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
-        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull("сообщение пользователя обрывает цикл");
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("сообщение пользователя не снимает цикл");
+        Sent<WorkLoopMessage>().Should().NotContain(m => !m.Active,
+            "выключение цикла не рассылается — цикл остаётся активным");
         adapter.Verify(a => a.Interrupt(), Times.Once());
         _sut.GetPending(session.Id).Should().ContainSingle()
             .Which.Kind.Should().Be(SessionManager.PendingKind.User);
     }
 
     [Fact]
-    public async Task SendMessage_User_ЦиклМеждуИтерациями_СнимаетЦиклИДоставляетСразу()
+    public async Task SendMessage_User_ЦиклМеждуИтерациями_НеСнимаетЦиклИДоставляетИтерациюСПротоколом()
     {
-        // Между итерациями цикла чат на мгновение свободен: прерывать нечего (Interrupt
-        // не зовётся), но цикл снимается, и доставку форсирует dispatchNow постановки
+        // Между итерациями цикла чат на мгновение свободен: прерывать нечего (Interrupt не
+        // зовётся), но цикл НЕ снимается — сообщение продолжает его следующей итерацией:
+        // dispatchNow форсирует разбор, и доставленный ход несёт протокол цикла (WorkLoopTurn).
         var session = await MkBusySessionAsync("preempt-idle-loop", SessionStatus.Active);
         session.Name = "есть имя";
         await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
@@ -1284,12 +1289,70 @@ public class SessionManagerTests : IDisposable
         var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться между итерациями", []);
 
         outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
-        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull();
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл продолжается");
         adapter.Verify(a => a.Interrupt(), Times.Never());
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
-        adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
-            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("вмешаться между итерациями")
+                            && t.Contains("[ЦИКЛ «ДО ГОТОВО»]")),
+            It.IsAny<IReadOnlyList<string>>(), It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
         _sut.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    // White-box: пользовательская вводная напрямую в очередь — моделирует «сообщение встало,
+    // пока ход стримился» без побочных эффектов реальной постановки (interrupt/dispatchNow).
+    private static void EnqueueUser(object entry, string text)
+    {
+        var pending = (System.Collections.IList)entry.GetType().GetField("Pending")!.GetValue(entry)!;
+        pending.Add(new SessionManager.QueuedMessage(Guid.NewGuid().ToString("N"), text, null, null,
+            0, DateTime.UtcNow, Kind: SessionManager.PendingKind.User));
+    }
+
+    [Fact]
+    public async Task ContinueWorkLoop_ПользовательскоеСообщениеВОчереди_НеШлётДирективуПродолжения()
+    {
+        // Без двойной отправки (п.4): при user-pending в очереди директива продолжения НЕ шлётся —
+        // продолжением служит само сообщение пользователя. Ход-итерация завершается result,
+        // в очереди лежит вводная пользователя.
+        var session = await MkBusySessionAsync("loop-pending-race", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true); // ход-итерация в полёте
+        EnqueueUser(entry, "доп. вводная человека");
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        // Доставка из очереди пошла (сообщение пользователя как следующая итерация)…
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("доп. вводная человека")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        // …а системной директивы продолжения НЕ было — иначе два хода подряд в один процесс
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл продолжается на сообщении пользователя");
+    }
+
+    [Fact]
+    public async Task Interrupt_ЧатВЦиклеДоГотово_СнимаетЦикл()
+    {
+        // «Стоп» — явный путь выключения цикла (п.5): прерывает ход и снимает цикл синхронно,
+        // поведение прежнее. WorkLoopMessage(active:false) рассылается.
+        var session = await MkBusySessionAsync("loop-stop", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        ClearSent();
+
+        _sut.Interrupt(session.Id);
+
+        _sut.GetById(session.Id)!.WorkLoop.Should().BeNull("«Стоп» снимает цикл");
+        Sent<WorkLoopMessage>().Should().ContainSingle(m => !m.Active);
     }
 
     [Fact]

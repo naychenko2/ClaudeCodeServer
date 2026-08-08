@@ -10,12 +10,18 @@ import {
 } from '../../lib/specialties';
 import { api } from '../../lib/api';
 import { showToast } from '../../lib/toast';
+import { plural } from '../../lib/spend';
 import { C, FS, R, SP } from '../../lib/design';
 import type { ModelOption } from '../../lib/models';
 import type {
   ResetResult, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyTemplateSettings,
 } from '../../types';
 import { ResetConfirmDialog } from './ResetConfirmDialog';
+
+// Склонение счётчиков в текстах сброса — тот же `plural`, что уже режет счётчики в
+// KpiRibbon/QuotasTab этой же вкладки, отдельного хелпера не заводим
+const specWord = (n: number) => plural(n, 'специальность', 'специальности', 'специальностей');
+const personaWord = (n: number) => plural(n, 'персона', 'персоны', 'персон');
 
 // Свёрнутый блок «Исключения» внизу вкладки «Модели по умолчанию» (макет models-spend-v3.html §2):
 // бывшая вкладка «Специальности», ужатая в раскрываемый блок. Свёрнуто — бейдж с числом
@@ -162,7 +168,8 @@ export function ExceptionsBlock({
     setConfirmBusy(true);
     try {
       const res = await onReset(scope);
-      const base = `Вернули к наследованию: ${res.specialties} специальностей, ${res.personas} персон`;
+      const personaPart = res.personas > 0 ? `, ${res.personas} ${personaWord(res.personas)}` : '';
+      const base = `Вернули к наследованию: ${res.specialties} ${specWord(res.specialties)}${personaPart}`;
       const body = res.shadowed.length === 0
         ? base
         : `${base}. Свои права сохранили: ${res.shadowed.map(k => specialtyLabel(catalog, k)).join(', ')} — они по-прежнему перекрывают общие уровни.`;
@@ -185,14 +192,18 @@ export function ExceptionsBlock({
       const names = bulkPreview.personaNames.slice(0, 3);
       const rest = bulkPreview.personas - names.length;
       const namesPart = names.length > 0 ? `: ${names.join(', ')}${rest > 0 ? `, и ещё ${rest}` : ''}` : '';
+      // Хвост про персоны — только при M > 0, иначе «и 0 персон» читается как сбой
+      const personasPart = bulkPreview.personas > 0
+        ? ` и ${bulkPreview.personas} ${personaWord(bulkPreview.personas)}${namesPart}`
+        : '';
       return {
         title: 'Сбросить свои исключения?',
-        body: `Свои модели потеряют ${bulkPreview.specialties} специальностей и ${bulkPreview.personas} персон${namesPart}. Все они снова пойдут моделями по умолчанию.`,
+        body: `Свои модели потеряют ${bulkPreview.specialties} ${specWord(bulkPreview.specialties)}${personasPart}. Все они снова пойдут моделями по умолчанию.`,
       };
     }
     return {
       title: 'Сбросить общие исключения?',
-      body: `Свои модели потеряют ${bulkPreview.specialties} специальностей. Личные настройки персон это не затронет.`,
+      body: `Свои модели потеряют ${bulkPreview.specialties} ${specWord(bulkPreview.specialties)}. Личные настройки персон это не затронет.`,
     };
   }, [bulkPreview, scope]);
 

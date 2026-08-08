@@ -28,6 +28,11 @@ public sealed class DossierStore
     };
     private static readonly TimeSpan SyncDebounce = TimeSpan.FromSeconds(15);
 
+    // Триггер перехода на SQLite (ADR-004 §4) — измеримый, не «когда-нибудь»: файл проекта
+    // перешёл за 15 МБ ИЛИ записей больше 3000. При подходе к порогу стор пишет warning в лог.
+    private const long MigrationSizeThreshold = 15 * 1024 * 1024;
+    private const int MigrationRecordThreshold = 3000;
+
     private readonly ConcurrentDictionary<string, List<ChangeDossier>> _store = new();
     private readonly string _dataDir;
     private readonly Lock _saveLock = new();
@@ -45,6 +50,10 @@ public sealed class DossierStore
 
     private readonly int _maxEntries;
 
+    // Проекты, для которых уже залогировано приближение к порогу миграции — чтобы не спамить
+    // warning на каждый коммит. In-memory: при рестарте предупредит повторно (приемлемо — раз).
+    private readonly HashSet<string> _migrationWarned = [];
+
     public DossierStore(IConfiguration config, ILogger<DossierStore>? log = null,
         KnowledgeService? knowledge = null, UserStore? users = null, ProjectManager? projects = null)
     {
@@ -56,12 +65,14 @@ public sealed class DossierStore
             config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json")))!;
         _dataDir = Path.Combine(dataRoot, "dossiers");
         _knowledgeStorePath = Path.Combine(_dataDir, "knowledge.json");
-        // Дефолт поднят с 5000 до 20000 (замер прода 2026-08-08): ~62 коммита/день, при фильтре
-        // захвата — ~600 паспортов/мес, так что 5000 исчерпались бы за ~8 мес вместо «запаса на
-        // годы». 20000 ≈ 2.7 года, ~30 МБ JSON на проект — приемлемо для редкого пути записи.
-        // Точка пересмотра (>10k) на SQLite (ADR-004 §4) — на горизонте, но Add редок (на коммит),
-        // чтение in-memory; до фактических тормозов JSON достаточен.
-        _maxEntries = int.TryParse(config["Dossiers:MaxEntries"], out var me) && me > 0 ? me : 20_000;
+        // Дефолт 5000 (замер прода 2026-08-08: ~5.2 КБ на запись → 5000 ≈ 26 МБ). Это верхняя
+        // граница терпимого для whole-file JSON: Save() переписывает файл ЦЕЛИКОМ на каждый
+        // коммит, плюс список держится в памяти, плюс data/ целиком едет в бэкап. Крутить потолок
+        // вверх — не выход: вытесненные в архивный JSONL записи в поиске и recall не участвуют,
+        // ценность фичи они всё равно теряют. Решение объёма — фильтр захвата (§2) либо SQLite
+        // (триггер — константы ниже, ADR-004 §4). Ранняя оценка «1.5 КБ на паспорт» была в 3.5×
+        // занижена против факта — отсюда и прежний «запас на годы» не держался.
+        _maxEntries = int.TryParse(config["Dossiers:MaxEntries"], out var me) && me > 0 ? me : 5000;
         _kStore = JsonFileStore.Load<Dictionary<string, KnowledgeState>>(_knowledgeStorePath, JsonOpts) ?? new();
     }
 
@@ -100,9 +111,34 @@ public sealed class DossierStore
             list.Add(dossier);
             EvictIfNeeded(dossier.OwnerId, dossier.ProjectId, list);
             Save(dossier.OwnerId, dossier.ProjectId);
+            WarnIfApproachingMigration(dossier.OwnerId, dossier.ProjectId, list);
         }
         QueueSync(dossier.OwnerId, dossier.ProjectId);
         return dossier;
+    }
+
+    // Предупреждение о приближении к порогу миграции на SQLite — once per project: размер файла
+    // после Save (только что записан) ИЛИ число записей. Архивный JSONL ценности не вернёт, рост
+    // потолка проблему не решает — пишем это в лог, чтобы узнать о необходимости переезда до
+    // того, как whole-file Save() и бэкап data/ станут ощутимо тяжёлыми (ADR-004 §4).
+    private void WarnIfApproachingMigration(string ownerId, string projectId, List<ChangeDossier> list)
+    {
+        var key = Key(ownerId, projectId);
+        if (_migrationWarned.Contains(key)) return;
+
+        long size;
+        try { size = new FileInfo(StorePath(ownerId, projectId)).Length; }
+        catch { size = 0; }
+
+        if (list.Count > MigrationRecordThreshold || size > MigrationSizeThreshold)
+        {
+            _migrationWarned.Add(key);
+            _log?.LogWarning(
+                "dossiers: стор проекта {Project} приближается к порогу миграции на SQLite: " +
+                "{Count} записей, {SizeMB:F1} МБ (порог >{Recs} записей или >{SizeMB:F0} МБ, ADR-004 §4). " +
+                "Архивный JSONL в поиске и recall не участвует — рост потолка ценности не вернёт, нужен переход модели хранения.",
+                projectId, list.Count, size / 1048576.0, MigrationRecordThreshold, MigrationSizeThreshold / 1048576.0);
+        }
     }
 
     // Переякорение при squash (§7): вызывающий уже смутировал поля объекта, полученного

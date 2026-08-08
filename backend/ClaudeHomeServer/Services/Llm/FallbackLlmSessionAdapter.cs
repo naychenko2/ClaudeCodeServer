@@ -109,6 +109,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     private void LogInfo(string message) => _log?.LogInformation("[ModelFallback] {Message}", message);
 
+    private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {Message}", message);
+
     // Эффективный потолок подмен для владельца сессии: per-owner → global → дефолт 3
     // (FallbackSettingsStore.ClampMaxSubstitutions). Info.OwnerId может быть пуст у
     // проектных сессий без владельца — тогда читаем global-слой.
@@ -254,6 +256,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // или пустая) — после пула честная ошибка, автоподбора больше нет. Вычисляем один раз за ход.
         var chain = _effectiveChain?.Invoke() ?? Array.Empty<string>();
         var chainIndex = 0;
+        // Отладка «почему выбралась эта модель»: построенная цепочка хода одной строкой.
+        LogDebug($"Цепочка хода ({Info.Id}): [{string.Join(", ", chain)}]");
 
         // Фактическая пара текущей попытки «модель × ключ». Берётся из шага цепочки или
         // эффективной модели на СТАРТЕ и далее обновляется применённой подменой (next), а не

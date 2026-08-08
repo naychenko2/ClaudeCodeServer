@@ -42,6 +42,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // остальные = план фолбэка). null/один элемент — цепочки нет (существующий автоподбор).
     // Вычисляется вызывающим (фабрикой через ClaudeSession.EffectiveTurnChain) на каждом ходу.
     private readonly Func<IReadOnlyList<string>>? _effectiveChain;
+    // Кулдаун недоступности провайдера (волна 2): провайдер, вернувший Unreachable/ProviderError,
+    // помечается недоступным на TTL; фолбэк пропускает его шаги цепочки (fail-open). null (тесты).
+    private readonly ProviderHealthRegistry? _health;
     // Лог подмен: без него оркестрацию нечем отлаживать на стенде (что классифицировали,
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
@@ -73,6 +76,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         string? initialProfileRoot,
         FallbackSettingsStore? fallbackSettings = null,
         Func<IReadOnlyList<string>>? effectiveChain = null,
+        ProviderHealthRegistry? health = null,
         ILogger? log = null)
     {
         _inner = inner;
@@ -85,6 +89,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _initialProfileRoot = initialProfileRoot;
         _fallbackSettings = fallbackSettings;
         _effectiveChain = effectiveChain;
+        _health = health;
         _log = log;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
     }
@@ -272,6 +277,37 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
         try
         {
+            // (б) Стартовая подмена при кулдауне (волна 2): если стартовый провайдер помечен
+            // недоступным (возвращал Unreachable/ProviderError в прошлых ходах), не тратим
+            // попытку на мёртвый эндпоинт — стартуем сразу с первого живого шага цепочки.
+            // Маркер provider_switched (Reason=unreachable). fail-open: если ВСЕ шаги цепочки
+            // в кулдауне, остаёмся на исходной паре (ход должен идти). substitutions не тратим —
+            // это выбор стартовой точки, а не подмена по ошибке в этом ходе.
+            if (_health is not null && chain.Count > 1 && _health.IsUnavailable(currentKey))
+            {
+                var stepIdx = -1;
+                for (var i = 1; i < chain.Count; i++)
+                {
+                    var sm = chain[i];
+                    if (!_health.IsUnavailable(ProviderKeyFor(sm))) { stepIdx = i; break; }
+                }
+                if (stepIdx > 0)
+                {
+                    chainIndex = stepIdx;
+                    currentModel = chain[stepIdx];
+                    currentKey = ProviderKeyFor(currentModel);
+                    Info.Model = currentModel;
+                    Info.Provider = currentKey;
+                    _profileRoot = ResolveRootFor(currentKey);
+                    appliedModel = currentModel;
+                    appliedProvider = currentKey;
+                    var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
+                    await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
+                        $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
+                    LogInfo($"Стартовая подмена (кулдаун): «{origModel}» × «{origProvider}» недоступен → старт на «{currentKey}» / «{currentModel}»");
+                }
+            }
+
             while (!_cts.IsCancellationRequested)
             {
                 if (_userInterrupted) { await SettleAsync(turn); return; }
@@ -307,6 +343,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 });
                 // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
                 if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
+
+                // Кулдаун недоступности (волна 2): провайдер, вернувший Unreachable/ProviderError,
+                // помечаем недоступным на TTL — следующие ходы и шаги цепочки пропустят его сразу.
+                // Лимитные классы (429/usage) сюда не попадают: это квота аккаунта, не мёртвый эндпоинт.
+                if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError)
+                    _health?.MarkUnavailable(currentKey);
 
                 trace.Add(new AttemptTrace(currentModel, currentKey, cls));
                 if (substitutions >= EffectiveMaxSubstitutions())
@@ -459,23 +501,37 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
         // Цепочка пресета: следующий шаг (модель могла быть сторонней — у неё нет ротации,
         // поэтому мы здесь). Каждый шаг цепочки, дойдя до своих подписок (у нативных),
-        // отработает уровень 1 на следующей итерации.
+        // отработает уровень 1 на следующей итерации. Кулдаун (волна 2): шаги с провайдером
+        // в кулдауне пропускаем, но fail-open — если ВСЕ оставшиеся непробованные в кулдауне,
+        // берём первого остывшего (кулдаун — наблюдение, а не запрет).
         if (chain.Count > 1)
         {
-            while (chainIndex + 1 < chain.Count)
+            FallbackTarget? cooled = null;
+            var cooledIdx = chainIndex;
+            var scan = chainIndex;
+            while (++scan < chain.Count)
             {
-                chainIndex++;
-                var nextModel = chain[chainIndex];
-                var nextKey = ProviderKeyFor(nextModel);
-                if (attempted.Contains((nextModel, nextKey))) continue;
-                var dstRoot = ResolveRootFor(nextKey);
+                var stepModel = chain[scan];
+                var stepKey = ProviderKeyFor(stepModel);
+                if (attempted.Contains((stepModel, stepKey))) continue;
+                var dstRoot = ResolveRootFor(stepKey);
                 if (!TryMigrateTranscript(dstRoot)) continue;
-                var label = string.IsNullOrWhiteSpace(nextModel) ? KeyLabel(nextKey) : nextModel;
-                return new FallbackTarget(nextKey, nextModel,
-                    Label: $"Цепочка пресета: шаг {chainIndex + 1} → «{label}»",
+                var label = string.IsNullOrWhiteSpace(stepModel) ? KeyLabel(stepKey) : stepModel;
+                var target = new FallbackTarget(stepKey, stepModel,
+                    Label: $"Цепочка пресета: шаг {scan + 1} → «{label}»",
                     ProfileRoot: dstRoot, IsProviderSwitch: true);
+                // Остывший: запоминаем первого, но ищем живого дальше
+                if (_health?.IsUnavailable(stepKey) is true)
+                {
+                    if (cooled is null) { cooled = target; cooledIdx = scan; }
+                    continue;
+                }
+                // Живой — берём сразу
+                chainIndex = scan;
+                return target;
             }
-            // Цепочка исчерпана — финальный сбой, автоподбора нет
+            // Живых не осталось — fail-open: берём первого остывшего (если был), иначе цепочка исчерпана
+            if (cooled is not null) { chainIndex = cooledIdx; return cooled; }
             return null;
         }
 

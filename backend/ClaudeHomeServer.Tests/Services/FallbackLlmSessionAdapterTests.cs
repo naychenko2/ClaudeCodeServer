@@ -123,7 +123,8 @@ public class FallbackLlmSessionAdapterTests
         string model = "sonnet", string provider = "acc-a",
         int? modelFallbackMax = null, string? ownerId = null,
         string[]? chain = null,
-        Func<string?>? effectiveModel = null)
+        Func<string?>? effectiveModel = null,
+        ProviderHealthRegistry? health = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -146,7 +147,8 @@ public class FallbackLlmSessionAdapterTests
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
             fallbackSettings: store,
-            effectiveChain: chain is null ? null : () => chain);
+            effectiveChain: chain is null ? null : () => chain,
+            health: health);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }
@@ -861,5 +863,102 @@ public class FallbackLlmSessionAdapterTests
         // CAS: Info != applied (manual-choice ≠ deepseek-chat) → finally не восстанавливает.
         session.Model.Should().Be("manual-choice", "ручной выбор пользователя не перетёрт подменой");
         session.Provider.Should().Be("manual-prov");
+    }
+
+    // --- Кулдаун недоступности провайдера (волна 2) ---
+
+    // Кулдаун: шаг цепочки с провайдером в кулдауне пропускается, фолбэк идёт к следующему
+    // живому шагу. Цепочка [sonnet, m-cooled, m-alive], p-cooled помечен недоступным заранее.
+    [Fact]
+    public async Task КулдаунПровайдера_ШагЦепочкиПропускается()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-cooled:ApiKey"] = "sk-c",
+            ["LlmProviders:p-cooled:AnthropicBaseUrl"] = "https://c.example.com",
+            ["LlmProviders:p-cooled:Models:0:Id"] = "m-cooled",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("p-cooled");   // шаг 2 цепочки — в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "m-cooled", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → цепочка: шаг 2 (p-cooled) пропущен
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // m-alive (шаг 3) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Шаг 2 (m-cooled/p-cooled) в кулдауне — пропущен; попытка 2 = m-alive (шаг 3).
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-alive", "m-alive"), "шаг 2 в кулдауне пропущен");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 3");
+    }
+
+    // fail-open: ВСЕ шаги цепочки в кулдауне — берём первого остывшего (кулдаун — наблюдение,
+    // а не запрет; эндпоинт мог уже подняться, а ход должен идти).
+    [Fact]
+    public async Task КулдаунПровайдера_FailOpen_БерётОстывшего()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-cooled:ApiKey"] = "sk-c",
+            ["LlmProviders:p-cooled:AnthropicBaseUrl"] = "https://c.example.com",
+            ["LlmProviders:p-cooled:Models:0:Id"] = "m-cooled",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("p-cooled");
+        health.MarkUnavailable("p-alive");   // ВСЕ шаги цепочки в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "m-cooled", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → цепочка: все в кулдауне → fail-open
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // m-cooled (первый остывший) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Все в кулдауне → fail-open берёт первого остывшего (m-cooled, шаг 2).
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-cooled", "m-cooled"), "fail-open: первый остывший шаг цепочки");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 2");
+    }
+
+    // Стартовый провайдер в кулдауне → стартуем сразу с первого живого шага цепочки (маркер
+    // provider_switched, Reason=unreachable), не тратя попытку на мёртвый эндпоинт.
+    [Fact]
+    public async Task КулдаунСтартовогоПровайдера_СтартСЖивогоШага()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("acc-a");   // стартовый провайдер sonnet (нативный claude, acc-a) в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // старт на m-alive через стартовую подмену
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Стартовая подмена: acc-a в кулдауне → одна попытка сразу на m-alive, без расхода на acc-a.
+        inner.Attempts.Should().ContainSingle();
+        inner.Attempts[0].Should().Be(("p-alive", "m-alive"), "старт с живого шага, а не с кулдаунного acc-a");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Reason.Should().Be("unreachable");
+        marker.Provider.Should().Be("p-alive");
     }
 }

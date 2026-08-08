@@ -35,6 +35,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Стор настроек фолбэк-оркестрации (потолок подмен per-owner → global → дефолт).
     // null (тесты без DI) — адаптер идёт по дефолту FallbackSettingsStore.DefaultMaxSubstitutions.
     private readonly FallbackSettingsStore? _fallbackSettings;
+    // Кулдаун недоступности провайдера (волна 2): провайдер, вернувший Unreachable/ProviderError,
+    // помечается недоступным на TTL — фолбэк пропускает его шаги цепочки. null (тесты) — выключен.
+    private readonly ProviderHealthRegistry? _health;
     // Логгер фолбэк-оркестрации: без него подмены нечем отлаживать (что
     // классифицировали, куда переключились, почему кандидат отвергнут). null в тестах
     // без DI — адаптер пишет в Console.Error, чтобы не терять диагностику совсем.
@@ -45,11 +48,13 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null,
         FileChangeAttributor? fileChangeAttributor = null,
         FallbackSettingsStore? fallbackSettings = null,
+        ProviderHealthRegistry? health = null,
         ILogger<LlmSessionAdapterFactory>? log = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
         _fallbackSettings = fallbackSettings;
+        _health = health;
         _log = log;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
@@ -108,7 +113,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,
             context.Launcher, context.CliConfigRoot, _fallbackSettings,
-            () => claudeSession.EffectiveTurnChain, _log);
+            () => claudeSession.EffectiveTurnChain, _health, _log);
         return fallback;
     }
 }

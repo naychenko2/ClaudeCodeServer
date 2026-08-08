@@ -272,6 +272,8 @@ builder.Services.AddSingleton<GlifAccountService>();
 builder.Services.AddSingleton<UsageService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
+// Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory наблюдение, без персиста и бэкапа
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderHealthRegistry>();
 // Интерфейс указывает на тот же singleton — нужен контроллеру и подмене в тестах ролей
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IProviderBalanceService>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.ProviderBalanceService>());

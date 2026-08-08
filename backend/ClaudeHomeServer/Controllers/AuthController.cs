@@ -43,18 +43,24 @@ public class AuthController(UserStore users, JwtService jwt, FeatureFlagService 
         var contextThresholds = me?.ContextThresholds;
         var executionEnvironment = me?.ExecutionEnvironment ?? ExecutionEnvironments.Local;
         // Дефолт-персона (фича default-personas-onboarding). Нормализация сироты на чтении:
-        // DefaultPersonaId с несуществующей персоной отдаём как null — онбординг-гейт сам
-        // чинит осиротевший дефолт вместо молчаливого нарушения «остаться без дефолта нельзя»
-        var defaultPersonaId = me?.DefaultPersonaId is { } dpid && userId is not null
-            && personas.Get(dpid, userId) is not null ? dpid : null;
-        // needsOnboarding — ГЛОБАЛЬНЫЙ гейт первого входа: «у пользователя нет личной
-        // дефолт-персоны». Намеренно не учитывает проектный дефолт (руководителя проекта):
-        // проектов может быть много, и сводить «есть ли хоть один без руководителя» в один
-        // флаг на auth/me — смешивать два независимых гейта. Проектный онбординг — локальное
-        // решение экрана: WorkspacePage смотрит project.defaultPersonaId и открывает свой гейт
-        // точечно по открытому проекту, не опираясь на этот флаг.
-        var needsOnboarding = userId is not null && defaultPersonaId is null
-            && flags.IsEnabled(userId, FeatureFlagKeys.DefaultPersonasOnboarding);
+        // DefaultPersonaId с несуществующей персоной отдаём как null — тогда онбординг-гейт
+        // сам чинит осиротевший дефолт вместо молчаливого нарушения «остаться без дефолта нельзя».
+        // ВАЖНО: здесь ТОЛЬКО чтение — провижн ассистента на GET НЕ вызывается НИКОГДА (план 2.5,
+        // принцип 3): мутации живут на точках записи, /me остаётся чистым синхронным чтением.
+        var defaultPersona = me?.DefaultPersonaId is { } dpid && userId is not null
+            ? personas.Get(dpid, userId) : null;
+        var defaultPersonaId = defaultPersona?.Id;
+        // needsOnboarding — «предложить знакомство»: флаг включён, знакомство не пройдено и
+        // дефолт — это НЕТРОНУТАЯ заготовка (DefaultPersonaId == AssistantPersonaId), причём
+        // она резолвится в ЖИВУЮ персону. Резолв, а не проверка поля на null, критичен: мёртвый
+        // id (заготовку удалили) не должен ни зажигать метку, ни запирать знакомство навсегда.
+        // Полноэкранный гейт убран (план волны 4) — флаг теперь лишь зажигает карточку-приглашение.
+        var needsOnboarding = userId is not null
+            && flags.IsEnabled(userId, FeatureFlagKeys.DefaultPersonasOnboarding)
+            && me?.IntroCompletedAt is null
+            && me?.DefaultPersonaId is not null
+            && me?.DefaultPersonaId == me?.AssistantPersonaId
+            && defaultPersona is not null;
         // displayName отдаём и здесь: имя могли поправить в users.json уже после логина,
         // а перевыпускать токен ради этого незачем
         return Ok(new

@@ -302,6 +302,89 @@ public class LlmProviderRegistryTests
         }
     }
 
+    // Встроенные механики едут в профиль из поставки приложения и перебивают копию с хоста:
+    // хостовый ~/.claude/workflows правится вручную и однажды приехал перекодированным —
+    // CLI отбивал такой скрипт по управляющим символам, и «Командный спринт» не стартовал
+    [Fact]
+    public void СидингМеханик_ПоставкаПеребиваетКопиюСХоста()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "llmreg_" + Guid.NewGuid().ToString("N"));
+        var userDir = Path.Combine(tmp, "user-claude");
+        Directory.CreateDirectory(Path.Combine(userDir, "workflows"));
+
+        // Имя уникально: каталог поставки общий на сборку, параллельные тесты не должны спорить
+        var name = "тест-механика-" + Guid.NewGuid().ToString("N") + ".js";
+        var defaultsDir = Path.Combine(AppContext.BaseDirectory, "claude-defaults", "workflows");
+        Directory.CreateDirectory(defaultsDir);
+        var shipped = Path.Combine(defaultsDir, name);
+        File.WriteAllText(shipped, "export const meta = { name: 'спринт', description: 'разбить и раздать' }");
+        // На хосте — та же механика, но испорченная (в боевой поломке — перекодировка мимо UTF-8)
+        File.WriteAllText(Path.Combine(userDir, "workflows", name), "export const meta = { name: 'битаякопия' }");
+
+        try
+        {
+            var reg = Create(new()
+            {
+                ["ClaudeUserProfileDir"] = userDir,
+                ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
+            });
+            var profile = reg.BuildCliEnv("deepseek-v4-pro")!["CLAUDE_CONFIG_DIR"];
+
+            var seeded = File.ReadAllText(Path.Combine(profile, "workflows", name));
+            seeded.Should().Be(File.ReadAllText(shipped));
+            seeded.Should().NotContain("битаякопия");
+        }
+        finally
+        {
+            try { File.Delete(shipped); } catch { }
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
+    // Установленные плагины включаются профилю сервером: без этого скиллы oh-my-claudecode
+    // отвечали «Unknown command» (механики «Автопилот», «QA-цикл», «Трассировка»…),
+    // а осознанно выключенный плагин обязан таким и остаться
+    [Fact]
+    public void ВключениеПлагинов_УстановленныеВключаются_ЯвноВыключенныйОстаётся()
+    {
+        var tmp = Path.Combine(Path.GetTempPath(), "llmreg_" + Guid.NewGuid().ToString("N"));
+        var userDir = Path.Combine(tmp, "user-claude");
+        var profileDir = Path.Combine(tmp, "data", "claude-profiles", "deepseek");
+        Directory.CreateDirectory(Path.Combine(userDir, "plugins"));
+        Directory.CreateDirectory(profileDir);
+
+        File.WriteAllText(Path.Combine(userDir, "plugins", "installed_plugins.json"), """
+        {
+          "version": 2,
+          "plugins": {
+            "oh-my-claudecode@omc": [{ "scope": "user" }],
+            "playwright@claude-plugins-official": [{ "scope": "user" }]
+          }
+        }
+        """);
+        File.WriteAllText(Path.Combine(profileDir, "settings.json"), """
+        { "enabledPlugins": { "playwright@claude-plugins-official": false } }
+        """);
+
+        try
+        {
+            var reg = Create(new()
+            {
+                ["ClaudeUserProfileDir"] = userDir,
+                ["DataPath"] = Path.Combine(tmp, "data", "projects.json"),
+            });
+            reg.BuildCliEnv("deepseek-v4-pro");
+
+            var enabled = JsonNode.Parse(File.ReadAllText(Path.Combine(profileDir, "settings.json")))!["enabledPlugins"]!;
+            enabled["oh-my-claudecode@omc"]!.GetValue<bool>().Should().BeTrue();
+            enabled["playwright@claude-plugins-official"]!.GetValue<bool>().Should().BeFalse();
+        }
+        finally
+        {
+            try { Directory.Delete(tmp, recursive: true); } catch { }
+        }
+    }
+
     [Fact]
     public void ComputeCost_ПоЦенамКонфига()
     {

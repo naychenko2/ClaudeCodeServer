@@ -6,6 +6,7 @@ using ClaudeHomeServer.Filters;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authorization;
@@ -36,6 +37,7 @@ public class PersonasController : ControllerBase
     private readonly PersonaAskService _ask;
     private readonly PersonaAutomationService _automation;
     private readonly SpecialtyTemplatesService _specialtyTemplates;
+    private readonly PersonaDraftService _drafts;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonasController> _log;
     private readonly IHubContext<SessionHub> _hub;
@@ -46,9 +48,11 @@ public class PersonasController : ControllerBase
         FalImageService falImage,
         Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
         PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation,
-        SpecialtyTemplatesService specialtyTemplates, IConfiguration config,
+        SpecialtyTemplatesService specialtyTemplates, PersonaDraftService drafts,
+        IConfiguration config,
         ILogger<PersonasController> log, IHubContext<SessionHub> hub)
     {
+        _drafts = drafts;
         _cheap = cheap;
         _personas = personas;
         _projects = projects;
@@ -754,7 +758,7 @@ public class PersonasController : ControllerBase
         {
             var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaAiCharacter,
                 prompt, model, UserId, jsonFormat: "json", ct: HttpContext.RequestAborted);
-            var contract = PersonaManager.NormalizeContract(ParseJsonObject<PersonaContract>(raw));
+            var contract = PersonaManager.NormalizeContract(PersonaDraftService.ParseJsonObject<PersonaContract>(raw));
             if (contract is null)
             {
                 _log.LogWarning("ai/character: контракт не распознан; сырой ответ: {Raw}",
@@ -818,7 +822,7 @@ public class PersonasController : ControllerBase
             try
             {
                 raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaQuickCreate,
-                    BuildDraftPrompt(req.Prompt), model, UserId, jsonFormat: "json",
+                    _drafts.BuildDraftPrompt(req.Prompt), model, UserId, jsonFormat: "json",
                     ct: HttpContext.RequestAborted);
             }
             catch (Exception ex)
@@ -828,7 +832,7 @@ public class PersonasController : ControllerBase
                     return StatusCode(502, new { error = $"Не удалось сгенерировать черновик: {ex.Message}" });
                 continue;
             }
-            draft = ParseDraft(raw);
+            draft = _drafts.ParseDraft(raw);
             if (draft is null || string.IsNullOrWhiteSpace(draft.Name))
             {
                 _log.LogWarning("quick-create: черновик не распознан (попытка {Attempt}); сырой ответ: {Raw}",
@@ -935,7 +939,7 @@ public class PersonasController : ControllerBase
         var start = raw.IndexOf('[');
         if (start < 0)
         {
-            var single = ParseJsonObject<TeamMemberDraft>(raw);
+            var single = PersonaDraftService.ParseJsonObject<TeamMemberDraft>(raw);
             return single is null ? null : [single];
         }
         int depth = 0; bool inStr = false, esc = false;
@@ -958,70 +962,8 @@ public class PersonasController : ControllerBase
         return null;
     }
 
-    private static string BuildDraftPrompt(string userPrompt)
-    {
-        var sb = new System.Text.StringBuilder();
-        sb.AppendLine("Пользователь описывает ассистента-персону, которую хочет создать. " +
-                      "Придумай и верни ВСЕ поля профиля персоны.");
-        sb.AppendLine($"\nОписание пользователя: {userPrompt.Trim()}");
-        sb.AppendLine("\nВерни ТОЛЬКО JSON-объект (без пояснений и markdown) с полями:");
-        sb.AppendLine("  role — роль/профессия по-русски, 1-3 слова (напр. «Дизайнер», «Личный тренер»);");
-        sb.AppendLine("  name — русское имя-человека (одно слово, подходит персоне);");
-        sb.AppendLine("  description — краткое «кто это», 3-8 слов, по-русски;");
-        sb.AppendLine("  character — характер и стиль общения: обращение на «ты» («Ты …»), живо, 2-5 предложений, по-русски;");
-        sb.AppendLine("  tone — тон одной короткой фразой по-русски (напр. «тепло и на равных», «сухо и по делу»);");
-        sb.AppendLine("  mustDo — массив из 2-4 правил «что делать всегда», по-русски, короткими предложениями;");
-        sb.AppendLine("  mustNot — массив из 2-4 правил «чего не делать никогда», по-русски;");
-        sb.AppendLine("  outputFormat — требования к формату ответов, 1-2 предложения, по-русски;");
-        sb.AppendLine("  speechExamples — массив из 1-2 характерных реплик персоны от её лица, по-русски;");
-        sb.AppendLine("  greeting — первое приветственное сообщение персоны пользователю, 1-2 предложения, по-русски, в её характере;");
-        sb.AppendLine("  color — один из: yellow, orange, blue, green, purple, red, brown, cyan, pink (подходит образу);");
-        sb.AppendLine("  avatarPrompt — описание внешности для фотопортрета, по-английски, 5-15 слов (пол, возраст, стиль, настроение, фон).");
-        return sb.ToString();
-    }
-
-    private static DraftRaw? ParseDraft(string raw) => ParseJsonObject<DraftRaw>(raw);
-
-    // Парс первого сбалансированного JSON-объекта из ответа модели
-    // (устойчиво к преамбуле/markdown-fence). Общий для quick-create и ai/character.
-    private static T? ParseJsonObject<T>(string raw) where T : class
-    {
-        if (string.IsNullOrWhiteSpace(raw)) return null;
-        var start = raw.IndexOf('{');
-        if (start < 0) return null;
-        int depth = 0; bool inStr = false, esc = false;
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-            if (inStr)
-            {
-                if (esc) esc = false;
-                else if (c == '\\') esc = true;
-                else if (c == '"') inStr = false;
-                continue;
-            }
-            if (c == '"') inStr = true;
-            else if (c == '{') depth++;
-            else if (c == '}' && --depth == 0)
-            {
-                try
-                {
-                    return System.Text.Json.JsonSerializer.Deserialize<T>(raw[start..(i + 1)],
-                        new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                }
-                catch (System.Text.Json.JsonException) { return null; }
-            }
-        }
-        return null;
-    }
-
     private static bool ValidColor(string? c) =>
         c is "yellow" or "orange" or "blue" or "green" or "purple" or "red" or "brown" or "cyan" or "pink";
-
-    private sealed record DraftRaw(string? Role, string? Name, string? Description,
-        string? Character, string? Tone, List<string>? MustDo, List<string>? MustNot,
-        string? OutputFormat, List<string>? SpeechExamples,
-        string? Greeting, string? Color, string? AvatarPrompt);
 
     // --- Привязки персоны: источники знаний и правила (фича persona-bindings) ---
     // CRUD работает независимо от флага (данные безвредны и переживают выключение);

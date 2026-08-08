@@ -153,6 +153,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>()
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
+// и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();
 // Провижн авто-ассистента (фича default-personas-onboarding): заготовка «Ассистент»
 // как дефолт при первом включении флага. Singleton — статический реестр семафоров.
 builder.Services.AddSingleton<DefaultAssistantProvisioner>();

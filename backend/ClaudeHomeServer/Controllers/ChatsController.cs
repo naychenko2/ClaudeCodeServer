@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/chats")]
 public class ChatsController(SessionManager sessions, FileService files, FeatureFlagService flags,
-    ILogger<ChatsController> logger) : ControllerBase
+    DefaultAssistantProvisioner provisioner, ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -41,17 +41,26 @@ public class ChatsController(SessionManager sessions, FileService files, Feature
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CreateChatRequest req)
     {
-        // Страховка инварианта «новый чат человека — только с персоной» (флаг
-        // default-personas-onboarding): без personaId и resumeSessionId — 400. Основной
-        // механизм — фронтовый хелпер; групповые чаты (createGroup) и служебные пути не трогаем.
-        if (string.IsNullOrWhiteSpace(req.PersonaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
+        string? personaId = req.PersonaId;
+        // Последний рубеж инварианта «новый чат человека — только с персоной» (план 2.4):
+        // под флагом без personaId/resumeSessionId сначала провижним ассистента и продолжим
+        // создание с ним. Работает в паре с фронт-правкой 4.3 — без неё продукт создаёт чаты
+        // через хелпер createChatWithContextPersona, минуя этот гейт; вместе они лечат и пустой
+        // дефолт, и осиротевший. 400 остаётся только когда провижн невозможен (сбой создания).
+        // Групповые чаты (createGroup) и служебные пути сюда не доходят.
+        if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
             && flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding))
-            return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
+        {
+            var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
+            if (provisioned is null)
+                return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
+            personaId = provisioned.Id;
+        }
         var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.Auto;
         try
         {
             var chat = await sessions.CreateChatAsync(UserId, mode, req.ResumeSessionId, req.Name,
-                req.Model, req.Effort, personaId: req.PersonaId);
+                req.Model, req.Effort, personaId: personaId);
             return CreatedAtAction(nameof(GetAll), new { }, chat);
         }
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }

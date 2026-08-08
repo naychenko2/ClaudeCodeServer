@@ -59,14 +59,22 @@ public class ChatCreationPersonaGateTests : IClassFixture<TestWebApplicationFact
     }
 
     [Fact]
-    public async Task ПодФлагом_СессияБезПерсоны_400()
+    public async Task ПодФлагом_СессияБезПерсоны_ПровижнитИСоздаёт()
     {
         await SetFlagAsync(true);
         var projectId = await CreateProjectAsync();
 
+        // План 2.4: под флагом без personaId сервер НЕ отвечает 400, а провижнит ассистента
+        // (рубеж 2.4 в паре с фронт-правкой 4.3) и создаёт чат с ним. personaId сессии
+        // совпадает с дефолтом владельца — ассистентом, созданным включением флага (2.2).
         var response = await _client.PostAsJsonAsync($"/api/projects/{projectId}/sessions", new { mode = "auto" });
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await response.Content.ReadAsStringAsync()).Should().Contain("personaId");
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var me = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
+        var defaultId = me.GetProperty("defaultPersonaId").GetString();
+        JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync())
+            .GetProperty("personaId").GetString().Should().Be(defaultId);
     }
 
     [Fact]
@@ -106,13 +114,20 @@ public class ChatCreationPersonaGateTests : IClassFixture<TestWebApplicationFact
     }
 
     [Fact]
-    public async Task ПодФлагом_ЧатБезПерсоны_400()
+    public async Task ПодФлагом_ЧатБезПерсоны_ПровижнитИСоздаёт()
     {
         await SetFlagAsync(true);
+        await EnsureHomeConfiguredAsync();
 
+        // План 2.4: под флагом без personaId сервер провижнит ассистента и создаёт чат с ним.
         var response = await _client.PostAsJsonAsync("/api/chats", new { mode = "auto" });
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        (await response.Content.ReadAsStringAsync()).Should().Contain("personaId");
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var me = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
+        var defaultId = me.GetProperty("defaultPersonaId").GetString();
+        JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync())
+            .GetProperty("personaId").GetString().Should().Be(defaultId);
     }
 
     [Fact]

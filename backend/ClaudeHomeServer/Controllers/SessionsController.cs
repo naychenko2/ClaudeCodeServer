@@ -12,7 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
-    FeatureFlagService flags) : ControllerBase
+    FeatureFlagService flags, DefaultAssistantProvisioner provisioner) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -31,17 +31,24 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
         if (!OwnsProject(projectId)) return NotFound();
-        // Страховка инварианта «новый чат человека — только с персоной» (флаг
-        // default-personas-onboarding): без personaId и resumeSessionId — 400. Основной
-        // механизм — фронтовый хелпер; служебные пути (задачи, one-shot) REST не используют.
-        if (string.IsNullOrWhiteSpace(req.PersonaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
+        string? personaId = req.PersonaId;
+        // Последний рубеж инварианта «новый чат человека — только с персоной» (план 2.4, парная
+        // связь с фронт-правкой 4.3): под флагом без personaId/resumeSessionId сначала провижним
+        // ассистента и продолжим с ним. 400 — только когда провижн невозможен. Служебные пути
+        // (задачи, one-shot) REST не используют, поэтому гейт их не задевает.
+        if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
             && flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding))
-            return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
+        {
+            var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
+            if (provisioned is null)
+                return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
+            personaId = provisioned.Id;
+        }
         try
         {
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
             var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
-                req.Model, req.AgentName, req.Effort, personaId: req.PersonaId);
+                req.Model, req.AgentName, req.Effort, personaId: personaId);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }

@@ -1371,6 +1371,20 @@ public class SessionManagerTests : IDisposable
             "стоп цикла во время хода не должен пускать второй ход в живой процесс");
         _sut.GetPending(session.Id).Should().ContainSingle(
             "агентское сообщение остаётся ждать штатного drain по result текущего хода");
+
+        // Позитивный контроль (Minor 3): негативная проверка выше — по таймауту, без неё не видно,
+        // что сообщение не потерялось, а дождётся своего часа. Доигрываем result текущего хода:
+        // статус падает в Active, drain разбирает очередь — накопленное агентское доставляется.
+        // Этим же закрывается, что доставка накопленного по result не сломана правками Minor 1–2.
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("доклад из параллельного чата")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once(),
+            "по result текущего хода накопленное агентское доставляется");
+        _sut.GetPending(session.Id).Should().BeEmpty("очередь разобрана после result");
     }
 
     [Fact]

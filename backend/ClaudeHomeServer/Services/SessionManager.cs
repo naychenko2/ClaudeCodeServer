@@ -2940,14 +2940,31 @@ public class SessionManager : IDisposable
         }
         if (next is null) return;
 
-        await BroadcastPendingAsync(sessionId, entry);
         try
         {
+            // Бродкаст внутри try (Minor 1): исключение хаба (disposed/отвал транспорта) не
+            // должно оставлять DrainInFlight взведённым навсегда и глушить разбор очереди чата
+            // до перезапуска сервера — finally гарантированно погасит флаг.
+            await BroadcastPendingAsync(sessionId, entry);
             await DeliverPendingAsync(sessionId, entry, next);
         }
         finally
         {
             entry.DrainInFlight = false;
+            // Гонка «result пришёл раньше finally» (Minor 2): параллельный drain по result хода
+            // мог увидеть флаг ещё взведённым и уступить. После сброса перепроверяем — если
+            // очередь непуста и чат свободен, запускаем разбор ещё раз (один), иначе сообщение
+            // застрянет до следующего сообщения человека. Сам DrainNextPendingAsync имеет гейт
+            // DrainInFlight, так что повторный запуск безопасен (уступит, если кто-то уже взял).
+            if (entry.Pending.Count > 0 && !entry.QueueFrozen
+                && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting))
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await DrainNextPendingAsync(sessionId); }
+                    catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Повторный разбор очереди ({sessionId}): {ex.Message}"); }
+                });
+            }
         }
     }
 

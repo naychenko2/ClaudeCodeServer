@@ -1157,6 +1157,80 @@ public class FallbackLlmSessionAdapterTests
         final.Subtype.Should().Be("error");
     }
 
+    // --- Фиксы ревью ContextOverflow (Major 1–3, Minor-review) ---
+
+    // Major 1: граница contextTokens == observed. m-small заявлено 200k (прошло бы по конфигу),
+    // но в прошлых ходах упала на 100k → при повторе с тем же контекстом 100k её отсеивать ОБЯЗАНЫ.
+    // Старый код сводил к min(200000, 100000)=100000 >= 100000 → пропускал отказавшую модель, и она
+    // падала снова. После фикса observed сравнивается СТРОГО: contextTokens >= observed → отсеиваем.
+    [Fact]
+    public async Task Overflow_ГраницаКонтекстРавенНаблюдению_ОтсеиваетсяСтрого()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-small", "m-small", 200_000), ("p-big", "m-big", 500_000));
+        var capacity = new ContextCapacityRegistry();
+        capacity.RecordOverflow("m-small", 100_000);   // упала на 100k
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-small", "m-big"], capacity: capacity, lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-big — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // m-small отсеян НА ГРАНИЦЕ (контекст 100k == наблюдению 100k), а не пропущен — попытка 2 = m-big.
+        // При старом баге (min >= context) m-small прошёл бы, и попытка 2 упала бы на нём с тем же overflow.
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-big", "m-big"),
+            "контекст == наблюдённому размеру отказа → модель отсеивается строго, не проходит по равенству");
+    }
+
+    // Major 3: фильтр по ёмкости применяется ТОЛЬКО при ContextOverflow. Для RateLimit размер
+    // контекста ни при чём, а оценка измерена токенизатором прошлой модели — она не должна молча
+    // выкидывать живого кандидата. Здесь m-small (50k) при контексте 100k на ошибке 429 ПРОБУЕТСЯ,
+    // а не отсекается. При старом коде (фильтр для всех классов) она бы отсеклась → финал без попытки.
+    [Fact]
+    public async Task ФильтрЁмкости_ТолькоПриContextOverflow_RateLimitНеОтсекаетПоОкну()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-small", "m-small", 50_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-small"], capacity: new(), lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // sonnet/acc-a — RateLimit (не overflow!)
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // m-small (50k) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // При RateLimit фильтр по ёмкости выключен: m-small (50k) пробуется несмотря на контекст 100k.
+        // Старый код (фильтр для всех классов) отсёк бы её и завершил ход одной попыткой.
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-small", "m-small"),
+            "RateLimit не имеет отношения к размеру окна — кандидат не отсекается по ёмкости");
+    }
+
+    // Major 3 (запас): заявленное окно, РАВНОЕ контексту, не проходит — нужен 10%-й запас на
+    // расхождение токенизаторов. m-tight заявлено 100k, контекст 100k → отсеивается (100k < 110k),
+    // идём к m-big. Без запаса (старое точное сравнение) модель «впритык» прошла бы и упала.
+    [Fact]
+    public async Task Overflow_ЗаявленноеОкноВпритык_ОтсекаетсяСЗапасом()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-tight", "m-tight", 100_000), ("p-big", "m-big", 500_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-tight", "m-big"], capacity: new(), lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-big — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // m-tight (заявленное 100k == контексту 100k) отсеян с запасом 10% → попытка 2 = m-big.
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-big", "m-big"),
+            "заявленное окно «впритык» к контексту отсеивается — нужен запас на расхождение токенизаторов");
+    }
+
     // --- Фиксы ревью Глеба (Major 1/2, Minor 4) ---
 
     // Major 1: restore модели в finally должен сопровождаться персистом — иначе финальный

@@ -50,8 +50,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // наблюдение — уточнение (конфиг расходится с фактическим лимитом тарифа). null (тесты) — fail-open.
     private readonly ContextCapacityRegistry? _capacity;
     // Оценка размера контекста текущего хода (ClaudeSession.LastContextTokens): по ней оркестратор
-    // при ContextOverflow отсеивает кандидатов цепочки с заведомо меньшим окном. null (тесты) —
-    // фильтр по ёмкости выключен (поведение как до защиты от overflow).
+    // отсеивает кандидатов цепочки с заведомо меньшим окном. Применяется ТОЛЬКО при ContextOverflow
+    // (Major 3 ревью) — для прочих классов размер контекста ни при чём. null (тесты) — фильтр по
+    // ёмкости выключен (поведение как до защиты от overflow).
     private readonly Func<int>? _lastContextTokens;
     // Лог подмен: без него оркестрацию нечем отлаживать на стенде (что классифицировали,
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
@@ -207,7 +208,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
             case ErrorMessage { ExpectResultFollows: true } em:
                 // Текст API-ошибки провайдера ПЕРЕД result: показываем в ленте честно
-                // (пользователь видит, что случилось) и запоминаем для классификации
+                // (пользователь видит, что случилось) и запоминаем для классификации.
+                // Подавлять сырой «Prompt is too long» при overflow-исчерпании НЕ будем (Nit 6
+                // ревью): класс ошибки становится известен лишь после result, а задерживать текст
+                // до классификации значило бы скрыть честный сигнал «контекст велик» и при успешном
+                // фолбэке — в ущерб диагностике. Дубль с финальным русским текстом при исчерпании —
+                // известный косметический нюанс, он менее вреден, чем невидимая причина переключения.
                 lock (turn.Sync)
                 {
                     if (turn.Settled) return _downstream(msg);
@@ -313,6 +319,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             // Маркер provider_switched (Reason=unreachable). fail-open: если ВСЕ шаги цепочки
             // в кулдауне, остаёмся на исходной паре (ход должен идти). substitutions не тратим —
             // это выбор стартовой точки, а не подмена по ошибке в этом ходе.
+            //
+            // Асимметрия с WouldFit (Minor 4 ревью): стартовый шаг намеренно НЕ сверяется с
+            // фильтром ёмкости. Кулдаун — про доступность эндпоинта, а не про размер окна, а
+            // стартовая модель — НАМЕРЕНИЕ пользователя (шаг цепочки пресета, выбранный им же).
+            // Отсечь её здесь значило бы молча подменить выбор пользователя до любой ошибки.
+            // Если стартовый шаг мал и контекст велик — первый ход упадёт с ContextOverflow, и
+            // тогда оркестратор пойдёт по цепочке уже с фильтром WouldFit (см. ResolveNextTarget).
             if (_health is not null && chain.Count > 1 && _health.IsUnavailable(currentKey))
             {
                 var stepIdx = -1;
@@ -426,7 +439,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return;
                 }
 
-                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ContextEstimate());
+                // Фильтр по ёмкости применяется ТОЛЬКО при ContextOverflow (Major 3 ревью): для
+                // остальных классов (RateLimit/Unreachable/…) размер контекста ни при чём, а сама
+                // оценка измерена токенизатором прошлой модели (расхождение 10–30%) и не должна
+                // молча выкидывать живых кандидатов. Запись наблюдения выше использует реальный размер.
+                var ctxForFilter = cls == FallbackErrorClass.ContextOverflow ? ContextEstimate() : 0;
+                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ctxForFilter);
                 if (next is null) { await FailExhaustedAsync(turn, trace, substitutions, end); return; }
 
                 // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
@@ -548,7 +566,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             Info.MessageCount = _snapshotMessageCount + 1;
             // ПЕРСИСТ ПОСЛЕ RESTORE (и обратного переноса): финальный result уже ушёл downstream
             // и успел сохранить sessions.json ПОДМЕНЁННЫМ (ApplyStatusAsync → SaveSessions ДО finally).
-            // При смене поставчика — переписываем персист восстановленными значениями, иначе рестарт
+            // При смене поставщика — переписываем персист восстановленными значениями, иначе рестарт
             // в этом окне залипил бы чат на подмене. При тихой ротации persist фиксирует оставленный
             // новый аккаунт (тот же, что сохранил result, но гарантированно — на случай хода без
             // result, когда ApplyStatus не успел). Без подмены persist не дёргаем — ApplyStatus уже
@@ -646,8 +664,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // Окно кандидата не вместит текущий контекст (заявленное из каталога либо
                 // наблюдённое при прошлых overflow) — пропускаем ЖЁСТКО, без fail-open: это
                 // не наблюдение о живости (кулдаун), а уверенный отказ — модель точно упадёт с
-                // тем же «Prompt is too long». Меньше конфигура врёт — наблюдение точнее, его
-                // и используем как потолок (min от заявленного и наблюдённого).
+                // тем же «Prompt is too long». Меньше конфиг врёт — наблюдение точнее, его
+                // и используем как потолок (min от заявленного и наблюдённого). Приходящий сюда
+                // contextEstimate уже обнулён для не-overflow классов (Major 3) → fail-open.
                 if (!WouldFit(stepModel, contextEstimate)) continue;
                 // Остывший: запоминаем индекс первого и ищем живого дальше, НЕ мигрируя —
                 // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open)
@@ -711,22 +730,30 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // выключается (WouldFit возвращает true), поведение как до защиты от overflow.
     private int ContextEstimate() => _lastContextTokens?.Invoke() ?? 0;
 
-    // Вместила бы модель текущий контекст? Эффективная ёмкость = min(заявленного окна из каталога,
-    // наблюдённого потолка). Заявленное — первичная оценка, наблюдение — уточнение (конфиг
-    // расходится с фактическим лимитом тарифа: kimi-k3 заявляет 1M, падает на меньшем). Нет ни
-    // того, ни другого (модель не описана в каталоге, наблюдений нет) — fail-open: лучше
-    // попробовать, чем молча сдаться. Контекст <= 0 — тоже fail-open (оценки нет, фильтровать нечем).
+    // Запас на расхождение токенизаторов: оценка контекста измерена токенизатором ДРУГОЙ модели
+    // (расхождение 10–30%), поэтому заявленное окно должно вмещать контекст с 10%-м запасом — иначе
+    // модель «впритык» по конфигу падает на том же overflow (Major 3 ревью). Целочисленное сравнение
+    // declared*10 < context*11 эквивалентно declared < context*1.1 без float-погрешности.
+    private const double ContextCapacityMargin = 1.1;
+
+    // Вместила бы модель текущий контекст? Заявленное окно (из каталога) и наблюдённый размер
+    // отказа (ContextCapacityRegistry) проверяются РАЗДЕЛЬНО — у них разная семантика:
+    //   • наблюдение — РАЗМЕР, на котором модель ОТКАЗАЛА: контекст должен быть СТРОГО меньше
+    //     (при равенстве модель упадёт снова — Major 1 ревью: именно на границе старый код,
+    //     сводивший всё к min(declared, observed) >= context, пропускал отказавшую модель);
+    //   • заявленное окно — ЁМКОСТЬ из каталога: вмещает с запасом ContextCapacityMargin.
+    // Нет ни того, ни другого (модель не описана, наблюдений нет) — fail-open: лучше попробовать,
+    // чем молча сдаться. Контекст <= 0 — тоже fail-open (оценки нет, фильтровать нечем).
     private bool WouldFit(string? model, int contextTokens)
     {
         if (contextTokens <= 0) return true;
-        var declared = _providers?.ResolveByModel(model)?.FindModel(model)?.ContextWindow;
-        var observed = _capacity?.ObservedCeiling(model);
-        int? effective;
-        if (declared.HasValue && observed.HasValue) effective = Math.Min(declared.Value, observed.Value);
-        else if (declared.HasValue) effective = declared;
-        else if (observed.HasValue) effective = observed;
-        else effective = null;
-        return !effective.HasValue || effective.Value >= contextTokens;
+        // Наблюдённый размер отказа: контекст СТРОГО меньше — иначе модель точно упадёт.
+        if (_capacity?.ObservedCeiling(model) is { } observed && contextTokens >= observed) return false;
+        // Заявленное окно: вмещает с запасом на расхождение токенизаторов.
+        if (_providers?.ResolveByModel(model)?.FindModel(model)?.ContextWindow is { } declared
+            && declared < contextTokens * ContextCapacityMargin) return false;
+        // Нет ни заявленного, ни наблюдённого — fail-open.
+        return true;
     }
 
     // Кандидаты уровня 1: сначала штатный Pick (с учётом исчерпания, SupportsModel,

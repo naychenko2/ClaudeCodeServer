@@ -74,7 +74,7 @@ function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain
     danger: { background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, color: C.dangerText },
   };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, ...styles[tone] }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, ...styles[tone] }}>
       {children}
     </span>
   );
@@ -86,7 +86,7 @@ function RoutingPill({ tone, label }: { tone: 'ok' | 'warn'; label: string }) {
     ? { background: C.successBg, border: C.success, color: C.successText }
     : { background: C.warningBg, border: C.warning, color: C.warningText };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, border: `1px solid ${s.border}`, background: s.background, color: s.color }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, border: `1px solid ${s.border}`, background: s.background, color: s.color }}>
       {label}
     </span>
   );
@@ -229,6 +229,9 @@ export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMob
         cursor: clickable ? 'pointer' : 'default',
         borderColor: exhausted ? C.warning : C.border,
         opacity: data.dim ? 0.55 : 1,
+        // Карточка живёт в grid-колонке: без этого её содержимое (шапка с пилюлями,
+        // ряды окон) диктует ширину и выносит колонку за пределы модалки
+        minWidth: 0, overflow: 'hidden',
       }}
     >
       {/* .top — имя, пилюли, бейдж ротации, свежесть */}
@@ -323,7 +326,7 @@ function FreeLlmHealth({ health }: { health: HealthSpec }) {
       {/* Сегменты платформ: живые — C.info, остальные — C.track */}
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: SP.sm }}>
         <span style={{ width: 64, flexShrink: 0, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Платформы</span>
-        <span style={{ display: 'flex', gap: 3, flex: 1, flexWrap: 'wrap' }}>
+        <span style={{ display: 'flex', gap: 3, flex: 1, minWidth: 0, flexWrap: 'wrap' }}>
           {Array.from({ length: total }, (_, i) => (
             <span key={i} style={{ display: 'block', width: 14, height: 6, borderRadius: 3, background: i < alive ? C.info : C.track }} />
           ))}

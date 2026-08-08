@@ -592,7 +592,10 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
     });
   }, [usage]);
 
-  const qGridCols = isMobile ? '1fr' : '1fr 1fr';
+  // minmax(0, 1fr), а не 1fr: у grid-колонки min-width по умолчанию auto, и длинное
+  // неразрывное содержимое (пилюли + свежесть в шапке, «в пределах нормы» в ряду окна)
+  // раздувает колонку за пределы контейнера вместо того, чтобы сжаться и обрезаться
+  const qGridCols = isMobile ? 'minmax(0, 1fr)' : 'minmax(0, 1fr) minmax(0, 1fr)';
 
   // === Рендер ===
 

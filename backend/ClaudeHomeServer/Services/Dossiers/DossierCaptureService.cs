@@ -249,12 +249,15 @@ public sealed class DossierCaptureService : BackgroundService
         string? taskId, GitCommitRaw commit)
     {
         var files = await GetChangedFilesAsync(ownerId, root, commit.Sha);
+        var parentCount = await GetParentCountAsync(ownerId, root, commit.Sha);
 
-        // Фильтр захвата (объём/стоимость): служебные типы и однофайловые правки с коротким
-        // сообщением пропускаем молчаливо — выжимать там нечего. Применяется ТОЛЬКО на новом
-        // захвате: переякорение при squash (выше) фильтру не подчиняется — перепись истории
-        // объединяет в теле и feat, и chore, и терять якорь паспорта из-за типа нельзя.
-        if (ShouldSkipCommit(commit.Subject, commit.Body, files.Count, _skipTypes, SkipSingleFileMessageChars))
+        // Фильтр захвата (объём/стоимость): merge-коммиты (2+ родителя), служебные типы и
+        // однофайловые правки с коротким сообщением пропускаем молчаливо — выжимать там нечего.
+        // Применяется ТОЛЬКО на новом захвате: переякорение при squash (выше) фильтру не
+        // подчиняется — перепись истории объединяет в теле и feat, и chore, и терять якорь
+        // паспорта из-за типа/merge нельзя.
+        if (ShouldSkipCommit(commit.Subject, commit.Body, files.Count, _skipTypes,
+            SkipSingleFileMessageChars, parentCount))
             return;
 
         var exactSecrets = _secrets.GetExactSecrets();
@@ -461,6 +464,21 @@ public sealed class DossierCaptureService : BackgroundService
         return [];
     }
 
+    // Число родителей коммита — надёжный признак merge (2+), в отличие от текста subject:
+    // стандартные автомержи «Merge branch …» conventional-типом не разбираются и фильтром по
+    // типу не ловятся. %P — родительские sha через пробел (0 = корневой, 1 = обычный, 2+ = merge).
+    // Ошибка вызова → консервативно 1 (обычный): ложный паспорт на merge безопаснее потери коммита.
+    private async Task<int> GetParentCountAsync(string ownerId, string root, string sha)
+    {
+        try
+        {
+            var r = await _git.RunAsync(ownerId, root, ["show", "-s", "--format=%P", sha]);
+            if (!r.Ok) return 1;
+            return r.Stdout.Split(' ', StringSplitOptions.RemoveEmptyEntries).Length;
+        }
+        catch { return 1; }
+    }
+
     private async Task<List<string>> AnchorSymbolsAsync(string root, List<string> files, string ownerId)
     {
         if (files.Count == 0) return [];
@@ -484,12 +502,15 @@ public sealed class DossierCaptureService : BackgroundService
         catch (Exception ex) { _log.LogDebug(ex, "dossiers: снимок CodeGraph {Root}", root); return []; }
     }
 
-    // Фильтр захвата (объём/стоимость, ADR-004 §3). Пропускает коммиты служебных conventional-типов
-    // (style/chore/build/ci — список из Dossiers:SkipCommitTypes) и однофайловые правки с коротким
-    // сообщением (выжимать нечего). Чистая логика — тестируется без git/конфига.
+    // Фильтр захвата (объём/стоимость, ADR-004 §2-§3). Пропускает merge-коммиты (2+ родителя —
+    // признак из git, не из текста), коммиты служебных conventional-типов (style/chore/build/ci —
+    // список из Dossiers:SkipCommitTypes; merge сюда НЕ добавляем — иначе обычный коммит с таким
+    // префиксом молча потеряется) и однофайловые правки с коротким сообщением. Чистая логика —
+    // тестируется без git/конфига. parentCount по умолчанию 1 (обычный коммит).
     internal static bool ShouldSkipCommit(string subject, string body, int filesCount,
-        IReadOnlySet<string> skipTypes, int minMessageChars)
+        IReadOnlySet<string> skipTypes, int minMessageChars, int parentCount = 1)
     {
+        if (parentCount >= 2) return true;
         var type = ParseConventionalType(subject);
         if (type is not null && skipTypes.Contains(type)) return true;
         if (filesCount == 1 && MessageContentLength(subject, body) < minMessageChars) return true;

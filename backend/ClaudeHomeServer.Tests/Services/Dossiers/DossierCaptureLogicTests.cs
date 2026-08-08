@@ -285,6 +285,26 @@ public class DossierCaptureLogicTests
             .Should().BeTrue("без трейлеров сообщение короче порога — однофайловое короткое пропускается");
     }
 
+    // Merge-коммиты фильтруются по числу родителей (факт git), а не по тексту subject: стандартный
+    // автомерж «Merge branch …» conventional-типом не разбирается и фильтром по типу не ловится.
+    [Fact]
+    public void Фильтр_MergeКоммит_ДваРодителя_Пропуск()
+    {
+        DossierCaptureService.ShouldSkipCommit(
+            "Merge branch 'feature/dossier-quality' into master", "", 5, DefSkip, 100, parentCount: 2)
+            .Should().BeTrue("2+ родителя — merge-коммит, паспорт дублирует выжимки коммитов ветки");
+    }
+
+    // Корректный негатив: обычный коммит (1 родитель) со словом merge в subject — паспорт нужен.
+    // Доказывает, что судим по родителям, а не по тексту (merge НЕ в SkipCommitTypes).
+    [Fact]
+    public void Фильтр_ОбычныйКоммитСоСловомMerge_ПаспортЕсть()
+    {
+        DossierCaptureService.ShouldSkipCommit(
+            "merge: влить ветку X в develop", "", 3, DefSkip, 100, parentCount: 1)
+            .Should().BeFalse("обычный коммит (1 родитель) — паспорт создаётся, текст не повод для пропуска");
+    }
+
     [Theory]
     [InlineData("feat(scope): добавить X", "feat")]
     [InlineData("feat!: breaking change", "feat")]

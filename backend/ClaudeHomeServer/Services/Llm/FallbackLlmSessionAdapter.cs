@@ -462,7 +462,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             return null;
         }
 
-        // Без цепочки — уровень 2: цепочка сторонних провайдеров в порядке конфига
+        // Без цепочки — уровень 2: обход сторонних провайдеров. Порядок — АЛФАВИТНЫЙ
+        // (LlmProviderRegistry собирает _providers из IConfiguration.GetChildren(), а тот
+        // отдаёт секции по алфавиту, а не в порядке appsettings), пока явный порядок не
+        // потребовался. Нужен детерминированный не-алфавитный порядок — завести поле Order.
         if (_providers is not null)
         {
             foreach (var provider in _providers.Enabled)

@@ -177,6 +177,20 @@ public class ClaudeSession : ILlmSessionAdapter
         // Прогон убит ради несовместимого нового хода: ExitedMessage не слать —
         // статусом сессии владеет уже новый ход
         public volatile bool SuppressExited;
+        // Ход получил хотя бы одно событие после submit (взводит ридер в ProcessLineAsync,
+        // сбрасывает TrySubmitTurn). false на смерти прогона ДО первого события = гонка
+        // TOCTOU (запись в stdin прошла, но CLI уже завершается); true = легитимный обрыв
+        // посреди хода. Консервативно взводится на ЛЮБОЙ строке пока ход активен: любое
+        // событие блокирует ретрай, иначе пересылка дублировала бы частичный вывод.
+        public volatile bool TurnGotEvent;
+        // Same-process ход может быть перезапущен при пустой смерти процесса (гонка TOCTOU):
+        // выставляет TrySubmitTurn (только он уязвим — новый процесс, умерший пустым, = реальный
+        // сбой старта). Читает FinalizeRunAsync вместе с TurnGotEvent — см. ShouldRetryEmptyExit.
+        public volatile bool RetryOnEmptyExit;
+        // Финализация обнаружила пустую смерть same-process хода: RunTurnAsync по этому
+        // признаку проваливается к запуску нового процесса на той же паре (один ретрай),
+        // не отдавая смерть наружу. volatile — пишется потоком ридера, читается потоком хода.
+        public volatile bool DiedEmpty;
         // Прогон запущен с --prompt-suggestions: после result ждём выхода CLI дольше
         // (PromptSuggestionExitGrace) — подсказка генерится и приходит после result
         public bool PromptSuggestionsActive { get; init; }
@@ -1470,6 +1484,8 @@ public class ClaudeSession : ILlmSessionAdapter
                 CorrTrace("submit-turn(no-skip)", Info.Id, run);
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
+            run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
+            run.RetryOnEmptyExit = true;    // same-process: смерть до первого события = гонка TOCTOU
             run.Process.StandardInput.WriteLine(userMessageJson);
             run.Process.StandardInput.Flush();
             return true;
@@ -2119,7 +2135,18 @@ public class ClaudeSession : ILlmSessionAdapter
                     Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг same-process хода {turnMcpPath}: {ex.Message}");
                 }
             await existing.TurnTcs.Task.WaitAsync(ct);
-            return;
+            // Прогон умер, не выдав ни одного события хода (TOCTOU: фоновые агенты кончились,
+            // CLI завершается сразу после успешной записи в stdin) — гонка same-process, а не
+            // ошибка доставки. Молча перезапускаем ход новым процессом на ТОЙ ЖЕ паре, не отдавая
+            // смерть наружу (иначе фолбэк сочтёт её Unreachable и навсегда сменит провайдера).
+            // Обрыв посреди хода (TurnGotEvent=true) сюда не попадает — там DiedEmpty=false.
+            if (!existing.DiedEmpty) return;
+            existing.DiedEmpty = false;
+            // existing уже финализирован (процесс мёртв, _run обнулён, ресурсы прогона сняты):
+            // блок убийства несовместимого прогона ниже пропускаем, проваливаемся к запуску
+            // нового процесса. Ретрай единственный — у нового прогона RetryOnEmptyExit=false,
+            // повторная пустая смерть уходит наружу как Unreachable (фолбэк работает штатно).
+            existing = null;
         }
 
         // Живой, но несовместимый прогон (сменились модель/режим/персона/env — или запись
@@ -2402,12 +2429,37 @@ public class ClaudeSession : ILlmSessionAdapter
         if (orphanedTools.Count > 0)
             await CompleteBgTasksAsync(orphanedTools, aborted: true, drainSubagent: false);
 
-        // Ход, ждущий result, его уже не дождётся — процесс умер: резолвим, чтобы
-        // RunTurnAsync не завис (обрыв пользователю виден по ExitedMessage/статусу)
+        // Ход, ждущий result, его уже не дождётся — процесс умер. Активен ли был ход (ждуresult)
+        // в момент смерти — фиксируем ДО смены TurnDone: по этому признаку отличаем смерть
+        // same-process хода до первого события (гонка TOCTOU) от штатного выхода между ходами/после result.
+        var activeTurnDied = !run.TurnDone;
         run.TurnDone = true;
+
+        // Same-process ход умер, не получив ни одного события после submit: успешная запись в
+        // stdin успела, но CLI уже завершался (фоновые агенты кончились) — внутренняя гонка
+        // процесса, а не ошибка доставки провайдера. Наружу ExitedMessage не идёт, RunTurnAsync
+        // перезапустит ход новым процессом на той же паре (DiedEmpty). Этим ОТЛИЧАЕТСЯ от обрыва
+        // посреди хода (TurnGotEvent=true) — тот легитимный Unreachable уходит наружу как раньше.
+        //
+        // ПОРЯДОК КРИТИЧЕН: выставление DiedEmpty/SuppressExited — СТРОГО ДО TurnTcs.TrySetResult.
+        // TrySetResult будит ждущий same-process путь (NewTcs = RunContinuationsAsynchronously),
+        // и в продолжение по happens-before видно ТОЛЬКО то, что сделано до TrySetResult. Поставь
+        // флаги после — ждущий прочтёт DiedEmpty=false (хода как будто нет), а SuppressExited уже
+        // подавил ExitedMessage → ни result, ни exited, ни ретрая: сессия навсегда залипает в
+        // Working (тот же класс бага, что и реанимация зависших чатов). Решение — чистая ф-я (тест).
+        if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent))
+        {
+            run.DiedEmpty = true;
+            run.SuppressExited = true;
+            Console.WriteLine("[ClaudeSession] Same-process ход умер до первого события — перезапуск новым процессом на той же паре");
+        }
+
+        // Резолвим TurnTcs ПОСЛЕ выставления флагов ретрая: будим ждущий same-process путь,
+        // к этому моменту DiedEmpty/SuppressExited уже стоят и гарантированно видны продолжению.
         run.TurnTcs.TrySetResult();
 
-        // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage
+        // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage.
+        // Пустая смерть same-process хода наружу не идёт (SuppressExited выше) — её поглотит ретрай.
         if (!run.SuppressExited)
             await _onMessage(new ExitedMessage());
     }
@@ -2532,6 +2584,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // инструментов — write/mentions/секции; токены/URL из содержимого намеренно опущены как
     // изменчивые) и системный промпт целиком — из него в сигнатуре только слой персоны,
     // recall/подсказки деградируют мягко.
+    // Решение о ретрае same-process хода при пустой смерти процесса (гонка TOCTOU). Чистая
+    // функция: FinalizeRunAsync применяет её исход, тест вызывает напрямую. activeTurnDied —
+    // ход был активен (ждуresult) в момент смерти (не между ходами и не после result);
+    // retryOnEmptyExit — ход отправлен через same-process submit (TrySubmitTurn, только он
+    // уязвим к гонке — новый процесс, умерший пустым, это реальный сбой старта); turnGotEvent —
+    // пришло хотя бы одно событие хода после submit (обрыв посреди хода — НЕ ретрай).
+    internal static bool ShouldRetryEmptyExit(bool activeTurnDied, bool retryOnEmptyExit, bool turnGotEvent)
+        => activeTurnDied && retryOnEmptyExit && !turnGotEvent;
+
     private static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys,
         IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
@@ -2579,6 +2640,12 @@ public class ClaudeSession : ILlmSessionAdapter
         var root = doc.RootElement;
 
         if (!root.TryGetProperty("type", out var typeProp)) return;
+
+        // Ход активен и получил событие от прогона — процесс жив и обрабатывает ход. Без
+        // этого флага смерть same-process прогона до ЛЮБОГО события неотличима от гонки TOCTOU
+        // (запись в stdin прошла, но CLI уже завершается), и ретрай работал бы даже на обрыв
+        // посреди хода. Сбрасывается в TrySubmitTurn — поэтому между ходами не срабатывает.
+        if (!run.TurnDone) run.TurnGotEvent = true;
 
         // Фактическая модель хода. Одной строкой на все виды событий: CLI называет её и в
         // system/init, и в message.model каждого ответа — разбор в TurnTelemetry.ModelFromEvent.

@@ -174,7 +174,12 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
   (тихо, потолок не тратится) → шаги цепочки (маркер в ленте, потолок тратится) →
   честная ошибка; автоподбора нет. Подмена живёт в пределах хода (restore с CAS +
   персист), кулдаун недоступности — только сторонние провайдеры
-  (`ProviderHealthRegistry`). Детали — ADR-007 §4/§4.1.
+  (`ProviderHealthRegistry`). Классы ошибок, запускающих фолбэк (`TurnErrorClassifier`):
+  RateLimit / UsageLimit / ProviderError / Unreachable / ContextOverflow; прочее —
+  fail-closed. `ContextOverflow` («Prompt is too long») идёт по цепочке к модели с бóльшим
+  окном: фильтр ёмкости (`ContextCapacityRegistry` — наблюдаемый размер отказа, строгое
+  сравнение; заявленное окно — с 10%-м запасом) применяется только к этому классу, оценка
+  контекста сбрасывается при `/compact`. Детали — ADR-007 §4/§4.1/§4.4.
 
 Фоновые one-shot действия (теги, сводки, память, changelog…) считаются дёшево по цепочке
 «выбранное → локальная Ollama → claude» (`LocalActionRouter` + `CheapTextRunner`, каталог —

@@ -103,7 +103,7 @@ public class FallbackLlmSessionAdapterTests
         ClaudeSubscriptionPool pool, LlmProviderRegistry? providers = null,
         string model = "sonnet", string provider = "acc-a",
         int? modelFallbackMax = null, string? ownerId = null,
-        string[]? chain = null, ModelTier? turnTier = null,
+        string[]? chain = null,
         Func<string?>? effectiveModel = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
@@ -121,30 +121,15 @@ public class FallbackLlmSessionAdapterTests
         var sut = new FallbackLlmSessionAdapter(inner,
             // По умолчанию эффективная модель следует за session.Model (обновляется ApplyTarget).
             // Явный effectiveModel имитирует продовое EffectiveModel = Resolve(...) — НАМЕРЕНИЕ
-            // хода, которое не следует за подменой на эквивалент стороннего провайдера
+            // хода, которое не следует за подменой на шаг цепочки стороннего провайдера
             // (инцидент 2026-08-07: повторы одной пары до потолка).
             effectiveModel ?? (() => session.Model),
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
             fallbackSettings: store,
-            effectiveChain: chain is null ? null : () => chain,
-            turnTier: () => turnTier);
+            effectiveChain: chain is null ? null : () => chain);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
-    }
-
-    // Провайдер с разными моделями по уровням (для теста явного тира §5.1): TierStrong ≠ TierMedium.
-    private static LlmProviderRegistry BuildProvidersWithTiers()
-    {
-        var dict = new Dictionary<string, string?>
-        {
-            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
-            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.example.com",
-            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
-            ["LlmProviders:deepseek:TierStrong"] = "ds-strong",
-            ["LlmProviders:deepseek:TierMedium"] = "ds-medium",
-        };
-        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
     }
 
     // Конфиг с уникальным DataPath во временной папке (как в SpecialtyTemplatesServiceTests):
@@ -414,26 +399,6 @@ public class FallbackLlmSessionAdapterTests
             "owner-y не имеет своей записи → global=5 → 1 + 5 подмен");
     }
 
-    [Fact]
-    public async Task ПулИсчерпан_Уровень2_СтороннийПровайдерСЭквивалентом()
-    {
-        var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProviders());
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));
-
-        await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
-
-        inner.Attempts.Should().HaveCount(2);
-        inner.Attempts[1].Provider.Should().Be("deepseek");
-        inner.Attempts[1].Model.Should().Be("deepseek-chat",
-            "уровень 2 берёт модель-эквивалент по слоту");
-        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
-            .Which.Label.Should().Contain("смена провайдера");
-        inner.Info.Model.Should().Be("deepseek-chat");
-    }
-
     // --- Цепочка пресета (ADR-007 §4, §8) ---
 
     [Fact]
@@ -488,41 +453,6 @@ public class FallbackLlmSessionAdapterTests
         inner.Attempts.Should().NotContain(p => p.Provider == "glm",
             "автоподбор при цепочке выключен");
         Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
-    }
-
-    [Fact]
-    public async Task ЯвныйТирХода_ПобеждаетРеверсЭвристику()
-    {
-        // §8/§5.1: тир хода, переданный явно, побеждает реверс-эвристику ResolveTier при
-        // автоподборе. turnTier=Strong → EquivalentModel берёт TierStrong провайдера (ds-strong),
-        // хотя реверс-эвристика без _tiers дала бы Medium (ds-medium).
-        var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProvidersWithTiers(), model: "sonnet",
-            turnTier: ModelTier.Strong);
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // sonnet × acc-a — исчерпан
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // автоподбор → успех
-
-        await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
-
-        inner.Attempts[1].Model.Should().Be("ds-strong",
-            "явный Strong побеждает реверс (Medium → ds-medium)");
-    }
-
-    [Fact]
-    public async Task БезЯвногоТира_РеверсЭвристикаДаётMedium()
-    {
-        // Контрольный кейс к предыдущему: без явного тира (и без _tiers) реверс даёт Medium.
-        var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProvidersWithTiers(), model: "sonnet");
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));
-
-        await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
-
-        inner.Attempts[1].Model.Should().Be("ds-medium",
-            "без явного тира и _tiers реверс-эвристика даёт Medium");
     }
 
     [Fact]
@@ -596,12 +526,13 @@ public class FallbackLlmSessionAdapterTests
 
     // Классификация причины попадает в ProviderSwitchedMessage.Reason — фронт
     // по нему выбирает каноническую формулировку подсказки. RateLimit → rate_limit.
-    // Проверяем на уровне 2 (смена типа поставщика): на уровне 1 маркера в ленте теперь нет.
+    // Проверяем на переходе по цепочке (смена типа поставщика): на уровне 1 маркера в ленте нет.
     [Fact]
     public async Task RateLimit_ПричинаВМаркере_RateLimit()
     {
         var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProviders());
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() =>
             inner.Emit(new RateLimitMessage("five_hour", ResetsAt: null, Status: "rejected")));
         inner.Scripts.Enqueue(() => inner.Emit(Success()));
@@ -614,12 +545,13 @@ public class FallbackLlmSessionAdapterTests
     }
 
     // Обрыв потока посреди ответа: класс Unreachable → wire-имя unreachable.
-    // Также уровень 2 (смена типа поставщика) — на уровне 1 маркера в ленте нет.
+    // Также переход по цепочке (смена типа поставщика) — на уровне 1 маркера в ленте нет.
     [Fact]
     public async Task ОбрывПотока_ПричинаВМаркере_Unreachable()
     {
         var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProviders());
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() =>
         {
             inner.Emit(new TextDeltaMessage("начал"));
@@ -656,115 +588,43 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
 
-    // Инцидент 2026-08-07: модель попытки бралась из _effectiveModel() — НАМЕРЕНИЯ хода,
-    // а не из применённой подмены. Намерение (opus) не следует за подменой на эквивалент
-    // стороннего провайдера, поэтому в attempted ложилось (opus, провайдер), а проверка
-    // зацикливания шла по (эквивалент, провайдер) — пары расходились, и одна мёртвая пара
-    // повторялась до потолка. Здесь намерение зафиксировано константой (как EffectiveModel
-    // в проде), фактическая пара должна быть уникальной.
+    // Волна 2 (ADR-007 §4): автоподбор удалён полностью. Цепочка из одной модели (хвоста нет,
+    // слот пустой) после исчерпания пула завершается честной ошибкой — к сторонним провайдерам
+    // сами не уходим. Это и есть удаление уровня 2: без настроенного хвоста магии нет.
+    // Сторож продовому входу: ClaudeSession.EffectiveTurnChain всегда отдаёт минимум один
+    // элемент, поэтому chain:["opus"] имитирует реальный ход с замороженной моделью персоны.
     [Fact]
-    public async Task ЭквивалентПровайдера_ФактическаяПараНеПовторяется()
+    public async Task ЦепочкаОднойМодели_ПулИсчерпан_ФинальнаяОшибка_АвтоподборНеСрабатывает()
     {
         var dict = new Dictionary<string, string?>
         {
             ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
             ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
             ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
-            ["LlmProviders:alibabacloud:TierStrong"] = "qwen-max",
             ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
             ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
-            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-flash",
-            ["LlmProviders:deepseek:TierStrong"] = "deepseek-v4-flash",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
         };
         var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
         var pool = BuildPool("claude-1");
         var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude-1",
-            effectiveModel: () => "opus", turnTier: ModelTier.Strong, modelFallbackMax: 4);
-        // Все попытки — обрыв (Unreachable): «эндпоинт недоступен», как в инциденте
-        for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
+            chain: ["opus"], effectiveModel: () => "opus");
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // claude-1/opus — исчерпан
 
         await sut.SendMessageAsync("сделай");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
 
-        // Три уникальные пары: claude-1 → alibabacloud → deepseek, дальше повторяться некому,
-        // оркестрация завершается исчерпанием. Без фикса цикл долбил бы потолок 4 подмены
-        // повторами одной пары (5 попыток), а не останавливался на трёх.
-        inner.Attempts.Should().HaveCount(3);
-        inner.Attempts.Select(a => (a.Provider, a.Model!)).Should().BeEquivalentTo(new[]
-        {
-            ("claude-1", "opus"), ("alibabacloud", "qwen-max"), ("deepseek", "deepseek-v4-flash"),
-        }, "фактическая пара «модель × подписка» не повторяется: в попытку идёт эквивалент, не opus");
-    }
-
-    // Тот же инцидент 2026-08-07, но через ПРОДОВЫЙ вход: ClaudeSession.EffectiveTurnChain
-    // всегда отдаёт минимум один элемент, поэтому модель попытки бралась из замороженной
-    // chain[0] (условие было chain.Count > 0), а не из _effectiveModel(). Вариант с chain:null
-    // эту ветку не задействует — а именно её «упростит» будущий исполнитель, вернув пересчёт
-    // из цепочки. Ожидание то же: 3 попытки, пары уникальны. На коде до фикса da952f0d падает
-    // пятью попытками — это и доказывает, что тест охраняет именно продовый сценарий.
-    [Fact]
-    public async Task ЭквивалентПровайдера_ФактическаяПараНеПовторяется_ЦепочкаОднойМодели()
-    {
-        var dict = new Dictionary<string, string?>
-        {
-            ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
-            ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
-            ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
-            ["LlmProviders:alibabacloud:TierStrong"] = "qwen-max",
-            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
-            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
-            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-flash",
-            ["LlmProviders:deepseek:TierStrong"] = "deepseek-v4-flash",
-        };
-        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
-        var pool = BuildPool("claude-1");
-        // chain: ["opus"] имитирует продовый EffectiveTurnChain (минимум один элемент) —
-        // модель попытки идёт из chain[0], а не из _effectiveModel().
-        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude-1",
-            chain: ["opus"], effectiveModel: () => "opus", turnTier: ModelTier.Strong, modelFallbackMax: 4);
-        // Все попытки — обрыв (Unreachable), как в инциденте
-        for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
-
-        await sut.SendMessageAsync("сделай");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
-
-        inner.Attempts.Should().HaveCount(3);
-        inner.Attempts.Select(a => (a.Provider, a.Model!)).Should().BeEquivalentTo(new[]
-        {
-            ("claude-1", "opus"), ("alibabacloud", "qwen-max"), ("deepseek", "deepseek-v4-flash"),
-        }, "фактическая пара «модель × подписка» не повторяется: в попытку идёт эквивалент, не opus");
-    }
-
-    // Уровень 2 — уход на стороннего провайдера: в попытку идёт модель ИЗ КАТАЛОГА
-    // провайдера (эквивалент по тиру), а не исходная opus, которой у него нет.
-    [Fact]
-    public async Task Уровень2_ВПопыткуИдётЭквивалентИзКаталогаПровайдера()
-    {
-        var dict = new Dictionary<string, string?>
-        {
-            ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
-            ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
-            ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
-            ["LlmProviders:alibabacloud:TierStrong"] = "qwen-max",
-        };
-        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
-        var pool = BuildPool("claude-1");
-        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude-1",
-            effectiveModel: () => "opus", turnTier: ModelTier.Strong);
-        inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));   // claude-1/opus — обрыв
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));             // alibabacloud/qwen-max — успех
-
-        await sut.SendMessageAsync("сделай");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
-
-        inner.Attempts[1].Should().Be(("alibabacloud", "qwen-max"),
-            "эквивалент Strong-тира из каталога alibabacloud, а не opus");
+        // Одна попытка: пул claude исчерпан, цепочки (хвоста) нет → честная ошибка.
+        // К сторонним провайдерам (alibabacloud/deepseek) сами не уходим — автоподбора нет.
+        inner.Attempts.Should().ContainSingle();
+        inner.Attempts.Should().NotContain(p => p.Provider == "alibabacloud" || p.Provider == "deepseek",
+            "автоподбор удалён: Enabled не обходится");
+        Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
 
     // Смена аккаунта внутри пула Claude (уровень 1) проходит ТИХО — без ProviderSwitchedMessage;
-    // маркер появляется только при смене ТИПА поставщика (уровень 2 → сторонний провайдер).
+    // маркер появляется только при переходе по цепочке на стороннего провайдера.
     [Fact]
     public async Task СменаАккаунтаВнутриПула_БезМаркера_СменаТипа_СМаркером()
     {
@@ -776,9 +636,10 @@ public class FallbackLlmSessionAdapterTests
         };
         var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
         var pool = BuildPool("acc-a", "acc-b");
-        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a — исчерпан → уровень 1 (acc-b, тихо)
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-b — исчерпан → уровень 2 (deepseek, маркер)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-b — исчерпан → шаг цепочки (deepseek, маркер)
         inner.Scripts.Enqueue(() => inner.Emit(Success()));         // deepseek — успех
 
         await sut.SendMessageAsync("сделай что-нибудь");
@@ -788,7 +649,7 @@ public class FallbackLlmSessionAdapterTests
         inner.Attempts[0].Should().Be(("acc-a", "sonnet"));
         inner.Attempts[1].Should().Be(("acc-b", "sonnet"));
         inner.Attempts[2].Should().Be(("deepseek", "deepseek-chat"));
-        // Ровно один маркер — только смена ТИПА поставщика (acc-b → deepseek);
+        // Ровно один маркер — только переход acc-b → deepseek (шаг цепочки, смена типа поставщика);
         // переход acc-a → acc-b внутри пула Claude прошёл без маркера.
         Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
             .Which.Provider.Should().Be("deepseek");
@@ -847,7 +708,8 @@ public class FallbackLlmSessionAdapterTests
     {
         var pool = BuildPoolWithNames(("acc-a", "Claude 2 (Max)"), ("acc-b", ""));
         var providers = BuildProviderWithName("deepseek", "DeepSeek", "deepseek-chat");
-        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a (Claude 2 Max) — RateLimit
         inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));// acc-b (без имени) — обрыв, Unreachable
         inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // deepseek (DeepSeek) — RateLimit

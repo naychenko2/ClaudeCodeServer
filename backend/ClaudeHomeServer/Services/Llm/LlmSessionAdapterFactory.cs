@@ -32,9 +32,6 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Атрибуция file_changed чату-источнику — singleton на процесс, общий для всех сессий;
     // null — в тестах фабрики, собранных без него (фильтрация тогда просто выключена)
     private readonly FileChangeAttributor? _fileChangeAttributor;
-    // Слоты тиров владельца — фолбэку уровня 2 нужны для модели-эквивалента по слоту;
-    // null (тесты без него) — эквивалент берётся из среднего тира провайдера
-    private readonly UserModelTierResolver? _tiers;
     // Стор настроек фолбэк-оркестрации (потолок подмен per-owner → global → дефолт).
     // null (тесты без DI) — адаптер идёт по дефолту FallbackSettingsStore.DefaultMaxSubstitutions.
     private readonly FallbackSettingsStore? _fallbackSettings;
@@ -46,13 +43,12 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     public LlmSessionAdapterFactory(IConfiguration config, SkillsService skills,
         WorkspaceKnowledgeStore workspaceStore, LlmProviderRegistry providers,
         ClaudeSubscriptionPool subscriptionPool, ModelAssignmentResolver? assignments = null,
-        FileChangeAttributor? fileChangeAttributor = null, UserModelTierResolver? tiers = null,
+        FileChangeAttributor? fileChangeAttributor = null,
         FallbackSettingsStore? fallbackSettings = null,
         ILogger<LlmSessionAdapterFactory>? log = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
-        _tiers = tiers;
         _fallbackSettings = fallbackSettings;
         _log = log;
         _mcpConfigPath = config["McpConfigPath"];
@@ -111,8 +107,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         fallback = new FallbackLlmSessionAdapter(claudeSession,
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,
-            context.Launcher, context.CliConfigRoot, _tiers, _fallbackSettings,
-            () => claudeSession.EffectiveTurnChain, () => claudeSession.EffectiveTurnTier, _log);
+            context.Launcher, context.CliConfigRoot, _fallbackSettings,
+            () => claudeSession.EffectiveTurnChain, _log);
         return fallback;
     }
 }

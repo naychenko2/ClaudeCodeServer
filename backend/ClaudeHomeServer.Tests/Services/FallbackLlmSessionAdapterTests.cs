@@ -119,6 +119,29 @@ public class FallbackLlmSessionAdapterTests
     private static string[] ChainModels(int count) =>
         Enumerable.Range(1, count).Select(i => $"m{i}").ToArray();
 
+    // Сторонние провайдеры с ЗАЯВЛЕННЫМ окном моделей (LlmModelConfig.ContextWindow) — для
+    // проверки фильтра ёмкости цепочки: кандидат с окном меньше контекста хода отсеивается.
+    private static LlmProviderRegistry BuildWindowProviders(params (string Key, string Model, int Window)[] specs)
+    {
+        var dict = new Dictionary<string, string?>();
+        foreach (var (key, model, window) in specs)
+        {
+            dict[$"LlmProviders:{key}:ApiKey"] = $"sk-{key}";
+            dict[$"LlmProviders:{key}:AnthropicBaseUrl"] = $"https://{key}.example.com";
+            dict[$"LlmProviders:{key}:Models:0:Id"] = model;
+            dict[$"LlmProviders:{key}:Models:0:ContextWindow"] = window.ToString();
+        }
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Эмит «Prompt is too long» одной попытки: текст ошибки (ErrorText → ContextOverflow) +
+    // result со статусом 400. Как на проде: CLI шлёт is_error-текст ПЕРЕД result.
+    private static void EmitOverflow(FakeInnerAdapter inner, string text = "Prompt is too long.")
+    {
+        inner.Emit(new ErrorMessage(text, ExpectResultFollows: true));
+        inner.Emit(ApiError("400"));
+    }
+
     private (FallbackLlmSessionAdapter Sut, FakeInnerAdapter Inner) BuildSut(
         ClaudeSubscriptionPool pool, LlmProviderRegistry? providers = null,
         string model = "sonnet", string provider = "acc-a",
@@ -126,7 +149,9 @@ public class FallbackLlmSessionAdapterTests
         string[]? chain = null,
         Func<string?>? effectiveModel = null,
         ProviderHealthRegistry? health = null,
-        Action? persist = null)
+        Action? persist = null,
+        ContextCapacityRegistry? capacity = null,
+        Func<int>? lastContextTokens = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -151,7 +176,9 @@ public class FallbackLlmSessionAdapterTests
             fallbackSettings: store,
             effectiveChain: chain is null ? null : () => chain,
             health: health,
-            persist: persist);
+            persist: persist,
+            capacity: capacity,
+            lastContextTokens: lastContextTokens);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }
@@ -1009,6 +1036,125 @@ public class FallbackLlmSessionAdapterTests
         var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
         marker.Reason.Should().Be("unreachable");
         marker.Provider.Should().Be("p-alive");
+    }
+
+    // --- Переполнение контекста (ContextOverflow) ---
+    // Репро инцидента 09.08: фолбэк ушёл на шаг цепочки, но ПРИНЯВШАЯ модель не переварила
+    // контекст → ход умер с «Prompt is too long». Теперь overflow — шаг по цепочке, а не смерть хода.
+
+    // Overflow уводит на следующий шаг цепочки, а не убивает ход. Подписка пула НЕ помечается
+    // исчерпанной (окно — не квота), эндпоинт НЕ помечается недоступным (он ответил). skip уровня 1
+    // (ротация подписок той же модели): у m2 нет окна в каталоге → fail-open → шаг происходит.
+    [Fact]
+    public async Task Overflow_УводитНаШагЦепочки_НеУбиваяХод()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p2", "m2", 1_000_000));
+        var capacity = new ContextCapacityRegistry();
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m2"], capacity: capacity, lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet × acc-a — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m2 (шаг 2) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p2", "m2"), "overflow → шаг цепочки, а не смерть хода");
+        // Наблюдение записано: модель не приняла ~100k токенов
+        capacity.ObservedCeiling("sonnet").Should().Be(100_000);
+        // Overflow — не квота и не мёртвый эндпоинт: подписка и здоровье не тронуты
+        pool.IsExhausted("acc-a").Should().BeFalse("overflow — не лимит аккаунта");
+        // Маркер подмены несёт reason=context_overflow (фронт покажет каноничную формулировку)
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Reason.Should().Be("context_overflow");
+    }
+
+    // Кандидат цепочки с ЗАЯВЛЕННЫМ окном меньше контекста хода — пропускается (модель точно
+    // упадёт с тем же overflow). Цепочка [sonnet, m-small(50k), m-big(500k)], контекст 100k.
+    [Fact]
+    public async Task Overflow_КандидатСМеньшимОкном_Пропускается()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-small", "m-small", 50_000), ("p-big", "m-big", 500_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-small", "m-big"], capacity: new(), lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-big — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // m-small (шаг 2, окно 50k) отсеян — контекст 100k; попытка 2 = m-big (шаг 3)
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-big", "m-big"), "шаг 2 (m-small, 50k) пропущен — идём к шагу 3");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 3");
+    }
+
+    // Наблюдение точнее конфига: m-small заявлено 200k (прошло бы по конфигу), но в прошлых ходах
+    // модель упала на 80k → effective=min(200000, 80000)=80k < 100k → отсеивается по наблюдению.
+    [Fact]
+    public async Task Overflow_НаблюдениеТочнееКонфига_ОтсеиваетПоФакту()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-small", "m-small", 200_000), ("p-big", "m-big", 500_000));
+        var capacity = new ContextCapacityRegistry();
+        capacity.RecordOverflow("m-small", 80_000);   // в прошлом ходе m-small не принял 80k
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-small", "m-big"], capacity: capacity, lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-big — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // m-small отсеян по наблюдению (заявленное 200k обрезано наблюдённым 80k), а не по конфигу
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-big", "m-big"), "m-small отсеян по наблюдению, не по конфигу");
+    }
+
+    // Fail-open при отсутствии оценки контекста: accessor контекста не задан (ContextEstimate=0) →
+    // WouldFit всегда true → шаг происходит даже на заведомо малое окно. Лучше попробовать, чем сдаться.
+    [Fact]
+    public async Task Overflow_НетОценкиКонтекста_FailOpen_ШагНаМалоеОкно()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-small", "m-small", 50_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-small"], capacity: new(), lastContextTokens: () => 0);  // оценки нет
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-small (50k) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // Оценки контекста нет → фильтр по ёмкости выключен → шаг на m-small несмотря на малое окно
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-small", "m-small"), "fail-open: без оценки контекста шаг не отсеивается");
+    }
+
+    // Все шаги цепочки не вмещают контекст → финальный текст про окно (/compact / смена модели),
+    // а не общее «модели не ответили». Без зацикливания: одна попытка, отсеянный шаг не пробуется.
+    [Fact]
+    public async Task Overflow_ВсеШагиНеВмещают_ФинальныйТекстПроОкно()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-small", "m-small", 50_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-small"], capacity: new(), lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow; m-small (50k) отсеян → финал
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // Только sonnet — m-small отсеян WouldFit, зацикливания нет
+        inner.Attempts.Should().ContainSingle();
+        // Финальный текст — про переполнение окна и действия, а не про лежащие эндпоинты
+        var error = Downstream().OfType<ErrorMessage>().First(m => m.Text.Contains("/compact"));
+        error.Text.Should().Contain("ни одна из доступных моделей не смогла");
+        error.Text.Should().NotContain("Ни одна из доступных моделей не ответила");
+        var final = Downstream().OfType<ResultMessage>().Should().ContainSingle().Subject;
+        final.Subtype.Should().Be("error");
     }
 
     // --- Фиксы ревью Глеба (Major 1/2, Minor 4) ---

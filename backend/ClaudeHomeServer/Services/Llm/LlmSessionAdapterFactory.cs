@@ -38,6 +38,9 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Кулдаун недоступности провайдера (волна 2): провайдер, вернувший Unreachable/ProviderError,
     // помечается недоступным на TTL — фолбэк пропускает его шаги цепочки. null (тесты) — выключен.
     private readonly ProviderHealthRegistry? _health;
+    // Наблюдаемая ёмкость окна модели (ContextOverflow): модель, не принявшая контекст, не
+    // получает следующие ходы с контекстом ≥ N. null (тесты) — fail-open. Singleton на процесс.
+    private readonly ContextCapacityRegistry? _capacity;
     // Логгер фолбэк-оркестрации: без него подмены нечем отлаживать (что
     // классифицировали, куда переключились, почему кандидат отвергнут). null в тестах
     // без DI — адаптер пишет в Console.Error, чтобы не терять диагностику совсем.
@@ -49,12 +52,14 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         FileChangeAttributor? fileChangeAttributor = null,
         FallbackSettingsStore? fallbackSettings = null,
         ProviderHealthRegistry? health = null,
+        ContextCapacityRegistry? capacity = null,
         ILogger<LlmSessionAdapterFactory>? log = null)
     {
         _assignments = assignments;
         _fileChangeAttributor = fileChangeAttributor;
         _fallbackSettings = fallbackSettings;
         _health = health;
+        _capacity = capacity;
         _log = log;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
@@ -113,7 +118,8 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             () => claudeSession.EffectiveTurnModel,
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,
             context.Launcher, context.CliConfigRoot, _fallbackSettings,
-            () => claudeSession.EffectiveTurnChain, _health, _log, context.PersistSessions);
+            () => claudeSession.EffectiveTurnChain, _health, _log, context.PersistSessions,
+            _capacity, () => claudeSession.LastContextTokens);
         return fallback;
     }
 }

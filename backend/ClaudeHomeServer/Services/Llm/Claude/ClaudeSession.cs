@@ -35,6 +35,12 @@ public class ClaudeSession : ILlmSessionAdapter
         _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
+    // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при
+    // ContextOverflow оркестратор по нему решает, вместит ли кандидат из цепочки текущий
+    // разговор. Для нового хода — последнее известное значение чата (контекст растёт плавно,
+    // прошлый ход — хорошая оценка). Сам резолв остаётся приватным, наружу — только чтение.
+    internal int LastContextTokens => _lastContextTokens;
+
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>
         Info.TaskExecution || Info.TaskId is not null ? LocalActionCatalog.TasksExecutor

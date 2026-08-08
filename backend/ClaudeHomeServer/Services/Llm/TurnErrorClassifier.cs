@@ -20,6 +20,11 @@ public enum FallbackErrorClass
     // Недоступность эндпоинта: DNS-фейл, connection refused/timeout, обрыв TLS,
     // любой обрыв stream — в том числе посреди уже начатого ответа
     Unreachable,
+    // Контекст хода не помещается в окно модели («Prompt is too long» и эквиваленты
+    // сторонних провайдеров). Отдельный класс: ту же модель/подписку повторять бессмысленно
+    // (окно — свойство модели, не аккаунта), но шагать по цепочке к модели с бóльшим окном —
+    // можно. Не помечает подписку исчерпанной и эндпоинт недоступным (он ответил, просто отказал).
+    ContextOverflow,
 }
 
 // Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
@@ -75,7 +80,9 @@ public static class TurnErrorClassifier
         {
             // Статуса нет — решаем по тексту (напр. «fetch failed» без статуса);
             // не опознали — None (fail-closed)
-            return LooksUnreachable(outcome.ErrorText) ? FallbackErrorClass.Unreachable : FallbackErrorClass.None;
+            if (LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
+            if (LooksContextOverflow(outcome.ErrorText)) return FallbackErrorClass.ContextOverflow;
+            return FallbackErrorClass.None;
         }
 
         // Белый список статусов
@@ -92,6 +99,10 @@ public static class TurnErrorClassifier
         if (int.TryParse(status, out var code) && code is >= 500 and <= 599) return FallbackErrorClass.ProviderError;
         // Сетевые маркеры в статусе или тексте ошибки
         if (LooksUnreachable(status) || LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
+        // Контекст не помещается в окно модели (400/413 + текст «Prompt is too long» у Anthropic,
+        // «context_length_exceeded» у OpenAI-совместимых эндпоинтов). Класс отдельный от None:
+        // повторять ту же модель бессмысленно, но шагнуть по цепочке к бóльшему окну — можно.
+        if (LooksContextOverflow(status) || LooksContextOverflow(outcome.ErrorText)) return FallbackErrorClass.ContextOverflow;
 
         // Неизвестный статус, прочие 4xx (400/401), содержательные отказы — фолбэк НЕ запускается
         return FallbackErrorClass.None;
@@ -106,6 +117,7 @@ public static class TurnErrorClassifier
         FallbackErrorClass.UsageLimit => "usage_limit",
         FallbackErrorClass.ProviderError => "provider_error",
         FallbackErrorClass.Unreachable => "unreachable",
+        FallbackErrorClass.ContextOverflow => "context_overflow",
         _ => null,
     };
 
@@ -114,6 +126,31 @@ public static class TurnErrorClassifier
         text is not null
         && (text.Contains("usage limit", StringComparison.OrdinalIgnoreCase)
             || text.Contains("usage_limit", StringComparison.OrdinalIgnoreCase));
+
+    // Признаки переполнения контекста. Anthropic CLI шлёт «Prompt is too long» (видели на проде:
+    // kimi-k3 со заявленным окном 1M упал с этим текстом — тариф режет раньше конфига).
+    // Сторонние провайдеры через Anthropic-скин и OpenAI-совместимые эндпоинты дают свои
+    // формулировки: «context_length_exceeded», «input length exceeds», «longer than the model's
+    // context window». Берём по подстроке без учёта регистра — точного кода ошибки у них нет.
+    private static readonly string[] ContextOverflowPhrases =
+    [
+        "prompt is too long",
+        "input length exceeds",
+        "context length exceeded",
+        "context_length_exceeded",
+        "maximum context length",
+        "longer than the model",
+        "exceeds the model",
+        "too long for the model",
+    ];
+
+    private static bool LooksContextOverflow(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var phrase in ContextOverflowPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
 
     private static bool LooksUnreachable(string? value)
     {

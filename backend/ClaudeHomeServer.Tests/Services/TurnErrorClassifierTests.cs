@@ -84,6 +84,35 @@ public class TurnErrorClassifierTests
     public void ОшибкиАвторизацииИЗапроса_ФолбэкНеЗапускают(string status)
         => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.None);
 
+    // Переполнение контекста: «Prompt is too long» у Anthropic (видели на проде: kimi-k3 со
+    // заявленным окном 1M) и эквиваленты сторонних провайдеров. Класс отдельный от None —
+    // повторять ту же модель бессмысленно, но шагнуть по цепочке к бóльшему окну можно.
+    [Theory]
+    [InlineData("Prompt is too long: 210000 tokens > 200000 maximum.")]
+    [InlineData("input length exceeds 200000, max is 128000")]
+    [InlineData("This model's maximum context length is 128000 tokens.")]
+    [InlineData("context_length_exceeded")]
+    [InlineData("Your request is longer than the model's context window.")]
+    [InlineData("The input is too long for the model")]
+    public void ПереполнениеКонтекста_ПоТексту_КлассContextOverflow(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ContextOverflow);
+
+    [Fact]
+    public void ПереполнениеКонтекста_Статус400_ПоТексту_КлассContextOverflow()
+        => TurnErrorClassifier.Classify(Result("400", "Prompt is too long."))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "400 сам по себе — содержательная ошибка (None), но с overflow-текстом это ContextOverflow");
+
+    [Fact]
+    public void ContextOverflow_WireNameДляМаркера()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.ContextOverflow)
+            .Should().Be("context_overflow");
+
+    [Fact]
+    public void Статус400_БезOverflowТекста_ОстаётсяNone()
+        => TurnErrorClassifier.Classify(Result("400", "invalid request body"))
+            .Should().Be(FallbackErrorClass.None, "обычный 400 — не переполнение контекста");
+
     [Fact]
     public void НеизвестнаяОшибка_ФолбэкНеЗапускает_FailClosed()
         => TurnErrorClassifier.Classify(Result("418", "teapot"))

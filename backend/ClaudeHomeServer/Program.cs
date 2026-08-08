@@ -274,6 +274,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.LlmProviderRegistry>
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderBalanceService>();
 // Кулдаун недоступности провайдера (волна 2 ADR-007): in-memory наблюдение, без персиста и бэкапа
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ProviderHealthRegistry>();
+// Наблюдаемая ёмкость окна модели (ContextOverflow): модель, не принявшая контекст, не получает
+// следующие ходы с контекстом ≥ N. In-memory наблюдение, без персиста и бэкапа — singleton на процесс
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ContextCapacityRegistry>();
 // Интерфейс указывает на тот же singleton — нужен контроллеру и подмене в тестах ролей
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.IProviderBalanceService>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Llm.ProviderBalanceService>());

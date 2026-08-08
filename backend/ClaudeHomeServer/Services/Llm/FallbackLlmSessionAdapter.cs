@@ -45,6 +45,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Кулдаун недоступности провайдера (волна 2): провайдер, вернувший Unreachable/ProviderError,
     // помечается недоступным на TTL; фолбэк пропускает его шаги цепочки (fail-open). null (тесты).
     private readonly ProviderHealthRegistry? _health;
+    // Наблюдаемая ёмкость окна модели (ContextOverflow): модель, не принявшая контекст размера N,
+    // не получает последующие ходы с контекстом ≥ N. Заявленный ContextWindow — первичная оценка,
+    // наблюдение — уточнение (конфиг расходится с фактическим лимитом тарифа). null (тесты) — fail-open.
+    private readonly ContextCapacityRegistry? _capacity;
+    // Оценка размера контекста текущего хода (ClaudeSession.LastContextTokens): по ней оркестратор
+    // при ContextOverflow отсеивает кандидатов цепочки с заведомо меньшим окном. null (тесты) —
+    // фильтр по ёмкости выключен (поведение как до защиты от overflow).
+    private readonly Func<int>? _lastContextTokens;
     // Лог подмен: без него оркестрацию нечем отлаживать на стенде (что классифицировали,
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
@@ -84,7 +92,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         Func<IReadOnlyList<string>>? effectiveChain = null,
         ProviderHealthRegistry? health = null,
         ILogger? log = null,
-        Action? persist = null)
+        Action? persist = null,
+        ContextCapacityRegistry? capacity = null,
+        Func<int>? lastContextTokens = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -97,6 +107,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _fallbackSettings = fallbackSettings;
         _effectiveChain = effectiveChain;
         _health = health;
+        _capacity = capacity;
+        _lastContextTokens = lastContextTokens;
         _log = log;
         _persist = persist;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
@@ -395,6 +407,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     && IsExternalProvider(currentKey))
                     _health?.MarkUnavailable(currentKey);
 
+                // ContextOverflow: модель не приняла контекст — запоминаем наблюдённый потолок
+                // ёмкости (модель не вместила ~N токенов), чтобы в этом и следующих ходах не
+                // отправлять на неё контекст ≥ N. Оценка N — последний известный размер контекста
+                // чата (для нового хода — значение прошлого хода, контекст растёт плавно).
+                // Не помечаем подписку исчерпанной (это не квота) и эндпоинт недоступным (он жив).
+                if (cls == FallbackErrorClass.ContextOverflow)
+                {
+                    var ctxN = ContextEstimate();
+                    _capacity?.RecordOverflow(currentModel, ctxN);
+                    LogInfo($"Переполнение контекста: «{currentModel}» × «{currentKey}» не принял ~{ctxN} токенов");
+                }
+
                 trace.Add(new AttemptTrace(currentModel, currentKey, cls));
                 if (substitutions >= EffectiveMaxSubstitutions())
                 {
@@ -402,7 +426,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return;
                 }
 
-                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex);
+                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ContextEstimate());
                 if (next is null) { await FailExhaustedAsync(turn, trace, substitutions, end); return; }
 
                 // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
@@ -552,7 +576,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // (одноэлементная/пустая) после пула автоподбора нет — финальный сбой.
     private FallbackTarget? ResolveNextTarget(FallbackErrorClass cls, AttemptEnd end,
         HashSet<(string Model, string Key)> attempted, string model, string currentKey,
-        IReadOnlyList<string> chain, ref int chainIndex)
+        IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate)
     {
         // Лимитные классы помечают подписку исчерпанной в пуле (существующий механизм):
         // 5xx/обрыв — НЕ помечают, это не квота аккаунта (инцидент 2026-08-02: ложные баны)
@@ -568,8 +592,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var isNativeClaude = _providers?.ResolveByModel(modelForPool) is null;
 
         // Уровень 1: ротация подписок пула (только нативные claude-модели; у сторонних пула нет —
-        // шаг считается исчерпанным сразу, переходим к следующему шагу цепочки/автоподбору)
-        if (isNativeClaude && _pool.HasExtra)
+        // шаг считается исчерпанным сразу, переходим к следующему шагу цепочки/автоподбору).
+        // ContextOverflow обходим уровень 1: окно — свойство МОДЕЛИ, не подписки. Другая подписка
+        // того же аккаунта-пула несёт ту же модель с тем же окном и упадёт так же — гонять её
+        // бессмысленно. Сразу к шагу цепочки, где может быть модель с бóльшим окном.
+        if (isNativeClaude && _pool.HasExtra && cls != FallbackErrorClass.ContextOverflow)
         {
             // SessionManager.TryPoolFailover по rate_limit_event мог уже переключить чат
             // (транскрипт перенесён им) — тогда не мигрируем повторно и не шлём второй маркер
@@ -616,6 +643,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 var stepModel = chain[scan];
                 var stepKey = ProviderKeyFor(stepModel);
                 if (attempted.Contains((stepModel, stepKey))) continue;
+                // Окно кандидата не вместит текущий контекст (заявленное из каталога либо
+                // наблюдённое при прошлых overflow) — пропускаем ЖЁСТКО, без fail-open: это
+                // не наблюдение о живости (кулдаун), а уверенный отказ — модель точно упадёт с
+                // тем же «Prompt is too long». Меньше конфигура врёт — наблюдение точнее, его
+                // и используем как потолок (min от заявленного и наблюдённого).
+                if (!WouldFit(stepModel, contextEstimate)) continue;
                 // Остывший: запоминаем индекс первого и ищем живого дальше, НЕ мигрируя —
                 // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open)
                 if (_health?.IsUnavailable(stepKey) is true)
@@ -672,6 +705,29 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // ClaudeSubscriptionPool (Major 2).
     private bool IsExternalProvider(string? key) =>
         _providers is not null && _providers.GetByKey(key ?? "") is not null;
+
+    // Оценка размера контекста текущего хода (ClaudeSession.LastContextTokens). 0 — значение
+    // недоступно (тесты без accessor'а, совсем новый чат без истории): фильтр по ёмкости при этом
+    // выключается (WouldFit возвращает true), поведение как до защиты от overflow.
+    private int ContextEstimate() => _lastContextTokens?.Invoke() ?? 0;
+
+    // Вместила бы модель текущий контекст? Эффективная ёмкость = min(заявленного окна из каталога,
+    // наблюдённого потолка). Заявленное — первичная оценка, наблюдение — уточнение (конфиг
+    // расходится с фактическим лимитом тарифа: kimi-k3 заявляет 1M, падает на меньшем). Нет ни
+    // того, ни другого (модель не описана в каталоге, наблюдений нет) — fail-open: лучше
+    // попробовать, чем молча сдаться. Контекст <= 0 — тоже fail-open (оценки нет, фильтровать нечем).
+    private bool WouldFit(string? model, int contextTokens)
+    {
+        if (contextTokens <= 0) return true;
+        var declared = _providers?.ResolveByModel(model)?.FindModel(model)?.ContextWindow;
+        var observed = _capacity?.ObservedCeiling(model);
+        int? effective;
+        if (declared.HasValue && observed.HasValue) effective = Math.Min(declared.Value, observed.Value);
+        else if (declared.HasValue) effective = declared;
+        else if (observed.HasValue) effective = observed;
+        else effective = null;
+        return !effective.HasValue || effective.Value >= contextTokens;
+    }
 
     // Кандидаты уровня 1: сначала штатный Pick (с учётом исчерпания, SupportsModel,
     // тарифа и утилизации), затем последовательно остальные подписки пула
@@ -795,15 +851,30 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private async Task FailExhaustedAsync(FallbackTurn turn, IReadOnlyList<AttemptTrace> trace,
         int substitutions, AttemptEnd lastEnd)
     {
-        // Три блока: заголовок, по строке на попытку (поставщик и причина), подсказка.
-        // Блоки разделены пустой строкой, строки попыток — \n: ChatItemView рендерит
-        // переносы в error-сообщениях (white-space: pre-wrap), так что обходной
-        // разделитель « · » больше не нужен. Служебные термины и ключи сюда не попадают.
-        var attempts = string.Join("\n", trace.Select(t => $"{ProviderLabel(t.Key)} — {UserClassLabel(t.Class)}"));
-        await _downstream(new ErrorMessage(
-            "Ни одна из доступных моделей не ответила.\n\n"
-            + attempts + "\n\n"
-            + "Попробуйте позже или выберите другую модель в настройках чата."));
+        // Переполнение контекста: перепробованы все шаги цепочки, и ни одна модель не вместила
+        // текущий разговор. Текст — про окно и действия (/compact / смена модели), а не общая
+        // «модели не ответили»: причина иная (контекст слишком велик, а не эндпоинты лежат).
+        // Формулировка согласована с продуктовым аналитиком (Софья): честнее «ни одна из
+        // доступных моделей не смогла», т.к. фолбэк мог пройти через 2–3 модели до отказа.
+        var overflow = trace.Count > 0 && trace[^1].Class == FallbackErrorClass.ContextOverflow;
+        if (overflow)
+        {
+            await _downstream(new ErrorMessage(
+                "Разговор слишком велик — ни одна из доступных моделей не смогла его обработать.\n\n"
+                + "Сожмите контекст командой /compact или выберите модель с бóльшим окном в настройках чата."));
+        }
+        else
+        {
+            // Три блока: заголовок, по строке на попытку (поставщик и причина), подсказка.
+            // Блоки разделены пустой строкой, строки попыток — \n: ChatItemView рендерит
+            // переносы в error-сообщениях (white-space: pre-wrap), так что обходной
+            // разделитель « · » больше не нужен. Служебные термины и ключи сюда не попадают.
+            var attempts = string.Join("\n", trace.Select(t => $"{ProviderLabel(t.Key)} — {UserClassLabel(t.Class)}"));
+            await _downstream(new ErrorMessage(
+                "Ни одна из доступных моделей не ответила.\n\n"
+                + attempts + "\n\n"
+                + "Попробуйте позже или выберите другую модель в настройках чата."));
+        }
 
         var reason = string.IsNullOrEmpty(lastEnd.Result?.ApiErrorStatus)
             ? lastEnd.ErrorText ?? "поток прерван"

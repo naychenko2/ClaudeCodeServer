@@ -2943,9 +2943,6 @@ public class SessionManager : IDisposable
             entry.Info.UpdatedAt = DateTime.UtcNow;
             SaveSessions();
             await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
-            entry.Info.UpdatedAt = DateTime.UtcNow;
-            SaveSessions();
-            await BroadcastChatRenamedAsync(sessionId, entry.Info, line);
         }
         catch (Exception ex) { _log.LogDebug(ex, "Уточнение заголовка чата {Session}", sessionId); }
     }

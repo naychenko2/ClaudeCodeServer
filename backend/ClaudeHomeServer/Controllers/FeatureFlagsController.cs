@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -9,7 +10,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/feature-flags")]
-public class FeatureFlagsController(FeatureFlagService flags, UserStore users) : ControllerBase
+public class FeatureFlagsController(FeatureFlagService flags, UserStore users,
+    DefaultAssistantProvisioner provisioner) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -27,7 +29,7 @@ public class FeatureFlagsController(FeatureFlagService flags, UserStore users) :
 
     // Включить/выключить флаг для текущего юзера
     [HttpPut("{key}")]
-    public IActionResult Set(string key, [FromBody] SetFlagRequest req)
+    public async Task<IActionResult> Set(string key, [FromBody] SetFlagRequest req)
     {
         if (UserId is null) return Unauthorized();
 
@@ -37,6 +39,13 @@ public class FeatureFlagsController(FeatureFlagService flags, UserStore users) :
 
         if (!users.SetFeatureFlag(UserId, key, req.Enabled))
             return Unauthorized();
+
+        // Включение флага default-personas-onboarding в рантайме (dark-launch) — основная точка
+        // провижна сегодня: сразу заводим ассистента, чтобы метки и аватар-лицо появились без
+        // перезагрузки (EnsureAsync шлёт broadcast created+default, а фронт после успешного PUT
+        // зовёт refreshMe). План 2.2. Выключение флага персоны не трогает (план 3г).
+        if (req.Enabled && key == FeatureFlagKeys.DefaultPersonasOnboarding)
+            await provisioner.EnsureAsync(UserId);
 
         return Ok(new { values = flags.GetEffective(UserId) });
     }

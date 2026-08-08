@@ -521,6 +521,47 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
     }
 
+    // Репро инцидента 2026-08-08 (волны 1+2): чат с замороженной opus (нативный claude), цепочка
+    // пресета «Основной — Сильный»: opus → kimi-k3 → glm-5.2. Обе подписки Claude исчерпаны —
+    // ход уходит на kimi-k3 (шаг 2 цепочки) одним маркером «Цепочка пресета: шаг 2», а не в
+    // алфавитный автоподбор alibabacloud/qwen. Провайдеры вне цепочки не зовутся вовсе.
+    [Fact]
+    public async Task РепроИнцидента_ОбеПодпискиClaudeМертвы_ИдёмНаШагЦепочки()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+            // Сторонний провайдер ВНЕ цепочки — автоподбор не должен к нему уйти
+            ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
+            ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
+            ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("claude", "claude-2");   // обе подписки пула Claude
+        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude",
+            chain: ["opus", "kimi-k3", "glm-5.2"], effectiveModel: () => "opus");
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // claude × opus — исчерпан
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // claude-2 × opus — исчерпан
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // kimi-k3 (шаг 2) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Две попытки opus (ротация подписок пула, бесплатно) → шаг 2 цепочки kimi-k3.
+        // alibabacloud/qwen (автоподбор) НЕ зовётся — автоподбора больше нет.
+        inner.Attempts.Should().HaveCount(3);
+        inner.Attempts[0].Should().Be(("claude", "opus"));
+        inner.Attempts[1].Should().Be(("claude-2", "opus"), "уровень 1: ротация подписок пула");
+        inner.Attempts[2].Should().Be(("kimi", "kimi-k3"), "шаг 2 цепочки, а не автоподбор");
+        inner.Attempts.Should().NotContain(p => p.Provider == "alibabacloud",
+            "автоподбор удалён: провайдеры вне цепочки не зовутся");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Label.Should().Contain("Цепочка пресета: шаг 2");
+        marker.Provider.Should().Be("kimi");
+    }
+
     [Fact]
     public async Task RateLimitRejected_СнимаетСПаузыИРотирует()
     {

@@ -174,6 +174,7 @@ export function AiLauncher() {
   // Балун списка ждущих чатов: поднимается по клику на FAB, когда ждут несколько.
   // На десктопе тот же список виден и по наведению (fabHover); на мобилке — только тап.
   const [awaitingBalloon, setAwaitingBalloon] = useState(false);
+  const awaitingBalloonRef = useRef<HTMLDivElement>(null);
   // Свайп-закрытие проактивного балуна на тач-экране (смещение вправо за экран)
   const [dragX, setDragX] = useState(0);
   const swipeStart = useRef<number | null>(null);
@@ -263,6 +264,22 @@ export function AiLauncher() {
 
   // Ждущих чатов больше нет (ответили / ход завершился) — балун списка стал неактуален.
   useEffect(() => { if (!aiAwaiting) setAwaitingBalloon(false); }, [aiAwaiting]);
+  // Балун списка ждущих чатов закрывается по Escape и клику вне (FAB и сам балун).
+  // На мобилке это единственный способ закрыть его, не открывая чат: hover там нет,
+  // поэтому тап по FAB работает тумблером, а здесь ловим уход за пределы балуна.
+  useEffect(() => {
+    if (!awaitingBalloon) return;
+    const onDown = (e: MouseEvent) => {
+      const el = awaitingBalloonRef.current;
+      const fab = fabRef.current;
+      if (el?.contains(e.target as Node) || fab?.contains(e.target as Node)) return;
+      setAwaitingBalloon(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAwaitingBalloon(false); };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('mousedown', onDown); document.removeEventListener('keydown', onKey); };
+  }, [awaitingBalloon]);
 
   const close = () => setOpen(false);
   const fire = (a: AiAction) => { close(); a.run(buildCtx()); };
@@ -370,7 +387,17 @@ export function AiLauncher() {
     if (rec.projectId) {
       const go = (p: Project) => {
         sessionStorage.setItem('cc_pending_project_chat', `${p.id}|${rec.chatId}`);
-        window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: p } }));
+        // Проект уже на экране — cc-open-session не перемонтирует WorkspacePage (тот же
+        // key={project.id}), а его эффект-потребитель зависит от [project.id] и не
+        // перезапускается: чат бы не открылся, а cc_pending_project_chat остался бы в
+        // sessionStorage и сработал позже. Поэтому дёргаем слушатель напрямую (тот же
+        // приём, что в App.openNotificationUrl). Другой проект/раздел — cc-open-session.
+        const n = getNav();
+        if (n?.screen === 'project' && n.project?.id === p.id) {
+          window.dispatchEvent(new Event('cc-pending-project-chat'));
+        } else {
+          window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: p } }));
+        }
       };
       const cached = getCachedProject(rec.projectId);
       if (cached) go(cached);
@@ -388,7 +415,7 @@ export function AiLauncher() {
   const onFabClick = () => {
     if (aiAwaiting) {
       if (awaitingList.length === 1) openWaitingChat(awaitingList[0]);
-      else setAwaitingBalloon(true);
+      else setAwaitingBalloon(b => !b); // тумблер: повторный тап закрывает балун списка
       return;
     }
     setQ(''); setOpen(true);
@@ -480,10 +507,15 @@ export function AiLauncher() {
       {/* Балун ждущих чатов: клик по FAB при нескольких ждущих (или наведение на десктопе).
           Переиспользует раскладку hover-балуна: иконка + имя чата + подпись. Клик ведёт в чат. */}
       {!open && aiAwaiting && (awaitingBalloon || (fabHover && !isMobile)) && (
-        <div style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
+        <div ref={awaitingBalloonRef} style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
           <div style={{ ...balloonHead, marginBottom: 8 }}>
             <span style={{ color: C.warning, display: 'flex' }}><AwaitingIcon size={15} /></span>
             <b style={{ fontSize: 12.5, color: C.textHeading }}>Ждут вашего ответа</b>
+            {/* Крестик — только в режиме тапа (awaitingBalloon). На десктопе это hover-балун:
+                он закрывается сам при уходе курсора, и крестик там был бы лишним. */}
+            {awaitingBalloon && (
+              <button onClick={() => setAwaitingBalloon(false)} aria-label="Закрыть" style={balloonClose}>×</button>
+            )}
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             {awaitingList.map(rec => (

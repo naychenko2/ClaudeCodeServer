@@ -15,6 +15,7 @@ import { ProductHistory } from './components/ProductHistory'
 import { GlobalSearch } from './components/GlobalSearch'
 import { AiLauncher } from './components/ai/AiLauncher'
 import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
+import { resetAiAwaiting } from './lib/ai/awaiting'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
 import { initConnectivity } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
@@ -885,6 +886,7 @@ export default function App() {
     sessionStorage.removeItem('cc_user_id')
     idbClear() // чистим кэш при смене аккаунта/сервера
     clearMe()
+    resetAiAwaiting() // имена ждущих чатов прежнего пользователя не живут в памяти вкладки
     // Раздел сбрасываем вместе с адресом — см. тот же комментарий в обработчике
     // cc-unauthorized: иначе следующий вход поднимет раздел прошлого пользователя
     localStorage.setItem(HUB_TAB_KEY, 'projects')

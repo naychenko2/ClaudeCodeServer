@@ -1146,6 +1146,25 @@ public class FallbackLlmSessionAdapterTests
         return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
     }
 
+    // Цепочка сторонних провайдеров p1..pN (модели m1..mN), каждый со своим профилем во временной
+    // папке (claude-profiles/p{i}). Нужна для тестов переноса транскрипта по цепочке подмен:
+    // у каждого шага свой физический профиль, куда копируется транскрипт.
+    private static LlmProviderRegistry BuildChainProvidersInDir(string baseDir, int count)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+            ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+        };
+        for (var i = 1; i <= count; i++)
+        {
+            dict[$"LlmProviders:p{i}:ApiKey"] = $"sk-{i}";
+            dict[$"LlmProviders:p{i}:AnthropicBaseUrl"] = $"https://p{i}.example.com";
+            dict[$"LlmProviders:p{i}:Models:0:Id"] = $"m{i}";
+        }
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
     // Перехват логов адаптера: проверяем, что провал обратного переноса не прошёл молча.
     private sealed class SpyLogger : ILogger
     {
@@ -1317,6 +1336,195 @@ public class FallbackLlmSessionAdapterTests
             spy.Entries.Should().Contain(e => e.Level == LogLevel.Warning
                 && e.Message.Contains("Обратный перенос") && e.Message.Contains(csid),
                 "провал обратного переноса пишется в лог с id сессии");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // --- Стартовая подмена по кулдауну: перенос транскрипта (Major) ---
+
+    // Major: стартовый сторонний провайдер в кулдауне → старт сразу с живого шага цепочки.
+    // Транскрипт обязан переехать в профиль шага ДО подмены: иначе --resume не найдёт разговор,
+    // ход упадёт (класс None), и чат встанет колом до TTL кулдауна, хотя оба провайдера живы.
+    // Здесь: p-dead в кулдауне, история лежит в профиле p-dead → после стартовой подмены она
+    // оказывается в профиле p-alive (куда пойдёт --resume), а свежий ответ копируется обратно в p-dead.
+    [Fact]
+    public async Task СтартоваяПодмена_Кулдаун_ПереноситТранскриптВПрофильШага()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_start_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            // p-dead / p-alive — сторонние провайдеры со своими профилями во временной папке.
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+                ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+                ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+                ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+                ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+                ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool("acc-a");
+            var health = new ProviderHealthRegistry();
+            health.MarkUnavailable("p-dead");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-start";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var deadDir = Path.Combine(baseDir, "claude-profiles", "p-dead", "projects", flat);
+            var aliveDir = Path.Combine(baseDir, "claude-profiles", "p-alive", "projects", flat);
+            Directory.CreateDirectory(deadDir);
+            File.WriteAllText(Path.Combine(deadDir, csid + ".jsonl"), "HISTORY");
+
+            var session = new Session { Model = "m-dead", Provider = "p-dead", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
+            inner.Sink = sut.HandleMessageAsync;
+            var aliveFile = Path.Combine(aliveDir, csid + ".jsonl");
+            // Стартовая подмена (миграция p-dead→p-alive) выполняется до первой попытки, поэтому
+            // первая попытка идёт на p-alive — туда и дописываем ответ CLI.
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(aliveFile, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Одна попытка — сразу на живом шаге p-alive (стартовая подмена сработала).
+            inner.Attempts.Should().ContainSingle();
+            inner.Attempts[0].Should().Be(("p-alive", "m-alive"), "старт с живого шага, а не с кулдаунного p-dead");
+            // Транскрипт перенесён в профиль шага p-alive — иначе --resume не нашёл бы разговор.
+            File.Exists(aliveFile).Should().BeTrue("транскрипт перенесён в профиль шага p-alive");
+            File.ReadAllText(aliveFile).Should().Contain("HISTORY", "история переехала из p-dead в p-alive");
+            // Свежий ответ скопирован обратно в профиль исходного провайдера (restore при смене поставщика).
+            File.ReadAllText(Path.Combine(deadDir, csid + ".jsonl")).Should().Contain("ANSWER",
+                "после restore ответ перенесён обратно в профиль p-dead");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // Major, fail-open: при провале переноса транскрипта стартовая подмена НЕ применяется —
+    // остаёмся на исходной паре, и ход идёт (кулдаун — наблюдение, а не запрет). Здесь транскрипта
+    // нет нигде → TryMigrateTranscript возвращает false → подмена отменяется, попытка уходит на p-dead.
+    [Fact]
+    public async Task СтартоваяПодмена_ПровалПереноса_FailOpen_ОстаётсяНаИсходнойПаре()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_open_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+                ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+                ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+                ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+                ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+                ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool("acc-a");
+            var health = new ProviderHealthRegistry();
+            health.MarkUnavailable("p-dead");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            // ClaudeSessionId задан, но транскрипта НЕТ нигде → TryMigrateTranscript(false).
+            var session = new Session { Model = "m-dead", Provider = "p-dead", ClaudeSessionId = "csid-open" };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
+            inner.Sink = sut.HandleMessageAsync;
+            inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Подмена НЕ применена: попытка ушла на исходную пару p-dead × m-dead.
+            inner.Attempts.Should().ContainSingle();
+            inner.Attempts[0].Should().Be(("p-dead", "m-dead"), "провал переноса → остаёмся на исходной паре");
+            // Стартовая пара не изменилась — маркера подмены нет.
+            Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+            session.Model.Should().Be("m-dead");
+            session.Provider.Should().Be("p-dead");
+            Downstream().OfType<ResultMessage>().Should().ContainSingle()
+                .Which.Subtype.Should().Be("success", "ход пошёл на исходной паре (fail-open)");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // Несколько подмен подряд (шаг → шаг → шаг): обратный перенос в finally идёт из ПОСЛЕДНЕГО
+    // профиля цепочки (где прошёл ход и записан свежий ответ), а не из первого/промежуточного.
+    // Цепочка m1(p1) → m2(p2) → m3(p3); ответ CLI пишется только в профиль p3; после хода он
+    // должен оказаться в p1 (исходный провайдер, куда вернётся --resume). Если бы копия шла из
+    // p1/p2 — ответ бы в p1 не попал.
+    [Fact]
+    public async Task НесколькоПодменПодряд_КопияНазадИзПоследнегоПрофиляЦепочки()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_chain_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildChainProvidersInDir(baseDir, 3);   // p1/m1, p2/m2, p3/m3
+            var pool = BuildPool("acc-a");   // одна подписка — m1 сторонний, ротаций пула нет
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-chain";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            string Profile(int i) => Path.Combine(baseDir, "claude-profiles", $"p{i}", "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(Profile(1))!);
+            File.WriteAllText(Profile(1), "HISTORY");
+
+            var session = new Session { Model = "m1", Provider = "p1", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "m1", "m2", "m3" });
+            inner.Sink = sut.HandleMessageAsync;
+            // m1/p1 — сбой → шаг m2/p2 (копия p1→p2). m2/p2 — сбой → шаг m3/p3 (копия p2→p3).
+            // m3/p3 — успех + ответ CLI пишется ТОЛЬКО в профиль p3.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(Profile(3), "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Три попытки — по одной на каждый шаг цепочки.
+            inner.Attempts.Should().HaveCount(3);
+            inner.Attempts[0].Should().Be(("p1", "m1"));
+            inner.Attempts[1].Should().Be(("p2", "m2"));
+            inner.Attempts[2].Should().Be(("p3", "m3"));
+            // Исходный провайдер восстановлен.
+            session.Provider.Should().Be("p1");
+            session.Model.Should().Be("m1");
+            // Свежий ответ скопирован из ПОСЛЕДНЕГО профиля (p3) в исходный (p1) — иначе следующий
+            // ход на --resume из p1 не нашёл бы ответ модели.
+            File.ReadAllText(Profile(1)).Should().Contain("ANSWER",
+                "обратный перенос идёт из последнего профиля цепочки (p3), где записан ответ");
+            // Подтверждение, что ответ жил только в p3: в промежуточном p2 его нет.
+            File.Exists(Profile(2)).Should().BeTrue("p2 получил копию при прямом переносе p1→p2");
+            File.ReadAllText(Profile(2)).Should().NotContain("ANSWER",
+                "ответ записан только в p3 — значит, копия в p1 пришла именно из p3");
         }
         finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }

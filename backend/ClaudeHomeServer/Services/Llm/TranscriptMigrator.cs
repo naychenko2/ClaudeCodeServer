@@ -144,8 +144,16 @@ public static class TranscriptMigrator
     // Скопировать транскрипт (и папку сабагентов, best-effort) в целевой профиль.
     // false с причиной — транскрипт не найден или копирование не удалось; вызывающий
     // в этом случае НЕ меняет провайдера, иначе --resume молча начал бы разговор с нуля.
+    //
+    // preserveLongerDestination — страховка для ОБРАТНОГО переноса (restore после смены типа
+    // поставщика): прямой перенос — это Copy, исходник не удаляется, поэтому в профиле исходного
+    // провайдера остаётся полная история. Если к моменту обратного переноса источник (профиль
+    // подмены) оказался КОРОЧЕ приёмника (гонка «result записался в профиль раньше финального
+    // флаша CLI», либо профиль подмены пуст/повреждён), безусловный overwrite затёр бы полную
+    // историю усечённой. При true — пропускаем копию, если приёмник длиннее источника, и
+    // возвращаем true (приёмник уже полнее, цели достигнуты), причину — в error для лога.
     public static bool TryMigrate(string srcRoot, string dstRoot, string cwd,
-        string claudeSessionId, out string? error)
+        string claudeSessionId, out string? error, bool preserveLongerDestination = false)
     {
         error = null;
         try
@@ -162,7 +170,22 @@ public static class TranscriptMigrator
             // сохранённое имя гарантированно резолвится и в целевом профиле
             var dstDir = Path.Combine(dstRoot, "projects", Path.GetFileName(Path.GetDirectoryName(src))!);
             Directory.CreateDirectory(dstDir);
-            File.Copy(src, Path.Combine(dstDir, claudeSessionId + ".jsonl"), overwrite: true);
+            var dstFile = Path.Combine(dstDir, claudeSessionId + ".jsonl");
+            // Страховка от усечения (Minor 1): при обратном переносе не затираем более полную
+            // историю приёмника усечённым/повреждённым источником. Сравнение по длине файла —
+            // достаточно и дёшево; свежий ответ хода делает источник длиннее, так что штатный
+            // обратный перенос (источник с новым ответом длиннее старого приёмника) проходит.
+            if (preserveLongerDestination && File.Exists(dstFile))
+            {
+                var dstLen = new FileInfo(dstFile).Length;
+                var srcLen = new FileInfo(src).Length;
+                if (dstLen > srcLen)
+                {
+                    error = $"пропущено: приёмник длиннее источника ({dstLen} > {srcLen} байт) — сохраняем полную историю";
+                    return true;
+                }
+            }
+            File.Copy(src, dstFile, overwrite: true);
 
             var srcSessionDir = Path.Combine(Path.GetDirectoryName(src)!, claudeSessionId);
             if (Directory.Exists(srcSessionDir))

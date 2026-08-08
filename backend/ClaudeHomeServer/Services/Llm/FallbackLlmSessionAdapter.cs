@@ -310,19 +310,39 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 }
                 if (stepIdx > 0)
                 {
-                    chainIndex = stepIdx;
-                    currentModel = chain[stepIdx];
-                    currentKey = ProviderKeyFor(currentModel);
-                    Info.Model = currentModel;
-                    Info.Provider = currentKey;
-                    _profileRoot = ResolveRootFor(currentKey);
-                    appliedModel = currentModel;
-                    appliedProvider = currentKey;
-                    appliedProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
-                    var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
-                    await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
-                        $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
-                    LogInfo($"Стартовая подмена (кулдаун): «{origModel}» × «{origProvider}» недоступен → старт на «{currentKey}» / «{currentModel}»");
+                    var stepModel = chain[stepIdx];
+                    var stepKey = ProviderKeyFor(stepModel);
+                    var stepRoot = ResolveRootFor(stepKey);
+                    // Перенос транскрипта ДО подмены (Major, инвариант ADR-007 §4.1: Provider и свежий
+                    // транскрипт — одно место). Профиль исходного провайдера (_profileRoot) → профиль
+                    // шага цепочки. Без этого --resume в профиле шага не найдёт разговор — ход падает
+                    // (класс None, fail-closed), фолбэк не спасает: дальнейшие миграции идут из уже
+                    // пустого _profileRoot, кандидаты отсеиваются → «Ни одна из доступных моделей не
+                    // ответила». Чат стоит колом до истечения TTL кулдауна, хотя оба провайдера живы.
+                    // Провал переноса — fail-open: НЕ применяем подмену, остаёмся на исходной паре
+                    // (ход должен идти; эндпоинт мог уже подняться, а кулдаун — лишь наблюдение).
+                    // TryMigrateTranscript=true при отсутствии ClaudeSessionId — переносить нечего,
+                    // подмена разрешена (как и везде в адаптере).
+                    if (!TryMigrateTranscript(stepRoot))
+                    {
+                        LogWarn($"Стартовая подмена (кулдаун) {Info.Id}: транскрипт не перенесён в профиль «{stepKey}» — остаёмся на исходной паре «{origProvider}» (ход продолжится, кулдаун — наблюдение, а не запрет)");
+                    }
+                    else
+                    {
+                        chainIndex = stepIdx;
+                        currentModel = stepModel;
+                        currentKey = stepKey;
+                        Info.Model = currentModel;
+                        Info.Provider = currentKey;
+                        _profileRoot = stepRoot;
+                        appliedModel = currentModel;
+                        appliedProvider = currentKey;
+                        appliedProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
+                        var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
+                        await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
+                            $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
+                        LogInfo($"Стартовая подмена (кулдаун): «{origModel}» × «{origProvider}» недоступен → старт на «{currentKey}» / «{currentModel}»");
+                    }
                 }
             }
 
@@ -482,6 +502,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             }
             // Тихая ротация (!appliedProviderSwitch): Provider оставляем — аккаунт, на котором
             // прошёл ход, хранит свежий транскрипт. providerRestored остаётся false.
+            //
+            // (Minor 4) Заметка о видимости для клиента: новое значение Info.Provider персистится
+            // (ниже), но в ленте событие об этом НЕ идёт — тихая ротация по решению владельца
+            // остаётся тихой. У открытого клиента session.provider поэтому устаревает до перезагрузки/
+            // следующего REST-рефетча списка чатов. Существующего WS-события, обновляющего именно
+            // session.provider БЕЗ элемента ленты, НЕТ: ProviderSwitchedMessage(Auto:true) (которое
+            // шлёт TryPoolFailover в той же ситуации) фронт использует только чтобы гасить карточки
+            // provider_limit и рисовать model_switched — поле session.provider из WS он не пишет
+            // (useSession/chatReducer этого не делают; session_started несёт Provider, но редьюсер
+            // его в объект сессии тоже не кладёт). Слать такой маркер отсюда не чинит устаревание и
+            // может невпопад погасить чужую provider_limit-карточку — поэтому поведение оставлено как
+            // есть. Полный фикс — фронтенд-задача: провести WS-сигнал провайдера (provider_switched
+            // или session_started.Provider) в session.provider единообразно для TryPoolFailover и адаптера.
             Info.MessageCount = _snapshotMessageCount + 1;
             // ПЕРСИСТ ПОСЛЕ RESTORE (и обратного переноса): финальный result уже ушёл downstream
             // и успел сохранить sessions.json ПОДМЕНЁННЫМ (ApplyStatusAsync → SaveSessions ДО finally).
@@ -680,11 +713,17 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: папка вне монтирований песочницы (src={_profileRoot}, dst={dstRoot})");
             return false;
         }
-        if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error))
+        // preserveLongerDestination: не затираем более полную историю приёмника усечённым
+        // источником (Minor 1). Skip (приёмник длиннее) возвращается как true, но с причиной в
+        // error — логируем её как Warning, иначе потеря полной истории осталась бы незамеченной.
+        if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error,
+                preserveLongerDestination: true))
         {
             LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: src={_profileRoot}, dst={dstRoot}: {error}");
             return false;
         }
+        if (error is not null)
+            LogWarn($"Обратный перенос транскрипта {Info.Id}: src={_profileRoot}, dst={dstRoot}: {error}");
         return true;
     }
 

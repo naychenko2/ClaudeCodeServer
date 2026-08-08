@@ -389,7 +389,9 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
     const next = cloneLayer(settings[scope]);
     const p = next.presets.find(x => x.id === preset.id);
     if (p) p.steps = draft;
-    onSaveLayer(scope, next);
+    // catch пустой намеренно: отказ уже показан баннером в ModelsSpendModal, здесь он нужен
+    // только чтобы отклонённый промис не всплыл как «Uncaught (in promise)»
+    void onSaveLayer(scope, next).catch(() => {});
   };
 
   // Сохранить как пресет: новый пресет из черновика + перепривязка слота на него. Слой —
@@ -403,8 +405,12 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
       description: preset?.description ?? null, steps: draft };
     const next = cloneLayer(settings[targetScope]);
     next.presets.push(copy);
-    onSaveLayer(targetScope, next);
-    onPickRoute(presetRoute(copy.id));
+    // Перепривязка слота — только после записи слоя. Иначе PUT тира уходит параллельно и,
+    // в отличие от мест, ссылку на пресет не валидирует вовсе: упавшая запись слоя оставила
+    // бы слот указывающим на несуществующий пресет — молча, у всех (MAJOR 1, ревью 03607845)
+    void onSaveLayer(targetScope, next)
+      .then(() => onPickRoute(presetRoute(copy.id)))
+      .catch(() => {});
   };
 
   const showChain = preset != null || broken;

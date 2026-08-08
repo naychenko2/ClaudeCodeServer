@@ -71,7 +71,9 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
     if (!layer || !settings) return;
     const template = rows.find(e => e.key === key)?.template ?? null;
     const next = withTierCell(layer, key, t, value, template);
-    onSaveLayer(scope, next);
+    // catch пустой намеренно: отказ уже показан баннером в ModelsSpendModal, здесь он нужен
+    // только чтобы отклонённый промис не всплыл как «Uncaught (in promise)»
+    void onSaveLayer(scope, next).catch(() => {});
   };
 
   // inline-сборка цепочки в ячейке матрицы: PresetOptions отдаёт СВЕЖИЙ слой (клон +
@@ -82,7 +84,8 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
   const onPresetCreated = (key: string, t: TierKey, presetId: string,
     presetScope: 'global' | 'owner', freshLayer: SpecialtySettingsLayer) => {
     const template = rows.find(e => e.key === key)?.template ?? null;
-    onSaveLayer(presetScope, mergePresetIntoCell(freshLayer, key, t, presetId, template));
+    void onSaveLayer(presetScope, mergePresetIntoCell(freshLayer, key, t, presetId, template))
+      .catch(() => {});
   };
 
   // Какие строки показывать по фильтру

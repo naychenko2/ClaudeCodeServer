@@ -72,13 +72,17 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
       const next = withNewPreset(creation.settings[targetScope], id, `Цепочка ${n}`, draft);
       if (creation.onCreated) {
         creation.onCreated(id, targetScope, next);
+        setEditing(false);
       } else {
         // Назначаем место ТОЛЬКО после того, как сервер подтвердил новый пресет — иначе
         // pick() улетает параллельно с PUT слоя и обгоняет его: бэкенд валидирует
-        // preset:{id} по снимку без ещё не записанного пресета → 400 (MAJOR 1)
-        creation.onSaveLayer(targetScope, next).then(() => onPick(presetRoute(id))).catch(() => {});
+        // preset:{id} по снимку без ещё не записанного пресета → 400 (MAJOR 1).
+        // Редактор закрываем тоже по успеху: на отказе черновик из нескольких шагов
+        // должен остаться на месте, иначе собирать цепочку заново
+        creation.onSaveLayer(targetScope, next)
+          .then(() => { onPick(presetRoute(id)); setEditing(false); })
+          .catch(() => {});
       }
-      setEditing(false);
     };
     const busy = creation.savingScope !== null;
     return (

@@ -25,7 +25,7 @@ interface ApplyTabProps {
   tierModels: Record<TierKey, string>;
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
 }
 
 export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingScope, onSaveLayer }: ApplyTabProps) {
@@ -201,7 +201,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
   models: ModelOption[];
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onPick: (route: string) => void;
   onReset: () => void;
   enabled?: boolean;
@@ -259,6 +259,13 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
           allowLocal={!a.agentic}
           showTiers
           showPresets
+          // Место каталога общее для всех пользователей: LocalActionsAdminController.Set
+          // валидирует preset:{id} только по Global.Presets, личная ссылка тут всегда 400.
+          // presetScope="global" ограничивает и список выбора, и слой inline-созданной
+          // цепочки — иначе «Собрать цепочку…» заводила бы ЛИЧНЫЙ пресет, который потом
+          // не сохранить (MAJOR 2, ревью 65d8df66). Правка backend-валидации не нужна:
+          // фронт просто не даёт создать/выбрать то, что бэкенд всё равно отклонит.
+          presetScope="global"
           presetCreation={{ settings, savingScope, onSaveLayer }}
           busy={busy}
           onChange={onPick}

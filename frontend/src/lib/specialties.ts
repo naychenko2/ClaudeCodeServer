@@ -5,6 +5,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
+import { presetRoute } from './presets';
 import type { ModelTierValue, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtyTemplateSettings } from '../types';
 
 let _catalog: SpecialtyCatalogEntry[] | null = null;
@@ -67,6 +68,19 @@ export function newPresetId(): string {
   try { return crypto.randomUUID(); } catch { return `preset-${Date.now()}-${Math.round(Math.random() * 1e6)}`; }
 }
 
+// Клонирует базовый слой и дописывает в него НОВЫЙ пресет (inline-сборка цепочки,
+// PresetOptions.savePreset) — не сохраняет. Вызывающий решает: если это единственная
+// правка слоя — шлёт onSaveLayer сам; если рядом есть ДРУГАЯ правка того же слоя
+// (ячейка матрицы «Исключений») — обязан слить обе в ОДИН клон и один PUT. Раздельные
+// PUT по одному слою гонятся: второй ответ (по seq) побеждает первый и стирает только
+// что созданный пресет (ревью 65d8df66, CRITICAL 1 — «Исключения» теряли цепочку).
+export function withNewPreset(baseLayer: SpecialtySettingsLayer, id: string, name: string,
+  steps: string[]): SpecialtySettingsLayer {
+  const next = cloneLayer(baseLayer);
+  next.presets.push({ id, name, description: null, steps });
+  return next;
+}
+
 // --- Матрица моделей по уровням у специальности (ADR-007 §2) ---
 
 // Запись специальности в слое: существующую возвращаем как есть; новую — с шаблоном
@@ -106,6 +120,16 @@ export function withTierCell(layer: SpecialtySettingsLayer, key: string,
   else if (tier === 'medium') rec.tierMedium = cell;
   else rec.tierWeak = cell;
   return withRecord(layer, key, rec);
+}
+
+// Слить свежий слой (клон + новый пресет из PresetOptions.savePreset, приходит через
+// PresetCreationCtx.onCreated) с правкой ОДНОЙ ячейки матрицы в тот же объект — вызывающий
+// шлёт результат ОДНИМ onSaveLayer (регрессия 65d8df66, CRITICAL 1: раздельные PUT по
+// одному слою гонятся, второй ответ стирает только что созданный пресет).
+export function mergePresetIntoCell(freshLayer: SpecialtySettingsLayer, key: string,
+  tier: 'strong' | 'medium' | 'weak', presetId: string,
+  template: SpecialtyCatalogEntry['template'] = null): SpecialtySettingsLayer {
+  return withTierCell(freshLayer, key, tier, presetRoute(presetId), template);
 }
 
 // Задать/снять «Уровень по умолчанию» специальности ('' — снять)

@@ -21,7 +21,7 @@ const PANEL_MAX_H = 340;
 export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle,
-  showTiers = true, showPresets = false, presetCreation,
+  showTiers = true, showPresets = false, presetCreation, presetScope,
 }: {
   route: string;
   label: string;
@@ -48,8 +48,15 @@ export function RoutePicker({
   presetCreation?: {
     settings: SpecialtySettingsResponse | null;
     savingScope: 'global' | 'owner' | null;
-    onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+    onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+    // См. PresetCreationCtx.onCreated — сливать сохранение пресета с ДРУГОЙ правкой того
+    // же слоя в один PUT (нужно там, где onChange этого пикера тоже пишет в этот слой).
+    onCreated?: (presetId: string, scope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
   };
+  // Слой пресетов группы «Пресеты»: 'global' — место общее (список и inline-создание
+  // ограничены общими пресетами), не задан — личный контекст (создание в owner, в списке
+  // видны оба слоя). Прокидывается в PresetOptions.scope как есть.
+  presetScope?: 'global' | 'owner';
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
@@ -68,16 +75,36 @@ export function RoutePicker({
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
+      // Черновик цепочки правится — не схлопывать ЭТУ панель по клику снаружи. Актуально
+      // для вложенного пикера (шаг цепочки в ChainStepsEditor): его открытие/закрытие не
+      // должно утаскивать за собой родительский presetEditing-черновик (MAJOR 4, ревью 65d8df66)
+      if (presetEditing) return;
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      // Гасим Escape ВСЕГДА, пока эта панель открыта — иначе Modal (её document-listener
+      // навешен раньше, при монтировании модалки) получает необработанное событие первым
+      // и закрывает модалку целиком поверх этой панели, стирая черновик (MAJOR 3, ревью d23231bd)
+      e.preventDefault();
+      // Тот же случай, что у mousedown-гейта выше: document-level слушатель есть у ОБОИХ
+      // пикеров разом — пока presetEditing, Escape достаётся только вложенному пикеру шага,
+      // не схлопывая родительский черновик.
+      if (presetEditing) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    // capture:true — иначе preventDefault() выше не успевает: Modal вешает свой keydown
+    // НА BUBBLE раньше (при монтировании модалки), и порядок между двумя bubble-слушателями
+    // одного document — по регистрации, а не по вложенности. Capture-фаза всегда отрабатывает
+    // ДО bubble-фазы в одном и том же событии — так preventDefault() успевает выставиться
+    // до того, как Modal дойдёт до своей проверки e.defaultPrevented (MAJOR 3, ревью d23231bd)
+    document.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
     };
-  }, [open]);
+  }, [open, presetEditing]);
 
   useLayoutEffect(() => {
     if (!open || !triggerRef.current) return;
@@ -130,7 +157,7 @@ export function RoutePicker({
         />
       )}
       {showPresets && (
-        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }}
+        <PresetOptions value={route} onPick={pick} ctx={{ tierModels, ollamaModel }} scope={presetScope}
           creation={presetCreation ? { models, ...presetCreation } : undefined}
           onEditingChange={setPresetEditing}
         />

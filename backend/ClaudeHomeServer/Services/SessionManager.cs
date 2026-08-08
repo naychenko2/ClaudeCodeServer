@@ -2940,37 +2940,48 @@ public class SessionManager : IDisposable
         }
         if (next is null) return;
 
+        bool turnStarted = false;
         try
         {
             // Бродкаст внутри try (Minor 1): исключение хаба (disposed/отвал транспорта) не
             // должно оставлять DrainInFlight взведённым навсегда и глушить разбор очереди чата
             // до перезапуска сервера — finally гарантированно погасит флаг.
             await BroadcastPendingAsync(sessionId, entry);
-            await DeliverPendingAsync(sessionId, entry, next);
+            turnStarted = await DeliverPendingAsync(sessionId, entry, next);
         }
         finally
         {
             entry.DrainInFlight = false;
-            // Гонка «result пришёл раньше finally» (Minor 2): параллельный drain по result хода
-            // мог увидеть флаг ещё взведённым и уступить. После сброса перепроверяем — если
-            // очередь непуста и чат свободен, запускаем разбор ещё раз (один), иначе сообщение
-            // застрянет до следующего сообщения человека. Сам DrainNextPendingAsync имеет гейт
-            // DrainInFlight, так что повторный запуск безопасен (уступит, если кто-то уже взял).
-            if (entry.Pending.Count > 0 && !entry.QueueFrozen
+            // Гейт каскада (Minor 3): перепроверяем очередь, ТОЛЬКО если предыдущая доставка
+            // реально стартовала ход (turnStarted). При провале доставки (CLI не поднялся) статус
+            // не ушёл в Working — без гейта по turnStarted перепроверка вычерпала бы ВСЮ очередь
+            // подряд, теряя каждое сообщение (одно потерянное — прежнее поведение, весь хвост —
+            // регрессия). Гонка «result пришёл раньше finally» (Minor 2): статус уже Idle, очередь
+            // непуста — перезапуск разыграет следующее сообщение. Сам DrainNextPendingAsync имеет
+            // гейт DrainInFlight, так что повторный запуск безопасен (уступит, если кто-то уже взял).
+            if (turnStarted && !entry.QueueFrozen
                 && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting))
             {
-                _ = Task.Run(async () =>
+                // Minor 2: чтение Pending.Count — под PendingLock, по конвенции файла.
+                bool hasPending;
+                lock (entry.PendingLock) hasPending = entry.Pending.Count > 0;
+                if (hasPending)
                 {
-                    try { await DrainNextPendingAsync(sessionId); }
-                    catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Повторный разбор очереди ({sessionId}): {ex.Message}"); }
-                });
+                    _ = Task.Run(async () =>
+                    {
+                        try { await DrainNextPendingAsync(sessionId); }
+                        catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Повторный разбор очереди ({sessionId}): {ex.Message}"); }
+                    });
+                }
             }
         }
     }
 
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
     // Пользовательское идёт со своими вложениями и режимом; агентское — как серверная отправка.
-    private async Task DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
+    // Возвращает true, если доставка действительно стартовала ход (можно ждать result); false —
+    // ход не поднялся (бросилось внутри), его повторная обработка не придёт по result (Minor 3).
+    private async Task<bool> DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
     {
         try
         {
@@ -2986,6 +2997,7 @@ public class SessionManager : IDisposable
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
                     suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote);
+            return true;
         }
         catch (Exception ex)
         {
@@ -2995,6 +3007,7 @@ public class SessionManager : IDisposable
             if (entry.Info.WorkLoop is not null)
                 entry.LoopTurnInFlight = false;
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
+            return false;
         }
     }
 

@@ -2940,26 +2940,27 @@ public class SessionManager : IDisposable
         }
         if (next is null) return;
 
-        bool turnStarted = false;
+        bool delivered = false;
         try
         {
             // Бродкаст внутри try (Minor 1): исключение хаба (disposed/отвал транспорта) не
             // должно оставлять DrainInFlight взведённым навсегда и глушить разбор очереди чата
             // до перезапуска сервера — finally гарантированно погасит флаг.
             await BroadcastPendingAsync(sessionId, entry);
-            turnStarted = await DeliverPendingAsync(sessionId, entry, next);
+            delivered = await DeliverPendingAsync(sessionId, entry, next);
         }
         finally
         {
             entry.DrainInFlight = false;
             // Гейт каскада (Minor 3): перепроверяем очередь, ТОЛЬКО если предыдущая доставка
-            // реально стартовала ход (turnStarted). При провале доставки (CLI не поднялся) статус
-            // не ушёл в Working — без гейта по turnStarted перепроверка вычерпала бы ВСЮ очередь
-            // подряд, теряя каждое сообщение (одно потерянное — прежнее поведение, весь хвост —
-            // регрессия). Гонка «result пришёл раньше finally» (Minor 2): статус уже Idle, очередь
-            // непуста — перезапуск разыграет следующее сообщение. Сам DrainNextPendingAsync имеет
-            // гейт DrainInFlight, так что повторный запуск безопасен (уступит, если кто-то уже взял).
-            if (turnStarted && !entry.QueueFrozen
+            // выполнена (delivered — не бросилась). Имя шире «ход стартовал»: для гейта важен лишь
+            // факт «доставка не провалилась». При провале (CLI не поднялся) статус не ушёл в
+            // Working — без гейта перепроверка вычерпала бы ВСЮ очередь подряд, теряя каждое
+            // сообщение (одно потерянное — прежнее поведение, весь хвост — регрессия). Гонка
+            // «result пришёл раньше finally» (Minor 2): статус уже Idle, очередь непуста —
+            // перезапуск разыграет следующее сообщение. Сам DrainNextPendingAsync имеет гейт
+            // DrainInFlight, так что повторный запуск безопасен (уступит, если кто-то уже взял).
+            if (delivered && !entry.QueueFrozen
                 && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting))
             {
                 // Minor 2: чтение Pending.Count — под PendingLock, по конвенции файла.
@@ -2979,8 +2980,8 @@ public class SessionManager : IDisposable
 
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
     // Пользовательское идёт со своими вложениями и режимом; агентское — как серверная отправка.
-    // Возвращает true, если доставка действительно стартовала ход (можно ждать result); false —
-    // ход не поднялся (бросилось внутри), его повторная обработка не придёт по result (Minor 3).
+    // Возвращает true, если доставка выполнена (ход стартовал — можно ждать result); false —
+    // бросилась внутри, ход не поднялся и его повторная обработка по result не придёт (Minor 3).
     private async Task<bool> DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
     {
         try

@@ -1,17 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Sparkles } from 'lucide-react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, CONTENT_MAX_W } from '../../lib/design';
+import { C, FONT, R, SP, CONTENT_MAX_W } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { useMe, refreshMe } from '../../lib/defaultPersona';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
-import { ConfirmDialog, IslandScaffold } from '../../components/ui';
+import { Button, ConfirmDialog, IntroDot, IslandScaffold } from '../../components/ui';
 import { PageCanvas } from '../../components/ui/PageCanvas';
+import { PersonaAvatar } from './PersonaAvatar';
 import { useIsMobile } from '../../lib/breakpoints';
 import { PanelZone } from '../../pages/workspace/PanelZone';
 import { personasPanels } from '../../pages/workspace/panelStackState';
@@ -58,6 +62,17 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const [projects, setProjects] = useState<Project[]>([]);
   // Идёт создание чата по кнопке «Поговорить»
   const [talking, setTalking] = useState(false);
+
+  // Карточка-приглашение «знакомство» на мобиле (фича default-personas-onboarding,
+  // п.5.1.2) — PersonasHub в мобильную ветку не попадает вовсе, без этой точки рендера
+  // знакомство на мобиле необнаружимо. Живёт над списком, а не внутри PersonaList —
+  // список переиспользуется панелью «Команда» проекта, где личное приглашение не к месту.
+  const introOnboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  const me = useMe();
+  const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
+  const showMobileInvite = isMobile && me.loaded && introOnboardingOn && me.needsOnboarding && !!defaultPersona;
+  const mobileListRef = useRef<HTMLDivElement>(null);
+  const focusMobileList = () => mobileListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
@@ -241,7 +256,28 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const body = isMobile ? (
     (mobileView === 'card' && hasContent)
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
-      : <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>{sidebar}</div>
+      : (
+        <div style={{ height: '100%', display: 'flex', flexDirection: 'column', background: C.bgPanel }}>
+          {showMobileInvite && defaultPersona && (
+            <div style={mobileInviteCard}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+                <div style={{ position: 'relative', flex: 'none' }}>
+                  <PersonaAvatar persona={defaultPersona} size={32} />
+                  <IntroDot size={6} />
+                </div>
+                <div style={mobileInviteTitle}>Ваш ассистент пока стандартный</div>
+              </div>
+              <div style={mobileInviteText}>Познакомьтесь — он получит имя, характер и будет помнить, чем вы занимаетесь. Пара минут разговора.</div>
+              <Button variant="primary" size="md" fullWidth leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                onClick={() => window.dispatchEvent(new CustomEvent(OPEN_INTRO_EVENT))}>
+                Познакомиться
+              </Button>
+              <Button variant="ghost" size="md" fullWidth onClick={focusMobileList}>Выбрать другого ассистента</Button>
+            </div>
+          )}
+          <div ref={mobileListRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{sidebar}</div>
+        </div>
+      )
   ) : (
     // Десктоп: рельса панелей по краям | центр на холсте (hero-стиль: студия сама
     // рисует тулбар на холсте + контент-остров; хаб — на холсте)
@@ -461,3 +497,15 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
     </div>
   );
 }
+
+// Карточка-приглашение «знакомство» (мобиль, п.5.1.2 волны 5) — над списком,
+// не внутри PersonaList (та переиспользуется панелью «Команда» проекта)
+const mobileInviteCard: React.CSSProperties = {
+  flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: SP.sm,
+  background: C.accentLight, border: `1px solid ${C.border}`, borderRadius: R.xl,
+  padding: SP.md, margin: '12px 12px 0',
+};
+const mobileInviteTitle: React.CSSProperties = {
+  fontFamily: FONT.serif, fontSize: 14, fontWeight: 600, color: C.textHeading, lineHeight: 1.3,
+};
+const mobileInviteText: React.CSSProperties = { fontSize: 12, color: C.textSecondary, lineHeight: 1.5 };

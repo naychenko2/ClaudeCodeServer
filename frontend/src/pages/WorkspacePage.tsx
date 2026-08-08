@@ -802,6 +802,28 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
+  // Диплинк на командный центр проекта (фича default-personas-onboarding, п.5.3):
+  // «Назначить руководителя» в настройках проекта кладёт id проекта в sessionStorage —
+  // тот же приём, что и pending-персона выше. teamCenterOpen — флаг центрального
+  // оверлея в новом режиме панелей; leftTab='personas' без выбранной персоны даёт тот
+  // же экран в одноколоночном режиме (mobile/tablet).
+  useEffect(() => {
+    const consumePendingTeam = () => {
+      const pid = sessionStorage.getItem('cc_pending_team_center');
+      if (pid !== project.id) return;
+      sessionStorage.removeItem('cc_pending_team_center');
+      setSelectedPersonaId(null);
+      setPersonaCreating(false);
+      setLeftTab('personas');
+      setTeamCenterOpen(true);
+      if (isMobile) setMobileView('chat');
+    };
+    consumePendingTeam();
+    window.addEventListener('cc-pending-team-center', consumePendingTeam);
+    return () => window.removeEventListener('cc-pending-team-center', consumePendingTeam);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
   // Эффект-подписка объявлена ниже, после handleSelectSession.
   // Сайдбар, его ширина и сплиттеры жили здесь, пока десктоп рисовался этим

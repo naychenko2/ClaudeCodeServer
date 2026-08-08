@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Info, RotateCcw, Sparkles, UserRound } from 'lucide-react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, FS, R, SP } from '../../lib/design';
+import { C, FONT, FS, R, SP, Z } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Modal, ModalActions, ConfirmDialog } from '../../components/ui';
 import { PageCanvas } from '../../components/ui/PageCanvas';
@@ -397,7 +397,7 @@ interface IntroPageProps {
 // что мир на месте, уйти можно кликом по любому разделу (тот же жест закрывает overlay).
 export function IntroChatPage({ auth, onLogout, onHubTab, onDone }: IntroPageProps) {
   return (
-    <PageCanvas style={{ position: 'fixed', inset: 0, zIndex: 1000 }}>
+    <PageCanvas style={{ position: 'fixed', inset: 0, zIndex: Z.modal }}>
       <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} />
       <IntroChatShell
         kind="user"
@@ -413,7 +413,7 @@ export function IntroChatPage({ auth, onLogout, onHubTab, onDone }: IntroPagePro
 // Проектное знакомство: интервью собирает персону-руководителя проекта
 export function ProjectIntroChatPage({ project, auth, onLogout, onHubTab, onDone }: IntroPageProps & { project: Project }) {
   return (
-    <PageCanvas style={{ position: 'fixed', inset: 0, zIndex: 1000 }}>
+    <PageCanvas style={{ position: 'fixed', inset: 0, zIndex: Z.modal }}>
       <HubHeader value="home" onTab={onHubTab} auth={auth} onLogout={onLogout} project={project} />
       <IntroChatShell
         kind="project"

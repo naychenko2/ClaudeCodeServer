@@ -41,5 +41,6 @@ export { FileTypeTile } from './FileTypeTile';
 export { FileStatusBadge } from './FileStatusBadge';
 export type { FileStatus } from './FileStatusBadge';
 export { Dot } from './Dot';
+export { IntroDot } from './IntroDot';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';

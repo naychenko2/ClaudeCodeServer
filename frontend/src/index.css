@@ -129,7 +129,13 @@ body {
 }
 /* --cc-fab-size НЕ анимируем на :root: смену размера проигрывает transition width/height
    самой кнопки (registered @property триггерит его). Иначе выходит двойная анимация в 2 шага. */
-:root { transition: --cc-fab-bottom 0.3s ease, --cc-fab-inset 0.22s ease; }
+:root {
+  transition: --cc-fab-bottom 0.3s ease, --cc-fab-inset 0.22s ease;
+  /* Оправа FAB — постоянный носитель статуса. Толщина и зазор НЕ масштабируются
+     вместе с кнопкой: на 36px пропорциональная оправа выродилась бы в нитку. */
+  --cc-fab-ring-w: 2px;
+  --cc-fab-ring-gap: 3px;
+}
 
 
 /* Поле ввода чата: прячем скроллбар (поле растёт до maxHeight, дальше скроллится
@@ -617,6 +623,87 @@ body {
 .cc-fab-breathe { animation: cc-fab-breathe 2.2s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
   .cc-fab-hop, .cc-fab-breathe { animation: none; }
+}
+
+/* === Оправа-носитель статуса и механика «работа»/«нужен ответ» ===
+   Оправа (.cc-fab-ring) — отдельный слой СНАРУЖИ лица (inset отрицательный),
+   поэтому лицо не ужимается ни на 54, ни на 36px. Цвет линии задаёт состояние
+   через --cc-fab-ring-c на самой кнопке. Бегущая дуга (.cc-fab-arc) и маячок
+   (cc-fab-alert) — свои механики движения для «работы» и «ожидания ответа».
+   Существующие cc-fab-hop / cc-fab-breathe / cc-echo-ring не трогаем. */
+
+/* Оправа: лежит поверх лица (z:3), цвет от состояния (наследуется от кнопки). */
+.cc-fab-ring {
+  position: absolute;
+  inset: calc(-1 * var(--cc-fab-ring-gap));
+  border-radius: 50%;
+  border: var(--cc-fab-ring-w) solid var(--cc-fab-ring-c, var(--c-smoke));
+  pointer-events: none;
+  z-index: 3;
+  transition: border-color .22s ease, border-width .22s ease, border-style .22s ease;
+}
+/* Бегущая дуга поверх оправы — только состояние «AI работает». Скрыта, пока не
+   потребуется: display управляется через [data-state="busy"]. */
+.cc-fab-arc {
+  position: absolute;
+  inset: calc(-1 * var(--cc-fab-ring-gap));
+  border-radius: 50%;
+  border: var(--cc-fab-ring-w) solid transparent;
+  border-top-color: var(--c-text-secondary);
+  pointer-events: none;
+  z-index: 4;
+  display: none;
+  animation: cc-fab-arc 1.1s linear infinite;
+}
+@keyframes cc-fab-arc { to { transform: rotate(360deg); } }
+
+/* Маячок «нужен ответ»: два удара и пауза — прерывистый ритм, не спутать с ровным
+   вращением дуги. Цвет внутри box-shadow берётся rgba-литералом (не из токена),
+   поэтому парный keyframe на тёмную тему — как у существующих --shadow-*. */
+@keyframes cc-fab-alert {
+  0%        { box-shadow: 0 0 0 0   rgba(201, 146, 62, 0.42), var(--shadow-fab-neutral); }
+  12%       { box-shadow: 0 0 0 7px rgba(201, 146, 62, 0),    var(--shadow-fab-neutral); }
+  24%       { box-shadow: 0 0 0 0   rgba(201, 146, 62, 0.42), var(--shadow-fab-neutral); }
+  36%       { box-shadow: 0 0 0 7px rgba(201, 146, 62, 0),    var(--shadow-fab-neutral); }
+  40%, 100% { box-shadow: 0 0 0 0   rgba(201, 146, 62, 0),    var(--shadow-fab-neutral); }
+}
+@keyframes cc-fab-alert-dark {
+  0%        { box-shadow: 0 0 0 0   rgba(224, 172, 90, 0.46), var(--shadow-fab-neutral); }
+  12%       { box-shadow: 0 0 0 7px rgba(224, 172, 90, 0),    var(--shadow-fab-neutral); }
+  24%       { box-shadow: 0 0 0 0   rgba(224, 172, 90, 0.46), var(--shadow-fab-neutral); }
+  36%       { box-shadow: 0 0 0 7px rgba(224, 172, 90, 0),    var(--shadow-fab-neutral); }
+  40%, 100% { box-shadow: 0 0 0 0   rgba(224, 172, 90, 0),    var(--shadow-fab-neutral); }
+}
+
+/* Базовая кнопка FAB: нейтральный ореол (без accent-заливки — весь круг занимает
+   лицо). Цвет оправы и ореол меняются состоянием ниже; наведение цвет не трогает. */
+.cc-fab {
+  box-shadow: var(--shadow-fab-neutral);
+  --cc-fab-ring-c: var(--c-smoke);
+  transition: width .18s ease, height .18s ease, transform .16s ease, box-shadow .2s ease;
+}
+/* Покой: дымчатая оправа, нейтральный ореол — без изменений (база). */
+.cc-fab[data-state="idle"] { --cc-fab-ring-c: var(--c-smoke); }
+/* Есть идея: акцентная оправа + accent-ореол ОСТАЁТСЯ после подскоков. */
+.cc-fab[data-state="idea"] { --cc-fab-ring-c: var(--c-accent); box-shadow: var(--shadow-button); }
+/* AI работает: та же дымчатая оправа, поверх — бегущая дуга + «Эхо» (в AiLauncher). */
+.cc-fab[data-state="busy"] { --cc-fab-ring-c: var(--c-smoke); }
+.cc-fab[data-state="busy"] .cc-fab-arc { display: block; }
+/* Нужен ответ: янтарная оправа + маячок из двух ударов. */
+.cc-fab[data-state="awaiting"] {
+  --cc-fab-ring-c: var(--c-warning);
+  animation: cc-fab-alert 2.6s ease-in-out infinite;
+}
+:root[data-theme="dark"] .cc-fab[data-state="awaiting"] { animation-name: cc-fab-alert-dark; }
+
+/* prefers-reduced-motion: движение выключено, но состояния различимы статикой —
+   характером линии и толщиной (читается даже в оттенках серого). Кольца «Эхо» при
+   reduced по-прежнему не рендерятся (в AiLauncher), их работу забирает пунктир. */
+@media (prefers-reduced-motion: reduce) {
+  .cc-fab[data-state="busy"] .cc-fab-arc { display: none; }
+  .cc-fab[data-state="busy"] .cc-fab-ring { border-style: dashed; --cc-fab-ring-c: var(--c-text-muted); }
+  .cc-fab[data-state="awaiting"] { animation: none; box-shadow: var(--shadow-alert); }
+  .cc-fab[data-state="awaiting"] .cc-fab-ring { border-width: 3px; }
 }
 
 /* Скелетон загрузки (аналитика токенов и др.): мягкое мерцание подложки */

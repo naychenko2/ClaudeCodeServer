@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { C, FONT, R, Z, SHADOW } from '../../lib/design';
 import { getNav, NAV_CHANGE_EVENT } from '../../lib/nav';
 import { useAiBusy } from '../../lib/ai/busy';
+import { useAiAwaiting, type AiAwaitingRec } from '../../lib/ai/awaiting';
 import { getFlag } from '../../lib/featureFlags';
 import { api } from '../../lib/api';
 import { useOnline } from '../../hooks/useOnline';
@@ -89,6 +90,10 @@ export function AiLauncher() {
   // Мобильный вид — палитра становится нижней шторкой
   const isMobile = useIsMobile();
   const aiBusy = useAiBusy();
+  // Какие чаты ждут ответа человека (permission_request / ask_question без ответа).
+  // Глобальный стор — AiLauncher видит «нужен ответ» из любого раздела, даже уйдя из чата.
+  const awaitingList = useAiAwaiting();
+  const aiAwaiting = awaitingList.length > 0;
   // prefers-reduced-motion: на FAB гасим и дыхание, и кольца «Эхо» (в cc-fab-breathe и
   // .cc-echo-ring анимация уже выключается, но статичные элементы оставались бы видимыми —
   // круг-контур и застывшее лицо, поэтому кольца при reduced мы не рендерим вовсе)
@@ -161,6 +166,9 @@ export function AiLauncher() {
   // что именно советует AI). Пусто — рекомендаций нет.
   const [recs, setRecs] = useState<ActionRec[]>([]);
   const [fabHover, setFabHover] = useState(false);
+  // Балун списка ждущих чатов: поднимается по клику на FAB, когда ждут несколько.
+  // На десктопе тот же список виден и по наведению (fabHover); на мобилке — только тап.
+  const [awaitingBalloon, setAwaitingBalloon] = useState(false);
   // Свайп-закрытие проактивного балуна на тач-экране (смещение вправо за экран)
   const [dragX, setDragX] = useState(0);
   const swipeStart = useRef<number | null>(null);
@@ -247,6 +255,9 @@ export function AiLauncher() {
     if (hoverTimer.current) { clearTimeout(hoverTimer.current); hoverTimer.current = null; }
     setFabHover(false);
   }, [open]);
+
+  // Ждущих чатов больше нет (ответили / ход завершился) — балун списка стал неактуален.
+  useEffect(() => { if (!aiAwaiting) setAwaitingBalloon(false); }, [aiAwaiting]);
 
   const close = () => setOpen(false);
   const fire = (a: AiAction) => { close(); a.run(buildCtx()); };
@@ -343,6 +354,31 @@ export function AiLauncher() {
   const leaveFab = () => { hoverTimer.current = window.setTimeout(() => setFabHover(false), 140); };
   // Клик по пункту hover-балуна — сразу запустить действие
   const runRec = (id: string) => { setFabHover(false); setSuggestion(null); runActionById(id, buildCtx()); };
+
+  // Сигнал «ждём ответа» должен не только звать, но и вести туда, где ждут. Каналы — те же,
+  // что у «зума» со стены и создания группового чата: проектный чат открывает воркспейс
+  // (сессия лежит в sessionStorage, её поднимает WorkspacePage), внепроектный — раздел «Чаты».
+  const openWaitingChat = (rec: AiAwaitingRec) => {
+    setFabHover(false);
+    setAwaitingBalloon(false);
+    if (rec.project) {
+      sessionStorage.setItem('cc_pending_session', JSON.stringify(rec.session));
+      window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project: rec.project } }));
+    } else {
+      localStorage.setItem('cc_open_chat', rec.chatId);
+      window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: rec.chatId } }));
+    }
+  };
+  // Клик по FAB: ждёт один чат → открываем его (без палитры); ждут несколько → балун
+  // списка; иначе — командная палитра как обычно.
+  const onFabClick = () => {
+    if (aiAwaiting) {
+      if (awaitingList.length === 1) openWaitingChat(awaitingList[0]);
+      else setAwaitingBalloon(true);
+      return;
+    }
+    setQ(''); setOpen(true);
+  };
   // Рекомендации с их действиями (для hover-балуна), в порядке уровня от модели
   const recActions = recs
     .map(r => ({ action: AI_ACTIONS.find(a => a.id === r.id), level: r.level }))
@@ -363,14 +399,24 @@ export function AiLauncher() {
   // Кнопка «просыпается» (пульс + акцент + анимация) ТОЛЬКО при сильной рекомендации.
   // medium/minor её не будят — они лишь подсвечиваются в открытой палитре. Пока реальной
   // идеи нет — кнопка приглушена, чтобы не создавать ложного ощущения «есть что предложить».
-  const fabDim = fabLevel !== 'strong';
   const fabStrong = fabLevel === 'strong';
 
+  // Четыре состояния FAB, приоритет при совпадении: ответ → работа → идея → покой.
+  // Каждое — своя механика движения и цвет постоянной оправы (см. ai-fab-states-proposal.md).
+  const fabState: 'idle' | 'idea' | 'busy' | 'awaiting' =
+    aiAwaiting ? 'awaiting' : aiBusy ? 'busy' : fabStrong ? 'idea' : 'idle';
+  // aria-label говорит правду о состоянии: в покое/работе/идее — палитра действий,
+  // при ожидании — зовёт в ждущий чат (один) или к списку (несколько).
+  const fabAriaLabel = aiAwaiting
+    ? (awaitingList.length === 1
+        ? `Claude ждёт ответа — открыть чат${awaitingList[0].name ? ` «${awaitingList[0].name}»` : ''}`
+        : `Claude ждёт ответа в ${awaitingList.length} чатах — выбрать`)
+    : 'AI-действия (Ctrl/⌘ + K)';
+
   // Прыжок «есть идея»: ровно 3 раза (CSS-count), потом замирает — не скачет без конца.
-  // Новая сильная подсказка перезапускает 3 прыжка заново. «Новизну» ловим по сигнатуре
-  // повода (ключ подсказки / id топовой рекомендации): пока он тот же — не дёргаем, класс
-  // уже отыграл; сменился — ре-триггерим анимацию через reflow (снять класс → reflow → надеть).
-  const hopSig = fabStrong && !aiBusy ? (suggestion?.key ?? recs[0]?.id ?? 'strong') : null;
+  // Оправа при этом ОСТАЁТСЯ акцентной: состояние живёт на цвете оправы, а не на прыжке.
+  // Не будим занятую (работает) и тем более ждущую ответа персону.
+  const hopSig = fabStrong && !aiBusy && !aiAwaiting ? (suggestion?.key ?? recs[0]?.id ?? 'strong') : null;
   useEffect(() => {
     const el = fabRef.current;
     if (!el) return;
@@ -417,9 +463,34 @@ export function AiLauncher() {
         </div>
       )}
 
+      {/* Балун ждущих чатов: клик по FAB при нескольких ждущих (или наведение на десктопе).
+          Переиспользует раскладку hover-балуна: иконка + имя чата + подпись. Клик ведёт в чат. */}
+      {!open && aiAwaiting && (awaitingBalloon || (fabHover && !isMobile)) && (
+        <div style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
+          <div style={{ ...balloonHead, marginBottom: 8 }}>
+            <span style={{ color: C.warning, display: 'flex' }}><AwaitingIcon size={15} /></span>
+            <b style={{ fontSize: 12.5, color: C.textHeading }}>Ждут вашего ответа</b>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {awaitingList.map(rec => (
+              <button key={rec.chatId} role="menuitem" onClick={() => openWaitingChat(rec)} style={hoverItemStyle}
+                onMouseEnter={e => { e.currentTarget.style.background = C.accentLight; }}
+                onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
+                <span style={{ ...itemIco, width: 26, height: 26, background: C.warningBg, color: C.warning }}><MessageIcon size={15} /></span>
+                <span style={{ flex: 1, minWidth: 0 }}>
+                  <span style={{ ...itemTitle, fontSize: 13 }}>{rec.name || 'Чат'}</span>
+                  <span style={itemHint}>Claude ждёт ответа</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Hover-балун: наведение на FAB → список рекомендованных действий, клик запускает.
-          Показываем при наведении, если есть рекомендации. */}
-      {!open && fabHover && recActions.length > 0 && !isMobile && (
+          Показываем при наведении, если есть рекомендации. Ждущие чаты важнее — при aiAwaiting
+          балун рекомендаций не поднимаем (его место занимает список ждущих). */}
+      {!open && fabHover && recActions.length > 0 && !isMobile && !aiAwaiting && (
         <div style={hoverBalloonStyle} role="menu" onMouseEnter={enterFab} onMouseLeave={leaveFab}>
           <div style={{ ...balloonHead, marginBottom: 8 }}>
             <span style={{ color: C.accent, display: 'flex' }}><SparkleIcon size={15} /></span>
@@ -442,20 +513,22 @@ export function AiLauncher() {
         </div>
       )}
 
-      {/* Плавающая кнопка */}
+      {/* Плавающая кнопка. Постоянная оправа (.cc-fab-ring) — носитель статуса: меняет
+          цвет и характер линии по data-state. Бегущая дуга (.cc-fab-arc) и кольца «Эхо» —
+          только «работа»; маячок «нужен ответ» и accent-ореол «идеи» — в CSS по data-state.
+          Геометрия (размер, наведение, ужимание) осталась inline; ореол и анимации — в CSS,
+          т.к. box-shadow/transform анимаций inline-стилем не перебить. */}
       {!open && (
         <button
           ref={fabRef}
-          onClick={() => { setQ(''); setOpen(true); }}
-          aria-label="AI-действия (Ctrl/⌘ + K)"
-          title="AI-действия · ⌘K"
+          className="cc-fab"
+          data-state={fabState}
+          onClick={onFabClick}
+          aria-label={fabAriaLabel}
+          title={aiAwaiting ? 'Claude ждёт ответа' : 'AI-действия · ⌘K'}
           style={{
             ...fabStyle,
-            // Ореол сохраняем, но нейтральный: SHADOW.fab из fabStyle — accent-свечение
-            // под сплошной оранжевый круг, а здесь заливки нет (весь круг занимает
-            // логотип), и оранжевый ореол выглядел беспричинным. Цвет свечения должен
-            // идти от самой кнопки — отсюда парный токен той же геометрии.
-            background: 'none', padding: 0, overflow: 'visible', boxShadow: SHADOW.fabNeutral,
+            background: 'none', padding: 0, overflow: 'visible',
             // Размер: базовый из var --cc-fab-size (54 без панели / 36 при распахнутой панели),
             // при наведении на десктопе — всегда 54. Растёт влево-вверх (угол приклеен к краю).
             // На мобиле размер фиксирован (36, там наведения и распахнутых панелей нет).
@@ -474,30 +547,25 @@ export function AiLauncher() {
           onMouseEnter={enterFab}
           onMouseLeave={leaveFab}
         >
-          {/* Лицо кнопки: аватар релевантной персоны (фича default-personas-onboarding),
-              fallback — логотип «AI Home» на весь круг. fill: аватар растягивается по
-              контейнеру и точно совпадает с кругом на ЛЮБОМ кадре анимации размера
-              (36↔54), а не по фиксированному size, который рассинхронизировался с переходом.
-              Покой — лёгкое приглушение (opacity 0.85, без grayscale); идея — подскок
-              (cc-fab-hop на кнопке) + кольца; работа — кольца + дыхание (cc-fab-breathe). */}
-          {/* Кольца «Эхо»: «идея» (strong) и «работа» (aiBusy). Тот же приём, что в ленте
-              чата — .cc-echo-ring с --cc-echo-color. Цвет разводит состояния: «работа» —
-              нейтральный дымок (C.smoke, те же кольца, что в ленте чата), «идея» — акцент
-              (C.accent). Если оба состояния сразу — приоритет у работы: персона занята,
-              звать не время, оранжевый пульс был бы зазыванием. pointer-events: none в
-              самом классе; overflow у кнопки visible, ничто выше по дереву её не клипует.
-              Лежат ПОД аватаром: в покое (scale 1) контур скрыт за кругом лица, при
-              расширении выходит за края и читается как пульс. */}
-          {(fabStrong || aiBusy) && !reduced && (
+          {/* Кольца «Эхо» — только «работа» (aiBusy). Тот же приём, что в ленте чата:
+              .cc-echo-ring с --cc-echo-color. У «идеи» колец больше нет — её держит
+              акцентная оправа + подскок (язык «Эхо» целиком закреплён за работой AI).
+              pointer-events: none в самом классе; overflow у кнопки visible. */}
+          {aiBusy && !reduced && (
             <span
               aria-hidden
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              style={{ position: 'absolute', inset: 0, ['--cc-echo-color' as any]: aiBusy ? C.smoke : C.accent }}
+              style={{ position: 'absolute', inset: 0, ['--cc-echo-color' as any]: C.smoke }}
             >
               <span className="cc-echo-ring" />
               <span className="cc-echo-ring cc-echo-ring--2" />
             </span>
           )}
+          {/* Лицо кнопки: аватар релевантной персоны (фича default-personas-onboarding),
+              fallback — логотип «AI Home» на весь круг. fill: аватар растягивается по
+              контейнеру и точно совпадает с кругом на ЛЮБОМ кадре анимации размера
+              (36↔54). Покой — лёгкое приглушение (opacity 0.85, без grayscale); работа —
+              дыхание (cc-fab-breathe); идея/ожидание — полное лицо. */}
           {facePersona ? (
             <span
               aria-hidden
@@ -506,7 +574,7 @@ export function AiLauncher() {
                 position: 'absolute', inset: 0, display: 'block', borderRadius: '50%', overflow: 'hidden',
                 // Покой — приглушение без grayscale: обесцвеченное лицо читается как
                 // «оффлайн/заблокирован», а сигнал должен быть «спокоен, но на связи».
-                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.85 } : {}),
+                ...(fabState === 'idle' && !fabHover ? { opacity: 0.85 } : {}),
               }}
             >
               <PersonaAvatar persona={facePersona} fill size={isMobile || (fabSmall && !(fabHover && !obstacleOverlap)) ? 36 : 54} />
@@ -518,10 +586,14 @@ export function AiLauncher() {
               style={{
                 position: 'absolute', inset: 0, width: '100%', height: '100%',
                 objectFit: 'cover', borderRadius: '50%', display: 'block',
-                ...(fabDim && !aiBusy && !fabHover ? { opacity: 0.85 } : {}),
+                ...(fabState === 'idle' && !fabHover ? { opacity: 0.85 } : {}),
               }}
             />
           )}
+          {/* Оправа-носитель статуса (всегда) и бегущая дуга (видна только в data-state="busy"
+              через CSS display). Лежат поверх лица, растут наружу — лицо не ужимается. */}
+          <span className="cc-fab-ring" aria-hidden />
+          <span className="cc-fab-arc" aria-hidden />
         </button>
       )}
 
@@ -641,6 +713,27 @@ function SparkleIcon({ size = 24 }: { size?: number }) {
   );
 }
 
+// Часы со стрелкой — «ждёт вашего ответа» (заголовок балуна ждущих чатов)
+function AwaitingIcon({ size = 24 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <circle cx={12} cy={12} r={9} />
+      <path d="M12 7.5V12l3 1.8" />
+    </svg>
+  );
+}
+
+// Пузырь диалога — строка ждущего чата в списке
+function MessageIcon({ size = 24 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor"
+      strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 11.5a8.38 8.38 0 0 1-9 8.4 8.5 8.5 0 0 1-3.8-.9L3 20.5l1.5-4.8A8.38 8.38 0 0 1 12 3.5a8.38 8.38 0 0 1 9 8z" />
+    </svg>
+  );
+}
+
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
     <span style={{
@@ -665,11 +758,12 @@ const fabStyle: React.CSSProperties = {
   // При наведении переопределяется на 54 (см. button inline). Меняется плавно (transition).
   width: 'var(--cc-fab-size, 54px)', height: 'var(--cc-fab-size, 54px)',
   borderRadius: '50%', border: 'none', cursor: 'pointer',
-  background: C.accent, color: C.onAccent, boxShadow: SHADOW.fab,
+  background: C.accent, color: C.onAccent,
+  // Ореол (box-shadow) и transition переехали в CSS-класс .cc-fab — ими управляет
+  // data-state (нейтральный/accent/маячок), а inline-стиль всё равно перебил бы CSS.
   // Ниже выпадающих меню (Z.dropdown): FAB висит в том же углу, что и попапы кнопок
   // композера, и на Z.modal-1 перекрывал их собой. Выше обычного контента остаётся.
   display: 'grid', placeItems: 'center', zIndex: Z.dropdown - 1,
-  transition: 'width .18s ease, height .18s ease, transform .16s ease',
 };
 
 const overlayStyle: React.CSSProperties = {

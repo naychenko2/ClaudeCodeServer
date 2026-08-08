@@ -57,7 +57,6 @@ import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../lib/selectio
 // Тумблер панели «Оглавление» правит раскладку зон напрямую — тем же каналом, что
 // кнопка «Открыть изменения» в git-баре над композером (ProjectGitBar)
 import { wsPanels, zoneOf } from '../pages/workspace/panelStackState';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 import { useThemeMode, getEffectiveTheme } from '../lib/themeMode';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
@@ -989,12 +988,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   };
 
   // Тумблер «История решений» в шапке diff-просмотра — тем же каналом, что «Оглавление»
-  // выше. Только в diff (мокап: «кнопка в шапке diff-просмотра»), гейт по флагу —
-  // сама панель для выключенной фичи уже показывает свой empty-state с настройками,
-  // но кнопка в тулбаре ведёт себя как остальные фич-флаженные контролы: скрыта, пока флаг off
-  const dossiersFlag = useFeature(FLAGS.changeDossiers);
+  // выше. Только в diff (мокап: «кнопка в шапке diff-просмотра»).
   const dossiersPanelOpen = zoneOf(panelZones, 'dossiers') !== null;
-  const dossiersToggleVisible = dossiersFlag && tab === 'diff' && !isMobile;
+  const dossiersToggleVisible = tab === 'diff' && !isMobile;
   const toggleDossiersPanel = () => {
     if (dossiersPanelOpen) closePanelKey('dossiers');
     else revealPanelKey('dossiers');

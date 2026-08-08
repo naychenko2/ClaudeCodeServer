@@ -16,7 +16,6 @@ import { type RateWindow, RATE_COLORS, windowLabel, fmtReset, worstWindow } from
 import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { C, FONT, R, SHADOW, TB, CHAT_MAX_W } from '../../lib/design';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton, Modal, ModalActions } from '../ui';
@@ -924,7 +923,6 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
-  const dossiersFlag = useFeature(FLAGS.changeDossiers);
   // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
   // проекта (вкладка «Команда», #/project/{id}/persona/{pid}), в глобальном — раздел «Персоны».
   // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
@@ -1177,9 +1175,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const expiryBadge = online ? (
     <ExpiryButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
   ) : null;
-  // Opt-out «не сохранять решения из этого чата» — только у проектных чатов и за
-  // флагом, рядом со «Временем жизни» (тем же паттерном кнопки в шапке)
-  const dossierBtn = project && dossiersFlag && online ? (
+  // Opt-out «не сохранять решения из этого чата» — только у проектных чатов, рядом со
+  // «Временем жизни» (тем же паттерном кнопки в шапке)
+  const dossierBtn = project && online ? (
     <DossierOptOutButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // На мобиле прогресс workflow втянут в объединённый чип (costBadges) — отдельный

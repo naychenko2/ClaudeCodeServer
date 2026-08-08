@@ -41,7 +41,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
     display: 'flex', alignItems: 'center', gap: 5,
   });
 
-  const personasOff = pendingDelete ? data.personasOffCount(pendingDelete.key) : 0;
+  const personasOn = pendingDelete ? data.personasOnCount(pendingDelete.key) : 0;
 
   return (
     <>
@@ -115,8 +115,8 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
       {pendingDelete && (
         <ConfirmDialog
           title={`Удалить «${pendingDelete.label || pendingDelete.key}»?`}
-          subtitle={`Сервер отключится ${personasOff > 0
-            ? `у ${personasOff} ${plural(personasOff, 'персоны', 'персон', 'персон')} и `
+          subtitle={`Сервер отключится ${personasOn > 0
+            ? `у ${personasOn} ${plural(personasOn, 'персоны', 'персон', 'персон')} и `
             : ''}во всех проектах. Секретные значения будут стёрты — чтобы подключить его снова, ключи придётся ввести заново.`}
           confirmLabel="Удалить"
           confirmVariant="danger"

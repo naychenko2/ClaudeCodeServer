@@ -9,14 +9,6 @@ import { useSyncExternalStore } from 'react';
 // приходят с сервера — здесь только ключи.
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
-  teamMemoryAutolearn: 'team-memory-autolearn',
-  docAnnotations: 'doc-annotations',
-  aiLocalSuggest: 'ai-local-suggest',
-  linkReader: 'link-reader',
-  mcpRegistry: 'mcp-registry',
-  mcpAllowlist: 'mcp-allowlist',
-  changeDossiers: 'change-dossiers',
-  teamImplementMode: 'team-implement-mode',
   defaultPersonasOnboarding: 'default-personas-onboarding',
 } as const;
 

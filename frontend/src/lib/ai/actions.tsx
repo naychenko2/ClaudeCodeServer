@@ -196,7 +196,7 @@ export const AI_ACTIONS: AiAction[] = [
   {
     id: 'note.annotations', title: 'Разобрать комментарии документа', hint: 'обработать open-комментарии',
     section: 'notes', sectionLabel: 'Заметки', icon: IcComments,
-    when: c => noteOpen(c) && c.online && c.flag('doc-annotations'), contextual: noteOpen,
+    when: c => noteOpen(c) && c.online, contextual: noteOpen,
     run: c => startChatWithPrompt(
       `Разбери необработанные (open) комментарии документа (заметка id ${c.nav?.note}): прочитай их (notes_annotations), `
       + `по каждому внеси правку или ответь (notes_reply), затем закрой (notes_set_status). Сначала покажи план.`, c),

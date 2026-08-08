@@ -25,7 +25,6 @@ import { PanelZone } from '../../pages/workspace/PanelZone';
 import { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 import { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 
 type Mode = 'notes' | 'graph';
 
@@ -88,7 +87,6 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const connectionsBelow = !isMobile && windowWidth < NOTE_CONN_SIDEBAR_MIN;
   const notes = useNotes();
   const online = useOnline();
-  const docAnnotationsOn = useFeature(FLAGS.docAnnotations);
   // Теги всех заметок по частоте — чипы-фильтры списка (клик = оператор tag: в поиске)
   const allTags = useMemo(() => {
     const counts = new Map<string, number>();
@@ -97,7 +95,7 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
     return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'ru'));
   }, [notes]);
   const [tagsExpanded, setTagsExpanded] = useState(false);
-  const hasCommentRoots = docAnnotationsOn && notes.some(n => n.annotation && !n.annotation.isReply);
+  const hasCommentRoots = notes.some(n => n.annotation && !n.annotation.isReply);
   // Режим МОБИЛЬНОЙ ветки: там панелей нет, разделами по-прежнему рулит переключатель.
   // На десктопе режим задаёт открытая панель графа (см. graphPanelOpen ниже).
   const [mobileMode, setMobileMode] = useState<Mode>('notes');

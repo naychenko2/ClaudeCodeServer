@@ -10,7 +10,6 @@ import { PanelRight } from 'lucide-react';
 import { C, R } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { ChatOpenReaderContext } from './contexts';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { readerEligibleDomain } from '../../pages/workspace/reader/readerEligibility';
 
 // Стили кнопки инжектим один раз (тот же приём, что у IconButton.FOCUS_CLASS):
@@ -39,8 +38,7 @@ const LINK_STYLE = { color: C.accent, textDecoration: 'underline' } as const;
 
 export function ReaderLinkWrap({ href, children }: { href?: string; children: ReactNode }) {
   const onOpenReader = useContext(ChatOpenReaderContext);
-  const enabled = useFeature(FLAGS.linkReader);
-  const domain = enabled && onOpenReader && href ? readerEligibleDomain(href) : null;
+  const domain = onOpenReader && href ? readerEligibleDomain(href) : null;
 
   // Перехватываем только чистый клик левой кнопкой; любой модификатор или другая
   // кнопка — поведение браузера по умолчанию (новая вкладка/окно)
@@ -57,8 +55,8 @@ export function ReaderLinkWrap({ href, children }: { href?: string; children: Re
     </a>
   );
 
-  // Фича выключена, контекста нет (мобильный «тонкий» чат без ридера) или ссылка не
-  // годится под панель — молчим, ссылка ведёт себя ровно как раньше (новая вкладка)
+  // Контекста нет (мобильный «тонкий» чат без ридера) или ссылка не годится под панель —
+  // молчим, ссылка ведёт себя ровно как раньше (новая вкладка)
   if (!domain) return anchor;
 
   return (

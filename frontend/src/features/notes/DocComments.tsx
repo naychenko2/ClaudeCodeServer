@@ -4,7 +4,6 @@ import { Check, MessageCircle, Pin, Trash2, TriangleAlert, Undo2, User, X } from
 import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useNotesVersion } from '../../lib/notes';
 import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
@@ -47,13 +46,12 @@ function Chip({ color, bg, icon, label }: { color: string; bg: string; icon: Rea
 // Загрузка комментариев документа + перезагрузка на realtime notes_changed.
 // Хук не экспортируется: живёт только в этом компонентном файле — экспорт хука
 // рядом с компонентом ломал бы fast refresh (см. eslint.config.js).
-function useDocAnnotations(scope: string, path: string, enabled: boolean) {
+function useDocAnnotations(scope: string, path: string) {
   const [items, setItems] = useState<DocAnnotation[]>([]);
   const notesVersion = useNotesVersion();
   const reload = useCallback(() => {
-    if (!enabled) return;
     api.notes.annotations(scope, path).then(setItems).catch(() => setItems([]));
-  }, [scope, path, enabled]);
+  }, [scope, path]);
   useEffect(() => { reload(); }, [reload, notesVersion]);
   return { items, reload };
 }
@@ -94,10 +92,9 @@ interface Props {
 const HINT_KEY = 'cc_doc_comments_hint';
 
 export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelBelow, viewer, onCounts, panelTarget, deferPanel }: Props) {
-  const enabled = useFeature(FLAGS.docAnnotations);
   const docRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
-  const { items, reload } = useDocAnnotations(scope, docPath, enabled);
+  const { items, reload } = useDocAnnotations(scope, docPath);
   // Просмотр — без frontmatter (иначе title/annotates рендерятся текстом); офсеты
   // якорей на сервере считаются по ПОЛНОМУ файлу — переводим через fmOffset
   const { body: renderBody, offset: fmOffset } = useMemo(() => stripFrontmatter(content), [content]);
@@ -119,7 +116,6 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
 
   // ── Выделение → плавающая кнопка «Комментировать» ──
   const onMouseUp = () => {
-    if (!enabled) return;
     window.setTimeout(() => {
       const sel = window.getSelection();
       const root = docRef.current;
@@ -211,7 +207,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   // Открытое меню поручения: комментарий + кнопка-якорь (позиционирование порталом)
   const [assignFor, setAssignFor] = useState<{ a: DocAnnotation; el: HTMLElement } | null>(null);
   const [assignedMsg, setAssignedMsg] = useState<string | null>(null);
-  useEffect(() => { if (enabled) void ensurePersonasLoaded(); }, [enabled]);
+  useEffect(() => { void ensurePersonasLoaded(); }, []);
   const assignTo = async (a: DocAnnotation, p: Persona) => {
     setAssignFor(null);
     try {
@@ -326,7 +322,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   // ── Подсветка якорных блоков + балуны-маркеры (DOM-слой поверх рендера) ──
   useEffect(() => {
     const root = docRef.current;
-    if (!root || !enabled) return;
+    if (!root) return;
     const cleanups: (() => void)[] = [];
     const byBlock = new Map<HTMLElement, DocAnnotation[]>();
     for (const a of shown) {
@@ -389,9 +385,9 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
       });
     });
     return () => cleanups.forEach(f => f());
-  }, [shown, enabled, content, fmOffset]);
+  }, [shown, content, fmOffset]);
 
-  const panel = enabled && items.length > 0 && (
+  const panel = items.length > 0 && (
     <div ref={panelRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13, color: C.textHeading }}>
@@ -553,7 +549,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
       <div ref={docRef} onMouseUp={onMouseUp} onTouchEnd={onMouseUp} style={{ flex: 1, minWidth: 0 }}>
         {/* Подсказка первого использования — пока нет ни одного комментария */}
-        {enabled && !hintDismissed && items.length === 0 && (
+        {!hintDismissed && items.length === 0 && (
           <div style={{
             display: 'flex', alignItems: 'flex-start', gap: 8, margin: '0 0 14px',
             border: `1px dashed ${C.accent}`, borderRadius: R.lg, padding: '9px 12px',
@@ -569,7 +565,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
             }}><X size={13} /></button>
           </div>
         )}
-        <MarkdownViewer content={renderBody} blockPos={enabled}
+        <MarkdownViewer content={renderBody} blockPos={true}
           onWikilink={viewer?.onWikilink} existingTitles={viewer?.existingTitles}
           resolveNote={viewer?.resolveNote} embedSource={viewer?.embedSource}
           hideLeadingH1={viewer?.hideLeadingH1} resolveImageSrc={viewer?.resolveImageSrc}

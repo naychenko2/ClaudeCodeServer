@@ -5,8 +5,7 @@ import { Button, Dot, EmptyState, IconButton, TextField, Toggle } from '../../co
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { groupHeaderStyle } from '../../lib/modelProvidersShared';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
-import { accessSummary, accessSummaryOn, mcpAuthLine, mcpStatusTone, plural } from './useMcpData';
+import { accessSummaryOn, mcpAuthLine, mcpStatusTone, plural } from './useMcpData';
 import type { McpData } from './useMcpData';
 import type { McpBuiltinServer, McpServer } from '../../types';
 
@@ -236,9 +235,6 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
   const oauthBusy = !!data.oauthPending[server.id];
   const oauthNotice = data.oauthNotice[server.id];
   const legacy = server.source !== 'manual';
-  const allowlist = useFeature(FLAGS.mcpAllowlist);
-  const personasOff = data.personasOffCount(server.key);
-  const projectsOff = data.projectsOffCount(server.key);
   const personasOn = data.personasOnCount(server.key);
   const projectsOn = data.projectsOnCount(server.key);
   const target = server.transport === 'stdio'
@@ -286,13 +282,9 @@ function ServerCard({ server, data, onEdit, onOpenAccess, onDelete }: {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', fontSize: FS.sm }}>
         <span style={{
-          color: allowlist
-            ? (personasOn || projectsOn || server.allowOutsideProjects ? C.textSecondary : C.textMuted)
-            : (personasOff || projectsOff ? C.textSecondary : C.textMuted),
+          color: (personasOn || projectsOn || server.allowOutsideProjects ? C.textSecondary : C.textMuted),
         }}>
-          {allowlist
-            ? accessSummaryOn(personasOn, projectsOn, server.allowOutsideProjects)
-            : accessSummary(personasOff, projectsOff)}
+          {accessSummaryOn(personasOn, projectsOn, server.allowOutsideProjects)}
         </span>
         <button
           type="button"

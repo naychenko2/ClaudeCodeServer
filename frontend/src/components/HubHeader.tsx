@@ -14,7 +14,6 @@ import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
-import { useFeature, FLAGS } from '../lib/featureFlags';
 import { api } from '../lib/api';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
@@ -61,7 +60,6 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showModelsSpend, setShowModelsSpend] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
-  const mcpRegistry = useFeature(FLAGS.mcpRegistry);
 
   // «Собрать цепочку…» из панелей выбора модели — открыть единый раздел «Модели и расход»
   useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
@@ -295,8 +293,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onShowChangePassword={() => setShowChangePassword(true)}
           onShowFeatureFlags={() => setShowFeatureFlags(true)}
           onShowModelsSpend={() => setShowModelsSpend(true)}
-          // «MCP-серверы» — за фич-флагом mcp-registry: без флага пункта в меню нет
-          onShowMcpServers={mcpRegistry ? () => setShowMcpServers(true) : undefined}
+          onShowMcpServers={() => setShowMcpServers(true)}
           onShowUserManagement={() => setShowUserMgmt(true)}
           hideStatus={isMobile}
           // «Знания», «Аналитика токенов» и «Что нового» живут здесь на обеих платформах:

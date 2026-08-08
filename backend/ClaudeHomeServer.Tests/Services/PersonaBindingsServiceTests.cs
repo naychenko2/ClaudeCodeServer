@@ -19,7 +19,6 @@ public class PersonaBindingsServiceTests : IDisposable
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _sut;
     private readonly ClaudeHomeServer.Services.Mcp.McpRegistry _mcp;
-    private readonly FeatureFlagService _flags;
     private readonly string _userId;
 
     public PersonaBindingsServiceTests()
@@ -48,10 +47,9 @@ public class PersonaBindingsServiceTests : IDisposable
 
         _mcp = new ClaudeHomeServer.Services.Mcp.McpRegistry(config,
             new ClaudeHomeServer.Services.Mcp.McpSecretStore(config));
-        _flags = new FeatureFlagService(_users);
         _sut = new PersonaBindingsService(_personas, _projects, wkStore, notesSvc, notesKb,
             knowledge, new SkillsService(), _users, config,
-            NullLogger<PersonaBindingsService>.Instance, _mcp, _flags);
+            NullLogger<PersonaBindingsService>.Instance, _mcp);
     }
 
     public void Dispose()

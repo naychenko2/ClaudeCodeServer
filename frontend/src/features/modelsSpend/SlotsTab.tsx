@@ -35,7 +35,7 @@ interface SlotsTabProps {
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onGoApply: () => void;
 }
 
@@ -238,7 +238,7 @@ interface SlotCardProps {
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onToggle: () => void;
   onPickRoute: (v: string) => void;
   onGoApply: () => void;
@@ -368,7 +368,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onPickRoute: (v: string) => void;
 }) {
   // Черновик шагов: правится локально, пока не «Сохранить». Инициализируем шагами пресета.
@@ -392,14 +392,18 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
     onSaveLayer(scope, next);
   };
 
-  // Сохранить как пресет: новый личный пресет из черновика + перепривязка слота на него
+  // Сохранить как пресет: новый пресет из черновика + перепривязка слота на него. Слой —
+  // owner у обычного пользователя (личный слот), но у админа ВСЕГДА global — даже когда
+  // контекст слота "чужой" (contextUserId): личный пресет админа не резолвится ни в его
+  // общем слоте, ни тем более в слоте другого пользователя (MAJOR 2, ревью d23231bd)
   const saveAsPreset = () => {
     if (!settings || draft.length === 0) return;
+    const targetScope: 'global' | 'owner' = isAdmin ? 'global' : 'owner';
     const copy = { id: newPresetId(), name: `${preset?.name ?? 'Цепочка'} (копия)`,
       description: preset?.description ?? null, steps: draft };
-    const next = cloneLayer(settings.owner);
+    const next = cloneLayer(settings[targetScope]);
     next.presets.push(copy);
-    onSaveLayer('owner', next);
+    onSaveLayer(targetScope, next);
     onPickRoute(presetRoute(copy.id));
   };
 
@@ -458,6 +462,11 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           tierModels={tierModels}
           ollamaModel={ollamaModel}
           showPresets
+          // 'global' у админа (и для общего слота, и для чужого контекста пользователя) —
+          // личный пресет админа не годится ни туда: свой слот у остальных пользователей
+          // читает Global.Presets, а чужой личный слот резолвится в ЕГО owner-пресетах,
+          // где созданного админом пресета тоже нет (MAJOR 2, ревью d23231bd)
+          presetScope={isAdmin ? 'global' : undefined}
           presetCreation={{ settings, savingScope, onSaveLayer }}
           busy={savingScope !== null}
           placeholder="не задана — решает CLI"

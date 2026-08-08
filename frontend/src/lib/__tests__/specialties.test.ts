@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // presets.test.ts, тестируем чистую логику сборки слоя
 vi.mock('../api', () => ({ api: {} }));
 
-import { emptyLayer, withNewPreset, withTierCell } from '../specialties';
+import { emptyLayer, mergePresetIntoCell, withNewPreset, withTierCell } from '../specialties';
 import { presetRoute } from '../presets';
 
 // Регрессия ревью 65d8df66 (CRITICAL 1): inline-сборка цепочки в матрице «Исключений»
@@ -13,22 +13,21 @@ import { presetRoute } from '../presets';
 // «settings.owner» до создания пресета, поэтому второй ответ (побеждающий по seq)
 // перезаписывал первый и стирал только что созданную цепочку. Фикс — PresetOptions
 // передаёт СВЕЖИЙ слой (клон + пресет) потребителю через onCreated, а тот дописывает
-// ячейку в ТОТ ЖЕ объект и шлёт onSaveLayer ровно один раз (ExceptionsBlock.onPresetCreated).
+// ячейку в ТОТ ЖЕ объект через mergePresetIntoCell (специально вынесена из
+// ExceptionsBlock.onPresetCreated продакшн-функцией, чтобы тест звал тот же код,
+// что и компонент — ревью d23231bd: старая версия теста реимплементировала слияние
+// прямо в тесте и не сторожила регресс в самой ExceptionsBlock).
 describe('inline-сборка цепочки в ячейке матрицы — один PUT, не два', () => {
-  it('onCreated сливает пресет и ячейку в один клон слоя — onSaveLayer вызывается один раз', () => {
+  it('mergePresetIntoCell (продакшн-функция ExceptionsBlock.onPresetCreated) сливает пресет и ячейку в один клон слоя', () => {
     const onSaveLayer = vi.fn();
     const base = emptyLayer();
 
     // savePreset (PresetOptions): строит свежий слой с добавленным пресетом
     const layerWithPreset = withNewPreset(base, 'p1', 'Цепочка 1', ['opus', 'sonnet']);
 
-    // onPresetCreated (ExceptionsBlock): дописывает ячейку матрицы в ТОТ ЖЕ layer
-    // и сохраняет один раз — это и есть проверяемый инвариант фикса
-    const onPresetCreated = (presetId: string, scope: 'global' | 'owner',
-      layer: ReturnType<typeof emptyLayer>) => {
-      onSaveLayer(scope, withTierCell(layer, 'coding', 'strong', presetRoute(presetId)));
-    };
-    onPresetCreated('p1', 'owner', layerWithPreset);
+    // onPresetCreated (ExceptionsBlock) зовёт РОВНО mergePresetIntoCell — тот же вызов,
+    // что и в продакшне, и сохраняет результат один раз
+    onSaveLayer('owner', mergePresetIntoCell(layerWithPreset, 'coding', 'strong', 'p1'));
 
     expect(onSaveLayer).toHaveBeenCalledTimes(1);
     const [scope, saved] = onSaveLayer.mock.calls[0] as [string, ReturnType<typeof emptyLayer>];
@@ -37,7 +36,11 @@ describe('inline-сборка цепочки в ячейке матрицы — 
     expect(saved.specialties.coding?.tierStrong).toBe('preset:p1');
   });
 
-  it('регрессия старого бага: два независимых PUT из устаревшего слоя теряют пресет', () => {
+  // Документирующий тест (не зовёт продакшн-код): воспроизводит СТАРЫЙ баг руками, чтобы
+  // объяснить, ПОЧЕМУ слияние в один клон (тест выше) обязательно — раздельные PUT от
+  // одного и того же устаревшего base гонятся, и второй ответ стирает только что
+  // созданный пресет. Регресс этого сценария сторожит только тест выше.
+  it('документирует старый баг: два независимых PUT из устаревшего слоя теряют пресет', () => {
     const onSaveLayer = vi.fn();
     const staleBase = emptyLayer();
 

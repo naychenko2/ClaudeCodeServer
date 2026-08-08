@@ -48,7 +48,7 @@ export function RoutePicker({
   presetCreation?: {
     settings: SpecialtySettingsResponse | null;
     savingScope: 'global' | 'owner' | null;
-    onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+    onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
     // См. PresetCreationCtx.onCreated — сливать сохранение пресета с ДРУГОЙ правкой того
     // же слоя в один PUT (нужно там, где onChange этого пикера тоже пишет в этот слой).
     onCreated?: (presetId: string, scope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
@@ -82,17 +82,27 @@ export function RoutePicker({
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
-      // Тот же случай для Escape: document-level слушатель есть у ОБОИХ пикеров разом —
-      // без гейта Escape, адресованный вложенному пикеру шага, закрывал бы и родителя,
-      // молча стирая черновик. Пока presetEditing — Escape достаётся только внутреннему.
+      if (e.key !== 'Escape') return;
+      // Гасим Escape ВСЕГДА, пока эта панель открыта — иначе Modal (её document-listener
+      // навешен раньше, при монтировании модалки) получает необработанное событие первым
+      // и закрывает модалку целиком поверх этой панели, стирая черновик (MAJOR 3, ревью d23231bd)
+      e.preventDefault();
+      // Тот же случай, что у mousedown-гейта выше: document-level слушатель есть у ОБОИХ
+      // пикеров разом — пока presetEditing, Escape достаётся только вложенному пикеру шага,
+      // не схлопывая родительский черновик.
       if (presetEditing) return;
-      if (e.key === 'Escape') setOpen(false);
+      setOpen(false);
     };
     document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
+    // capture:true — иначе preventDefault() выше не успевает: Modal вешает свой keydown
+    // НА BUBBLE раньше (при монтировании модалки), и порядок между двумя bubble-слушателями
+    // одного document — по регистрации, а не по вложенности. Capture-фаза всегда отрабатывает
+    // ДО bubble-фазы в одном и том же событии — так preventDefault() успевает выставиться
+    // до того, как Modal дойдёт до своей проверки e.defaultPrevented (MAJOR 3, ревью d23231bd)
+    document.addEventListener('keydown', onKey, true);
     return () => {
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
     };
   }, [open, presetEditing]);
 

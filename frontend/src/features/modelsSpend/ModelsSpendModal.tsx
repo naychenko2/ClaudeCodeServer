@@ -74,8 +74,10 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
     return merged;
   };
 
-  // Оптимистичное сохранение слоя: применяем сразу, при ошибке откатываем.
-  const handleSaveLayer = (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => {
+  // Оптимистичное сохранение слоя: применяем сразу, при ошибке откатываем. Возвращает
+  // промис PUT — вызывающие, которым важен порядок (PresetOptions.savePreset: назначить
+  // место можно только ПОСЛЕ того, как пресет реально попал на сервер), на нём ждут.
+  const handleSaveLayer = (scope: 'global' | 'owner', next: SpecialtySettingsLayer): Promise<void> => {
     const prev = settings;
     const seq = ++saveSeqRef.current[scope];
     setSettings(s => s ? { ...s, [scope]: next } : s);
@@ -93,11 +95,10 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
       setSettingsError(e instanceof Error ? e.message : 'Не удалось сохранить');
     };
     const settle = () => { if (saveSeqRef.current[scope] === seq) setSavingScope(null); };
-    if (scope === 'global') {
-      api.specialties.saveGlobalLayer(next).then(res => commit(res.global)).catch(fail).finally(settle);
-    } else {
-      api.specialties.saveOwnerLayer(next).then(res => commit(res.owner)).catch(fail).finally(settle);
-    }
+    const req = scope === 'global'
+      ? api.specialties.saveGlobalLayer(next).then(res => commit(res.global))
+      : api.specialties.saveOwnerLayer(next).then(res => commit(res.owner));
+    return req.catch(e => { fail(e); throw e; }).finally(settle);
   };
 
   const tierModels = useMemo<Record<TierKey, string>>(() => ({

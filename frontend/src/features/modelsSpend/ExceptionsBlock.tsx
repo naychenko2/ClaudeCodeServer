@@ -4,9 +4,9 @@ import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
 import { RoutePicker } from '../../components/RoutePicker';
-import { presetRoute, routeDisplayLabel, usePresets } from '../../lib/presets';
+import { routeDisplayLabel, usePresets } from '../../lib/presets';
 import {
-  ANY_SPECIALTY, effectiveSpecialtyRecord, specialtyLabel, useSpecialtyCatalog, withTierCell,
+  ANY_SPECIALTY, effectiveSpecialtyRecord, mergePresetIntoCell, specialtyLabel, useSpecialtyCatalog, withTierCell,
 } from '../../lib/specialties';
 import { C, FS, R, SP } from '../../lib/design';
 import type { ModelOption } from '../../lib/models';
@@ -24,7 +24,7 @@ interface Props {
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
 }
 
 export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaModel, savingScope, onSaveLayer }: Props) {
@@ -82,7 +82,7 @@ export function ExceptionsBlock({ settings, isAdmin, models, tierModels, ollamaM
   const onPresetCreated = (key: string, t: TierKey, presetId: string,
     presetScope: 'global' | 'owner', freshLayer: SpecialtySettingsLayer) => {
     const template = rows.find(e => e.key === key)?.template ?? null;
-    onSaveLayer(presetScope, withTierCell(freshLayer, key, t, presetRoute(presetId), template));
+    onSaveLayer(presetScope, mergePresetIntoCell(freshLayer, key, t, presetId, template));
   };
 
   // Какие строки показывать по фильтру
@@ -237,7 +237,7 @@ function MatrixRow({ name, hint, mark, layer, anyKey, specKey, scope, canEdit, s
   presets: ReturnType<typeof usePresets>;
   labelCtx: { tierModels: Record<TierKey, string>; ollamaModel?: string };
   settings: SpecialtySettingsResponse;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onCell: (t: TierKey, v: string) => void;
   onPresetCreated: (t: TierKey, presetId: string, presetScope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
 }) {

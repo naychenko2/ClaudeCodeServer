@@ -17,7 +17,9 @@ export interface PresetCreationCtx {
   models: ModelOption[];
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  // Промис — вызывающий (PresetOptions.savePreset) ждёт резолва PUT слоя, прежде чем
+  // назначать место на новый пресет (гонка «создать → назначить», MAJOR 1, ревью d23231bd)
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   // Когда сборка цепочки — не единственная правка слоя (матрица «Исключений»: тут же
   // пишется ячейка тем же PUT) — потребитель подключает onCreated и сам ОДНИМ onSaveLayer
   // фиксирует и пресет, и свою правку на том же клоне layer. Без onCreated — старое
@@ -71,8 +73,10 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
       if (creation.onCreated) {
         creation.onCreated(id, targetScope, next);
       } else {
-        creation.onSaveLayer(targetScope, next);
-        onPick(presetRoute(id));
+        // Назначаем место ТОЛЬКО после того, как сервер подтвердил новый пресет — иначе
+        // pick() улетает параллельно с PUT слоя и обгоняет его: бэкенд валидирует
+        // preset:{id} по снимку без ещё не записанного пресета → 400 (MAJOR 1)
+        creation.onSaveLayer(targetScope, next).then(() => onPick(presetRoute(id))).catch(() => {});
       }
       setEditing(false);
     };
@@ -149,22 +153,23 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
         </>
       )}
       {hiddenByScope && scopeNote}
-      {/* Кнопка видна всегда, когда есть доступ к слоям — сборка идёт в targetScope
-          (см. savePreset выше), поэтому в контексте «только общие» она теперь тоже
-          валидна: создаёт ОБЩИЙ пресет, а не личный (было MAJOR 2 — 400 на сохранении) */}
-      {creation && (
-        <button
-          type="button"
-          onClick={startEditing}
-          style={{
-            alignSelf: 'flex-start', font: 'inherit', fontSize: FS.sm, fontWeight: 600,
-            color: C.accent, background: 'none', border: 'none', padding: '2px 2px',
-            cursor: 'pointer', fontFamily: FONT.sans,
-          }}
-        >
-          Собрать цепочку…
-        </button>
-      )}
+      {/* Кнопка видна ВСЕГДА, а не только при переданном creation — иначе она пропадает
+          там, где панель не подняла слои специальностей в состояние (форма/матрица
+          персоны), и завести первую цепочку оттуда нельзя (MAJOR 4, ревью d23231bd).
+          startEditing сам решает: creation есть — inline-редактор; нет — requestNewPreset()
+          (диплинк в раздел). В контексте «только общие» сборка идёт в targetScope, поэтому
+          валидна и там: создаёт ОБЩИЙ пресет, а не личный (было MAJOR 2 — 400 на сохранении) */}
+      <button
+        type="button"
+        onClick={startEditing}
+        style={{
+          alignSelf: 'flex-start', font: 'inherit', fontSize: FS.sm, fontWeight: 600,
+          color: C.accent, background: 'none', border: 'none', padding: '2px 2px',
+          cursor: 'pointer', fontFamily: FONT.sans,
+        }}
+      >
+        Собрать цепочку…
+      </button>
     </>
   );
 }

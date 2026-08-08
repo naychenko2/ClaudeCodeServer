@@ -5,6 +5,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react';
 import { api } from './api';
+import { presetRoute } from './presets';
 import type { ModelTierValue, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtyTemplateSettings } from '../types';
 
 let _catalog: SpecialtyCatalogEntry[] | null = null;
@@ -119,6 +120,16 @@ export function withTierCell(layer: SpecialtySettingsLayer, key: string,
   else if (tier === 'medium') rec.tierMedium = cell;
   else rec.tierWeak = cell;
   return withRecord(layer, key, rec);
+}
+
+// Слить свежий слой (клон + новый пресет из PresetOptions.savePreset, приходит через
+// PresetCreationCtx.onCreated) с правкой ОДНОЙ ячейки матрицы в тот же объект — вызывающий
+// шлёт результат ОДНИМ onSaveLayer (регрессия 65d8df66, CRITICAL 1: раздельные PUT по
+// одному слою гонятся, второй ответ стирает только что созданный пресет).
+export function mergePresetIntoCell(freshLayer: SpecialtySettingsLayer, key: string,
+  tier: 'strong' | 'medium' | 'weak', presetId: string,
+  template: SpecialtyCatalogEntry['template'] = null): SpecialtySettingsLayer {
+  return withTierCell(freshLayer, key, tier, presetRoute(presetId), template);
 }
 
 // Задать/снять «Уровень по умолчанию» специальности ('' — снять)

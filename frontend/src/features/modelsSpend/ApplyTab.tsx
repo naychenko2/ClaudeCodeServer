@@ -25,7 +25,7 @@ interface ApplyTabProps {
   tierModels: Record<TierKey, string>;
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
 }
 
 export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingScope, onSaveLayer }: ApplyTabProps) {
@@ -201,7 +201,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
   models: ModelOption[];
   settings: SpecialtySettingsResponse | null;
   savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => void;
+  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onPick: (route: string) => void;
   onReset: () => void;
   enabled?: boolean;

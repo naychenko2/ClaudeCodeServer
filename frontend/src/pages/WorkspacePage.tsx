@@ -14,7 +14,7 @@ import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
-import { loadWorkspaceState, saveWorkspaceState, isLeftTab, type LeftTab } from '../lib/workspaceState';
+import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
 import { api } from '../lib/api';
 import { markChatRead } from '../lib/chatReadState';
 import { refreshProjectActivity } from '../lib/projectActivity';
@@ -329,7 +329,10 @@ export function WorkspacePage({ project, onGoToProjects, onSwitchHub, auth, onLo
   // же точкой входа, что «Открыть изменения» у ProjectGitBar и тумблер «Оглавление»
   // у FileViewer (правим раскладку напрямую через стор зон)
   const { reveal: revealPanelKey } = wsPanels.use();
-  const [fileFullscreen, setFileFullscreen] = useState(() => loadWorkspaceState(project.id)?.fileFullscreen ?? false);
+  // Режим просмотра файла — из ГЛОБАЛЬНОГО предпочтения (одно на все проекты), а не
+  // из per-project стора: тумблер в шапке файла пишет предпочтение, точки открытия
+  // его читают. См. loadFileFullscreenPref в lib/workspaceState.
+  const [fileFullscreen, setFileFullscreen] = useState(loadFileFullscreenPref);
   const [workflowRunningFor, setWorkflowRunningFor] = useState<string | null>(null);
   // «Модели и расход» — единый раздел вместо прежних «Использование»/«Поставщики моделей»:
   // из мобильного меню «⋯» проекта и по диплинку «Подробная статистика» бейджа fal.ai
@@ -733,7 +736,7 @@ const windowWidth = useWindowWidth();
     sessionStorage.removeItem('cc_pending_file');
     // eslint-disable-next-line react-hooks/set-state-in-effect -- одноразовое потребление диплинка из sessionStorage
     setOpenFile(path);
-    setFileFullscreen(true);
+    setFileFullscreen(loadFileFullscreenPref());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1022,8 +1025,8 @@ const windowWidth = useWindowWidth();
 
   // Запоминаем состояние окна (активный чат/файл, панели) для проекта
   useEffect(() => {
-    saveWorkspaceState(project.id, { activeSession, openFile, fileFullscreen, leftTab });
-  }, [project.id, activeSession, openFile, fileFullscreen, leftTab]);
+    saveWorkspaceState(project.id, { activeSession, openFile, leftTab });
+  }, [project.id, activeSession, openFile, leftTab]);
 
   // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
@@ -1055,6 +1058,16 @@ const windowWidth = useWindowWidth();
         setActiveSession(prev =>
           prev?.id === msg.sessionId
             ? { ...prev, status: msg.status as Session['status'] }
+            : prev
+        );
+      }
+      // Имя (и значок) чата уточнила модель — авто-заголовок нового чата или
+      // «Обновить название» из AI-хаба. Обновляем открытый чат на лету: иначе
+      // activeSession держит старое имя до переключения чата, и шапка врёт
+      if (msg.type === 'chat_renamed') {
+        setActiveSession(prev =>
+          prev?.id === msg.sessionId
+            ? { ...prev, name: msg.name, topic: msg.topic ?? prev.topic }
             : prev
         );
       }
@@ -1112,14 +1125,14 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- срабатывание только на ВХОД в командный центр; зависимости от project/mobileView плодили бы лишние записи истории при каждом переключении вида
   }, [leftTab, selectedPersonaId, personaCreating]);
 
-  // из дерева файлов → всегда полноэкранный режим; опциональная строка для скролла
+  // из дерева файлов → режим по глобальному предпочтению; опциональная строка для скролла
   const handleOpenFileFromTree = (filePath: string, line?: number) => {
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
-    setFileFullscreen(true);
+    setFileFullscreen(loadFileFullscreenPref());
     setGraphOpen(false);
     setScrollToLine(line);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
@@ -1149,14 +1162,15 @@ const windowWidth = useWindowWidth();
     histDispatch({ type: 'push', entry: { path: filePath, anchor } });
   };
 
-  // из чата → split на десктопе, fullscreen на планшете/мобайле
+  // из чата → на десктопе режим по глобальному предпочтению; на планшете/мобайле
+  // сплита нет — всегда fullscreen
   const handleOpenFileFromChat = (filePath: string) => {
     reader.actions.closeReader();
     setOpenCommitSha(null);
     setOpenFile(filePath);
     setOpenFileDiffMode(false);
     setGitStagePath(null);
-    setFileFullscreen(isMobile || isTablet);
+    setFileFullscreen(isMobile || isTablet ? true : loadFileFullscreenPref());
     setGraphOpen(false);
     navPush({ screen: 'project', project, view: mobileView, file: filePath });
     histDispatch({ type: 'push', entry: { path: filePath } });
@@ -1263,7 +1277,13 @@ const windowWidth = useWindowWidth();
     if (isMobile && id) setMobileView('chat');
   };
 
-  const handleToggleFileFullscreen = () => setFileFullscreen(v => !v);
+  // Тумблер в шапке файла — теперь это выбор ГЛОБАЛЬНОГО предпочтения: меняем не только
+  // текущий вид, но и запоминаем его для всех последующих открытий (см. saveFileFullscreenPref)
+  const handleToggleFileFullscreen = () => setFileFullscreen(v => {
+    const next = !v;
+    saveFileFullscreenPref(next);
+    return next;
+  });
 
   // Пропорция split-режима «чат | файл» и её сплиттер живут в DesktopWorkspace —
   // мобильная ветка split не показывает

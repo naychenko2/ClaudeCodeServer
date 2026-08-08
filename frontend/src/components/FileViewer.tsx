@@ -1401,7 +1401,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                 <ToolbarIconButton
                   isMobile={isMobile}
                   onClick={onToggleFullscreen}
-                  title={fullscreen ? 'Свернуть: сплит с чатом' : 'На весь экран'}
+                  title={fullscreen ? 'Рядом с чатом (запомнится для всех файлов)' : 'На весь экран (запомнится для всех файлов)'}
                 >
                   {fullscreen
                     ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
@@ -1571,7 +1571,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   <ToolbarIconButton
                     isMobile={isMobile}
                     onClick={handleToggleMode}
-                    title={fullscreen ? 'Свернуть: сплит с чатом' : 'Развернуть на весь экран'}
+                    title={fullscreen ? 'Рядом с чатом (запомнится для всех файлов)' : 'На весь экран (запомнится для всех файлов)'}
                   >
                     {fullscreen
                       ? <Columns2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />

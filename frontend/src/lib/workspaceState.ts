@@ -17,11 +17,33 @@ export function isLeftTab(v: unknown): v is LeftTab {
 export interface WorkspaceUIState {
   activeSession: Session | null;
   openFile: string | null;
-  fileFullscreen: boolean;
   leftTab: LeftTab;
 }
 
 const key = (projectId: string) => `ws:${projectId}`;
+
+// Режим просмотра файла в центре (сплит рядом с чатом ↔ на весь экран) — ГЛОБАЛЬНОЕ
+// предпочтение, одно на все проекты. Раньше оно жило в WorkspaceUIState (per-project)
+// и его перебивала каждая точка открытия файла, из-за чего режим приходилось
+// переключать в каждом файле заново. Теперь тумблер в шапке файла пишет сюда, а
+// точки открытия только читают. Дефолт (нет ключа) — false = сплит рядом с чатом.
+const FILE_VIEW_KEY = 'cc_file_view_fullscreen';
+
+export function loadFileFullscreenPref(): boolean {
+  try {
+    return localStorage.getItem(FILE_VIEW_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveFileFullscreenPref(fullscreen: boolean): void {
+  try {
+    localStorage.setItem(FILE_VIEW_KEY, fullscreen ? '1' : '0');
+  } catch {
+    // переполнение/недоступность localStorage — не критично
+  }
+}
 
 export function loadWorkspaceState(projectId: string): Partial<WorkspaceUIState> | null {
   try {

@@ -2754,6 +2754,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     int? postTokens = meta.ValueKind == JsonValueKind.Object
                         && meta.TryGetProperty("post_tokens", out var pst) && pst.TryGetInt32(out var pstv) ? pstv : null;
                     await _onMessage(new CompactBoundaryMessage(trigger, preTokens, postTokens));
+                    // После компакции фактический контекст резко меньше. Обновляем оценку до
+                    // post_tokens, иначе _lastContextTokens держит полный докомпактный размер: ход
+                    // компакции измерил его через usage assistant-сообщений, и значение живёт дальше.
+                    // Тогда при ошибке СЛЕДУЮЩЕГО хода фолбэк отсёк бы все шаги с окном < старого
+                    // размера — хотя разговор теперь помещается везде (Major 2 ревью). post_tokens
+                    // нет — обнуляем: фильтр ёмкости уходит в fail-open (лучше попробовать, чем сдаться).
+                    _lastContextTokens = postTokens ?? 0;
                 }
                 else if (sysSubtype == "status")
                 {

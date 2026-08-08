@@ -10,7 +10,9 @@ namespace ClaudeHomeServer.Services.Llm;
 //
 //   Уровень 1 — та же модель, другая подписка ТОГО ЖЕ пула: существующие механизмы
 //               ротации (MarkExhausted → Pick → перенос транскрипта), новых не заводится;
-//   Уровень 2 — следующий сторонний провайдер цепочки (модель-эквивалент по слоту).
+//   Уровень 2 — следующий шаг цепочки хода (пресет слота тира, ADR-007 §4).
+//               Алфавитного автоподбора провайдеров больше нет: ход без хвоста цепочки
+//               после пула завершается честной ошибкой.
 //
 // Защита от зацикливания: каждая пара пробуется не более одного раза за ход
 // (HashSet попыток), потолок подмен задаётся через FallbackSettingsStore
@@ -29,7 +31,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private readonly Func<ServerMessage, Task> _downstream;
     private readonly ClaudeSubscriptionPool _pool;
     private readonly LlmProviderRegistry? _providers;
-    private readonly UserModelTierResolver? _tiers;
     private readonly string _rootPath;
     private readonly Execution.IProcessLauncher? _launcher;
     // Стор настроек фолбэка. Жёсткий потолок (FallbackSettingsStore.HardMaxSubstitutions)
@@ -41,14 +42,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // остальные = план фолбэка). null/один элемент — цепочки нет (существующий автоподбор).
     // Вычисляется вызывающим (фабрикой через ClaudeSession.EffectiveTurnChain) на каждом ходу.
     private readonly Func<IReadOnlyList<string>>? _effectiveChain;
-    // Явный тир хода (ADR-007 §5.1): известен на границе запуска (он выбирал строку матрицы).
-    // Побеждает реверс-эвристику ResolveTier при автоподборе модели-эквивалента. null — уровень
-    // не участвовал (явная модель), тогда работает реверс-эвристика по слотам владельца.
-    private readonly Func<ModelTier?>? _turnTier;
+    // Кулдаун недоступности провайдера (волна 2): провайдер, вернувший Unreachable/ProviderError,
+    // помечается недоступным на TTL; фолбэк пропускает его шаги цепочки (fail-open). null (тесты).
+    private readonly ProviderHealthRegistry? _health;
     // Лог подмен: без него оркестрацию нечем отлаживать на стенде (что классифицировали,
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
     private readonly ILogger? _log;
+    // Колбэк персиста сессий (SessionManager.SaveSessions через фабрику/контекст): нужен,
+    // чтобы переписать sessions.json ВОССТАНОВЛЕННЫМИ значениями после restore в finally —
+    // иначе финальный result успевает сохранить подменённую модель (ApplyStatusAsync →
+    // SaveSessions ДО restore), и рестарт сервера в этом окне залипил бы чат на подмене
+    // (возврат инцидента 2026-08-07). null (тесты без DI) — персист не вызывается.
+    private readonly Action? _persist;
     // Корень профиля CLI на момент старта сессии (хостовый путь): источник для
     // переноса транскрипта и, у container-пользователя, способ вывести раскладку
     // песочных профилей (родитель = data/sandbox-profiles/{ownerId}).
@@ -74,11 +80,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         string rootPath,
         Execution.IProcessLauncher? launcher,
         string? initialProfileRoot,
-        UserModelTierResolver? tiers = null,
         FallbackSettingsStore? fallbackSettings = null,
         Func<IReadOnlyList<string>>? effectiveChain = null,
-        Func<ModelTier?>? turnTier = null,
-        ILogger? log = null)
+        ProviderHealthRegistry? health = null,
+        ILogger? log = null,
+        Action? persist = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -88,11 +94,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _rootPath = rootPath;
         _launcher = launcher;
         _initialProfileRoot = initialProfileRoot;
-        _tiers = tiers;
         _fallbackSettings = fallbackSettings;
         _effectiveChain = effectiveChain;
-        _turnTier = turnTier;
+        _health = health;
         _log = log;
+        _persist = persist;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
     }
 
@@ -110,6 +116,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     }
 
     private void LogInfo(string message) => _log?.LogInformation("[ModelFallback] {Message}", message);
+
+    private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {Message}", message);
 
     // Эффективный потолок подмен для владельца сессии: per-owner → global → дефолт 3
     // (FallbackSettingsStore.ClampMaxSubstitutions). Info.OwnerId может быть пуст у
@@ -252,11 +260,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         AttemptEnd? lastEnd = null;
 
         // Цепочка хода (ADR-007 §4): конкретные модели пресета, первый = основной, остальные
-        // = план фолбэка. Есть цепочка (Count > 1) — фолбэк идёт по её шагам, автоподбор
-        // выключен; нет — действующий автоподбор (уровень 2). Вычисляем один раз за ход.
+        // = план фолбэка. Есть цепочка (Count > 1) — фолбэк идёт по её шагам; нет (одноэлементная
+        // или пустая) — после пула честная ошибка, автоподбора больше нет. Вычисляем один раз за ход.
         var chain = _effectiveChain?.Invoke() ?? Array.Empty<string>();
-        var hasChain = chain.Count > 1;
         var chainIndex = 0;
+        // Отладка «почему выбралась эта модель»: построенная цепочка хода одной строкой.
+        LogDebug($"Цепочка хода ({Info.Id}): [{string.Join(", ", chain)}]");
 
         // Фактическая пара текущей попытки «модель × ключ». Берётся из шага цепочки или
         // эффективной модели на СТАРТЕ и далее обновляется применённой подменой (next), а не
@@ -268,8 +277,76 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var currentModel = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
         var currentKey = ProviderKeyFor(currentModel);
 
+        // Снимок «модели × провайдера» на старте хода. Подмены внутри хода пишутся в
+        // Info.Model/Provider (процесс попытки пересобирается из них), но в finally исходные
+        // значения восстанавливаются — иначе ход фолбэка переписывал бы модель чата навсегда
+        // (инцидент 2026-08-07: чат залип на qwen3.7-plus после одной подмены). appliedModel/
+        // appliedProvider — последнее значение, записанное ApplyTarget; по нему CAS в finally.
+        var origModel = Info.Model;
+        var origProvider = Info.Provider;
+        var appliedModel = origModel;
+        var appliedProvider = origProvider;
+        // Была ли за ход хоть одна смена ТИПА поставщика (шаг цепочки/сторонний провайдер,
+        // IsProviderSwitch:true). Накапливается по «или»: тихая ротация подписки того же пула
+        // Claude флаг не сбрасывает (сценарий «шаг цепочки → 429 → тихая ротация → успех» —
+        // restore обязан сработать по накопленному флагу). Решает в finally, что восстанавливать
+        // и переносить ли транскрипт обратно — регрессия волны 2 (см. блок restore ниже).
+        var anyProviderSwitch = false;
+
         try
         {
+            // (б) Стартовая подмена при кулдауне (волна 2): если стартовый провайдер помечен
+            // недоступным (возвращал Unreachable/ProviderError в прошлых ходах), не тратим
+            // попытку на мёртвый эндпоинт — стартуем сразу с первого живого шага цепочки.
+            // Маркер provider_switched (Reason=unreachable). fail-open: если ВСЕ шаги цепочки
+            // в кулдауне, остаёмся на исходной паре (ход должен идти). substitutions не тратим —
+            // это выбор стартовой точки, а не подмена по ошибке в этом ходе.
+            if (_health is not null && chain.Count > 1 && _health.IsUnavailable(currentKey))
+            {
+                var stepIdx = -1;
+                for (var i = 1; i < chain.Count; i++)
+                {
+                    var sm = chain[i];
+                    if (!_health.IsUnavailable(ProviderKeyFor(sm))) { stepIdx = i; break; }
+                }
+                if (stepIdx > 0)
+                {
+                    var stepModel = chain[stepIdx];
+                    var stepKey = ProviderKeyFor(stepModel);
+                    var stepRoot = ResolveRootFor(stepKey);
+                    // Перенос транскрипта ДО подмены (Major, инвариант ADR-007 §4.1: Provider и свежий
+                    // транскрипт — одно место). Профиль исходного провайдера (_profileRoot) → профиль
+                    // шага цепочки. Без этого --resume в профиле шага не найдёт разговор — ход падает
+                    // (класс None, fail-closed), фолбэк не спасает: дальнейшие миграции идут из уже
+                    // пустого _profileRoot, кандидаты отсеиваются → «Ни одна из доступных моделей не
+                    // ответила». Чат стоит колом до истечения TTL кулдауна, хотя оба провайдера живы.
+                    // Провал переноса — fail-open: НЕ применяем подмену, остаёмся на исходной паре
+                    // (ход должен идти; эндпоинт мог уже подняться, а кулдаун — лишь наблюдение).
+                    // TryMigrateTranscript=true при отсутствии ClaudeSessionId — переносить нечего,
+                    // подмена разрешена (как и везде в адаптере).
+                    if (!TryMigrateTranscript(stepRoot))
+                    {
+                        LogWarn($"Стартовая подмена (кулдаун) {Info.Id}: транскрипт не перенесён в профиль «{stepKey}» — остаёмся на исходной паре «{origProvider}» (ход продолжится, кулдаун — наблюдение, а не запрет)");
+                    }
+                    else
+                    {
+                        chainIndex = stepIdx;
+                        currentModel = stepModel;
+                        currentKey = stepKey;
+                        Info.Model = currentModel;
+                        Info.Provider = currentKey;
+                        _profileRoot = stepRoot;
+                        appliedModel = currentModel;
+                        appliedProvider = currentKey;
+                        anyProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
+                        var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
+                        await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
+                            $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
+                        LogInfo($"Стартовая подмена (кулдаун): «{origModel}» × «{origProvider}» недоступен → старт на «{currentKey}» / «{currentModel}»");
+                    }
+                }
+            }
+
             while (!_cts.IsCancellationRequested)
             {
                 if (_userInterrupted) { await SettleAsync(turn); return; }
@@ -306,6 +383,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
                 if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
 
+                // Кулдаун недоступности (волна 2): провайдер, вернувший Unreachable/ProviderError,
+                // помечаем недоступным на TTL — следующие ходы и шаги цепочки пропустят его сразу.
+                // Лимитные классы (429/usage) сюда не попадают: это квота аккаунта, не мёртвый эндпоинт.
+                // ТОЛЬКО для сторонних провайдеров: ключи подписок пула Claude НЕ помечаем — их
+                // здоровье уже ведёт ClaudeSubscriptionPool (исчерпание/ротация). Иначе один
+                // транзитный 529 на «claude» уводил бы все новые ходы с цепочкой на сторонний шаг 2
+                // мимо живой «claude-2» (Major 2 ревью). Стартовая подмена для нативного ключа тогда
+                // не срабатывает (IsUnavailable всегда false) — пул отработает уровень 1 штатно.
+                if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError
+                    && IsExternalProvider(currentKey))
+                    _health?.MarkUnavailable(currentKey);
+
                 trace.Add(new AttemptTrace(currentModel, currentKey, cls));
                 if (substitutions >= EffectiveMaxSubstitutions())
                 {
@@ -313,7 +402,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return;
                 }
 
-                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, hasChain, ref chainIndex);
+                var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex);
                 if (next is null) { await FailExhaustedAsync(turn, trace, substitutions, end); return; }
 
                 // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
@@ -356,7 +445,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // _effectiveModel() — поэтому именно эта пара попадает в attempted и в след.
                 currentModel = next.Model ?? currentModel;
                 currentKey = next.Key;
-                substitutions++;
+                // Запоминаем последнее применённое значение Info — для CAS-восстановления в finally.
+                // anyProviderSwitch накапливаем: за ход могла быть смена поставщика, а затем тихая
+                // ротация подписки (IsProviderSwitch:false) — по накопленному флагу finally решает,
+                // восстанавливать ли Provider и переносить ли транскрипт обратно из актуального
+                // _profileRoot (профиль последней пары — там лежит свежий ответ).
+                appliedModel = Info.Model;
+                appliedProvider = Info.Provider;
+                anyProviderSwitch |= next.IsProviderSwitch;
+                // Потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки /
+                // переход к стороннему провайдеру). Тихие ротации подписок того же пула
+                // Claude бесплатны — это та же модель на другом аккаунте, а не подмена.
+                if (next.IsProviderSwitch) substitutions++;
             }
         }
         catch (Exception ex)
@@ -366,10 +466,72 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
         finally
         {
-            // Счётчик сообщений пользователя: реальный ClaudeSession инкрементирует
-            // MessageCount на каждую отправку — после подмен восстановим так, чтобы
-            // одно user-сообщение с N попытками считалось одним сообщением
+            // Восстановить модель/провайдер, сохранённые на старте хода, — подмена не должна
+            // переписывать модель чата навсегда (инцидент 2026-08-07). Восстановление ПОКОМПОНЕНТНОЕ
+            // (CAS по каждому полю отдельно): так ручная смена одного поля во время хода не блокирует
+            // восстановление другого. ABA (Info совпала с applied случайно) принят осознанно: редкий
+            // случай, а различить «подмена» от «совпадение» без версионирования нельзя. Без подмен
+            // applied == orig и восстановление — no-op.
+            //
+            // Флаг anyProviderSwitch решает, что делать с Provider (регрессия волны 2: restore
+            // провайдера терял свежий транскрипт хода). TranscriptMigrator.TryMigrate — это Copy,
+            // а не move: ход на профиле A поймал ошибку → транскрипт скопирован A→B → финальный
+            // ответ CLI записан ТОЛЬКО в профиль B. Вернуть Provider в A — и следующий ход на
+            // --resume с A не вспомнит собственный ответ (в ленте CCS он есть, в контексте CLI нет),
+            // а TryPoolFailover ещё и затрёт свежий B устаревшей копией A→B.
+            //   • За ход НЕ было смены типа поставщика (только тихие ротации подписок того же пула):
+            //     Provider НЕ восстанавливаем — оставляем аккаунт, где реально прошёл ход и лежит
+            //     свежий транскрипт. Качество не страдает (та же модель, другой аккаунт), а транскрипт
+            //     остаётся консистентным. Модель восстанавливаем как обычно (тихая ротация её и не
+            //     трогала — restore здесь no-op).
+            //   • За ход БЫЛА смена типа поставщика (IsProviderSwitch — шаг цепочки/сторонний
+            //     провайдер, возможно с последующей тихой ротацией внутри нового пула): восстанавливаем
+            //     И модель, И Provider (иначе пара вроде opus × kimi несовместима), но ПЕРЕД restore
+            //     копируем транскрипт обратно в профиль исходного провайдера. Источник копии —
+            //     _profileRoot (профиль ПОСЛЕДНЕЙ пары: шаг цепочки прошёл, а за ним тихая ротация
+            //     сменила подписку — именно там лежит свежий ответ).
+            var modelRestored = false;
+            var providerRestored = false;
+            if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }
+            if (anyProviderSwitch)
+            {
+                if (Info.Provider == appliedProvider)
+                {
+                    // Обратный перенос строго ДО перезаписи Provider и ДО персиста: копируем из
+                    // профиля последней пары (_profileRoot — там лежит свежий ответ) в профиль
+                    // исходного провайдера, куда вернётся --resume. Провал не роняет ход (TryCopy).
+                    if (appliedProvider != origProvider)
+                        TryCopyTranscriptBack(ResolveRootFor(origProvider));
+                    Info.Provider = origProvider;
+                    providerRestored = true;
+                }
+            }
+            // Без смены типа поставщика (!anyProviderSwitch): Provider оставляем — аккаунт, на
+            // котором прошёл ход, хранит свежий транскрипт. providerRestored остаётся false.
+            //
+            // (Minor 4) Заметка о видимости для клиента: новое значение Info.Provider персистится
+            // (ниже), но в ленте событие об этом НЕ идёт — тихая ротация по решению владельца
+            // остаётся тихой. У открытого клиента session.provider поэтому устаревает до перезагрузки/
+            // следующего REST-рефетча списка чатов. Существующего WS-события, обновляющего именно
+            // session.provider БЕЗ элемента ленты, НЕТ: ProviderSwitchedMessage(Auto:true) (которое
+            // шлёт TryPoolFailover в той же ситуации) фронт использует только чтобы гасить карточки
+            // provider_limit и рисовать model_switched — поле session.provider из WS он не пишет
+            // (useSession/chatReducer этого не делают; session_started несёт Provider, но редьюсер
+            // его в объект сессии тоже не кладёт). Слать такой маркер отсюда не чинит устаревание и
+            // может невпопад погасить чужую provider_limit-карточку — поэтому поведение оставлено как
+            // есть. Полный фикс — фронтенд-задача: провести WS-сигнал провайдера (provider_switched
+            // или session_started.Provider) в session.provider единообразно для TryPoolFailover и адаптера.
             Info.MessageCount = _snapshotMessageCount + 1;
+            // ПЕРСИСТ ПОСЛЕ RESTORE (и обратного переноса): финальный result уже ушёл downstream
+            // и успел сохранить sessions.json ПОДМЕНЁННЫМ (ApplyStatusAsync → SaveSessions ДО finally).
+            // При смене поставчика — переписываем персист восстановленными значениями, иначе рестарт
+            // в этом окне залипил бы чат на подмене. При тихой ротации persist фиксирует оставленный
+            // новый аккаунт (тот же, что сохранил result, но гарантированно — на случай хода без
+            // result, когда ApplyStatus не успел). Без подмены persist не дёргаем — ApplyStatus уже
+            // сохранил корректное состояние.
+            if ((modelRestored || providerRestored)
+                && (appliedModel != origModel || appliedProvider != origProvider))
+                _persist?.Invoke();
             lock (_gate) if (ReferenceEquals(_turn, turn)) _turn = null;
         }
     }
@@ -385,13 +547,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _ => true,
     };
 
-    // Уровень 1: другая подписка того же пула (та же модель). Далее при цепочке (ADR-007 §4) —
-    // следующий шаг цепочки; без цепочки — уровень 2 (автоподбор модели-эквивалента). null —
-    // кандидатов не осталось. Цепочка вытесняет автоподбор: у хода с пресетом идём только по
-    // его шагам, провайдеров сами не подбираем.
+    // Уровень 1: другая подписка того же пула (та же модель). Далее — следующий шаг цепочки
+    // (ADR-007 §4). null — кандидатов не осталось (цепочки нет либо она исчерпана). Без цепочки
+    // (одноэлементная/пустая) после пула автоподбора нет — финальный сбой.
     private FallbackTarget? ResolveNextTarget(FallbackErrorClass cls, AttemptEnd end,
         HashSet<(string Model, string Key)> attempted, string model, string currentKey,
-        IReadOnlyList<string> chain, bool hasChain, ref int chainIndex)
+        IReadOnlyList<string> chain, ref int chainIndex)
     {
         // Лимитные классы помечают подписку исчерпанной в пуле (существующий механизм):
         // 5xx/обрыв — НЕ помечают, это не квота аккаунта (инцидент 2026-08-02: ложные баны)
@@ -441,48 +602,59 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
 
         // Цепочка пресета: следующий шаг (модель могла быть сторонней — у неё нет ротации,
-        // поэтому мы здесь). Автоподбор при цепочке выключен (ADR-007 §4). Каждый шаг цепочки,
-        // дойдя до своих подписок (у нативных), отработает уровень 1 на следующей итерации.
-        if (hasChain)
+        // поэтому мы здесь). Каждый шаг цепочки, дойдя до своих подписок (у нативных),
+        // отработает уровень 1 на следующей итерации. Кулдаун (волна 2): шаги с провайдером
+        // в кулдауне пропускаем, но fail-open — если ВСЕ оставшиеся непробованные в кулдауне,
+        // берём первого остывшего (кулдаун — наблюдение, а не запрет). Кулдаун проверяем ДО
+        // переноса транскрипта: иначе копии плодятся по профилям пропущенных остывших кандидатов.
+        if (chain.Count > 1)
         {
-            while (chainIndex + 1 < chain.Count)
+            var cooledIdx = -1;
+            var scan = chainIndex;
+            while (++scan < chain.Count)
             {
-                chainIndex++;
-                var nextModel = chain[chainIndex];
-                var nextKey = ProviderKeyFor(nextModel);
-                if (attempted.Contains((nextModel, nextKey))) continue;
-                var dstRoot = ResolveRootFor(nextKey);
+                var stepModel = chain[scan];
+                var stepKey = ProviderKeyFor(stepModel);
+                if (attempted.Contains((stepModel, stepKey))) continue;
+                // Остывший: запоминаем индекс первого и ищем живого дальше, НЕ мигрируя —
+                // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open)
+                if (_health?.IsUnavailable(stepKey) is true)
+                {
+                    if (cooledIdx < 0) cooledIdx = scan;
+                    continue;
+                }
+                var dstRoot = ResolveRootFor(stepKey);
                 if (!TryMigrateTranscript(dstRoot)) continue;
-                var label = string.IsNullOrWhiteSpace(nextModel) ? KeyLabel(nextKey) : nextModel;
-                return new FallbackTarget(nextKey, nextModel,
-                    Label: $"Цепочка пресета: шаг {chainIndex + 1} → «{label}»",
-                    ProfileRoot: dstRoot, IsProviderSwitch: true);
+                // Живой — берём сразу
+                chainIndex = scan;
+                return ChainStepTarget(scan, stepKey, stepModel, dstRoot);
             }
-            // Цепочка исчерпана — финальный сбой, автоподбора нет
+            // Живых не осталось — fail-open: берём первого остывшего (мигрируем здесь), иначе цепочка исчерпана
+            if (cooledIdx > 0)
+            {
+                var cm = chain[cooledIdx];
+                var ck = ProviderKeyFor(cm);
+                var dstRoot = ResolveRootFor(ck);
+                if (TryMigrateTranscript(dstRoot))
+                {
+                    chainIndex = cooledIdx;
+                    return ChainStepTarget(cooledIdx, ck, cm, dstRoot);
+                }
+            }
             return null;
         }
 
-        // Без цепочки — уровень 2: обход сторонних провайдеров. Порядок — АЛФАВИТНЫЙ
-        // (LlmProviderRegistry собирает _providers из IConfiguration.GetChildren(), а тот
-        // отдаёт секции по алфавиту, а не в порядке appsettings), пока явный порядок не
-        // потребовался. Нужен детерминированный не-алфавитный порядок — завести поле Order.
-        if (_providers is not null)
-        {
-            foreach (var provider in _providers.Enabled)
-            {
-                if (provider.Key == currentKey) continue;
-                var equivalent = EquivalentModel(provider, modelForPool);
-                if (equivalent is null || attempted.Contains((equivalent, provider.Key))) continue;
-                var dstRoot = ResolveRootFor(provider.Key);
-                if (!TryMigrateTranscript(dstRoot)) continue;
-                var name = string.IsNullOrWhiteSpace(provider.DisplayName) ? provider.Key : provider.DisplayName;
-                return new FallbackTarget(provider.Key, equivalent,
-                    Label: $"Автофолбэк: смена провайдера → «{name}»",
-                    ProfileRoot: dstRoot, IsProviderSwitch: true);
-            }
-        }
-
+        // Без цепочки (одноэлементная/пустая) автоподбора нет — честная ошибка (ADR-007 §4).
         return null;
+    }
+
+    // Целевой шаг цепочки с маркером для ленты («Цепочка пресета: шаг N → …»)
+    private FallbackTarget ChainStepTarget(int scan, string stepKey, string stepModel, string? dstRoot)
+    {
+        var label = string.IsNullOrWhiteSpace(stepModel) ? KeyLabel(stepKey) : stepModel;
+        return new FallbackTarget(stepKey, stepModel,
+            Label: $"Цепочка пресета: шаг {scan + 1} → «{label}»",
+            ProfileRoot: dstRoot, IsProviderSwitch: true);
     }
 
     // Ключ пары для модели шага: провайдер по модели (приоритет), затем Provider сессии —
@@ -494,6 +666,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return byModel ?? (string.IsNullOrEmpty(Info.Provider)
             ? ClaudeSubscriptionPool.PrimaryKey : Info.Provider);
     }
+
+    // Сторонний ли провайдер (есть в реестре LlmProviderRegistry), а не подписка пула Claude.
+    // Кулдаун недоступности помечает только сторонние эндпоинты — здоровье подписок пула ведёт
+    // ClaudeSubscriptionPool (Major 2).
+    private bool IsExternalProvider(string? key) =>
+        _providers is not null && _providers.GetByKey(key ?? "") is not null;
 
     // Кандидаты уровня 1: сначала штатный Pick (с учётом исчерпания, SupportsModel,
     // тарифа и утилизации), затем последовательно остальные подписки пула
@@ -510,45 +688,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
     }
 
-    // Модель-эквивалент по слоту (ADR §3): тир текущей модели определяем совпадением
-    // со слотами владельца, у целевого провайдера берём модель того же тира
-    // (с фолбэком на первый каталог — провайдер без моделей пропускается выше)
-    private string? EquivalentModel(LlmProviderConfig provider, string? currentModel)
-    {
-        string? FirstCatalogModel() => provider.Models.FirstOrDefault()?.Id;
-        var m = ResolveTier(currentModel) switch
-        {
-            ModelTier.Strong => FirstNonEmpty(provider.TierStrong, provider.TierMedium, FirstCatalogModel()),
-            ModelTier.Weak => FirstNonEmpty(provider.TierWeak, FirstCatalogModel()),
-            _ => FirstNonEmpty(provider.TierMedium, FirstCatalogModel()),
-        };
-        return string.IsNullOrWhiteSpace(m) ? null : m;
-    }
-
-    private ModelTier ResolveTier(string? model)
-    {
-        // Явный тир хода (ADR-007 §5.1): передан с границы запуска, побеждает реверс-эвристику.
-        // null — уровень не участвовал (явная модель), тогда сравнение со слотами ниже.
-        if (_turnTier?.Invoke() is { } explicitTier) return explicitTier;
-        // У проектных сессий OwnerId пуст — слоты тогда глобальные, как и при резолве хода
-        if (_tiers is null || string.IsNullOrWhiteSpace(model)) return ModelTier.Medium;
-        foreach (var tier in new[] { ModelTier.Strong, ModelTier.Medium, ModelTier.Weak })
-        {
-            var slot = _tiers.ModelFor(tier, Info.OwnerId);
-            if (!string.IsNullOrWhiteSpace(slot)
-                && string.Equals(slot.Trim(), model.Trim(), StringComparison.OrdinalIgnoreCase))
-                return tier;
-        }
-        return ModelTier.Medium;
-    }
-
-    private static string? FirstNonEmpty(params string?[] values)
-    {
-        foreach (var v in values)
-            if (!string.IsNullOrWhiteSpace(v)) return v;
-        return null;
-    }
-
     // Перенос транскрипта в профиль целевой пары (тот же механизм, что у ручной миграции
     // MigrateProviderAsync и автофейловера TryPoolFailover). Ход ещё не начинался —
     // переносить нечего. Не удалось — кандидат пропускается (fail-closed)
@@ -556,15 +695,50 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
-        string cwd;
-        try { cwd = _launcher is { IsSandboxed: true } ? _launcher.Paths.ToRuntime(_rootPath) : _rootPath; }
-        catch (InvalidOperationException) { return false; } // папка вне монтирований песочницы
+        if (ResolveCwd() is not { } cwd) return false; // папка вне монтирований песочницы
         if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error))
         {
             LogWarn($"Транскрипт {Info.Id} не перенесён {dstRoot}: {error}");
             return false;
         }
         return true;
+    }
+
+    // Обратный перенос транскрипта в профиль исходного провайдера при restore после смены типа
+    // поставщика (IsProviderSwitch). Финальный ответ хода CLI записал только в профиль ПОДМЕНЫ
+    // (_profileRoot); restore вернёт Info.Provider в исходный — следующий ход на --resume из
+    // исходного профиля не нашёл бы ответ модели. Копируем туда, где его ждёт resume. Провал
+    // не роняет ход, но пишем Warning с обоими путями (иначе потеря памяти диалога останется
+    // незамеченной). cwd — тот же, что у прямого переноса (TryMigrateTranscript).
+    private bool TryCopyTranscriptBack(string? dstRoot)
+    {
+        if (Info.ClaudeSessionId is null) return true;
+        if (_profileRoot is null || dstRoot is null) return false;
+        if (ResolveCwd() is not { } cwd)
+        {
+            LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: папка вне монтирований песочницы (src={_profileRoot}, dst={dstRoot})");
+            return false;
+        }
+        // preserveLongerDestination: не затираем более полную историю приёмника усечённым
+        // источником (Minor 1). Skip (приёмник длиннее) возвращается как true, но с причиной в
+        // error — логируем её как Warning, иначе потеря полной истории осталась бы незамеченной.
+        if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error,
+                preserveLongerDestination: true))
+        {
+            LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: src={_profileRoot}, dst={dstRoot}: {error}");
+            return false;
+        }
+        if (error is not null)
+            LogWarn($"Обратный перенос транскрипта {Info.Id}: src={_profileRoot}, dst={dstRoot}: {error}");
+        return true;
+    }
+
+    // cwd хода для переноса транскрипта: хостовый для local, контейнерный — для песочницы
+    // (CLI уплощает КОНТЕЙНЕРНЫЙ путь). null — папка вне монтирований песочницы.
+    private string? ResolveCwd()
+    {
+        try { return _launcher is { IsSandboxed: true } ? _launcher.Paths.ToRuntime(_rootPath) : _rootPath; }
+        catch (InvalidOperationException) { return null; }
     }
 
     // Применение выбранной пары: смена подписки двигает только Provider, смена провайдера —

@@ -73,6 +73,13 @@ public class SessionManager : IDisposable
         // при живых фоновых агентах). Чужие ходы (REST-канал агентов, /compact,
         // ходы-продолжения CLI) протокола не несут и цикл не двигают.
         public volatile bool LoopTurnInFlight;
+        // Разбор очереди (DrainNextPendingAsync) вне цикла идёт по одному сообщению за раз —
+        // следующее уйдёт по result уже этого хода. Параллельные drain (выключение цикла из
+        // SetWorkLoopAsync + штатный drain из OnMessageAsync по result) без этого флага
+        // вытащили бы ДВА сообщения и послали два хода. Взводится атомарно с извлечением,
+        // гасится по концу доставки — второй drain в окне видит его и уступает (сообщение
+        // не теряется: по result хода отработает следующий drain).
+        public volatile bool DrainInFlight;
         // Ожидающая карточка взаимодействия (разрешение/вопрос/план) — replay при
         // JoinSession: без него клиент после F5 видел бы «Claude печатает…» без
         // возможности ответить, а CLI ждал бы до часового таймаута
@@ -2230,7 +2237,8 @@ public class SessionManager : IDisposable
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
-            DossierTrailerHint: BuildDossierTrailerHint(ownerId, session)));
+            DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
+            PersistSessions: SaveSessions));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -2277,20 +2285,23 @@ public class SessionManager : IDisposable
             // карточке, — иначе текст человека упирался бы в гейты стадии «ждёт решения».
             ResumeTeamFromDecisionOnUserInput(sessionId, entry);
 
-            // Занятый чат: сообщение встаёт в видимую очередь (pending_messages) и СРАЗУ
-            // прерывает текущий ход — доставка идёт по его концу, а не после пассивного
-            // ожидания. Пользовательское прерывает всё, включая цикл «до готово»: цикл
-            // снимаем СИНХРОННО (как в Interrupt), чтобы exited прерванного хода не
-            // запустил автопродолжение.
+            // Занятый чат (ход в полёте) ИЛИ активный цикл «до готово»: сообщение встаёт в
+            // видимую очередь (pending_messages). При идущем ходе — сразу его прерывает,
+            // доставка идёт по exited прерванного прогона. Цикл при этом НЕ снимается
+            // (решение владельца 2026-08-08): пользовательское сообщение само продолжит цикл
+            // как следующую итерацию (между итерациями — форсирует dispatchNow, при живом
+            // ходе — exited после прерывания). Сбрасываем LoopTurnInFlight синхронно с
+            // interrupt: прерванный ход result не пришлёт, и взведённый маркер иначе
+            // заблокировал бы разбор очереди (drain уступает, пока LoopTurnInFlight).
             var loopActive = entry.Info.WorkLoop is not null;
             var turnInFlight = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting;
             if (loopActive || turnInFlight)
             {
-                // Потолок очереди проверяем ДО побочных эффектов: снятый цикл и разморозка
-                // очереди на отказе QueueFull не откатываются, и пользователь получил бы
-                // исключение при уже убитом цикле. Проверка предварительная — точная (под
-                // PendingLock) остаётся в EnqueuePendingAsync, конкурентная постановка между
-                // ними лишь вернёт тот же отказ на шаг позже.
+                // Потолок очереди проверяем ДО побочных эффектов: разморозка очереди на отказе
+                // QueueFull не откатывается, и пользователь получил бы исключение при уже
+                // нарушенном состоянии. Проверка предварительная — точная (под PendingLock)
+                // остаётся в EnqueuePendingAsync, конкурентная постановка между ними лишь
+                // вернёт тот же отказ на шаг позже.
                 lock (entry.PendingLock)
                 {
                     if (entry.Pending.Count >= MaxPendingPerSession)
@@ -2298,12 +2309,6 @@ public class SessionManager : IDisposable
                             $"В очереди чата уже {MaxPendingPerSession} сообщений — дождитесь, пока она разберётся");
                 }
 
-                if (loopActive)
-                {
-                    entry.Info.WorkLoop = null;
-                    SaveSessions();
-                    _ = BroadcastWorkLoopAsync(sessionId, entry);
-                }
                 // Пользователь возобновил разговор — заморозка «Стоп» снимается ДО постановки,
                 // иначе форсаж dispatchNow и разбор по концу хода упёрлись бы в QueueFrozen
                 entry.QueueFrozen = false;
@@ -2336,6 +2341,9 @@ public class SessionManager : IDisposable
                         }
                         entry.SkipNextTeamTurnEnd = false;
                     }
+                    // Прерванный ход result не пришлёт — погасим маркер итерации цикла, иначе
+                    // он заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
+                    entry.LoopTurnInFlight = false;
                     entry.DrainOnExitedRun = entry.RunId;
                     entry.Process?.Interrupt();
                 }
@@ -2640,11 +2648,11 @@ public class SessionManager : IDisposable
             // чтобы конкурентные постановки не стимулировали несколько drain'ов. Условия НЕ срабатывания:
             // замороженная «Стоп» очередь (возобновляет только новое пользовательское сообщение) и активный
             // цикл «до готово» — между итерациями чат на мгновение свободен, но агентское сообщение должно
-            // ждать конца ВСЕГО цикла (пользовательское сюда с живым циклом не попадает: SendMessageAsync
-            // снимает цикл ДО постановки).
+            // ждать конца ВСЕГО цикла (пользовательское — наоборот, продолжается цикл как следующая
+            // итерация, поэтому при живом цикле dispatchNow форсируется).
             dispatchNow = position == 1
                 && !entry.QueueFrozen
-                && entry.Info.WorkLoop is null
+                && (entry.Info.WorkLoop is null || kind == PendingKind.User)
                 && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting);
         }
         await BroadcastPendingAsync(sessionId, entry);
@@ -2877,21 +2885,104 @@ public class SessionManager : IDisposable
         if (entry.QueueFrozen) return;
 
         QueuedMessage? next;
+        var scheduleContinue = false;
         lock (entry.PendingLock)
         {
             if (entry.QueueFrozen) return;
-            next = entry.Pending.FirstOrDefault();
-            if (next is not null) entry.Pending.RemoveAt(0);
+            if (entry.Info.WorkLoop is not null)
+            {
+                // Цикл «до готово» активен: пользовательские сообщения продолжают цикл как
+                // следующие итерации, агентские ждут конца ВСЕГО цикла. Если итерация уже
+                // стартует (LoopTurnInFlight — системная директива продолжения из
+                // ContinueWorkLoopAsync либо ход, извлечённый здесь же в параллельном drain),
+                // очередь не трогаем: иначе два хода подряд ушли бы в один процесс. Маркер
+                // LoopTurnInFlight выставляем атомарно с извлечением — тогда параллельный
+                // ContinueWorkLoopAsync по result увидит его и уступит, не дублируя директиву.
+                if (entry.LoopTurnInFlight) return;
+                next = entry.Pending.FirstOrDefault(p => p.Kind == PendingKind.User);
+                if (next is null)
+                {
+                    // Minor 6: при активном цикле, свободном маркере и пустой user-очереди
+                    // (напр. сообщение удалили из очереди до exited прерванного хода, а result
+                    // не пришёл) — цикл продолжит свою работу директивой, иначе он висел бы
+                    // «активным» без движения. ContinueWorkLoopAsync пройдёт гейты сама: если
+                    // параллельный запуск (по result) уже взвёл маркер — она сразу уступит.
+                    scheduleContinue = true;
+                }
+                else
+                {
+                    entry.Pending.Remove(next);
+                    entry.LoopTurnInFlight = true;
+                }
+            }
+            else
+            {
+                // Параллельный drain уже вытащил сообщение и отправляет — уступаем, чтобы не
+                // запустить второй ход. Сообщение не теряется: по result этого хода отработает
+                // следующий drain (DrainInFlight к тому моменту уже погашен).
+                if (entry.DrainInFlight) return;
+                next = entry.Pending.FirstOrDefault();
+                if (next is not null)
+                {
+                    entry.Pending.RemoveAt(0);
+                    entry.DrainInFlight = true;
+                }
+            }
+        }
+        if (scheduleContinue)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await ContinueWorkLoopAsync(sessionId); }
+                catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Продолжение цикла из drain ({sessionId}): {ex.Message}"); }
+            });
+            return;
         }
         if (next is null) return;
 
-        await BroadcastPendingAsync(sessionId, entry);
-        await DeliverPendingAsync(sessionId, entry, next);
+        bool delivered = false;
+        try
+        {
+            // Бродкаст внутри try (Minor 1): исключение хаба (disposed/отвал транспорта) не
+            // должно оставлять DrainInFlight взведённым навсегда и глушить разбор очереди чата
+            // до перезапуска сервера — finally гарантированно погасит флаг.
+            await BroadcastPendingAsync(sessionId, entry);
+            delivered = await DeliverPendingAsync(sessionId, entry, next);
+        }
+        finally
+        {
+            entry.DrainInFlight = false;
+            // Гейт каскада (Minor 3): перепроверяем очередь, ТОЛЬКО если предыдущая доставка
+            // выполнена (delivered — не бросилась). Имя шире «ход стартовал»: для гейта важен лишь
+            // факт «доставка не провалилась». При провале (CLI не поднялся) статус не ушёл в
+            // Working — без гейта перепроверка вычерпала бы ВСЮ очередь подряд, теряя каждое
+            // сообщение (одно потерянное — прежнее поведение, весь хвост — регрессия). Гонка
+            // «result пришёл раньше finally» (Minor 2): статус уже Idle, очередь непуста —
+            // перезапуск разыграет следующее сообщение. Сам DrainNextPendingAsync имеет гейт
+            // DrainInFlight, так что повторный запуск безопасен (уступит, если кто-то уже взял).
+            if (delivered && !entry.QueueFrozen
+                && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting or SessionStatus.Starting))
+            {
+                // Minor 2: чтение Pending.Count — под PendingLock, по конвенции файла.
+                bool hasPending;
+                lock (entry.PendingLock) hasPending = entry.Pending.Count > 0;
+                if (hasPending)
+                {
+                    _ = Task.Run(async () =>
+                    {
+                        try { await DrainNextPendingAsync(sessionId); }
+                        catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Повторный разбор очереди ({sessionId}): {ex.Message}"); }
+                    });
+                }
+            }
+        }
     }
 
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
     // Пользовательское идёт со своими вложениями и режимом; агентское — как серверная отправка.
-    private async Task DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
+    // Возвращает true, если доставка выполнена (ход стартовал — можно ждать result); false —
+    // бросилась внутри, ход не поднялся и его повторная обработка по result не придёт (Minor 3).
+    private async Task<bool> DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
     {
         try
         {
@@ -2907,10 +2998,17 @@ public class SessionManager : IDisposable
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
                     suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote);
+            return true;
         }
         catch (Exception ex)
         {
+            // При активном цикле drain выставил LoopTurnInFlight=true до отправки. Если ход
+            // так и не стартовал — ход-то не пришлёт result, и маркер повис бы навсегда,
+            // заблокировав разбор очереди. Сбрасываем, чтобы цикл не завис на мёртвой итерации.
+            if (entry.Info.WorkLoop is not null)
+                entry.LoopTurnInFlight = false;
             Console.Error.WriteLine($"[SessionManager] Доставка отложенного сообщения ({sessionId}): {ex.Message}");
+            return false;
         }
     }
 
@@ -2927,6 +3025,15 @@ public class SessionManager : IDisposable
                 p.Id, p.Text, p.SenderPersonaId, p.SenderOrigin, p.EnqueuedAt, p.SenderChatName,
                 p.Kind == PendingKind.User ? "user" : "agent",
                 p.AttachedPaths, p.Kind == PendingKind.User ? p.Mode : null))];
+    }
+
+    // Есть ли в очереди пользовательское сообщение. При активном цикле именно оно продолжает
+    // работу следующей итерацией — разбор очереди по концу хода опирается на эту проверку,
+    // чтобы доставить такое сообщение (агентские при цикле по-прежнему ждут его конца).
+    private static bool HasUserPending(SessionEntry entry)
+    {
+        lock (entry.PendingLock)
+            return entry.Pending.Any(p => p.Kind == PendingKind.User);
     }
 
     // Снимок для replay при JoinSession (без служебных)
@@ -3045,7 +3152,8 @@ public class SessionManager : IDisposable
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
-                ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona));
+                ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
+                PersistSessions: SaveSessions);
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -3081,7 +3189,8 @@ public class SessionManager : IDisposable
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
-                DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info));
+                DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info),
+                PersistSessions: SaveSessions);
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -3429,6 +3538,9 @@ public class SessionManager : IDisposable
             if (entry.Info.WorkLoop is not null)
             {
                 entry.Info.WorkLoop = null;
+                // Прерванный ход result не пришлёт — погасим маркер итерации, иначе он
+                // повис бы и заблокировал разбор очереди по концу следующего хода.
+                entry.LoopTurnInFlight = false;
                 SaveSessions();
                 _ = BroadcastWorkLoopAsync(sessionId, entry);
             }
@@ -3571,6 +3683,10 @@ public class SessionManager : IDisposable
         {
             entry.Info.WorkLoop = newLoop;
             entry.LoopTurnText.Clear();
+            // При выключении гасим маркер итерации: висящий LoopTurnInFlight заблокировал бы
+            // разбор очереди по концу следующего хода (гейт !LoopTurnInFlight).
+            if (newLoop is null)
+                entry.LoopTurnInFlight = false;
         }
         SaveSessions();
         await BroadcastWorkLoopAsync(sessionId, entry);
@@ -3580,6 +3696,20 @@ public class SessionManager : IDisposable
         if (manual && wasEnabled && !enabled)
             await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "manual",
                 "Цикл остановлен вами. Текущий ход продолжает работу.");
+
+        // Агентские сообщения, скопившиеся за время цикла (они ждали конца ВСЕГО цикла),
+        // при выключении не должны дожидаться следующего пользовательского хода — запускаем
+        // разбор очереди. В фоне: SetWorkLoopAsync вызывается в т.ч. из ContinueWorkLoopAsync
+        // по result. НО только когда текущий ход цикла уже завершился (статус не Working/Waiting):
+        // ручной стоп приходит ВО ВРЕМЯ хода, и drain миновал бы гейт занятости SendMessageAsync(auto)
+        // → второй ход в живой процесс. Ничего не теряется — по result текущего хода отработает
+        // штатный drain (там WorkLoop уже null).
+        if (wasEnabled && !enabled && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting))
+            _ = Task.Run(async () =>
+            {
+                try { await DrainNextPendingAsync(sessionId); }
+                catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Разбор очереди после стопа цикла ({sessionId}): {ex.Message}"); }
+            });
 
         return entry.Info;
     }
@@ -5837,58 +5967,89 @@ public class SessionManager : IDisposable
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (entry.Info.WorkLoop is not { } loop) return;
 
-        // Буфер потребляем и чистим здесь (а не при постановке хода): очистка на постановке
-        // стирала бы текст стримящегося хода при параллельной отправке пользователя
-        string turnText;
-        lock (entry.LoopTurnLock)
+        // Без двойной отправки (гонка «result → директива продолжения» vs «очередь доставляет
+        // сообщение пользователя»): если пользователь успел прислать сообщение в этом ходе или
+        // между итерациями, оно само продолжит цикл как следующая итерация (доставку выполнит
+        // drain). Системную директиву продолжения/верификации в этом случае не шлём — иначе
+        // два хода подряд ушли бы в один процесс. Проверка атомарна с извлечением drain'а:
+        // LoopTurnInFlight=true означает, что drain уже вытащил пользовательское сообщение и
+        // запуска итерацию. Маркер взводим ПОД ТЕМ ЖЕ PendingLock, что и гейт (Major 3): иначе
+        // в окне до BuildCliTurnText (SaveSessions/Broadcast/EnsureProcess, сотни мс) параллельный
+        // drain успевал вытащить пользовательское сообщение и пустить второй ход в тот же процесс.
+        // До всей логики цикла (phase/iteration) — чтобы не оставлять изменённое состояние при уступке.
+        lock (entry.PendingLock)
         {
-            turnText = entry.LoopTurnText.ToString();
-            entry.LoopTurnText.Clear();
+            if (entry.Pending.Any(p => p.Kind == PendingKind.User)) return;
+            if (entry.LoopTurnInFlight) return;
+            entry.LoopTurnInFlight = true;
         }
 
-        if (entry.LoopTurnFailed)
+        try
         {
-            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "error", "Цикл остановлен: ход завершился ошибкой.");
-            await SetWorkLoopAsync(sessionId, false);
-            return;
-        }
+            // Буфер потребляем и чистим здесь (а не при постановке хода): очистка на постановке
+            // стирала бы текст стримящегося хода при параллельной отправке пользователя
+            string turnText;
+            lock (entry.LoopTurnLock)
+            {
+                turnText = entry.LoopTurnText.ToString();
+                entry.LoopTurnText.Clear();
+            }
 
-        var promiseFound = ContainsPromiseMarker(turnText, loop.Promise);
+            if (entry.LoopTurnFailed)
+            {
+                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "error", "Цикл остановлен: ход завершился ошибкой.");
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
 
-        if (loop.Phase == "verifying")
-        {
-            // Верификационный ход отработал — цикл завершён независимо от исхода (штатное
-            // окончание, свидетельства уже в самом верификационном посте — отдельное
-            // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа)
-            await SetWorkLoopAsync(sessionId, false);
-            return;
-        }
+            var promiseFound = ContainsPromiseMarker(turnText, loop.Promise);
 
-        if (promiseFound)
-        {
-            loop.Phase = "verifying";
+            if (loop.Phase == "verifying")
+            {
+                // Верификационный ход отработал — цикл завершён независимо от исхода (штатное
+                // окончание, свидетельства уже в самом верификационном посте — отдельное
+                // сообщение-остановка тут не нужна, в отличие от лимита/ошибки/ручного стопа)
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
+
+            if (promiseFound)
+            {
+                loop.Phase = "verifying";
+                SaveSessions();
+                await BroadcastWorkLoopAsync(sessionId, entry);
+                if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
+                await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
+                return;
+            }
+
+            loop.Iteration++;
+            if (loop.Iteration >= loop.MaxIterations)
+            {
+                await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
+                    $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} ходов. " +
+                    "Работа могла остаться незавершённой — проверьте результат.");
+                await SetWorkLoopAsync(sessionId, false);
+                return;
+            }
+
             SaveSessions();
             await BroadcastWorkLoopAsync(sessionId, entry);
             if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
-            await SendMessageAsync(sessionId, OmoPrompts.WorkLoopVerification, [], systemDirective: true);
-            return;
+            await SendMessageAsync(sessionId,
+                OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
         }
-
-        loop.Iteration++;
-        if (loop.Iteration >= loop.MaxIterations)
+        catch
         {
-            await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "limit",
-                $"Цикл остановлен: исчерпан лимит в {loop.MaxIterations} ходов. " +
-                "Работа могла остаться незавершённой — проверьте результат.");
-            await SetWorkLoopAsync(sessionId, false);
-            return;
+            // Директива так и не ушла (сбой до/в отправке) — ход result не пришлёт, и взведённый
+            // выше маркер повис бы, заблокировав разбор очереди (drain уступает, пока он взведён).
+            // Пути остановки снимают цикл через SetWorkLoop(false) — та сбрасывает маркер сама;
+            // здесь ловим только исключение до отправки. Перебрасываем — вызывающий (Task.Run по
+            // result) залогирует.
+            if (entry.Info.WorkLoop is not null)
+                entry.LoopTurnInFlight = false;
+            throw;
         }
-
-        SaveSessions();
-        await BroadcastWorkLoopAsync(sessionId, entry);
-        if (entry.Info.WorkLoop is null) return; // Стоп успел снять цикл — ход-сироту не шлём
-        await SendMessageAsync(sessionId,
-            OmoPrompts.WorkLoopContinuation(loop.Promise, loop.Iteration, loop.MaxIterations), [], systemDirective: true);
     }
 
     // Маркер завершения ищем вне код-блоков и с точным регистром: модель часто цитирует
@@ -6454,7 +6615,7 @@ public class SessionManager : IDisposable
                 entry.DrainOnExitedRun = 0;
             if (drainOnExited
                 || (msg is ResultMessage or ErrorMessage && !entry.LoopTurnInFlight
-                    && entry.Info.WorkLoop is null))
+                    && (entry.Info.WorkLoop is null || HasUserPending(entry))))
             {
                 _ = Task.Run(async () =>
                 {

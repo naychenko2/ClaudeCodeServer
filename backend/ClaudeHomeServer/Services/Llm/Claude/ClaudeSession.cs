@@ -4,7 +4,6 @@ using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Git;
-using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 using ClaudeHomeServer.Telemetry;
 
@@ -35,14 +34,6 @@ public class ClaudeSession : ILlmSessionAdapter
     internal IReadOnlyList<string> EffectiveTurnChain =>
         _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
-
-    // Явный тир хода для фолбэка (ADR-007 §5.1): дефолт места каталога, когда модель выбирается
-    // по месту (Info.Model пуст). При явной модели (персона/задача/выбор) тир не известен надёжно
-    // — отдаём null, и адаптер использует реверс-эвристику по слотам (как раньше, без регрессии).
-    internal ModelTier? EffectiveTurnTier =>
-        string.IsNullOrEmpty(Info.Model) && LocalActionCatalog.Find(UsageKey) is { } action
-            ? LocalActionCatalog.EffectiveDefaultTier(action)
-            : null;
 
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>

@@ -212,4 +212,9 @@ public sealed record LlmSessionContext(
     // Подсказка про трейлер CCS-Session/CCS-Task в системный промпт (ADR-004, «Паспорта
     // изменений»): null — чат вне проекта. Вычисляется при построении контекста (не Func —
     // как WorkspaceMcp/NotificationsMcp, тоже не живёт мид-сессию без пересоздания адаптера).
-    string? DossierTrailerHint = null);
+    string? DossierTrailerHint = null,
+    // Персист сессий (SessionManager.SaveSessions): фолбэк-адаптер вызывает его после restore
+    // модели в finally, чтобы переписать sessions.json восстановленными значениями — иначе
+    // финальный result успевает сохранить подменённую модель (Major 1 ревью). null (тесты) —
+    // персист не вызывается.
+    Action? PersistSessions = null);

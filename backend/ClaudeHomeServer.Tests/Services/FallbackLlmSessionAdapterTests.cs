@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -99,12 +100,33 @@ public class FallbackLlmSessionAdapterTests
         return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
     }
 
+    // N сторонних провайдеров p1..pN с моделями m1..mN — цепочка шагов, у каждого свой
+    // провайдер и нет пула подписок. Каждый шаг цепочки = одна попытка = одна подмена
+    // (IsProviderSwitch), поэтому потолок подмен здесь проверяется переходами по цепочке,
+    // а не бесплатными ротациями пула (волна 2: только IsProviderSwitch тратит потолок).
+    private static LlmProviderRegistry BuildChainProviders(int count)
+    {
+        var dict = new Dictionary<string, string?>();
+        for (var i = 1; i <= count; i++)
+        {
+            dict[$"LlmProviders:p{i}:ApiKey"] = $"sk-{i}";
+            dict[$"LlmProviders:p{i}:AnthropicBaseUrl"] = $"https://p{i}.example.com";
+            dict[$"LlmProviders:p{i}:Models:0:Id"] = $"m{i}";
+        }
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    private static string[] ChainModels(int count) =>
+        Enumerable.Range(1, count).Select(i => $"m{i}").ToArray();
+
     private (FallbackLlmSessionAdapter Sut, FakeInnerAdapter Inner) BuildSut(
         ClaudeSubscriptionPool pool, LlmProviderRegistry? providers = null,
         string model = "sonnet", string provider = "acc-a",
         int? modelFallbackMax = null, string? ownerId = null,
-        string[]? chain = null, ModelTier? turnTier = null,
-        Func<string?>? effectiveModel = null)
+        string[]? chain = null,
+        Func<string?>? effectiveModel = null,
+        ProviderHealthRegistry? health = null,
+        Action? persist = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -121,30 +143,17 @@ public class FallbackLlmSessionAdapterTests
         var sut = new FallbackLlmSessionAdapter(inner,
             // По умолчанию эффективная модель следует за session.Model (обновляется ApplyTarget).
             // Явный effectiveModel имитирует продовое EffectiveModel = Resolve(...) — НАМЕРЕНИЕ
-            // хода, которое не следует за подменой на эквивалент стороннего провайдера
+            // хода, которое не следует за подменой на шаг цепочки стороннего провайдера
             // (инцидент 2026-08-07: повторы одной пары до потолка).
             effectiveModel ?? (() => session.Model),
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
             pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
             fallbackSettings: store,
             effectiveChain: chain is null ? null : () => chain,
-            turnTier: () => turnTier);
+            health: health,
+            persist: persist);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
-    }
-
-    // Провайдер с разными моделями по уровням (для теста явного тира §5.1): TierStrong ≠ TierMedium.
-    private static LlmProviderRegistry BuildProvidersWithTiers()
-    {
-        var dict = new Dictionary<string, string?>
-        {
-            ["LlmProviders:deepseek:ApiKey"] = "sk-test",
-            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.example.com",
-            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
-            ["LlmProviders:deepseek:TierStrong"] = "ds-strong",
-            ["LlmProviders:deepseek:TierMedium"] = "ds-medium",
-        };
-        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
     }
 
     // Конфиг с уникальным DataPath во временной папке (как в SpecialtyTemplatesServiceTests):
@@ -289,23 +298,27 @@ public class FallbackLlmSessionAdapterTests
         error.Text.Should().Contain("Попробуйте позже или выберите другую модель в настройках чата.");
     }
 
+    // Волна 2: потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки), а
+    // ротации подписок пула бесплатны. Поэтому потолок проверяется на цепочке сторонних
+    // провайдеров (каждый шаг — отдельная подмена), а не на ротациях пула.
     [Fact]
     public async Task ПотолокПятьПодмен_ШестаяПопыткаНеЗапускается()
     {
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6", "s7" };
-        var pool = BuildPool(keys);
-        var (sut, inner) = BuildSut(pool, provider: "s1", modelFallbackMax: 5);
+        var providers = BuildChainProviders(7);
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "m1", provider: "p1",
+            chain: ChainModels(7), modelFallbackMax: 5);
         for (var i = 0; i < 7; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));   // обрыв — не помечает пул
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
-        inner.Attempts.Should().HaveCount(6, "1 исходная + максимум 5 подмен");
+        inner.Attempts.Should().HaveCount(6, "1 стартовая + максимум 5 подмен (переходов по цепочке)");
         inner.Attempts.Select(a => a.Provider).Distinct().Should().HaveCount(6,
             "пара «модель × подписка» пробуется не более одного раза");
-        // Все подмены — уровень 1 (ротация подписок того же пула): без маркеров в ленте
-        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        // Каждый переход по цепочке — маркер; 5 переходов до упора в потолок
+        Downstream().OfType<ProviderSwitchedMessage>().Should().HaveCount(5);
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("error");
     }
@@ -314,19 +327,19 @@ public class FallbackLlmSessionAdapterTests
     public async Task ПотолокНеЗадан_ДефолтЧетыреПодмены()
     {
         // Без стора (modelFallbackMax = null) потолок — дефолт 4 (FallbackSettingsStore.DefaultMaxSubstitutions).
-        // 6 подписок в пуле, но больше 5 попыток (1 стартовая + 4 подмены) не пройдёт.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
-        var (sut, inner) = BuildSut(pool, provider: "s1");
+        // Цепочка из 6 сторонних шагов, но больше 5 попыток (1 стартовая + 4 подмены) не пройдёт.
+        var providers = BuildChainProviders(6);
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "m1", provider: "p1",
+            chain: ChainModels(6));
         for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
 
-        inner.Attempts.Should().HaveCount(5, "1 исходная + максимум 4 подмены по дефолту");
-        // Все подмены — уровень 1 (ротация подписок того же пула): без маркеров в ленте
-        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        inner.Attempts.Should().HaveCount(5, "1 стартовая + максимум 4 подмены по дефолту");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().HaveCount(4);
         Downstream().OfType<ResultMessage>().Should().ContainSingle()
             .Which.Subtype.Should().Be("error");
         Downstream().OfType<ErrorMessage>().Should().ContainSingle()
@@ -336,23 +349,24 @@ public class FallbackLlmSessionAdapterTests
     [Fact]
     public async Task ВнеДиапазона_КлампитсяКДефолту()
     {
-        // Потолок 99 в файле выходит за жёсткий 1..5 — адаптер должен игнорировать
-        // (клампится к дефолту 4), иначе жёсткий потолок ADR был бы обойдён.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
+        // Потолок 99 в файле выходит за жёсткий 1..5 — стор отвергает значение (валидация),
+        // global остаётся null, и читается дефолт 4. Иначе жёсткий потолок ADR был бы обойдён.
+        var providers = BuildChainProviders(6);
+        var chain = ChainModels(6);
+        var pool = BuildPool("acc-a");
         var store = new FallbackSettingsStore(BuildTempConfiguration(out _));
         Assert.Equal("Потолок подмен должен быть в диапазоне 1..5", store.SetGlobal(99));
-        // global остаётся null → читается дефолт 4 (FallbackSettingsStore.DefaultMaxSubstitutions)
-        var session = new Session { Provider = "s1", OwnerId = null };
+        var session = new Session { Model = "m1", Provider = "p1", OwnerId = null };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
-            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
-            fallbackSettings: store);
+            pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            fallbackSettings: store,
+            effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
         for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
@@ -364,21 +378,23 @@ public class FallbackLlmSessionAdapterTests
     public async Task ЛичныйПотолокВладельцаБьётГлобальный()
     {
         // Глобально потолок 1, лично у владельца — 5. per-owner слой перебивает глобальный.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
+        var providers = BuildChainProviders(7);
+        var chain = ChainModels(7);
+        var pool = BuildPool("acc-a");
         var store = new FallbackSettingsStore(BuildTempConfiguration(out _));
         Assert.Null(store.SetGlobal(1));
         Assert.Null(store.SetOwner("owner-x", 5));
-        var session = new Session { Provider = "s1", OwnerId = "owner-x" };
+        var session = new Session { Model = "m1", Provider = "p1", OwnerId = "owner-x" };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
-            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
-            fallbackSettings: store);
+            pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            fallbackSettings: store,
+            effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
         for (var i = 0; i < 7; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
@@ -391,21 +407,23 @@ public class FallbackLlmSessionAdapterTests
     {
         // Личный потолок owner-x — 1, у другого владельца должна быть глобальная 5.
         // per-owner изоляция: значения одного владельца не должны просачиваться к другому.
-        var keys = new[] { "s1", "s2", "s3", "s4", "s5", "s6" };
-        var pool = BuildPool(keys);
+        var providers = BuildChainProviders(7);
+        var chain = ChainModels(7);
+        var pool = BuildPool("acc-a");
         var store = new FallbackSettingsStore(BuildTempConfiguration(out _));
         Assert.Null(store.SetGlobal(5));
         Assert.Null(store.SetOwner("owner-x", 1));
-        var session = new Session { Provider = "s1", OwnerId = "owner-y" };
+        var session = new Session { Model = "m1", Provider = "p1", OwnerId = "owner-y" };
         var inner = new FakeInnerAdapter(session);
         var sut = new FallbackLlmSessionAdapter(inner,
             () => session.Model,
             msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
-            pool, providers: null, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
-            fallbackSettings: store);
+            pool, providers, Path.GetTempPath(), launcher: null, initialProfileRoot: null,
+            fallbackSettings: store,
+            effectiveChain: () => chain);
         inner.Sink = sut.HandleMessageAsync;
         for (var i = 0; i < 7; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
@@ -414,24 +432,36 @@ public class FallbackLlmSessionAdapterTests
             "owner-y не имеет своей записи → global=5 → 1 + 5 подмен");
     }
 
+    // Волна 2: ротации подписок того же пула бесплатны — потолок подмен на них не тратится.
+    // Пул из 3 подписок, потолок 1, цепочка [sonnet, deepseek-chat]. Все три sonnet-подписки
+    // перепробуются (ротации, бесплатно), и лишь переход к deepseek тратит единственную
+    // подмену. Если бы ротации считались, после acc-b (sub=1>=1) ход упал бы, и acc-c/deepseek
+    // не позвались бы — а они зовутся.
     [Fact]
-    public async Task ПулИсчерпан_Уровень2_СтороннийПровайдерСЭквивалентом()
+    public async Task РотацияПулаБесплатна_ПотолокТолькоНаШагЦепочки()
     {
-        var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProviders());
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a", "acc-b", "acc-c");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"], modelFallbackMax: 1);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a — исчерпан → ротация acc-b (бесплатно)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-b — исчерпан → ротация acc-c (бесплатно)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-c — исчерпан → шаг цепочки deepseek (sub=1)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // deepseek — substitutions=1>=1 → финал
 
-        await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
 
-        inner.Attempts.Should().HaveCount(2);
-        inner.Attempts[1].Provider.Should().Be("deepseek");
-        inner.Attempts[1].Model.Should().Be("deepseek-chat",
-            "уровень 2 берёт модель-эквивалент по слоту");
-        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
-            .Which.Label.Should().Contain("смена провайдера");
-        inner.Info.Model.Should().Be("deepseek-chat");
+        // 4 попытки: 3 бесплатных ротации пула + 1 платный переход к deepseek.
+        inner.Attempts.Should().HaveCount(4);
+        inner.Attempts[3].Should().Be(("deepseek", "deepseek-chat"), "единственная подмена — шаг цепочки");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle();
     }
 
     // --- Цепочка пресета (ADR-007 §4, §8) ---
@@ -449,13 +479,17 @@ public class FallbackLlmSessionAdapterTests
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        // restore модели выполняется в finally — после выпускания result. Ждём полного
+        // завершения оркестрации, иначе Info читается до восстановления.
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
 
         inner.Attempts.Should().HaveCount(2);
         inner.Attempts[0].Should().Be(("acc-a", "sonnet"));
         inner.Attempts[1].Should().Be(("deepseek", "deepseek-chat"), "шаг 2 цепочки, а не автоподбор");
         Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
             .Which.Label.Should().Contain("Цепочка пресета");
-        inner.Info.Model.Should().Be("deepseek-chat");
+        // Волна 2: подмена не персистится — после хода модель чата восстановлена в исходную.
+        inner.Info.Model.Should().Be("sonnet");
     }
 
     [Fact]
@@ -490,39 +524,45 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
     }
 
+    // Репро инцидента 2026-08-08 (волны 1+2): чат с замороженной opus (нативный claude), цепочка
+    // пресета «Основной — Сильный»: opus → kimi-k3 → glm-5.2. Обе подписки Claude исчерпаны —
+    // ход уходит на kimi-k3 (шаг 2 цепочки) одним маркером «Цепочка пресета: шаг 2», а не в
+    // алфавитный автоподбор alibabacloud/qwen. Провайдеры вне цепочки не зовутся вовсе.
     [Fact]
-    public async Task ЯвныйТирХода_ПобеждаетРеверсЭвристику()
+    public async Task РепроИнцидента_ОбеПодпискиClaudeМертвы_ИдёмНаШагЦепочки()
     {
-        // §8/§5.1: тир хода, переданный явно, побеждает реверс-эвристику ResolveTier при
-        // автоподборе. turnTier=Strong → EquivalentModel берёт TierStrong провайдера (ds-strong),
-        // хотя реверс-эвристика без _tiers дала бы Medium (ds-medium).
-        var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProvidersWithTiers(), model: "sonnet",
-            turnTier: ModelTier.Strong);
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // sonnet × acc-a — исчерпан
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // автоподбор → успех
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+            // Сторонний провайдер ВНЕ цепочки — автоподбор не должен к нему уйти
+            ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
+            ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
+            ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("claude", "claude-2");   // обе подписки пула Claude
+        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude",
+            chain: ["opus", "kimi-k3", "glm-5.2"], effectiveModel: () => "opus");
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // claude × opus — исчерпан
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // claude-2 × opus — исчерпан
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // kimi-k3 (шаг 2) — успех
 
-        await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
 
-        inner.Attempts[1].Model.Should().Be("ds-strong",
-            "явный Strong побеждает реверс (Medium → ds-medium)");
-    }
-
-    [Fact]
-    public async Task БезЯвногоТира_РеверсЭвристикаДаётMedium()
-    {
-        // Контрольный кейс к предыдущему: без явного тира (и без _tiers) реверс даёт Medium.
-        var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProvidersWithTiers(), model: "sonnet");
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));
-
-        await sut.SendMessageAsync("сделай что-нибудь");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
-
-        inner.Attempts[1].Model.Should().Be("ds-medium",
-            "без явного тира и _tiers реверс-эвристика даёт Medium");
+        // Две попытки opus (ротация подписок пула, бесплатно) → шаг 2 цепочки kimi-k3.
+        // alibabacloud/qwen (автоподбор) НЕ зовётся — автоподбора больше нет.
+        inner.Attempts.Should().HaveCount(3);
+        inner.Attempts[0].Should().Be(("claude", "opus"));
+        inner.Attempts[1].Should().Be(("claude-2", "opus"), "уровень 1: ротация подписок пула");
+        inner.Attempts[2].Should().Be(("kimi", "kimi-k3"), "шаг 2 цепочки, а не автоподбор");
+        inner.Attempts.Should().NotContain(p => p.Provider == "alibabacloud",
+            "автоподбор удалён: провайдеры вне цепочки не зовутся");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Label.Should().Contain("Цепочка пресета: шаг 2");
+        marker.Provider.Should().Be("kimi");
     }
 
     [Fact]
@@ -596,12 +636,13 @@ public class FallbackLlmSessionAdapterTests
 
     // Классификация причины попадает в ProviderSwitchedMessage.Reason — фронт
     // по нему выбирает каноническую формулировку подсказки. RateLimit → rate_limit.
-    // Проверяем на уровне 2 (смена типа поставщика): на уровне 1 маркера в ленте теперь нет.
+    // Проверяем на переходе по цепочке (смена типа поставщика): на уровне 1 маркера в ленте нет.
     [Fact]
     public async Task RateLimit_ПричинаВМаркере_RateLimit()
     {
         var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProviders());
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() =>
             inner.Emit(new RateLimitMessage("five_hour", ResetsAt: null, Status: "rejected")));
         inner.Scripts.Enqueue(() => inner.Emit(Success()));
@@ -614,12 +655,13 @@ public class FallbackLlmSessionAdapterTests
     }
 
     // Обрыв потока посреди ответа: класс Unreachable → wire-имя unreachable.
-    // Также уровень 2 (смена типа поставщика) — на уровне 1 маркера в ленте нет.
+    // Также переход по цепочке (смена типа поставщика) — на уровне 1 маркера в ленте нет.
     [Fact]
     public async Task ОбрывПотока_ПричинаВМаркере_Unreachable()
     {
         var pool = BuildPool("acc-a");
-        var (sut, inner) = BuildSut(pool, BuildProviders());
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() =>
         {
             inner.Emit(new TextDeltaMessage("начал"));
@@ -656,115 +698,43 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
 
-    // Инцидент 2026-08-07: модель попытки бралась из _effectiveModel() — НАМЕРЕНИЯ хода,
-    // а не из применённой подмены. Намерение (opus) не следует за подменой на эквивалент
-    // стороннего провайдера, поэтому в attempted ложилось (opus, провайдер), а проверка
-    // зацикливания шла по (эквивалент, провайдер) — пары расходились, и одна мёртвая пара
-    // повторялась до потолка. Здесь намерение зафиксировано константой (как EffectiveModel
-    // в проде), фактическая пара должна быть уникальной.
+    // Волна 2 (ADR-007 §4): автоподбор удалён полностью. Цепочка из одной модели (хвоста нет,
+    // слот пустой) после исчерпания пула завершается честной ошибкой — к сторонним провайдерам
+    // сами не уходим. Это и есть удаление уровня 2: без настроенного хвоста магии нет.
+    // Сторож продовому входу: ClaudeSession.EffectiveTurnChain всегда отдаёт минимум один
+    // элемент, поэтому chain:["opus"] имитирует реальный ход с замороженной моделью персоны.
     [Fact]
-    public async Task ЭквивалентПровайдера_ФактическаяПараНеПовторяется()
+    public async Task ЦепочкаОднойМодели_ПулИсчерпан_ФинальнаяОшибка_АвтоподборНеСрабатывает()
     {
         var dict = new Dictionary<string, string?>
         {
             ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
             ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
             ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
-            ["LlmProviders:alibabacloud:TierStrong"] = "qwen-max",
             ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
             ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
-            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-flash",
-            ["LlmProviders:deepseek:TierStrong"] = "deepseek-v4-flash",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
         };
         var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
         var pool = BuildPool("claude-1");
         var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude-1",
-            effectiveModel: () => "opus", turnTier: ModelTier.Strong, modelFallbackMax: 4);
-        // Все попытки — обрыв (Unreachable): «эндпоинт недоступен», как в инциденте
-        for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
+            chain: ["opus"], effectiveModel: () => "opus");
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // claude-1/opus — исчерпан
 
         await sut.SendMessageAsync("сделай");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
 
-        // Три уникальные пары: claude-1 → alibabacloud → deepseek, дальше повторяться некому,
-        // оркестрация завершается исчерпанием. Без фикса цикл долбил бы потолок 4 подмены
-        // повторами одной пары (5 попыток), а не останавливался на трёх.
-        inner.Attempts.Should().HaveCount(3);
-        inner.Attempts.Select(a => (a.Provider, a.Model!)).Should().BeEquivalentTo(new[]
-        {
-            ("claude-1", "opus"), ("alibabacloud", "qwen-max"), ("deepseek", "deepseek-v4-flash"),
-        }, "фактическая пара «модель × подписка» не повторяется: в попытку идёт эквивалент, не opus");
-    }
-
-    // Тот же инцидент 2026-08-07, но через ПРОДОВЫЙ вход: ClaudeSession.EffectiveTurnChain
-    // всегда отдаёт минимум один элемент, поэтому модель попытки бралась из замороженной
-    // chain[0] (условие было chain.Count > 0), а не из _effectiveModel(). Вариант с chain:null
-    // эту ветку не задействует — а именно её «упростит» будущий исполнитель, вернув пересчёт
-    // из цепочки. Ожидание то же: 3 попытки, пары уникальны. На коде до фикса da952f0d падает
-    // пятью попытками — это и доказывает, что тест охраняет именно продовый сценарий.
-    [Fact]
-    public async Task ЭквивалентПровайдера_ФактическаяПараНеПовторяется_ЦепочкаОднойМодели()
-    {
-        var dict = new Dictionary<string, string?>
-        {
-            ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
-            ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
-            ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
-            ["LlmProviders:alibabacloud:TierStrong"] = "qwen-max",
-            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
-            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
-            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-v4-flash",
-            ["LlmProviders:deepseek:TierStrong"] = "deepseek-v4-flash",
-        };
-        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
-        var pool = BuildPool("claude-1");
-        // chain: ["opus"] имитирует продовый EffectiveTurnChain (минимум один элемент) —
-        // модель попытки идёт из chain[0], а не из _effectiveModel().
-        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude-1",
-            chain: ["opus"], effectiveModel: () => "opus", turnTier: ModelTier.Strong, modelFallbackMax: 4);
-        // Все попытки — обрыв (Unreachable), как в инциденте
-        for (var i = 0; i < 6; i++)
-            inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));
-
-        await sut.SendMessageAsync("сделай");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
-
-        inner.Attempts.Should().HaveCount(3);
-        inner.Attempts.Select(a => (a.Provider, a.Model!)).Should().BeEquivalentTo(new[]
-        {
-            ("claude-1", "opus"), ("alibabacloud", "qwen-max"), ("deepseek", "deepseek-v4-flash"),
-        }, "фактическая пара «модель × подписка» не повторяется: в попытку идёт эквивалент, не opus");
-    }
-
-    // Уровень 2 — уход на стороннего провайдера: в попытку идёт модель ИЗ КАТАЛОГА
-    // провайдера (эквивалент по тиру), а не исходная opus, которой у него нет.
-    [Fact]
-    public async Task Уровень2_ВПопыткуИдётЭквивалентИзКаталогаПровайдера()
-    {
-        var dict = new Dictionary<string, string?>
-        {
-            ["LlmProviders:alibabacloud:ApiKey"] = "sk-ali",
-            ["LlmProviders:alibabacloud:AnthropicBaseUrl"] = "https://ali.example.com",
-            ["LlmProviders:alibabacloud:Models:0:Id"] = "qwen-max",
-            ["LlmProviders:alibabacloud:TierStrong"] = "qwen-max",
-        };
-        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
-        var pool = BuildPool("claude-1");
-        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude-1",
-            effectiveModel: () => "opus", turnTier: ModelTier.Strong);
-        inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));   // claude-1/opus — обрыв
-        inner.Scripts.Enqueue(() => inner.Emit(Success()));             // alibabacloud/qwen-max — успех
-
-        await sut.SendMessageAsync("сделай");
-        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
-
-        inner.Attempts[1].Should().Be(("alibabacloud", "qwen-max"),
-            "эквивалент Strong-тира из каталога alibabacloud, а не opus");
+        // Одна попытка: пул claude исчерпан, цепочки (хвоста) нет → честная ошибка.
+        // К сторонним провайдерам (alibabacloud/deepseek) сами не уходим — автоподбора нет.
+        inner.Attempts.Should().ContainSingle();
+        inner.Attempts.Should().NotContain(p => p.Provider == "alibabacloud" || p.Provider == "deepseek",
+            "автоподбор удалён: Enabled не обходится");
+        Downstream().OfType<ResultMessage>().Single().Subtype.Should().Be("error");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
 
     // Смена аккаунта внутри пула Claude (уровень 1) проходит ТИХО — без ProviderSwitchedMessage;
-    // маркер появляется только при смене ТИПА поставщика (уровень 2 → сторонний провайдер).
+    // маркер появляется только при переходе по цепочке на стороннего провайдера.
     [Fact]
     public async Task СменаАккаунтаВнутриПула_БезМаркера_СменаТипа_СМаркером()
     {
@@ -776,9 +746,10 @@ public class FallbackLlmSessionAdapterTests
         };
         var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
         var pool = BuildPool("acc-a", "acc-b");
-        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a — исчерпан → уровень 1 (acc-b, тихо)
-        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-b — исчерпан → уровень 2 (deepseek, маркер)
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-b — исчерпан → шаг цепочки (deepseek, маркер)
         inner.Scripts.Enqueue(() => inner.Emit(Success()));         // deepseek — успех
 
         await sut.SendMessageAsync("сделай что-нибудь");
@@ -788,7 +759,7 @@ public class FallbackLlmSessionAdapterTests
         inner.Attempts[0].Should().Be(("acc-a", "sonnet"));
         inner.Attempts[1].Should().Be(("acc-b", "sonnet"));
         inner.Attempts[2].Should().Be(("deepseek", "deepseek-chat"));
-        // Ровно один маркер — только смена ТИПА поставщика (acc-b → deepseek);
+        // Ровно один маркер — только переход acc-b → deepseek (шаг цепочки, смена типа поставщика);
         // переход acc-a → acc-b внутри пула Claude прошёл без маркера.
         Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
             .Which.Provider.Should().Be("deepseek");
@@ -847,7 +818,8 @@ public class FallbackLlmSessionAdapterTests
     {
         var pool = BuildPoolWithNames(("acc-a", "Claude 2 (Max)"), ("acc-b", ""));
         var providers = BuildProviderWithName("deepseek", "DeepSeek", "deepseek-chat");
-        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
         inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a (Claude 2 Max) — RateLimit
         inner.Scripts.Enqueue(() => inner.Emit(new ExitedMessage()));// acc-b (без имени) — обрыв, Unreachable
         inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // deepseek (DeepSeek) — RateLimit
@@ -868,5 +840,782 @@ public class FallbackLlmSessionAdapterTests
         // обрыв (ExitedMessage) → Unreachable → «сервис не отвечает»
         error.Text.Should().Contain("слишком много запросов").And.Contain("сервис не отвечает");
         inner.Attempts.Should().HaveCount(3);
+    }
+
+    // Волна 2: подмена не переписывает модель чата навсегда. После хода с переходом по цепочке
+    // Info.Model был переписан ApplyTarget в deepseek-chat, но в finally восстанавливается
+    // исходная sonnet — чат не залипает на подмене (инцидент 2026-08-07: залипание на qwen).
+    [Fact]
+    public async Task ПослеХодаСПодменой_МодельЧатаВосстанавливается()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // deepseek — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
+
+        // Внутри хода Info.Model был переписан в deepseek-chat, но в finally восстановлена
+        // исходная sonnet — подмена не персистится в модель чата.
+        inner.Info.Model.Should().Be("sonnet", "подмена восстанавливается после хода");
+        inner.Info.Provider.Should().Be("acc-a", "провайдер восстанавливается после хода");
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("deepseek", "deepseek-chat"), "ход действительно шёл на deepseek");
+    }
+
+    // CAS: если во время хода модель сменили руками (Info != applied), finally НЕ восстанавливает —
+    // выбор пользователя побеждает, подмена его не перетирает. Пользовательский ввод имитируем
+    // перезаписью Info в скрипте успешной попытки (гонка с UI, пока оркестратор держит ход).
+    [Fact]
+    public async Task РучнаяСменаМоделиВоВремяХода_НеПеретираетсяCAS()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        var session = inner.Info;
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() =>
+        {
+            // Во время успешной попытки пользователь сменил модель руками (гонка с UI):
+            // Info переписан вручную, оркестратор этого не делал.
+            session.Model = "manual-choice";
+            session.Provider = "manual-prov";
+            inner.Emit(Success());
+        });
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
+
+        // CAS: Info != applied (manual-choice ≠ deepseek-chat) → finally не восстанавливает.
+        session.Model.Should().Be("manual-choice", "ручной выбор пользователя не перетёрт подменой");
+        session.Provider.Should().Be("manual-prov");
+    }
+
+    // --- Кулдаун недоступности провайдера (волна 2) ---
+
+    // Кулдаун: шаг цепочки с провайдером в кулдауне пропускается, фолбэк идёт к следующему
+    // живому шагу. Цепочка [sonnet, m-cooled, m-alive], p-cooled помечен недоступным заранее.
+    [Fact]
+    public async Task КулдаунПровайдера_ШагЦепочкиПропускается()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-cooled:ApiKey"] = "sk-c",
+            ["LlmProviders:p-cooled:AnthropicBaseUrl"] = "https://c.example.com",
+            ["LlmProviders:p-cooled:Models:0:Id"] = "m-cooled",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("p-cooled");   // шаг 2 цепочки — в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "m-cooled", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → цепочка: шаг 2 (p-cooled) пропущен
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // m-alive (шаг 3) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Шаг 2 (m-cooled/p-cooled) в кулдауне — пропущен; попытка 2 = m-alive (шаг 3).
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-alive", "m-alive"), "шаг 2 в кулдауне пропущен");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 3");
+    }
+
+    // fail-open: ВСЕ шаги цепочки в кулдауне — берём первого остывшего (кулдаун — наблюдение,
+    // а не запрет; эндпоинт мог уже подняться, а ход должен идти).
+    [Fact]
+    public async Task КулдаунПровайдера_FailOpen_БерётОстывшего()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-cooled:ApiKey"] = "sk-c",
+            ["LlmProviders:p-cooled:AnthropicBaseUrl"] = "https://c.example.com",
+            ["LlmProviders:p-cooled:Models:0:Id"] = "m-cooled",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("p-cooled");
+        health.MarkUnavailable("p-alive");   // ВСЕ шаги цепочки в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "m-cooled", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → цепочка: все в кулдауне → fail-open
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // m-cooled (первый остывший) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Все в кулдауне → fail-open берёт первого остывшего (m-cooled, шаг 2).
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-cooled", "m-cooled"), "fail-open: первый остывший шаг цепочки");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 2");
+    }
+
+    // Стартовый СТОРОННИЙ провайдер в кулдауне → стартуем сразу с первого живого шага цепочки
+    // (маркер provider_switched, Reason=unreachable), не тратя попытку на мёртвый эндпоинт.
+    // Подписки пула Claude кулдауном не помечаются (Major 2) — стартовую подмену проверяем
+    // на стороннем провайдере, как и бывает в проде после фикса.
+    [Fact]
+    public async Task КулдаунСтартовогоПровайдера_СтартСЖивогоШага()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkUnavailable("p-dead");   // стартовый сторонний провайдер в кулдауне
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // старт на m-alive через стартовую подмену
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // Стартовая подмена: p-dead в кулдауне → одна попытка сразу на m-alive, без расхода на p-dead.
+        inner.Attempts.Should().ContainSingle();
+        inner.Attempts[0].Should().Be(("p-alive", "m-alive"), "старт с живого шага, а не с кулдаунного p-dead");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Reason.Should().Be("unreachable");
+        marker.Provider.Should().Be("p-alive");
+    }
+
+    // --- Фиксы ревью Глеба (Major 1/2, Minor 4) ---
+
+    // Major 1: restore модели в finally должен сопровождаться персистом — иначе финальный
+    // result успевает сохранить sessions.json с ПОДМЕНЁННОЙ моделью (ApplyStatusAsync →
+    // SaveSessions ДО finally), и рестарт сервера в окне залипил бы чат на подмене. Здесь
+    // persist-колбэк пишет «стор» — проверяем, что после хода с подменой в нём исходная модель.
+    [Fact]
+    public async Task ПодменаМодели_PersistПослеВосстановления_ПишетИсходную()
+    {
+        var providers = BuildProviders();   // deepseek/deepseek-chat — сторонний шаг цепочки
+        var pool = BuildPool("acc-a");
+        var persisted = new List<(string? Model, string? Provider)>();
+        FakeInnerAdapter? innerRef = null;
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"],
+            persist: () => { if (innerRef is { } i) persisted.Add((i.Info.Model, i.Info.Provider)); });
+        innerRef = inner;
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // deepseek-chat — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "restore в finally");
+
+        // Ход действительно уходил на подмену deepseek-chat…
+        inner.Attempts[1].Should().Be(("deepseek", "deepseek-chat"));
+        // …но persist после restore записал ИСХОДНУЮ модель (не подмену).
+        persisted.Should().NotBeEmpty("restore в finally должен персистить восстановленные значения");
+        persisted[^1].Model.Should().Be("sonnet", "persist пишет восстановленную модель, а не подмену");
+        persisted[^1].Provider.Should().Be("acc-a");
+        inner.Info.Model.Should().Be("sonnet");
+    }
+
+    // Major 2: кулдаун недоступности НЕ помечает подписки пула Claude — один 529 на нативной
+    // подписке не должен уводить следующие ходы на сторонний шаг 2 мимо живой подписки пула.
+    // Здесь: первый ход на opus/claude ловит 529 (ProviderError), ротация на claude-2 — успех.
+    // Кулдаун на «claude» НЕ ставится → второй ход не уходит на kimi, а остаётся в пуле Claude.
+    // После тихой ротации (IsProviderSwitch:false) Provider НЕ восстанавливается — ход реально
+    // прошёл и свежий транскрипт записан на claude-2, поэтому второй ход стартует с claude-2.
+    [Fact]
+    public async Task Кулдаун_НеТрогаетПодпискиПула_СледующийХодНачинаетсяСНей()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:kimi:ApiKey"] = "sk-kimi",
+            ["LlmProviders:kimi:AnthropicBaseUrl"] = "https://kimi.example.com",
+            ["LlmProviders:kimi:Models:0:Id"] = "kimi-k3",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("claude", "claude-2");
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, providers, model: "opus", provider: "claude",
+            chain: ["opus", "kimi-k3"], effectiveModel: () => "opus", health: health);
+        // Ход 1: claude × opus — 529 (ProviderError), ротация на claude-2 — успех.
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("529")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал хода 1");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение хода 1");
+
+        // Кулдаун на ключе подписки пула НЕ поставлен (Major 2) — иначе второй ход ушёл бы на kimi.
+        health.IsUnavailable("claude").Should().BeFalse("подписки пула не помечаются кулдауном");
+        // Тихая ротация оставила чат на claude-2 (где прошёл ход и лежит свежий транскрипт).
+        inner.Info.Provider.Should().Be("claude-2", "после тихой ротации Provider не восстанавливается");
+
+        // Ход 2: стартовая подмена проверяет кулдаун «claude-2» → false → старт с opus/claude-2.
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        await sut.SendMessageAsync("ещё");
+        await WaitForAsync(() => inner.Attempts.Count >= 3, "старт хода 2");
+
+        // Последняя попытка — старт второго хода с claude-2 × opus (в пуле Claude), а не kimi-k3.
+        inner.Attempts[^1].Should().Be(("claude-2", "opus"),
+            "второй ход стартует с подписки пула (claude-2 после тихой ротации), а не со шага 2 цепочки");
+    }
+
+    // Minor 4: покомпонентный CAS restore. Пользователь сменил во время хода ТОЛЬКО модель
+    // (провайдер остался подменённым) — модель не восстанавливаем (ручной выбор), а провайдер
+    // восстанавливаем. Раньше попарный CAS блокировал восстановление провайдера из-за модели.
+    [Fact]
+    public async Task Restore_ПокомпонентныйCAS_ПровайдерВосстанавливаетсяНезависимо()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        var session = inner.Info;
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() =>
+        {
+            // Во время успешной попытки пользователь сменил ТОЛЬКО модель (провайдер deepseek
+            // остался подменённым applied). Покомпонентный CAS: модель не трогаем, провайдер вернём.
+            session.Model = "manual-choice";   // ≠ deepseek-chat → модель не восстанавливается
+            inner.Emit(Success());
+        });
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "restore в finally");
+
+        // Модель — ручной выбор пользователя (не перетёрта), провайдер — восстановлен в acc-a.
+        session.Model.Should().Be("manual-choice", "ручная модель не перетёрта (CAS по модели не прошёл)");
+        session.Provider.Should().Be("acc-a", "провайдер восстановлен покомпонентно (CAS по провайдеру прошёл)");
+    }
+
+    // --- Сохранение свежего транскрипта хода при restore (регрессия волны 2) ---
+    //
+    // TranscriptMigrator.TryMigrate — это File.Copy, а не move: ход на профиле A поймал ошибку
+    // → транскрипт скопирован A→B → финальный ответ CLI записан ТОЛЬКО в профиль B. Восстановить
+    // Provider в A — и следующий ход на --resume с A не вспомнит свой ответ, а TryPoolFailover
+    // ещё и затрёт свежий B устаревшей копией A→B. Поэтому restore различает тип последней подмены:
+    //   • тихая ротация подписки того же пула — Provider оставляем новым (транскрипт там);
+    //   • смена типа поставщика — Provider восстанавливаем, но перед этим копируем транскрипт обратно.
+
+    // Провайдер deepseek с профилем во временной папке (claude-profiles/deepseek). ClaudeUserProfileDir
+    // указывает на несуществующую папку → синк настроек из ~/.claude не идёт (чистый тестовый профиль).
+    private static LlmProviderRegistry BuildProvidersInDir(string baseDir)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+            ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Цепочка сторонних провайдеров p1..pN (модели m1..mN), каждый со своим профилем во временной
+    // папке (claude-profiles/p{i}). Нужна для тестов переноса транскрипта по цепочке подмен:
+    // у каждого шага свой физический профиль, куда копируется транскрипт.
+    private static LlmProviderRegistry BuildChainProvidersInDir(string baseDir, int count)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+            ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+        };
+        for (var i = 1; i <= count; i++)
+        {
+            dict[$"LlmProviders:p{i}:ApiKey"] = $"sk-{i}";
+            dict[$"LlmProviders:p{i}:AnthropicBaseUrl"] = $"https://p{i}.example.com";
+            dict[$"LlmProviders:p{i}:Models:0:Id"] = $"m{i}";
+        }
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Перехват логов адаптера: проверяем, что провал обратного переноса не прошёл молча.
+    private sealed class SpyLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    // (а) Тихая ротация подписки того же пула: Provider остаётся новым, обратного переноса нет.
+    // Ход на acc-a поймал 429 → ротация на acc-b (тихо, IsProviderSwitch:false) → успех на acc-b.
+    // Свежий ответ записан в профиль acc-b, поэтому чат оставляем на acc-b (транскрипт консистентен).
+    [Fact]
+    public async Task ТихаяРотацияПула_ProviderОстаётсяНовым_ТранскриптНеКопируетсяНазад()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_silent_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a", "acc-b");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-silent";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var subAccA = Path.Combine(baseDir, "claude-profiles", "sub-acc-a");
+            var subAccB = Path.Combine(baseDir, "claude-profiles", "sub-acc-b");
+            var accAFile = Path.Combine(subAccA, "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet" });
+            inner.Sink = sut.HandleMessageAsync;
+            var accBFile = Path.Combine(subAccB, "projects", flat, csid + ".jsonl");
+            // acc-a — 429 → тихая ротация на acc-b (копия acc-a→acc-b). acc-b — успех + ответ CLI.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(accBFile, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Тихая ротация: Provider остался новым (acc-b) — там, где прошёл ход и лежит транскрипт.
+            session.Provider.Should().Be("acc-b", "после тихой ротации Provider не восстанавливается");
+            session.Model.Should().Be("sonnet");
+            // Обратного переноса НЕ было: acc-a хранит исходный транскрипт без свежего ответа.
+            File.ReadAllText(accAFile).Should().NotContain("ANSWER",
+                "обратный перенос при тихой ротации не вызывается");
+            // Свежий ответ остался в acc-b (там, где ход реально прошёл).
+            File.ReadAllText(accBFile).Should().Contain("ANSWER");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // (б) Смена типа поставщика (шаг цепочки): Model/Provider восстановлены И транскрипт перенесён
+    // обратно в профиль исходного провайдера. Проверяем факт наличия файла во временных профилях,
+    // а не поле в памяти: acc-a после хода должен содержать свежий ответ, скопированный из deepseek.
+    [Fact]
+    public async Task СменаПоставщика_ModelProviderВосстановлены_ТранскриптПеренесёнНазад()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_switch_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-switch";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var subAccA = Path.Combine(baseDir, "claude-profiles", "sub-acc-a");
+            var deepseek = Path.Combine(baseDir, "claude-profiles", "deepseek");
+            var accAFile = Path.Combine(subAccA, "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet", "deepseek-chat" });
+            inner.Sink = sut.HandleMessageAsync;
+            var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
+            // acc-a — 429 → шаг цепочки deepseek (копия acc-a→deepseek). deepseek — успех + ответ CLI.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(deepseekFile, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Смена поставщика: Model и Provider восстановлены в исходные (иначе пара opus × kimi).
+            session.Model.Should().Be("sonnet", "модель восстановлена после смены поставщика");
+            session.Provider.Should().Be("acc-a", "провайдер восстановлен после смены поставщика");
+            // Обратный перенос: свежий ответ скопирован из deepseek в профиль acc-a — иначе
+            // следующий ход на --resume с acc-a не нашёл бы ответ модели.
+            File.ReadAllText(accAFile).Should().Contain("ANSWER",
+                "после restore транскрипт перенесён обратно в профиль исходного провайдера");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // (в) Провал обратного переноса не роняет ход и не проходит молча: Model/Provider восстановлены,
+    // result доставлен, в логе — Warning с id сессии. Профиль deepseek пустеет до restore →
+    // TranscriptMigrator.TryMigrate не находит транскрипт и возвращает false.
+    [Fact]
+    public async Task СменаПоставщика_ПровалОбратногоПереноса_НеРоняетХод_ПишетWarning()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_fail_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-fail";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var subAccA = Path.Combine(baseDir, "claude-profiles", "sub-acc-a");
+            var deepseek = Path.Combine(baseDir, "claude-profiles", "deepseek");
+            var accAFile = Path.Combine(subAccA, "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var spy = new SpyLogger();
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet", "deepseek-chat" }, log: spy);
+            inner.Sink = sut.HandleMessageAsync;
+            var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
+            // acc-a — 429 → шаг цепочки deepseek (копия acc-a→deepseek). deepseek — успех, НО транскрипт
+            // в deepseek пропал к моменту restore (профиль удалили/диск упал) → обратный перенос не найдёт источник.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                if (File.Exists(deepseekFile)) File.Delete(deepseekFile);
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Ход не роняется: Model/Provider восстановлены, result доставлен успехом.
+            session.Model.Should().Be("sonnet");
+            session.Provider.Should().Be("acc-a");
+            Downstream().OfType<ResultMessage>().Should().ContainSingle()
+                .Which.Subtype.Should().Be("success");
+            // Провал переноса не прошёл молча: Warning с id сессии и признаком обратного переноса.
+            spy.Entries.Should().Contain(e => e.Level == LogLevel.Warning
+                && e.Message.Contains("Обратный перенос") && e.Message.Contains(csid),
+                "провал обратного переноса пишется в лог с id сессии");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // --- Стартовая подмена по кулдауну: перенос транскрипта (Major) ---
+
+    // Major: стартовый сторонний провайдер в кулдауне → старт сразу с живого шага цепочки.
+    // Транскрипт обязан переехать в профиль шага ДО подмены: иначе --resume не найдёт разговор,
+    // ход упадёт (класс None), и чат встанет колом до TTL кулдауна, хотя оба провайдера живы.
+    // Здесь: p-dead в кулдауне, история лежит в профиле p-dead → после стартовой подмены она
+    // оказывается в профиле p-alive (куда пойдёт --resume), а свежий ответ копируется обратно в p-dead.
+    [Fact]
+    public async Task СтартоваяПодмена_Кулдаун_ПереноситТранскриптВПрофильШага()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_start_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            // p-dead / p-alive — сторонние провайдеры со своими профилями во временной папке.
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+                ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+                ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+                ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+                ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+                ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool("acc-a");
+            var health = new ProviderHealthRegistry();
+            health.MarkUnavailable("p-dead");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-start";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var deadDir = Path.Combine(baseDir, "claude-profiles", "p-dead", "projects", flat);
+            var aliveDir = Path.Combine(baseDir, "claude-profiles", "p-alive", "projects", flat);
+            Directory.CreateDirectory(deadDir);
+            File.WriteAllText(Path.Combine(deadDir, csid + ".jsonl"), "HISTORY");
+
+            var session = new Session { Model = "m-dead", Provider = "p-dead", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
+            inner.Sink = sut.HandleMessageAsync;
+            var aliveFile = Path.Combine(aliveDir, csid + ".jsonl");
+            // Стартовая подмена (миграция p-dead→p-alive) выполняется до первой попытки, поэтому
+            // первая попытка идёт на p-alive — туда и дописываем ответ CLI.
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(aliveFile, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Одна попытка — сразу на живом шаге p-alive (стартовая подмена сработала).
+            inner.Attempts.Should().ContainSingle();
+            inner.Attempts[0].Should().Be(("p-alive", "m-alive"), "старт с живого шага, а не с кулдаунного p-dead");
+            // Транскрипт перенесён в профиль шага p-alive — иначе --resume не нашёл бы разговор.
+            File.Exists(aliveFile).Should().BeTrue("транскрипт перенесён в профиль шага p-alive");
+            File.ReadAllText(aliveFile).Should().Contain("HISTORY", "история переехала из p-dead в p-alive");
+            // Свежий ответ скопирован обратно в профиль исходного провайдера (restore при смене поставщика).
+            File.ReadAllText(Path.Combine(deadDir, csid + ".jsonl")).Should().Contain("ANSWER",
+                "после restore ответ перенесён обратно в профиль p-dead");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // Major, fail-open: при провале переноса транскрипта стартовая подмена НЕ применяется —
+    // остаёмся на исходной паре, и ход идёт (кулдаун — наблюдение, а не запрет). Здесь транскрипта
+    // нет нигде → TryMigrateTranscript возвращает false → подмена отменяется, попытка уходит на p-dead.
+    [Fact]
+    public async Task СтартоваяПодмена_ПровалПереноса_FailOpen_ОстаётсяНаИсходнойПаре()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_open_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+                ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+                ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+                ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+                ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+                ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool("acc-a");
+            var health = new ProviderHealthRegistry();
+            health.MarkUnavailable("p-dead");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            // ClaudeSessionId задан, но транскрипта НЕТ нигде → TryMigrateTranscript(false).
+            var session = new Session { Model = "m-dead", Provider = "p-dead", ClaudeSessionId = "csid-open" };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
+            inner.Sink = sut.HandleMessageAsync;
+            inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Подмена НЕ применена: попытка ушла на исходную пару p-dead × m-dead.
+            inner.Attempts.Should().ContainSingle();
+            inner.Attempts[0].Should().Be(("p-dead", "m-dead"), "провал переноса → остаёмся на исходной паре");
+            // Стартовая пара не изменилась — маркера подмены нет.
+            Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+            session.Model.Should().Be("m-dead");
+            session.Provider.Should().Be("p-dead");
+            Downstream().OfType<ResultMessage>().Should().ContainSingle()
+                .Which.Subtype.Should().Be("success", "ход пошёл на исходной паре (fail-open)");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // Несколько подмен подряд (шаг → шаг → шаг): обратный перенос в finally идёт из ПОСЛЕДНЕГО
+    // профиля цепочки (где прошёл ход и записан свежий ответ), а не из первого/промежуточного.
+    // Цепочка m1(p1) → m2(p2) → m3(p3); ответ CLI пишется только в профиль p3; после хода он
+    // должен оказаться в p1 (исходный провайдер, куда вернётся --resume). Если бы копия шла из
+    // p1/p2 — ответ бы в p1 не попал.
+    [Fact]
+    public async Task НесколькоПодменПодряд_КопияНазадИзПоследнегоПрофиляЦепочки()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_chain_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildChainProvidersInDir(baseDir, 3);   // p1/m1, p2/m2, p3/m3
+            var pool = BuildPool("acc-a");   // одна подписка — m1 сторонний, ротаций пула нет
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-chain";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            string Profile(int i) => Path.Combine(baseDir, "claude-profiles", $"p{i}", "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(Profile(1))!);
+            File.WriteAllText(Profile(1), "HISTORY");
+
+            var session = new Session { Model = "m1", Provider = "p1", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "m1", "m2", "m3" });
+            inner.Sink = sut.HandleMessageAsync;
+            // m1/p1 — сбой → шаг m2/p2 (копия p1→p2). m2/p2 — сбой → шаг m3/p3 (копия p2→p3).
+            // m3/p3 — успех + ответ CLI пишется ТОЛЬКО в профиль p3.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(Profile(3), "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Три попытки — по одной на каждый шаг цепочки.
+            inner.Attempts.Should().HaveCount(3);
+            inner.Attempts[0].Should().Be(("p1", "m1"));
+            inner.Attempts[1].Should().Be(("p2", "m2"));
+            inner.Attempts[2].Should().Be(("p3", "m3"));
+            // Исходный провайдер восстановлен.
+            session.Provider.Should().Be("p1");
+            session.Model.Should().Be("m1");
+            // Свежий ответ скопирован из ПОСЛЕДНЕГО профиля (p3) в исходный (p1) — иначе следующий
+            // ход на --resume из p1 не нашёл бы ответ модели.
+            File.ReadAllText(Profile(1)).Should().Contain("ANSWER",
+                "обратный перенос идёт из последнего профиля цепочки (p3), где записан ответ");
+            // Подтверждение, что ответ жил только в p3: в промежуточном p2 его нет.
+            File.Exists(Profile(2)).Should().BeTrue("p2 получил копию при прямом переносе p1→p2");
+            File.ReadAllText(Profile(2)).Should().NotContain("ANSWER",
+                "ответ записан только в p3 — значит, копия в p1 пришла именно из p3");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // Регрессия ревью 2026-08-08 (sticky-флаг): за ход БЫЛА смена типа поставщика (шаг цепочки,
+    // IsProviderSwitch:true), а ЗА НЕЙ — тихая ротация подписки того же пула (IsProviderSwitch:false).
+    // Раньше appliedProviderSwitch = next.IsProviderSwitch присваивал тип ПОСЛЕДНЕЙ подмены (false),
+    // и finally НЕ восстанавливал Provider/Model и НЕ переносил транскрипт обратно — пара
+    // Model=deepseek-chat × Provider=claude-2 персистилась, а следующий ход по модели уходил в профиль
+    // deepseek, где свежего ответа нет → молчаливая потеря хода из контекста CLI. После фикса флаг
+    // накапливается (|=), restore отрабатывает полностью.
+    //
+    // Цепочка [deepseek-chat, opus]: шаг 1 (deepseek, сторонний) — сбой → шаг цепочки opus на подписку
+    // пула claude (нативная, IsProviderSwitch:true) → 429 → тихая ротация на claude-2 (free) → успех.
+    // Ответ CLI пишется только в профиль sub-claude-2; после хода должен оказаться в sub-claude (origProvider).
+    [Fact]
+    public async Task ШагЦепочкиЗатемТихаяРотация_ModelProviderВосстановлены_ТранскриптИзПоследнейПары()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_sticky_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+                ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+                ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool("claude", "claude-2");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-sticky";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            string Profile(string key) => Path.Combine(baseDir, "claude-profiles", key, "projects", flat, csid + ".jsonl");
+
+            var persisted = new List<(string? Model, string? Provider)>();
+            // origProvider = claude (ключ пула), чтобы шаг цепочки opus резолвился на подписку пула.
+            var session = new Session { Model = "deepseek-chat", Provider = "claude", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "deepseek-chat", "opus" },
+                persist: () => persisted.Add((session.Model, session.Provider)));
+            inner.Sink = sut.HandleMessageAsync;
+
+            // История лежит в стартовом профиле deepseek (currentKey на старте = deepseek по модели).
+            Directory.CreateDirectory(Path.GetDirectoryName(Profile("deepseek"))!);
+            File.WriteAllText(Profile("deepseek"), "HISTORY");
+            var claude2File = Profile("sub-claude-2");
+
+            // deepseek × deepseek-chat — 429 → шаг цепочки opus (на подписку пула claude).
+            // claude × opus — 429 → тихая ротация на claude-2 (IsProviderSwitch:false).
+            // claude-2 × opus — успех + ответ CLI пишется в профиль sub-claude-2.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(claude2File, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Три попытки. Первая — стартовая пара сессии: origProvider=claude (ключ пула) выбран
+            // так, чтобы шаг цепочки opus резолвился на подписку пула, а не на сторонний deepseek.
+            // Реальный профиль транскрипта первой попытки — deepseek (по модели deepseek-chat),
+            // поэтому HISTORY лежит в Profile("deepseek"); Attempts пишут Info.Provider, а не профиль.
+            inner.Attempts.Should().HaveCount(3);
+            inner.Attempts[0].Should().Be(("claude", "deepseek-chat"));
+            inner.Attempts[1].Should().Be(("claude", "opus"), "шаг цепочки на подписку пула (смена поставщика)");
+            inner.Attempts[2].Should().Be(("claude-2", "opus"), "тихая ротация подписки того же пула");
+            // Маркер подмены — ровно один (только шаг цепочки); тихая ротация прошла без маркера.
+            Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle();
+
+            // Sticky-флаг: после шага цепочки + тихой ротации ОБА поля восстановлены.
+            session.Model.Should().Be("deepseek-chat", "модель восстановлена (sticky-флаг не сброшен тихой ротацией)");
+            session.Provider.Should().Be("claude", "провайдер восстановлен (тихая ротация не сбросила накопленный флаг)");
+            // Свежий ответ скопирован из профиля последней пары (sub-claude-2) в исходный профиль (sub-claude).
+            File.ReadAllText(Profile("sub-claude")).Should().Contain("ANSWER",
+                "обратный перенос идёт из актуального профиля последней пары (sub-claude-2)");
+            // Persist вызван с восстановленными значениями.
+            persisted.Should().NotBeEmpty("restore после sticky-флага персистит восстановленные значения");
+            persisted[^1].Model.Should().Be("deepseek-chat");
+            persisted[^1].Provider.Should().Be("claude");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
 }

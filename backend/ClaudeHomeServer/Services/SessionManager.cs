@@ -2878,6 +2878,7 @@ public class SessionManager : IDisposable
         if (entry.QueueFrozen) return;
 
         QueuedMessage? next;
+        var scheduleContinue = false;
         lock (entry.PendingLock)
         {
             if (entry.QueueFrozen) return;
@@ -2892,15 +2893,35 @@ public class SessionManager : IDisposable
                 // ContinueWorkLoopAsync по result увидит его и уступит, не дублируя директиву.
                 if (entry.LoopTurnInFlight) return;
                 next = entry.Pending.FirstOrDefault(p => p.Kind == PendingKind.User);
-                if (next is null) return;
-                entry.Pending.Remove(next);
-                entry.LoopTurnInFlight = true;
+                if (next is null)
+                {
+                    // Minor 6: при активном цикле, свободном маркере и пустой user-очереди
+                    // (напр. сообщение удалили из очереди до exited прерванного хода, а result
+                    // не пришёл) — цикл продолжит свою работу директивой, иначе он висел бы
+                    // «активным» без движения. ContinueWorkLoopAsync пройдёт гейты сама: если
+                    // параллельный запуск (по result) уже взвёл маркер — она сразу уступит.
+                    scheduleContinue = true;
+                }
+                else
+                {
+                    entry.Pending.Remove(next);
+                    entry.LoopTurnInFlight = true;
+                }
             }
             else
             {
                 next = entry.Pending.FirstOrDefault();
                 if (next is not null) entry.Pending.RemoveAt(0);
             }
+        }
+        if (scheduleContinue)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await ContinueWorkLoopAsync(sessionId); }
+                catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Продолжение цикла из drain ({sessionId}): {ex.Message}"); }
+            });
+            return;
         }
         if (next is null) return;
 
@@ -3622,6 +3643,16 @@ public class SessionManager : IDisposable
         if (manual && wasEnabled && !enabled)
             await AddWorkLoopStoppedNoticeAsync(sessionId, entry, "manual",
                 "Цикл остановлен вами. Текущий ход продолжает работу.");
+
+        // Minor 5: агентские сообщения, скопившиеся за время цикла (они ждали конца ВСЕГО цикла),
+        // при выключении не должны дожидаться следующего пользовательского хода — запускаем разбор
+        // очереди. В фоне: SetWorkLoopAsync вызывается в т.ч. из ContinueWorkLoopAsync по result.
+        if (wasEnabled && !enabled)
+            _ = Task.Run(async () =>
+            {
+                try { await DrainNextPendingAsync(sessionId); }
+                catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Разбор очереди после стопа цикла ({sessionId}): {ex.Message}"); }
+            });
 
         return entry.Info;
     }

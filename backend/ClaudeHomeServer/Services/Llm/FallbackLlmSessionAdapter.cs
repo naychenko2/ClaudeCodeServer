@@ -531,40 +531,56 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // поэтому мы здесь). Каждый шаг цепочки, дойдя до своих подписок (у нативных),
         // отработает уровень 1 на следующей итерации. Кулдаун (волна 2): шаги с провайдером
         // в кулдауне пропускаем, но fail-open — если ВСЕ оставшиеся непробованные в кулдауне,
-        // берём первого остывшего (кулдаун — наблюдение, а не запрет).
+        // берём первого остывшего (кулдаун — наблюдение, а не запрет). Кулдаун проверяем ДО
+        // переноса транскрипта: иначе копии плодятся по профилям пропущенных остывших кандидатов.
         if (chain.Count > 1)
         {
-            FallbackTarget? cooled = null;
-            var cooledIdx = chainIndex;
+            var cooledIdx = -1;
             var scan = chainIndex;
             while (++scan < chain.Count)
             {
                 var stepModel = chain[scan];
                 var stepKey = ProviderKeyFor(stepModel);
                 if (attempted.Contains((stepModel, stepKey))) continue;
-                var dstRoot = ResolveRootFor(stepKey);
-                if (!TryMigrateTranscript(dstRoot)) continue;
-                var label = string.IsNullOrWhiteSpace(stepModel) ? KeyLabel(stepKey) : stepModel;
-                var target = new FallbackTarget(stepKey, stepModel,
-                    Label: $"Цепочка пресета: шаг {scan + 1} → «{label}»",
-                    ProfileRoot: dstRoot, IsProviderSwitch: true);
-                // Остывший: запоминаем первого, но ищем живого дальше
+                // Остывший: запоминаем индекс первого и ищем живого дальше, НЕ мигрируя —
+                // перенос выполнится единожды, только если этот кандидат будет выбран (fail-open)
                 if (_health?.IsUnavailable(stepKey) is true)
                 {
-                    if (cooled is null) { cooled = target; cooledIdx = scan; }
+                    if (cooledIdx < 0) cooledIdx = scan;
                     continue;
                 }
+                var dstRoot = ResolveRootFor(stepKey);
+                if (!TryMigrateTranscript(dstRoot)) continue;
                 // Живой — берём сразу
                 chainIndex = scan;
-                return target;
+                return ChainStepTarget(scan, stepKey, stepModel, dstRoot);
             }
-            // Живых не осталось — fail-open: берём первого остывшего (если был), иначе цепочка исчерпана
-            if (cooled is not null) { chainIndex = cooledIdx; return cooled; }
+            // Живых не осталось — fail-open: берём первого остывшего (мигрируем здесь), иначе цепочка исчерпана
+            if (cooledIdx > 0)
+            {
+                var cm = chain[cooledIdx];
+                var ck = ProviderKeyFor(cm);
+                var dstRoot = ResolveRootFor(ck);
+                if (TryMigrateTranscript(dstRoot))
+                {
+                    chainIndex = cooledIdx;
+                    return ChainStepTarget(cooledIdx, ck, cm, dstRoot);
+                }
+            }
             return null;
         }
 
         // Без цепочки (одноэлементная/пустая) автоподбора нет — честная ошибка (ADR-007 §4).
         return null;
+    }
+
+    // Целевой шаг цепочки с маркером для ленты («Цепочка пресета: шаг N → …»)
+    private FallbackTarget ChainStepTarget(int scan, string stepKey, string stepModel, string? dstRoot)
+    {
+        var label = string.IsNullOrWhiteSpace(stepModel) ? KeyLabel(stepKey) : stepModel;
+        return new FallbackTarget(stepKey, stepModel,
+            Label: $"Цепочка пресета: шаг {scan + 1} → «{label}»",
+            ProfileRoot: dstRoot, IsProviderSwitch: true);
     }
 
     // Ключ пары для модели шага: провайдер по модели (приоритет), затем Provider сессии —

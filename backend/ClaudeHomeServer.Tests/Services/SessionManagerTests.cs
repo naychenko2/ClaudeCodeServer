@@ -1507,6 +1507,100 @@ public class SessionManagerTests : IDisposable
         Sent<WorkLoopStoppedMessage>().Should().BeEmpty("это включение, а не остановка");
     }
 
+    // --- Фиксы ревью Глеба: цикл «до готово» (Major 3, Minor 5/6) ---
+
+    private static bool GetLoopTurnInFlight(object entry) =>
+        (bool)entry.GetType().GetField("LoopTurnInFlight")!.GetValue(entry)!;
+
+    // Major 3: ContinueWorkLoopAsync взводит LoopTurnInFlight под PendingLock до отправки
+    // директивы продолжения. Пользовательское сообщение, пришедшее в момент отправки директивы
+    // (гонка «гейт пройден → user → drain»), НЕ должно пускать второй ход в тот же процесс —
+    // оно ждёт конца continuation-итерации как следующая итерация.
+    [Fact]
+    public async Task ContinueWorkLoop_ВзводитМаркерДоОтправки_ОчередьНеДублируетХод()
+    {
+        var session = await MkBusySessionAsync("loop-race-gate", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        var continuationSent = 0;
+        adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()))
+            .Callback<string, IReadOnlyList<string>, int, bool>((t, _, _, _) =>
+            {
+                if (!t.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")) return;
+                continuationSent++;
+                // В момент вызова адаптера (директива отправляется) маркер уже взведён —
+                // имитируем гонку: пользователь кладёт сообщение. Drain по нему уступить должен.
+                EnqueueUser(entry, "опоздавшая вводная");
+            })
+            .Returns(Task.CompletedTask);
+        SetProcess(entry, adapter.Object);
+        SetLoopTurnInFlight(entry, true); // ход-итерация в полёте
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        continuationSent.Should().Be(1, "директива продолжения отправлена ровно один раз");
+        GetLoopTurnInFlight(entry).Should().BeTrue("continuation-итерация помечена в полёте");
+        // Опоздавшее сообщение НЕ доставлено вторым ходом параллельно директиве — ждёт в очереди.
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("опоздавшая вводная")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Never());
+        _sut.GetPending(session.Id).Should().Contain(m => m.Text.Contains("опоздавшая вводная"),
+            "сообщение осталось в очереди до конца continuation-итерации");
+    }
+
+    // Minor 5: выключение цикла разбирает агентские сообщения, скопившиеся за время цикла
+    // (они ждали конца ВСЕГО цикла), — не дожидаясь следующего пользовательского хода.
+    [Fact]
+    public async Task SetWorkLoop_Выключение_РазбираетАгентскиеСообщенияИзОчереди()
+    {
+        var session = await MkBusySessionAsync("loop-drain-on-disable", SessionStatus.Active);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        await InvokeEnqueuePendingAsync(session.Id, entry, "доклад из цикла");
+        _sut.GetPending(session.Id).Should().ContainSingle("агентское сообщение скопилось за цикл");
+
+        await _sut.SetWorkLoopAsync(session.Id, enabled: false, userId: TestUserId, manual: true);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("доклад из цикла")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once(),
+            "Minor 5: агентское сообщение доставляется при выключении цикла");
+        _sut.GetPending(session.Id).Should().BeEmpty();
+    }
+
+    // Minor 6: drain при активном цикле, свободном маркере и пустой user-очереди (напр. ход
+    // прерван, сообщение из очереди удалено до exited) — планирует ContinueWorkLoopAsync,
+    // иначе цикл висел бы «активным» без движения.
+    [Fact]
+    public async Task Drain_АктивныйЦиклПустаяОчередь_ПродолжаетЦиклДирективой()
+    {
+        var session = await MkBusySessionAsync("loop-drain-empty", SessionStatus.Working);
+        await _sut.SetWorkLoopAsync(session.Id, enabled: true, userId: TestUserId);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        // Прерванный ход: exited этого прогона разберёт очередь, но сообщения в ней нет (удалили),
+        // а маркер свободен (interrupt сбросил) — без Minor 6 цикл завис бы.
+        entry.GetType().GetField("DrainOnExitedRun")!.SetValue(entry, TestRunId);
+        SetLoopTurnInFlight(entry, false);
+
+        await InvokeOnMessageAsync(session.Id, GetAccumulator(entry), new ExitedMessage(), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        adapter.Verify(a => a.SendMessageAsync(
+            It.Is<string>(t => t.Contains("СИСТЕМНАЯ ДИРЕКТИВА — ЦИКЛ")), It.IsAny<IReadOnlyList<string>>(),
+            It.IsAny<int>(), It.IsAny<bool>()), Times.Once(),
+            "Minor 6: drain продолжает цикл директивой при пустой user-очереди");
+    }
+
     // --- Гард B4: автопилот и «Командная реализация» не сочетаются в одном чате ---
 
     [Fact]

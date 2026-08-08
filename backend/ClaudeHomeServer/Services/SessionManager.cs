@@ -1462,7 +1462,12 @@ public class SessionManager : IDisposable
         return Prompts.TeamMechanicsPromptCatalog.BuildPromptBlock(InstalledSkillNames());
     }
 
-    // Имена установленных скиллов (глобальные + плагинные) для фильтра каталога механик.
+    // Имена установленных скиллов (глобальные + workflow-скрипты + плагинные) для фильтра
+    // каталога механик. Источник обязан совпадать с тем, по которому доступность механик
+    // считает фронт (GET /api/skills = скиллы + workflows + плагины): без workflow-скриптов
+    // руководитель проекта НИКОГДА не предлагал четыре механики на них — панель экспертов,
+    // командный спринт, ревью-консилиум и красную команду, — хотя в раскрывашке композера
+    // они доступны и запускаются руками.
     // Ошибки чтения — пустой набор (блок сузится до механик без скилла, ход не падает).
     private IReadOnlySet<string> InstalledSkillNames()
     {
@@ -1470,6 +1475,7 @@ public class SessionManager : IDisposable
         try
         {
             return _skills.GetGlobalSkills().Select(s => s.Name)
+                .Concat(_skills.GetGlobalWorkflows().Select(s => s.Name))
                 .Concat(_skills.GetPluginSkills().Select(s => s.Name))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
         }

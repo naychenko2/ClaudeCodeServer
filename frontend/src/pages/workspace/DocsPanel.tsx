@@ -1852,7 +1852,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       {homeView ? (
         // Без своей шапки: заголовок и так первой строкой документа, а переключиться
         // и настроить область можно в ряду выше — вторая полоса кнопок была бы лишней
-        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Развернуть в центре — поверх текста, в правом верхнем углу области чтения.
               Кнопка относится к документу под ней, а не к панели, поэтому и стоит на нём;
               подложка непрозрачная — под кнопкой едет прокручиваемый текст */}
@@ -1866,7 +1866,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               </IconButton>
             </div>
           )}
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
+          <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
             {!homeDoc && <div style={emptyStyle}>Загружаем…</div>}
             {homeDoc && (
               <MarkdownViewer
@@ -1883,7 +1883,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           </div>
         </div>
       ) : searching ? (
-        <div style={{ flex: 1, overflowY: 'auto', padding: `${SP.xs}px 0` }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px 0` }}>
           {/* null — ответ ещё не пришёл (запрос уходит через 250 мс после ввода) */}
           {hits === null && <div style={emptyStyle}>Ищем…</div>}
           {hits?.length === 0 && <div style={emptyStyle}>Ничего не найдено</div>}
@@ -1905,7 +1905,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             ref={treeRef}
             style={previewEnabled
               ? { flexGrow: 0, flexShrink: 1, flexBasis: treeH, display: 'flex', flexDirection: 'column', minHeight: TREE_SQUEEZE_H }
-              : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
+              // Расписано по осям, а не сокращением flex: у одного и того же узла
+              // React не даёт смешивать shorthand и отдельные свойства между рендерами
+              // и на каждом переключении режима ругается в консоль.
+              //
+              // Базис ИМЕННО auto, а не 0. Одиночная панель у центра стоит по контенту
+              // (fill=false в PanelShell — см. panelStretched в PanelZone), то есть высота
+              // родителя тут не задана. Нулевой базис в таком контейнере означает высоту 0:
+              // растягивать flexGrow нечего, свободного места нет — и от панели оставалась
+              // одна шапка. С auto список занимает свою настоящую высоту, а когда она
+              // больше окна, панель упирается в maxHeight:100% и сжимается до скролла
+              : { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }
             }
           >
             {/* Итог переименования: сколько ссылок починено и сколько осталось битыми.
@@ -1925,7 +1935,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               </div>
             )}
 
-            <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
+            {/* Базис auto по той же причине, что у контейнера выше: в панели «по контенту»
+                нулевой базис схлопнул бы список в ноль */}
+            <div ref={listRef} style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {index?.length === 0 && (
                   // Общий примитив, а не своя вёрстка: пустые состояния в продукте
                   // выглядят одинаково, и это одно из них

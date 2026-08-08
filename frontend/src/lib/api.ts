@@ -935,6 +935,10 @@ export const api = {
     startUser: () => request<Session>('/onboarding/user/start', { method: 'POST' }),
     startProject: (projectId: string) =>
       request<Session>(`/onboarding/project/${encodeURIComponent(projectId)}/start`, { method: 'POST' }),
+    // Страховка «применить итоги разговора»: LLM-прогон + генерация аватара до ~90 с,
+    // таймаут 150 с — запас на fal и холодный старт модели
+    applyTranscript: () =>
+      request<Persona>('/onboarding/user/apply-transcript', { method: 'POST', timeoutMs: 150_000 }),
   },
 
   sessions: {

@@ -57,6 +57,7 @@ export interface ProviderCardData {
   thresholdNote?: string;            // подписки: пояснение порога вывода из ротации
   freshnessDetail?: ReactNode;       // подписки: полная подпись свежести (из таблицы)
   copyCommand?: string | null;       // подписки: loginCommand — моно-блок + кнопка копирования
+  loginCommand?: string | null;      // подписки: та же команда компактной ссылкой, когда моно-блок не нужен
 }
 
 const cardBase: CSSProperties = {
@@ -107,6 +108,35 @@ function Sparkline({ points, height = 30 }: { points: { t: number; u: number }[]
     <svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" style={{ display: 'block' }}>
       <polyline points={xy} fill="none" stroke={C.accent} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
+  );
+}
+
+// Компактный вид той же команды — когда опрос жив и чинить нечего, но перелогинить
+// аккаунт всё равно может понадобиться (протух OAuth, сменили профиль). Ссылка вместо
+// кнопки с моно-блоком: место в раскрытии дорогое, а действие здесь про запас
+function CopyCommandLink({ cmd }: { cmd: string }) {
+  const [copied, setCopied] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const copy = () => {
+    navigator.clipboard?.writeText(cmd)
+      .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); })
+      .catch(() => {});
+  };
+  return (
+    <button onClick={copy} type="button"
+      onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 5, padding: 0, border: 'none',
+        background: 'none', font: 'inherit', fontSize: FS.xs, cursor: 'pointer',
+        color: copied ? C.successText : C.textMuted,
+        textDecoration: hovered && !copied ? 'underline' : 'none',
+        alignSelf: 'flex-start',
+      }}>
+      {copied
+        ? <Check size={12} color={C.successText} strokeWidth={ICON_STROKE} />
+        : <Copy size={12} color={C.textMuted} strokeWidth={ICON_STROKE} />}
+      {copied ? 'Команда скопирована' : 'Команда входа для PowerShell'}
+    </button>
   );
 }
 
@@ -278,12 +308,16 @@ export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMob
           {data.tier && <Pill>Тариф: {data.tier}</Pill>}
           {data.thresholdNote && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{data.thresholdNote}</div>}
           {data.freshnessDetail && <div style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>{data.freshnessDetail}</div>}
-          {data.copyCommand && (
+          {data.copyCommand ? (
+            // Опрос сломан — команда нужна прямо сейчас: показываем её целиком
             <>
               <span style={{ display: 'block', fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary, background: C.bgInset, padding: '5px 8px', borderRadius: R.md, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{data.copyCommand}</span>
               <CopyCommandButton cmd={data.copyCommand} />
             </>
-          )}
+          ) : data.loginCommand ? (
+            // Всё в порядке — команда про запас, одной строкой без моно-блока
+            <CopyCommandLink cmd={data.loginCommand} />
+          ) : null}
           {data.countWindows?.map((w, i) => (
             <div key={i}>
               <QuotaWindow w={w} labelWidth={data.labelWidth} />

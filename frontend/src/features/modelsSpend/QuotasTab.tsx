@@ -330,7 +330,11 @@ function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: SubCtx)
     tier: sub.tier ?? null,
     thresholdNote: `Из ротации выводит нагрузка 5-часового окна выше ${Math.round((ctx.rotationThreshold || 0.8) * 100)}%`,
     freshnessDetail: fresh.detail,
+    // Команда входа доступна всегда, а не только при сломанном опросе: перелогинить
+    // аккаунт бывает нужно и с живым токеном (протух OAuth, сменили профиль). При
+    // unauthorized она подана крупно, в остальных случаях — компактной ссылкой
     copyCommand: fresh.copyCommand,
+    loginCommand: sub.loginCommand ?? null,
     trend: trend.length >= 2 ? trend : undefined,
   };
 }

@@ -429,6 +429,11 @@ public class PersonasController : ControllerBase
         if (onboarding.OnboardingKind == OnboardingKinds.User)
         {
             _sessions.SetPersona(onboarding.Id, UserId, persona.Id);
+            // Финализация знакомства (план 2.6): фиксируем момент завершения и снимаем статус
+            // заготовки — ассистент превратился в «своего». IntroCompletedAt гасит карточку-
+            // приглашение, обнулённый AssistantPersonaId убирает метку и при будущей смене дефолта.
+            _users.SetIntroCompleted(UserId, DateTime.UtcNow);
+            _users.SetAssistantPersona(UserId, null);
             _users.SetOnboardingSession(UserId, null);
         }
         else if (onboarding.OnboardingKind == OnboardingKinds.Project && onboarding.ProjectId is { } pid)

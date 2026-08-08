@@ -1528,4 +1528,94 @@ public class FallbackLlmSessionAdapterTests
         }
         finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
+
+    // Регрессия ревью 2026-08-08 (sticky-флаг): за ход БЫЛА смена типа поставщика (шаг цепочки,
+    // IsProviderSwitch:true), а ЗА НЕЙ — тихая ротация подписки того же пула (IsProviderSwitch:false).
+    // Раньше appliedProviderSwitch = next.IsProviderSwitch присваивал тип ПОСЛЕДНЕЙ подмены (false),
+    // и finally НЕ восстанавливал Provider/Model и НЕ переносил транскрипт обратно — пара
+    // Model=deepseek-chat × Provider=claude-2 персистилась, а следующий ход по модели уходил в профиль
+    // deepseek, где свежего ответа нет → молчаливая потеря хода из контекста CLI. После фикса флаг
+    // накапливается (|=), restore отрабатывает полностью.
+    //
+    // Цепочка [deepseek-chat, opus]: шаг 1 (deepseek, сторонний) — сбой → шаг цепочки opus на подписку
+    // пула claude (нативная, IsProviderSwitch:true) → 429 → тихая ротация на claude-2 (free) → успех.
+    // Ответ CLI пишется только в профиль sub-claude-2; после хода должен оказаться в sub-claude (origProvider).
+    [Fact]
+    public async Task ШагЦепочкиЗатемТихаяРотация_ModelProviderВосстановлены_ТранскриптИзПоследнейПары()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_sticky_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+                ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+                ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool("claude", "claude-2");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-sticky";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            string Profile(string key) => Path.Combine(baseDir, "claude-profiles", key, "projects", flat, csid + ".jsonl");
+
+            var persisted = new List<(string? Model, string? Provider)>();
+            // origProvider = claude (ключ пула), чтобы шаг цепочки opus резолвился на подписку пула.
+            var session = new Session { Model = "deepseek-chat", Provider = "claude", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "deepseek-chat", "opus" },
+                persist: () => persisted.Add((session.Model, session.Provider)));
+            inner.Sink = sut.HandleMessageAsync;
+
+            // История лежит в стартовом профиле deepseek (currentKey на старте = deepseek по модели).
+            Directory.CreateDirectory(Path.GetDirectoryName(Profile("deepseek"))!);
+            File.WriteAllText(Profile("deepseek"), "HISTORY");
+            var claude2File = Profile("sub-claude-2");
+
+            // deepseek × deepseek-chat — 429 → шаг цепочки opus (на подписку пула claude).
+            // claude × opus — 429 → тихая ротация на claude-2 (IsProviderSwitch:false).
+            // claude-2 × opus — успех + ответ CLI пишется в профиль sub-claude-2.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(claude2File, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Три попытки. Первая — стартовая пара сессии: origProvider=claude (ключ пула) выбран
+            // так, чтобы шаг цепочки opus резолвился на подписку пула, а не на сторонний deepseek.
+            // Реальный профиль транскрипта первой попытки — deepseek (по модели deepseek-chat),
+            // поэтому HISTORY лежит в Profile("deepseek"); Attempts пишут Info.Provider, а не профиль.
+            inner.Attempts.Should().HaveCount(3);
+            inner.Attempts[0].Should().Be(("claude", "deepseek-chat"));
+            inner.Attempts[1].Should().Be(("claude", "opus"), "шаг цепочки на подписку пула (смена поставщика)");
+            inner.Attempts[2].Should().Be(("claude-2", "opus"), "тихая ротация подписки того же пула");
+            // Маркер подмены — ровно один (только шаг цепочки); тихая ротация прошла без маркера.
+            Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle();
+
+            // Sticky-флаг: после шага цепочки + тихой ротации ОБА поля восстановлены.
+            session.Model.Should().Be("deepseek-chat", "модель восстановлена (sticky-флаг не сброшен тихой ротацией)");
+            session.Provider.Should().Be("claude", "провайдер восстановлен (тихая ротация не сбросила накопленный флаг)");
+            // Свежий ответ скопирован из профиля последней пары (sub-claude-2) в исходный профиль (sub-claude).
+            File.ReadAllText(Profile("sub-claude")).Should().Contain("ANSWER",
+                "обратный перенос идёт из актуального профиля последней пары (sub-claude-2)");
+            // Persist вызван с восстановленными значениями.
+            persisted.Should().NotBeEmpty("restore после sticky-флага персистит восстановленные значения");
+            persisted[^1].Model.Should().Be("deepseek-chat");
+            persisted[^1].Provider.Should().Be("claude");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
 }

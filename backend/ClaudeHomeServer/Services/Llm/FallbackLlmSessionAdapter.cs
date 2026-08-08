@@ -286,11 +286,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var origProvider = Info.Provider;
         var appliedModel = origModel;
         var appliedProvider = origProvider;
-        // Тип последней подмены: была ли она сменой ТИПА поставщика (шаг цепочки/сторонний
-        // провайдер, IsProviderSwitch:true) или тихой ротацией подписки того же пула Claude.
-        // Решает в finally, что восстанавливать и переносить ли транскрипт обратно —
-        // регрессия волны 2 (см. комментарий блока restore ниже).
-        var appliedProviderSwitch = false;
+        // Была ли за ход хоть одна смена ТИПА поставщика (шаг цепочки/сторонний провайдер,
+        // IsProviderSwitch:true). Накапливается по «или»: тихая ротация подписки того же пула
+        // Claude флаг не сбрасывает (сценарий «шаг цепочки → 429 → тихая ротация → успех» —
+        // restore обязан сработать по накопленному флагу). Решает в finally, что восстанавливать
+        // и переносить ли транскрипт обратно — регрессия волны 2 (см. блок restore ниже).
+        var anyProviderSwitch = false;
 
         try
         {
@@ -337,7 +338,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         _profileRoot = stepRoot;
                         appliedModel = currentModel;
                         appliedProvider = currentKey;
-                        appliedProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
+                        anyProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
                         var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
                         await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
                             $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
@@ -445,11 +446,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 currentModel = next.Model ?? currentModel;
                 currentKey = next.Key;
                 // Запоминаем последнее применённое значение Info — для CAS-восстановления в finally.
-                // appliedProviderSwitch — тип именно этой (последней) подмены: по нему finally
-                // решает, восстанавливать ли Provider и переносить ли транскрипт обратно.
+                // anyProviderSwitch накапливаем: за ход могла быть смена поставщика, а затем тихая
+                // ротация подписки (IsProviderSwitch:false) — по накопленному флагу finally решает,
+                // восстанавливать ли Provider и переносить ли транскрипт обратно из актуального
+                // _profileRoot (профиль последней пары — там лежит свежий ответ).
                 appliedModel = Info.Model;
                 appliedProvider = Info.Provider;
-                appliedProviderSwitch = next.IsProviderSwitch;
+                anyProviderSwitch |= next.IsProviderSwitch;
                 // Потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки /
                 // переход к стороннему провайдеру). Тихие ротации подписок того же пула
                 // Claude бесплатны — это та же модель на другом аккаунте, а не подмена.
@@ -470,24 +473,27 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             // случай, а различить «подмена» от «совпадение» без версионирования нельзя. Без подмен
             // applied == orig и восстановление — no-op.
             //
-            // Тип последней подмены решает, что делать с Provider (регрессия волны 2: restore
+            // Флаг anyProviderSwitch решает, что делать с Provider (регрессия волны 2: restore
             // провайдера терял свежий транскрипт хода). TranscriptMigrator.TryMigrate — это Copy,
             // а не move: ход на профиле A поймал ошибку → транскрипт скопирован A→B → финальный
             // ответ CLI записан ТОЛЬКО в профиль B. Вернуть Provider в A — и следующий ход на
             // --resume с A не вспомнит собственный ответ (в ленте CCS он есть, в контексте CLI нет),
             // а TryPoolFailover ещё и затрёт свежий B устаревшей копией A→B.
-            //   • Тихая ротация подписки того же пула (IsProviderSwitch:false, модель не менялась):
+            //   • За ход НЕ было смены типа поставщика (только тихие ротации подписок того же пула):
             //     Provider НЕ восстанавливаем — оставляем аккаунт, где реально прошёл ход и лежит
             //     свежий транскрипт. Качество не страдает (та же модель, другой аккаунт), а транскрипт
             //     остаётся консистентным. Модель восстанавливаем как обычно (тихая ротация её и не
             //     трогала — restore здесь no-op).
-            //   • Смена типа поставщика (IsProviderSwitch:true — шаг цепочки/сторонний провайдер):
-            //     восстанавливаем И модель, И Provider (иначе пара вроде opus × kimi несовместима),
-            //     но ПЕРЕД restore копируем транскрипт обратно в профиль исходного провайдера.
+            //   • За ход БЫЛА смена типа поставщика (IsProviderSwitch — шаг цепочки/сторонний
+            //     провайдер, возможно с последующей тихой ротацией внутри нового пула): восстанавливаем
+            //     И модель, И Provider (иначе пара вроде opus × kimi несовместима), но ПЕРЕД restore
+            //     копируем транскрипт обратно в профиль исходного провайдера. Источник копии —
+            //     _profileRoot (профиль ПОСЛЕДНЕЙ пары: шаг цепочки прошёл, а за ним тихая ротация
+            //     сменила подписку — именно там лежит свежий ответ).
             var modelRestored = false;
             var providerRestored = false;
             if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }
-            if (appliedProviderSwitch)
+            if (anyProviderSwitch)
             {
                 if (Info.Provider == appliedProvider)
                 {
@@ -500,8 +506,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     providerRestored = true;
                 }
             }
-            // Тихая ротация (!appliedProviderSwitch): Provider оставляем — аккаунт, на котором
-            // прошёл ход, хранит свежий транскрипт. providerRestored остаётся false.
+            // Без смены типа поставщика (!anyProviderSwitch): Provider оставляем — аккаунт, на
+            // котором прошёл ход, хранит свежий транскрипт. providerRestored остаётся false.
             //
             // (Minor 4) Заметка о видимости для клиента: новое значение Info.Provider персистится
             // (ниже), но в ленте событие об этом НЕ идёт — тихая ротация по решению владельца

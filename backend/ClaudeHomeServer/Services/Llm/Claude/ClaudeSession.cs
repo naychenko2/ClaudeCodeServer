@@ -2754,13 +2754,18 @@ public class ClaudeSession : ILlmSessionAdapter
                     int? postTokens = meta.ValueKind == JsonValueKind.Object
                         && meta.TryGetProperty("post_tokens", out var pst) && pst.TryGetInt32(out var pstv) ? pstv : null;
                     await _onMessage(new CompactBoundaryMessage(trigger, preTokens, postTokens));
-                    // После компакции фактический контекст резко меньше. Обновляем оценку до
-                    // post_tokens, иначе _lastContextTokens держит полный докомпактный размер: ход
-                    // компакции измерил его через usage assistant-сообщений, и значение живёт дальше.
-                    // Тогда при ошибке СЛЕДУЮЩЕГО хода фолбэк отсёк бы все шаги с окном < старого
-                    // размера — хотя разговор теперь помещается везде (Major 2 ревью). post_tokens
-                    // нет — обнуляем: фильтр ёмкости уходит в fail-open (лучше попробовать, чем сдаться).
-                    _lastContextTokens = postTokens ?? 0;
+                    // После компакции оценки контекста НЕТ. post_tokens — размер свёрнутой ИСТОРИИ,
+                    // а не контекст следующего хода: в него не входят системный промпт, определения
+                    // инструментов и CLAUDE.md, которые в окно возвращаются. Замер на живом чате дал
+                    // post=3.7k при 52k реального контекста следующего хода (frontend/src/lib/context.ts).
+                    // Класть post_tokens в оценку — отравлять реестр ёмкости: ход сразу после компакции
+                    // часто падает с overflow у потолка (summary + большой tool_result), и тогда
+                    // RecordOverflow запомнил бы МИНИМУМ 3.7k на час, выпав модель из цепочек по всему
+                    // процессу. Обнуляем безусловно: 0 = «оценки нет» — WouldFit уходит в fail-open,
+                    // RecordOverflow отсекается guard'ом contextTokens<=0, ContextTokens в result
+                    // остаётся пустым (фронтовый fresh: «оценка появится после следующего хода»), а
+                    // реальное значение вернёт TrackContextTokens на первом же assistant-сообщении.
+                    _lastContextTokens = 0;
                 }
                 else if (sysSubtype == "status")
                 {

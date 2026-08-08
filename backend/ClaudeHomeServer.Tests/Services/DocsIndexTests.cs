@@ -1660,6 +1660,819 @@ public class DocsIndexTests : IDisposable
         info.Defaults.Should().BeEquivalentTo(DocsIndexService.DefaultScope);
     }
 
+    // ─── Свойства документов: разбор шапки ──────────────────────────────────
+
+    // Шапка ADR как она написана в репозитории: заголовок, пустая строка, блок свойств,
+    // многострочное значение, пустая строка, раздел
+    private const string AdrText = """
+        # ADR-005: Серверная часть
+
+        **Статус:** Предложено
+        **Дата:** 2026-08-03
+        **Принимающие решение:** Андрей
+        **Связанные артефакты:** макет `docs/mockups/x.html`,
+        спецификация `docs/mockups/y.md`
+
+        ## Контекст
+
+        Текст решения. **В этом плане:** строка в теле документа.
+        """;
+
+    [Fact]
+    public void Свойства_ШапкаADR_РазбираетсяВПорядкеФайла()
+    {
+        Write(AdrText, "docs", "adr", "ADR-005-x.md");
+
+        var props = _svc.GetIndex(_root, Scope("docs"), AdrSchema())
+            .Single(d => d.Path.Contains("ADR-005")).Properties!;
+
+        props.Select(p => p.Key).Should().Equal("Статус", "Дата", "Принимающие решение", "Связанные артефакты");
+        props[0].Value.Should().Be("Предложено");
+    }
+
+    [Fact]
+    public void Свойства_ПереносСтроки_ВЗначениеНеВходит()
+    {
+        // Строка-продолжение остаётся в блоке, но не приклеивается к значению: иначе правка
+        // свойства схлопнула бы в одну строку целый абзац шапки (такие шапки в проектах есть)
+        Write(AdrText, "docs", "a.md");
+
+        var props = DocProperties.Values(AdrText, "docs/a.md");
+
+        props.Last().Value.Should().Be("макет `docs/mockups/x.html`,");
+        props.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ПродолжениеСоседнейСтроки_НеТрогается()
+    {
+        // Правка статуса не имеет права переписать абзац, который идёт следом за ним
+        Write("# Док\n\n> **Статус:** Проектирование.\n> Правила в силе, папка наполняется.\n\n## Раздел\n",
+            "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", "Принято");
+
+        File.ReadAllText(AdrPath).Should().Be(
+            "# Док\n\n> **Статус:** Принято\n> Правила в силе, папка наполняется.\n\n## Раздел\n");
+    }
+
+    [Fact]
+    public void Свойства_СтрокаВТелеДокумента_СвойствомНеСтановится()
+    {
+        // «**В этом плане:**» стоит после раздела — шапка кончилась задолго до неё
+        DocProperties.Values(AdrText, "a.md").Select(p => p.Key).Should().NotContain("В этом плане");
+    }
+
+    [Fact]
+    public void Свойства_ЖирныйТекстБезДвоеточияВнутри_НеШапка()
+    {
+        // Реальные промахи корпуса: двоеточие снаружи «**…**» либо его нет вовсе.
+        // Терпимость к такому написанию сделала бы свойствами пол-репозитория
+        var text = "# Observability\n\n**OpenTelemetry-based** observability с режимами:\nдальше текст\n";
+        DocProperties.Values(text, "a.md").Should().BeEmpty();
+
+        DocProperties.Values("# Режим\n\n**ОБЯЗАТЕЛЬНО**: первым же ответом\n", "a.md").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Свойства_ДубликатКлюча_БерётсяПервый()
+    {
+        var text = "# Док\n\n**Статус:** Принято\n**Статус:** Отклонено\n";
+        DocProperties.Values(text, "a.md").Should().ContainSingle().Which.Value.Should().Be("Принято");
+    }
+
+    [Fact]
+    public void Свойства_ПустоеЗначение_СвойствоОстаётсяПустым()
+    {
+        var props = DocProperties.Values("# Док\n\n**Статус:**\n", "a.md");
+        props.Should().ContainSingle();
+        props[0].Value.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Свойства_ПустаяСтрокаВнутриБлока_ОбрываетШапку()
+    {
+        var text = "# Док\n\n**Статус:** Принято\n\n**Дата:** 2026-08-08\n";
+        DocProperties.Values(text, "a.md").Select(p => p.Key).Should().Equal("Статус");
+    }
+
+    [Fact]
+    public void Свойства_ШапкаСписком_Разбирается()
+    {
+        // Так пишут шапку решений в других проектах: пунктами списка. Ложных срабатываний
+        // маркер не добавляет — шапку по-прежнему ищем только сразу за H1
+        var text = "# ADR-0001: Ядро не знает доменов\n\n"
+            + "- **Статус:** Предложено\n- **Основание:** Ретроспектива\n- **Дата:** 2026-08-05\n\n## Контекст\n";
+
+        DocProperties.Values(text, "a.md").Select(p => $"{p.Key}={p.Value}")
+            .Should().Equal("Статус=Предложено", "Основание=Ретроспектива", "Дата=2026-08-05");
+    }
+
+    [Fact]
+    public void Свойства_ШапкаЦитатой_Разбирается()
+    {
+        var text = "# 🔭 Vision\n\n> **Статус:** Проектирование.\n\nТекст документа.\n";
+
+        DocProperties.Values(text, "a.md").Should().ContainSingle()
+            .Which.Value.Should().Be("Проектирование.");
+    }
+
+    [Fact]
+    public void Свойства_СписочнаяСтрокаВТелеДокумента_СвойствомНеСтановится()
+    {
+        // Тот же маркер в прозе (после раздела) шапкой не считается: контур не пускает
+        var text = "# Док\n\nВводный абзац.\n\n## Раздел\n\n- **Хранилище:** ClickHouse\n";
+        DocProperties.Values(text, "a.md").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ШапкаСписком_СохраняетОформление()
+    {
+        Write("# ADR-1\n\n- **Статус:** Предложено\n- **Дата:** 2026-01-01\n\n## Контекст\n",
+            "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", "Принято");
+        WriteProp("Ответственный", "Гриша");
+
+        File.ReadAllText(AdrPath).Should().Be(
+            "# ADR-1\n\n- **Статус:** Принято\n- **Дата:** 2026-01-01\n- **Ответственный:** Гриша\n\n## Контекст\n");
+    }
+
+    [Fact]
+    public void Свойства_ОградаКодаПередШапкой_РазборНеНачинается()
+    {
+        DocProperties.Values("# Док\n\n```\n**Статус:** Принято\n```\n", "a.md").Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Свойства_FrontMatter_Пропускается_ШапкаНиже()
+    {
+        var text = "---\nsource: x.md\n---\n\n# Док\n\n**Статус:** Принято\n";
+        DocProperties.Values(text, "a.md").Should().ContainSingle().Which.Key.Should().Be("Статус");
+    }
+
+    [Fact]
+    public void Свойства_ТриДефисаБезЗакрытия_ЭтоНеFrontMatter()
+    {
+        // Горизонтальная линия в начале файла: закрывающей черты нет, разбор начинается сверху
+        var text = "---\n\n**Статус:** Принято\n";
+        DocProperties.Values(text, "a.md").Should().ContainSingle().Which.Value.Should().Be("Принято");
+    }
+
+    [Fact]
+    public void Свойства_БезЗаголовкаH1_ШапкаСПервойСтроки()
+    {
+        DocProperties.Values("**Статус:** Принято\n\nтекст\n", "a.md")
+            .Should().ContainSingle().Which.Key.Should().Be("Статус");
+    }
+
+    [Fact]
+    public void Свойства_ЗначениеСоСсылкой_ОтдаётПутьОтКорня()
+    {
+        var text = "# Док\n\n**Заменено:** [ADR-7](../adr/ADR-7.md)\n";
+        DocProperties.Values(text, "docs/other/a.md")[0].Link.Should().Be("docs/adr/ADR-7.md");
+    }
+
+    [Fact]
+    public void Свойства_БинарныйДокумент_СвойствНет()
+    {
+        Write("# Док\n\n**Статус:** Принято\n", "docs", "a.md");
+        File.WriteAllBytes(Path.Combine(_root, "docs", "b.pdf"), [1, 2, 3]);
+
+        var index = _svc.GetIndex(_root, new DocsScope(["docs"], [], ["markdown", "pdf"]));
+
+        index.Single(d => d.Path.EndsWith(".pdf")).Properties.Should().BeNull();
+    }
+
+    // ─── Тип документа ──────────────────────────────────────────────────────
+
+    // Схема из одного типа: папка docs/adr, свойство-выбор «Статус» и «Дата» со штампом
+    private static IReadOnlyList<DocTypeDef> AdrSchema(string? match = "ADR-*.md", bool autoDate = false) =>
+    [
+        new("adr", "ADR", ["docs/adr"], match, "Статус",
+        [
+            new DocPropertyDef("Статус", DocPropertyKind.Choice, Choices:
+            [
+                new DocPropertyChoice("Предложено", "info"),
+                new DocPropertyChoice("Принято", "success"),
+            ]),
+            new DocPropertyDef("Дата", DocPropertyKind.Date, AutoUpdate: autoDate),
+            new DocPropertyDef("Ответственный", DocPropertyKind.Text),
+            new DocPropertyDef("Заменено", DocPropertyKind.DocLink),
+        ]),
+    ];
+
+    [Fact]
+    public void ТипДокумента_ПапкаИМаска_ОпределяетТип()
+    {
+        Write("# A\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-a.md");
+        Write("# B\n", "docs", "adr", "README.md");
+
+        var index = _svc.GetIndex(_root, Scope("docs"), AdrSchema());
+
+        index.Single(d => d.Path.EndsWith("ADR-1-a.md")).Type.Should().Be("adr");
+        // Маска отсекает README из той же папки
+        index.Single(d => d.Path.EndsWith("adr/README.md")).Type.Should().BeNull();
+    }
+
+    [Fact]
+    public void ТипДокумента_БезМаски_ВсяПапкаОдногоТипа()
+    {
+        Write("# B\n", "docs", "adr", "README.md");
+
+        _svc.GetIndex(_root, Scope("docs"), AdrSchema(match: null))
+            .Single().Type.Should().Be("adr");
+    }
+
+    [Fact]
+    public void ТипДокумента_РегистрИмени_НеМешает()
+    {
+        // На Linux файловая система регистрозависима, и без IgnoreCase маска «ADR-*.md»
+        // не поймала бы файл, названный строчными буквами
+        Write("# A\n", "docs", "adr", "adr-1-a.md");
+
+        _svc.GetIndex(_root, Scope("docs"), AdrSchema()).Single().Type.Should().Be("adr");
+    }
+
+    [Fact]
+    public void ТипДокумента_ВложенныеПапки_ПобеждаетДлиннейшийПрефикс()
+    {
+        Write("# A\n", "docs", "adr", "deep", "ADR-1.md");
+        IReadOnlyList<DocTypeDef> schema =
+        [
+            new("doc", "Документ", ["docs"], null, null, [new DocPropertyDef("Ответственный", DocPropertyKind.Text)]),
+            .. AdrSchema(),
+        ];
+
+        _svc.GetIndex(_root, Scope("docs"), schema).Single().Type.Should().Be("adr");
+    }
+
+    [Fact]
+    public void ТипДокумента_ПравкаСхемы_ВиднаБезПравкиДокументов()
+    {
+        // Сторож инварианта: схема живёт в .docs, которого нет в отпечатке кеша. Проставь
+        // мы тип при сборке корпуса — правка схемы была бы не видна до перезапуска сервера
+        Write("# A\n", "docs", "adr", "ADR-1.md");
+        Write("""{ "folders": ["docs"] }""", ".docs");
+
+        _svc.GetIndex(_root, _svc.ReadScopeFile(_root).Scope, _svc.ReadScopeFile(_root).Types)
+            .Single().Type.Should().BeNull();
+
+        Write("""
+            { "folders": ["docs"], "docTypes": [ { "id": "adr", "title": "ADR",
+              "folders": ["docs/adr"], "properties": [ { "key": "Статус", "kind": "text" } ] } ] }
+            """, ".docs");
+
+        var file = _svc.ReadScopeFile(_root);
+        _svc.GetIndex(_root, file.Scope, file.Types).Single().Type.Should().Be("adr");
+    }
+
+    [Fact]
+    public void ТипДокумента_БезСхемы_СвойстваИзИндексаУбираются()
+    {
+        // Индекс перезапрашивается на каждое изменение файлов: возить шапки всех документов
+        // подряд ради метки у типизированных незачем
+        Write("# A\n\n**Статус:** Принято\n", "docs", "a.md");
+
+        _svc.GetIndex(_root, Scope("docs")).Single().Properties.Should().BeNull();
+    }
+
+    // ─── Секция docTypes в файле области ────────────────────────────────────
+
+    [Fact]
+    public void ТипыДокументов_ЧитаютсяИзФайлаОбласти()
+    {
+        Write("""
+            { "folders": ["docs"], "docTypes": [ { "id": "adr", "title": "ADR", "folders": ["docs/adr"],
+              "match": "ADR-*.md", "badgeProperty": "Статус", "properties": [
+                { "key": "Статус", "kind": "choice", "required": true,
+                  "choices": [ { "value": "Принято", "color": "success" } ] },
+                { "key": "Дата", "kind": "date", "autoUpdate": true } ] } ] }
+            """, ".docs");
+
+        var types = _svc.ReadScopeFile(_root).Types;
+
+        types.Should().ContainSingle();
+        types[0].Match.Should().Be("ADR-*.md");
+        types[0].BadgeProperty.Should().Be("Статус");
+        types[0].Properties[0].Kind.Should().Be(DocPropertyKind.Choice);
+        types[0].Properties[0].Required.Should().BeTrue();
+        types[0].Properties[0].Choices!.Single().Color.Should().Be("success");
+        types[0].Properties[1].AutoUpdate.Should().BeTrue();
+    }
+
+    [Fact]
+    public void ТипыДокументов_СекцииНет_ПустойСписок()
+    {
+        Write("""{ "folders": ["docs"] }""", ".docs");
+
+        var file = _svc.ReadScopeFile(_root);
+        file.Types.Should().BeEmpty();
+        file.DocTypesError.Should().BeNull();
+    }
+
+    [Fact]
+    public void ТипыДокументов_БитаяСекция_НеЛомаетОбласть()
+    {
+        // Схема не вправе утащить за собой область: иначе одна опечатка в docTypes
+        // выключала бы панель документации целиком
+        Write("""{ "folders": ["wiki"], "docTypes": 5 }""", ".docs");
+
+        var file = _svc.ReadScopeFile(_root);
+
+        file.Scope!.Folders.Should().Equal("wiki");
+        file.Types.Should().BeEmpty();
+        file.DocTypesError.Should().NotBeNullOrEmpty();
+    }
+
+    [Fact]
+    public void ТипыДокументов_НеизвестныйВид_СвойствоОтбрасывается()
+    {
+        // Молча превратить «выбор» в «текст» значит потерять словарь значений
+        Write("""
+            { "docTypes": [ { "id": "adr", "folders": ["docs"], "properties": [
+              { "key": "Плохое", "kind": "рулетка" }, { "key": "Хорошее", "kind": "text" } ] } ] }
+            """, ".docs");
+
+        _svc.ReadScopeFile(_root).Types.Single().Properties.Select(p => p.Key).Should().Equal("Хорошее");
+    }
+
+    [Fact]
+    public void ТипыДокументов_HexЦвет_НеПроходит()
+    {
+        // Сырой цвет запрещён дизайн-системой: в схеме живут имена ролей, а не значения
+        Write("""
+            { "docTypes": [ { "id": "adr", "folders": ["docs"], "properties": [
+              { "key": "Статус", "kind": "choice", "choices": [
+                { "value": "Принято", "color": "#22c55e" }, { "value": "Ждём", "color": "лиловый" } ] } ] } ] }
+            """, ".docs");
+
+        _svc.ReadScopeFile(_root).Types.Single().Properties[0].Choices!
+            .Select(c => c.Color).Should().AllBe("gray");
+    }
+
+    [Fact]
+    public void ТипыДокументов_ТипБезПапокИлиБезСвойств_Отбрасывается()
+    {
+        Write("""
+            { "docTypes": [
+              { "id": "нет-папок", "properties": [ { "key": "Статус", "kind": "text" } ] },
+              { "id": "нет-свойств", "folders": ["docs"] },
+              { "id": "ok", "folders": ["docs"], "properties": [ { "key": "Статус", "kind": "text" } ] } ] }
+            """, ".docs");
+
+        _svc.ReadScopeFile(_root).Types.Select(t => t.Id).Should().Equal("ok");
+    }
+
+    [Fact]
+    public void ТипыДокументов_ДубликатId_ВторойОтбрасывается()
+    {
+        Write("""
+            { "docTypes": [
+              { "id": "adr", "title": "Первый", "folders": ["docs"], "properties": [ { "key": "A", "kind": "text" } ] },
+              { "id": "ADR", "title": "Второй", "folders": ["wiki"], "properties": [ { "key": "B", "kind": "text" } ] } ] }
+            """, ".docs");
+
+        _svc.ReadScopeFile(_root).Types.Should().ContainSingle().Which.Title.Should().Be("Первый");
+    }
+
+    [Fact]
+    public void ТипыДокументов_МаскаСПутём_Отбрасывается()
+    {
+        // Маска задаёт имя файла; путь в ней означал бы вторую дорогу к папке мимо folders
+        Write("""
+            { "docTypes": [ { "id": "adr", "folders": ["docs"], "match": "docs/*.md",
+              "properties": [ { "key": "A", "kind": "text" } ] } ] }
+            """, ".docs");
+
+        _svc.ReadScopeFile(_root).Types.Single().Match.Should().BeNull();
+    }
+
+    [Fact]
+    public void ТипыДокументов_ChoiceБезЗначений_Отбрасывается()
+    {
+        Write("""
+            { "docTypes": [ { "id": "adr", "folders": ["docs"], "properties": [
+              { "key": "Статус", "kind": "choice" }, { "key": "Ответственный", "kind": "text" } ] } ] }
+            """, ".docs");
+
+        _svc.ReadScopeFile(_root).Types.Single().Properties.Select(p => p.Key).Should().Equal("Ответственный");
+    }
+
+    // ─── Файл области: запись не должна терять чужое ────────────────────────
+
+    [Fact]
+    public void ФайлОбласти_ЗаписьОбласти_СохраняетСекциюТипов()
+    {
+        // Пять дорог в контроллере ведут к записи .docs, и только одна из них про типы:
+        // кнопка «вернуть README в область» не имеет права стереть схему у всей команды
+        Write("""
+            { "folders": ["docs"], "docTypes": [ { "id": "adr", "folders": ["docs/adr"],
+              "properties": [ { "key": "Статус", "kind": "text" } ] } ] }
+            """, ".docs");
+
+        _svc.WriteScopeFile(_root, new DocsScope(["wiki"], ["README.md"], ["markdown"]));
+
+        var file = _svc.ReadScopeFile(_root);
+        file.Scope!.Folders.Should().Equal("wiki");
+        file.Types.Should().ContainSingle().Which.Id.Should().Be("adr");
+    }
+
+    [Fact]
+    public void ФайлОбласти_ЗаписьОбласти_СохраняетНезнакомыеПоля()
+    {
+        // Файл правится, а не пересобирается: поля, о которых эта версия продукта не знает,
+        // обязаны пережить сохранение области
+        Write("""{ "folders": ["docs"], "somethingNew": 42 }""", ".docs");
+
+        _svc.WriteScopeFile(_root, new DocsScope(["wiki"], [], ["markdown"]));
+
+        File.ReadAllText(Path.Combine(_root, ".docs")).Should().Contain("somethingNew");
+    }
+
+    [Fact]
+    public void ФайлОбласти_ЗаписьТипов_НеТеряетОбласть()
+    {
+        Write("""{ "folders": ["wiki"], "rootFiles": ["INDEX.md"], "types": ["markdown"] }""", ".docs");
+
+        _svc.WriteScopeFile(_root, _svc.ReadScopeFile(_root).Scope!, AdrSchema());
+
+        var file = _svc.ReadScopeFile(_root);
+        file.Scope!.Folders.Should().Equal("wiki");
+        file.Scope.RootFiles.Should().Equal("INDEX.md");
+        file.Types.Should().ContainSingle().Which.Properties.Should().HaveCount(4);
+    }
+
+    [Fact]
+    public void ФайлОбласти_ЗаписьТипов_НеТрогаетОбластьВФайле()
+    {
+        // Наши оси нормализованы, и запись их обратно молча срезала бы то, что человек
+        // написал в файле руками: лишние папки, опущенные оси, незнакомые ключи типов
+        Write("""{ "folders": ["wiki", "docs", "specs"], "types": ["markdown", "будущий-тип"] }""", ".docs");
+
+        _svc.WriteScopeFile(_root, scope: null, AdrSchema());
+
+        var raw = File.ReadAllText(Path.Combine(_root, ".docs"));
+        raw.Should().Contain("будущий-тип");
+        raw.Should().Contain("specs");
+        raw.Should().NotContain("rootFiles");        // ось не была задана — и не появилась
+        _svc.ReadScopeFile(_root).Types.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void ФайлОбласти_ПустойФайл_ЗаписьСоздаётСодержимое()
+    {
+        // Пустой файл чтение считает отсутствием — отказывать в записи было бы необъяснимо
+        Write("", ".docs");
+
+        _svc.WriteScopeFile(_root, DocsIndexService.DefaultScope)
+            .Should().Be(DocsIndexService.ScopeFileWriteStatus.Ok);
+
+        _svc.ReadScopeFile(_root).Scope!.Folders.Should().Equal("docs");
+    }
+
+    [Fact]
+    public void ФайлОбласти_БитыйJson_ЗаписьОтклоняется()
+    {
+        // Перезаписать неразобранный файл значит уничтожить чужую ручную правку,
+        // о содержимом которой мы ничего не знаем
+        Write("{ это не json", ".docs");
+
+        var status = _svc.WriteScopeFile(_root, DocsIndexService.DefaultScope);
+
+        status.Should().Be(DocsIndexService.ScopeFileWriteStatus.Broken);
+        File.ReadAllText(Path.Combine(_root, ".docs")).Should().Be("{ это не json");
+    }
+
+    // ─── Запись значения свойства ───────────────────────────────────────────
+
+    private string AdrPath => Path.Combine(_root, "docs", "adr", "ADR-1-x.md");
+
+    private DocsIndexService.PropertyWriteResult WriteProp(string key, string? value,
+        IReadOnlyList<DocTypeDef>? schema = null) =>
+        Creating().WriteProperty(_root, "docs/adr/ADR-1-x.md", key, value, Scope("docs"), schema ?? AdrSchema());
+
+    [Fact]
+    public void ЗаписьСвойства_СуществующийКлюч_МеняетТолькоЗначение()
+    {
+        Write("# ADR-1\n\n**Статус:** Предложено\n**Дата:** 2026-01-01\n\n## Контекст\n\nТело.\n",
+            "docs", "adr", "ADR-1-x.md");
+
+        var result = WriteProp("Статус", "Принято");
+
+        result.Status.Should().Be(DocsIndexService.PropertyWriteStatus.Ok);
+        // Весь остальной файл — байт в байт: правится ровно хвост одной строки
+        File.ReadAllText(AdrPath).Should()
+            .Be("# ADR-1\n\n**Статус:** Принято\n**Дата:** 2026-01-01\n\n## Контекст\n\nТело.\n");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_СохраняетCRLF()
+    {
+        Write("# ADR-1\r\n\r\n**Статус:** Предложено\r\n\r\n## Контекст\r\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", "Принято");
+
+        File.ReadAllText(AdrPath).Should().Be("# ADR-1\r\n\r\n**Статус:** Принято\r\n\r\n## Контекст\r\n");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_СохраняетBOM()
+    {
+        // FileService.WriteFile — это File.WriteAllText, то есть UTF-8 БЕЗ BOM: без отдельной
+        // ветки правка одного слова дала бы дифф на весь файл
+        var full = Path.Combine(_root, "docs", "adr", "ADR-1-x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        File.WriteAllText(full, "# ADR-1\n\n**Статус:** Предложено\n", new System.Text.UTF8Encoding(true));
+
+        WriteProp("Статус", "Принято");
+
+        var bytes = File.ReadAllBytes(full);
+        bytes[..3].Should().Equal([0xEF, 0xBB, 0xBF]);
+        File.ReadAllText(full).Should().Contain("**Статус:** Принято");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_НовыйКлюч_ВстаётВПорядкеСхемы()
+    {
+        // Не в конец шапки: иначе она превращается в хронологию кликов
+        Write("# ADR-1\n\n**Статус:** Принято\n**Ответственный:** Гриша\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Дата", "2026-08-08");
+
+        File.ReadAllText(AdrPath).Should()
+            .Be("# ADR-1\n\n**Статус:** Принято\n**Дата:** 2026-08-08\n**Ответственный:** Гриша\n");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ШапкиНет_СоздаётсяПослеЗаголовка()
+    {
+        Write("# ADR-1\n\n## Контекст\n\nТело.\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", "Принято");
+
+        File.ReadAllText(AdrPath).Should().Be("# ADR-1\n\n**Статус:** Принято\n\n## Контекст\n\nТело.\n");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_БезЗаголовка_ВставляетсяВНачалоФайла()
+    {
+        Write("Просто текст.\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", "Принято");
+
+        File.ReadAllText(AdrPath).Should().Be("**Статус:** Принято\n\nПросто текст.\n");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ПеренесённыйХвостЗначения_ОстаётсяВФайле()
+    {
+        // Продукт правит ровно свою строку. Хвост, перенесённый автором на следующую,
+        // остаётся как есть: угадывать, часть это значения или отдельная мысль, нельзя,
+        // а стереть чужой текст — хуже, чем оставить его на месте
+        Write("# ADR-1\n\n**Ответственный:** Гриша,\nа также Денис\n\n## Контекст\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Ответственный", "Гриша");
+
+        File.ReadAllText(AdrPath).Should().Be("# ADR-1\n\n**Ответственный:** Гриша\nа также Денис\n\n## Контекст\n");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ЗначениеNull_УдаляетСтроку()
+    {
+        Write("# ADR-1\n\n**Статус:** Принято\n**Дата:** 2026-01-01\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", null);
+
+        File.ReadAllText(AdrPath).Should().Be("# ADR-1\n\n**Дата:** 2026-01-01\n");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ЗначениеВнеСловаря_Отклоняется()
+    {
+        Write("# ADR-1\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-x.md");
+
+        var result = WriteProp("Статус", "Как-нибудь потом");
+
+        result.Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadValue);
+        File.ReadAllText(AdrPath).Should().Contain("**Статус:** Принято");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_РегистрЗначения_ПриводитсяКСхеме()
+    {
+        Write("# ADR-1\n\n**Статус:** Предложено\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", "принято");
+
+        File.ReadAllText(AdrPath).Should().Contain("**Статус:** Принято");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ДатаНеВФормате_Отклоняется()
+    {
+        Write("# ADR-1\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Дата", "8 августа").Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadValue);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ПереносСтрокиВЗначении_Отклоняется()
+    {
+        // Иначе хвост значения при следующем чтении стал бы отдельным свойством
+        Write("# ADR-1\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Ответственный", "Гриша\n**Статус:** Отклонено")
+            .Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadValue);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_Ссылка_ПишетсяОтносительноДокумента()
+    {
+        Write("# ADR-1\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-x.md");
+        Write("# ADR-7: Новое решение\n", "docs", "adr", "ADR-7-y.md");
+
+        WriteProp("Заменено", "docs/adr/ADR-7-y.md");
+
+        File.ReadAllText(AdrPath).Should().Contain("**Заменено:** [ADR-7: Новое решение](ADR-7-y.md)");
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_СсылкаВнеКорпуса_Отклоняется()
+    {
+        Write("# ADR-1\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Заменено", "backend/secret.md")
+            .Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadValue);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_НеописанныйКлюч_Отклоняется()
+    {
+        // Гейт схемы: без него эндпоинт стал бы универсальным редактором чужих md-файлов
+        Write("# ADR-1\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Произвольный", "что угодно")
+            .Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadKey);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ДокументБезТипа_Отклоняется()
+    {
+        Write("# Док\n\n**Статус:** Принято\n", "docs", "a.md");
+
+        Creating().WriteProperty(_root, "docs/a.md", "Статус", "Принято", Scope("docs"), AdrSchema())
+            .Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadKey);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ДокументВнеОбласти_НеНайден()
+    {
+        Write("# Секрет\n", "backend", "SECRET.md");
+
+        Creating().WriteProperty(_root, "backend/SECRET.md", "Статус", "Принято", Scope("docs"), AdrSchema())
+            .Status.Should().Be(DocsIndexService.PropertyWriteStatus.NotFound);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_БинарныйДокумент_ОтклоняетсяИФайлЦел()
+    {
+        // Тип задан ПАПКОЙ, поэтому без гейта содержимого правка «свойства» у pdf из
+        // типизированной папки прочитала бы его как текст и записала обратно испорченным
+        var pdf = Path.Combine(_root, "docs", "adr", "ADR-1-x.pdf");
+        Directory.CreateDirectory(Path.GetDirectoryName(pdf)!);
+        var original = new byte[] { 0x25, 0x50, 0x44, 0x46, 0x00, 0xFF, 0xFE };
+        File.WriteAllBytes(pdf, original);
+
+        var result = Creating().WriteProperty(_root, "docs/adr/ADR-1-x.pdf", "Статус", "Принято",
+            new DocsScope(["docs"], [], ["markdown", "pdf"]), AdrSchema(match: null));
+
+        result.Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadKey);
+        File.ReadAllBytes(pdf).Should().Equal(original);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ДокументНеВUtf8_ОтклоняетсяИФайлЦел()
+    {
+        // Терпимый декодер заменил бы непонятые байты на «?», и обратная запись сохранила бы
+        // файл уже испорченным целиком — из-за одного клика по статусу
+        var full = Path.Combine(_root, "docs", "adr", "ADR-1-x.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+        // Байты «Предложено» в CP1251: кодовую страницу берём не через Encoding.GetEncoding —
+        // в .NET Core её нет без RegisterProvider, а тесты гоняются и на Linux
+        byte[] original =
+        [
+            .. "# ADR-1\n\n**Статус:** "u8.ToArray(),
+            0xCF, 0xF0, 0xE5, 0xE4, 0xEB, 0xEE, 0xE6, 0xE5, 0xED, 0xEE,
+            .. "\n"u8.ToArray(),
+        ];
+        File.WriteAllBytes(full, original);
+
+        var result = WriteProp("Статус", "Принято");
+
+        result.Status.Should().Be(DocsIndexService.PropertyWriteStatus.Failed);
+        File.ReadAllBytes(full).Should().Equal(original);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_СнятьПустоеСвойство_УдаляетСтроку()
+    {
+        // «Значение пустое» и «свойства нет» — разные вещи: сравнение с пустой строкой
+        // считало бы снятие отсутствием изменений, и строка навсегда оставалась бы в файле
+        Write("# ADR-1\n\n**Статус:**\n**Дата:** 2026-01-01\n", "docs", "adr", "ADR-1-x.md");
+
+        var result = WriteProp("Статус", null);
+
+        result.Touched.Should().Equal("Статус");
+        File.ReadAllText(AdrPath).Should().Be("# ADR-1\n\n**Дата:** 2026-01-01\n");
+    }
+
+    [Fact]
+    public void ТипДокумента_ТекстовыйФайлВТипизированнойПапке_ТипаНеПолучает()
+    {
+        // Иначе .txt показывал бы плашку и редактор, а запись отвечала бы 400:
+        // условие «только markdown» обязано быть одним и в проекции, и в гейте записи
+        Write("# Заметка\n\n**Статус:** Принято\n", "docs", "adr", "notes.txt");
+
+        _svc.GetIndex(_root, new DocsScope(["docs"], [], ["markdown", "text"]), AdrSchema(match: null))
+            .Single().Type.Should().BeNull();
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_СлишкомДлинноеЗначение_Отклоняется()
+    {
+        // Значение на мегабайт выпихнуло бы документ за потолок размера, и он выпал бы
+        // из корпуса — починить его через панель стало бы нечем
+        Write("# ADR-1\n\n**Статус:** Принято\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Ответственный", new string('я', 501))
+            .Status.Should().Be(DocsIndexService.PropertyWriteStatus.BadValue);
+    }
+
+    [Fact]
+    public void ЗаписьСвойства_ИндексВидитНовоеЗначениеСразу()
+    {
+        Write("# ADR-1\n\n**Статус:** Предложено\n", "docs", "adr", "ADR-1-x.md");
+        var svc = Creating();
+        svc.GetIndex(_root, Scope("docs"), AdrSchema());   // прогреваем кеш
+
+        svc.WriteProperty(_root, "docs/adr/ADR-1-x.md", "Статус", "Принято", Scope("docs"), AdrSchema());
+
+        svc.GetIndex(_root, Scope("docs"), AdrSchema()).Single().Properties!
+            .Single(p => p.Key == "Статус").Value.Should().Be("Принято");
+    }
+
+    // ─── Дата смены ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void ДатаСмены_ПравкаДругогоСвойства_ОбновляетДату()
+    {
+        Write("# ADR-1\n\n**Статус:** Предложено\n**Дата:** 2020-01-01\n", "docs", "adr", "ADR-1-x.md");
+
+        var result = WriteProp("Статус", "Принято", AdrSchema(autoDate: true));
+
+        result.Touched.Should().Equal("Статус", "Дата");
+        File.ReadAllText(AdrPath).Should().Contain($"**Дата:** {DateTime.Now:yyyy-MM-dd}");
+    }
+
+    [Fact]
+    public void ДатаСмены_ШапкиНеБыло_ОбаСвойстваВОдномБлоке()
+    {
+        // Поштучная вставка отбивала бы каждую строку пустой, а пустая строка обрывает
+        // шапку: при следующем чтении из двух свойств оставалось одно
+        Write("# ADR-1\n\n## Контекст\n", "docs", "adr", "ADR-1-x.md");
+
+        WriteProp("Статус", "Принято", AdrSchema(autoDate: true));
+
+        var text = File.ReadAllText(AdrPath);
+        text.Should().Contain($"**Статус:** Принято\n**Дата:** {DateTime.Now:yyyy-MM-dd}\n\n## Контекст");
+        DocProperties.Values(text, "docs/adr/ADR-1-x.md").Select(p => p.Key).Should().Equal("Статус", "Дата");
+    }
+
+    [Fact]
+    public void ДатаСмены_ЗначениеНеИзменилось_ДатуНеТрогает()
+    {
+        // Повторный выбор того же статуса не должен бить дату
+        Write("# ADR-1\n\n**Статус:** Принято\n**Дата:** 2020-01-01\n", "docs", "adr", "ADR-1-x.md");
+
+        var result = WriteProp("Статус", "Принято", AdrSchema(autoDate: true));
+
+        result.Status.Should().Be(DocsIndexService.PropertyWriteStatus.Ok);
+        result.Touched.Should().BeEmpty();
+        File.ReadAllText(AdrPath).Should().Contain("**Дата:** 2020-01-01");
+    }
+
+    [Fact]
+    public void ДатаСмены_ПравкаСамойДаты_БезРекурсии()
+    {
+        Write("# ADR-1\n\n**Статус:** Принято\n**Дата:** 2020-01-01\n", "docs", "adr", "ADR-1-x.md");
+
+        var result = WriteProp("Дата", "2021-02-03", AdrSchema(autoDate: true));
+
+        result.Touched.Should().Equal("Дата");
+        File.ReadAllText(AdrPath).Should().Contain("**Дата:** 2021-02-03");
+    }
+
     public void Dispose()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* уборка best-effort */ }

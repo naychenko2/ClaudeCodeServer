@@ -102,6 +102,19 @@ public static class ServerMetrics
         unit: "{tick}",
         description: "Heartbeat телеметрии — если остановился, pipeline сломан");
 
+    // Знакомство вместо обязательного онбординга (фича default-personas-onboarding, план 2.10).
+    // После снятия гейта доля прохождения — единственный способ узнать, не убило ли изменение
+    // персонализацию. Без разрезов по пользователю (PII): только факт события.
+    public static readonly Counter<long> IntroStarted = _meter.CreateCounter<long>(
+        "ccs.intro.started",
+        unit: "{event}",
+        description: "Начато знакомство (создана онбординг-сессия)");
+
+    public static readonly Counter<long> IntroCompleted = _meter.CreateCounter<long>(
+        "ccs.intro.completed",
+        unit: "{event}",
+        description: "Знакомство завершено (дефолт назначен из онбординг-сессии)");
+
     // ── Recording API ────────────────────────────────────────────────────────
     // Строковые параметры = теги (camelCase ↔ snake_case ↔ AllowedTags).
     // Числовой параметр (где есть) = скалярное значение метрики.
@@ -169,6 +182,10 @@ public static class ServerMetrics
     {
         TelemetryHeartbeat.Add(1);
     }
+
+    // Знакомство (план 2.10): без тегов — только счётчик события.
+    public static void RecordIntroStarted() => IntroStarted.Add(1);
+    public static void RecordIntroCompleted() => IntroCompleted.Add(1);
 
     // ObservableGauges (sessions.active, websocket.connections) регистрируются
     // извне в задаче T9 через _meter.CreateObservableGauge — здесь только декларация

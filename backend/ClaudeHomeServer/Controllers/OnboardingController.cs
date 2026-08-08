@@ -4,6 +4,7 @@ using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Prompts;
+using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -66,7 +67,10 @@ public class OnboardingController(SessionManager sessions, UserStore users,
 
         if (earlyReturn is not null) return earlyReturn;
         if (created)
+        {
+            ServerMetrics.RecordIntroStarted();
             await KickoffFirstTurnAsync(chat!.Id);
+        }
         return Ok(chat);
     }
 
@@ -115,7 +119,10 @@ public class OnboardingController(SessionManager sessions, UserStore users,
 
         if (earlyReturn is not null) return earlyReturn;
         if (created)
+        {
+            ServerMetrics.RecordIntroStarted();
             await KickoffFirstTurnAsync(session!.Id);
+        }
         return Ok(session);
     }
 

@@ -7,6 +7,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.TriggerSources;
+using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -518,6 +519,8 @@ public class PersonasController : ControllerBase
         // или кнопке «Перейти в систему» — событие лишь помечает завершение
         await _sessions.BroadcastSessionMessageAsync(onboarding.Id,
             new OnboardingCompletedMessage(onboarding.OnboardingKind!, persona.Id, onboarding.ProjectId));
+        // Телеметрия знакомства (план 2.10): без разрезов по пользователю.
+        ServerMetrics.RecordIntroCompleted();
     }
 
     // Чаты, которые ведутся от лица этой персоны

@@ -331,28 +331,49 @@ public class PersonasController : ControllerBase
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
 
-        // Дефолт-персона удаляется только с преемником по той же зоне — остаться без
-        // дефолта нельзя (фича default-personas-onboarding, единственная точка каскада)
-        var isUserDefault = _users.GetById(UserId)?.DefaultPersonaId == id;
-        var defaultOfProjects = _projects.GetByOwner(UserId)
-            .Where(p => p.DefaultPersonaId == id).ToList();
-        if (isUserDefault || defaultOfProjects.Count > 0)
-        {
-            if (string.IsNullOrWhiteSpace(successorId))
-                return BadRequest(new { error = "Это дефолт-персона: выберите преемника" });
-            var successor = _personas.Get(successorId, UserId);
-            if (successor is null || successor.Id == id)
-                return BadRequest(new { error = "Преемник не найден или совпадает с удаляемой персоной" });
-            if (isUserDefault && successor.Scope != PersonaScope.Global)
-                return BadRequest(new { error = "Преемником личной дефолт-персоны может быть только глобальная персона" });
-            foreach (var project in defaultOfProjects)
-                if (successor.Scope != PersonaScope.Project || successor.ProjectId != project.Id)
-                    return BadRequest(new { error = $"Преемником руководителя проекта «{project.Name}» может быть только персона этого проекта" });
+        var me = _users.GetById(UserId);
+        var isAssistantDraft = me?.AssistantPersonaId == id;
 
-            if (isUserDefault) _users.SetDefaultPersona(UserId, successor.Id);
-            foreach (var project in defaultOfProjects)
-                _projects.SetDefaultPersona(project.Id, successor.Id);
-            await Broadcast("default", successor.Id);
+        // Заготовка-ассистент (план 2.7, решение §3в): AssistantPersonaId обнуляется ВСЕГДА при
+        // удалении заготовки — иначе поле повисает на мёртвом id и запирает знакомство навсегда.
+        // Если заготовка к тому же дефолт владельца — разрешаем удаление БЕЗ преемника и обнуляем
+        // дефолт: у нового пользователя единственная глобальная персона — заготовка, и требование
+        // преемника сделало бы её неудаляемой. Следующее создание чата заведёт нового ассистента
+        // (рубеж 2.4). Преемник нужен только обычной дефолт-персоне (не заготовке).
+        if (isAssistantDraft)
+        {
+            _users.SetAssistantPersona(UserId, null);
+            if (me?.DefaultPersonaId == id)
+            {
+                _users.SetDefaultPersona(UserId, null);
+                await Broadcast("default", null);
+            }
+        }
+        else
+        {
+            // Дефолт-персона удаляется только с преемником по той же зоне — остаться без
+            // дефолта нельзя (фича default-personas-onboarding, единственная точка каскада)
+            var isUserDefault = me?.DefaultPersonaId == id;
+            var defaultOfProjects = _projects.GetByOwner(UserId)
+                .Where(p => p.DefaultPersonaId == id).ToList();
+            if (isUserDefault || defaultOfProjects.Count > 0)
+            {
+                if (string.IsNullOrWhiteSpace(successorId))
+                    return BadRequest(new { error = "Это дефолт-персона: выберите преемника" });
+                var successor = _personas.Get(successorId, UserId);
+                if (successor is null || successor.Id == id)
+                    return BadRequest(new { error = "Преемник не найден или совпадает с удаляемой персоной" });
+                if (isUserDefault && successor.Scope != PersonaScope.Global)
+                    return BadRequest(new { error = "Преемником личной дефолт-персоны может быть только глобальная персона" });
+                foreach (var project in defaultOfProjects)
+                    if (successor.Scope != PersonaScope.Project || successor.ProjectId != project.Id)
+                        return BadRequest(new { error = $"Преемником руководителя проекта «{project.Name}» может быть только персона этого проекта" });
+
+                if (isUserDefault) _users.SetDefaultPersona(UserId, successor.Id);
+                foreach (var project in defaultOfProjects)
+                    _projects.SetDefaultPersona(project.Id, successor.Id);
+                await Broadcast("default", successor.Id);
+            }
         }
 
         if (!_personas.Delete(id, UserId)) return NotFound();

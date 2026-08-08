@@ -10,7 +10,7 @@ import { C, FONT, FS, R, SP } from '../../lib/design';
 import { Dot, IconButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { fmtReset } from '../../lib/rateLimit';
-import { QuotaWindow, type QuotaWindowView } from './QuotaWindow';
+import { QuotaWindow, CountSegments, type QuotaWindowView } from './QuotaWindow';
 
 export interface PillSpec { label: string; tone: 'plain' | 'danger' | 'free' }
 
@@ -357,14 +357,11 @@ function FreeLlmHealth({ health }: { health: HealthSpec }) {
   const req = health.requests24h;
   return (
     <>
-      {/* Сегменты платформ: живые — C.info, остальные — C.track */}
+      {/* Сегменты платформ: живые — C.info, остальные — C.track. Разметка общая с квотами:
+          CountSegments даёт и плашки, и потолок MAX_SEGMENTS в одной точке */}
       <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: SP.sm }}>
         <span style={{ width: 64, flexShrink: 0, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Платформы</span>
-        <span style={{ display: 'flex', gap: 3, flex: 1, minWidth: 0, flexWrap: 'wrap' }}>
-          {Array.from({ length: total }, (_, i) => (
-            <span key={i} style={{ display: 'block', width: 14, height: 6, borderRadius: 3, background: i < alive ? C.info : C.track }} />
-          ))}
-        </span>
+        <CountSegments used={alive} total={total} label="Живых" />
         <span style={{ flexShrink: 0, minWidth: 34, textAlign: 'right', fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textHeading }}>
           {alive} из {total}
         </span>

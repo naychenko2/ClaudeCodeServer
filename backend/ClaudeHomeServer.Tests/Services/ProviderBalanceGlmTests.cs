@@ -10,7 +10,7 @@ namespace ClaudeHomeServer.Tests.Services;
 public class ProviderBalanceGlmTests
 {
     // Живой payload (снимок 07.08.2026): два окна токенов (5 часов израсходовано на 60%,
-    // неделя — на 28%) и месячный лимит вызовов веб-инструментов (101/4000).
+    // неделя — на 28%) и месячный лимит веб-вызовов (101/4000).
     private const string RealPayload = """
         {"code":200,"msg":"Operation successful","success":true,
         "data":{"level":"max","limits":[
@@ -44,7 +44,7 @@ public class ProviderBalanceGlmTests
         var b = Parse(RealPayload);
 
         b!.Windows.Should().HaveCount(3);
-        // Короткое (5 часов) первым, затем неделя, затем месячный лимит инструментов
+        // Короткое (5 часов) первым, затем неделя, затем месячный лимит веб-вызовов
         b.Windows![0].Label.Should().Be("5 часов");
         b.Windows[0].Value.Should().Be("40"); // 100 − 60
         b.Windows[0].Unit.Should().Be("percent");
@@ -57,14 +57,14 @@ public class ProviderBalanceGlmTests
     }
 
     [Fact]
-    public void ЖивойОтвет_ВебИнструменты_ТретьимОкномCount()
+    public void ЖивойОтвет_ВебВызовы_ТретьимОкномConsumed()
     {
         var b = Parse(RealPayload);
 
         var tools = b!.Windows![2];
-        tools.Label.Should().Be("Веб-инструменты"); // НЕ «Месяц» — иначе читалось бы как квота токенов
+        tools.Label.Should().Be("Веб-вызовы"); // НЕ «Месяц» — иначе читалось бы как квота токенов
         tools.Value.Should().Be("101/4000");
-        tools.Unit.Should().Be("count");
+        tools.Unit.Should().Be("consumed"); // накопительный расход со сбросом, не моментальная занятость
         tools.ResetsAt.Should().Be(DateTimeOffset.FromUnixTimeMilliseconds(1786567342991).UtcDateTime);
     }
 
@@ -145,9 +145,9 @@ public class ProviderBalanceGlmTests
     }
 
     [Fact]
-    public void НеразборчивыйCount_ОкноИнструментовПропускается()
+    public void НеразборчивыйConsumed_ОкноВебВызововПропускается()
     {
-        // currentValue не разобрать — count-окно не добавляем, токен-окна живут
+        // currentValue не разобрать — consumed-окно не добавляем, токен-окна живут
         const string json = """
             {"data":{"limits":[
             {"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":60,"nextResetTime":1786101061032},

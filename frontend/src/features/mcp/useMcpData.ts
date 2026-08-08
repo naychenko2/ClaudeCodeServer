@@ -97,11 +97,34 @@ export function accessSummary(personasOff: number, projectsOff: number): string 
   return `Выключен ${parts.join(' и ')}`;
 }
 
+// Та же строка карточки, но для allow-модели (флаг mcp-allowlist): показываем, кому
+// сервер РЕАЛЬНО выдан, а не кого он обходит — «нигде не включён» здесь норма, а не поломка.
+export function accessSummaryOn(personasOn: number, projectsOn: number, outsideOn: boolean): string {
+  if (personasOn === 0 && projectsOn === 0 && !outsideOn) return 'Доступ не выдан';
+  const parts: string[] = [];
+  if (projectsOn > 0) parts.push(`${projectsOn} ${plural(projectsOn, 'проект', 'проекта', 'проектов')}`);
+  if (outsideOn) parts.push('чаты вне проектов');
+  if (personasOn > 0) parts.push(`${personasOn} ${plural(personasOn, 'персона', 'персоны', 'персон')}`);
+  return `Работает: ${parts.join(' · ')}`;
+}
+
 // Персона выключила сервер Off-привязкой «mcp:<ключ>» (по умолчанию сервер ей доступен)
 export function personaOffFor(persona: Persona, serverKey: string): boolean {
   const target = `mcp:${serverKey}`.toLowerCase();
   return (persona.bindings ?? []).some(b =>
     b.type === 'tool' && b.mode === 'off' && b.target.toLowerCase() === target);
+}
+
+// Персоне явно выдан доступ (allow-модель, флаг mcp-allowlist): привязка «mcp:<ключ>»
+// с Mode != Off. Та же таблица привязок, что читает студия персоны и деливери хода.
+export function personaBindingFor(persona: Persona, serverKey: string) {
+  const target = `mcp:${serverKey}`.toLowerCase();
+  return (persona.bindings ?? []).find(b => b.type === 'tool' && b.target.toLowerCase() === target);
+}
+
+export function personaGrantedFor(persona: Persona, serverKey: string): boolean {
+  const b = personaBindingFor(persona, serverKey);
+  return !!b && b.mode !== 'off';
 }
 
 export interface McpData {
@@ -123,6 +146,12 @@ export interface McpData {
   setProjectOff: (project: Project, serverKey: string, off: boolean) => void;
   personasOffCount: (serverKey: string) => number;
   projectsOffCount: (serverKey: string) => number;
+  // Allow-модель (флаг mcp-allowlist): выдача доступа, а не исключение из него
+  setProjectOn: (project: Project, serverKey: string, on: boolean) => void;
+  projectsOnCount: (serverKey: string) => number;
+  personasOnCount: (serverKey: string) => number;
+  grantPersona: (persona: Persona, serverKey: string) => Promise<void>;
+  revokePersona: (persona: Persona, serverKey: string) => Promise<void>;
   // Вход по OAuth (волна 7). oauthPending[serverId] — открыто окно провайдера, ждём
   // postMessage; oauthNotice[serverId] — сообщение под карточкой (окно закрыли / отказ)
   oauthPending: Record<string, boolean>;
@@ -347,6 +376,58 @@ export function useMcpData(): McpData {
   const projectsOffCount = (serverKey: string) =>
     projects.filter(p => (p.mcpServersOff ?? []).includes(serverKey)).length;
 
+  // Allow-list проекта правится тем же PUT /api/projects/{id}, что и deny-list
+  const setProjectOn = (project: Project, serverKey: string, on: boolean) => {
+    const current = project.mcpServersOn ?? [];
+    const next = on
+      ? [...current.filter(k => k !== serverKey), serverKey]
+      : current.filter(k => k !== serverKey);
+    const seq = (saveSeq.current[project.id] ?? 0) + 1;
+    saveSeq.current[project.id] = seq;
+    setProjects(list => list.map(p => (p.id === project.id ? { ...p, mcpServersOn: next } : p)));
+    setError(null);
+    api.projects.update(project.id, { mcpServersOn: next })
+      .then(saved => {
+        if (saveSeq.current[project.id] !== seq) return;
+        setProjects(list => list.map(p => (p.id === saved.id ? saved : p)));
+      })
+      .catch(e => {
+        if (saveSeq.current[project.id] !== seq) return;
+        setProjects(list => list.map(p => (p.id === project.id ? project : p)));
+        setError(msg(e, 'Не удалось сохранить'));
+      });
+  };
+
+  const projectsOnCount = (serverKey: string) =>
+    projects.filter(p => (p.mcpServersOn ?? []).includes(serverKey)).length;
+
+  const personasOnCount = (serverKey: string) =>
+    personas.filter(p => personaGrantedFor(p, serverKey)).length;
+
+  // Выдача/отзыв доступа персоне — та же Tool-привязка «mcp:<ключ>», что правит студия
+  // персоны (PersonaBindingsService): второго источника истины у allow-модели не заводим.
+  const grantPersona = async (persona: Persona, serverKey: string) => {
+    const target = `mcp:${serverKey}`;
+    const existing = personaBindingFor(persona, serverKey);
+    const saved = existing
+      ? await api.personas.updateBinding(persona.id, existing.id, { type: 'tool', target, mode: 'always' })
+      : await api.personas.addBinding(persona.id, { type: 'tool', target, mode: 'always' });
+    setPersonas(list => list.map(p => {
+      if (p.id !== persona.id) return p;
+      const bindings = (p.bindings ?? []).filter(b => b.id !== saved.id);
+      return { ...p, bindings: [...bindings, saved] };
+    }));
+  };
+
+  const revokePersona = async (persona: Persona, serverKey: string) => {
+    const existing = personaBindingFor(persona, serverKey);
+    if (!existing) return;
+    await api.personas.removeBinding(persona.id, existing.id);
+    setPersonas(list => list.map(p => (p.id === persona.id
+      ? { ...p, bindings: (p.bindings ?? []).filter(b => b.id !== existing.id) }
+      : p)));
+  };
+
   const oauthPending: Record<string, boolean> = {};
   for (const id of Object.keys(oauthSessions)) oauthPending[id] = true;
 
@@ -355,6 +436,7 @@ export function useMcpData(): McpData {
     checking, probes, reload: loadServers,
     setEnabled, probe, remove, save, importJson, setProjectOff,
     personasOffCount, projectsOffCount,
+    setProjectOn, projectsOnCount, personasOnCount, grantPersona, revokePersona,
     oauthPending, oauthNotice, startOAuth, completeOAuth, dismissOAuthNotice,
   };
 }

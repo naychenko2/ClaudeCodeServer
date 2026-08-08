@@ -129,6 +129,28 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Update_McpServersOn_PersistedAndReturnedByGet()
+    {
+        var project = await CreateProjectAsync("McpOn");
+        var id = project.GetProperty("id").GetString()!;
+
+        var putResponse = await _client.PutAsJsonAsync($"/api/projects/{id}", new
+        {
+            name = (string?)null,
+            rootPath = (string?)null,
+            mcpServersOn = new[] { "context7" }
+        });
+        putResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var putBody = JsonSerializer.Deserialize<JsonElement>(await putResponse.Content.ReadAsStringAsync());
+        putBody.GetProperty("mcpServersOn").EnumerateArray().Select(e => e.GetString()).Should().Equal("context7");
+
+        var getResponse = await _client.GetAsync($"/api/projects/{id}");
+        getResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        var getBody = JsonSerializer.Deserialize<JsonElement>(await getResponse.Content.ReadAsStringAsync());
+        getBody.GetProperty("mcpServersOn").EnumerateArray().Select(e => e.GetString()).Should().Equal("context7");
+    }
+
+    [Fact]
     public async Task Update_NonExistentProject_Returns404()
     {
         var response = await _client.PutAsJsonAsync("/api/projects/nope", new

@@ -221,7 +221,12 @@ available». Ограничения по ходу — на бэкенде: се�
 секретов) + `data/mcp-secrets.json` (значения, в `BackupPaths.SecretFileNames`) +
 `data/mcp-status.json` (наблюдения, в бэкап не едет). Каскад доступности реестр →
 `Project.McpServersOff` (deny-list) → Off-привязка персоны `mcp:<ключ>` (без `condition` —
-тот же инвариант состава хода). Доставка в ход — `SessionManager.BuildExternalMcpProvider` →
+тот же инвариант состава хода). **Разворачивается на allow-list** (флаг `mcp-allowlist`):
+сервер не едет никуда, пока не включён в проекте чата (`Project.McpServersOn`) ИЛИ
+у персоны чата (привязка `mcp:<ключ>` с `Mode != Off`); чат вне проекта без персоны —
+по `McpServerRecord.AllowOutsideProjects`. Deny-ветка живёт до снятия флага; план —
+[mcp-allowlist-plan.md](docs/research/mcp-allowlist-plan.md).
+Доставка в ход — `SessionManager.BuildExternalMcpProvider` →
 `ClaudeSession.BuildTurnMcpConfig`, `AuthVersion` в отпечатке запуска. Известное ограничение:
 полный цикл входа по OAuth не проверялся на реальном сервере с учётными данными. Подробности —
 [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).

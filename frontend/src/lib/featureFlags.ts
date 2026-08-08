@@ -14,6 +14,7 @@ export const FLAGS = {
   aiLocalSuggest: 'ai-local-suggest',
   linkReader: 'link-reader',
   mcpRegistry: 'mcp-registry',
+  mcpAllowlist: 'mcp-allowlist',
   changeDossiers: 'change-dossiers',
   teamImplementMode: 'team-implement-mode',
   defaultPersonasOnboarding: 'default-personas-onboarding',

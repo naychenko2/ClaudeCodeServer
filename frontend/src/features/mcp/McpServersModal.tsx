@@ -5,7 +5,7 @@ import { C, FONT, FS, MODAL_W, R } from '../../lib/design';
 import { useMcpData, plural } from './useMcpData';
 import { McpServerList } from './McpServerList';
 import { McpServerForm } from './McpServerForm';
-import { McpAccessMatrix } from './McpAccessMatrix';
+import { McpAccessTab } from './McpAccessTab';
 import { McpDiagnosticsTab } from './McpDiagnosticsTab';
 import type { McpServer } from '../../types';
 
@@ -106,7 +106,7 @@ export function McpServersModal({ onClose, isAdmin }: { onClose: () => void; isA
                 onCancel={() => { setEditing(null); setTab('servers'); }}
               />
             )}
-            {tab === 'access' && <McpAccessMatrix data={data} onClose={onClose} />}
+            {tab === 'access' && <McpAccessTab data={data} onClose={onClose} onAdd={openAdd} onEdit={openEdit} />}
             {tab === 'diag' && isAdmin && <McpDiagnosticsTab />}
           </div>
         </div>

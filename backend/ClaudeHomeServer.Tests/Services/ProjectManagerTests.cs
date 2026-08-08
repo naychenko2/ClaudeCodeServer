@@ -172,6 +172,45 @@ public class ProjectManagerTests : IDisposable
     }
 
     [Fact]
+    public void Update_McpServersOn_НормализуетИСбрасываетПустымСписком()
+    {
+        var created = _sut.Create("P", MkDir("mcp-on"), TestUserId, TestUsername);
+        created.McpServersOn.Should().BeNull("по умолчанию в проекте не включён никто");
+
+        // ключи приходят из UI: нормализуем как в реестре (нижний регистр, без дублей)
+        var updated = _sut.Update(created.Id, null, null, mcpServersOn: [" Context7 ", "context7", "figma"]);
+        updated.McpServersOn.Should().Equal("context7", "figma");
+
+        // null = не менять
+        _sut.Update(created.Id, "Другое имя", null).McpServersOn.Should().Equal("context7", "figma");
+
+        // пустой список = «включённых нет»
+        _sut.Update(created.Id, null, null, mcpServersOn: []).McpServersOn.Should().BeNull();
+    }
+
+    [Fact]
+    public void PurgeMcpKey_УбираетКлючИзВсехПроектовВладельца()
+    {
+        var a = _sut.Create("A", MkDir("purge-a"), TestUserId, TestUsername);
+        var b = _sut.Create("B", MkDir("purge-b"), TestUserId, TestUsername);
+        // третий проект ДРУГОГО владельца с тем же ключом — sweep не должен его тронуть
+        var alien = _sut.Create("Alien", MkDir("purge-alien"), "other-owner", "other-user");
+
+        _sut.Update(a.Id, null, null, mcpServersOn: ["context7", "figma"]);
+        _sut.Update(b.Id, null, null, mcpServersOn: ["context7"]);
+        _sut.Update(alien.Id, null, null, mcpServersOn: ["context7"]);
+
+        var touched = _sut.PurgeMcpKey(TestUserId, "Context7");
+        touched.Should().Be(2, "удалены выдачи только в двух проектах этого владельца");
+
+        _sut.GetById(a.Id)!.McpServersOn.Should().Equal(["figma"], "соседний ключ остался на месте");
+        // ключ был единственным -> список схлопывается в null, а не остаётся пустым
+        _sut.GetById(b.Id)!.McpServersOn.Should().BeNull();
+        // чужой проект не тронут
+        _sut.GetById(alien.Id)!.McpServersOn.Should().Equal(["context7"]);
+    }
+
+    [Fact]
     public void Update_NonExistent_ThrowsKeyNotFound()
     {
         var act = () => _sut.Update("nope", "X", null);

@@ -57,6 +57,12 @@ public class PersonaBindingsService
     public static string McpServerKeyOf(string key) =>
         key[Mcp.McpRegistry.ToolKeyPrefix.Length..].Trim().ToLowerInvariant();
 
+    // Включена ли allow-модель доступа серверов реестра для владельца (флаг mcp-allowlist).
+    // null-флаг-сервис (тесты без DI) — флаг считается выключенным (поведение как раньше).
+    private bool McpAllowlistOn(string? ownerId) =>
+        ownerId is not null && _flags is not null
+        && _flags.IsEnabled(ownerId, FeatureFlagKeys.McpAllowlist);
+
     // Каталог Tool-ключей для пикера и промпта подбора: статический ToolCatalog плюс
     // серверы личного реестра владельца. Сам ToolCatalog остаётся неизменным — он
     // статический и общий, а реестр у каждого владельца свой.
@@ -67,15 +73,23 @@ public class PersonaBindingsService
         if (records.Count == 0) return ToolCatalog;
 
         var catalog = new Dictionary<string, (string, string)>(ToolCatalog, StringComparer.OrdinalIgnoreCase);
+        var allowlist = McpAllowlistOn(ownerId);
         foreach (var record in records.OrderBy(r => r.Key, StringComparer.Ordinal))
         {
             var description = string.IsNullOrWhiteSpace(record.Description) ? "" : record.Description!.Trim() + ". ";
+            // Текст подсказки обязан совпадать с действующей семантикой: его читает промпт
+            // подбора привязок. За флагом — allow-семантика, без флага — прежняя deny.
+            var hint = allowlist
+                ? "По умолчанию выключен; привязка ВКЛЮЧАЕТ этот сервер персоне " +
+                  "(он доезжает и в проектные чаты по выдаче проекта, и в чаты персоны). " +
+                  "Условие применения не учитывается: состав инструментов хода не смеет " +
+                  "зависеть от текста запроса"
+                : "По умолчанию включён; привязка нужна только чтобы ВЫКЛЮЧИТЬ его этой персоне " +
+                  "(режим «выключено»). Условие применения у такой привязки не учитывается: " +
+                  "состав инструментов хода не смеет зависеть от текста запроса";
             catalog[Mcp.McpRegistry.ToolKeyPrefix + record.Key] = (
                 string.IsNullOrWhiteSpace(record.Label) ? record.Key : record.Label,
-                $"Свой MCP-сервер «{record.Key}» из личного реестра. {description}" +
-                "По умолчанию включён; привязка нужна только чтобы ВЫКЛЮЧИТЬ его этой персоне " +
-                "(режим «выключено»). Условие применения у такой привязки не учитывается: " +
-                "состав инструментов хода не смеет зависеть от текста запроса");
+                $"Свой MCP-сервер «{record.Key}» из личного реестра. {description}" + hint);
         }
         return catalog;
     }
@@ -109,6 +123,9 @@ public class PersonaBindingsService
     private readonly SkillsService _skills;
     private readonly UserStore _users;
     private readonly Mcp.McpRegistry? _mcpRegistry;
+    // Опционально (в тестах не передаётся): флаг-сервис — дефолт Tool-привязки на сервер
+    // реестра (mcp:...) зависит от флага mcp-allowlist. null — флаг считается выключенным.
+    private readonly FeatureFlagService? _flags;
     private readonly IConfiguration _config;
     private readonly ILogger<PersonaBindingsService> _log;
 
@@ -124,7 +141,9 @@ public class PersonaBindingsService
         // Опционально (в тестах не передаётся): личный реестр MCP-серверов владельца —
         // его записи попадают в каталог Tool-ключей как «mcp:<ключ>». Без него каталог
         // остаётся статическим, а mcp-привязки не проходят валидацию
-        Mcp.McpRegistry? mcpRegistry = null)
+        Mcp.McpRegistry? mcpRegistry = null,
+        // Опционально (в тестах не передаётся): флаг-сервис для allow-модели mcp-allowlist.
+        FeatureFlagService? flags = null)
     {
         _personas = personas;
         _projects = projects;
@@ -135,6 +154,7 @@ public class PersonaBindingsService
         _skills = skills;
         _users = users;
         _mcpRegistry = mcpRegistry;
+        _flags = flags;
         _config = config;
         _log = log;
     }
@@ -164,6 +184,15 @@ public class PersonaBindingsService
         if (persona is null) return true;
         return FindToolBinding(persona, key) is not { Mode: PersonaBindingMode.Off };
     }
+
+    // Выдан ли персоне сервер личного реестра по allow-модели (флаг mcp-allowlist):
+    // выдаёт только явная привязка Mode != Off на ключ каталога «mcp:<ключ>»; отсутствие
+    // привязки и режим Off — не выдан. Чат без персоны — не выдан. Инверсия касется ТОЛЬКО
+    // mcp-ключей: ServerToolEnabled и его deny-семантика для встроенных серверов (ServerKeys)
+    // не меняются. Решение зависит ТОЛЬКО от персоны → детерминировано на сессию
+    // (состав tools/list не мерцает между ходами). key — полный ключ с префиксом «mcp:».
+    public bool McpServerGranted(Persona? persona, string key) =>
+        persona is not null && FindToolBinding(persona, key) is { Mode: not PersonaBindingMode.Off };
 
     // Секция-надстройка под пресетом (PresetKeys: git/kb/personas-manage/personas-automation/
     // notes-annotations).
@@ -233,10 +262,11 @@ public class PersonaBindingsService
                 : (false, null);
         }
 
-        // Серверы личного реестра: та же семантика, что у ServerKeys — дефолт «включён»,
-        // выключает только Off-привязка (см. ServerToolEnabled в резолвере доставки)
+        // Серверы личного реестра: за флагом mcp-allowlist дефолт инвертируется —
+        // «по умолчанию выключен», привязка ВКЛЮЧАЕТ сервер персоне (McpServerGranted в
+        // резолвере доставки). Без флага — прежний дефолт «включён», Off-привязка выключает.
         if (IsMcpKey(key))
-            return (true, null);
+            return (McpAllowlistOn(ownerId) ? (false, null) : (true, null));
 
         // MCP-серверы-рубильники: дефолт всегда включён (выключить можно только Off-привязкой)
         if (ServerKeys.Contains(key))

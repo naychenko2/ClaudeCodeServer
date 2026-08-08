@@ -106,20 +106,23 @@ public class McpToolsetStabilityTests
 
         body.Should().Contain($"\"{key}\"",
             $"сервер обязан гейтиться Tool-ключом {key} (Off-привязка type: tool, target: {key})");
-        body.Should().MatchRegex(@"(ServerToolEnabled|ConsultantsEnabled|NotificationsEnabled)\(",
+        body.Should().MatchRegex(@"(ServerToolEnabled|McpServerGranted|ConsultantsEnabled|NotificationsEnabled)\(",
             "решение принимает единая точка PersonaBindingsService.ServerToolEnabled "
             + "(для консультантов и персон — обёртки ConsultantsEnabled/PersonasEnabled "
             + "с исключением для групповых чатов; для уведомлений — NotificationsEnabled "
-            + "с дефолтом по роли)");
+            + "с дефолтом по роли; для серверов реестра в allow-модели — McpServerGranted)");
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на состав серверов");
     }
 
     /// <summary>
-    /// Каскад доступности серверов личного реестра: реестр (Enabled) → проект
-    /// (deny-list Project.McpServersOff) → персона (Off-привязка «mcp:&lt;ключ&gt;»).
-    /// Все три оси — свойства owner/project/persona, ни одна не смотрит на ход;
-    /// выпадение любой означало бы, что настройка молча перестала действовать.
+    /// Каскад доступности серверов личного реестра в теле BuildExternalMcpProvider.
+    /// На период флага mcp-allowlist в методе живут ОБЕ модели — deny (реестр →
+    /// Project.McpServersOff → Off-привязка ServerToolEnabled) и allow (реестр →
+    /// Project.McpServersOn → выдача персоне McpServerGranted, чистое условие McpDelivery).
+    /// Все оси — свойства owner/project/persona, ни одна не смотрит на ход; выпадение
+    /// любой означало бы, что настройка молча перестала действовать. При зачистке deny-ветки
+    /// ассерты на McpServersOff/ServerToolEnabled уходят вместе с ней.
     /// </summary>
     [SkippableFact]
     public void КаскадРеестра_ТриОсиНаМесте()
@@ -130,10 +133,50 @@ public class McpToolsetStabilityTests
         var body = MethodBody(File.ReadAllText(path!),
             "private Func<ExternalMcpContext?>? BuildExternalMcpProvider");
 
+        // Общая ось 0 (рубильник записи) и оси deny-модели
         body.Should().Contain("record.Enabled", "первая ось каскада — рубильник самой записи реестра");
         body.Should().Contain("McpServersOff",
-            "вторая ось — deny-list проекта: сервер, выключенный в проекте, в ход не едет");
-        body.Should().Contain("ServerToolEnabled(", "третья ось — Off-привязка персоны");
+            "deny-модель: сервер, выключенный в проекте (McpServersOff), в ход не едет");
+        body.Should().Contain("ServerToolEnabled(", "deny-модель: Off-привязка персоны");
+        // Оси allow-модели
+        body.Should().Contain("McpServersOn",
+            "allow-модель: сервер включается в проекте через McpServersOn");
+        body.Should().Contain("McpServerGranted(", "allow-модель: выдача сервера персоне");
+        body.Should().Contain("ShouldDeliver",
+            "allow-модель: чистое условие доставки вынесено в McpDelivery.ShouldDeliver");
+        // Свойства хода в условие не входят — состав tools/list стабилен
+        body.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав серверов реестра");
+    }
+
+    /// <summary>
+    /// Чистое условие allow-доставки (McpDelivery.ShouldDeliver) обязано сверять все входы
+    /// правила: рубильник записи (Enabled), ось «вне проектов» (AllowOutsideProjects) и
+    /// AND-гейт профиля «Только чтение» (AllowReadOnlyPersonas). Выпадение любого — тихая
+    /// потеря настройки; все входы — свойства owner/project/persona/записи, не хода.
+    /// </summary>
+    [SkippableFact]
+    public void AllowМодель_ЧистоеУсловиеДоставки_СодержитВсеоси()
+    {
+        var path = FindSource("Services", "Mcp", "McpDelivery.cs");
+        Skip.If(path is null, "McpDelivery.cs не найден (сборка вне дерева репозитория)");
+
+        var source = File.ReadAllText(path!);
+        var start = source.IndexOf("public static bool ShouldDeliver(", StringComparison.Ordinal);
+        start.Should().BeGreaterThan(0, "метод ShouldDeliver обязан существовать");
+        // Тело метода — от сигнатуры до конца файла (в McpDelivery.cs единственный метод);
+        // XML-doc перед сигнатурой сюда не попадает, а внутренние //-комментарии выкидываем,
+        // чтобы ассенты судили по коду, а не по пояснениям.
+        var body = string.Join('\n', source[start..].Split('\n')
+            .Where(l => !l.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+
+        body.Should().Contain("record.Enabled", "ось 0 — рубильник записи реестра");
+        body.Should().Contain("AllowOutsideProjects",
+            "ось «чаты вне проектов»: без неё внепроектный чат теряет сервер");
+        body.Should().Contain("AllowReadOnlyPersonas",
+            "AND-гейт профиля «Только чтение» — не поглощается allow-list");
+        body.Should().Contain("personaGranted", "выдача персоне — вторая половина OR-правила");
+        body.Should().Contain("readOnly", "профиль персоны передаётся в условие явно");
     }
 
     /// <summary>

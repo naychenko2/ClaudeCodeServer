@@ -756,6 +756,10 @@ public class ClaudeSession : ILlmSessionAdapter
                         ["PERSONAS_SESSION_ID"] = Info.Id,
                         ["PERSONAS_MENTIONS"] = personaMentions,
                         ["PERSONAS_BINDINGS"] = _personasMcp.BindingsEnabled ? "1" : "0",
+                        // Флаг allow-модели серверов реестра: серверу персон нужен для фолбэка
+                        // enabledForPersona (allow: нет записи = не выдан) и allow-текстов.
+                        // Состав tools/list от него не зависит → в отпечаток запуска не входит.
+                        ["PERSONAS_MCP_ALLOWLIST"] = _personasMcp.McpAllowlist ? "1" : "0",
                         ["PERSONAS_WRITE"] = personaWrite,
                         ["PERSONAS_MANAGE"] = personaManage,
                         ["PERSONAS_AUTOMATION"] = personaAutomation,

@@ -1,0 +1,634 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MCP-серверы — вкладка «Доступ» (список исключений)</title>
+<style>
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-success:#5E8B4E; --c-success-bg:#E9F1E8; --c-success-text:#3F7A4F;
+  --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+  --c-danger:#B4452F; --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F; --c-danger-border:#F5C6BF;
+  --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05); --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.4); --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12); --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-button:0 4px 14px rgba(217,119,87,.30);
+  --c-overlay:rgba(23,19,15,.42);
+  --skeleton:rgba(154,143,126,.16);
+  font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+}
+[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-success:#7CB86A; --c-success-bg:#232E20; --c-success-text:#8FCB79;
+  --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+  --c-danger:#E8785E; --c-danger-bg:#331F1B; --c-danger-text:#EE8A72; --c-danger-border:#5A302A;
+  --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35); --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65); --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45); --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-button:0 4px 16px rgba(227,138,106,.34);
+  --c-overlay:rgba(0,0,0,.62);
+  --skeleton:rgba(237,230,219,.10);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--c-bg-panel);color:var(--c-text-primary);min-height:100vh}
+svg{display:block}
+
+/* ==== Оправа демонстрации (в продукте её нет) ==== */
+.topbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  padding:10px 16px;background:var(--c-bg-white);border-bottom:1px solid var(--c-border)}
+.topbar h1{font-family:'PT Serif',Georgia,serif;font-size:15px;margin:0 10px 0 0;color:var(--c-text-heading);font-weight:700}
+.topbar .sep{width:1px;height:22px;background:var(--c-border);margin:0 4px}
+.btn{font:inherit;font-size:12px;color:var(--c-text-secondary);background:var(--c-bg-panel);
+  border:1px solid var(--c-border);border-radius:8px;padding:6px 10px;cursor:pointer}
+.btn:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.btn.on{background:var(--c-accent-light);color:var(--c-accent);border-color:var(--c-accent-muted)}
+
+.stage{padding:32px 16px 90px;display:flex;justify-content:center}
+.stage.mob{padding:16px 0 90px}
+.stage.mob .modal-shell{max-width:390px;border:6px solid #000;border-radius:36px;box-shadow:0 20px 50px rgba(0,0,0,.35)}
+.stage.mob .modal{border-radius:26px;max-height:84vh}
+.stage.mob .grabber{display:block}
+
+/* ==== Modal / MODAL_W.wide = 720 ==== */
+.modal-shell{width:100%;max-width:720px;position:relative}
+.modal{background:var(--c-bg-card);border-radius:20px;box-shadow:var(--shadow-modal);
+  border:1px solid var(--c-border-light);display:flex;flex-direction:column;max-height:88vh;overflow:hidden}
+.grabber{display:none;width:36px;height:4px;border-radius:4px;background:var(--c-dashed);margin:10px auto 0;flex-shrink:0}
+.modal-head{padding:18px 22px 12px;border-bottom:1px solid var(--c-border-light);flex-shrink:0}
+.stage.mob .modal-head{padding:8px 14px}
+.modal-head .row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.modal-head h2{font-family:'PT Serif',Georgia,serif;font-size:19px;margin:0;color:var(--c-text-heading)}
+.modal-head p{font-size:12.5px;color:var(--c-text-secondary);margin:4px 0 0;line-height:1.45}
+.x{width:26px;height:26px;border-radius:8px;display:flex;align-items:center;justify-content:center;
+  color:var(--c-text-muted);cursor:pointer;font-size:15px;flex-shrink:0}
+.x:hover{background:var(--c-bg-selected)}
+
+.tabs{display:flex;gap:2px;padding:0 22px;border-bottom:1px solid var(--c-border-light);overflow-x:auto;flex-shrink:0}
+.stage.mob .tabs{padding:0 14px}
+.tab-btn{font:inherit;font-size:13px;font-weight:600;color:var(--c-text-secondary);background:transparent;
+  border:none;border-bottom:2px solid transparent;padding:10px 12px;cursor:pointer;white-space:nowrap;
+  display:flex;align-items:center;gap:5px}
+.tab-btn.active{color:var(--c-accent);border-bottom-color:var(--c-accent)}
+.tab-btn .cnt{font-size:10.5px;font-weight:700;color:var(--c-text-muted)}
+.tab-btn.active .cnt{color:var(--c-accent)}
+
+.body{overflow-y:auto;padding:16px 22px 24px;display:flex;flex-direction:column;gap:8px}
+.stage.mob .body{padding:12px 14px 20px}
+
+.section-title{font-size:11px;font-weight:700;color:var(--c-text-muted);text-transform:uppercase;
+  letter-spacing:.06em;margin:8px 2px 0}
+.section-title:first-child{margin-top:0}
+.hint{font-size:11.5px;color:var(--c-text-muted);line-height:1.45;padding:0 2px}
+.hint a{color:var(--c-accent);cursor:pointer}
+
+/* ==== Карточка сервера ==== */
+/* flex-shrink:0 обязателен: .body — flex-колонка со скроллом, иначе карточки
+   сжимаются и нижние строки уезжают под собственную границу */
+.acc-card{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;
+  display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.sk,.empty,.err,.hint,.section-title{flex-shrink:0}
+.acc-card + .acc-card{margin-top:8px}
+.acc-card.disabled{opacity:.62}
+.acc-head{display:flex;align-items:center;gap:8px;padding:11px 13px}
+.acc-name{display:flex;align-items:center;gap:7px;min-width:0;flex:1;
+  font-size:13.5px;font-weight:600;color:var(--c-text-heading)}
+.acc-name .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.transport{font-family:'JetBrains Mono','Courier New',monospace;font-size:10.5px;color:var(--c-text-muted);
+  border:1px solid var(--c-border);border-radius:6px;padding:1px 6px;flex-shrink:0}
+.badge{font-size:10px;font-weight:700;padding:2px 7px;border-radius:9px;white-space:nowrap;flex-shrink:0}
+.badge.own{background:var(--c-bg-selected);color:var(--c-text-secondary)}
+.badge.legacy{background:var(--c-warning-bg);color:var(--c-warning-text)}
+
+/* Плашка состояния доступа: норма — нейтральная, исключения — info (к сведению, не ошибка) */
+.state{font-size:11px;font-weight:700;padding:3px 9px;border-radius:9px;white-space:nowrap;flex-shrink:0;
+  display:flex;align-items:center;gap:5px}
+.state.all{background:var(--c-bg-selected);color:var(--c-text-secondary)}
+.state.some{background:var(--c-info-bg);color:var(--c-info)}
+.state.off{background:var(--c-warning-bg);color:var(--c-warning-text)}
+
+.acc-note{padding:0 13px 11px;font-size:12px;color:var(--c-text-muted);line-height:1.45}
+.acc-note b{color:var(--c-text-secondary);font-weight:600}
+
+/* ==== Строки исключений ==== */
+.ex-list{border-top:1px solid var(--c-border-light);display:flex;flex-direction:column}
+.ex{display:flex;align-items:center;gap:9px;padding:9px 13px;border-top:1px solid var(--c-border-light)}
+.ex:first-child{border-top:none}
+.ex .ic{width:26px;height:26px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;justify-content:center;
+  background:var(--c-bg-panel);color:var(--c-text-muted)}
+.ex .txt{min-width:0;flex:1;display:flex;flex-direction:column;gap:1px}
+.ex .t1{font-size:12.5px;color:var(--c-text-heading);font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ex .t2{font-size:11px;color:var(--c-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ex .act{flex-shrink:0}
+.ex.readonly .ic{background:var(--c-bg-selected)}
+.ex-more{font:inherit;font-size:11.5px;font-weight:600;color:var(--c-accent);background:transparent;
+  border:none;border-top:1px solid var(--c-border-light);padding:8px 13px;cursor:pointer;text-align:left}
+.ex-more:hover{background:var(--c-bg-selected)}
+
+.acc-foot{border-top:1px solid var(--c-border-light);padding:9px 13px;display:flex;align-items:center;
+  justify-content:space-between;gap:8px;flex-wrap:wrap;background:var(--c-bg-white)}
+.stage.mob .acc-foot .btn-ghost{width:100%;justify-content:center}
+.stage.mob .acc-foot{flex-direction:column;align-items:stretch}
+/* На узком экране бейджи съедали имя до «Файловый серв…» — имя занимает всю строку,
+   бейджи уходят под него */
+.stage.mob .acc-head{flex-wrap:wrap;row-gap:6px}
+.stage.mob .acc-name{flex:1 0 100%}
+
+.btn-ghost{font:inherit;font-size:12px;font-weight:600;color:var(--c-text-secondary);background:var(--c-bg-panel);
+  border:1px solid var(--c-border);border-radius:10px;padding:7px 12px;cursor:pointer;
+  display:flex;align-items:center;gap:6px}
+.btn-ghost:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.btn-ghost[disabled]{opacity:.5;cursor:default}
+.btn-sm{font:inherit;font-size:11.5px;font-weight:600;color:var(--c-text-secondary);
+  background:var(--c-bg-panel);border:1px solid var(--c-border);border-radius:8px;padding:5px 10px;cursor:pointer;
+  white-space:nowrap}
+.btn-sm:hover{background:var(--c-bg-selected);color:var(--c-text-primary)}
+.link-btn{font:inherit;font-size:11.5px;color:var(--c-accent);background:transparent;border:none;
+  cursor:pointer;padding:0;text-decoration:underline;white-space:nowrap}
+.btn-primary{font:inherit;font-size:12.5px;font-weight:600;color:var(--c-on-accent);background:var(--c-accent);
+  border:none;border-radius:10px;padding:8px 18px;cursor:pointer;box-shadow:var(--shadow-button)}
+.btn-danger{font:inherit;font-size:12.5px;font-weight:600;color:#fff;background:var(--c-danger);
+  border:none;border-radius:10px;padding:8px 16px;cursor:pointer}
+
+/* ==== Пустое состояние вкладки (своих серверов нет) ==== */
+.empty{border:1px dashed var(--c-dashed);border-radius:14px;padding:26px 20px;text-align:center;
+  display:flex;flex-direction:column;align-items:center;gap:8px}
+.empty .ic{width:44px;height:44px;border-radius:50%;background:var(--c-bg-panel);color:var(--c-text-muted);
+  display:flex;align-items:center;justify-content:center}
+.empty .t{font-size:14px;font-weight:600;color:var(--c-text-heading)}
+.empty p{font-size:12.5px;color:var(--c-text-secondary);line-height:1.55;margin:0;max-width:430px}
+
+/* ==== Загрузка / ошибка ==== */
+.sk{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:12px;padding:13px;
+  display:flex;flex-direction:column;gap:9px}
+.sk + .sk{margin-top:8px}
+.sk .l{height:11px;border-radius:6px;background:var(--skeleton);animation:sh 1.3s ease-in-out infinite}
+@keyframes sh{0%,100%{opacity:1}50%{opacity:.45}}
+.err{padding:9px 12px;border-radius:8px;font-size:12.5px;line-height:1.45;
+  color:var(--c-danger-text);background:var(--c-danger-bg);border:1px solid var(--c-danger-border);
+  display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+
+/* ==== Пикер проекта: поповер на десктопе, шторка на мобиле ==== */
+.pick-back{position:fixed;inset:0;z-index:60;background:transparent}
+.stage.mob ~ .pick-back, .pick-back.sheet{background:var(--c-overlay)}
+.pick{position:fixed;z-index:61;width:300px;max-width:calc(100vw - 24px);
+  background:var(--c-bg-card);border:1px solid var(--c-border);border-radius:12px;
+  box-shadow:var(--shadow-dropdown);display:flex;flex-direction:column;overflow:hidden}
+.pick.sheet{left:0;right:0;bottom:0;width:auto;max-width:none;border-radius:22px 22px 0 0;
+  box-shadow:var(--shadow-sheet);border-bottom:none}
+.pick-head{padding:11px 12px 8px;display:flex;flex-direction:column;gap:8px;
+  border-bottom:1px solid var(--c-border-light)}
+.pick-head .t{font-size:12.5px;font-weight:700;color:var(--c-text-heading)}
+.search{display:flex;align-items:center;gap:7px;background:var(--c-bg-white);border:1px solid var(--c-border);
+  border-radius:10px;padding:6px 9px;color:var(--c-text-muted)}
+.search input{font:inherit;font-size:13px;color:var(--c-text-heading);background:transparent;border:none;
+  outline:none;width:100%;min-width:0}
+.search:focus-within{border-color:var(--c-accent);box-shadow:var(--shadow-focus)}
+.pick-list{overflow-y:auto;max-height:260px;display:flex;flex-direction:column}
+.pick.sheet .pick-list{max-height:46vh}
+.pick-row{display:flex;align-items:center;gap:9px;padding:8px 12px;cursor:pointer;
+  border-top:1px solid var(--c-border-light);background:transparent;border-left:none;border-right:none;
+  border-bottom:none;font:inherit;text-align:left;width:100%}
+.pick-row:first-child{border-top:none}
+.pick-row:hover,.pick-row.kb{background:var(--c-bg-selected)}
+.pick-row .nm{flex:1;min-width:0;font-size:12.5px;color:var(--c-text-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pick-row .mark{font-size:10.5px;font-weight:700;color:var(--c-info);background:var(--c-info-bg);
+  border-radius:9px;padding:2px 7px;flex-shrink:0}
+.pick-empty{padding:16px 12px;text-align:center;font-size:12px;color:var(--c-text-muted)}
+.pick-foot{padding:8px 12px;border-top:1px solid var(--c-border-light);font-size:11px;color:var(--c-text-muted)}
+
+/* ==== ConfirmDialog удаления (сценарий «кого заденет») ==== */
+.overlay{position:fixed;inset:0;background:var(--c-overlay);z-index:70;display:flex;
+  align-items:center;justify-content:center;padding:16px}
+.confirm{width:100%;max-width:380px;background:var(--c-bg-card);border:1px solid var(--c-border-light);
+  border-radius:20px;box-shadow:var(--shadow-modal);padding:18px 20px}
+.confirm h3{font-family:'PT Serif',Georgia,serif;font-size:16px;margin:0 0 6px;color:var(--c-text-heading)}
+.confirm p{font-size:12.5px;color:var(--c-text-secondary);line-height:1.5;margin:0 0 10px}
+.confirm ul{margin:0 0 14px;padding-left:18px;font-size:12px;color:var(--c-text-secondary);line-height:1.6}
+.confirm-actions{display:flex;justify-content:flex-end;gap:8px}
+
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:80;
+  background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:10px;
+  box-shadow:var(--shadow-dropdown);padding:9px 14px;font-size:12.5px;color:var(--c-text-primary)}
+
+@media(max-width:640px){
+  .modal-head{padding:14px 14px 8px} .tabs{padding:0 14px} .body{padding:12px 14px 20px}
+}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Вкладка «Доступ» — список исключений</h1>
+  <button class="btn" id="themeBtn" onclick="toggleTheme()">Тёмная тема</button>
+  <button class="btn" id="mobBtn" onclick="toggleMobile()">Мобильная 390px</button>
+  <span class="sep"></span>
+  <button class="btn on" data-mode="normal" onclick="setMode('normal',this)">Норма: исключений нет</button>
+  <button class="btn" data-mode="exceptions" onclick="setMode('exceptions',this)">Есть исключения</button>
+  <button class="btn" data-mode="stress" onclick="setMode('stress',this)">Стресс: длинные имена, 12 исключений</button>
+  <button class="btn" data-mode="loading" onclick="setMode('loading',this)">Загрузка</button>
+  <button class="btn" data-mode="error" onclick="setMode('error',this)">Ошибка</button>
+  <button class="btn" data-mode="empty" onclick="setMode('empty',this)">Своих серверов нет</button>
+  <span class="sep"></span>
+  <button class="btn" onclick="openDelete()">Диалог удаления</button>
+</div>
+
+<div class="stage" id="stage">
+  <div class="modal-shell">
+    <div class="modal">
+      <div class="grabber"></div>
+      <div class="modal-head">
+        <div class="row">
+          <div>
+            <h2>MCP-серверы</h2>
+            <p>Внешние инструменты, которыми пользуются чаты и персоны: что подключено, живо ли оно и кому доступно.</p>
+          </div>
+          <div class="x">×</div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab-btn">Серверы <span class="cnt" id="tabCount">2</span></button>
+        <button class="tab-btn">Добавить</button>
+        <button class="tab-btn active">Доступ</button>
+        <button class="tab-btn">Диагностика</button>
+      </div>
+
+      <div class="body" id="body"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ===== Данные демонстрации =====
+const PROJECT_NAMES = [
+  'AI Home', 'НСИ Каталог', 'Вагонный парк', 'Платформа отчётности', 'Telemetry Gateway',
+  'Складской учёт', 'Мобильное приложение', 'Витрина данных', 'Интеграция 1С', 'Биллинг',
+  'Личный кабинет', 'Портал подрядчика', 'Расписание перевозок', 'Маршрутизатор заявок',
+  'Архив документов', 'Реестр контрагентов', 'Сервис уведомлений', 'Аналитика продаж',
+  'Планировщик ремонтов', 'Каталог оборудования', 'Договорной модуль', 'Тарифный калькулятор',
+  'Сверка платежей', 'Электронный документооборот', 'Кадровый портал', 'Обучающий контур',
+  'Песочница экспериментов', 'Legacy-миграция', 'Мониторинг инфраструктуры', 'Бот поддержки',
+  'Генератор отчётов', 'Импорт из внешних систем', 'Реестр обращений', 'Сервис печати',
+  'Витрина KPI', 'Тестовый стенд QA', 'Демо для заказчика', 'Черновики и наброски',
+];
+const PROJECTS = PROJECT_NAMES.map((name, i) => ({ id: 'p' + i, name }));
+const LONG_PROJECT = { id: 'plong', name: 'Миграция исторических данных подсистемы бухгалтерского учёта (этап 2, контур предпрода)' };
+const PERSONA_COUNT = 149;
+
+function srv(o){ return Object.assign({ enabled:true, source:'manual', off:[], personasOff:[] }, o); }
+
+const PRESETS = {
+  normal: [
+    srv({ id:'miro', label:'Miro', transport:'http' }),
+  ],
+  exceptions: [
+    srv({ id:'miro', label:'Miro', transport:'http', off:['p1'],
+      personasOff:[{ id:'vera', name:'Вера', role:'QA-тестер' }] }),
+    srv({ id:'fs', label:'Файловый сервер', transport:'stdio', off:[] }),
+    srv({ id:'legacy', label:'context7', transport:'http', source:'legacy', off:['p3','p9'] }),
+  ],
+  stress: [
+    srv({ id:'long', transport:'stdio',
+      label:'Файловый сервер общей папки подрядчиков (только чтение, без переходов по симлинкам)',
+      off:['p1','p3','p5','p7','p9','p11','p13','p15','p17','plong'],
+      personasOff:[
+        { id:'vera', name:'Вера', role:'QA-тестер AI Home: ручная проверка фич через Playwright' },
+        { id:'gleb', name:'Глеб', role:'Код-ревьюер' },
+      ] }),
+    srv({ id:'off', label:'Черновой сервер', transport:'http', enabled:false, off:['p2'] }),
+  ],
+  empty: [],
+};
+
+let mode = 'normal';
+let servers = clone(PRESETS.normal);
+let expanded = {};          // id сервера → показывать все исключения
+let picker = null;          // { serverId, anchor, query, kb }
+let deleteFor = null;
+
+function clone(v){ return JSON.parse(JSON.stringify(v)); }
+function projectName(id){
+  if (id === LONG_PROJECT.id) return LONG_PROJECT.name;
+  const p = PROJECTS.find(p => p.id === id);
+  return p ? p.name : id;
+}
+function plural(n, one, few, many){
+  const m10 = n % 10, m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+  return many;
+}
+function isMobile(){ return document.getElementById('stage').classList.contains('mob'); }
+
+// ===== Иконки (inline SVG вместо lucide — макет самодостаточный) =====
+const ico = {
+  ban:  '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="5.6" y1="5.6" x2="18.4" y2="18.4"/></svg>',
+  user: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  search:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.5" y2="16.5"/></svg>',
+  chev: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>',
+  check:'<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>',
+  plug: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6"/><path d="M6 8h12v3a6 6 0 0 1-12 0z"/><path d="M12 17v5"/></svg>',
+};
+
+// ===== Рендер =====
+function render(){
+  const body = document.getElementById('body');
+  document.getElementById('tabCount').textContent = servers.length || '';
+
+  if (mode === 'loading'){
+    body.innerHTML =
+      '<div class="section-title">Ваши серверы</div>' +
+      '<div class="hint">Смотрим, где сервер выключен…</div>' +
+      skeleton() + skeleton();
+    return;
+  }
+
+  if (mode === 'error'){
+    body.innerHTML =
+      '<div class="section-title">Ваши серверы</div>' +
+      '<div class="err"><span>Не удалось загрузить проекты и персоны — список исключений может быть неполным.</span>' +
+      '<button class="btn-sm" onclick="setMode(\'exceptions\')">Повторить</button></div>' +
+      '<div class="hint">Сами серверы на месте — их видно на вкладке «Серверы».</div>';
+    return;
+  }
+
+  if (servers.length === 0){
+    body.innerHTML =
+      '<div class="section-title">Ваши серверы</div>' +
+      '<div class="empty">' +
+        '<div class="ic">' + ico.plug + '</div>' +
+        '<div class="t">Своих серверов пока нет</div>' +
+        '<p>Настраивать доступ пока не к чему: встроенные серверы продукта доступны всегда и не выключаются. ' +
+        'Добавьте свой сервер — например, Miro или файловый — и здесь появится, где он выключен.</p>' +
+        '<button class="btn-primary" onclick="toast(\'Переход на вкладку «Добавить»\')">Добавить сервер</button>' +
+      '</div>';
+    return;
+  }
+
+  body.innerHTML =
+    '<div class="section-title">Где сервер выключен</div>' +
+    '<div class="hint">Свой сервер доступен во всех проектах и всем персонам, пока его не выключили точечно. ' +
+    'Ниже — только исключения. Встроенные серверы продукта здесь не показаны: они доступны всегда.</div>' +
+    servers.map(card).join('') +
+    '<div class="hint" style="margin-top:4px">Доступ персоны задаётся в её студии — здесь он только виден, ' +
+    'чтобы перед выключением или удалением сервера было понятно, кого это заденет.</div>';
+}
+
+function skeleton(){
+  return '<div class="sk">' +
+    '<div class="l" style="width:38%"></div>' +
+    '<div class="l" style="width:72%"></div>' +
+    '<div class="l" style="width:52%"></div>' +
+  '</div>';
+}
+
+function card(s){
+  const exProjects = s.off.map(id => ({ kind:'project', id, name: projectName(id) }));
+  const exPersonas = s.personasOff.map(p => ({ kind:'persona', id:p.id, name:p.name, role:p.role }));
+  const all = exProjects.concat(exPersonas);
+  const open = !!expanded[s.id];
+  const shown = open ? all : all.slice(0, 5);
+  const rest = all.length - shown.length;
+
+  const stateBadge = !s.enabled
+    ? '<span class="state off">Выключен целиком</span>'
+    : all.length === 0
+      ? '<span class="state all">Доступен везде</span>'
+      : '<span class="state some">' + all.length + ' ' + plural(all.length, 'исключение', 'исключения', 'исключений') + '</span>';
+
+  let note = '';
+  if (!s.enabled){
+    note = '<div class="acc-note">Сервер выключен в реестре — он не едет ни в один ход, ' +
+      'поэтому точечные исключения сейчас ни на что не влияют. Включить можно на вкладке «Серверы».</div>';
+  } else if (all.length === 0){
+    note = '<div class="acc-note">Исключений нет: сервер едет в ходы всех <b>' + PROJECTS.length + '</b> проектов ' +
+      'и доступен всем <b>' + PERSONA_COUNT + '</b> персонам.</div>';
+  }
+
+  const rows = shown.map(e => e.kind === 'project' ? projectRow(s, e) : personaRow(e)).join('');
+  const moreBtn = rest > 0
+    ? '<button class="ex-more" onclick="expand(\'' + s.id + '\')">Показать ещё ' + rest + ' ' + plural(rest, 'исключение', 'исключения', 'исключений') + ' ' + ico.chev + '</button>'
+    : (open && all.length > 5 ? '<button class="ex-more" onclick="collapse(\'' + s.id + '\')">Свернуть</button>' : '');
+
+  return '<div class="acc-card' + (s.enabled ? '' : ' disabled') + '">' +
+    '<div class="acc-head">' +
+      '<div class="acc-name"><span class="n" title="' + esc(s.label) + '">' + esc(s.label) + '</span>' +
+      '<span class="badge ' + (s.source === 'manual' ? 'own">свой' : 'legacy">наследство') + '</span></div>' +
+      '<span class="transport">' + s.transport + '</span>' +
+      stateBadge +
+    '</div>' +
+    note +
+    (rows ? '<div class="ex-list">' + rows + '</div>' : '') +
+    moreBtn +
+    '<div class="acc-foot">' +
+      '<button class="btn-ghost" onclick="openPicker(event,\'' + s.id + '\')">' + ico.ban + ' Выключить в проекте ' + ico.chev + '</button>' +
+    '</div>' +
+  '</div>';
+}
+
+function projectRow(s, e){
+  return '<div class="ex">' +
+    '<span class="ic">' + ico.ban + '</span>' +
+    '<span class="txt">' +
+      '<span class="t1" title="' + esc(e.name) + '">' + esc(e.name) + '</span>' +
+      '<span class="t2">Проект</span>' +
+    '</span>' +
+    '<span class="act"><button class="btn-sm" onclick="restore(\'' + s.id + '\',\'' + e.id + '\')">Вернуть доступ</button></span>' +
+  '</div>';
+}
+
+function personaRow(e){
+  return '<div class="ex readonly">' +
+    '<span class="ic">' + ico.user + '</span>' +
+    '<span class="txt">' +
+      '<span class="t1" title="' + esc(e.name) + '">' + esc(e.name) + '</span>' +
+      '<span class="t2" title="' + esc(e.role || '') + '">Персона' + (e.role ? ' · ' + esc(e.role) : '') + '</span>' +
+    '</span>' +
+    '<span class="act"><button class="link-btn" onclick="toast(\'Открываем студию персоны «' + esc(e.name) + '»\')">Студия →</button></span>' +
+  '</div>';
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+// ===== Действия =====
+function expand(id){ expanded[id] = true; render(); }
+function collapse(id){ delete expanded[id]; render(); }
+
+function restore(serverId, projectId){
+  const s = servers.find(s => s.id === serverId);
+  s.off = s.off.filter(id => id !== projectId);
+  render();
+  toast('Сервер снова доступен в проекте «' + projectName(projectId) + '»');
+}
+
+function openPicker(evt, serverId){
+  evt.stopPropagation();
+  const r = evt.currentTarget.getBoundingClientRect();
+  picker = { serverId, top: r.bottom + 6, left: r.left, query: '', kb: 0 };
+  renderPicker();
+}
+
+function closePicker(){ picker = null; renderPicker(); }
+
+function renderPicker(){
+  document.querySelectorAll('.pick, .pick-back').forEach(n => n.remove());
+  if (!picker) return;
+
+  const s = servers.find(s => s.id === picker.serverId);
+  const mob = isMobile();
+  const list = PROJECTS.concat(s.off.includes(LONG_PROJECT.id) ? [LONG_PROJECT] : [])
+    .filter(p => p.name.toLowerCase().includes(picker.query.trim().toLowerCase()));
+
+  const back = document.createElement('div');
+  back.className = 'pick-back' + (mob ? ' sheet' : '');
+  back.onclick = closePicker;
+
+  const el = document.createElement('div');
+  el.className = 'pick' + (mob ? ' sheet' : '');
+  if (!mob){
+    const maxLeft = window.innerWidth - 312;
+    el.style.top = Math.min(picker.top, window.innerHeight - 340) + 'px';
+    el.style.left = Math.max(12, Math.min(picker.left, maxLeft)) + 'px';
+  } else {
+    // В продукте шторка растянута по краям экрана; в макете «экран» — рамка телефона,
+    // поэтому и шторку, и затемнение сажаем по её границам
+    const r = document.querySelector('.modal-shell').getBoundingClientRect();
+    el.style.left = (r.left + 6) + 'px';
+    el.style.right = 'auto';
+    el.style.width = (r.width - 12) + 'px';
+    el.style.bottom = Math.max(8, window.innerHeight - r.bottom + 8) + 'px';
+    back.style.left = r.left + 'px';
+    back.style.top = r.top + 'px';
+    back.style.width = r.width + 'px';
+    back.style.height = r.height + 'px';
+    back.style.right = 'auto';
+    back.style.bottom = 'auto';
+    back.style.borderRadius = '30px';
+  }
+
+  const rows = list.length === 0
+    ? '<div class="pick-empty">Ничего не нашлось<br><span style="font-size:11px">Проверьте написание названия проекта</span></div>'
+    : list.map((p, i) => {
+        const off = s.off.includes(p.id);
+        return '<button class="pick-row' + (i === picker.kb ? ' kb' : '') + '" onclick="pickProject(\'' + p.id + '\')">' +
+          '<span class="nm" title="' + esc(p.name) + '">' + esc(p.name) + '</span>' +
+          (off ? '<span class="mark">выключен</span>' : '') +
+        '</button>';
+      }).join('');
+
+  el.innerHTML =
+    '<div class="pick-head">' +
+      '<div class="t">В каком проекте выключить «' + esc(s.label.length > 28 ? s.label.slice(0, 28) + '…' : s.label) + '»?</div>' +
+      '<div class="search">' + ico.search +
+        '<input id="pickInput" type="text" placeholder="Поиск по ' + PROJECTS.length + ' проектам" value="' + esc(picker.query) + '" />' +
+      '</div>' +
+    '</div>' +
+    '<div class="pick-list">' + rows + '</div>' +
+    '<div class="pick-foot">Выключенный проект в списке помечен — повторный клик вернёт доступ.</div>';
+
+  el.onclick = e => e.stopPropagation();
+  document.body.appendChild(back);
+  document.body.appendChild(el);
+
+  const input = document.getElementById('pickInput');
+  input.oninput = e => { picker.query = e.target.value; picker.kb = 0; renderPicker(); };
+  input.onkeydown = e => {
+    if (e.key === 'Escape') return closePicker();
+    if (e.key === 'ArrowDown'){ picker.kb = Math.min(picker.kb + 1, list.length - 1); renderPicker(); e.preventDefault(); }
+    if (e.key === 'ArrowUp'){ picker.kb = Math.max(picker.kb - 1, 0); renderPicker(); e.preventDefault(); }
+    if (e.key === 'Enter' && list[picker.kb]) pickProject(list[picker.kb].id);
+  };
+  input.focus();
+  input.setSelectionRange(input.value.length, input.value.length);
+}
+
+function pickProject(projectId){
+  const s = servers.find(s => s.id === picker.serverId);
+  const was = s.off.includes(projectId);
+  s.off = was ? s.off.filter(id => id !== projectId) : s.off.concat([projectId]);
+  render();
+  renderPicker();
+  toast(was
+    ? 'Сервер снова доступен в проекте «' + projectName(projectId) + '»'
+    : 'Сервер выключен в проекте «' + projectName(projectId) + '»');
+}
+
+// ===== Диалог удаления: «кого заденет» =====
+function openDelete(){
+  const s = servers.find(x => x.off.length + x.personasOff.length > 0) || servers[0];
+  if (!s){ toast('Удалять нечего — своих серверов нет'); return; }
+  deleteFor = s;
+  const ov = document.createElement('div');
+  ov.className = 'overlay';
+  ov.onclick = e => { if (e.target === ov) ov.remove(); };
+  const items = [];
+  if (s.off.length) items.push('выключен в ' + s.off.length + ' ' + plural(s.off.length, 'проекте', 'проектах', 'проектах') + ' — эти настройки исчезнут');
+  if (s.personasOff.length) items.push('выключен у ' + s.personasOff.length + ' ' + plural(s.personasOff.length, 'персоны', 'персон', 'персон') + ': ' + s.personasOff.map(p => p.name).join(', '));
+  items.push('во всех остальных проектах и у остальных ' + (PERSONA_COUNT - s.personasOff.length) + ' персон сервер просто пропадёт из инструментов');
+  ov.innerHTML =
+    '<div class="confirm">' +
+      '<h3>Удалить «' + esc(s.label.length > 34 ? s.label.slice(0, 34) + '…' : s.label) + '»?</h3>' +
+      '<p>Что это заденет:</p>' +
+      '<ul>' + items.map(i => '<li>' + i + '</li>').join('') + '</ul>' +
+      '<p style="margin-bottom:14px">Секретные значения будут стёрты — чтобы подключить сервер снова, ключи придётся ввести заново.</p>' +
+      '<div class="confirm-actions">' +
+        '<button class="btn-ghost" onclick="this.closest(\'.overlay\').remove()">Отмена</button>' +
+        '<button class="btn-danger" onclick="this.closest(\'.overlay\').remove();toast(\'Сервер удалён (демо)\')">Удалить</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(ov);
+}
+
+// ===== Оправа демонстрации =====
+function setMode(m, btn){
+  mode = m;
+  expanded = {};
+  closePicker();
+  servers = clone(PRESETS[m] || PRESETS.exceptions);
+  document.querySelectorAll('.topbar .btn[data-mode]').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  render();
+}
+function toggleTheme(){
+  const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  document.getElementById('themeBtn').classList.toggle('on', !dark);
+  document.getElementById('themeBtn').textContent = dark ? 'Тёмная тема' : 'Светлая тема';
+}
+function toggleMobile(){
+  const st = document.getElementById('stage');
+  st.classList.toggle('mob');
+  document.getElementById('mobBtn').classList.toggle('on', st.classList.contains('mob'));
+  closePicker();
+}
+let toastTimer;
+function toast(text){
+  document.querySelectorAll('.toast').forEach(n => n.remove());
+  const el = document.createElement('div');
+  el.className = 'toast';
+  el.textContent = text;
+  document.body.appendChild(el);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.remove(), 2600);
+}
+
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePicker(); });
+window.addEventListener('resize', () => { if (picker) closePicker(); });
+render();
+</script>
+</body>
+</html>

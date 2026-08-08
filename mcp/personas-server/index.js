@@ -84,6 +84,11 @@ const WRITE = process.env.PERSONAS_WRITE !== '0';
 // явным "0"; без переменной включены (совместимость с прямыми запусками и старым конфигом).
 const MANAGE = WRITE && process.env.PERSONAS_MANAGE !== '0';
 const AUTOMATION = WRITE && process.env.PERSONAS_AUTOMATION !== '0';
+// Allow-модель доступа серверов личного реестра (флаг mcp-allowlist владельца): сервер по
+// умолчанию НЕ выдан ни одной персоне — его нужно выдать явно. Определяет фолбэк
+// enabledForPersona и тексты инструментов. Состав tools/list от флага не зависит, поэтому
+// процесс от него не «мерцает» между ходами (флаг — свойство владельца, как MANAGE/AUTOMATION).
+const MCP_ALLOWLIST = process.env.PERSONAS_MCP_ALLOWLIST === '1';
 // Кросс-проектные привязки ProjectPersonas: доступ к команде/точечным персонам ДРУГОГО проекта
 const EXTRA_PROJECT_IDS = (process.env.PERSONAS_EXTRA_PROJECT_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
 const EXTRA_PERSONA_IDS = (process.env.PERSONAS_EXTRA_PERSONA_IDS || '').split(',').map(s => s.trim()).filter(Boolean);
@@ -327,10 +332,12 @@ const INSTRUCTIONS = [
   'ПРИВЯЗКА (bindings в create/update, bindings_set): { type, target, path?, condition?, mode? }.',
   '  type → target/path: project — проект целиком (projectId); projectPath — папка/файл проекта',
   '  (projectId; path обязателен); knowledge — база знаний (datasetId); notes — заметки',
-  '  ("personal"|projectId; path: папка); tool — рубильник инструмента (tasks/…/mcp:<ключ>:',
-  '  personas_mcp_list); skill — скилл (имя); projectPersonas — команда ЧУЖОГО проекта для',
-  '  persona_ask (projectId; path: id персоны = сужение до неё, пусто = вся команда);',
-  '  projectTasks — задачи ЧУЖОГО проекта (projectId; path "readonly" = только чтение, пусто = полный доступ).',
+  '  ("personal"|projectId; path: папка); tool — рубильник (tasks/…; mcp:<ключ> — сервер',
+  MCP_ALLOWLIST
+    ? '  реестра, по умолчанию НЕ выдан — personas_mcp_grant); skill; projectPersonas —'
+    : '  реестра, включён по умолчанию); skill; projectPersonas —',
+  '  ЧУЖОГО проекта для persona_ask (projectId; path: id персоны = сужение, пусто = вся команда);',
+  '  projectTasks — задачи ЧУЖОГО проекта (projectId; path "readonly" = чтение, иначе полный доступ).',
   '  condition — когда применять (пусто = всегда). mode — auto (дефолт) | always | off.',
   ] : []),
   ...(AUTOMATION ? [
@@ -452,14 +459,18 @@ const TOOLS = [
     {
       name: 'personas_mcp_list',
       description: 'MCP-серверы личного реестра владельца: key, label, транспорт, статус, ' +
-        'включён ли у персоны (id). Включить/выключить — personas_bindings_set/bindings ' +
-        'с target "mcp:<ключ>", отдельного инструмента для этого нет.',
+        'выдан ли персоне (поле enabledForPersona при id). ' + (MCP_ALLOWLIST
+          ? 'Сервер по умолчанию НЕ выдан ни одной персоне — его нужно выдать явно. ' +
+            'Выдать/отозвать один сервер точечно (не трогая остальные привязки) — personas_mcp_grant; ' +
+            'полная замена набора привязок — personas_bindings_set/bindings с target "mcp:<ключ>".'
+          : 'Сервер по умолчанию включён всем; выключить конкретной персоне — personas_bindings_set ' +
+            'с target "mcp:<ключ>" и mode "off" (или personas_mcp_grant с revoke=true).'),
       inputSchema: {
         type: 'object',
-        properties: { id: { type: 'string', description: 'ID персоны — проверить, включён ли у неё каждый сервер (без id — только список серверов)' } },
+        properties: { id: { type: 'string', description: 'ID персоны — проверить, выдан ли ей каждый сервер (без id — только список серверов)' } },
       },
     },
-    // bindings_set — правка чужой персоны, поэтому едет с модулем manage, а не с
+    // bindings_set и mcp_grant — правка чужой персоны, поэтому едут с модулем manage, а не с
     // read-инструментами привязок (иначе персона без manage меняла бы права коллегам)
     ...(MANAGE ? [{
       name: 'personas_bindings_set',
@@ -471,6 +482,29 @@ const TOOLS = [
         properties: {
           id: { type: 'string', description: 'ID персоны' },
           bindings: { type: 'array', items: BINDING_ITEM_SCHEMA, description: 'Новый набор привязок' },
+        },
+      },
+    },
+    {
+      // Точечная выдача/отзыв одного MCP-сервера — в отличие от bindings_set НЕ трогает
+      // остальные привязки персоны. Слабой модели проще кликнуть один сервер, чем собрать
+      // весь набор (риск снести привязки к проектам/базам). mode: auto/always — выдать
+      // (allow: выдан, deny: включён как дефолт), off — отозвать (allow: не выдан, deny: выключен).
+      name: 'personas_mcp_grant',
+      description: 'Выдать или отозвать персоне один MCP-сервер личного реестра — точечно, ' +
+        'не затрагивая остальные её привязки (в отличие от personas_bindings_set, который ' +
+        'заменяет весь набор). ' + (MCP_ALLOWLIST
+          ? 'Сервер по умолчанию НЕ выдан: выдай его (revoke=false), чтобы персона получила ' +
+            'инструменты сервера в своих чатах.'
+          : 'Сервер по умолчанию включён всем; отзовите его (revoke=true), чтобы выключить этой персоне.') +
+        ' Свои собственные доступы персона менять не может.',
+      inputSchema: {
+        type: 'object',
+        required: ['id', 'key'],
+        properties: {
+          id: { type: 'string', description: 'ID персоны (не себя)' },
+          key: { type: 'string', description: 'Ключ MCP-сервера (см. personas_mcp_list)' },
+          revoke: { type: 'boolean', description: 'true — отозвать сервер у персоны, false (дефолт) — выдать' },
         },
       },
     }] : []),
@@ -676,7 +710,7 @@ function contractFrom(args) {
 // отдельно (defense-in-depth: выключенный модуль не должен отработать при ошибке экспозиции)
 const MANAGE_TOOLS = new Set([
   'personas_create', 'personas_update', 'personas_delete', 'personas_bindings_set',
-  'personas_generate_avatar', 'personas_ai_team',
+  'personas_mcp_grant', 'personas_generate_avatar', 'personas_ai_team',
 ]);
 const AUTOMATION_TOOLS = new Set([
   'personas_automation_list', 'personas_automation_create', 'personas_automation_update',
@@ -790,7 +824,11 @@ async function callTool(name, args) {
         label: s.label,
         transport: s.transport,
         status: s.status?.status ?? null,
-        ...(enabledByKey ? { enabledForPersona: enabledByKey.get(s.key) ?? true } : {}),
+        // defaultEnabled приходит с бэка уже с учётом флага; фолбэк — только если сервера
+        // вдруг нет в каталоге привязок (рассинхрон). В allow-модели «нет записи = не выдан»,
+        // в deny — «включён». Каталог и реестр синхронны (оба из McpRegistry.GetByOwner),
+        // так что фолбэк фактически не достигается — но семантику держим верной в обеих моделях.
+        ...(enabledByKey ? { enabledForPersona: enabledByKey.get(s.key) ?? (MCP_ALLOWLIST ? false : true) } : {}),
       })));
     }
 
@@ -800,6 +838,38 @@ async function callTool(name, args) {
         method: 'PUT',
         body: JSON.stringify({ bindings: args.bindings ?? [] }),
       }));
+    }
+
+    case 'personas_mcp_grant': {
+      // Точечная выдача/отзыв одного MCP-сервера: берём текущие привязки, заменяем только
+      // цель «mcp:<ключ>», остальное не трогаем. GET /bindings возвращает массив напрямую.
+      assertNotSelfBindings(args.id);
+      const key = String(args.key ?? '').trim();
+      if (!key) throw new Error('Укажи key MCP-сервера (см. personas_mcp_list).');
+      const mcpTarget = 'mcp:' + key;
+      const revoke = args.revoke === true;
+      const current = await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`);
+      // Канонические поля привязки (Id и служебное отбрасываем — PUT их не требует и
+      // пересоздаст), mcp-цель снимаем, чтобы поставить свежую.
+      const bindings = (Array.isArray(current) ? current : [])
+        .map(b => ({
+          type: b.type, target: b.target,
+          ...(b.path != null ? { path: b.path } : {}),
+          ...(b.condition != null ? { condition: b.condition } : {}),
+          ...(b.mode != null ? { mode: b.mode } : {}),
+        }))
+        .filter(b => !(b.type === 'tool' && b.target === mcpTarget));
+      // mode работает в обеих моделях доступа: auto/always — выдан (allow) и включён (deny),
+      // off — не выдан (allow) и выключен (deny). condition не ставим: состав инструментов хода
+      // не смеет зависеть от текста (инвариант стабильности состава).
+      bindings.push({ type: 'tool', target: mcpTarget, mode: revoke ? 'off' : 'auto' });
+      await api(`/api/personas/${encodeURIComponent(args.id)}/bindings`, {
+        method: 'PUT',
+        body: JSON.stringify({ bindings }),
+      });
+      return { content: [{ type: 'text', text: revoke
+        ? `Сервер «${key}» отозван у персоны ${args.id}.`
+        : `Сервер «${key}» выдан персоне ${args.id}.` }] };
     }
 
     case 'knowledge_search':

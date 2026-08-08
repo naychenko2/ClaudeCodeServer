@@ -139,7 +139,7 @@ public class ProjectManager
 
     public Project Update(string id, string? name, string? rootPath, string? systemPrompt = null,
         bool? showHiddenFiles = null, List<PermissionRule>? permissionRules = null, string? groupId = null,
-        string? color = null, List<string>? mcpServersOff = null)
+        string? color = null, List<string>? mcpServersOff = null, List<string>? mcpServersOn = null)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
@@ -172,6 +172,13 @@ public class ProjectManager
             project.McpServersOff = mcpServersOff.Count == 0
                 ? null
                 : [.. mcpServersOff.Select(k => k.Trim().ToLowerInvariant())
+                    .Where(k => k.Length > 0).Distinct(StringComparer.Ordinal)];
+        // mcpServersOn: та же нормализация и семантика null/пусто, но allow-смысл:
+        // null = не менять; пустой список = «в проекте не включён никто» (флаг mcp-allowlist)
+        if (mcpServersOn is not null)
+            project.McpServersOn = mcpServersOn.Count == 0
+                ? null
+                : [.. mcpServersOn.Select(k => k.Trim().ToLowerInvariant())
                     .Where(k => k.Length > 0).Distinct(StringComparer.Ordinal)];
         project.UpdatedAt = DateTime.UtcNow;
         Save();
@@ -330,6 +337,27 @@ public class ProjectManager
         return _projects.Values
             .Where(p => WorkspaceKnowledgeStore.NormalizePath(p.RootPath) == key)
             .ToList();
+    }
+
+    // Подмести ключ сервера из McpServersOn всех проектов владельца — вызывается при
+    // удалении сервера из реестра и смене его ключа. Протухший deny (McpServersOff)
+    // безвреден, а протухшая выдача — нет: новый сервер под старым ключом молча унаследовал
+    // бы чужие права. Возвращает число тронутых проектов.
+    public int PurgeMcpKey(string ownerId, string serverKey)
+    {
+        var key = serverKey.Trim().ToLowerInvariant();
+        var touched = 0;
+        foreach (var p in _projects.Values.Where(p => p.OwnerId == ownerId))
+        {
+            if (p.McpServersOn is not { Count: > 0 } on) continue;
+            var kept = on.Where(k => !string.Equals(k, key, StringComparison.OrdinalIgnoreCase)).ToList();
+            if (kept.Count == on.Count) continue;
+            p.McpServersOn = kept.Count == 0 ? null : kept;
+            p.UpdatedAt = DateTime.UtcNow;
+            touched++;
+        }
+        if (touched > 0) Save();
+        return touched;
     }
 
     // Отвязывает все проекты от удаляемой группы (вызывается при удалении группы)

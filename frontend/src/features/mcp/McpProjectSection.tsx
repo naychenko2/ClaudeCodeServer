@@ -5,18 +5,24 @@ import { Toggle } from '../../components/ui';
 import { FLAGS, useFeature } from '../../lib/featureFlags';
 import type { McpServer, Project } from '../../types';
 
-// Секция «MCP-серверы» в настройках проекта: тумблеры включённости своих серверов
-// в этом проекте (deny-list Project.McpServersOff — сервер едет в ход везде, пока его
-// не выключили здесь). Встроенных серверов продукта тут нет: они доступны всегда.
-// Своих серверов нет — секция не рисуется вовсе, чтобы не занимать место пустотой.
+// Секция «MCP-серверы» в настройках проекта: тумблеры своих серверов в этом проекте.
+// Две модели за флагом mcp-allowlist:
+//  - deny (флаг выключен): Project.McpServersOff — сервер едет в ход везде, пока его
+//    не выключили здесь;
+//  - allow (флаг включён): Project.McpServersOn — сервер не едет никуда, пока его здесь
+//    не включили явно.
+// Встроенных серверов продукта тут нет: они доступны всегда. Своих серверов нет —
+// секция не рисуется вовсе, чтобы не занимать место пустотой.
 export function McpProjectSection({ project, onUpdated }: { project: Project; onUpdated?: (updated: Project) => void }) {
   const [servers, setServers] = useState<McpServer[]>([]);
   const [off, setOff] = useState<string[]>(project.mcpServersOff ?? []);
+  const [on, setOn] = useState<string[]>(project.mcpServersOn ?? []);
   const [err, setErr] = useState('');
   // Тумблеры бьют пачкой — счётчик защищает от устаревшего ответа (тот же приём,
   // что в useMcpData и «Поставщиках моделей»)
   const seqRef = useRef(0);
   const enabled = useFeature(FLAGS.mcpRegistry);
+  const allowlist = useFeature(FLAGS.mcpAllowlist);
 
   useEffect(() => {
     if (!enabled) return;
@@ -29,8 +35,8 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
 
   if (!enabled || servers.length === 0) return null;
 
-  const toggle = (key: string, on: boolean) => {
-    const next = on ? off.filter(k => k !== key) : [...off.filter(k => k !== key), key];
+  const toggleOff = (key: string, checked: boolean) => {
+    const next = checked ? off.filter(k => k !== key) : [...off.filter(k => k !== key), key];
     const prev = off;
     const seq = ++seqRef.current;
     setOff(next);
@@ -48,6 +54,25 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
       });
   };
 
+  const toggleOn = (key: string, checked: boolean) => {
+    const next = checked ? [...on.filter(k => k !== key), key] : on.filter(k => k !== key);
+    const prev = on;
+    const seq = ++seqRef.current;
+    setOn(next);
+    setErr('');
+    api.projects.update(project.id, { mcpServersOn: next })
+      .then(saved => {
+        if (seqRef.current !== seq) return;
+        setOn(saved.mcpServersOn ?? []);
+        onUpdated?.(saved);
+      })
+      .catch((e: unknown) => {
+        if (seqRef.current !== seq) return;
+        setOn(prev);
+        setErr(e instanceof Error && e.message ? e.message : 'Не удалось сохранить');
+      });
+  };
+
   return (
     <div style={{
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden',
@@ -57,7 +82,9 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
       }}>
         MCP-серверы в проекте
         <span style={{ display: 'block', fontWeight: 400, fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
-          Выключенный здесь сервер не поедет в ходы этого проекта. В остальных проектах он останется доступен.
+          {allowlist
+            ? 'Включённый здесь сервер поедет в ходы этого проекта — всем его чатам и персонам. В остальных проектах он не появится, пока не включён и там.'
+            : 'Выключенный здесь сервер не поедет в ходы этого проекта. В остальных проектах он останется доступен.'}
         </span>
       </div>
       {servers.map(server => (
@@ -76,11 +103,19 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
           }}>
             {server.label || server.key}
           </span>
-          <Toggle
-            checked={!off.includes(server.key)}
-            onChange={v => toggle(server.key, v)}
-            ariaLabel={`${server.label || server.key} в проекте`}
-          />
+          {allowlist ? (
+            <Toggle
+              checked={on.includes(server.key)}
+              onChange={v => toggleOn(server.key, v)}
+              ariaLabel={`${server.label || server.key} в проекте`}
+            />
+          ) : (
+            <Toggle
+              checked={!off.includes(server.key)}
+              onChange={v => toggleOff(server.key, v)}
+              ariaLabel={`${server.label || server.key} в проекте`}
+            />
+          )}
         </div>
       ))}
       {err && (

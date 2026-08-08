@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
 import { X } from 'lucide-react';
-import { Button, Field, IconButton, InlineSegmented, TextArea, TextField } from '../../components/ui';
+import { Button, Field, IconButton, InlineSegmented, TextArea, TextField, Toggle } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { slugify } from '../../lib/slug';
@@ -49,6 +49,7 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
   const [authMode, setAuthMode] = useState<'headers' | 'oauth'>(
     initialAuthKind === 'oauth2' ? 'oauth' : 'headers');
   const [oauthClientId, setOauthClientId] = useState(server?.auth.clientId ?? '');
+  const [allowReadOnlyPersonas, setAllowReadOnlyPersonas] = useState(server?.allowReadOnlyPersonas ?? false);
   const [json, setJson] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -83,6 +84,7 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
         key: key.trim(),
         label: label.trim() || key.trim(),
         transport: mode,
+        allowReadOnlyPersonas,
         ...(mode === 'stdio'
           ? { command: command.trim(), args: splitArgs(args), env: toInputs(env) }
           : { url: url.trim(), headers: toInputs(headers), auth: authField() }),
@@ -195,6 +197,25 @@ export function McpServerForm({ data, server, onDone, onCancel }: {
           <div style={hintStyle}>
             Секретные значения после сохранения не показываются — в форме правки вместо них
             остаётся только отметка «задано».
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: 14, paddingTop: 4 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textHeading, marginBottom: 3 }}>
+                Доступ персонам «Только чтение»
+              </div>
+              <div style={hintStyle}>
+                Имена инструментов этого сервера системе не известны, среди них могут быть пишущие —
+                поэтому персоны с профилем «Только чтение» не получают сервер, пока это не разрешено явно.
+              </div>
+            </div>
+            <div style={{ flexShrink: 0, paddingTop: 2 }}>
+              <Toggle
+                checked={allowReadOnlyPersonas}
+                onChange={setAllowReadOnlyPersonas}
+                ariaLabel="Доступ персонам «Только чтение»"
+              />
+            </div>
           </div>
         </>
       )}

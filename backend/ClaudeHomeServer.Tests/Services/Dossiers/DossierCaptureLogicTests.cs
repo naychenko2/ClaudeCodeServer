@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Dossiers;
 using FluentAssertions;
 using Xunit;
@@ -121,5 +122,199 @@ public class DossierCaptureLogicTests
     {
         DossierCaptureService.PickReanchorSubject([], "любое сообщение").Should().BeNull();
         DossierCaptureService.PickReanchorSubject(["fix bug"], "").Should().BeNull();
+    }
+
+    // --- Окно реплик по времени коммита (блокер «зачем про чужое дело») ---
+
+    private const long Min = 60_000L;
+    private const long Hr = 3_600_000L;
+    private static readonly DossierCaptureService.CommitWindowOptions WOpts =
+        new(2 * Hr, 15 * Min, 30 * Min);   // before=2ч, after=15мин, gap=30мин — как в сервисе
+
+    private static StoredUserMessage User(string text, long ts) => new(text, timestamp: ts);
+    private static StoredTextMessage Ai(string text, long ts) => new(text, timestamp: ts);
+
+    // ПРОД-БАГ: после коммита (дело A) чат продолжился другим делом (B), и «последние N реплик»
+    // подобрали свежее B. Окно вокруг коммита должно взять только A. Здесь коммит в конце дела A,
+    // а дело B — спустя 3 часа, заведомо за пределами after-окна.
+    [Fact]
+    public void Окно_КоммитВДелеА_НеБерётБолееСвежееДелоВ()
+    {
+        var t0 = 1_700_000_000_000L;
+        var msgs = new List<StoredMessage>
+        {
+            User("сделать выбор персоны", t0),            // дело A
+            Ai("добавил экран выбора", t0 + Min),
+            User("починить профиль CLI", t0 + 3 * Hr),    // дело B (спустя 3 ч)
+            Ai("починил профиль", t0 + 3 * Hr + Min),
+        };
+
+        var window = DossierCaptureService.SelectCommitWindow(msgs, t0 + Min + 30_000, WOpts);
+
+        window.Should().HaveCount(2, "коммит в деле A — берём только его кластер, не свежее дело B");
+        window.OfType<StoredTextMessage>().Should().NotContain(m => m.Text.Contains("профиль"));
+    }
+
+    // Обратная сторона: коммит в деле B не должен затянуть предшествующее дело A, даже если оно
+    // уложилось в before-окно по времени. Расширение назад останавливается на паузе > gap.
+    [Fact]
+    public void Окно_КоммитВДелеВ_НеБерётПредыдущееДелоА_ПаузаБольшеСGap()
+    {
+        var t0 = 1_700_000_000_000L;
+        var msgs = new List<StoredMessage>
+        {
+            User("выбор персоны", t0),                     // дело A
+            Ai("экран выбора", t0 + Min),
+            User("профиль CLI", t0 + 3 * Hr),              // дело B (пауза 3 ч > gap)
+            Ai("починил профиль", t0 + 3 * Hr + Min),
+        };
+
+        var window = DossierCaptureService.SelectCommitWindow(msgs, t0 + 3 * Hr + 90_000, WOpts);
+
+        window.Should().HaveCount(2, "кластер дела B; пауза между делами > gap отсекает дело A");
+        window.OfType<StoredTextMessage>().Should().NotContain(m => m.Text.Contains("выбора"));
+    }
+
+    // Реплики одного хода идут подряд (паузы < gap) — все входят в кластер.
+    [Fact]
+    public void Окно_РепликиОдногоХодаВместе()
+    {
+        var t0 = 1_700_000_000_000L;
+        var msgs = new List<StoredMessage>
+        {
+            User("v1", t0),
+            Ai("a1", t0 + Min),
+            User("v2", t0 + 5 * Min),
+            Ai("a2", t0 + 6 * Min),
+        };
+
+        var window = DossierCaptureService.SelectCommitWindow(msgs, t0 + 6 * Min + 30_000, WOpts);
+
+        window.Should().HaveCount(4, "все реплики хода в пределах gap — один кластер");
+    }
+
+    // Нетаймштампные сообщения (tool_use, file_changed) между репликами кластера входят в выжимку
+    // как контекст — у них нет Timestamp, но они попадают в диапазон индексов кластера.
+    [Fact]
+    public void Окно_ВключаетНетаймштампныеСообщенияМеждуРепликами()
+    {
+        var t0 = 1_700_000_000_000L;
+        var tool = new StoredToolUseMessage { Name = "Read" };
+        var msgs = new List<StoredMessage>
+        {
+            User("поехали", t0),
+            tool,
+            Ai("готово", t0 + Min),
+        };
+
+        var window = DossierCaptureService.SelectCommitWindow(msgs, t0 + 30_000, WOpts);
+
+        window.Should().Contain(tool, "tool_use между репликами — контекст хода, входит в кластер");
+    }
+
+    [Fact]
+    public void Окно_НетTimestamp_ВозвращеноПусто()
+    {
+        var msgs = new List<StoredMessage>
+        {
+            new StoredToolUseMessage { Name = "Read" },   // ни у кого нет Timestamp — не привязаться
+        };
+
+        DossierCaptureService.SelectCommitWindow(msgs, 1_700_000_000_000L, WOpts)
+            .Should().BeEmpty("без временных меток привязка к коммиту невозможна — лучше пусто, чем весь чат");
+    }
+
+    [Fact]
+    public void Окно_КоммитДалекоОтРеплик_ВозвращеноПусто()
+    {
+        var t0 = 1_700_000_000_000L;
+        var msgs = new List<StoredMessage> { User("старое", t0) };
+
+        // Коммит через 10 часов — все реплики вне окна.
+        DossierCaptureService.SelectCommitWindow(msgs, t0 + 10 * Hr, WOpts)
+            .Should().BeEmpty();
+    }
+
+    // --- Фильтр захвата (объём/стоимость) ---
+
+    private static readonly HashSet<string> DefSkip = ["style", "chore", "build", "ci"];
+
+    [Theory]
+    [InlineData("chore: обновить зависимости", true,  "тип chore — пропуск")]
+    [InlineData("style: форматирование", true,  "тип style — пропуск")]
+    [InlineData("build(ci): пайплайн", true,  "тип build — пропуск")]
+    [InlineData("ci: линтер", true,  "тип ci — пропуск")]
+    [InlineData("feat: новая фича", false, "тип feat — снимаем паспорт")]
+    [InlineData("fix: баг", false, "тип fix — снимаем")]
+    [InlineData("refactor: переименовать", false, "тип refactor — снимаем")]
+    [InlineData("merge: ветка", false, "merge не в skip-списке")]
+    public void Фильтр_ПоТипуКоммита(string subject, bool skip, string _)
+    {
+        // filesCount большой — чтобы правило однофайловости не вмешивалось
+        DossierCaptureService.ShouldSkipCommit(subject, "", 5, DefSkip, 100).Should().Be(skip);
+    }
+
+    [Fact]
+    public void Фильтр_ОднофайловоеКороткоеСообщение_Пропуск()
+    {
+        DossierCaptureService.ShouldSkipCommit("fix: опечатка", "", 1, DefSkip, 100)
+            .Should().BeTrue("однофайловая правка с коротким сообщением — выжимать нечего");
+    }
+
+    [Fact]
+    public void Фильтр_ОднофайловоеДлинноеСообщение_Снимаем()
+    {
+        var body = new string('x', 120);   // сообщение длиннее порога — содержательное
+        DossierCaptureService.ShouldSkipCommit("fix: поправить опечатку и обновить ссылку", body, 1, DefSkip, 100)
+            .Should().BeFalse("однофайлово, но сообщение содержательное — паспорт нужен");
+    }
+
+    [Fact]
+    public void Фильтр_МногофайловоеКороткоеСообщение_Снимаем()
+    {
+        DossierCaptureService.ShouldSkipCommit("fix: баг", "", 3, DefSkip, 100)
+            .Should().BeFalse("несколько файлов — правило однофайловости не действует, тип fix не в skip");
+    }
+
+    // Служебные трейлеры не должны спасать короткое сообщение от фильтра: их длина — не содержание.
+    [Fact]
+    public void Фильтр_ТрейлерыНеСчитаютсяВДлину()
+    {
+        var body = "CCS-Session: a7d10551-abcd-1234-5678-aaaaaaaaaaaa\nCo-Authored-By: Claude <noreply@anthropic.com>";
+        DossierCaptureService.ShouldSkipCommit("fix: опечатка", body, 1, DefSkip, 100)
+            .Should().BeTrue("без трейлеров сообщение короче порога — однофайловое короткое пропускается");
+    }
+
+    // Merge-коммиты фильтруются по числу родителей (факт git), а не по тексту subject: стандартный
+    // автомерж «Merge branch …» conventional-типом не разбирается и фильтром по типу не ловится.
+    [Fact]
+    public void Фильтр_MergeКоммит_ДваРодителя_Пропуск()
+    {
+        DossierCaptureService.ShouldSkipCommit(
+            "Merge branch 'feature/dossier-quality' into master", "", 5, DefSkip, 100, parentCount: 2)
+            .Should().BeTrue("2+ родителя — merge-коммит, паспорт дублирует выжимки коммитов ветки");
+    }
+
+    // Корректный негатив: обычный коммит (1 родитель) со словом merge в subject — паспорт нужен.
+    // Доказывает, что судим по родителям, а не по тексту (merge НЕ в SkipCommitTypes).
+    [Fact]
+    public void Фильтр_ОбычныйКоммитСоСловомMerge_ПаспортЕсть()
+    {
+        DossierCaptureService.ShouldSkipCommit(
+            "merge: влить ветку X в develop", "", 3, DefSkip, 100, parentCount: 1)
+            .Should().BeFalse("обычный коммит (1 родитель) — паспорт создаётся, текст не повод для пропуска");
+    }
+
+    [Theory]
+    [InlineData("feat(scope): добавить X", "feat")]
+    [InlineData("feat!: breaking change", "feat")]
+    [InlineData("feat: добавить", "feat")]
+    [InlineData("chore: bump", "chore")]
+    [InlineData("merge: ветка", "merge")]
+    [InlineData("без конвенции", null)]
+    [InlineData("", null)]
+    public void ПарсингТипа(string subject, string? expected)
+    {
+        DossierCaptureService.ParseConventionalType(subject).Should().Be(expected);
     }
 }

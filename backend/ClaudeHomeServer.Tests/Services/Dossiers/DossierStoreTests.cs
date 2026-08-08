@@ -144,6 +144,20 @@ public class DossierStoreTests : IDisposable
         archiveText.Should().NotContain("sha3");
     }
 
+    // Ровно потолок — не вытесняем: граница count == max не должна запускать ротацию, а панель
+    // не должна терять свежие записи, пока превышения нет. Архивного файла при этом не возникает.
+    [Fact]
+    public void ПотолокMaxEntries_РовноПотолок_НеВытесняет()
+    {
+        _store.Add(New("sha1", "первый", committedAt: new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero)));
+        _store.Add(New("sha2", "второй", committedAt: new DateTimeOffset(2026, 1, 2, 0, 0, 0, TimeSpan.Zero)));
+
+        _store.List(Owner, Project).Should().HaveCount(2, "ровно потолок — обе записи на месте");
+
+        var archivePath = Path.Combine(_temp, "dossiers", Owner, Project + ".archive.jsonl");
+        File.Exists(archivePath).Should().BeFalse("превышения нет — архив не создаётся");
+    }
+
     [Fact]
     public async Task DeleteProjectDossiersAsync_ЧиститСтор()
     {

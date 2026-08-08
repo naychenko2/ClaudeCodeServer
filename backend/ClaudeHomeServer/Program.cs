@@ -153,6 +153,9 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>()
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Провижн авто-ассистента (фича default-personas-onboarding): заготовка «Ассистент»
+// как дефолт при первом включении флага. Singleton — статический реестр семафоров.
+builder.Services.AddSingleton<DefaultAssistantProvisioner>();
 // Специальности и пресеты правил: стор настроек специальностей и пресетов правил
 // выбора модели (глобальные + per-owner) + применение шаблонов прав
 builder.Services.AddSingleton<SpecialtySettingsStore>();

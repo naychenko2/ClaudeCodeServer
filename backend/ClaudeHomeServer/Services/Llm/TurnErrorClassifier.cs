@@ -99,10 +99,13 @@ public static class TurnErrorClassifier
         if (int.TryParse(status, out var code) && code is >= 500 and <= 599) return FallbackErrorClass.ProviderError;
         // Сетевые маркеры в статусе или тексте ошибки
         if (LooksUnreachable(status) || LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
-        // Контекст не помещается в окно модели (400/413 + текст «Prompt is too long» у Anthropic,
-        // «context_length_exceeded» у OpenAI-совместимых эндпоинтов). Класс отдельный от None:
-        // повторять ту же модель бессмысленно, но шагнуть по цепочке к бóльшему окну — можно.
-        if (LooksContextOverflow(status) || LooksContextOverflow(outcome.ErrorText)) return FallbackErrorClass.ContextOverflow;
+        // Контекст не помещается в окно модели. Провайдеры кладут эту ошибку на 400/413 (Anthropic
+        // «Prompt is too long», OpenAI-совместимые «context_length_exceeded»). Маркеры в ErrorText
+        // трактуем как overflow ТОЛЬКО при этих статусах: иначе ход, ЦИТИРУЮЩИЙ «Prompt is too long»
+        // (разбор таких инцидентов в чатах), при прочем сбое классифицировался бы ложно как overflow.
+        // Пустой статус (когда маркеры в тексте — единственный сигнал) разобран отдельной веткой выше.
+        if (status is "400" or "413" && LooksContextOverflow(outcome.ErrorText))
+            return FallbackErrorClass.ContextOverflow;
 
         // Неизвестный статус, прочие 4xx (400/401), содержательные отказы — фолбэк НЕ запускается
         return FallbackErrorClass.None;
@@ -128,7 +131,7 @@ public static class TurnErrorClassifier
             || text.Contains("usage_limit", StringComparison.OrdinalIgnoreCase));
 
     // Признаки переполнения контекста. Anthropic CLI шлёт «Prompt is too long» (видели на проде:
-    // kimi-k3 со заявленным окном 1M упал с этим текстом — тариф режет раньше конфига).
+    // kimi-k3 с заявленным окном 1M упал с этим текстом — тариф режет раньше конфига).
     // Сторонние провайдеры через Anthropic-скин и OpenAI-совместимые эндпоинты дают свои
     // формулировки: «context_length_exceeded», «input length exceeds», «longer than the model's
     // context window». Берём по подстроке без учёта регистра — точного кода ошибки у них нет.

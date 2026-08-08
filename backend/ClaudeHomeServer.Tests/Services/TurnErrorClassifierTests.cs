@@ -104,6 +104,27 @@ public class TurnErrorClassifierTests
                 "400 сам по себе — содержательная ошибка (None), но с overflow-текстом это ContextOverflow");
 
     [Fact]
+    public void ПереполнениеКонтекста_Статус413_ПоТексту_КлассContextOverflow()
+        => TurnErrorClassifier.Classify(Result("413", "context_length_exceeded"))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "413 — куда OpenAI-совместимые эндпоинты кладут overflow; с маркером в тексте это ContextOverflow");
+
+    // Minor-review: overflow-фразы ищутся в тексте ошибки, поэтому ход, ЦИТИРУЮЩИЙ «Prompt is
+    // too long» (разбор таких инцидентов в чатах), при прочем сбое классифицировался бы ложно.
+    // Маркеры в тексте трактуем как overflow ТОЛЬКО при пустом статусе или 400/413 — куда
+    // провайдеры реально кладут эту ошибку. При прочих статусах цитата — не overflow.
+    [Theory]
+    [InlineData("418")]
+    [InlineData("404")]
+    [InlineData("401")]
+    [InlineData("200")]
+    public void ЦитатаOverflowПриЧужомСтатусе_НеКлассифицируетсяКакOverflow(string status)
+        => TurnErrorClassifier.Classify(Result(status,
+                "Разбираем ошибку «Prompt is too long: 210000 tokens > 200000 maximum.»"))
+            .Should().Be(FallbackErrorClass.None,
+                "overflow-маркеры в тексте при нерелевантном статусе — это цитата, а не сама ошибка переполнения");
+
+    [Fact]
     public void ContextOverflow_WireNameДляМаркера()
         => TurnErrorClassifier.WireName(FallbackErrorClass.ContextOverflow)
             .Should().Be("context_overflow");

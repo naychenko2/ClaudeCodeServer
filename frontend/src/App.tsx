@@ -31,7 +31,6 @@ import { api } from './lib/api'
 import { idbClear } from './lib/idb'
 import { setAllFlags } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
-import { OnboardingPage } from './features/onboarding/OnboardingPage'
 import { isWallActive, setWallActive } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
@@ -288,14 +287,10 @@ export default function App() {
   }, [])
   const isMobileView = useIsMobile()
 
-  // Гейт обязательного онбординга первого входа (фича default-personas-onboarding).
-  // Липкий: needsOnboarding гаснет посреди интервью (broadcast смены дефолта), но гейт
-  // держится до конца хода/кнопки — снимает его сам OnboardingPage через onDone.
+  // Стор дефолт-персоны/онбординга (фича default-personas-onboarding): обязательного
+  // гейта первого входа больше нет (знакомство — приглашение из раздела «Персоны»,
+  // см. п.5), но стор нужен ниже — оверлей знакомства (п.4.5) ждёт me.loaded.
   const me = useMe()
-  const [onboardingGate, setOnboardingGate] = useState(false)
-  useEffect(() => {
-    if (auth && me.loaded && me.needsOnboarding) setOnboardingGate(true)
-  }, [auth, me.loaded, me.needsOnboarding])
 
   const online = useOnline()
   const onlineRef = useRef(online)
@@ -985,10 +980,6 @@ export default function App() {
           AI-кнопка перекрывала бы его контролы в правом нижнем углу — прячем её там */}
       {auth && !authChecking && effectiveHubTab !== 'telemetry' && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
-      {/* Полноэкранный гейт онбординга — поверх всего, без навигации и «Пропустить» */}
-      {auth && !authChecking && onboardingGate && (
-        <OnboardingPage onDone={() => setOnboardingGate(false)} />
-      )}
     </>
   )
 }

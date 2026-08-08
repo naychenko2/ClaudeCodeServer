@@ -286,6 +286,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var origProvider = Info.Provider;
         var appliedModel = origModel;
         var appliedProvider = origProvider;
+        // Тип последней подмены: была ли она сменой ТИПА поставщика (шаг цепочки/сторонний
+        // провайдер, IsProviderSwitch:true) или тихой ротацией подписки того же пула Claude.
+        // Решает в finally, что восстанавливать и переносить ли транскрипт обратно —
+        // регрессия волны 2 (см. комментарий блока restore ниже).
+        var appliedProviderSwitch = false;
 
         try
         {
@@ -313,6 +318,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     _profileRoot = ResolveRootFor(currentKey);
                     appliedModel = currentModel;
                     appliedProvider = currentKey;
+                    appliedProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
                     var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
                     await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
                         $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
@@ -419,8 +425,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 currentModel = next.Model ?? currentModel;
                 currentKey = next.Key;
                 // Запоминаем последнее применённое значение Info — для CAS-восстановления в finally.
+                // appliedProviderSwitch — тип именно этой (последней) подмены: по нему finally
+                // решает, восстанавливать ли Provider и переносить ли транскрипт обратно.
                 appliedModel = Info.Model;
                 appliedProvider = Info.Provider;
+                appliedProviderSwitch = next.IsProviderSwitch;
                 // Потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки /
                 // переход к стороннему провайдеру). Тихие ротации подписок того же пула
                 // Claude бесплатны — это та же модель на другом аккаунте, а не подмена.
@@ -436,30 +445,51 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         {
             // Восстановить модель/провайдер, сохранённые на старте хода, — подмена не должна
             // переписывать модель чата навсегда (инцидент 2026-08-07). Восстановление ПОКОМПОНЕНТНОЕ
-            // (CAS по каждому полю отдельно): модель возвращаем, только если Info всё ещё равна
-            // последней подменённой (appliedModel), провайдер — аналогично. Так ручная смена одного
-            // поля во время хода не блокирует восстановление другого. ABA (пользователь руками выбрал
-            // ровно подменённое значение — Info совпало с applied случайно) принят осознанно: редкий
+            // (CAS по каждому полю отдельно): так ручная смена одного поля во время хода не блокирует
+            // восстановление другого. ABA (Info совпала с applied случайно) принят осознанно: редкий
             // случай, а различить «подмена» от «совпадение» без версионирования нельзя. Без подмен
             // applied == orig и восстановление — no-op.
-            // Намерение чата важнее результата ротации: после ТИХОЙ подмены (смена подписки того же
-            // пула Claude, IsProviderSwitch:false) restore возвращает чат на ИСХОДНЫЙ аккаунт — даже
-            // исчерпанный (RateLimited). Это не потеря ротации, а намеренный откат per-turn фолбэка:
-            // на следующем ходу SessionManager.TryPoolFailover снова переключит исчерпанный аккаунт
-            // на рабочий того же пула. Явный выбор пользователя переживёт ход, а фолбэк не застрянет.
+            //
+            // Тип последней подмены решает, что делать с Provider (регрессия волны 2: restore
+            // провайдера терял свежий транскрипт хода). TranscriptMigrator.TryMigrate — это Copy,
+            // а не move: ход на профиле A поймал ошибку → транскрипт скопирован A→B → финальный
+            // ответ CLI записан ТОЛЬКО в профиль B. Вернуть Provider в A — и следующий ход на
+            // --resume с A не вспомнит собственный ответ (в ленте CCS он есть, в контексте CLI нет),
+            // а TryPoolFailover ещё и затрёт свежий B устаревшей копией A→B.
+            //   • Тихая ротация подписки того же пула (IsProviderSwitch:false, модель не менялась):
+            //     Provider НЕ восстанавливаем — оставляем аккаунт, где реально прошёл ход и лежит
+            //     свежий транскрипт. Качество не страдает (та же модель, другой аккаунт), а транскрипт
+            //     остаётся консистентным. Модель восстанавливаем как обычно (тихая ротация её и не
+            //     трогала — restore здесь no-op).
+            //   • Смена типа поставщика (IsProviderSwitch:true — шаг цепочки/сторонний провайдер):
+            //     восстанавливаем И модель, И Provider (иначе пара вроде opus × kimi несовместима),
+            //     но ПЕРЕД restore копируем транскрипт обратно в профиль исходного провайдера.
             var modelRestored = false;
             var providerRestored = false;
             if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }
-            if (Info.Provider == appliedProvider) { Info.Provider = origProvider; providerRestored = true; }
-            // Счётчик сообщений пользователя: реальный ClaudeSession инкрементирует
-            // MessageCount на каждую отправку — после подмен восстановим так, чтобы
-            // одно user-сообщение с N попытками считалось одним сообщением
+            if (appliedProviderSwitch)
+            {
+                if (Info.Provider == appliedProvider)
+                {
+                    // Обратный перенос строго ДО перезаписи Provider и ДО персиста: копируем из
+                    // профиля последней пары (_profileRoot — там лежит свежий ответ) в профиль
+                    // исходного провайдера, куда вернётся --resume. Провал не роняет ход (TryCopy).
+                    if (appliedProvider != origProvider)
+                        TryCopyTranscriptBack(ResolveRootFor(origProvider));
+                    Info.Provider = origProvider;
+                    providerRestored = true;
+                }
+            }
+            // Тихая ротация (!appliedProviderSwitch): Provider оставляем — аккаунт, на котором
+            // прошёл ход, хранит свежий транскрипт. providerRestored остаётся false.
             Info.MessageCount = _snapshotMessageCount + 1;
-            // ПЕРСИСТ ПОСЛЕ RESTORE (Major 1): финальный result уже ушёл downstream и успел
-            // сохранить sessions.json с ПОДМЕНЁННОЙ моделью (ApplyStatusAsync → SaveSessions
-            // ДО finally). Если была подмена — переписываем персист восстановленными значениями,
-            // иначе рестарт сервера в этом окне залипил бы чат на подмене. Без подмены persist
-            // не дёргаем —ApplyStatus уже сохранил корректное состояние.
+            // ПЕРСИСТ ПОСЛЕ RESTORE (и обратного переноса): финальный result уже ушёл downstream
+            // и успел сохранить sessions.json ПОДМЕНЁННЫМ (ApplyStatusAsync → SaveSessions ДО finally).
+            // При смене поставчика — переписываем персист восстановленными значениями, иначе рестарт
+            // в этом окне залипил бы чат на подмене. При тихой ротации persist фиксирует оставленный
+            // новый аккаунт (тот же, что сохранил result, но гарантированно — на случай хода без
+            // result, когда ApplyStatus не успел). Без подмены persist не дёргаем — ApplyStatus уже
+            // сохранил корректное состояние.
             if ((modelRestored || providerRestored)
                 && (appliedModel != origModel || appliedProvider != origProvider))
                 _persist?.Invoke();
@@ -626,15 +656,44 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
-        string cwd;
-        try { cwd = _launcher is { IsSandboxed: true } ? _launcher.Paths.ToRuntime(_rootPath) : _rootPath; }
-        catch (InvalidOperationException) { return false; } // папка вне монтирований песочницы
+        if (ResolveCwd() is not { } cwd) return false; // папка вне монтирований песочницы
         if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error))
         {
             LogWarn($"Транскрипт {Info.Id} не перенесён {dstRoot}: {error}");
             return false;
         }
         return true;
+    }
+
+    // Обратный перенос транскрипта в профиль исходного провайдера при restore после смены типа
+    // поставщика (IsProviderSwitch). Финальный ответ хода CLI записал только в профиль ПОДМЕНЫ
+    // (_profileRoot); restore вернёт Info.Provider в исходный — следующий ход на --resume из
+    // исходного профиля не нашёл бы ответ модели. Копируем туда, где его ждёт resume. Провал
+    // не роняет ход, но пишем Warning с обоими путями (иначе потеря памяти диалога останется
+    // незамеченной). cwd — тот же, что у прямого переноса (TryMigrateTranscript).
+    private bool TryCopyTranscriptBack(string? dstRoot)
+    {
+        if (Info.ClaudeSessionId is null) return true;
+        if (_profileRoot is null || dstRoot is null) return false;
+        if (ResolveCwd() is not { } cwd)
+        {
+            LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: папка вне монтирований песочницы (src={_profileRoot}, dst={dstRoot})");
+            return false;
+        }
+        if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error))
+        {
+            LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: src={_profileRoot}, dst={dstRoot}: {error}");
+            return false;
+        }
+        return true;
+    }
+
+    // cwd хода для переноса транскрипта: хостовый для local, контейнерный — для песочницы
+    // (CLI уплощает КОНТЕЙНЕРНЫЙ путь). null — папка вне монтирований песочницы.
+    private string? ResolveCwd()
+    {
+        try { return _launcher is { IsSandboxed: true } ? _launcher.Paths.ToRuntime(_rootPath) : _rootPath; }
+        catch (InvalidOperationException) { return null; }
     }
 
     // Применение выбранной пары: смена подписки двигает только Provider, смена провайдера —

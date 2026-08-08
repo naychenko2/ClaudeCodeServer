@@ -5,6 +5,7 @@ using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -1046,7 +1047,9 @@ public class FallbackLlmSessionAdapterTests
     // Major 2: кулдаун недоступности НЕ помечает подписки пула Claude — один 529 на нативной
     // подписке не должен уводить следующие ходы на сторонний шаг 2 мимо живой подписки пула.
     // Здесь: первый ход на opus/claude ловит 529 (ProviderError), ротация на claude-2 — успех.
-    // Кулдаун на «claude» НЕ ставится → второй ход стартует с opus/claude, а не с шага цепочки.
+    // Кулдаун на «claude» НЕ ставится → второй ход не уходит на kimi, а остаётся в пуле Claude.
+    // После тихой ротации (IsProviderSwitch:false) Provider НЕ восстанавливается — ход реально
+    // прошёл и свежий транскрипт записан на claude-2, поэтому второй ход стартует с claude-2.
     [Fact]
     public async Task Кулдаун_НеТрогаетПодпискиПула_СледующийХодНачинаетсяСНей()
     {
@@ -1071,15 +1074,17 @@ public class FallbackLlmSessionAdapterTests
 
         // Кулдаун на ключе подписки пула НЕ поставлен (Major 2) — иначе второй ход ушёл бы на kimi.
         health.IsUnavailable("claude").Should().BeFalse("подписки пула не помечаются кулдауном");
+        // Тихая ротация оставила чат на claude-2 (где прошёл ход и лежит свежий транскрипт).
+        inner.Info.Provider.Should().Be("claude-2", "после тихой ротации Provider не восстанавливается");
 
-        // Ход 2: стартовая подмена проверяет кулдаун «claude» → false → старт с opus/claude.
+        // Ход 2: стартовая подмена проверяет кулдаун «claude-2» → false → старт с opus/claude-2.
         inner.Scripts.Enqueue(() => inner.Emit(Success()));
         await sut.SendMessageAsync("ещё");
         await WaitForAsync(() => inner.Attempts.Count >= 3, "старт хода 2");
 
-        // Последняя попытка — старт второго хода с claude × opus (через пул), а не kimi-k3.
-        inner.Attempts[^1].Should().Be(("claude", "opus"),
-            "второй ход стартует с исходной модели через пул, а не со шага 2 цепочки");
+        // Последняя попытка — старт второго хода с claude-2 × opus (в пуле Claude), а не kimi-k3.
+        inner.Attempts[^1].Should().Be(("claude-2", "opus"),
+            "второй ход стартует с подписки пула (claude-2 после тихой ротации), а не со шага 2 цепочки");
     }
 
     // Minor 4: покомпонентный CAS restore. Пользователь сменил во время хода ТОЛЬКО модель
@@ -1115,5 +1120,204 @@ public class FallbackLlmSessionAdapterTests
         // Модель — ручной выбор пользователя (не перетёрта), провайдер — восстановлен в acc-a.
         session.Model.Should().Be("manual-choice", "ручная модель не перетёрта (CAS по модели не прошёл)");
         session.Provider.Should().Be("acc-a", "провайдер восстановлен покомпонентно (CAS по провайдеру прошёл)");
+    }
+
+    // --- Сохранение свежего транскрипта хода при restore (регрессия волны 2) ---
+    //
+    // TranscriptMigrator.TryMigrate — это File.Copy, а не move: ход на профиле A поймал ошибку
+    // → транскрипт скопирован A→B → финальный ответ CLI записан ТОЛЬКО в профиль B. Восстановить
+    // Provider в A — и следующий ход на --resume с A не вспомнит свой ответ, а TryPoolFailover
+    // ещё и затрёт свежий B устаревшей копией A→B. Поэтому restore различает тип последней подмены:
+    //   • тихая ротация подписки того же пула — Provider оставляем новым (транскрипт там);
+    //   • смена типа поставщика — Provider восстанавливаем, но перед этим копируем транскрипт обратно.
+
+    // Провайдер deepseek с профилем во временной папке (claude-profiles/deepseek). ClaudeUserProfileDir
+    // указывает на несуществующую папку → синк настроек из ~/.claude не идёт (чистый тестовый профиль).
+    private static LlmProviderRegistry BuildProvidersInDir(string baseDir)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+            ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        return new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+    }
+
+    // Перехват логов адаптера: проверяем, что провал обратного переноса не прошёл молча.
+    private sealed class SpyLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    // (а) Тихая ротация подписки того же пула: Provider остаётся новым, обратного переноса нет.
+    // Ход на acc-a поймал 429 → ротация на acc-b (тихо, IsProviderSwitch:false) → успех на acc-b.
+    // Свежий ответ записан в профиль acc-b, поэтому чат оставляем на acc-b (транскрипт консистентен).
+    [Fact]
+    public async Task ТихаяРотацияПула_ProviderОстаётсяНовым_ТранскриптНеКопируетсяНазад()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_silent_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a", "acc-b");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-silent";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var subAccA = Path.Combine(baseDir, "claude-profiles", "sub-acc-a");
+            var subAccB = Path.Combine(baseDir, "claude-profiles", "sub-acc-b");
+            var accAFile = Path.Combine(subAccA, "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet" });
+            inner.Sink = sut.HandleMessageAsync;
+            var accBFile = Path.Combine(subAccB, "projects", flat, csid + ".jsonl");
+            // acc-a — 429 → тихая ротация на acc-b (копия acc-a→acc-b). acc-b — успех + ответ CLI.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(accBFile, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Тихая ротация: Provider остался новым (acc-b) — там, где прошёл ход и лежит транскрипт.
+            session.Provider.Should().Be("acc-b", "после тихой ротации Provider не восстанавливается");
+            session.Model.Should().Be("sonnet");
+            // Обратного переноса НЕ было: acc-a хранит исходный транскрипт без свежего ответа.
+            File.ReadAllText(accAFile).Should().NotContain("ANSWER",
+                "обратный перенос при тихой ротации не вызывается");
+            // Свежий ответ остался в acc-b (там, где ход реально прошёл).
+            File.ReadAllText(accBFile).Should().Contain("ANSWER");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // (б) Смена типа поставщика (шаг цепочки): Model/Provider восстановлены И транскрипт перенесён
+    // обратно в профиль исходного провайдера. Проверяем факт наличия файла во временных профилях,
+    // а не поле в памяти: acc-a после хода должен содержать свежий ответ, скопированный из deepseek.
+    [Fact]
+    public async Task СменаПоставщика_ModelProviderВосстановлены_ТранскриптПеренесёнНазад()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_switch_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-switch";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var subAccA = Path.Combine(baseDir, "claude-profiles", "sub-acc-a");
+            var deepseek = Path.Combine(baseDir, "claude-profiles", "deepseek");
+            var accAFile = Path.Combine(subAccA, "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet", "deepseek-chat" });
+            inner.Sink = sut.HandleMessageAsync;
+            var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
+            // acc-a — 429 → шаг цепочки deepseek (копия acc-a→deepseek). deepseek — успех + ответ CLI.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(deepseekFile, "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Смена поставщика: Model и Provider восстановлены в исходные (иначе пара opus × kimi).
+            session.Model.Should().Be("sonnet", "модель восстановлена после смены поставщика");
+            session.Provider.Should().Be("acc-a", "провайдер восстановлен после смены поставщика");
+            // Обратный перенос: свежий ответ скопирован из deepseek в профиль acc-a — иначе
+            // следующий ход на --resume с acc-a не нашёл бы ответ модели.
+            File.ReadAllText(accAFile).Should().Contain("ANSWER",
+                "после restore транскрипт перенесён обратно в профиль исходного провайдера");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // (в) Провал обратного переноса не роняет ход и не проходит молча: Model/Provider восстановлены,
+    // result доставлен, в логе — Warning с id сессии. Профиль deepseek пустеет до restore →
+    // TranscriptMigrator.TryMigrate не находит транскрипт и возвращает false.
+    [Fact]
+    public async Task СменаПоставщика_ПровалОбратногоПереноса_НеРоняетХод_ПишетWarning()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_fail_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-fail";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var subAccA = Path.Combine(baseDir, "claude-profiles", "sub-acc-a");
+            var deepseek = Path.Combine(baseDir, "claude-profiles", "deepseek");
+            var accAFile = Path.Combine(subAccA, "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            File.WriteAllText(accAFile, "QUESTION");
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var spy = new SpyLogger();
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet", "deepseek-chat" }, log: spy);
+            inner.Sink = sut.HandleMessageAsync;
+            var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
+            // acc-a — 429 → шаг цепочки deepseek (копия acc-a→deepseek). deepseek — успех, НО транскрипт
+            // в deepseek пропал к моменту restore (профиль удалили/диск упал) → обратный перенос не найдёт источник.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                if (File.Exists(deepseekFile)) File.Delete(deepseekFile);
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Ход не роняется: Model/Provider восстановлены, result доставлен успехом.
+            session.Model.Should().Be("sonnet");
+            session.Provider.Should().Be("acc-a");
+            Downstream().OfType<ResultMessage>().Should().ContainSingle()
+                .Which.Subtype.Should().Be("success");
+            // Провал переноса не прошёл молча: Warning с id сессии и признаком обратного переноса.
+            spy.Entries.Should().Contain(e => e.Level == LogLevel.Warning
+                && e.Message.Contains("Обратный перенос") && e.Message.Contains(csid),
+                "провал обратного переноса пишется в лог с id сессии");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
 }

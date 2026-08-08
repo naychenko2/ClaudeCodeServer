@@ -15,9 +15,12 @@ describe('rankedActions — доступность и ранжирование',
   it('на «Чатах» без открытого чата видны глобальные действия', () => {
     const r = rankedActions(ctx({ nav: { screen: 'chats' } }));
     // Все действия секции «Глобально» с when=online доступны вне домашнего экрана
-    // (home.overview/home.resume контекстны только на Home, но видны везде). Порядок —
+    // (home.overview/home.resume контекстны только на Home, но видны везде), плюс
+    // note.annotationsAll — оно тоже when=online и без гейта по экрану (комментарии
+    // оставляются и в файлах проекта, не только в открытом документе). Порядок —
     // каталожный: контекстных на «Чатах» нет, поэтому все идут в порядке AI_ACTIONS.
     expect(r.map(x => x.action.id)).toEqual([
+      'note.annotationsAll',
       'chat.widget',
       'global.briefing', 'global.search', 'global.whatsnew',
       'home.overview', 'home.resume', 'global.capture',

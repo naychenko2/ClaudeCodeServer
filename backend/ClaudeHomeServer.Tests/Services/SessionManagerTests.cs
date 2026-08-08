@@ -2919,6 +2919,55 @@ public class SessionManagerTests : IDisposable
         budget.RunsUsed.Should().Be(budget.MaxRuns, "отказ ничего не расходует");
     }
 
+    // Единственная кнопка, поднимающая потолки, — «Добавить бюджет» на карточке
+    // BudgetExhausted; попросить её координатор не может (в протоколе лишь deviation/check/
+    // clarify). Пока гейт молчал, штаб упирался в отказ бесконечно: человек жал «Разрешить»
+    // на карточке расхождения с планом, а та бюджет не трогает (прод 2026-08-08).
+    [Fact]
+    public async Task КвотаЗапуска_ВыбранныйБюджет_ПоднимаетКарточкуСКнопкойДобавитьБюджет()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-quota-card");
+        SetWaveStage(session.Id);
+        var budget = _sut.GetById(session.Id)!.TeamImplement!.Budget;
+        budget.WavesUsed = budget.MaxWaves;
+
+        // Ждём СОБЫТИЕ, а не время: карточка публикуется фоновой задачей (FireAndForget),
+        // и на голодном раннере CI пауза фиксированной длины давала бы плавающий провал
+        var raised = new TaskCompletionSource<TeamEscalation>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _sut.TeamEscalationRaiser = (_, card) => { raised.TrySetResult(card); return Task.CompletedTask; };
+
+        var (verdict, _) = _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
+
+        verdict.Should().Be(SessionManager.TeamRunQuota.Exhausted);
+        var finished = await Task.WhenAny(raised.Task, Task.Delay(TimeSpan.FromSeconds(10)));
+        finished.Should().Be(raised.Task, "исчерпание бюджета обязано дойти до человека карточкой");
+        var escalation = await raised.Task;
+        escalation.Kind.Should().Be(TeamEscalationKind.BudgetExhausted);
+        escalation.Actions.Select(a => a.Id).Should().Contain("addBudget",
+            "потолки поднимает только эта кнопка — без неё штаб остаётся в тупике");
+    }
+
+    // Прочие отказы гейта человек уже видит: «остановлено» и «ждёт решения» висят карточкой,
+    // неподтверждённый план — карточкой плана. Вторая карточка была бы спамом.
+    [Fact]
+    public async Task КвотаЗапуска_ОтказНеИзБюджета_КарточкуНеПлодит()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-quota-card-none");
+        SetWaveStage(session.Id);
+        _sut.WithTeamState(session.Id, t => { t.Stopped = true; return true; });
+
+        var raised = new TaskCompletionSource<TeamEscalation>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _sut.TeamEscalationRaiser = (_, card) => { raised.TrySetResult(card); return Task.CompletedTask; };
+
+        var (verdict, _) = _sut.TryConsumeTeamImplementRun(session.Id, TestUserId);
+
+        verdict.Should().Be(SessionManager.TeamRunQuota.Exhausted);
+        // Ожидание отрицательного результата: ждём с запасом и убеждаемся, что не пришло.
+        // Провал в другую сторону (медленный раннер) даст ложно-зелёный, а не ложно-красный
+        var finished = await Task.WhenAny(raised.Task, Task.Delay(TimeSpan.FromSeconds(1)));
+        finished.Should().NotBe(raised.Task, "про остановку человек уже знает из своей же карточки");
+    }
+
     [Fact]
     public async Task ГейтЗапуска_ОбычныйЧатВнеРежима_РаботаетКакРаньше()
     {

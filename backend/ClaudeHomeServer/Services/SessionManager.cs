@@ -4581,23 +4581,27 @@ public class SessionManager : IDisposable
         if (entry.Info.TeamImplement is not { } team) return (TeamRunQuota.NotTeamMode, null);
 
         string? reason;
+        // Причина именно из бюджета (а не «остановлено»/«ждёт решения»/«план не подтверждён») —
+        // по ней ниже поднимается карточка с кнопкой «Добавить бюджет»
+        string? budgetReason = null;
         lock (entry.TeamLock)
         {
             // Стадия волны — вторая проверка после «Остановлено»: без неё квота честно
             // считала расход, но разрешала запуск ДО публикации и подтверждения плана —
             // единственное согласование (карточка плана) обходилось целиком (Э7-фикс).
-            reason = team.Stopped
-                ? "практика остановлена человеком — новые запуски не идут, пока он не продолжит"
-                // M3: причина отказа обязана быть честной. Из «ждёт решения» ссылаться на
-                // неподтверждённый план — враньё: план как раз подтверждён, а ждём мы ответа
-                // человека по карточке остановки (кнопкой или обычным сообщением в чат).
-                : team.Stage == TeamImplementStage.AwaitingDecision
-                    ? "практика ждёт решения человека по карточке остановки — запуск исполнителей " +
-                      "возобновится, когда он ответит (кнопкой карточки или сообщением в чат)"
-                    : team.Stage != TeamImplementStage.Wave
-                        ? "план ещё не подтверждён человеком — запуск исполнителей доступен только " +
-                          "в стадии волны, единственное согласование — карточка плана"
-                        : team.Budget.ExceededReason();
+            if (team.Stopped)
+                reason = "практика остановлена человеком — новые запуски не идут, пока он не продолжит";
+            // M3: причина отказа обязана быть честной. Из «ждёт решения» ссылаться на
+            // неподтверждённый план — враньё: план как раз подтверждён, а ждём мы ответа
+            // человека по карточке остановки (кнопкой или обычным сообщением в чат).
+            else if (team.Stage == TeamImplementStage.AwaitingDecision)
+                reason = "практика ждёт решения человека по карточке остановки — запуск исполнителей " +
+                         "возобновится, когда он ответит (кнопкой карточки или сообщением в чат)";
+            else if (team.Stage != TeamImplementStage.Wave)
+                reason = "план ещё не подтверждён человеком — запуск исполнителей доступен только " +
+                         "в стадии волны, единственное согласование — карточка плана";
+            else
+                reason = budgetReason = team.Budget.ExceededReason();
             if (reason is null)
             {
                 team.Budget.RunsUsed++;
@@ -4606,13 +4610,50 @@ public class SessionManager : IDisposable
                 team.Budget.TasksUsed++;
             }
         }
-        if (reason is not null) return (TeamRunQuota.Exhausted, reason);
+        if (reason is not null)
+        {
+            // Исчерпанный бюджет — единственный отказ, о котором человек ещё НЕ знает:
+            // «остановлено» и «ждёт решения» уже висят карточкой, неподтверждённый план —
+            // карточкой плана. Без этой публикации выхода из тупика не было вовсе: потолки
+            // поднимает только кнопка «Добавить бюджет» карточки BudgetExhausted, а её
+            // публиковала раздача волны — не гейт ручного запуска; попросить карточку
+            // координатор тоже не мог (в протоколе лишь deviation/check/clarify), и штаб
+            // бесконечно упирался в отказ, пока человек жал «Разрешить» на чужой карточке
+            // расхождения с планом — та бюджет не трогает (прод 2026-08-08).
+            if (budgetReason is not null)
+                FireAndForget(RaiseTeamBudgetExhaustedAsync(stabId, budgetReason),
+                    $"карточка исчерпанного бюджета итерации ({stabId})");
+            return (TeamRunQuota.Exhausted, reason);
+        }
 
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         FireAndForget(BroadcastTeamImplementAsync(stabId, entry),
             $"рассылка состояния режима после расхода квоты ({stabId})");
         return (TeamRunQuota.Allowed, null);
+    }
+
+    // Карточка «Бюджет итерации израсходован» из точки отказа квоты: у человека появляется
+    // кнопка «Добавить бюджет» — единственный способ поднять потолки (агенту он недоступен).
+    // Публикация переводит практику в «ждёт решения», поэтому следующий отказ придёт уже с
+    // другой причиной и второй карточки не даст. Через TeamEscalationRaiser, когда он есть:
+    // хук вдобавок шлёт уведомление и push, иначе остановка осталась бы только в ленте.
+    private async Task RaiseTeamBudgetExhaustedAsync(string stabId, string reason)
+    {
+        if (GetById(stabId) is not { TeamImplement: { } team } stab) return;
+        if (team.Stage == TeamImplementStage.AwaitingDecision) return;
+
+        var card = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.BudgetExhausted,
+            Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.BudgetExhausted, reason),
+            Details = $"Запуск исполнителя отклонён: {reason}.\n\n"
+                      + TeamImplementPrompts.BudgetLine(team.Budget),
+            Wave = team.WaveNumber,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
+        };
+        if (TeamEscalationRaiser is { } raise) await raise(stab, card);
+        else await PublishTeamEscalationAsync(stabId, card);
     }
 
     // Компенсация квоты запуска (m3, второй проход Глеба): TryConsumeTeamImplementRun списывает

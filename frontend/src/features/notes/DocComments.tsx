@@ -8,7 +8,7 @@ import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { useNotesVersion } from '../../lib/notes';
 import { ensurePersonasLoaded, usePersonas, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../personas/PersonaAvatar';
-import { Button, ConfirmDialog } from '../../components/ui';
+import { Badge, Button, ConfirmDialog, SidebarSection } from '../../components/ui';
 import { startChatFromPanel } from '../../lib/ai/startChat';
 import { docAnnotationsPrompt, ANNOTATIONS_TOOL_KEY } from '../../lib/ai/annotationsPrompt';
 import type { DocAnnotation, NoteReply, Persona } from '../../types';
@@ -23,27 +23,21 @@ const PRESET_TAGS = ['вопрос', 'правка', 'идея', 'обсудит
 
 interface SelectionInfo { start: number; end: number; text: string; x: number; y: number }
 
+// Раскрыта ли секция комментариев в сайдбаре. Ключ общий на все документы — это привычка
+// чтения, а не данные конкретного файла
+const COMMENTS_OPEN_KEY = 'cc_doc_comments_open';
+
 const statusColor = (open: boolean) => (open ? C.warning : C.success);
 
-// Чип статуса/состояния комментария
+// Чип статуса/состояния комментария — на общем примитиве ui/Badge
 function StatusChip({ status, state }: { status: DocAnnotation['status']; state?: DocAnnotation['state'] }) {
   if (state === 'orphan')
-    return <Chip color={C.textMuted} bg={C.bgInset} icon={<X size={11} />} label="сирота" />;
+    return <Badge size="xs" icon={<X size={11} />}>сирота</Badge>;
   if (state === 'changed')
-    return <Chip color={C.warningText} bg={C.warningBg} icon={<TriangleAlert size={11} />} label="место изменилось" />;
+    return <Badge size="xs" tone="warning" icon={<TriangleAlert size={11} />}>место изменилось</Badge>;
   return status === 'open'
-    ? <Chip color={C.warningText} bg={C.warningBg} icon={<MessageCircle size={11} />} label="открыт" />
-    : <Chip color={C.successText} bg={C.successBg} icon={<Check size={11} />} label="решён" />;
-}
-
-function Chip({ color, bg, icon, label }: { color: string; bg: string; icon: React.ReactNode; label: string }) {
-  return (
-    <span style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4, padding: '1px 8px',
-      borderRadius: 11, fontSize: 11, fontWeight: 600, color, background: bg,
-      whiteSpace: 'nowrap',
-    }}>{icon}{label}</span>
-  );
+    ? <Badge size="xs" tone="warning" icon={<MessageCircle size={11} />}>открыт</Badge>
+    : <Badge size="xs" tone="success" icon={<Check size={11} />}>решён</Badge>;
 }
 
 // Загрузка комментариев документа + перезагрузка на realtime notes_changed
@@ -108,11 +102,13 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const [customTag, setCustomTag] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
-  const [filter, setFilter] = useState<'all' | 'open' | 'none'>('all');
+  // Скрыть комментарии целиком — это сворачивание секции (SidebarSection), а не третий
+  // режим фильтра: панель и её соседи по сайдбару прячутся одним и тем же жестом
+  const [filter, setFilter] = useState<'all' | 'open'>('all');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const shown = useMemo(
-    () => (filter === 'none' ? [] : items.filter(a => filter === 'all' || a.status === 'open')),
+    () => items.filter(a => filter === 'all' || a.status === 'open'),
     [items, filter]);
   const openCount = items.filter(a => a.status === 'open').length;
   useEffect(() => { onCounts?.(items.length, openCount); }, [items.length, openCount, onCounts]);
@@ -391,55 +387,51 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
     return () => cleanups.forEach(f => f());
   }, [shown, enabled, content]);
 
-  const panel = enabled && items.length > 0 && (
-    <div ref={panelRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13, color: C.textHeading }}>
-          <MessageCircle size={14} style={{ color: C.accent }} /> Комментарии
-          <span style={{ color: C.textMuted, fontWeight: 400 }}>· {items.length}{openCount > 0 && ` · ${openCount} откр.`}</span>
-        </span>
-        {/* Кнопка «Разобрать» и переключатель фильтра — в одном flex-ряду, всегда на
-            одном уровне (не разъезжаются по вертикали при переносе). Группа прижимается
-            к правому краю заголовка; не помещается с заголовком — переносится целиком. */}
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, marginLeft: 'auto',
-          // wrap — страховка на утянутый до минимума сайдбар: вместо обрезки контролы
-          // встанут друг под другом (в штатной ширине они всегда в одной строке)
-          flexWrap: 'wrap', justifyContent: 'flex-end',
-        }}>
-          {openCount > 0 && (
-            // Разбор всех открытых комментариев этого документа одним чатом: путь и область
-            // здесь известны, поэтому AI не ищет документ, а сразу читает notes_annotations.
-            <Button
-              size="xs" variant="secondary" leftIcon={<Sparkles size={12} />}
-              title="Открыть чат и разобрать открытые комментарии этого документа"
-              onClick={() => void startChatFromPanel(
-                docAnnotationsPrompt(scope, docPath), { requiredTool: ANNOTATIONS_TOOL_KEY })}
-              // nowrap + flexShrink:0 — текст «Разобрать N» не должен ломиться по строкам,
-              // а сама кнопка не сжиматься под соседний сегментед на узкой панели.
-              // Зазор с иконкой поджат (базовый gap кнопки — 8): вместе с сегментедом
-              // группа обязана уложиться в ширину панели (~276px в сайдбаре)
-              style={{ whiteSpace: 'nowrap', flexShrink: 0, gap: 5, padding: '0 8px' }}
-            >Разобрать {openCount}</Button>
-          )}
-          <div style={{
-            display: 'flex', flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden',
-          }}>
-            {/* Метки короткие («Откр.» вместо «Открытые»): сайдбар заметок резиновый
-                (usePanelWidth, минимум 230px), и с полными подписями группа
-                «Разобрать N» + фильтр не укладывалась в его ширину */}
-            {([['all', 'Все', 'Все комментарии'], ['open', 'Откр.', 'Только открытые'],
-               ['none', 'Скрыть', 'Скрыть комментарии']] as const).map(([key, label, hint]) => (
-              <button key={key} onClick={() => setFilter(key)} title={hint} style={{
-                padding: '3px 7px', fontSize: 11.5, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
-                background: filter === key ? C.accentLight : 'transparent',
-                color: filter === key ? C.textHeading : C.textMuted,
-                fontWeight: filter === key ? 600 : 400, fontFamily: FONT.sans,
-              }}>{label}</button>
-            ))}
-          </div>
-        </div>
+  // Действия секции: разбор открытых и фильтр. Живут в правом слоте заголовка и видны,
+  // только пока секция раскрыта
+  const panelActions = (
+    <>
+      {openCount > 0 && (
+        // Разбор всех открытых комментариев этого документа одним чатом: путь и область
+        // здесь известны, поэтому AI не ищет документ, а сразу читает notes_annotations.
+        <Button
+          size="xs" variant="secondary" leftIcon={<Sparkles size={12} />}
+          title="Открыть чат и разобрать открытые комментарии этого документа"
+          onClick={() => void startChatFromPanel(
+            docAnnotationsPrompt(scope, docPath), { requiredTool: ANNOTATIONS_TOOL_KEY })}
+          // nowrap + flexShrink:0 — текст «Разобрать N» не должен ломиться по строкам,
+          // а сама кнопка не сжиматься под соседний сегментед на узкой панели.
+          // Зазор с иконкой поджат (базовый gap кнопки — 8): вместе с сегментедом
+          // группа обязана уложиться в ширину панели (~276px в сайдбаре)
+          style={{ whiteSpace: 'nowrap', flexShrink: 0, gap: 5, padding: '0 8px' }}
+        >Разобрать {openCount}</Button>
+      )}
+      <div style={{
+        display: 'flex', flexShrink: 0, border: `1px solid ${C.border}`, borderRadius: 8, overflow: 'hidden',
+      }}>
+        {/* Метки короткие («Откр.» вместо «Открытые»): сайдбар заметок резиновый
+            (usePanelWidth, минимум 230px), и с полными подписями группа
+            «Разобрать N» + фильтр не укладывалась в его ширину */}
+        {([['all', 'Все', 'Все комментарии'], ['open', 'Откр.', 'Только открытые']] as const)
+          .map(([key, label, hint]) => (
+            <button key={key} onClick={() => setFilter(key)} title={hint} style={{
+              padding: '3px 7px', fontSize: 11.5, border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+              background: filter === key ? C.accentLight : 'transparent',
+              color: filter === key ? C.textHeading : C.textMuted,
+              fontWeight: filter === key ? 600 : 400, fontFamily: FONT.sans,
+            }}>{label}</button>
+          ))}
       </div>
+    </>
+  );
+
+  const panel = enabled && items.length > 0 && (
+    <SidebarSection
+      title="Комментарии" count={items.length}
+      hint={openCount > 0 ? `${openCount} откр.` : undefined}
+      actions={panelActions} storageKey={COMMENTS_OPEN_KEY}
+    >
+    <div ref={panelRef} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
       {assignedMsg && (
         <div style={{ fontSize: 12, color: C.successText, background: C.successBg, borderRadius: R.sm, padding: '5px 9px' }}>
           {assignedMsg}
@@ -461,9 +453,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           </button>
         </div>
       )}
-      {filter === 'none'
-        ? <div style={{ fontSize: 12, color: C.textMuted }}>Комментарии скрыты фильтром.</div>
-        : shown.map(a => (
+      {shown.map(a => (
           <div key={a.noteId} data-ann={a.noteId} onClick={() => gotoBlock(a)} style={{
             border: `1px solid ${selectedId === a.noteId ? C.accent : C.border}`,
             boxShadow: selectedId === a.noteId ? `0 0 0 1px ${C.accent}` : undefined,
@@ -573,6 +563,7 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
           </div>
         ))}
     </div>
+    </SidebarSection>
   );
 
   // panelTarget (NoteView-сайдбар) старше below: панель уходит в переданный контейнер порталом.
@@ -581,8 +572,13 @@ export function DocCommentedMarkdown({ scope, docPath, content, isMobile, panelB
   const defer = !!deferPanel && !panelTarget;
   const below = !useTarget && !defer && (isMobile || panelBelow);
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 18 }}>
-      <div ref={docRef} onMouseUp={onMouseUp} onTouchEnd={onMouseUp} style={{ flex: 1, minWidth: 0 }}>
+    // Панель уехала во внешний контейнер (useTarget) — своя двухколоночная раскладка тут
+    // не нужна и ВРЕДНА: flex-контейнер не обтекает плавающие блоки, а колонка свойств
+    // и комментариев у открытого файла стоит именно плавающей, чтобы текст шёл под ней,
+    // а не оставлял пустую полосу справа
+    <div style={useTarget ? undefined : { display: 'flex', alignItems: 'flex-start', gap: 18 }}>
+      <div ref={docRef} onMouseUp={onMouseUp} onTouchEnd={onMouseUp}
+        style={useTarget ? { minWidth: 0 } : { flex: 1, minWidth: 0 }}>
         {/* Подсказка первого использования — пока нет ни одного комментария */}
         {enabled && !hintDismissed && items.length === 0 && (
           <div style={{

@@ -279,17 +279,22 @@ const components: Components = {
       </code>
     );
   },
+  // display: flow-root у блоков с собственным фоном, рамкой или маркерами — не украшение,
+  // а условие соседства с плавающими элементами (колонка свойств и комментариев у открытого
+  // документа): обычный блок обтекается только строками, а его бокс уходит ПОД флоат —
+  // подложка цитаты заезжала под панель, маркеры списка прятались за ней. Своё BFC заставляет
+  // блок встать рядом. У pre и таблицы оно уже есть — от overflow
   ul: ({ children }) => (
-    <ul style={{ margin: '0 0 14px', paddingLeft: 22, lineHeight: 1.7 }}>{children}</ul>
+    <ul style={{ margin: '0 0 14px', paddingLeft: 22, lineHeight: 1.7, display: 'flow-root' }}>{children}</ul>
   ),
   ol: ({ children }) => (
-    <ol style={{ margin: '0 0 14px', paddingLeft: 22, lineHeight: 1.7 }}>{children}</ol>
+    <ol style={{ margin: '0 0 14px', paddingLeft: 22, lineHeight: 1.7, display: 'flow-root' }}>{children}</ol>
   ),
   li: ({ children }) => (
     <li style={{ margin: '3px 0', color: C.textHeading }}>{children}</li>
   ),
   blockquote: ({ children }) => (
-    <blockquote style={{ margin: '0 0 14px', padding: '10px 16px', borderLeft: `3px solid ${C.accent}`, background: C.bgMain, borderRadius: '0 8px 8px 0', color: C.textSecondary }}>
+    <blockquote style={{ margin: '0 0 14px', padding: '10px 16px', borderLeft: `3px solid ${C.accent}`, background: C.bgMain, borderRadius: '0 8px 8px 0', color: C.textSecondary, display: 'flow-root' }}>
       {children}
     </blockquote>
   ),

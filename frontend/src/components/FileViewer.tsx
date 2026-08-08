@@ -34,6 +34,8 @@ import { useHeadings, useHeadingSpy, scrollToHeading, type DocToc, type Heading 
 import { EmptyState } from './EmptyState';
 import { getLanguage } from '../lib/getLanguage';
 import { MarkdownViewer } from './MarkdownViewer';
+import { DocPropsPanel } from '../features/docs/DocPropsPanel';
+import { useDocProps } from '../features/docs/useDocProps';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { DocCommentedMarkdown } from '../features/notes/DocComments';
@@ -152,6 +154,10 @@ type TabKey = ViewTab | 'code';
 // отличает только «якорь текущего документа» (kind 'doc', скроллим) от «другой файл»
 // (kind 'repo', открываем) — внешние MarkdownViewer уводит в новую вкладку сам.
 const EMPTY_DOCS: ReadonlySet<string> = new Set();
+
+// Ширина просмотрщика, ниже которой колонка свойств и комментариев (290 + зазор) уезжает
+// под текст: документу должно оставаться не меньше ~450px, иначе строки рвутся по слову
+const SIDE_MIN_W = 760;
 
 // Ступени шапки по ширине ПАНЕЛИ (не окна — в сплите панель живёт своей жизнью).
 // comfort — подписи, cozy/narrow — иконки, tight — вкладки уезжают в меню.
@@ -429,6 +435,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [imgDims, setImgDims] = useState<{ w: number; h: number } | null>(null);
   // Счётчики комментариев к документу — чип в тулбаре (данные поднимает DocCommentedMarkdown)
   const [commentCounts, setCommentCounts] = useState<{ total: number; open: number } | null>(null);
+  // Контейнер колонки документа (свойства + комментарии): в него порталом уезжает панель
+  // комментариев, чтобы она стояла под свойствами, а не отдельным сайдбаром рядом
+  const [sideEl, setSideEl] = useState<HTMLDivElement | null>(null);
   useEffect(() => { setCommentCounts(null); }, [filePath]);
   const onCommentCounts = useCallback((total: number, open: number) => setCommentCounts({ total, open }), []);
   const drawioRef = useRef<DrawioHandle>(null);
@@ -454,6 +463,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
   const content = fileContent?.content ?? '';
   const hasUnsavedChanges = editing && editContent !== content;
+
+  // Колонка свойств и комментариев встаёт сбоку, только если после неё документу остаётся
+  // читаемая ширина. Порог считаем по просмотрщику, а не по окну: при открытых панелях
+  // центр сжимается до трети экрана, и колонка в 290px оставляла документу лапшу
+  // в одно слово. Не помещается — уезжает под текст, как на мобиле
+  const stackSide = isMobile || (panelWidth > 0 && panelWidth < SIDE_MIN_W);
 
   // Оглавление md для скролла к якорю: снимается с DOM контент-зоны (md внутри
   // DocCommentedMarkdown — вложенность querySelectorAll не мешает). Используется и для
@@ -908,6 +923,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // (Windows), как есть — relPath не нормализует то, что вне корня проекта
   const fileName = basename(filePath) || filePath;
   const isMarkdown = /\.(md|mdx)$/i.test(fileName);
+  // Свойства документа (статус ADR и прочее по схеме типа). Загрузка одна на оба
+  // представления — полосу под шапкой и сайдбар справа: иначе на каждый файл уходило бы
+  // вдвое больше запросов. Для не-md и файлов вне проекта не запрашиваются вовсе
+  const docProps = useDocProps(project.id, filePath, !isHostMode && isMarkdown);
   // Текстовый файл, содержимое которого можно скопировать целиком
   const isCopyableText = !!fileContent && !fileContent.isBinary && !fileContent.isImage
     && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio;
@@ -1335,6 +1354,23 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   // Блок «бейджи + вкладки + действие» пуст (загрузка, бинарник без вкладок) — не рисуем
   // его вовсе, иначе строка получает лишний зазор в пустом месте
   const commentsChipVisible = showChips && !!commentCounts && commentCounts.total > 0 && !editing && tab === 'file';
+
+  // Колонка документа: свойства сверху, панель комментариев под ними (приезжает порталом
+  // в sideEl). Живёт, пока есть хоть один блок — пустая рамка сбоку документу ни к чему
+  const docSide = (docProps.type || (commentCounts?.total ?? 0) > 0) ? (
+    <aside style={stackSide ? {
+      // Под текстом: отступы минимальные, чтобы свёрнутые секции остались двумя
+      // строками, а не полосой пустоты
+      width: '100%', marginTop: 12,
+      borderTop: `1px solid ${C.border}`, paddingTop: 4,
+    } : {
+      float: 'right', width: 290, marginLeft: 18, marginBottom: 12,
+      borderLeft: `1px solid ${C.border}`, paddingLeft: 14,
+    }}>
+      <DocPropsPanel state={docProps} />
+      <div ref={setSideEl} />
+    </aside>
+  ) : null;
   const diffChipVisible = showChips && !!diffStats && tab === 'diff';
   const badgesVisible = commentsChipVisible || diffChipVisible || showTabs;
 
@@ -1818,18 +1854,44 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   // обе фичи проектные (scope=project.id), для файла вне проекта не годятся
                   ? <div data-selection-scope="doc" data-selection-priority="2"><MarkdownViewer content={content} onDocLink={handleDocLink} /></div>
                   : isMarkdown
-                  ? <div data-selection-scope="doc" data-selection-priority="2"><DocCommentedMarkdown
-                      scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
-                      onCounts={onCommentCounts}
-                      // Логотип и скриншоты README лежат рядом в репозитории: путь в src
-                      // относителен документа, грузить их надо через файловый эндпоинт.
-                      // onDocLink — переход по md-ссылкам внутри файла (другой файл/якорь),
-                      // иначе клик уводил бы браузер из SPA на главный экран
-                      viewer={{ onDocLink: handleDocLink, resolveImageSrc: src => {
-                        const target = resolveDocImage(filePath, src);
-                        return target ? api.files.fileUrl(project.id, target) : undefined;
-                      } }}
-                    /></div>
+                  ? (
+                    // Свойства и комментарии — ОДНОЙ колонкой справа (на узком просмотрщике
+                    // блоком под текстом), свойства сверху. Панель комментариев уезжает сюда
+                    // порталом (panelTarget), иначе она рисует собственный сайдбар и рядом
+                    // с документом оказывается две колонки.
+                    //
+                    // Колонка ПЛАВАЮЩАЯ, а не второй колонкой флекса: свёрнутые секции — это
+                    // две строки заголовков, и в двухколоночной раскладке весь текст ниже
+                    // всё равно жался бы в остаток ширины, оставляя справа пустую полосу
+                    // до самого конца документа. Обтекание пускает текст под колонку.
+                    // flow-root — чтобы контейнер учитывал высоту флоата (замена clearfix)
+                    <div style={{ display: 'flow-root' }}>
+                      {/* Плавающая колонка обязана стоять в разметке ДО текста, который её
+                          обтекает; уехав под текст (узкий просмотрщик), она встаёт после
+                          него — там же, где её ждут глазами */}
+                      {!stackSide && docSide}
+                      <div style={{ minWidth: 0 }}
+                        data-selection-scope="doc" data-selection-priority="2">
+                        <DocCommentedMarkdown
+                          scope={project.id} docPath={filePath} content={content} isMobile={isMobile}
+                          onCounts={onCommentCounts}
+                          panelTarget={sideEl}
+                          // Пока контейнер колонки не смонтирован, панель не рисуется нигде:
+                          // без этого она успевала мигнуть на своём обычном месте
+                          deferPanel
+                          // Логотип и скриншоты README лежат рядом в репозитории: путь в src
+                          // относителен документа, грузить их надо через файловый эндпоинт.
+                          // onDocLink — переход по md-ссылкам внутри файла (другой файл/якорь),
+                          // иначе клик уводил бы браузер из SPA на главный экран
+                          viewer={{ onDocLink: handleDocLink, resolveImageSrc: src => {
+                            const target = resolveDocImage(filePath, src);
+                            return target ? api.files.fileUrl(project.id, target) : undefined;
+                          } }}
+                        />
+                      </div>
+                      {stackSide && docSide}
+                    </div>
+                  )
                   : <div data-selection-scope="doc" data-selection-priority="2"><SyntaxHighlighter
                       language={getLanguage(filePath)}
                       style={codeTheme}

@@ -442,6 +442,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             // ровно подменённое значение — Info совпало с applied случайно) принят осознанно: редкий
             // случай, а различить «подмена» от «совпадение» без версионирования нельзя. Без подмен
             // applied == orig и восстановление — no-op.
+            // Намерение чата важнее результата ротации: после ТИХОЙ подмены (смена подписки того же
+            // пула Claude, IsProviderSwitch:false) restore возвращает чат на ИСХОДНЫЙ аккаунт — даже
+            // исчерпанный (RateLimited). Это не потеря ротации, а намеренный откат per-turn фолбэка:
+            // на следующем ходу SessionManager.TryPoolFailover снова переключит исчерпанный аккаунт
+            // на рабочий того же пула. Явный выбор пользователя переживёт ход, а фолбэк не застрянет.
             var modelRestored = false;
             var providerRestored = false;
             if (Info.Model == appliedModel) { Info.Model = origModel; modelRestored = true; }

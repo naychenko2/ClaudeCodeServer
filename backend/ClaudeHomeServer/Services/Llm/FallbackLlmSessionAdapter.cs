@@ -260,6 +260,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         var currentModel = chain.Count > 0 ? chain[chainIndex] : (_effectiveModel() ?? "");
         var currentKey = ProviderKeyFor(currentModel);
 
+        // Снимок «модели × провайдера» на старте хода. Подмены внутри хода пишутся в
+        // Info.Model/Provider (процесс попытки пересобирается из них), но в finally исходные
+        // значения восстанавливаются — иначе ход фолбэка переписывал бы модель чата навсегда
+        // (инцидент 2026-08-07: чат залип на qwen3.7-plus после одной подмены). appliedModel/
+        // appliedProvider — последнее значение, записанное ApplyTarget; по нему CAS в finally.
+        var origModel = Info.Model;
+        var origProvider = Info.Provider;
+        var appliedModel = origModel;
+        var appliedProvider = origProvider;
+
         try
         {
             while (!_cts.IsCancellationRequested)
@@ -348,6 +358,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // _effectiveModel() — поэтому именно эта пара попадает в attempted и в след.
                 currentModel = next.Model ?? currentModel;
                 currentKey = next.Key;
+                // Запоминаем последнее применённое значение Info — для CAS-восстановления в finally.
+                appliedModel = Info.Model;
+                appliedProvider = Info.Provider;
                 // Потолок подмен тратится только на смену ТИПА поставщика (шаг цепочки /
                 // переход к стороннему провайдеру). Тихие ротации подписок того же пула
                 // Claude бесплатны — это та же модель на другом аккаунте, а не подмена.
@@ -361,6 +374,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         }
         finally
         {
+            // Восстановить модель/провайдер, сохранённые на старте хода, — подмена не должна
+            // переписывать модель чата навсегда (инцидент 2026-08-07). CAS: восстанавливаем,
+            // только если текущее значение всё ещё равно последнему подменённому (applied).
+            // Если пользователь сменил модель руками во время хода (Info != applied) — его
+            // выбор не перетираем. Без подмен applied == orig и восстановление — no-op.
+            if (Info.Model == appliedModel && Info.Provider == appliedProvider)
+            {
+                Info.Model = origModel;
+                Info.Provider = origProvider;
+            }
             // Счётчик сообщений пользователя: реальный ClaudeSession инкрементирует
             // MessageCount на каждую отправку — после подмен восстановим так, чтобы
             // одно user-сообщение с N попытками считалось одним сообщением

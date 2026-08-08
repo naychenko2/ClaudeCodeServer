@@ -474,13 +474,17 @@ public class FallbackLlmSessionAdapterTests
 
         await sut.SendMessageAsync("сделай что-нибудь");
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+        // restore модели выполняется в finally — после выпускания result. Ждём полного
+        // завершения оркестрации, иначе Info читается до восстановления.
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
 
         inner.Attempts.Should().HaveCount(2);
         inner.Attempts[0].Should().Be(("acc-a", "sonnet"));
         inner.Attempts[1].Should().Be(("deepseek", "deepseek-chat"), "шаг 2 цепочки, а не автоподбор");
         Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
             .Which.Label.Should().Contain("Цепочка пресета");
-        inner.Info.Model.Should().Be("deepseek-chat");
+        // Волна 2: подмена не персистится — после хода модель чата восстановлена в исходную.
+        inner.Info.Model.Should().Be("sonnet");
     }
 
     [Fact]
@@ -790,5 +794,72 @@ public class FallbackLlmSessionAdapterTests
         // обрыв (ExitedMessage) → Unreachable → «сервис не отвечает»
         error.Text.Should().Contain("слишком много запросов").And.Contain("сервис не отвечает");
         inner.Attempts.Should().HaveCount(3);
+    }
+
+    // Волна 2: подмена не переписывает модель чата навсегда. После хода с переходом по цепочке
+    // Info.Model был переписан ApplyTarget в deepseek-chat, но в finally восстанавливается
+    // исходная sonnet — чат не залипает на подмене (инцидент 2026-08-07: залипание на qwen).
+    [Fact]
+    public async Task ПослеХодаСПодменой_МодельЧатаВосстанавливается()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // deepseek — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
+
+        // Внутри хода Info.Model был переписан в deepseek-chat, но в finally восстановлена
+        // исходная sonnet — подмена не персистится в модель чата.
+        inner.Info.Model.Should().Be("sonnet", "подмена восстанавливается после хода");
+        inner.Info.Provider.Should().Be("acc-a", "провайдер восстанавливается после хода");
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("deepseek", "deepseek-chat"), "ход действительно шёл на deepseek");
+    }
+
+    // CAS: если во время хода модель сменили руками (Info != applied), finally НЕ восстанавливает —
+    // выбор пользователя побеждает, подмена его не перетирает. Пользовательский ввод имитируем
+    // перезаписью Info в скрипте успешной попытки (гонка с UI, пока оркестратор держит ход).
+    [Fact]
+    public async Task РучнаяСменаМоделиВоВремяХода_НеПеретираетсяCAS()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:deepseek:ApiKey"] = "sk-ds",
+            ["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://ds.example.com",
+            ["LlmProviders:deepseek:Models:0:Id"] = "deepseek-chat",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        var session = inner.Info;
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));   // acc-a → шаг цепочки deepseek
+        inner.Scripts.Enqueue(() =>
+        {
+            // Во время успешной попытки пользователь сменил модель руками (гонка с UI):
+            // Info переписан вручную, оркестратор этого не делал.
+            session.Model = "manual-choice";
+            session.Provider = "manual-prov";
+            inner.Emit(Success());
+        });
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации (restore в finally)");
+
+        // CAS: Info != applied (manual-choice ≠ deepseek-chat) → finally не восстанавливает.
+        session.Model.Should().Be("manual-choice", "ручной выбор пользователя не перетёрт подменой");
+        session.Provider.Should().Be("manual-prov");
     }
 }

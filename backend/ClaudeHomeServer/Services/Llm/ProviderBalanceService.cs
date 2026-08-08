@@ -44,9 +44,10 @@ public sealed record ProviderBalance(bool Available, string Currency, string Tot
 }
 
 // Одно окно квоты подписки: подпись для UI, значение уже отформатированной строкой,
-// момент сброса и единица — "percent" (остаток в %, как у GLM/Kimi/MiniMax) или "count"
-// (число вызовов модели со знаменателем "120/300", как задумано для Alibaba Coding Plan) —
-// фронт по Unit выбирает, как рисовать значение, и не пишет "токенов" там, где их нет.
+// момент сброса и единица: "percent" (остаток в %, как у GLM/Kimi/MiniMax), "count" — занято
+// сейчас из лимита, моментальный снимок "120/300" (Kimi/FreeLLM), или "consumed" — израсходовано
+// из лимита, растёт монотонно и сбрасывается по ResetsAt "101/4000" (веб-вызовы GLM). Фронт по Unit
+// выбирает, как рисовать значение, и не пишет "токенов" там, где их нет.
 public sealed record ProviderQuotaWindow(string Label, string Value, DateTime? ResetsAt, string Unit);
 
 // Денежный лимит ключа провайдера (OpenRouter /key): сколько ещё осталось из общего лимита.
@@ -446,14 +447,15 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             }
             else if (string.Equals(type, "TIME_LIMIT", StringComparison.OrdinalIgnoreCase))
             {
-                // Месячный лимит вызовов веб-инструментов подписки — НЕ токены: значение
-                // "currentValue/usage" (фронт по unit=count допишет «запросов»). Подпись — НЕ
+                // Месячный лимит веб-вызовов подписки — НЕ токены: значение "currentValue/usage".
+                // consumed, не count: это накопительный расход со сбросом по ResetsAt, а не моментальная
+                // занятость — фронт по unit=consumed рисует шкалу расхода, а не сегменты. Подпись — НЕ
                 // период: «Месяц» рядом с токен-окнами читался бы как общая месячная квота токенов
                 var current = ReadNumber(item, "currentValue");
                 var usage = ReadNumber(item, "usage");
                 if (double.IsNaN(current) || double.IsNaN(usage)) continue; // не разобрать числа — окно не добавляем
-                toolWindow = new ProviderQuotaWindow("Веб-инструменты", $"{(long)current}/{(long)usage}",
-                    ReadUnixTime(item, "nextResetTime"), "count");
+                toolWindow = new ProviderQuotaWindow("Веб-вызовы", $"{(long)current}/{(long)usage}",
+                    ReadUnixTime(item, "nextResetTime"), "consumed");
             }
         }
 

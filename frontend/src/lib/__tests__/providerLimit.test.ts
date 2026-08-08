@@ -157,9 +157,11 @@ describe('providerAvailabilityFromBalance', () => {
     expect(providerAvailabilityFromBalance(cnt, NOW).available).toBe(true);
   });
 
-  it('count-окно исчерпано в обеих семантиках: ноль остатка и выбор лимита', () => {
+  it('count-окно: нуль занятых — доступен (числитель = занято), выбор лимита — исчерпан', () => {
+    // 0/300 — ни одной активной сессии: это не исчерпание. Нуль числителя означал бы
+    // беду только у FreeLLM (0 живых платформ), но то закрыто флагом available выше окон
     const zero = balance({ windows: [{ label: 'Интервал', value: '0/300', resetsAt: FUTURE, unit: 'count' }] });
-    expect(providerAvailabilityFromBalance(zero, NOW)).toEqual({ available: false, resetsAt: FUTURE });
+    expect(providerAvailabilityFromBalance(zero, NOW).available).toBe(true);
     const full = balance({ windows: [{ label: 'Интервал', value: '300/300', resetsAt: FUTURE, unit: 'count' }] });
     expect(providerAvailabilityFromBalance(full, NOW)).toEqual({ available: false, resetsAt: FUTURE });
   });

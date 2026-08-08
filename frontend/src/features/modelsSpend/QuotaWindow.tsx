@@ -1,7 +1,8 @@
 // Окно квоты — один ряд в карточке (.wins): подпись (ширина labelWidth), индикатор,
-// значение. Два вида по ProviderQuotaWindow.unit:
-//   percent — шкала ИЗРАСХОДОВАННОГО (в контракте value — остаток, переводим);
-//   count   — сегменты «занято 3 из 5»: моментальный снимок, шкала расхода врёт.
+// значение. Три вида по ProviderQuotaWindow.unit:
+//   percent  — шкала ИЗРАСХОДОВАННОГО (в контракте value — остаток, переводим);
+//   consumed — то же, но value уже «N/M» израсходовано из лимита (растёт, сбрасывается);
+//   count    — сегменты «занято 3 из 5»: моментальный снимок, шкала расхода врёт.
 // percent без доли (подписка «в пределах нормы») — без шкалы, значение sans/muted.
 import type { ProviderQuotaWindow } from '../../types';
 import { C, FONT, FS, SP } from '../../lib/design';
@@ -13,11 +14,11 @@ export const barTextTone = (used: number) =>
 
 export interface QuotaWindowView {
   label: string;
-  kind: 'percent' | 'count';
-  usedPct: number | null;        // percent: израсходованная доля 0..100
-  usedCount: number | null;      // count: занятые сегменты
-  totalCount: number | null;     // count: всего сегментов
-  valueText: string;             // «78%» либо «3 из 5»
+  kind: 'percent' | 'count' | 'consumed';
+  usedPct: number | null;        // percent/consumed: израсходованная доля 0..100
+  usedCount: number | null;      // count/consumed: занятые/израсходованные единицы
+  totalCount: number | null;     // count/consumed: всего (лимит)
+  valueText: string;             // «78%», «3 из 5», «101 из 4 000»
   resetsAt: string | null;
   exhausted: boolean;
 }
@@ -27,16 +28,30 @@ const COUNT_RE = /^\s*(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)\s*$/;
 // Сырое окно из ProviderBalanceInfo → вид. Парсинг не удался — честные null,
 // рисуем значение как есть без индикатора (без выдуманных нулей).
 export function parseQuotaWindow(w: ProviderQuotaWindow): QuotaWindowView {
-  if (w.unit === 'count') {
+  if (w.unit === 'count' || w.unit === 'consumed') {
     const m = COUNT_RE.exec(w.value);
     const used = m ? parseFloat(m[1].replace(',', '.')) : null;
     const total = m ? parseFloat(m[2].replace(',', '.')) : null;
+    if (w.unit === 'consumed') {
+      // Израсходовано из лимита: шкала как у percent (светофор barTone), но числа — из value.
+      // usedPct только при total > 0; иначе индикатора нет, значение печатаем как есть
+      const usedPct = used !== null && total !== null && total > 0
+        ? Math.min(100, Math.max(0, Math.round(used / total * 100)))
+        : null;
+      return {
+        label: w.label, kind: 'consumed', usedPct,
+        usedCount: used, totalCount: total,
+        valueText: used !== null && total !== null
+          ? `${used.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}`
+          : w.value,
+        resetsAt: w.resetsAt,
+        exhausted: used !== null && total !== null && total > 0 && used >= total,
+      };
+    }
+    // count: сегменты «занято N из M», моментальный снимок — шкала расхода врала бы
     return {
-      label: w.label,
-      kind: 'count',
-      usedPct: null,
-      usedCount: used,
-      totalCount: total,
+      label: w.label, kind: 'count', usedPct: null,
+      usedCount: used, totalCount: total,
       valueText: used !== null && total !== null ? `${used} из ${total}` : w.value,
       resetsAt: w.resetsAt,
       exhausted: used !== null && total !== null && total > 0 && used >= total,
@@ -63,7 +78,7 @@ const labelStyle: React.CSSProperties = {
   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
 };
 const valueStyle: React.CSSProperties = {
-  flexShrink: 0, minWidth: 34, textAlign: 'right',
+  flexShrink: 0, minWidth: 34, textAlign: 'right', whiteSpace: 'nowrap',
   fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700,
 };
 // «Спокойное» значение — percent-окно без доли (подписка «в пределах нормы»):
@@ -75,8 +90,24 @@ const calmValueStyle: React.CSSProperties = {
   fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted,
 };
 
-// Ряд-сегменты для count-окна: дорожка C.track, занятые — C.info (решение §5: не шкала)
-function CountSegments({ used, total }: { used: number; total: number }) {
+// Выше этого знаменателя стена плашек перестаёт читаться (~4 ряда десктоп, ~7 на 320px) —
+// вместо сегментов дорожка-заливка. Цвет C.info, как у самих сегментов: занятость — не расход,
+// светофор barTone врал бы («30 сессий заняты» это ожидание, а не исчерпание)
+const MAX_SEGMENTS = 40;
+
+// Сегменты «занято N из M»: занятые — C.info, остальные — C.track. Выше MAX_SEGментов —
+// дорожка-заливка тем же C.info. label — слово в title fallback-режима: для квот «Занято»,
+// для живых платформ FreeLLM передаётся «Живо» (одно поведение, минус копия разметки).
+export function CountSegments({ used, total, label = 'Занято' }: { used: number; total: number; label?: string }) {
+  if (total > MAX_SEGMENTS) {
+    const pct = Math.min(100, Math.max(2, Math.round(used / total * 100)));
+    return (
+      <span title={`${label} ${used.toLocaleString('ru-RU')} из ${total.toLocaleString('ru-RU')}`}
+        style={{ display: 'block', flex: 1, minWidth: 24, height: 6, borderRadius: 3, background: C.track, overflow: 'hidden' }}>
+        <span style={{ display: 'block', width: `${pct}%`, height: '100%', background: C.info }} />
+      </span>
+    );
+  }
   return (
     <span style={{ display: 'flex', gap: 3, flex: 1, minWidth: 0, flexWrap: 'wrap' }}>
       {Array.from({ length: total }, (_, i) => (
@@ -89,28 +120,39 @@ function CountSegments({ used, total }: { used: number; total: number }) {
   );
 }
 
+// title на ряд для consumed: «Израсходовано 101 из 4 000 · 3%». Доля округляется в ноль при
+// ненулевом расходе → «· менее 1%»; при нулевом (или без знаменателя) — без доли
+function consumedTitle(w: QuotaWindowView): string | undefined {
+  if (w.kind !== 'consumed' || w.usedCount === null || w.totalCount === null) return undefined;
+  const base = `Израсходовано ${w.usedCount.toLocaleString('ru-RU')} из ${w.totalCount.toLocaleString('ru-RU')}`;
+  if (w.usedPct === null || w.usedCount === 0) return base;
+  return w.usedPct === 0 ? `${base} · менее 1%` : `${base} · ${w.usedPct}%`;
+}
+
 export function QuotaWindow({ w, dim, labelWidth = 64 }: { w: QuotaWindowView; dim?: boolean; labelWidth?: number }) {
   const color = w.usedPct === null ? C.textMuted : barTextTone(w.usedPct);
   // percent-окно без доли → «спокойное» sans-значение вместо моно-жирного
   const calmValue = w.kind === 'percent' && w.usedPct === null;
+  // Дорожка шкалы — percent/consumed при наличии доли; count рисует сегменты отдельно.
+  // minWidth дорожки страхует от схлопывания в ноль на 320px при длинном значении
+  const hasBar = w.kind !== 'count' && w.usedPct !== null;
+  const pct = w.usedPct;
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }} title={consumedTitle(w)}>
       <span style={{ ...labelStyle, width: labelWidth }} title={w.label}>{w.label}</span>
-      {w.kind === 'percent' ? (
-        w.usedPct === null ? (
-          <span style={{ flex: 1 }} />
-        ) : (
-          <span style={{
-            display: 'block', flex: 1, height: 6, borderRadius: 3,
-            background: C.track, overflow: 'hidden', opacity: dim ? 0.4 : 1,
-          }}>
-            <span style={{ display: 'block', width: `${Math.min(100, Math.max(2, w.usedPct))}%`, height: '100%', background: barTone(w.usedPct) }} />
-          </span>
-        )
-      ) : (
+      {w.kind === 'count' ? (
         w.usedCount !== null && w.totalCount !== null
           ? <CountSegments used={w.usedCount} total={w.totalCount} />
           : <span style={{ flex: 1 }} />
+      ) : hasBar && pct !== null ? (
+        <span style={{
+          display: 'block', flex: 1, minWidth: 24, height: 6, borderRadius: 3,
+          background: C.track, overflow: 'hidden', opacity: dim ? 0.4 : 1,
+        }}>
+          <span style={{ display: 'block', width: `${Math.min(100, Math.max(2, pct))}%`, height: '100%', background: barTone(pct) }} />
+        </span>
+      ) : (
+        <span style={{ flex: 1 }} />
       )}
       <span style={calmValue ? calmValueStyle : { ...valueStyle, color }}>{w.valueText}</span>
     </div>

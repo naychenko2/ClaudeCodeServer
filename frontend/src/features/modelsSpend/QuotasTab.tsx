@@ -346,7 +346,9 @@ function providerReadyCard(
   snapshots: { timestamp: string; balance: number; currency: string }[],
 ): ProviderCardData {
   const windows = (bal.windows ?? []).map(parseQuotaWindow);
-  const percentWindows = windows.filter(w => w.kind === 'percent');
+  // На поверхность — percent и consumed (со сбросом, как токен-окна); count (моментальная
+  // занятость) живёт в раскрытии со своей подписью
+  const surfaceWindows = windows.filter(w => w.kind !== 'count');
   const countWindows = windows.filter(w => w.kind === 'count');
   const hasExhausted = windows.some(w => w.exhausted);
   const pills: PillSpec[] = [];
@@ -364,7 +366,7 @@ function providerReadyCard(
   const expandable = countWindows.length > 0 || trend.length >= 2 || !!cabinetUrl;
   return {
     key, name, color, state: 'ready', isFree: isFreeSource(key), dim: false, onRetry: () => {},
-    windows: percentWindows, labelWidth: 64, pills,
+    windows: surfaceWindows, labelWidth: 64, pills,
     freshness: providerFreshness(bal.asOf),
     health: bal.health ?? null, hasExhausted,
     exhaustedResetAt: windows.find(w => w.exhausted)?.resetsAt ?? null,

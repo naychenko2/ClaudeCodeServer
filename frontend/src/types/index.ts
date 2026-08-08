@@ -926,9 +926,10 @@ export interface RateLimitInfo {
 }
 
 // Одно окно квоты CLI-провайдера подписки (GET /api/providers/{key}/balance|usage):
-// unit 'percent' — value остаток в процентах ("97.3"), 'count' — уже отформатированная
-// строка вида "120/300" (число вызовов со знаменателем), рисуется как есть без суффиксов
-export type ProviderQuotaWindowUnit = 'percent' | 'count';
+// unit 'percent' — value остаток в процентах ("97.3"); 'count' — "120/300", занято сейчас
+// из лимита (моментальный снимок); 'consumed' — "101/4000", израсходовано из лимита (растёт
+// монотонно, сбрасывается по resetsAt). count/consumed — уже отформатированная строка «N/M»
+export type ProviderQuotaWindowUnit = 'percent' | 'count' | 'consumed';
 export interface ProviderQuotaWindow {
   label: string;
   value: string;

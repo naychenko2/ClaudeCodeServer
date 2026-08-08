@@ -84,6 +84,75 @@ public class TurnErrorClassifierTests
     public void ОшибкиАвторизацииИЗапроса_ФолбэкНеЗапускают(string status)
         => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.None);
 
+    // Переполнение контекста: «Prompt is too long» у Anthropic (видели на проде: kimi-k3 со
+    // заявленным окном 1M) и эквиваленты сторонних провайдеров. Класс отдельный от None —
+    // повторять ту же модель бессмысленно, но шагнуть по цепочке к бóльшему окну можно.
+    [Theory]
+    [InlineData("Prompt is too long: 210000 tokens > 200000 maximum.")]
+    [InlineData("input length exceeds 200000, max is 128000")]
+    [InlineData("This model's maximum context length is 128000 tokens.")]
+    [InlineData("context_length_exceeded")]
+    [InlineData("Your request is longer than the model's context window.")]
+    [InlineData("The input is too long for the model")]
+    public void ПереполнениеКонтекста_ПоТексту_КлассContextOverflow(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ContextOverflow);
+
+    [Fact]
+    public void ПереполнениеКонтекста_Статус400_ПоТексту_КлассContextOverflow()
+        => TurnErrorClassifier.Classify(Result("400", "Prompt is too long."))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "400 сам по себе — содержательная ошибка (None), но с overflow-текстом это ContextOverflow");
+
+    [Fact]
+    public void ПереполнениеКонтекста_Статус413_ПоТексту_КлассContextOverflow()
+        => TurnErrorClassifier.Classify(Result("413", "context_length_exceeded"))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "413 — куда OpenAI-совместимые эндпоинты кладут overflow; с маркером в тексте это ContextOverflow");
+
+    // Страховка на провайдеров, кладущих в поле статуса не код, а ТИП ошибки (invalid_request_error,
+    // request_too_large) — при overflow-тексте это тот же класс. Видели на проде: в инциденте
+    // kimi-k3 статус пришёл пустым, а эта ветка ловит провайдеров, заполняющих поле типом ошибки.
+    [Theory]
+    [InlineData("invalid_request_error")]
+    [InlineData("request_too_large")]
+    public void ПереполнениеКонтекста_ТипОшибкиВместоКода_КлассContextOverflow(string status)
+        => TurnErrorClassifier.Classify(Result(status, "Prompt is too long."))
+            .Should().Be(FallbackErrorClass.ContextOverflow,
+                "некоторые провайдеры кладут в статус тип ошибки, а не HTTP-код; с overflow-текстом это ContextOverflow");
+
+    [Theory]
+    [InlineData("invalid_request_error")]
+    [InlineData("request_too_large")]
+    public void ТипОшибкиВместоКода_БезOverflowТекста_ОстаётсяNone(string status)
+        => TurnErrorClassifier.Classify(Result(status, "malformed request body"))
+            .Should().Be(FallbackErrorClass.None,
+                "ярлык без overflow-маркера — содержательная ошибка, fail-closed сохраняется");
+
+    // Minor-review: overflow-фразы ищутся в тексте ошибки, поэтому ход, ЦИТИРУЮЩИЙ «Prompt is
+    // too long» (разбор таких инцидентов в чатах), при прочем сбое классифицировался бы ложно.
+    // Маркеры в тексте трактуем как overflow ТОЛЬКО при пустом статусе или 400/413 — куда
+    // провайдеры реально кладут эту ошибку. При прочих статусах цитата — не overflow.
+    [Theory]
+    [InlineData("418")]
+    [InlineData("404")]
+    [InlineData("401")]
+    [InlineData("200")]
+    public void ЦитатаOverflowПриЧужомСтатусе_НеКлассифицируетсяКакOverflow(string status)
+        => TurnErrorClassifier.Classify(Result(status,
+                "Разбираем ошибку «Prompt is too long: 210000 tokens > 200000 maximum.»"))
+            .Should().Be(FallbackErrorClass.None,
+                "overflow-маркеры в тексте при нерелевантном статусе — это цитата, а не сама ошибка переполнения");
+
+    [Fact]
+    public void ContextOverflow_WireNameДляМаркера()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.ContextOverflow)
+            .Should().Be("context_overflow");
+
+    [Fact]
+    public void Статус400_БезOverflowТекста_ОстаётсяNone()
+        => TurnErrorClassifier.Classify(Result("400", "invalid request body"))
+            .Should().Be(FallbackErrorClass.None, "обычный 400 — не переполнение контекста");
+
     [Fact]
     public void НеизвестнаяОшибка_ФолбэкНеЗапускает_FailClosed()
         => TurnErrorClassifier.Classify(Result("418", "teapot"))

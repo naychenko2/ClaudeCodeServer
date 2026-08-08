@@ -770,7 +770,7 @@ export type ServerMessage = { sessionId: string } & (
   // Чат переключён на другой аккаунт/провайдер: auto — тихий фейловер пула подписок
   // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции.
   // reason — классификация причины фолбэка с бэкенда (TurnErrorClassifier.WireName:
-  // rate_limit|usage_limit|provider_error|unreachable) для подсказки «Ответила … — … была
+  // rate_limit|usage_limit|provider_error|unreachable|context_overflow) для подсказки «Ответила … — … была
   // недоступна» (см. providerSwitchReasonLabel в lib/providerLimit.ts)
   | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean; reason?: string }
   // Лимит подписки исчерпан, в пуле переключиться некуда — предложение продолжить
@@ -1338,7 +1338,7 @@ export type ChatItem =
   // другой провайдер), не просто подписку того же провайдера: та ротация модель не трогает
   // и своей пометки не получает (см. блок G model-providers-rework.md). model/previousModel —
   // id из каталога моделей, подпись собирается на рендере (useModelLabel). reason —
-  // канонический класс причины с бэкенда (rate_limit|usage_limit|provider_error|unreachable,
+  // канонический класс причины с бэкенда (rate_limit|usage_limit|provider_error|unreachable|context_overflow,
   // персистится в StoredModelSwitchedMessage.Reason). rawLabel — сырой label маркера
   // provider_switched, фолбэк подсказки, когда reason не пришёл или не распознан
   // (см. providerSwitchReasonLabel в lib/providerLimit.ts)

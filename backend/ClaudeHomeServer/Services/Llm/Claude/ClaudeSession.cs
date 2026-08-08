@@ -35,6 +35,12 @@ public class ClaudeSession : ILlmSessionAdapter
         _assignments?.ResolveChain(UsageKey, Info.Model, Info.OwnerId)
         ?? (EffectiveModel is { } m ? new[] { m } : Array.Empty<string>());
 
+    // Размер контекста последнего запроса для слоя фолбэка (оценка заполнения окна): при
+    // ContextOverflow оркестратор по нему решает, вместит ли кандидат из цепочки текущий
+    // разговор. Для нового хода — последнее известное значение чата (контекст растёт плавно,
+    // прошлый ход — хорошая оценка). Сам резолв остаётся приватным, наружу — только чтение.
+    internal int LastContextTokens => _lastContextTokens;
+
     // Место применения сессии — порядок как в SessionManager.UsageKeyFor
     private string UsageKey =>
         Info.TaskExecution || Info.TaskId is not null ? LocalActionCatalog.TasksExecutor
@@ -2748,6 +2754,18 @@ public class ClaudeSession : ILlmSessionAdapter
                     int? postTokens = meta.ValueKind == JsonValueKind.Object
                         && meta.TryGetProperty("post_tokens", out var pst) && pst.TryGetInt32(out var pstv) ? pstv : null;
                     await _onMessage(new CompactBoundaryMessage(trigger, preTokens, postTokens));
+                    // После компакции оценки контекста НЕТ. post_tokens — размер свёрнутой ИСТОРИИ,
+                    // а не контекст следующего хода: в него не входят системный промпт, определения
+                    // инструментов и CLAUDE.md, которые в окно возвращаются. Замер на живом чате дал
+                    // post=3.7k при 52k реального контекста следующего хода (frontend/src/lib/context.ts).
+                    // Класть post_tokens в оценку — отравлять реестр ёмкости: ход сразу после компакции
+                    // часто падает с overflow у потолка (summary + большой tool_result), и тогда
+                    // RecordOverflow запомнил бы МИНИМУМ 3.7k на час, выпав модель из цепочек по всему
+                    // процессу. Обнуляем безусловно: 0 = «оценки нет» — WouldFit уходит в fail-open,
+                    // RecordOverflow отсекается guard'ом contextTokens<=0, ContextTokens в result
+                    // остаётся пустым (фронтовый fresh: «оценка появится после следующего хода»), а
+                    // реальное значение вернёт TrackContextTokens на первом же assistant-сообщении.
+                    _lastContextTokens = 0;
                 }
                 else if (sysSubtype == "status")
                 {

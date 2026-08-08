@@ -254,7 +254,7 @@ public class StoredTeamEscalationMessage : StoredMessage
 // историю после F5 / рестарта человек не увидит, что отвечала не та модель. PreviousModel
 // — модель последнего session_started этого чата на момент подмены; Model — новая
 // фактическая. Reason — канонический класс ошибки (rate_limit | usage_limit |
-// provider_error | unreachable) для подсказки; null — на проводе отсутствует (старая запись
+// provider_error | unreachable | context_overflow) для подсказки; null — на проводе отсутствует (старая запись
 // либо подмена без Reason).
 public class StoredModelSwitchedMessage : StoredMessage
 {

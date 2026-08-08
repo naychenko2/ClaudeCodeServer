@@ -17,6 +17,7 @@ import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type Team
 import { parseTeamMechanicOffer, hasUserTurnAfter, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
+import { registerAiAwaiting, unregisterAiAwaiting } from '../lib/ai/awaiting';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
@@ -958,6 +959,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   const awaitingResponse = items.some(it =>
     (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
   );
+
+  // Глобальный сигнал «нужен ответ» для плавающей кнопки AI-хаба: пока здесь висит
+  // незакрытый запрос, чат регистрируется в сторе — кнопка из любого раздела показывает
+  // состояние «нужен ответ» и кликом ведёт сюда. Снятие — при ответе, завершении хода
+  // (awaitingResponse становится false) и размонтировании (cleanup эффекта).
+  useEffect(() => {
+    if (!awaitingResponse) return;
+    registerAiAwaiting({ chatId: session.id, name: session.name ?? 'Чат', session, project });
+    return () => unregisterAiAwaiting(session.id);
+  }, [awaitingResponse, session, project]);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.

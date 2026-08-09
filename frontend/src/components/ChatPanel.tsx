@@ -136,6 +136,22 @@ function derivePlanPhase(items: ChatItem[], mode: Mode, isWaiting: boolean): Pla
 
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
+  // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
+  // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
+  // и в чат с перепиской. Мобилу не трогаем — фокус поднимает экранную клавиатуру
+  // поверх ленты; стену тоже (embedded): там курсор забирает только активная колонка,
+  // сигналом composerFocusSignal от WallColumn.
+  const [emptyChatFocus, setEmptyChatFocus] = useState(0);
+  const focusDecidedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (isMobile || embedded || isHistoryLoading) return;
+    if (focusDecidedFor.current === session.id) return;
+    focusDecidedFor.current = session.id;
+    if (items.length > 0) return;
+    setEmptyChatFocus(n => n + 1);
+  }, [session.id, isHistoryLoading, items.length, isMobile, embedded]);
+
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен
   const workLoopState = useMemo<WorkLoopState | null>(() => {
@@ -1633,7 +1649,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
             rateWindow={worstRate}
             restore={composerRestore}
             onReplaceAttachments={onAttachedFilesChange}
-            focusSignal={composerFocusSignal}
+            // Два источника «поставь курсор в поле»: колонка стены стала активной и
+            // открылся пустой чат. Оба счётчика монотонны, поэтому сумма растёт от любого
+            // из них; 0 = сигнала не было (Composer такое значение игнорирует).
+            focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus}
           />
           </div>
         </div>

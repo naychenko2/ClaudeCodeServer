@@ -2384,13 +2384,15 @@ public class ClaudeSession : ILlmSessionAdapter
                 var stderr = await stderrTask;
                 if (!string.IsNullOrWhiteSpace(stderr))
                     Console.Error.WriteLine($"[ClaudeSession stderr] {stderr.Trim()}");
-                // Пустой stderr интересен ТОЛЬКО у хода, умершего без единого события: там
-                // «stderr пуст» — улика (процесс ушёл молча), и её раньше нельзя было отличить
-                // от «stderr не прочитан». Условие строго то же, что у ретрая пустой смерти;
-                // по !TurnDone печатать нельзя — под него попадает и остановка пользователем
-                // (Interrupt убивает процесс, ход остаётся незавершённым, stderr закономерно пуст).
-                else if (!run.TurnDone && !run.TurnGotEvent)
-                    Console.Error.WriteLine("[ClaudeSession stderr] пуст (процесс умер молча)");
+                // Пустой stderr под активным ходом — улика: процесс ушёл молча, и раньше это
+                // было неотличимо от «stderr не прочитан». Печатаем при любой смерти активного
+                // хода, в том числе после отработавших событий — там и живёт разбираемый дефект.
+                // Остановка пользователем (Interrupt) сюда тоже попадёт: отдельного признака у
+                // неё нет, а выдумывать его ради лога не стоит. Разводится по соседним строкам —
+                // перед Interrupt в логе всегда есть hub-вызов Interrupt.
+                else if (!run.TurnDone)
+                    Console.Error.WriteLine("[ClaudeSession stderr] пуст (процесс умер молча, "
+                        + $"gotEvent={run.TurnGotEvent})");
             }
             catch (OperationCanceledException) { /* сессия отменена — stderr уже не важен */ }
             catch (Exception ex)
@@ -2474,13 +2476,18 @@ public class ClaudeSession : ILlmSessionAdapter
         // флаги после — ждущий прочтёт DiedEmpty=false (хода как будто нет), а SuppressExited уже
         // подавил ExitedMessage → ни result, ни exited, ни ретрая: сессия навсегда залипает в
         // Working (тот же класс бага, что и реанимация зависших чатов). Решение — чистая ф-я (тест).
-        // Диагностика молчаливой смерти (прод 2026-08-07..09): фолбэк получал ProcessGone
-        // с пустыми status/errText — из лога нельзя было понять, ПОЧЕМУ процесс ушёл.
-        // Печатаем код выхода и время жизни: разовая гонка TOCTOU (CLI завершался сразу
-        // после записи в stdin) даёт код 0 и доли секунды, а сбой старта — ненулевой код.
-        // Пишем при ЛЮБОЙ смерти активного хода без событий, в том числе на втором заходе,
-        // когда ретрай уже израсходован и смерть уходит наружу как Unreachable.
-        if (activeTurnDied && !run.TurnGotEvent)
+        // Диагностика смерти процесса под активным ходом (прод 2026-08-07..09): фолбэк
+        // получал ProcessGone с пустыми status/errText, и понять причину из лога было нечем.
+        //
+        // Условие — ЛЮБАЯ смерть активного хода, а не только «без событий». Первая версия
+        // проверяла !TurnGotEvent и промолчала ровно там, где нужна: 22:46:53 ход выдал
+        // result-emit (13 итераций), а через 2 секунды процесс умер молча → фолбэк увидел
+        // ProcessGone. То есть ход СВОИ события получил, и фильтр по TurnGotEvent их отсекал.
+        //
+        // gotEvent разводит два разных дефекта: false — смерть до первого события (гонка
+        // TOCTOU, лечится ретраем DiedEmpty), true — смерть ПОСЛЕ отработавшего хода, где
+        // ретрая нет и Unreachable уходит наружу, меняя провайдера.
+        if (activeTurnDied)
         {
             var willRetry = ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent);
             string exit;
@@ -2488,10 +2495,10 @@ public class ClaudeSession : ILlmSessionAdapter
             // диагностика не должна ронять финализацию прогона
             try { exit = run.Process.HasExited ? run.Process.ExitCode.ToString() : "ещё жив"; }
             catch (Exception ex) { exit = $"недоступен ({ex.GetType().Name})"; }
-            Console.WriteLine($"[ClaudeSession] Пустая смерть хода: exitCode={exit} "
+            Console.WriteLine($"[ClaudeSession] Смерть под активным ходом: exitCode={exit} "
                 + $"прожил={(DateTime.UtcNow - run.StartedAt).TotalSeconds:F1}с "
-                + $"retryOnEmptyExit={run.RetryOnEmptyExit} "
-                + $"→ {(willRetry ? "перезапуск на той же паре" : "НАРУЖУ как Unreachable (ретрай израсходован)")}");
+                + $"gotEvent={run.TurnGotEvent} retryOnEmptyExit={run.RetryOnEmptyExit} "
+                + $"→ {(willRetry ? "перезапуск на той же паре" : "НАРУЖУ как Unreachable (ретрая нет)")}");
         }
 
         if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent))

@@ -2384,10 +2384,12 @@ public class ClaudeSession : ILlmSessionAdapter
                 var stderr = await stderrTask;
                 if (!string.IsNullOrWhiteSpace(stderr))
                     Console.Error.WriteLine($"[ClaudeSession stderr] {stderr.Trim()}");
-                // Пустой stderr при смерти активного хода — сам по себе улика: процесс ушёл
-                // молча. Раньше этот случай не логировался вовсе, и в разборе молчаливых
-                // ProcessGone нельзя было отличить «stderr пуст» от «stderr не прочитан».
-                else if (!run.TurnDone)
+                // Пустой stderr интересен ТОЛЬКО у хода, умершего без единого события: там
+                // «stderr пуст» — улика (процесс ушёл молча), и её раньше нельзя было отличить
+                // от «stderr не прочитан». Условие строго то же, что у ретрая пустой смерти;
+                // по !TurnDone печатать нельзя — под него попадает и остановка пользователем
+                // (Interrupt убивает процесс, ход остаётся незавершённым, stderr закономерно пуст).
+                else if (!run.TurnDone && !run.TurnGotEvent)
                     Console.Error.WriteLine("[ClaudeSession stderr] пуст (процесс умер молча)");
             }
             catch (OperationCanceledException) { /* сессия отменена — stderr уже не важен */ }

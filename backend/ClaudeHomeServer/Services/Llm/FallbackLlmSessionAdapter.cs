@@ -203,6 +203,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     internal Task HandleMessageAsync(ServerMessage msg)
     {
         var turn = _turn;
+        // Диагностика ложных Unreachable (прод 2026-08-09): ход штатно отдавал result-emit,
+        // а через секунду фолбэк получал ProcessGone и менял провайдера. Подозрение —
+        // Exited ДОЖИВАЮЩЕГО процесса приходит, когда оркестрация прежнего хода уже снята
+        // (_turn=null, строка ~601) либо заменена оркестрацией СЛЕДУЮЩЕГО хода: тогда
+        // терминальное событие чужого прогона засчитывается новому ходу как его обрыв.
+        // В SessionManager ту же природу лечат привязкой к RunId (см. DrainOnExitedRun);
+        // здесь привязки нет — сначала подтверждаем гипотезу логом.
+        if (msg is ExitedMessage or ResultMessage)
+            LogInfo($"Событие {msg.GetType().Name}: turn={(turn is null ? "НЕТ (оркестрация снята)" : "есть")}"
+                + (turn is not null ? $" settled={turn.Settled} attemptResolved={turn.AttemptResolved}" : ""));
         if (turn is null) return _downstream(msg);
 
         switch (msg)

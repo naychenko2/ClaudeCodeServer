@@ -132,6 +132,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {Message}", message);
 
+    // Текст ошибки для диагностической строки: переводы строк — в пробел (иначе запись
+    // рвётся на несколько строк лога и перестаёт грепаться), длинный хвост — под нож.
+    // Ошибка провайдера бывает в килобайты, а для классификации важно её начало.
+    private const int ErrTextLogLimit = 300;
+
+    private static string Trim(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return "—";
+        var flat = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        return flat.Length <= ErrTextLogLimit ? flat : flat[..ErrTextLogLimit] + "…";
+    }
+
     // Эффективный потолок подмен для владельца сессии: per-owner → global → дефолт 3
     // (FallbackSettingsStore.ClampMaxSubstitutions). Info.OwnerId может быть пуст у
     // проектных сессий без владельца — тогда читаем global-слой.
@@ -397,14 +409,26 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // Успех (нет ошибки доставки) — задержанный result уходит наружу, ход окончен
                 if (!IsDeliveryFailure(end)) { await SettleAsync(turn); return; }
 
-                var cls = TurnErrorClassifier.Classify(new TurnAttemptOutcome
+                var outcome = new TurnAttemptOutcome
                 {
                     HasResult = end.Kind == AttemptEndKind.Result,
                     Subtype = end.Result?.Subtype,
                     ApiErrorStatus = end.Result?.ApiErrorStatus,
                     ErrorText = end.ErrorText,
                     RateLimitRejected = end.Kind == AttemptEndKind.RateLimited,
-                });
+                };
+                var cls = TurnErrorClassifier.Classify(outcome);
+                // Прод 2026-08-07..09: 33 подмены «opus → эндпоинт недоступен» подряд, причём
+                // в логе рядом НЕТ ни сетевой ошибки, ни смерти процесса, а серии идут по 4
+                // штуки за 20 секунд. Вердикт классификатора виден («unreachable»), а его ВХОД —
+                // нет, поэтому отличить настоящий обрыв от ветки `!HasResult` по умолчанию
+                // (TurnErrorClassifier:76) нечем. Логируем сырые входы: на следующем же
+                // срабатывании станет ясно, что именно приходит вместо result.
+                LogInfo($"Классификация попытки ({currentModel} × {currentKey}): {cls} ← "
+                    + $"kind={end.Kind} subtype={outcome.Subtype ?? "—"} "
+                    + $"status={outcome.ApiErrorStatus ?? "—"} "
+                    + $"rateLimited={outcome.RateLimitRejected} "
+                    + $"errText={Trim(outcome.ErrorText)}");
                 // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
                 if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
 

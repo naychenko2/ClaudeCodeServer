@@ -1783,12 +1783,12 @@ export type PersonaAccess = 'full' | 'readOnly' | 'custom';
 // Специальность персоны — функциональная роль для оркестрации (НЕ отображаемое имя роли):
 // конвейер (analyst→planner→reviewer→executor), голос брифинга (secretary),
 // группировка/статус команды, роутинг памяти команды. none — не задана.
-// backendExecutor/frontendExecutor — профильные исполнители; wire-значения совпадают
-// с ключами бэкендного SpecialtyCatalog (camelCase от enum).
+// backendExecutor/frontendExecutor/devopsExecutor — профильные исполнители; wire-значения
+// совпадают с ключами бэкендного SpecialtyCatalog (camelCase от enum).
 export type PersonaSpecialty =
   | 'none' | 'analyst' | 'planner' | 'reviewer' | 'executor' | 'secretary'
   | 'coordinator' | 'mentor' | 'designer' | 'consultant' | 'librarian' | 'tester'
-  | 'backendExecutor' | 'frontendExecutor';
+  | 'backendExecutor' | 'frontendExecutor' | 'devopsExecutor';
 
 // Шаблон прав и инструментов специальности: подставляется в поля персоны
 // при выборе специальности, дальше правится вручную.
@@ -2336,6 +2336,32 @@ export interface SpendPivotNode extends SpendCardRow {
 
 export interface SpendPivotResponse {
   nodes: SpendPivotNode[];
+}
+
+// Замер размера постановки задачи по секциям (один запуск исполнителя).
+// Только размеры в символах — содержимого постановки и заметок здесь нет by design.
+export interface SpendTaskPromptRun {
+  at: string;
+  taskId: string;
+  ownerId: string;
+  projectId: string | null;
+  sessionId: string | null;
+  personaId: string | null;
+  totalChars: number;
+  totalTokensEst: number;
+  task: number;
+  expected: number;
+  tools: number;
+  rules: number;
+  restrictions: number;
+  delegation: number;
+  omo: number;
+  context: number;
+  notes: number;
+}
+
+export interface SpendTaskPromptResponse {
+  runs: SpendTaskPromptRun[];
 }
 
 export interface SpendTurnDto {

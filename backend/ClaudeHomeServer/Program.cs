@@ -219,6 +219,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.ISpendCollector>(
     sp => sp.GetRequiredService<ClaudeHomeServer.Services.Spend.SpendStore>());
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.SpendAnalyticsService>();
+// Замеры размера постановки задач по секциям (разрез «Задача» в аналитике)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Spend.TaskPromptMetricsStore>();
 AddHosted<ClaudeHomeServer.Services.Spend.SpendMaintenanceService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.OneShotClaudeRunner>();
 // AI-хаб: локальное ранжирование действий через Ollama (бесплатно, мимо claude CLI)

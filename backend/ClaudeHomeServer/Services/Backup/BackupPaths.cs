@@ -65,6 +65,12 @@ public static class BackupPaths
         // Снимки промпта ходов — диагностический лог (последние 50 ходов на чат):
         // восстанавливать нечего, а в облако они бы поехали десятками мегабайт
         if (root.Equals("prompt-snapshots", StringComparison.OrdinalIgnoreCase)) return false;
+        // Замеры размера постановки задач — наблюдение, а не настройка (как mcp-status.json):
+        // растут линейно с числом запусков, восстанавливать нечего. Сама аналитика расхода
+        // (spend/turns-*.jsonl, spend/daily.json) в архив едет — исключён только этот файл.
+        if (root.Equals(Spend.TaskPromptMetricsStore.DirName, StringComparison.OrdinalIgnoreCase)
+            && fileName.Equals(Spend.TaskPromptMetricsStore.FileName, StringComparison.OrdinalIgnoreCase))
+            return false;
         if (root.Equals(StagingDirName, StringComparison.OrdinalIgnoreCase)) return false;
 
         // Кеш CodeGraph: code-graphs/{hash}/cache/ — не едет в облако (пересобирается).

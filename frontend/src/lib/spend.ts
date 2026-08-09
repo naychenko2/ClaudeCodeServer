@@ -3,13 +3,14 @@
 import { C } from './design';
 
 // Разрезы pivot-дерева и фильтров. 'turn' — терминальный псевдо-уровень (лист-ходы).
-export type SpendDim = 'user' | 'project' | 'chat' | 'persona' | 'provider' | 'model' | 'source';
+export type SpendDim = 'user' | 'project' | 'chat' | 'task' | 'persona' | 'provider' | 'model' | 'source';
 export type SpendLevel = SpendDim | 'turn';
 
 export const DIM_LABELS: Record<SpendDim, string> = {
   user: 'Пользователь',
   project: 'Проект',
   chat: 'Чат / задача',
+  task: 'Задача',
   persona: 'Персона',
   provider: 'Провайдер',
   model: 'Модель',
@@ -24,6 +25,9 @@ export const SPEND_PRESETS: { key: string; label: string; admin: SpendLevel[]; u
   { key: 'who', label: 'Кто и где', admin: ['user', 'project', 'chat', 'turn'], user: ['project', 'chat', 'turn'] },
   { key: 'models', label: 'По моделям', admin: ['model', 'user', 'project'], user: ['model', 'project', 'chat'] },
   { key: 'personas', label: 'По персонам', admin: ['persona', 'chat', 'turn'], user: ['persona', 'chat', 'turn'] },
+  // Задача → персона → ход: разрез «чат» вторым уровнем почти всегда вырожден
+  // (у задачи-исполнителя ровно один чат), поэтому в цепочке его нет
+  { key: 'tasks', label: 'По задачам', admin: ['task', 'persona', 'turn'], user: ['task', 'persona', 'turn'] },
   { key: 'sources', label: 'По источникам', admin: ['source', 'model', 'chat'], user: ['source', 'model', 'chat'] },
 ];
 

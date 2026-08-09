@@ -66,6 +66,17 @@ public class BackupPathsTests
     }
 
     [Fact]
+    public void ЗамерыПостановкиЗадач_Исключены()
+    {
+        // Наблюдение, а не настройка (как mcp-status.json): растёт линейно с числом
+        // запусков, восстанавливать нечего
+        BackupPaths.ShouldInclude("spend/task-prompts.jsonl").Should().BeFalse();
+        // А сама аналитика расхода — данные, которых больше нигде нет: она в архив едет
+        BackupPaths.ShouldInclude("spend/turns-2026-08-09.jsonl").Should().BeTrue();
+        BackupPaths.ShouldInclude("spend/daily.json").Should().BeTrue();
+    }
+
+    [Fact]
     public void СтатусыMcpСерверов_Исключены()
     {
         // Наблюдение, а не настройка: восстановленное из архива, оно описывает состояние

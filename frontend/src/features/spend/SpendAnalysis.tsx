@@ -4,7 +4,8 @@
 // На мобиле панель деталей — bottom-sheet по tap на узел.
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type {
-  SpendOverviewResponse, SpendPivotNode, SpendTurnDetailResponse, SpendTurnDto, SpendTurnsResponse,
+  SpendOverviewResponse, SpendPivotNode, SpendTaskPromptRun, SpendTurnDetailResponse,
+  SpendTurnDto, SpendTurnsResponse,
 } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
@@ -729,14 +730,62 @@ function NodeDetail({ sel, ov, rootTotal, hasTurnLevel, onShowTurns, detailDays 
     <DetailHead path={sel.path} title={sel.name}
       sub={`${DIM_LABELS[sel.dim]} · ${sel.node.turns} ходов за период${sel.node.hasDetail ? '' : ' · 🔒 агрегаты'}`} />
   );
+  // Разбивка постановки — только у узлов разреза «задача» и только для реальной задачи
+  // (пустой ключ = «Вне задач», постановки у него нет)
+  const promptTaskId = sel.dim === 'task' && sel.node.key ? sel.node.key : null;
   if (ov === 'error') return <>{head}<div style={{ padding: 18, fontSize: 12, color: C.textMuted }}>Не удалось загрузить свод узла.</div></>;
   if (!ov) return <>{head}<div style={{ padding: 18 }}><Skel w="100%" h={90} style={{ marginBottom: 10 }} /><Skel w="100%" h={70} /></div></>;
   return (
     <>
       {head}
+      {promptTaskId && <TaskPromptBreakdown taskId={promptTaskId} />}
       <OverviewBody ov={ov} shareOfRoot={rootTotal > 0 ? ov.totals.total / rootTotal : null}
         hasTurnLevel={hasTurnLevel} onShowTurns={onShowTurns} detailDays={detailDays} />
     </>
+  );
+}
+
+// Разбивка постановки задачи по секциям: из чего сложился промпт, отправленный исполнителю.
+// Показывается при раскрытии узла разреза «Задача». Данные — только размеры в символах,
+// содержимого постановки и заметок в сторе нет by design.
+function TaskPromptBreakdown({ taskId }: { taskId: string }) {
+  const [runs, setRuns] = useState<SpendTaskPromptRun[] | null | 'error'>(null);
+  useEffect(() => {
+    let cancelled = false;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- скелетон вместо старой разбивки при смене задачи
+    setRuns(null);
+    api.spend.taskPrompt(taskId)
+      .then(d => { if (!cancelled) setRuns(d.runs); })
+      .catch(() => { if (!cancelled) setRuns('error'); });
+    return () => { cancelled = true; };
+  }, [taskId]);
+
+  if (runs === 'error') return null;   // разбивка — дополнение, её отсутствие не ошибка экрана
+  if (!runs) return <div style={{ padding: '0 18px 12px' }}><Skel w="100%" h={70} /></div>;
+  // Задача запускалась до появления учёта — блок просто не показываем
+  if (runs.length === 0) return null;
+
+  const r = runs[0];   // последний запуск: он отражает текущий вид постановки
+  const rows: [string, number][] = [
+    ['Задача', r.task],
+    ['Правила', r.rules + r.restrictions + r.expected + r.tools],
+    ['Делегирование', r.delegation + r.omo],
+    ['Контекст', r.context],
+    ['Заметки', r.notes],
+  ];
+  const shown = rows.filter(([, v]) => v > 0);
+  const max = Math.max(1, ...shown.map(([, v]) => v));
+
+  return (
+    <Section title={`Постановка · ${fmtTok(r.totalChars)} симв.${runs.length > 1 ? ` · запусков: ${runs.length}` : ''}`}>
+      {shown.map(([label, v]) => (
+        <HBar key={label} label={label} value={`${Math.round(v / r.totalChars * 100)}%`}
+          share={v / max} color={C.accentSoft} />
+      ))}
+      <div style={{ fontSize: 10, color: C.textMuted, fontFamily: FONT.sans, marginTop: 2 }}>
+        Промпт постановки уходит исполнителю каждый ход — экономия здесь умножается на число ходов.
+      </div>
+    </Section>
   );
 }
 

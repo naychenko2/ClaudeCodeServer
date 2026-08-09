@@ -19,6 +19,15 @@ internal sealed record ModelTierAliases(string? Strong, string? Medium, string? 
     public bool Any => Strong is not null || Medium is not null || Weak is not null;
 }
 
+/// <summary>
+/// Разбивка размера системного промпта исполнителя по секциям (символы и токены-экв).
+/// Используется для аналитики расхода токенов на постановку задач.
+/// </summary>
+internal sealed record TaskPromptMetrics(int TotalChars, int TotalTokensEst,
+    int TaskSectionChars, int ExpectedResultChars, int ToolsChars,
+    int MandatoryChars, int RestrictionsChars, int DelegationChars,
+    int OmOChars, int ContextChars, int NotesContextChars);
+
 // Claude-исполнитель задач: запускает отдельную чат-сессию по задаче (кнопкой или
 // автозапуском по сроку), следит за её ходом через SessionManager.OnSessionMessage
 // и уведомляет пользователя (тост + push) о завершении и запросах разрешений.
@@ -59,6 +68,9 @@ public class TaskExecutionService
     // claim на входе метода закрывает окно: конкурентный вызов получает мгновенный явный отказ
     // вместо гонки, а не решает загадочную «первую» ошибку молча.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _launching = new();
+    // Учёт размера постановки по секциям (шаг 4 плана оптимизации токенов). null — стор
+    // не подключён (тесты без DI): замер тогда идёт только в лог, запуск задачи не страдает.
+    private readonly Spend.TaskPromptMetricsStore? _promptMetrics;
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
@@ -69,8 +81,10 @@ public class TaskExecutionService
         Llm.UserModelTierResolver? tiers = null, Llm.LlmProviderRegistry? providers = null,
         PersonaAgentFileSync? agentFiles = null, Execution.ILauncherFactory? launchers = null,
         SpecialtySettingsStore? specialtySettings = null,
-        Llm.ModelAssignmentResolver? assignments = null)
+        Llm.ModelAssignmentResolver? assignments = null,
+        Spend.TaskPromptMetricsStore? promptMetrics = null)
     {
+        _promptMetrics = promptMetrics;
         _tiers = tiers;
         _providers = providers;
         _agentFiles = agentFiles;
@@ -192,7 +206,25 @@ public class TaskExecutionService
         var prompt = BuildPrompt(updated, persona, ResolveTierAliases(task.OwnerId),
             ResolveCategoryProfilesPath(task));
         // Обогащение контекста семантически близкими заметками
-        prompt += await BuildNotesContextAsync(updated);
+        var notesBlock = await BuildNotesContextAsync(updated);
+        prompt += notesBlock;
+        // Инструментация: замер размера промпта по секциям (не влияет на поведение).
+        // В стор едут ТОЛЬКО размеры — ни символа текста постановки и заметок (инвариант
+        // приватности TaskPromptMetricsStore, под тестом-сторожем)
+        var metrics = MeasurePrompt(prompt, notesBlock);
+        _log.LogInformation("Prompt metrics task={TaskId} totalChars={TotalChars} totalTokensEst={TotalTokens} " +
+            "task={TaskC} expected={ExpC} tools={ToolsC} mandatory={ManC} restrictions={RestrC} " +
+            "delegation={DelC} omo={OmOC} context={CtxC} notes={NotesC}",
+            task.Id, metrics.TotalChars, metrics.TotalTokensEst,
+            metrics.TaskSectionChars, metrics.ExpectedResultChars, metrics.ToolsChars,
+            metrics.MandatoryChars, metrics.RestrictionsChars, metrics.DelegationChars,
+            metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars);
+        _promptMetrics?.Record(new Spend.TaskPromptMetricsStore.Entry(
+            DateTime.UtcNow, updated.Id, updated.OwnerId!, updated.ProjectId, session.Id, persona?.Id,
+            metrics.TotalChars, metrics.TotalTokensEst,
+            metrics.TaskSectionChars, metrics.ExpectedResultChars, metrics.ToolsChars,
+            metrics.MandatoryChars, metrics.RestrictionsChars, metrics.DelegationChars,
+            metrics.OmOChars, metrics.ContextChars, metrics.NotesContextChars));
         await _sessions.SendMessageAsync(session.Id, prompt, [], auto: true, senderPersonaId: persona?.Id);
 
         if (auto)
@@ -283,8 +315,9 @@ public class TaskExecutionService
         {
             sb.AppendLine();
             sb.AppendLine("Подзадачи:");
+            // id — только у невыполненных (см. тот же приём в BuildPersonaPrompt)
             foreach (var s in task.Subtasks)
-                sb.AppendLine($"- [{(s.IsDone ? "x" : " ")}] {s.Title} (id: {s.Id})");
+                sb.AppendLine(s.IsDone ? $"- [x] {s.Title}" : $"- [ ] {s.Title} (id: {s.Id})");
         }
         if (task.LinkedFiles.Count > 0)
         {
@@ -294,12 +327,13 @@ public class TaskExecutionService
                 sb.AppendLine($"- {f}");
         }
         sb.AppendLine();
+        // Правила сведены к сути: три инструкции вместо четырёх с повторами. Смысл тот же —
+        // как вести статус, чем закрывать, что делать при невозможности
         sb.AppendLine("Правила:");
-        sb.AppendLine("- Задача уже переведена в статус inProgress; веди её через MCP-инструменты tasks_*.");
-        sb.AppendLine("- Выполненные подзадачи отмечай через tasks_toggle_subtask.");
-        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete, передав resultMarkdown " +
-                      "(короткий итог сделанного) и linkedFiles (пути итоговых файлов проекта, если есть).");
-        sb.AppendLine("- Если выполнить невозможно — не завершай задачу, а кратко опиши причину.");
+        sb.AppendLine("- Статус веди через tasks_*: задача уже inProgress, подзадачи отмечай tasks_toggle_subtask.");
+        sb.AppendLine("- Готово = проверено и закрыто через tasks_complete с resultMarkdown (итог) " +
+                      "и linkedFiles (итоговые файлы, если есть).");
+        sb.AppendLine("- Выполнить невозможно — не завершай задачу, кратко опиши причину.");
         return sb.ToString();
     }
 
@@ -321,78 +355,59 @@ public class TaskExecutionService
             sb.AppendLine(task.Description);
         }
         sb.AppendLine();
-        sb.AppendLine("## ОЖИДАЕМЫЙ РЕЗУЛЬТАТ");
-        sb.AppendLine("- Задача выполнена, проверена и завершена в трекере.");
-        sb.AppendLine("- Завершая через tasks_complete, прикрепи resultMarkdown — короткий итог сделанного " +
-                      "от твоего лица, и linkedFiles — пути итоговых файлов проекта (если есть).");
-        sb.AppendLine();
-        sb.AppendLine("## ИНСТРУМЕНТЫ");
-        sb.AppendLine("- Статус задачи веди через MCP-инструменты tasks_*.");
-        sb.AppendLine("- Выполненные подзадачи отмечай через tasks_toggle_subtask.");
-        sb.AppendLine("- Делегируя часть работы другой персоне через tasks_create (personaId), " +
-                      "сразу запусти её исполнение через tasks_run_executor — сама она не стартует.");
-        sb.AppendLine();
-        sb.AppendLine("## ОБЯЗАТЕЛЬНО");
-        sb.AppendLine("- Задача уже переведена в статус inProgress — поддерживай статус актуальным.");
+        // Секции ОЖИДАЕМЫЙ РЕЗУЛЬТАТ, ОБЯЗАТЕЛЬНО, НЕЛЬЗЯ и ИНСТРУМЕНТЫ слиты в одну:
+        // они говорили об одном и том же (заверши через tasks_complete с итогом и файлами)
+        // тремя разными формулировками. Содержание правил — защищённое, тронут только
+        // повтор: верификационная дисциплина и границы задачи ниже дословно те же.
+        sb.AppendLine("## ПРАВИЛА");
+        sb.AppendLine("- Готово = задача проверена и закрыта через tasks_complete с resultMarkdown " +
+                      "(итог от твоего лица) и linkedFiles (итоговые файлы, если есть).");
+        sb.AppendLine("- Статус веди через tasks_*: задача уже inProgress, подзадачи отмечай " +
+                      "tasks_toggle_subtask.");
         // Верификационная дисциплина и правило остановки — из oh-my-openagent
         // (Hephaestus/Sisyphus-Junior, см. docs/omo/adoption.md)
         sb.AppendLine("- НЕТ СВИДЕТЕЛЬСТВ = НЕ ГОТОВО: перед завершением прогони фактическую проверку " +
                       "(сборка, тесты, реальный результат) и приведи её вывод в итоге.");
         sb.AppendLine("- Делегировал часть работы субагенту — не доверяй его отчёту на слово, проверь результат сам.");
-        sb.AppendLine("- Когда всё сделано и проверено — заверши задачу через tasks_complete с resultMarkdown " +
-                      "(итог сделанного) и linkedFiles (итоговые файлы проекта, если есть).");
-        sb.AppendLine();
-        sb.AppendLine("## НЕЛЬЗЯ");
-        sb.AppendLine("- Не выходи за рамки задачи и не трогай несвязанное.");
         sb.AppendLine("- ОСТАНОВИСЬ после первой успешной верификации: не полируй сделанное и не выдумывай " +
                       "дополнительную работу сверх постановки.");
+        sb.AppendLine("- Не выходи за рамки задачи и не трогай несвязанное.");
         sb.AppendLine("- Не заявляй завершение раньше времени: «почти готово» — это не готово.");
-        sb.AppendLine("- Если выполнить невозможно — не завершай задачу, а кратко опиши причину.");
+        sb.AppendLine("- Выполнить невозможно — не завершай задачу, кратко опиши причину.");
         sb.AppendLine();
-        // Как резать крупную работу на субагентов: короткая таблица профилей (OmO) +
-        // выбор канала и уровня модели. Полные профили — файлом на диске, не в промпте.
+        // Как резать крупную работу на субагентов. Таблица категорий (тип работы → уровень)
+        // в промпт НЕ идёт: она дублирует шапку справочника на диске, ссылка на который
+        // даётся ниже. В промпте остаётся только то, что без него не вывести, — выбор
+        // канала и алиасы тиров конкретного владельца.
         sb.AppendLine("## ДЕЛЕГИРОВАНИЕ");
-        sb.AppendLine("Крупную задачу режь на субагентов по таблице ниже; мелкую делай сам.");
-        sb.AppendLine();
-        sb.AppendLine("Канал делегирования выбирай по характеру работы:");
-        sb.AppendLine();
-        sb.AppendLine("| Что нужно | Канал | Кто ставит уровень |");
-        sb.AppendLine("|---|---|---|");
-        sb.AppendLine("| Мнение, разведка, ревью куска — read-only | `Task(персона, model=…)` | ты в вызове |");
-        sb.AppendLine("| Полноценная работа с правками и отчётом | `tasks_create(personaId, modelTier)` " +
-                      "+ `tasks_run_executor` | ты в задаче |");
+        sb.AppendLine("Крупную работу режь на субагентов, мелкую делай сам. Канал:");
+        sb.AppendLine("- мнение, разведка, ревью куска (read-only) — `Task(персона, model=…)`;");
+        sb.AppendLine("- работа с правками и отчётом — `tasks_create(personaId, modelTier)` " +
+                      "+ `tasks_run_executor` (сама задача не стартует).");
         if (aliases.Any)
         {
-            sb.AppendLine();
-            sb.AppendLine("Уровень — поправка к дефолту места (без него субагент идёт назначением " +
-                          "«сабагенты-консультанты», задача — «исполнитель задач»):");
-            sb.AppendLine();
-            sb.AppendLine("| Уровень | `model=` в вызове `Task` | `modelTier` в задаче | Когда |");
-            sb.AppendLine("|---|---|---|---|");
-            if (aliases.Strong is { } strong)
-                sb.AppendLine($"| сильная | `{strong}` | `strong` | тяжёлое рассуждение, запутанная архитектура |");
-            if (aliases.Medium is { } medium)
-                sb.AppendLine($"| средняя | `{medium}` | `medium` | обычная работа |");
-            if (aliases.Weak is { } weak)
-                sb.AppendLine($"| слабая | `{weak}` | `weak` | рутина |");
+            // Когда какой уровень брать — в справочнике профилей (ссылка ниже);
+            // здесь только сами алиасы владельца, вывести их больше неоткуда
+            var levels = new List<string>(3);
+            if (aliases.Strong is { } strong) levels.Add($"сильная `{strong}`/`strong`");
+            if (aliases.Medium is { } medium) levels.Add($"средняя `{medium}`/`medium`");
+            if (aliases.Weak is { } weak) levels.Add($"слабая `{weak}`/`weak`");
+            sb.AppendLine($"Уровень (`model=` в `Task` / `modelTier` в задаче): {string.Join("; ", levels)}.");
         }
-        sb.AppendLine();
-        sb.AppendLine(Prompts.OmoPrompts.DelegationCategories);
         // Путь абсолютный: Read относительный не принимает. Не смогли обеспечить файл —
         // ссылку не даём вовсе, чтобы исполнитель не бился в несуществующий путь.
         if (categoryProfilesPath is not null)
-        {
-            sb.AppendLine();
-            sb.AppendLine("Нужен развёрнутый профиль категории (промпт-довесок, ворота выбора, " +
-                          $"предупреждения вызывающему) — прочитай файл `{categoryProfilesPath}`.");
-        }
+            sb.AppendLine($"Профили категорий (какой уровень и как формулировать) — `{categoryProfilesPath}`.");
         sb.AppendLine();
         sb.AppendLine("## КОНТЕКСТ");
         if (task.Subtasks.Count > 0)
         {
             sb.AppendLine("Подзадачи:");
+            // id выводим только у невыполненных: он нужен ровно для tasks_toggle_subtask,
+            // а по уже отмеченной подзадаче звать его незачем. На длинных списках это
+            // заметная часть постановки (~40 символов на строку)
             foreach (var s in task.Subtasks)
-                sb.AppendLine($"- [{(s.IsDone ? "x" : " ")}] {s.Title} (id: {s.Id})");
+                sb.AppendLine(s.IsDone ? $"- [x] {s.Title}" : $"- [ ] {s.Title} (id: {s.Id})");
         }
         if (task.LinkedFiles.Count > 0)
         {
@@ -403,6 +418,66 @@ public class TaskExecutionService
         if (task.Subtasks.Count == 0 && task.LinkedFiles.Count == 0)
             sb.AppendLine("Дополнительного контекста нет.");
         return sb.ToString();
+    }
+
+    // Измерить размер промпта по секциям: символы + грубая оценка токенов (~4 байта на символ UTF-8).
+    // Не влияет на поведение — только для аналитики расхода.
+    // Заголовок блока категорий OmO — по нему MeasurePrompt отличает промпт с этим блоком
+    // от промпта без него (см. комментарий у поля omo)
+    private const string OmoCategoriesProbe = "# Категории делегирования";
+
+    internal static TaskPromptMetrics MeasurePrompt(string fullPrompt, string notesBlock)
+    {
+        var lines = fullPrompt.Split('\n');
+        int totalChars = fullPrompt.Length;
+        int totalTokensEst = totalChars / 4;
+        int taskSection = 0, expected = 0, tools = 0, mandatory = 0, restrictions = 0;
+        int delegation = 0, omo = 0, context = 0, notes = notesBlock.Length;
+
+        string? current = null;
+        foreach (var line in lines)
+        {
+            var trimmed = line.Trim();
+            if (trimmed.StartsWith("## ") || trimmed.StartsWith("# "))
+            {
+                current = trimmed[3..].Trim();
+                continue;
+            }
+            var len = line.Length;
+            switch (current)
+            {
+                case "ЗАДАЧА": case "Задача":
+                    taskSection += len; break;
+                case "ОЖИДАЕМЫЙ РЕЗУЛЬТАТ":
+                    expected += len; break;
+                // ИНСТРУМЕНТЫ слиты в ПРАВИЛА; ключ оставлен для чтения прежних замеров
+                case "ИНСТРУМЕНТЫ":
+                    tools += len; break;
+                // ОБЯЗАТЕЛЬНО и НЕЛЬЗЯ слиты в ПРАВИЛА — обе прежние секции продолжают
+                // считаться, чтобы baseline, снятый до слияния, оставался сопоставимым
+                case "ПРАВИЛА": case "ОБЯЗАТЕЛЬНО":
+                    mandatory += len; break;
+                case "НЕЛЬЗЯ":
+                    restrictions += len; break;
+                case "ДЕЛЕГИРОВАНИЕ":
+                    delegation += len; break;
+                case "КОНТЕКСТ":
+                    context += len; break;
+            }
+        }
+        // Блок категорий OmO: считаем ФАКТ его наличия в промпте, а не длину константы —
+        // безусловная подстановка врала в замерах постановки без персоны, где блока нет.
+        omo = fullPrompt.Contains(OmoCategoriesProbe, StringComparison.Ordinal)
+            ? Prompts.OmoPrompts.DelegationCategories.Length
+            : 0;
+        // Промпт без персоны — секций нет вовсе, весь текст постановки идёт одним куском
+        if (taskSection == 0 && expected == 0 && mandatory == 0)
+        {
+            taskSection = totalChars - notes;
+        }
+        return new TaskPromptMetrics(totalChars, totalTokensEst,
+            taskSection, expected, tools, mandatory, restrictions,
+            delegation, omo, context, notes);
     }
 
     // Подпись персоны «Роль (Имя)» — единый формат отображения
@@ -419,7 +494,10 @@ public class TaskExecutionService
             : $"{task.Title}\n{task.Description}";
 
         IReadOnlyList<NoteSemanticHit> hits;
-        try { hits = await _kb.SearchAsync(task.OwnerId, query, topK: 5); }
+        // topK=2 (было 5): блок заметок — самая крупная переменная часть постановки, а хвост
+        // выдачи семантического поиска релевантен всё слабее. Два верхних попадания дают
+        // контекст, пять — платный шум на каждом ходу исполнителя.
+        try { hits = await _kb.SearchAsync(task.OwnerId, query, topK: 2); }
         catch (Exception ex)
         {
             _log.LogWarning(ex, "Не удалось получить контекст заметок для задачи {TaskId}", task.Id);
@@ -790,10 +868,29 @@ public class TaskExecutionService
     // делегированной задачи от обычной реплики персоны в ленте
     internal const string DelegationReportMarker = "↩ Отчёт по делегированной задаче: ";
 
+    // Потолок итога в гостевой реплике. Отчёт постановщику нужен как СИГНАЛ «готово, вот
+    // куда смотреть»: полный текст уже лежит в задаче и читается через tasks_get, а копия
+    // в ленте оплачивается на каждом последующем ходу чата постановщика.
+    // Короткий итог проходит целиком — резать его в «факт» смысла нет.
+    internal const int DelegationReportBodyLimit = 400;
+
     // Тело resultMarkdown задачи для доклада — фолбэк на случай, если исполнитель завершил
-    // задачу (done) не через tasks_complete с итогом (напр. вручную через UI/PUT)
-    private static string DelegationReportBody(TaskItem task) =>
-        string.IsNullOrWhiteSpace(task.ResultMarkdown) ? "(итог не указан)" : task.ResultMarkdown;
+    // задачу (done) не через tasks_complete с итогом (напр. вручную через UI/PUT).
+    // Длинный итог обрезается по границе строки с явной пометкой, где читать целиком.
+    private static string DelegationReportBody(TaskItem task)
+    {
+        var body = task.ResultMarkdown;
+        if (string.IsNullOrWhiteSpace(body)) return "(итог не указан)";
+        body = body.Trim();
+        if (body.Length <= DelegationReportBodyLimit) return body;
+
+        // Режем по последнему переводу строки в пределах лимита, иначе — жёстко по лимиту:
+        // обрыв на середине markdown-конструкции ломает разметку карточки в ленте
+        var head = body[..DelegationReportBodyLimit];
+        var cut = head.LastIndexOf('\n');
+        if (cut > DelegationReportBodyLimit / 2) head = head[..cut];
+        return head.TrimEnd() + $"\n\n… итог целиком — в задаче (`tasks_get` по id {task.Id}).";
+    }
 
     // Текст гостевой реплики B: маркер + пустая строка + итог задачи
     internal static string BuildDelegationReportText(TaskItem task) =>

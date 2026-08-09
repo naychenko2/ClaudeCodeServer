@@ -50,6 +50,7 @@ public static class SpecialtyCatalog
         new(PersonaSpecialty.Tester, KeyOf(PersonaSpecialty.Tester), "Тестировщик", false, null),
         new(PersonaSpecialty.BackendExecutor, KeyOf(PersonaSpecialty.BackendExecutor), "Исполнитель (бэкенд)", true, ExecutorDefaultTemplate),
         new(PersonaSpecialty.FrontendExecutor, KeyOf(PersonaSpecialty.FrontendExecutor), "Исполнитель (фронтенд)", true, ExecutorDefaultTemplate),
+        new(PersonaSpecialty.DevopsExecutor, KeyOf(PersonaSpecialty.DevopsExecutor), "Исполнитель (DevOps)", true, ExecutorDefaultTemplate),
     ];
 
     private static readonly Dictionary<PersonaSpecialty, Entry> BySpecialty =

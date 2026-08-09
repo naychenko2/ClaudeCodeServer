@@ -219,7 +219,7 @@ public class TaskExecutionServiceTests
     }
 
     [Fact]
-    public void BuildPrompt_СПерсоной_ШестьСекцийКонтракта()
+    public void BuildPrompt_СПерсоной_СекцииКонтракта()
     {
         var task = new TaskItem
         {
@@ -232,10 +232,10 @@ public class TaskExecutionServiceTests
 
         var prompt = TaskExecutionService.BuildPrompt(task, persona);
 
-        // Все 6 секций контракта, в порядке следования (КОНТЕКСТ — последняя:
-        // блок заметок дописывается после и попадает в неё)
-        string[] sections = ["## ЗАДАЧА", "## ОЖИДАЕМЫЙ РЕЗУЛЬТАТ", "## ИНСТРУМЕНТЫ",
-            "## ОБЯЗАТЕЛЬНО", "## НЕЛЬЗЯ", "## КОНТЕКСТ"];
+        // Секции контракта в порядке следования. ОЖИДАЕМЫЙ РЕЗУЛЬТАТ, ИНСТРУМЕНТЫ,
+        // ОБЯЗАТЕЛЬНО и НЕЛЬЗЯ слиты в ПРАВИЛА (оптимизация промпта); КОНТЕКСТ —
+        // последняя, блок заметок дописывается после и попадает в неё
+        string[] sections = ["## ЗАДАЧА", "## ПРАВИЛА", "## ДЕЛЕГИРОВАНИЕ", "## КОНТЕКСТ"];
         var positions = sections.Select(s => prompt.IndexOf(s, StringComparison.Ordinal)).ToList();
         positions.Should().OnlyContain(p => p >= 0);
         positions.Should().BeInAscendingOrder();
@@ -245,8 +245,22 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("Найти причину").And.Contain(task.Subtasks[0].Id);
         prompt.Should().Contain("src/Program.cs");
         prompt.Should().Contain("tasks_complete").And.Contain("tasks_toggle_subtask");
-        // Дисциплина: не выходить за рамки, при невозможности — не завершать
+    }
+
+    // Защищённое содержание: слияние ОБЯЗАТЕЛЬНО+НЕЛЬЗЯ убрало заголовки, но НЕ правила.
+    // Верификационная дисциплина и границы задачи обязаны остаться дословно — на них
+    // держится качество исполнения, ради экономии их резать нельзя.
+    [Fact]
+    public void BuildPrompt_СПерсоной_ВерификационнаяДисциплинаСохранена()
+    {
+        var prompt = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t" }, new Persona { Name = "Вера" });
+
+        prompt.Should().Contain("НЕТ СВИДЕТЕЛЬСТВ = НЕ ГОТОВО");
+        prompt.Should().Contain("не доверяй его отчёту на слово");
+        prompt.Should().Contain("ОСТАНОВИСЬ после первой успешной верификации");
         prompt.Should().Contain("Не выходи за рамки задачи");
+        prompt.Should().Contain("«почти готово» — это не готово");
         prompt.Should().Contain("не завершай задачу");
     }
 
@@ -259,13 +273,14 @@ public class TaskExecutionServiceTests
             new TaskItem { Title = "t" }, new Persona { Name = "Вера" },
             categoryProfilesPath: profiles);
 
-        // Короткая таблица категорий — в промпте
-        prompt.Should().Contain("ultrabrain").And.Contain("visual-engineering");
-        // Полные профили — только файлом на диске, в промпт не вставляются
+        // Таблица категорий больше НЕ дублируется в промпте: она есть в шапке файла-
+        // справочника, ссылка на который стоит рядом. Экономия ~1.5 КБ на каждой постановке
+        prompt.Should().NotContain("ultrabrain").And.NotContain("visual-engineering");
+        // Полные профили тем более не вставляются
         prompt.Should().NotContain("Ворота выбора");
         prompt.Should().Contain(profiles);
-        // Правило выбора канала
-        prompt.Should().Contain("tasks_run_executor").And.Contain("model=");
+        // Правило выбора канала остаётся — без него исполнитель не знает, чем делегировать
+        prompt.Should().Contain("tasks_run_executor").And.Contain("Task(персона");
         // Разгрузка постановки: раньше секция делегирования одна весила ~30 КБ
         prompt.Length.Should().BeLessThan(8000);
     }
@@ -279,7 +294,7 @@ public class TaskExecutionServiceTests
             new TaskItem { Title = "t" }, new Persona { Name = "Вера" });
 
         prompt.Should().NotContain(PersonaAgentFileSync.CategoryProfilesFileName);
-        prompt.Should().Contain("ultrabrain", "короткая таблица категорий остаётся");
+        prompt.Should().Contain("## ДЕЛЕГИРОВАНИЕ", "выбор канала остаётся и без справочника");
     }
 
     // ─── Путь справочника в среде исполнения владельца ────────────────────────
@@ -324,7 +339,7 @@ public class TaskExecutionServiceTests
         var prompt = TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" },
             new Persona { Name = "Вера" }, categoryProfilesPath: runtime);
         prompt.Should().NotContain(PersonaAgentFileSync.CategoryProfilesFileName);
-        prompt.Should().Contain("ultrabrain", "короткая таблица категорий остаётся");
+        prompt.Should().Contain("## ДЕЛЕГИРОВАНИЕ", "выбор канала не зависит от справочника");
     }
 
     // Маппер путей владельца ровно той цепочкой, что в проде: ILauncherFactory.ForOwner().Paths
@@ -350,22 +365,87 @@ public class TaskExecutionServiceTests
         var prompt = TaskExecutionService.BuildPrompt(
             new TaskItem { Title = "t" }, new Persona { Name = "Вера" }, ModelTierAliases.None);
 
-        // «сильная/средняя/слабая» есть и в таблице категорий — проверяем по колонке уровней
         prompt.Should().NotContain("`strong`").And.NotContain("`weak`");
         // Канал делегирования остаётся — он от алиасов не зависит
         prompt.Should().Contain("tasks_create(personaId, modelTier)");
     }
 
     [Fact]
-    public void BuildPrompt_САлиасамиТиров_ПодставляетИхВТаблицу()
+    public void BuildPrompt_САлиасамиТиров_ПодставляетИхВСтрокуУровней()
     {
         var prompt = TaskExecutionService.BuildPrompt(
             new TaskItem { Title = "t" }, new Persona { Name = "Вера" },
             new ModelTierAliases("opus", "sonnet", null));
 
-        prompt.Should().Contain("| сильная | `opus` | `strong` |");
-        prompt.Should().Contain("| средняя | `sonnet` | `medium` |");
+        // Таблица уровней свёрнута в строку (оптимизация промпта), содержание то же:
+        // алиас владельца + имя тира для modelTier
+        prompt.Should().Contain("сильная `opus`/`strong`");
+        prompt.Should().Contain("средняя `sonnet`/`medium`");
         prompt.Should().NotContain("`weak`", "у слабого слота алиас не определился");
+    }
+
+    // ─── Измерение промпта ────────────────────────────────────────────────────
+
+    [Fact]
+    public void MeasurePrompt_СПерсоной_ВозвращаетРазбивкуПоСекциям()
+    {
+        var task = new TaskItem
+        {
+            Title = "Оптимизация",
+            Description = "Ужать промпты",
+            Subtasks = [new TaskSubtask { Title = "Замерить" }],
+        };
+        var persona = new Persona { Name = "Вера", Role = "QA" };
+        var aliases = new ModelTierAliases("opus", "sonnet", "haiku");
+        var prompt = TaskExecutionService.BuildPrompt(task, persona, aliases);
+        var notes = "## Возможно релевантные заметки\n### Заметка\nсниппет";
+
+        var m = TaskExecutionService.MeasurePrompt(prompt, notes);
+
+        m.TotalChars.Should().BeGreaterThan(0);
+        m.TotalTokensEst.Should().BeGreaterThan(0);
+        m.NotesContextChars.Should().Be(notes.Length);
+        m.NotesContextChars.Should().BeGreaterThan(0);
+        m.DelegationChars.Should().BeGreaterThan(0, "секция делегирования должна присутствовать");
+        m.OmOChars.Should().Be(0, "таблица категорий вынесена в файл-справочник, в промпт не идёт");
+        m.MandatoryChars.Should().BeGreaterThan(0, "секция ПРАВИЛА должна считаться");
+        m.TaskSectionChars.Should().BeGreaterThan(0);
+        m.ExpectedResultChars.Should().Be(0,
+            "ОЖИДАЕМЫЙ РЕЗУЛЬТАТ слит в ПРАВИЛА; ключ остаётся для чтения прежних замеров");
+    }
+
+    // Дефект замера: раньше OmOChars подставлялся длиной константы БЕЗУСЛОВНО и врал там,
+    // где блока категорий в промпте нет вовсе (постановка без персоны)
+    [Fact]
+    public void MeasurePrompt_БезБлокаКатегорий_OmOНоль()
+    {
+        var prompt = TaskExecutionService.BuildPrompt(new TaskItem { Title = "t" });
+
+        TaskExecutionService.MeasurePrompt(prompt, "").OmOChars.Should().Be(0);
+    }
+
+    [Fact]
+    public void MeasurePrompt_БезПерсоны_КороткийФормат()
+    {
+        var task = new TaskItem { Title = "t", Description = "desc" };
+        var prompt = TaskExecutionService.BuildPrompt(task);
+
+        var m = TaskExecutionService.MeasurePrompt(prompt, notesBlock: "");
+
+        m.TotalChars.Should().BeGreaterThan(0);
+        m.DelegationChars.Should().Be(0, "без персоны делегирование не выводится");
+        m.TaskSectionChars.Should().BeGreaterThan(0);
+        m.NotesContextChars.Should().Be(0);
+    }
+
+    [Fact]
+    public void MeasurePrompt_ПустойПромпт_НулёвыеЗначения()
+    {
+        var m = TaskExecutionService.MeasurePrompt("", "");
+
+        m.TotalChars.Should().Be(0);
+        m.TotalTokensEst.Should().Be(0);
+        m.NotesContextChars.Should().Be(0);
     }
 
     // ─── Уведомления от лица персоны ─────────────────────────────────────────
@@ -417,6 +497,37 @@ public class TaskExecutionServiceTests
         var text = TaskExecutionService.BuildDelegationReportText(task);
 
         text.Should().Contain("(итог не указан)");
+    }
+
+    // Экономия на докладе: длинный итог не копируется в ленту постановщика целиком —
+    // он уже лежит в задаче и читается через tasks_get, а копия оплачивается на каждом
+    // последующем ходу чата постановщика
+    [Fact]
+    public void BuildDelegationReportText_ДлинныйИтог_ОбрезанСоСсылкойНаЗадачу()
+    {
+        var task = new TaskItem
+        {
+            Title = "Крупная задача",
+            ResultMarkdown = string.Join("\n", Enumerable.Range(1, 60)
+                .Select(i => $"- пункт отчёта номер {i} с некоторым пояснением")),
+        };
+
+        var text = TaskExecutionService.BuildDelegationReportText(task);
+
+        text.Should().Contain("пункт отчёта номер 1", "начало итога остаётся видимым");
+        text.Should().NotContain("пункт отчёта номер 60", "хвост длинного итога в ленту не идёт");
+        text.Should().Contain(task.Id, "должно быть сказано, где читать целиком");
+        text.Length.Should().BeLessThan(task.ResultMarkdown!.Length);
+    }
+
+    [Fact]
+    public void BuildDelegationReportText_КороткийИтог_НеРежется()
+    {
+        // Резать короткий итог смысла нет: экономии ноль, а читаемость страдает
+        var task = new TaskItem { Title = "Мелочь", ResultMarkdown = "Готово, тесты зелёные." };
+
+        TaskExecutionService.BuildDelegationReportText(task)
+            .Should().EndWith("Готово, тесты зелёные.");
     }
 
     [Fact]

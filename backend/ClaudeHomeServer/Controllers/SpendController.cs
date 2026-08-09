@@ -13,7 +13,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Route("api/spend")]
 [Authorize]
-public class SpendController(SpendAnalyticsService analytics, SessionManager sessions) : ControllerBase
+public class SpendController(SpendAnalyticsService analytics, SessionManager sessions,
+    TaskManager tasks, TaskPromptMetricsStore promptMetrics) : ControllerBase
 {
     private string CurrentUserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
     private bool IsAdmin => User.IsInRole("admin");
@@ -70,6 +71,21 @@ public class SpendController(SpendAnalyticsService analytics, SessionManager ses
     {
         var passport = analytics.Passport(id, CurrentUserId, IsAdmin);
         return passport is null ? NotFound() : Ok(passport);
+    }
+
+    // Разбивка постановки задачи по секциям (сколько символов заняли ЗАДАЧА, ПРАВИЛА,
+    // ДЕЛЕГИРОВАНИЕ, КОНТЕКСТ, заметки). Раскрытие узла разреза «задача» в анализе.
+    // Гейт как у Badge: своя задача либо admin. Содержимого постановки здесь нет —
+    // стор хранит только размеры (инвариант TaskPromptMetricsStore).
+    [HttpGet("tasks/{taskId}/prompt")]
+    public IActionResult TaskPrompt(string taskId)
+    {
+        var task = tasks.GetById(taskId);
+        if (task is null) return NotFound();
+        if (!IsAdmin && task.OwnerId != CurrentUserId)
+            return Forbidden("Чужая задача доступна только администратору");
+        // Пусто — задача запускалась до появления стора: это не ошибка, разбивки просто нет
+        return Ok(new { runs = promptMetrics.ForTask(taskId) });
     }
 
     // Виджет «Домой»: сегодня/неделя текущего пользователя

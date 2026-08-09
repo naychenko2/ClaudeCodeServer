@@ -21,5 +21,8 @@ public static class BackupSchema
     // 6 — из Project удалено поле McpServersOff (deny-модель MCP умерла вместе с флагом
     //     mcp-allowlist): старый код при сериализации писал бы его обратно, а проверка
     //     целостности формата держится на этом инкременте
-    public const int Version = 6;
+    // 7 — новое значение PersonaSpecialty (DevopsExecutor): старый код не знает его и
+    //     уронил бы десериализацию personas.json при восстановлении (тот же кейс, что 3→4
+    //     для BackendExecutor/FrontendExecutor)
+    public const int Version = 7;
 }

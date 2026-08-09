@@ -165,7 +165,8 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
 
     // --- pivot ---
 
-    public static readonly string[] PivotLevels = ["user", "project", "chat", "persona", "provider", "model", "source"];
+    public static readonly string[] PivotLevels =
+        ["user", "project", "chat", "task", "persona", "provider", "model", "source"];
 
     public IReadOnlyList<SpendPivotNodeDto> Pivot(string groupBy, DateOnly from, DateOnly to, SpendFilter f) =>
         GroupNodes(Slices(from, to, f), groupBy);
@@ -202,6 +203,7 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         "user" => s.OwnerId,
         "project" => s.ProjectId ?? "",
         "chat" => s.SessionId ?? "",
+        "task" => s.TaskId ?? "",
         "persona" => s.PersonaId ?? "",
         "provider" => s.Provider,
         "model" => s.Model ?? "",
@@ -216,6 +218,7 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         "user" => (key.Length == 0 ? "Система" : users.GetById(key)?.Username, null),
         "project" => (key.Length == 0 ? "Вне проектов" : projects.GetById(key)?.Name, null),
         "chat" => ChatName(key),
+        "task" => TaskName(key),
         "persona" => key.Length == 0 ? ("Без персоны", null) : PersonaName(key),
         // Пустого ключа модели больше не бывает (Slices резолвит дефолт), но на случай
         // стороннего вызова GroupRaw с сырым null — честный технический fallback.
@@ -233,6 +236,17 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         if (string.IsNullOrWhiteSpace(name) && s.TaskId is not null)
             name = tasks.GetById(s.TaskId)?.Title;
         return (string.IsNullOrWhiteSpace(name) ? "Без названия" : name, kind);
+    }
+
+    // Имя узла разреза «задача». Пустой ключ — расход вне задач (обычные чаты и фон):
+    // он есть почти всегда и должен читаться как осмысленная строка, а не «—».
+    // Удалённая задача — Name=null, фронт покажет «удалено» (как у прочих разрезов).
+    private (string? Name, string? Meta) TaskName(string taskId)
+    {
+        if (taskId.Length == 0) return ("Вне задач", null);
+        var t = tasks.GetById(taskId);
+        if (t is null) return (null, null);
+        return (string.IsNullOrWhiteSpace(t.Title) ? "Без названия" : t.Title, null);
     }
 
     private (string? Name, string? Meta) PersonaName(string personaId)

@@ -4,7 +4,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
 
-// Каталог специальностей: wire-ключи, подписи (в т.ч. трёх исполнительских),
+// Каталог специальностей: wire-ключи, подписи (в т.ч. четырёх исполнительских),
 // семейство исполнителя и дефолтные шаблоны прав.
 public class SpecialtyCatalogTests
 {
@@ -14,15 +14,17 @@ public class SpecialtyCatalogTests
         SpecialtyCatalog.KeyOf(PersonaSpecialty.Executor).Should().Be("executor");
         SpecialtyCatalog.KeyOf(PersonaSpecialty.BackendExecutor).Should().Be("backendExecutor");
         SpecialtyCatalog.KeyOf(PersonaSpecialty.FrontendExecutor).Should().Be("frontendExecutor");
+        SpecialtyCatalog.KeyOf(PersonaSpecialty.DevopsExecutor).Should().Be("devopsExecutor");
         SpecialtyCatalog.KeyOf(PersonaSpecialty.None).Should().Be("none");
     }
 
     [Fact]
-    public void Labels_ТриИсполнительскиеПодписи_Утверждённые()
+    public void Labels_ЧетыреИсполнительскиеПодписи_Утверждённые()
     {
         SpecialtyCatalog.Label(PersonaSpecialty.Executor).Should().Be("Исполнитель (универсальный)");
         SpecialtyCatalog.Label(PersonaSpecialty.BackendExecutor).Should().Be("Исполнитель (бэкенд)");
         SpecialtyCatalog.Label(PersonaSpecialty.FrontendExecutor).Should().Be("Исполнитель (фронтенд)");
+        SpecialtyCatalog.Label(PersonaSpecialty.DevopsExecutor).Should().Be("Исполнитель (DevOps)");
     }
 
     [Fact]
@@ -41,11 +43,12 @@ public class SpecialtyCatalogTests
     }
 
     [Fact]
-    public void ExecutorFamily_ТолькоТриИсполнителя()
+    public void ExecutorFamily_ЧетыреИсполнителя()
     {
         SpecialtyCatalog.IsExecutorKind(PersonaSpecialty.Executor).Should().BeTrue();
         SpecialtyCatalog.IsExecutorKind(PersonaSpecialty.BackendExecutor).Should().BeTrue();
         SpecialtyCatalog.IsExecutorKind(PersonaSpecialty.FrontendExecutor).Should().BeTrue();
+        SpecialtyCatalog.IsExecutorKind(PersonaSpecialty.DevopsExecutor).Should().BeTrue();
 
         SpecialtyCatalog.IsExecutorKind(PersonaSpecialty.Tester).Should().BeFalse();
         SpecialtyCatalog.IsExecutorKind(PersonaSpecialty.Reviewer).Should().BeFalse();
@@ -60,6 +63,7 @@ public class SpecialtyCatalogTests
                      PersonaSpecialty.Executor,
                      PersonaSpecialty.BackendExecutor,
                      PersonaSpecialty.FrontendExecutor,
+                     PersonaSpecialty.DevopsExecutor,
                  })
         {
             var template = SpecialtyCatalog.Get(specialty).DefaultTemplate;
@@ -82,6 +86,9 @@ public class SpecialtyCatalogTests
     {
         SpecialtyCatalog.TryGetByKey("backendExecutor", out var entry).Should().BeTrue();
         entry.Specialty.Should().Be(PersonaSpecialty.BackendExecutor);
+
+        SpecialtyCatalog.TryGetByKey("devopsExecutor", out var devops).Should().BeTrue();
+        devops.Specialty.Should().Be(PersonaSpecialty.DevopsExecutor);
 
         SpecialtyCatalog.TryGetByKey("backend-executor", out _).Should().BeFalse();
         SpecialtyCatalog.TryGetByKey("BackendExecutor", out var ci).Should().BeTrue();

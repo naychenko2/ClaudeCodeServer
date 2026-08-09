@@ -33,6 +33,11 @@ public static class OmcPersonaRouting
         [PersonaSpecialty.Executor] = ["executor", "debugger", "git-master"],
         [PersonaSpecialty.BackendExecutor] = ["executor", "debugger", "git-master"],
         [PersonaSpecialty.FrontendExecutor] = ["executor", "debugger", "git-master"],
+        // DevOps-исполнитель замещает те же исполнительские типы, что остальные профильные:
+        // правит файлы (Dockerfile/манифесты/пайплайны), дебажит сборки, работает с git.
+        // Отдельного devops-типа у oh-my-claudecode нет, отдельный набор означал бы
+        // несуществующий subagent_type.
+        [PersonaSpecialty.DevopsExecutor] = ["executor", "debugger", "git-master"],
         [PersonaSpecialty.Tester] = ["qa-tester", "test-engineer", "verifier"],
     };
 
@@ -50,6 +55,13 @@ public static class OmcPersonaRouting
         ("фронтенд", PersonaSpecialty.FrontendExecutor),
         ("фронтэнд", PersonaSpecialty.FrontendExecutor),
         ("frontend", PersonaSpecialty.FrontendExecutor),
+        // DevOps — тоже ДО общих «исполнитель»/«разработчик»: иначе «devops-инженер» или
+        // «инфраструктурный разработчик» уйдёт в универсальный Executor. «инфраструктур» —
+        // корень, покрывает «инфраструктура»/«инфраструктурный»/«инфраструктурщик».
+        ("devops", PersonaSpecialty.DevopsExecutor),
+        ("девопс", PersonaSpecialty.DevopsExecutor),
+        ("sre", PersonaSpecialty.DevopsExecutor),
+        ("инфраструктур", PersonaSpecialty.DevopsExecutor),
         ("мастер", PersonaSpecialty.Executor),
         ("исполнитель", PersonaSpecialty.Executor),
         ("разработчик", PersonaSpecialty.Executor),

@@ -1,12 +1,13 @@
-import { useMemo, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
+import { TIERS, TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
 import { RoutePicker } from '../../components/RoutePicker';
 import { routeDisplayLabel, usePresets } from '../../lib/presets';
 import {
-  ANY_SPECIALTY, mergePresetIntoCell, specialtyLabel, useSpecialtyCatalog, withTierCell,
+  ANY_SPECIALTY, effectiveDefaultTier, mergePresetIntoCell, specialtyLabel,
+  useSpecialtyCatalog, withDefaultTier, withTierCell,
 } from '../../lib/specialties';
 import { api } from '../../lib/api';
 import { showToast } from '../../lib/toast';
@@ -14,7 +15,8 @@ import { plural } from '../../lib/spend';
 import { C, FS, R, SP } from '../../lib/design';
 import type { ModelOption } from '../../lib/models';
 import type {
-  ResetResult, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, SpecialtyTemplateSettings,
+  ModelTierValue, ResetResult, SpecialtyCatalogEntry, SpecialtySettingsLayer,
+  SpecialtySettingsResponse, SpecialtyTemplateSettings,
 } from '../../types';
 import { ResetConfirmDialog } from './ResetConfirmDialog';
 
@@ -76,9 +78,12 @@ export function ExceptionsBlock({
     return catalog.filter(e => e.key !== 'none');
   }, [catalog]);
 
-  // Заполнена ли запись (есть хотя бы одна ячейка уровня)
+  // Заполнена ли запись (есть хотя бы одна ячейка уровня или задан уровень по умолчанию).
+  // Семантика зеркалит бэкенд SpecialtySettingsStore.CarriesTier: носителем настройки
+  // считается и defaultTier, — иначе запись «только с уровнем» ложно помечалась бы
+  // затеняющей (запись без уровней) и исчезала из счётчика исключений.
   const recFilled = (rec: SpecialtyTemplateSettings | null | undefined): boolean =>
-    !!(rec && (rec.tierStrong || rec.tierMedium || rec.tierWeak));
+    !!(rec && (rec.tierStrong || rec.tierMedium || rec.tierWeak || rec.defaultTier));
   // Запись есть, но ни одна ячейка не заполнена — «затеняющая» запись, оставшаяся ради
   // прав (см. `shadowed` в ответе серверного reset). Считается ИЗ ДАННЫХ слоя, а не из
   // ответа reset, иначе маркер жил бы один рендер и исчезал при переоткрытии модалки.
@@ -116,6 +121,17 @@ export function ExceptionsBlock({
     const next = withTierCell(layer, key, t, value, template);
     // catch пустой намеренно: отказ уже показан баннером в ModelsSpendModal, здесь он нужен
     // только чтобы отклонённый промис не всплыл как «Uncaught (in promise)»
+    void onSaveLayer(scope, next).catch(() => {});
+  };
+
+  // Установить/снять уровень по умолчанию специальности (через withDefaultTier):
+  // '' — снять до наследования. Запись создаётся с правами из шаблона специальности,
+  // если её в слое ещё не было (recordOf копирует эффективный шаблон, иначе «пустая»
+  // owner-запись сбросила бы права специальности к дефолту кода).
+  const setDefaultTier = (key: string, value: ModelTierValue | '') => {
+    if (!layer || !settings) return;
+    const template = rows.find(e => e.key === key)?.template ?? null;
+    const next = withDefaultTier(layer, key, value, template);
     void onSaveLayer(scope, next).catch(() => {});
   };
 
@@ -282,13 +298,14 @@ export function ExceptionsBlock({
               </div>
             ) : (
               <div style={{ border: `1px solid ${C.border}`, borderRadius: R.xl, overflowX: 'auto', background: C.bgWhite }}>
-                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 480 }}>
+                <table style={{ width: '100%', borderCollapse: 'separate', borderSpacing: 0, minWidth: 620 }}>
                   <thead>
                     <tr>
                       <Th style={{ width: '30%' }}>Специальность</Th>
                       <Th>Сильная</Th>
                       <Th>Средняя</Th>
                       <Th>Слабая</Th>
+                      <Th style={{ width: '18%' }}>По умолчанию</Th>
                     </tr>
                   </thead>
                   <tbody>
@@ -307,6 +324,8 @@ export function ExceptionsBlock({
                         settings={settings} onSaveLayer={onSaveLayer}
                         onCell={(t, v) => setCell(ANY_SPECIALTY, t, v)}
                         onPresetCreated={(t, id, s, l) => onPresetCreated(ANY_SPECIALTY, t, id, s, l)}
+                        onDefaultTier={v => setDefaultTier(ANY_SPECIALTY, v)}
+                        effectiveDefaultTierOverride={effectiveDefaultTier(settings.global, settings.owner, ANY_SPECIALTY)}
                       />
                     )}
                     {visibleRows.map(e => {
@@ -330,6 +349,8 @@ export function ExceptionsBlock({
                           settings={settings} onSaveLayer={onSaveLayer}
                           onCell={(t, v) => setCell(e.key, t, v)}
                           onPresetCreated={(t, id, s, l) => onPresetCreated(e.key, t, id, s, l)}
+                          onDefaultTier={v => setDefaultTier(e.key, v)}
+                          effectiveDefaultTierOverride={effectiveDefaultTier(settings.global, settings.owner, e.key)}
                         />
                       );
                     })}
@@ -369,7 +390,7 @@ function Th({ children, style }: { children: React.ReactNode; style?: React.CSSP
 
 function MatrixRow({ name, hint, filled, shadowed, canReset, resetBusy, onResetRow, layer, anyKey, specKey,
   scope, canEdit, savingScope, resettingScope, models, tierModels, ollamaModel, cellOf, presets, labelCtx,
-  settings, onSaveLayer, onCell, onPresetCreated }: {
+  settings, onSaveLayer, onCell, onPresetCreated, onDefaultTier, effectiveDefaultTierOverride }: {
   name: string;
   hint?: string;
   filled: boolean;
@@ -394,9 +415,19 @@ function MatrixRow({ name, hint, filled, shadowed, canReset, resetBusy, onResetR
   onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
   onCell: (t: TierKey, v: string) => void;
   onPresetCreated: (t: TierKey, presetId: string, presetScope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
+  onDefaultTier: (v: ModelTierValue | '') => void;
+  // Готовое значение effectiveDefaultTier (resolve across оба слоя — зеркало бэкенд
+  // SpecialtySettingsStore.SpecialtyDefaultTier). Если задано и приходит из ДРУГОГО scope —
+  // рисуем под именем строки подсказку «уровень по умолчанию: Сильная · общая/своя».
+  effectiveDefaultTierOverride: { tier: ModelTierValue; source: 'owner' | 'global' } | null;
 }) {
   const rec = anyKey ? layer?.defaultSpecialty : (specKey ? layer?.specialties[specKey] : null);
   const cellBusy = savingScope === scope || resettingScope === scope;
+  // Показывать подсказку только если уровень приходит из другого scope (т.е. в текущем
+  // scope его нет или он другой) — иначе чип уже всё сказал
+  const inheritHint = effectiveDefaultTierOverride
+    && (effectiveDefaultTierOverride.source !== scope
+      || effectiveDefaultTierOverride.tier !== rec?.defaultTier);
   return (
     <tr>
       <td style={{ padding: '6px 10px', borderBottom: `1px solid ${C.borderLight}`, verticalAlign: 'middle' }}>
@@ -404,6 +435,12 @@ function MatrixRow({ name, hint, filled, shadowed, canReset, resetBusy, onResetR
           {name} {(filled || shadowed) && <span style={{ color: filled ? C.accent : C.textMuted }}>●</span>}
         </div>
         {hint && <div style={{ fontSize: FS.xs, color: C.textMuted }}>{hint}</div>}
+        {inheritHint && effectiveDefaultTierOverride && (
+          <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
+            уровень по умолчанию: {TIERS[effectiveDefaultTierOverride.tier].title}
+            {' · '}{effectiveDefaultTierOverride.source === 'owner' ? 'своя' : 'общая'}
+          </div>
+        )}
         {canReset && (
           <button
             type="button"
@@ -452,7 +489,92 @@ function MatrixRow({ name, hint, filled, shadowed, canReset, resetBusy, onResetR
           </td>
         );
       })}
+      <td style={{ padding: '6px 10px', borderBottom: `1px solid ${C.borderLight}`, verticalAlign: 'middle' }}>
+        <DefaultTierPicker
+          value={rec?.defaultTier}
+          disabled={!canEdit || cellBusy}
+          onChange={onDefaultTier}
+        />
+      </td>
     </tr>
+  );
+}
+
+// Селектор «Уровень по умолчанию» в ячейке матрицы: чип с текущим значением (— если
+// не задан) и выпадающее меню из 4 пунктов (— по умолчанию — + три уровня). Стиль чипа
+// и пункта меню — те же токены, что у FilterChip / ячейки уровня, только цветовая
+// подложка уходит в accentLight при заданном уровне (визуально показывает, что
+// строка не «наследует всё», а держит своё значение).
+function DefaultTierPicker({ value, disabled, onChange }: {
+  value: ModelTierValue | null | undefined;
+  disabled: boolean;
+  onChange: (v: ModelTierValue | '') => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, [open]);
+
+  const options: { v: ModelTierValue | ''; label: string }[] = [
+    { v: '', label: '— по умолчанию —' },
+    { v: 'strong', label: TIERS.strong.title },
+    { v: 'medium', label: TIERS.medium.title },
+    { v: 'weak', label: TIERS.weak.title },
+  ];
+  const label = value ? TIERS[value].title : '—';
+
+  return (
+    <div ref={rootRef} style={{ position: 'relative', display: 'inline-block' }}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen(o => !o)}
+        style={{
+          font: 'inherit', fontSize: FS.xs, fontWeight: 600, padding: '4px 10px',
+          borderRadius: R.max, border: `1px solid ${value ? C.accentMuted : C.border}`,
+          background: value ? C.accentLight : C.bgWhite, color: value ? C.textHeading : C.textMuted,
+          cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1,
+          display: 'inline-flex', alignItems: 'center', gap: 4,
+        }}
+      >
+        {label} <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+      </button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 10,
+          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
+          boxShadow: 'var(--shadow-pop)', minWidth: 150, padding: 4,
+        }}>
+          {options.map(o => {
+            const isSelected = (o.v || null) === (value || null);
+            return (
+              <button
+                key={o.v || 'none'}
+                type="button"
+                onClick={() => { onChange(o.v); setOpen(false); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, width: '100%',
+                  font: 'inherit', fontSize: FS.xs, fontWeight: 600, padding: '6px 10px',
+                  background: 'transparent', border: 'none', borderRadius: R.md,
+                  color: C.textHeading, textAlign: 'left', cursor: 'pointer',
+                }}
+              >
+                <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{
+                  visibility: isSelected ? 'visible' : 'hidden', color: C.accent,
+                }} />
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -140,6 +140,33 @@ export function withDefaultTier(layer: SpecialtySettingsLayer, key: string,
   return withRecord(layer, key, rec);
 }
 
+// Действующий «Уровень по умолчанию» специальности по дереву настроек (для UI):
+// запись специальности (owner → global), затем defaultSpecialty (owner → global).
+// Семантика повторяет бэкенд SpecialtySettingsStore.SpecialtyDefaultTier, только
+// отдельно по defaultTier — используется в подсказках «общая / своя», чтобы пользователь
+// видел, откуда возьмётся уровень, если в текущем scope значение не задано.
+export function effectiveDefaultTier(globalLayer: SpecialtySettingsLayer,
+  ownerLayer: SpecialtySettingsLayer, key: string):
+  { tier: ModelTierValue; source: 'owner' | 'global' } | null {
+  const get = (layer: SpecialtySettingsLayer): SpecialtyTemplateSettings | null | undefined =>
+    key === ANY_SPECIALTY ? layer.defaultSpecialty : layer.specialties[key];
+  // 1. запись специальности в owner (если есть запись — даже пустая по defaultTier)
+  const ownerSpec = ownerLayer && get(ownerLayer);
+  if (ownerSpec && ownerSpec.defaultTier) return { tier: ownerSpec.defaultTier, source: 'owner' };
+  // 2. запись специальности в global
+  const globalSpec = globalLayer && get(globalLayer);
+  if (globalSpec && globalSpec.defaultTier) return { tier: globalSpec.defaultTier, source: 'global' };
+  // 3. defaultSpecialty в owner
+  if (ownerLayer?.defaultSpecialty?.defaultTier) {
+    return { tier: ownerLayer.defaultSpecialty.defaultTier, source: 'owner' };
+  }
+  // 4. defaultSpecialty в global
+  if (globalLayer?.defaultSpecialty?.defaultTier) {
+    return { tier: globalLayer.defaultSpecialty.defaultTier, source: 'global' };
+  }
+  return null;
+}
+
 // Действующая запись специальности для владельца: owner-слой ЦЕЛИКОМ заменяет
 // глобальный (без полевого слияния) — повторяет семантику бэкенда (TemplateSettings).
 // "any": owner defaultSpecialty → глобальный defaultSpecialty.

@@ -4,7 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 // presets.test.ts, тестируем чистую логику сборки слоя
 vi.mock('../api', () => ({ api: {} }));
 
-import { effectiveSpecialtyRecord, emptyLayer, mergePresetIntoCell, withNewPreset, withTierCell } from '../specialties';
+import { effectiveDefaultTier, effectiveSpecialtyRecord, emptyLayer, mergePresetIntoCell, withDefaultTier, withNewPreset, withTierCell } from '../specialties';
 import { presetRoute } from '../presets';
 
 // Регрессия ревью 65d8df66 (CRITICAL 1): inline-сборка цепочки в матрице «Исключений»
@@ -102,3 +102,76 @@ describe('withNewPreset', () => {
     expect(next.presets).toEqual([{ id: 'p9', name: 'Моя цепочка', description: null, steps: ['opus', 'local'] }]);
   });
 });
+
+// Контракт effectiveDefaultTier — зеркало бэкенд SpecialtySettingsStore.SpecialtyDefaultTier:
+// 1) запись специальности owner, 2) запись специальности global,
+// 3) defaultSpecialty owner, 4) defaultSpecialty global. Источник идёт в подсказку «уровень
+// по умолчанию: Сильная · общая/своя», поэтому ошибка порядка → путаница в UI.
+describe('effectiveDefaultTier — порядок резолва и источник', () => {
+  it('владелец перекрывает общую запись (порядок 1 > 2)', () => {
+    const owner = emptyLayer();
+    owner.specialties.coding = { ...defaults(), defaultTier: 'strong' };
+    const global = emptyLayer();
+    global.specialties.coding = { ...defaults(), defaultTier: 'weak' };
+
+    expect(effectiveDefaultTier(global, owner, 'coding')).toEqual({ tier: 'strong', source: 'owner' });
+  });
+
+  it('при отсутствии у владельца берётся общая запись (порядок 2)', () => {
+    const owner = emptyLayer();
+    const global = emptyLayer();
+    global.specialties.coding = { ...defaults(), defaultTier: 'medium' };
+
+    expect(effectiveDefaultTier(global, owner, 'coding')).toEqual({ tier: 'medium', source: 'global' });
+  });
+
+  it('если в обеих записях специальности пусто, уровень берётся из defaultSpecialty владельца (порядок 3)', () => {
+    const owner = emptyLayer();
+    owner.defaultSpecialty = { ...defaults(), defaultTier: 'weak' };
+    const global = emptyLayer();
+    global.defaultSpecialty = { ...defaults(), defaultTier: 'strong' };
+
+    expect(effectiveDefaultTier(global, owner, 'coding')).toEqual({ tier: 'weak', source: 'owner' });
+  });
+
+  it('если ничего выше не задано, уровень берётся из defaultSpecialty global (порядок 4)', () => {
+    const owner = emptyLayer();
+    const global = emptyLayer();
+    global.defaultSpecialty = { ...defaults(), defaultTier: 'medium' };
+
+    expect(effectiveDefaultTier(global, owner, 'coding')).toEqual({ tier: 'medium', source: 'global' });
+  });
+
+  it('возвращает null, если нигде ничего не задано', () => {
+    expect(effectiveDefaultTier(emptyLayer(), emptyLayer(), 'coding')).toBeNull();
+  });
+
+  it('для ключа "any" резолвит defaultSpecialty в обоих слоях', () => {
+    const owner = emptyLayer();
+    const global = emptyLayer();
+    global.defaultSpecialty = { ...defaults(), defaultTier: 'strong' };
+
+    expect(effectiveDefaultTier(global, owner, 'any')).toEqual({ tier: 'strong', source: 'global' });
+  });
+
+  it('withDefaultTier иммутабельно записывает уровень по умолчанию в запись слоя', () => {
+    const base = emptyLayer();
+    const next = withDefaultTier(base, 'coding', 'medium', null);
+
+    expect(base.specialties.coding).toBeUndefined();
+    expect(next.specialties.coding?.defaultTier).toBe('medium');
+  });
+
+  it('withDefaultTier("") очищает уровень', () => {
+    const base = emptyLayer();
+    base.specialties.coding = { ...defaults(), defaultTier: 'weak' };
+    const next = withDefaultTier(base, 'coding', '', null);
+
+    expect(next.specialties.coding?.defaultTier).toBeNull();
+  });
+});
+
+// Дефолты для записи уровня — те же, что в recordOf() для НЕ-any ключа.
+function defaults() {
+  return { access: 'full' as const, tools: null, disallowedTools: null };
+}

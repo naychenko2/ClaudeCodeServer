@@ -147,6 +147,9 @@ public class ClaudeSession : ILlmSessionAdapter
         public string? TurnMcpPath { get; init; }
         // turnId запуска — по нему pid-файл прогона в песочнице (Kill контейнерного pgid)
         public string? LaunchTurnId { get; init; }
+        // Момент старта прогона — только для диагностики пустой смерти: доли секунды
+        // указывают на гонку TOCTOU, минуты — на обрыв уже работавшего процесса
+        public DateTime StartedAt { get; init; } = DateTime.UtcNow;
         // Снимок промпта, с которым прогон СТАРТОВАЛ. Ходы, доигрывающиеся в этом же процессе,
         // ссылаются на него (inheritedFromId): их собственный промпт модели не уходил.
         public string? PromptSnapshotId { get; init; }
@@ -2381,6 +2384,11 @@ public class ClaudeSession : ILlmSessionAdapter
                 var stderr = await stderrTask;
                 if (!string.IsNullOrWhiteSpace(stderr))
                     Console.Error.WriteLine($"[ClaudeSession stderr] {stderr.Trim()}");
+                // Пустой stderr при смерти активного хода — сам по себе улика: процесс ушёл
+                // молча. Раньше этот случай не логировался вовсе, и в разборе молчаливых
+                // ProcessGone нельзя было отличить «stderr пуст» от «stderr не прочитан».
+                else if (!run.TurnDone)
+                    Console.Error.WriteLine("[ClaudeSession stderr] пуст (процесс умер молча)");
             }
             catch (OperationCanceledException) { /* сессия отменена — stderr уже не важен */ }
             catch (Exception ex)
@@ -2464,6 +2472,26 @@ public class ClaudeSession : ILlmSessionAdapter
         // флаги после — ждущий прочтёт DiedEmpty=false (хода как будто нет), а SuppressExited уже
         // подавил ExitedMessage → ни result, ни exited, ни ретрая: сессия навсегда залипает в
         // Working (тот же класс бага, что и реанимация зависших чатов). Решение — чистая ф-я (тест).
+        // Диагностика молчаливой смерти (прод 2026-08-07..09): фолбэк получал ProcessGone
+        // с пустыми status/errText — из лога нельзя было понять, ПОЧЕМУ процесс ушёл.
+        // Печатаем код выхода и время жизни: разовая гонка TOCTOU (CLI завершался сразу
+        // после записи в stdin) даёт код 0 и доли секунды, а сбой старта — ненулевой код.
+        // Пишем при ЛЮБОЙ смерти активного хода без событий, в том числе на втором заходе,
+        // когда ретрай уже израсходован и смерть уходит наружу как Unreachable.
+        if (activeTurnDied && !run.TurnGotEvent)
+        {
+            var willRetry = ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent);
+            string exit;
+            // HasExited/ExitCode кидают, если процесс уже освобождён или не стартовал —
+            // диагностика не должна ронять финализацию прогона
+            try { exit = run.Process.HasExited ? run.Process.ExitCode.ToString() : "ещё жив"; }
+            catch (Exception ex) { exit = $"недоступен ({ex.GetType().Name})"; }
+            Console.WriteLine($"[ClaudeSession] Пустая смерть хода: exitCode={exit} "
+                + $"прожил={(DateTime.UtcNow - run.StartedAt).TotalSeconds:F1}с "
+                + $"retryOnEmptyExit={run.RetryOnEmptyExit} "
+                + $"→ {(willRetry ? "перезапуск на той же паре" : "НАРУЖУ как Unreachable (ретрай израсходован)")}");
+        }
+
         if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent))
         {
             run.DiedEmpty = true;

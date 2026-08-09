@@ -261,7 +261,26 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("ОСТАНОВИСЬ после первой успешной верификации");
         prompt.Should().Contain("Не выходи за рамки задачи");
         prompt.Should().Contain("«почти готово» — это не готово");
-        prompt.Should().Contain("не завершай задачу");
+        // При невозможности выполнить задача не закрывается — теперь это часть правила
+        // эскалации (см. BuildPrompt_ЗастрялИсполнитель_ЕстьКудаЭскалировать)
+        prompt.Should().Contain("Задачу не завершай");
+    }
+
+    // Эскалация застрявшего исполнителя. Канал chats_report_up в продукте есть, но в
+    // постановке о нём не говорилось — исполнитель о нём не знал и заканчивал ход молча,
+    // оставляя задачу в inProgress. Правило обязано пережить следующие оптимизации промпта.
+    [Theory]
+    [InlineData(true)]   // с персоной — 6-секционный контракт
+    [InlineData(false)]  // без персоны — короткий формат
+    public void BuildPrompt_ЗастрялИсполнитель_ЕстьКудаЭскалировать(bool withPersona)
+    {
+        var prompt = TaskExecutionService.BuildPrompt(
+            new TaskItem { Title = "t" }, withPersona ? new Persona { Name = "Вера" } : null);
+
+        prompt.Should().Contain("chats_report_up", "канал доклада наверх должен быть назван");
+        prompt.Should().Contain("blocker", "признак «работа встала» будит постановщика сразу");
+        prompt.Should().Contain("Застрял", "у застревания должен быть явный выход, кроме молчания");
+        prompt.Should().Contain("не завершай", "эскалация не подменяет завершение задачи");
     }
 
     [Fact]

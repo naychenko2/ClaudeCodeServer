@@ -20,7 +20,7 @@ const PANEL_MAX_H = 340;
 // Два вида триггера: обычная кнопка-строка и мини-карточка (макет специальностей).
 export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
-  readOnly = false, onChange, placeholder = 'не задан', cardTitle,
+  readOnly = false, onChange, placeholder = 'не задан', cardTitle, title,
   showTiers = true, showPresets = false, presetCreation, presetScope,
 }: {
   route: string;
@@ -35,6 +35,10 @@ export function RoutePicker({
   placeholder?: string;
   // Режим мини-карточки: триггер — карточка с заголовком сверху и значением ниже
   cardTitle?: string;
+  // Тултип триггера. По умолчанию пусто — старые места вызова не получают лишних подсказок.
+  // Используется там, где label укорочен для узкой ячейки и полный текст нужен в тултипе
+  // (спека «Исключения»: цепочка «glm-5.2 → sonnet · +2» → title с полным составом).
+  title?: string;
   // Показывать карточки уровней (сильная/средняя/слабая). В поле, которое само адресовано
   // уровнем (ячейка матрицы), уровни не предлагаем — «сильная = средняя» была бы петлёй
   showTiers?: boolean;
@@ -190,6 +194,7 @@ export function RoutePicker({
           type="button"
           onClick={() => interactive && setOpen(o => !o)}
           disabled={!interactive}
+          title={title || undefined}
           style={{
             width: '100%', display: 'flex', flexDirection: 'column', gap: 1, textAlign: 'left',
             padding: '8px 10px', borderRadius: R.md, fontFamily: FONT.sans,
@@ -227,6 +232,7 @@ export function RoutePicker({
         type="button"
         onClick={() => interactive && setOpen(o => !o)}
         disabled={!interactive}
+        title={title || undefined}
         style={{
           display: 'flex', alignItems: 'center', gap: 6, maxWidth: 230, width: '100%',
           fontFamily: FONT.sans, fontSize: FS.xs,

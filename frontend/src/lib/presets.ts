@@ -110,6 +110,31 @@ export function routeDisplayLabel(route: string | null | undefined,
   return routeLabel(r, ctx.ollamaModel, ctx.tierModels);
 }
 
+// Подпись значения в узкой ячейке таблицы (спека «Исключения»): для пресета — голова
+// цепочки «glm-5.2 → sonnet · +2» (первые 2 шага и счётчик остатка), полный состав и
+// имя пресета — в title (тултип). Битая ссылка — короткая пометка без длинного пояснения
+// (в table-cell пояснение превратится во вторую строку, а title его сохраняет).
+// Для непресетов возвращается обычная подпись маршрута без title — это локальная
+// альтернатива routeDisplayLabel: не меняем имя и поведение в SlotsTab/PersonaForm,
+// где имя пресета в ячейке уместно само по себе.
+export function cellPresetLabel(route: string | null | undefined,
+  presets: ScopedPreset[] | ModelRoutePreset[] | null | undefined, ctx: ChainLabelContext):
+  { label: string; title: string } {
+  const r = route ?? '';
+  if (!isPresetRoute(r)) return { label: routeLabel(r, ctx.ollamaModel, ctx.tierModels), title: '' };
+  const id = presetIdOf(r);
+  const preset = findPreset(presets, id);
+  if (!preset) {
+    return { label: 'Пресет удалён', title: 'Пресет удалён — работает настройка по умолчанию' };
+  }
+  const steps = preset.steps.map(s => chainStepLabel(s, ctx));
+  // 1–2 шага — целиком; 3+ — голова + «+N», где N = steps.length − 2
+  const head = steps.slice(0, 2);
+  const rest = steps.length - head.length;
+  const label = rest > 0 ? `${head.join(' → ')} · +${rest}` : head.join(' → ');
+  return { label, title: `${preset.name}: ${steps.join(' → ')}` };
+}
+
 // Раскрытие пресета места каталога для триггера (вкладка «Применение»). Поле preset
 // ответа сильнее: route в нём уже развёрнут в первый шаг цепочки и имени не несёт.
 // Без поля (старый ответ /usage) — разбираем route по-старому.

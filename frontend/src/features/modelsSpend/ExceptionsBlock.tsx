@@ -4,7 +4,7 @@ import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { TIERS, TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
 import { RoutePicker } from '../../components/RoutePicker';
-import { routeDisplayLabel, usePresets } from '../../lib/presets';
+import { cellPresetLabel, usePresets } from '../../lib/presets';
 import {
   ANY_SPECIALTY, effectiveDefaultTier, mergePresetIntoCell, specialtyLabel,
   useSpecialtyCatalog, withDefaultTier, withTierCell,
@@ -459,11 +459,17 @@ function MatrixRow({ name, hint, filled, shadowed, canReset, resetBusy, onResetR
       </td>
       {TIER_ORDER.map(t => {
         const value = cellOf(rec, t);
+        // В узкой ячейке матрицы имя пресета «Цепочка 2 · 4 шага» не информативно:
+        // вместо него показываем голову цепочки («glm-5.2 → sonnet · +2»), а полный
+        // состав и имя пресета — в title (тултип). Для непресетов возвращается обычная
+        // подпись маршрута без title, чтобы не дублировать строку в тултипе.
+        const { label, title } = cellPresetLabel(value, presets, labelCtx);
         return (
           <td key={t} style={{ padding: '6px 10px', borderBottom: `1px solid ${C.borderLight}`, verticalAlign: 'middle' }}>
             <RoutePicker
               route={value}
-              label={value ? routeDisplayLabel(value, presets, labelCtx) : ''}
+              label={value ? label : ''}
+              title={value ? title : undefined}
               models={models}
               tierModels={tierModels}
               ollamaModel={ollamaModel}

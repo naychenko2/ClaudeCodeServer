@@ -5,7 +5,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('../api', () => ({ api: {} }));
 
 import {
-  isPresetRoute, presetIdOf, presetValueLabel, chainStepLabel, chainSummary,
+  isPresetRoute, presetIdOf, presetValueLabel, cellPresetLabel, chainStepLabel, chainSummary,
   stepsWord, substitutionsWord, placesWord, isBrokenPresetRoute, formatEffectiveLine,
   isChainStepDimmed, resolvePlacePreset,
 } from '../presets';
@@ -177,5 +177,58 @@ describe('formatEffectiveLine — строка «Сейчас пойдёт»', (
       ...base, model: 'opus', source: 'specialty-cell', tier: 'strong', tierOrigin: 'task',
     }, { tierText: 'уровень «Сильная»' }))
       .toBe('Сейчас пойдёт: Opus · уровень «Сильная», модель — от специальности');
+  });
+});
+
+describe('cellPresetLabel — подпись пресета в узкой ячейке', () => {
+  // Подмена каталога для теста: имена шагов «как в проде» (Opus, …); в реальности они
+  // приходят из modelLabel модели и chainStepLabel 'tier:strong' → «Сильная (модели по умолч.)»
+  const bigPreset: ScopedPreset = {
+    id: 'big', name: 'Цепочка 2', description: null,
+    steps: ['opus', 'glm-5.2', 'deepseek-v4', 'qwen3.8-max'],
+    scope: 'global',
+  };
+  const allPresets: ScopedPreset[] = [...PRESETS, bigPreset];
+
+  it('1 шаг — целиком, без «+N»', () => {
+    const r = cellPresetLabel('preset:p2', allPresets, CTX);
+    expect(r.label).toBe('Слабая (модели по умолч.) → Локальная · qwen3');
+    expect(r.title).toBe('Дешёвый фон: Слабая (модели по умолч.) → Локальная · qwen3');
+  });
+
+  it('2 шага — целиком, без «+N»', () => {
+    // Соберём двухшаговый пресет: «tier:strong» → «Сильная (модели по умолч.)», затем модель
+    const twoStep: ScopedPreset = {
+      id: 'two', name: 'Парные', description: null, steps: ['tier:strong', 'opus'], scope: 'owner',
+    };
+    const r = cellPresetLabel('preset:two', [...allPresets, twoStep], CTX);
+    expect(r.label).toBe('Сильная (модели по умолч.) → Opus');
+    expect(r.title).toBe('Парные: Сильная (модели по умолч.) → Opus');
+  });
+
+  it('3+ шагов — голова (первые 2) + «+N» в label, полный состав и имя — в title', () => {
+    const r = cellPresetLabel('preset:big', allPresets, CTX);
+    expect(r.label).toBe('Opus → glm-5.2 · +2');
+    expect(r.title).toBe('Цепочка 2: Opus → glm-5.2 → deepseek-v4 → qwen3.8-max');
+  });
+
+  it('битая ссылка — короткая пометка в label, полное пояснение — в title', () => {
+    const r = cellPresetLabel('preset:gone', allPresets, CTX);
+    expect(r.label).toBe('Пресет удалён');
+    expect(r.title).toBe('Пресет удалён — работает настройка по умолчанию');
+  });
+
+  it('не-preset — обычная подпись маршрута, title пустой (не дублируем строку)', () => {
+    const r = cellPresetLabel('sonnet', allPresets, CTX);
+    expect(r.label).toBe('Sonnet');
+    expect(r.title).toBe('');
+  });
+
+  it('пустой route — идёт в routeLabel целиком (как routeDisplayLabel), title не дублируем', () => {
+    // В проде пустой route до cellPresetLabel не доходит: ExceptionsBlock рисует RoutePicker
+    // только при value, иначе — прочерк. Но если вдруг дойдёт (битая строка), единообразие
+    // с routeDisplayLabel важнее, чем «пустая подпись» — иначе ячейка будет выглядеть как
+    // «нет данных», а не «не задан». title пустой, чтобы не дублировать тот же текст.
+    expect(cellPresetLabel('', allPresets, CTX)).toEqual({ label: 'не задан', title: '' });
   });
 });

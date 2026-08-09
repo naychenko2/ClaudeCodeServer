@@ -1,18 +1,70 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Folder, GitBranch, Lock, X } from 'lucide-react';
+import { Crown, Folder, GitBranch, Lock, Sparkles, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
-import { C, FONT, R } from '../../../lib/design';
+import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
+import { useFeature, FLAGS } from '../../../lib/featureFlags';
+import { useIsMobile } from '../../../lib/breakpoints';
+import { getNav } from '../../../lib/nav';
+import { OPEN_INTRO_EVENT } from '../../onboarding/OnboardingPage';
 import { GroupSelect } from '../GroupSelect';
 import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/GitModeCards';
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { invalidateProjectsCache } from '../useAllProjects';
+
+// Строка «Руководитель проекта не назначен» (фича default-personas-onboarding, п.5.3):
+// главная кнопка — «Познакомиться с проектом» (интервью работает всегда, «Назначить
+// руководителя» упирается в пустую команду, если персон в проекте ещё нет). Обе кнопки
+// сначала закрывают диалог — иначе overlay знакомства и модалка окажутся на одном Z.modal.
+function ProjectLeadSection({ project, onClose }: { project: Project; onClose: () => void }) {
+  const isMobile = useIsMobile();
+  const goIntro = () => { onClose(); window.dispatchEvent(new CustomEvent(OPEN_INTRO_EVENT, { detail: { projectId: project.id } })); };
+  // Панель «Команда»: тот же приём, что у диплинка на персону (cc_pending_persona) —
+  // sessionStorage + событие для уже смонтированного воркспейса того же проекта,
+  // cc-open-session для перехода из другого проекта/раздела (см. WorkspacePage).
+  const goTeam = () => {
+    onClose();
+    sessionStorage.setItem('cc_pending_team_center', project.id);
+    const n = getNav();
+    if (n?.screen === 'project' && n.project?.id === project.id) {
+      window.dispatchEvent(new Event('cc-pending-team-center'));
+    } else {
+      window.dispatchEvent(new CustomEvent('cc-open-session', { detail: { project } }));
+    }
+  };
+  return (
+    <div style={{
+      padding: '8px 12px', background: C.bgWhite,
+      border: `1px solid ${C.border}`, borderRadius: R.xl,
+      display: 'flex', flexDirection: 'column', gap: SP.sm,
+    }}>
+      <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        Руководитель проекта
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm }}>
+        <Crown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.accent, marginTop: 2 }} />
+        <div style={{ fontSize: FS.base, color: C.textPrimary, lineHeight: 1.5 }}>
+          У проекта нет руководителя. Пока чаты ведёт ваш личный ассистент — без командных механик.
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: SP.sm, flexDirection: isMobile ? 'column' : 'row' }}>
+        <Button variant="ghostAccent" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
+          leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={goIntro}>
+          Познакомиться с проектом
+        </Button>
+        <Button variant="ghost" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile} onClick={goTeam}>
+          Назначить руководителя
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 // === История файлов (Git) в настройках проекта ===
 // Включение необратимо by design: «выключить» означало бы удалить .git со всей историей,
@@ -169,6 +221,9 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
+  // Строка «Руководитель проекта» (фича default-personas-onboarding, п.5.3) — у проекта
+  // с назначенным руководителем секции нет вовсе
+  const showLeadSection = useFeature(FLAGS.defaultPersonasOnboarding) && project.defaultPersonaId == null;
   const [draftPrompt, setDraftPrompt] = useState('');
   const [promptParts, setPromptParts] = useState<SystemPromptPart[] | null>(null);
   const builtinPrompt = promptParts?.find(p => p.kind === 'builtin')?.content
@@ -433,6 +488,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
           </Button>
         </SettingsRow>
       </div>
+      {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       <GitHistorySection project={project} />
       <ProjectSyncToggle projectId={project.id} online={online} />

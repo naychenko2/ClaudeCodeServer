@@ -12,7 +12,8 @@ namespace ClaudeHomeServer.Controllers;
 [Route("api/users")]
 [Authorize(Roles = "admin")]
 public class UsersController(UserStore users, SessionManager sessions,
-    UserKnowledgeCascade knowledgeCascade, ILogger<UsersController> logger) : ControllerBase
+    UserKnowledgeCascade knowledgeCascade, DefaultAssistantProvisioner provisioner,
+    ILogger<UsersController> logger) : ControllerBase
 {
     private static readonly Regex UsernameRegex = new(@"^[a-zA-Z0-9_-]+$", RegexOptions.Compiled);
 
@@ -24,7 +25,7 @@ public class UsersController(UserStore users, SessionManager sessions,
     }
 
     [HttpPost]
-    public IActionResult Create([FromBody] CreateUserRequest req)
+    public async Task<IActionResult> Create([FromBody] CreateUserRequest req)
     {
         var validationError = ValidateUsername(req.Username)
                            ?? ValidatePassword(req.Password)
@@ -36,6 +37,11 @@ public class UsersController(UserStore users, SessionManager sessions,
         {
             var user = users.Add(req.Username, req.Password, req.Role,
                 req.ExecutionEnvironment ?? ExecutionEnvironments.Local);
+            // Провижн ассистента новому пользователю (план 2.3). Сегодня это no-op: флаг
+            // default-personas-onboarding по умолчанию выключен, и EnsureAsync вернёт null.
+            // Сработает, когда флаг станет дефолтно включённым — тогда новичок сразу получит
+            // ассистента при заведении, без отдельного шага.
+            await provisioner.EnsureAsync(user.Id);
             return CreatedAtAction(nameof(GetAll), ToDto(user));
         }
         catch (InvalidOperationException ex)

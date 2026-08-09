@@ -29,9 +29,9 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags } from './lib/featureFlags'
+import { setAllFlags, getFlag, FLAGS } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
-import { OnboardingPage } from './features/onboarding/OnboardingPage'
+import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { isWallActive, setWallActive } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
@@ -200,6 +200,42 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
+  // Знакомство (фича default-personas-onboarding) — overlay поверх обычной навигации,
+  // план §4, п.4.5. Без projectId — личное, с { projectId } в detail — проектное (в паре
+  // с 4.3 это единственный способ показать интервью: гейта, который его открывал бы
+  // автоматически, больше нет — только приглашение, волна 5). При выключенном флаге
+  // маршрут инертен: диплинк #/intro уводит на главную вместо открытия.
+  const [introCtx, setIntroCtx] = useState<{ projectId?: string } | null>(null)
+  useEffect(() => {
+    const open = (e: Event) => {
+      if (!getFlag(FLAGS.defaultPersonasOnboarding)) return
+      const detail = (e as CustomEvent<{ projectId?: string }>).detail ?? {}
+      setIntroCtx(detail)
+      if (!(window.history.state as { introOverlay?: boolean } | null)?.introOverlay) {
+        window.history.pushState({ ...(window.history.state ?? {}), introOverlay: true }, '', '#/intro')
+      }
+    }
+    window.addEventListener(OPEN_INTRO_EVENT, open)
+    if (initialHash?.intro) {
+      if (getFlag(FLAGS.defaultPersonasOnboarding)) open(new Event(OPEN_INTRO_EVENT))
+      else navReplace({ screen: 'home' })
+    }
+    return () => window.removeEventListener(OPEN_INTRO_EVENT, open)
+  }, [])
+
+  // Синхронизация overlay знакомства с кнопками «назад/вперёд» — тот же приём, что у «Что нового»
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      if (!(e.state as { introOverlay?: boolean } | null)?.introOverlay) setIntroCtx(null)
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  const closeIntro = () => {
+    if ((window.history.state as { introOverlay?: boolean } | null)?.introOverlay) window.history.back()
+    else setIntroCtx(null)
+  }
+
   // Уход в раздел из «глубокого» места (открытый проект, заметка, файл, задача, персона,
   // база знаний) добавляет запись в историю, а не затирает текущую: иначе снимок того, откуда
   // ушли, пропадает и Back уводит мимо. Латеральные переходы с плоского экрана — replace.
@@ -288,14 +324,10 @@ export default function App() {
   }, [])
   const isMobileView = useIsMobile()
 
-  // Гейт обязательного онбординга первого входа (фича default-personas-onboarding).
-  // Липкий: needsOnboarding гаснет посреди интервью (broadcast смены дефолта), но гейт
-  // держится до конца хода/кнопки — снимает его сам OnboardingPage через onDone.
+  // Стор дефолт-персоны/онбординга (фича default-personas-onboarding): обязательного
+  // гейта первого входа больше нет (знакомство — приглашение из раздела «Персоны»,
+  // см. п.5), но стор нужен ниже — оверлей знакомства (п.4.5) ждёт me.loaded.
   const me = useMe()
-  const [onboardingGate, setOnboardingGate] = useState(false)
-  useEffect(() => {
-    if (auth && me.loaded && me.needsOnboarding) setOnboardingGate(true)
-  }, [auth, me.loaded, me.needsOnboarding])
 
   const online = useOnline()
   const onlineRef = useRef(online)
@@ -651,6 +683,17 @@ export default function App() {
         navReplace(rest)
       }
     }
+    // Тот же приём для overlay знакомства: клик по разделу хаба закрывает его тоже
+    // (HubHeader интервью зовёт onHubTab тем же switchHubTab) — навигация и есть выход.
+    if (introCtx) {
+      setIntroCtx(null)
+      const st = window.history.state as (NavSnapshot & { introOverlay?: boolean }) | null
+      if (st?.introOverlay) {
+        const rest: NavSnapshot & { introOverlay?: boolean } = { ...st }
+        delete rest.introOverlay
+        navReplace(rest)
+      }
+    }
     // Клик по «Проектам» с самой стены (там эта пилюля подсвечена как активная) —
     // явный выход из режима стены к списку проектов: тот же жест, что повторный
     // клик по активному разделу с открытым проектом ниже
@@ -981,14 +1024,20 @@ export default function App() {
           }}
         />
       )}
+      {/* Overlay знакомства (план §4, п.4.5) — проектное только когда introCtx.projectId
+          совпадает с открытым проектом: событие всегда шлётся со страницы этого же
+          проекта (настройки/«Команда»), другого объекта тут взять негде. */}
+      {auth && !authChecking && me.loaded && introCtx && (
+        introCtx.projectId
+          ? (project && project.id === introCtx.projectId && (
+              <ProjectIntroChatPage project={project} auth={auth} onLogout={logout} onHubTab={switchHubTab} onDone={closeIntro} />
+            ))
+          : <IntroChatPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onDone={closeIntro} />
+      )}
       {/* В разделе «Телеметрия» iframe SigNoz занимает весь экран, и плавающая
           AI-кнопка перекрывала бы его контролы в правом нижнем углу — прячем её там */}
       {auth && !authChecking && effectiveHubTab !== 'telemetry' && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
-      {/* Полноэкранный гейт онбординга — поверх всего, без навигации и «Пропустить» */}
-      {auth && !authChecking && onboardingGate && (
-        <OnboardingPage onDone={() => setOnboardingGate(false)} />
-      )}
     </>
   )
 }

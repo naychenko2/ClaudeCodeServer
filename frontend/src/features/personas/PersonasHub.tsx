@@ -2,8 +2,13 @@ import { useRef, useState } from 'react';
 import { Plus, Sparkles, MessageSquare, Brain, ListChecks, Zap, Users, AtSign } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Persona, Session } from '../../types';
-import { C, FONT, R, CONTENT_MAX_W } from '../../lib/design';
-import { personaTitleLines } from '../../lib/personas';
+import { C, FONT, FS, R, SP, CONTENT_MAX_W } from '../../lib/design';
+import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { Button, IntroDot } from '../../components/ui';
+import { personaTitleLines, usePersonas } from '../../lib/personas';
+import { useMe } from '../../lib/defaultPersona';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { PersonaAvatar } from './PersonaAvatar';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
 import { usePersonasActivity } from './personasActivity';
@@ -31,6 +36,17 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
     setActivityExpanded(v => !v);
     scrollRef.current?.scrollTo({ top: 0 });
   };
+
+  // Карточка-приглашение «знакомство» (фича default-personas-onboarding, п.5.1) —
+  // единственная залитая акцентом кнопка всей фичи. allPersonas (не отфильтрованный
+  // listMode) — дефолт-персона нужна вне зависимости от переключателя «Глобальные/Все».
+  const me = useMe();
+  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  const allPersonas = usePersonas();
+  const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
+  const showInvite = me.loaded && onboardingOn && me.needsOnboarding && !!defaultPersona;
+  const assistantsSectionRef = useRef<HTMLElement>(null);
+  const goToAssistantsList = () => assistantsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   return (
     // Фон прозрачный: под центром виден дудл-фон страницы (CanvasBackdrop)
@@ -62,8 +78,29 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
           {!activityExpanded && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 34, minWidth: 0 }}>
 
+              {/* Приглашение познакомиться (фича default-personas-onboarding, п.5.1) */}
+              {showInvite && defaultPersona && (
+                <div style={inviteCard}>
+                  <div style={{ position: 'relative', flex: 'none' }}>
+                    <PersonaAvatar persona={defaultPersona} size={48} />
+                    <IntroDot size={8} />
+                  </div>
+                  <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+                    <div style={inviteTitle}>Ваш ассистент пока стандартный</div>
+                    <div style={inviteText}>Познакомьтесь — он получит имя, характер и будет помнить, чем вы занимаетесь. Пара минут разговора.</div>
+                  </div>
+                  <div style={inviteActions}>
+                    <Button variant="primary" size="sm" leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+                      onClick={() => window.dispatchEvent(new CustomEvent(OPEN_INTRO_EVENT))}>
+                      Познакомиться
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={goToAssistantsList}>Выбрать другого ассистента</Button>
+                  </div>
+                </div>
+              )}
+
               {/* Твои помощники */}
-              <section>
+              <section ref={assistantsSectionRef}>
                 <SectionTitle title="Твои помощники" sub="Кликни, чтобы открыть, или наведи, чтобы поговорить" />
                 {hasPersonas ? (
                   <div style={showcaseGrid}>
@@ -246,3 +283,14 @@ const createIcon: React.CSSProperties = {
 };
 const createPanelTitle: React.CSSProperties = { fontSize: 14, fontWeight: 700, color: C.textHeading };
 const createPanelDesc: React.CSSProperties = { fontSize: 12.5, color: C.textMuted, marginTop: 3, lineHeight: 1.5 };
+
+// Карточка-приглашение «знакомство» (десктоп, п.5.1 волны 5)
+const inviteCard: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: SP.lg,
+  background: C.accentLight, border: `1px solid ${C.border}`, borderRadius: R.xxl, padding: SP.lg,
+};
+const inviteTitle: React.CSSProperties = {
+  fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em',
+};
+const inviteText: React.CSSProperties = { fontSize: FS.base, color: C.textSecondary, lineHeight: 1.55, maxWidth: 520 };
+const inviteActions: React.CSSProperties = { display: 'flex', gap: SP.sm, flex: 'none', flexWrap: 'wrap', justifyContent: 'flex-end' };

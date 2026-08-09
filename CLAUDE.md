@@ -380,8 +380,10 @@ Dark launch: фича коммитится выключенной и включ�
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
 хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
 (2026-08); в каталоге осталось два флага — `workspace-destructive` (постоянный
-предохранитель от необратимого удаления) и `default-personas-onboarding` (dark-launch
-онбординга). Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
+предохранитель от необратимого удаления) и `default-personas-onboarding` (ассистент по
+умолчанию заводится автоматически при первом входе, знакомство — по приглашению, а не
+обязательный экран; детали — [docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md)).
+Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
 
 **Как добавить новый флаг (3 шага):**
 1. Бэк: добавить строку в `FeatureFlagCatalog.All` (`key`, `title`, `description`, `Default: false`, `stage`).

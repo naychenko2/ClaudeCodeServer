@@ -42,7 +42,6 @@ import { useGitState, ensureGit } from '../lib/git';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { useFeature, FLAGS } from '../lib/featureFlags';
-import { ProjectOnboardingGate } from '../features/onboarding/OnboardingPage';
 import { ProjectPersonasPanel, ProjectPersonaPane } from '../features/personas/ProjectPersonasPanel';
 import type { PersonaView } from '../features/personas/PersonaToolbar';
 import { TeamCommandCenter } from '../features/personas/TeamCommandCenter';
@@ -803,6 +802,28 @@ const windowWidth = useWindowWidth();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
+  // Диплинк на командный центр проекта (фича default-personas-onboarding, п.5.3):
+  // «Назначить руководителя» в настройках проекта кладёт id проекта в sessionStorage —
+  // тот же приём, что и pending-персона выше. teamCenterOpen — флаг центрального
+  // оверлея в новом режиме панелей; leftTab='personas' без выбранной персоны даёт тот
+  // же экран в одноколоночном режиме (mobile/tablet).
+  useEffect(() => {
+    const consumePendingTeam = () => {
+      const pid = sessionStorage.getItem('cc_pending_team_center');
+      if (pid !== project.id) return;
+      sessionStorage.removeItem('cc_pending_team_center');
+      setSelectedPersonaId(null);
+      setPersonaCreating(false);
+      setLeftTab('personas');
+      setTeamCenterOpen(true);
+      if (isMobile) setMobileView('chat');
+    };
+    consumePendingTeam();
+    window.addEventListener('cc-pending-team-center', consumePendingTeam);
+    return () => window.removeEventListener('cc-pending-team-center', consumePendingTeam);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
   // Эффект-подписка объявлена ниже, после handleSelectSession.
   // Сайдбар, его ширина и сплиттеры жили здесь, пока десктоп рисовался этим
@@ -871,23 +892,21 @@ const windowWidth = useWindowWidth();
     setActiveSession(prev => (prev?.id === updated.id ? updated : prev));
   };
 
-  // Гейт онбординга проекта (фича default-personas-onboarding): рабочее пространство
-  // недоступно, пока у проекта нет персоны по умолчанию (руководителя). Свежий дефолт
-  // проверяем с сервера: project из localStorage может не знать о поле defaultPersonaId —
-  // гейт активируется только по подтверждённому null, без ложной вспышки.
+  // Дефолт-персона проекта (руководитель, фича default-personas-onboarding): больше не
+  // гейтует рабочее пространство (знакомство — приглашение из «Персон»/настроек проекта,
+  // волна 5), но актуальное значение нужно колбэкам создания чата. Свежий дефолт проверяем
+  // с сервера: project из localStorage может не знать о поле defaultPersonaId.
   const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
   const [projectDefaultId, setProjectDefaultId] = useState<string | null | undefined>(project.defaultPersonaId);
   // Актуальное значение для колбэков создания чата: у них deps осознанно сужены,
-  // и без ref они держат дефолт на момент монтирования (тост «пройдите онбординг»
-  // на первом чате после гейта даже с уже обновлённым стейтом)
+  // и без ref они держат дефолт на момент монтирования
   const projectDefaultIdRef = useRef(projectDefaultId);
   projectDefaultIdRef.current = projectDefaultId;
   useEffect(() => {
     if (project.defaultPersonaId !== undefined) setProjectDefaultId(project.defaultPersonaId);
   }, [project.defaultPersonaId]);
-  const [projectGate, setProjectGate] = useState(false);
   useEffect(() => {
-    if (!onboardingOn) { setProjectGate(false); return; }
+    if (!onboardingOn) return;
     let cancelled = false;
     api.projects.list()
       .then(list => {
@@ -895,19 +914,10 @@ const windowWidth = useWindowWidth();
         const fresh = list.find(p => p.id === project.id);
         if (!fresh) return;
         setProjectDefaultId(fresh.defaultPersonaId ?? null);
-        if (!fresh.defaultPersonaId) setProjectGate(true);
       })
-      .catch(() => { /* офлайн — гейт не поднимаем, работаем как раньше */ });
+      .catch(() => { /* офлайн — работаем с тем, что знаем */ });
     return () => { cancelled = true; };
   }, [onboardingOn, project.id]);
-  // Завершение онбординга: гейт снимает сам ProjectOnboardingGate (по концу хода или
-  // кнопке). Свежий дефолт проекта перечитывать здесь НЕ нужно: App по broadcast
-  // personas_changed action='default' перечитывает открытый проект (единая точка),
-  // а эффект выше синкает prop в projectDefaultId — свой fetch был бы вторым
-  // перечитыванием на то же событие и гонкой setState по размонтированию.
-  const handleProjectOnboardingDone = useCallback(() => {
-    setProjectGate(false);
-  }, []);
 
   // Диплинк проектного чата (#/project/{id}/chat/{chatId}) из уведомления проактивности.
   useEffect(() => {
@@ -1508,8 +1518,6 @@ const windowWidth = useWindowWidth();
             onClose={() => setEditProjectOpen(false)}
           />
         )}
-        {/* Обязательный онбординг проекта — оверлей поверх рабочего пространства */}
-        {projectGate && <ProjectOnboardingGate project={project} onDone={handleProjectOnboardingDone} />}
       </PageCanvas>
     );
   }
@@ -1622,8 +1630,6 @@ const windowWidth = useWindowWidth();
           onClose={() => setEditProjectOpen(false)}
         />
       )}
-      {/* Обязательный онбординг проекта — оверлей поверх рабочего пространства */}
-      {projectGate && <ProjectOnboardingGate project={project} onDone={handleProjectOnboardingDone} />}
     </PageCanvas>
   );
 }

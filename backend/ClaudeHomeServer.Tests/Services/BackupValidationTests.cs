@@ -129,9 +129,10 @@ public class BackupValidationTests : IDisposable
         BackupValidation.ValidateGraphWarnings(_dir).Should().BeEmpty();
     }
 
-    // Шесть новых полей онбординга/дефолт-персоны (User.DefaultPersonaId,
-    // User.OnboardingSessionId, Project.DefaultPersonaId, Project.OnboardingSessionId,
-    // Session.OnboardingKind, Session.OnboardingCreatedPersonaId) — все string?.
+    // Восемь новых полей онбординга/дефолт-персоны (User.DefaultPersonaId,
+    // User.OnboardingSessionId, User.IntroCompletedAt, User.AssistantPersonaId,
+    // Project.DefaultPersonaId, Project.OnboardingSessionId, Session.OnboardingKind,
+    // Session.OnboardingCreatedPersonaId) — все string?/DateTime?.
     // Поскольку схема для этих полей не бампалась (они добавлены без increment BackupSchema.Version;
     // текущий инкремент 5→6 относится к удалению Project.McpServersOff), архив со старой
     // SchemaVersion ОБЯЗАН продолжать валидироваться как пригодный.
@@ -147,7 +148,9 @@ public class BackupValidationTests : IDisposable
                   "Username": "admin",
                   "Role": "admin",
                   "DefaultPersonaId": "test-default-persona-1234",
-                  "OnboardingSessionId": "test-onboarding-session-5678"
+                  "OnboardingSessionId": "test-onboarding-session-5678",
+                  "IntroCompletedAt": "2026-08-09T00:00:00Z",
+                  "AssistantPersonaId": "test-assistant-persona-2468"
                 }
               ]
             }

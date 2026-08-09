@@ -34,6 +34,7 @@
 [mcp-servers.md](architecture/mcp-servers.md),
 [knowledge.md](architecture/knowledge.md) (заметки и Dify),
 [personas.md](architecture/personas.md),
+[onboarding-intro.md](architecture/onboarding-intro.md) (первый вход и знакомство с ассистентом),
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 

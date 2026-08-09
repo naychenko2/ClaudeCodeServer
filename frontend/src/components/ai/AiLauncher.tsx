@@ -22,6 +22,8 @@ import {
 } from '../../lib/ai/proactive';
 import { useContextPersona } from '../../lib/contextPersona';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { useMe } from '../../lib/defaultPersona';
+import { IntroDot } from '../ui';
 
 // Полный размер круглешка — от него считаем налезание (см. useFabObstacleOverlap)
 const FAB_FULL = 54;
@@ -114,6 +116,11 @@ export function AiLauncher() {
   // и лицо в шапке палитры (searchRow) — они всегда совпадают. (WaitingIndicator в ленте
   // зовёт useContextPersona() без аргументов — там персона чата правильна.)
   const facePersona = useContextPersona({ personaId: null });
+  // Точка-приглашение «знакомство» на FAB (фича default-personas-onboarding, п.5.2):
+  // только когда лицо кнопки — реально дефолт-персона владельца (в проекте с чужим
+  // руководителем точки быть не должно — там речь не про личное знакомство).
+  const me = useMe();
+  const showIntroDot = me.loaded && me.needsOnboarding && facePersona?.id === me.defaultPersonaId;
   useEffect(() => { api.notes.caps().then(c => setSemanticCaps(c.semantic)).catch(() => {}); }, []);
   // Глобальный стор «ждём ответа» живёт на потоке статусов сессий, не на ChatPanel:
   // запускаем подписку + первичную загрузку при монтировании хаба (он рендерится везде).
@@ -448,11 +455,16 @@ export function AiLauncher() {
     aiAwaiting ? 'awaiting' : aiBusy ? 'busy' : fabStrong ? 'idea' : 'idle';
   // aria-label говорит правду о состоянии: в покое/работе/идее — палитра действий,
   // при ожидании — зовёт в ждущий чат (один) или к списку (несколько).
+  // Суффикс точки уходит в aria-label кнопки (точка — aria-hidden, скринридером не
+  // озвучивается) и только в спокойном состоянии: в busy/awaiting текст занят более
+  // срочным сообщением.
   const fabAriaLabel = aiAwaiting
     ? (awaitingList.length === 1
         ? `Claude ждёт ответа — открыть чат${awaitingList[0].name ? ` «${awaitingList[0].name}»` : ''}`
         : `Claude ждёт ответа в ${awaitingList.length} чатах — выбрать`)
-    : 'AI-действия (Ctrl/⌘ + K)';
+    : aiBusy
+    ? 'AI-действия (Ctrl/⌘ + K)'
+    : `AI-действия (Ctrl/⌘ + K)${showIntroDot ? ' · знакомство с ассистентом не пройдено' : ''}`;
 
   // Прыжок «есть идея»: ровно 3 раза (CSS-count), потом замирает — не скачет без конца.
   // Оправа при этом ОСТАЁТСЯ акцентной: состояние живёт на цвете оправы, а не на прыжке.
@@ -640,6 +652,12 @@ export function AiLauncher() {
               через CSS display). Лежат поверх лица, растут наружу — лицо не ужимается. */}
           <span className="cc-fab-ring" aria-hidden />
           <span className="cc-fab-arc" aria-hidden />
+          {/* Точка-приглашение «знакомство» (п.5.2 волны 5): сиблинг лица, а не проп
+              PersonaAvatar — обёртка лица имеет overflow:hidden и срезала бы точку. Одна
+              формула сдвига держит угол на обоих размерах FAB (36 и 54). */}
+          {showIntroDot && (
+            <IntroDot size={8} style={{ transform: 'translate(25%, 25%)', zIndex: 5 }} />
+          )}
         </button>
       )}
 

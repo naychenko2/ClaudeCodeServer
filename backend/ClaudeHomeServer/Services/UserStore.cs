@@ -53,6 +53,7 @@ public class UserStore
                 Save();
                 logger.LogInformation("users.json: удалено легаси-поле NtHash (NT-хэш пароля больше не хранится)");
             }
+            MigrateIntroCompleted(logger);
             return;
         }
 
@@ -73,6 +74,35 @@ public class UserStore
             "║  Пароль: {Password}\n" +
             "║  Пароль показан ОДИН раз — смените после входа ║\n" +
             "╚══════════════════════════════════════════════╝", generatedPassword);
+    }
+
+    // Миграция IntroCompletedAt (фича default-personas-onboarding). Load бежит на КАЖДОМ
+    // старте, поэтому условие обязано быть точным: пользователь с дефолтом, но без признака
+    // знакомства и без заготовки-ассистента считаются уже прошедшими знакомство — им
+    // авто-ассистент не предлагают. Третье слагаемое (AssistantPersonaId == null) критично:
+    // без него первый же рестарт проставил бы дату и погасил приглашение всем, кто отложил
+    // знакомство, но уже получил заготовку. Идемпотентно: после первого проставления
+    // IntroCompletedAt != null, и условие больше не срабатывает.
+    private void MigrateIntroCompleted(ILogger logger)
+    {
+        var migrated = 0;
+        foreach (var user in _users)
+        {
+            if (user.DefaultPersonaId is not null
+                && user.IntroCompletedAt is null
+                && user.AssistantPersonaId is null)
+            {
+                user.IntroCompletedAt = DateTime.UtcNow;
+                migrated++;
+            }
+        }
+        if (migrated > 0)
+        {
+            Save();
+            logger.LogInformation(
+                "users.json: {Count} пользователям проставлен IntroCompletedAt (дефолт уже есть — знакомство не предлагается)",
+                migrated);
+        }
     }
 
     // Есть ли в файле на диске легаси-поле NT-хэша (записи, сделанные до его отмены)
@@ -397,6 +427,38 @@ public class UserStore
             var user = _users.FirstOrDefault(u => u.Id == id);
             if (user is null) return false;
             user.DefaultPersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Момент завершения знакомства с ассистентом (UTC); null — сброс/не пройдено.
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetIntroCompleted(string id, DateTime? at)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            user.IntroCompletedAt = at;
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Id заготовки-ассистента пользователя (фича default-personas-onboarding); null — сброс.
+    /// Возвращает false если пользователь не найден.
+    /// </summary>
+    public bool SetAssistantPersona(string id, string? personaId)
+    {
+        lock (_lock)
+        {
+            var user = _users.FirstOrDefault(u => u.Id == id);
+            if (user is null) return false;
+            user.AssistantPersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId;
             Save();
             return true;
         }

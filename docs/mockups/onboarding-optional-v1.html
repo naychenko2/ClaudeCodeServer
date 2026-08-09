@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Знакомство вместо обязательного онбординга — макет v1</title>
+<style>
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4;
+  --c-nav-ink:#2A251F; --c-on-nav-ink:#F4ECE1;
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+}
+html[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037;
+  --c-nav-ink:#F2ECE1; --c-on-nav-ink:#201C18;
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 6px 20px rgba(0,0,0,.40);
+  --shadow-modal:0 24px 60px rgba(0,0,0,.65);
+}
+* { box-sizing: border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+.serif { font-family:"PT Serif",Georgia,"Times New Roman",serif; letter-spacing:-.01em; }
+.wrap { max-width:1100px; margin:0 auto; padding:24px 24px 80px; }
+
+/* --- служебная обвязка макета (не часть продукта) --- */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:200px; }
+.bar button {
+  font:inherit; font-size:12px; padding:6px 12px; border-radius:10px; cursor:pointer;
+  background:transparent; border:1px solid var(--c-border); color:var(--c-text-primary);
+}
+.bar button.on { background:var(--c-nav-ink); color:var(--c-on-nav-ink); border-color:var(--c-nav-ink); }
+h2.sec {
+  margin:44px 0 6px; font-size:22px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:70ch; }
+p.note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; }
+.stage {
+  border:1px dashed var(--c-border); border-radius:14px; padding:20px;
+  background:var(--c-bg-card); margin-bottom:14px;
+}
+.stage.panel { background:var(--c-bg-panel); }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin-bottom:12px; }
+.mobile-frame {
+  width:360px; max-width:100%; border:1px solid var(--c-border); border-radius:22px; overflow:hidden;
+  background:var(--c-bg-panel); box-shadow:var(--shadow-island);
+}
+.cols { display:flex; gap:14px; flex-wrap:wrap; align-items:flex-start; }
+
+/* --- примитивы продукта --- */
+.btn {
+  display:inline-flex; align-items:center; gap:6px; font:inherit; font-size:12px; font-weight:500;
+  padding:0 12px; height:32px; border-radius:12px; cursor:pointer; white-space:nowrap;
+  border:1px solid transparent; background:transparent; color:var(--c-text-primary);
+  transition:background .15s, border-color .15s;
+}
+.btn:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.btn.md { height:40px; font-size:13px; padding:0 16px; }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); border-color:var(--c-accent); font-weight:600; }
+.btn.primary:hover { filter:brightness(1.05); }
+.btn.ghostAccent { color:var(--c-accent); border-color:var(--c-accent); font-weight:600; }
+.btn.ghostAccent:hover { background:var(--c-accent-light); }
+.btn.ghost { color:var(--c-text-secondary); border-color:var(--c-border); }
+.btn.ghost:hover { background:var(--c-bg-selected); }
+.btn.full { width:100%; justify-content:center; }
+.ico { width:14px; height:14px; flex:none; }
+.ico.md { width:16px; height:16px; }
+
+.avatar {
+  border-radius:50%; background:var(--c-accent-soft); color:#fff; display:flex;
+  align-items:center; justify-content:center; font-weight:600; overflow:hidden; flex:none;
+}
+.avatar-wrap { position:relative; flex:none; }
+.dot {
+  position:absolute; right:0; bottom:0; width:8px; height:8px; border-radius:999px;
+  background:var(--c-accent); border:2px solid var(--c-bg-main); box-sizing:content-box; pointer-events:none;
+}
+
+/* карточка-приглашение */
+.invite {
+  display:flex; align-items:center; gap:16px; padding:16px;
+  background:var(--c-accent-light); border:1px solid var(--c-border); border-radius:14px;
+}
+.invite .body { flex:1; min-width:0; display:flex; flex-direction:column; gap:4px; }
+.invite .title { font-size:16px; font-weight:600; color:var(--c-text-heading); }
+.invite .text { font-size:13px; line-height:1.55; color:var(--c-text-secondary); max-width:520px; }
+.invite .acts { display:flex; align-items:center; gap:8px; flex:none; flex-wrap:wrap; justify-content:flex-end; }
+.invite.compact { flex-direction:column; align-items:stretch; gap:8px; padding:12px; border-radius:12px; margin:12px 12px 0; }
+.invite.compact .head { display:flex; align-items:center; gap:8px; }
+.invite.compact .title { font-size:14px; line-height:1.3; }
+.invite.compact .text { font-size:12px; line-height:1.5; max-width:none; }
+
+/* секция диалога */
+.dlg-sec {
+  padding:8px 12px; background:var(--c-bg-white); border:1px solid var(--c-border);
+  border-radius:12px; display:flex; flex-direction:column; gap:8px;
+}
+.dlg-sec .cap2 { font-size:12px; font-weight:600; color:var(--c-text-secondary); text-transform:uppercase; letter-spacing:.05em; }
+.dlg-sec .row { display:flex; align-items:flex-start; gap:8px; }
+.dlg-sec .row p { margin:0; font-size:13px; line-height:1.5; color:var(--c-text-primary); }
+.dlg-sec .acts { display:flex; gap:8px; flex-wrap:wrap; }
+
+/* экран знакомства */
+.hubhdr {
+  display:flex; align-items:center; gap:16px; padding:10px 20px;
+  background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.hubhdr .logo { width:26px; height:26px; border-radius:8px; background:var(--c-accent); flex:none; }
+.hubhdr nav { display:flex; gap:4px; flex:1; flex-wrap:wrap; }
+.hubhdr nav span { font-size:12px; padding:5px 10px; border-radius:9px; color:var(--c-text-secondary); }
+.hubhdr nav span.act { background:var(--c-nav-ink); color:var(--c-on-nav-ink); }
+.introbar {
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap; row-gap:8px;
+  padding:16px 24px; border-bottom:1px solid var(--c-border);
+}
+.introbar .tile {
+  width:38px; height:38px; border-radius:10px; background:var(--c-accent-light); color:var(--c-accent);
+  display:flex; align-items:center; justify-content:center; flex:none;
+}
+.introbar .ttl { flex:1; min-width:0; }
+.introbar .ttl b { display:block; font-size:18px; font-weight:600; color:var(--c-text-heading); }
+.introbar .ttl small { display:block; font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+.vdiv { width:1px; height:20px; background:var(--c-border); margin:0 4px; flex:none; }
+.plaque {
+  max-width:460px; width:100%; padding:24px; background:var(--c-accent-light);
+  border:1px solid var(--c-border); border-radius:14px; display:flex; flex-direction:column; gap:12px;
+}
+.plaque .ph { display:flex; align-items:center; gap:8px; color:var(--c-accent); }
+.plaque .ph b { font-size:18px; font-weight:600; color:var(--c-text-heading); }
+.plaque .pb { font-size:14px; line-height:1.55; color:var(--c-text-primary); }
+.plaque .pn {
+  display:flex; align-items:flex-start; gap:8px; padding-top:12px;
+  border-top:1px solid var(--c-accent-muted); font-size:12px; line-height:1.5; color:var(--c-text-muted);
+}
+.chatarea { padding:32px 24px; display:flex; justify-content:center; background:var(--c-bg-main); }
+
+/* FAB */
+.fabstage {
+  position:relative; height:140px; border-radius:12px; background:var(--c-bg-main);
+  border:1px solid var(--c-border-light); overflow:hidden;
+}
+.fab {
+  position:absolute; right:18px; bottom:18px; width:54px; height:54px; border-radius:50%;
+  background:var(--c-bg-card); border:none; padding:0; cursor:pointer;
+  box-shadow:var(--shadow-island); overflow:visible;
+}
+.fab.small { width:36px; height:36px; }
+.fab .face { position:absolute; inset:0; border-radius:50%; overflow:hidden; display:flex; }
+.fab .face .avatar { width:100%; height:100%; font-size:18px; }
+.fab.small .face .avatar { font-size:13px; }
+.fab .ring { position:absolute; inset:-3px; border-radius:50%; border:2px solid var(--c-accent-muted); z-index:3; }
+.fab .dot { transform:translate(25%,25%); z-index:5; }
+
+/* было/стало */
+.gate-demo { position:relative; border-radius:12px; overflow:hidden; border:1px solid var(--c-border); }
+.gate-demo .under { padding:14px 18px; background:var(--c-bg-panel); color:var(--c-text-muted); font-size:12px; }
+.gate-demo .over {
+  position:absolute; inset:0; background:var(--c-bg-main); display:flex; align-items:center;
+  justify-content:center; flex-direction:column; gap:6px; text-align:center; padding:20px;
+  box-shadow:var(--shadow-modal);
+}
+.gate-demo .over b { font-size:16px; color:var(--c-text-heading); }
+.gate-demo .over span { font-size:12px; color:var(--c-text-secondary); }
+.badge-no { display:inline-block; font-size:11px; padding:2px 8px; border-radius:999px; background:var(--c-accent-muted); color:var(--c-text-primary); }
+
+.hidden { display:none !important; }
+@media (max-width:720px) { .wrap { padding:16px 14px 60px; } }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>Знакомство вместо обязательного онбординга — макет v1</h1>
+  <button id="theme" onclick="toggleTheme()">Тёмная тема</button>
+  <button id="dsk" class="on" onclick="setView('desktop')">Десктоп</button>
+  <button id="mob" onclick="setView('mobile')">Мобиль</button>
+</div>
+
+<div class="wrap">
+
+  <p class="note" style="margin-top:18px">
+    Четыре элемента фичи: карточка-приглашение в «Персонах», точка у аватара ассистента,
+    строка в настройках проекта и экран знакомства без оверлея. Дизайн — Майя,
+    токены соответствуют <code>theme.css</code> обеих тем. Кнопки кликабельны только визуально.
+  </p>
+
+  <!-- ============ 1 ============ -->
+  <h2 class="sec">1. Карточка-приглашение в разделе «Персоны»</h2>
+  <p class="note">
+    Единственное громкое место приглашения: здесь человек уже пришёл разбираться с помощниками,
+    поэтому главное действие — залитая акцентом кнопка. Карточка целиком не кликается: внутри два действия.
+    Десктоп — первым блоком колонки <code>PersonasHub</code>; мобиль — над списком в <code>PersonasPage</code>,
+    иначе на мобиле знакомство необнаружимо.
+  </p>
+
+  <div class="stage view-desktop panel">
+    <div class="cap">Десктоп · PersonasHub, первым блоком</div>
+    <div class="invite">
+      <div class="avatar-wrap" style="width:48px;height:48px">
+        <div class="avatar" style="width:48px;height:48px;font-size:17px">А</div>
+        <span class="dot"></span>
+      </div>
+      <div class="body">
+        <div class="title serif">Ваш ассистент пока стандартный</div>
+        <div class="text">Познакомьтесь — он получит имя, характер и будет помнить, чем вы занимаетесь. Пара минут разговора.</div>
+      </div>
+      <div class="acts">
+        <button class="btn ghost">Выбрать другого ассистента</button>
+        <button class="btn primary">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+          Познакомиться
+        </button>
+      </div>
+    </div>
+    <div style="height:34px"></div>
+    <div style="font-size:12px;font-weight:600;color:var(--c-text-secondary);text-transform:uppercase;letter-spacing:.05em">Твои помощники</div>
+    <div style="margin-top:10px;padding:12px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-card);color:var(--c-text-muted);font-size:12px">…существующий список персон…</div>
+  </div>
+
+  <div class="stage view-mobile hidden">
+    <div class="cap">Мобиль · над списком персон, ~150px постоянно</div>
+    <div class="mobile-frame">
+      <div class="invite compact">
+        <div class="head">
+          <div class="avatar-wrap" style="width:32px;height:32px">
+            <div class="avatar" style="width:32px;height:32px;font-size:13px">А</div>
+            <span class="dot" style="width:6px;height:6px"></span>
+          </div>
+          <div class="title serif">Ваш ассистент пока стандартный</div>
+        </div>
+        <div class="text">Познакомьтесь — он получит имя, характер и будет помнить, чем вы занимаетесь. Пара минут разговора.</div>
+        <button class="btn primary md full">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+          Познакомиться
+        </button>
+        <button class="btn ghost md full">Выбрать другого ассистента</button>
+      </div>
+      <div style="padding:12px">
+        <div style="padding:10px 12px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-card);color:var(--c-text-muted);font-size:12px">…список персон…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 2 ============ -->
+  <h2 class="sec">2. Точка-бейдж у аватара ассистента</h2>
+  <p class="note">
+    Шёпот: 8 пикселей, без анимации, некликабельна. Живёт только на плавающей AI-кнопке и в карточке —
+    в ленте чата превратилась бы в сыпь. Отдельный примитив <code>ui/IntroDot</code>, а не проп
+    <code>PersonaAvatar</code>: обёртка лица на FAB имеет <code>overflow:hidden</code> и срезала бы точку изнутри.
+    Точка декоративна (<code>aria-hidden</code>) — доступное имя несёт <code>aria-label</code> самой кнопки.
+  </p>
+  <div class="cols">
+    <div class="stage" style="flex:1;min-width:260px">
+      <div class="cap">FAB 54 · знакомство не пройдено</div>
+      <div class="fabstage">
+        <button class="fab" title="AI-действия (Ctrl/⌘ + K) · знакомство с ассистентом не пройдено">
+          <span class="face"><span class="avatar">А</span></span>
+          <span class="ring"></span>
+          <span class="dot"></span>
+        </button>
+      </div>
+    </div>
+    <div class="stage" style="flex:1;min-width:260px">
+      <div class="cap">FAB 36 (мобиль / свёрнутый)</div>
+      <div class="fabstage">
+        <button class="fab small">
+          <span class="face"><span class="avatar">А</span></span>
+          <span class="ring"></span>
+          <span class="dot"></span>
+        </button>
+      </div>
+    </div>
+    <div class="stage" style="flex:1;min-width:260px">
+      <div class="cap">После знакомства — точки нет</div>
+      <div class="fabstage">
+        <button class="fab">
+          <span class="face"><span class="avatar" style="background:#7C6BA8">М</span></span>
+          <span class="ring"></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 3 ============ -->
+  <h2 class="sec">3. Строка в настройках проекта</h2>
+  <p class="note">
+    Деловая справка с двумя выходами, без залитого акцента: у диалога уже есть главная кнопка «Сохранить»
+    в футере, второй оранжевый прямоугольник спорил бы с ней. Главная здесь — «Познакомиться с проектом»:
+    «Назначить руководителя» упирается в пустую «Команду», если персон в проекте ещё нет.
+    Обе кнопки сначала закрывают диалог, иначе модалка и страница знакомства окажутся на одном слое.
+  </p>
+  <div class="stage view-desktop">
+    <div class="cap">EditDialog · перед секцией MCP</div>
+    <div style="max-width:560px;display:flex;flex-direction:column;gap:10px">
+      <div class="dlg-sec">
+        <div class="cap2">Руководитель проекта</div>
+        <div class="row">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="1.8" style="margin-top:2px"><path d="M3 7l4 3 5-6 5 6 4-3-2 12H5L3 7z"/></svg>
+          <p>У проекта нет руководителя. Пока чаты ведёт ваш личный ассистент — без командных механик.</p>
+        </div>
+        <div class="acts">
+          <button class="btn ghostAccent">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+            Познакомиться с проектом
+          </button>
+          <button class="btn ghost">
+            <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3"/><path d="M3 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/><path d="M16 8h5M18.5 5.5v5"/></svg>
+            Назначить руководителя
+          </button>
+        </div>
+      </div>
+      <div style="padding:8px 12px;border:1px solid var(--c-border);border-radius:12px;background:var(--c-bg-white);color:var(--c-text-muted);font-size:12px">…секция MCP-серверов…</div>
+    </div>
+  </div>
+  <div class="stage view-mobile hidden">
+    <div class="cap">Мобиль · шторка, кнопки колонкой, высота 40</div>
+    <div class="mobile-frame" style="padding:12px">
+      <div class="dlg-sec">
+        <div class="cap2">Руководитель проекта</div>
+        <div class="row">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="var(--c-accent)" stroke-width="1.8" style="margin-top:2px"><path d="M3 7l4 3 5-6 5 6 4-3-2 12H5L3 7z"/></svg>
+          <p>У проекта нет руководителя. Пока чаты ведёт ваш личный ассистент — без командных механик.</p>
+        </div>
+        <div class="acts" style="flex-direction:column">
+          <button class="btn ghostAccent md full">Познакомиться с проектом</button>
+          <button class="btn ghost md full">Назначить руководителя</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 4 ============ -->
+  <h2 class="sec">4. Экран знакомства без оверлея</h2>
+  <p class="note">
+    Гейт превращается в страницу: сверху обычная навигация — видно, что мир на месте и уйти можно в один клик.
+    «Позже» отделено вертикальной чертой от двух страховок и снабжено стрелкой, а не крестиком:
+    крестик обещал бы «отменить», а мы обещаем возврат к тому же разговору.
+    Шаг выбора готовой персоны удалён, «Создать персону из разговора» стало «Применить итоги разговора».
+  </p>
+
+  <div class="stage view-desktop" style="padding:0;overflow:hidden">
+    <div class="hubhdr">
+      <div class="logo"></div>
+      <nav><span>Главная</span><span>Чаты</span><span>Проекты</span><span class="act">Персоны</span><span>Заметки</span><span>Задачи</span></nav>
+      <div class="avatar" style="width:26px;height:26px;font-size:11px">Н</div>
+    </div>
+    <div class="introbar">
+      <div class="tile">
+        <svg class="ico md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+      </div>
+      <div class="ttl">
+        <b class="serif">Знакомство</b>
+        <small>Несколько вопросов — и ваш ассистент получит имя, характер и ваш контекст. Выйти можно в любой момент.</small>
+      </div>
+      <button class="btn ghost">Применить итоги разговора</button>
+      <button class="btn ghost">Начать заново</button>
+      <span class="vdiv"></span>
+      <button class="btn ghost" title="Выйти — разговор сохранится и продолжится с этого места">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+        Позже
+      </button>
+    </div>
+    <div class="chatarea">
+      <div class="plaque">
+        <div class="ph">
+          <svg class="ico md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+          <b class="serif">Давайте познакомимся</b>
+        </div>
+        <div class="pb">Ваш ассистент уже работает — просто пока без имени. Сейчас несколько вопросов о вас и ваших делах: по ответам он получит имя, характер и аватар и будет помнить контекст.</div>
+        <div class="pn">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" style="margin-top:2px"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+          <span>Новое имя появится и в чатах, которые вы уже с ним начали. Прервать можно в любой момент — разговор продолжится с этого же места.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="stage view-mobile hidden" style="padding:0;overflow:hidden">
+    <div class="mobile-frame" style="border:none;border-radius:0">
+      <div class="hubhdr" style="padding:8px 12px">
+        <div class="logo" style="width:22px;height:22px"></div>
+        <nav style="flex:1"><span class="act">Персоны</span></nav>
+        <div class="avatar" style="width:22px;height:22px;font-size:10px">Н</div>
+      </div>
+      <div class="introbar" style="padding:12px 16px">
+        <div class="tile" style="width:32px;height:32px">
+          <svg class="ico md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+        </div>
+        <div class="ttl"><b class="serif" style="font-size:16px">Знакомство</b></div>
+        <button class="btn ghost">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+          Позже
+        </button>
+        <button class="btn ghost">Применить</button>
+        <button class="btn ghost">Заново</button>
+      </div>
+      <div class="chatarea" style="padding:16px">
+        <div class="plaque" style="padding:16px">
+          <div class="ph">
+            <svg class="ico md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/></svg>
+            <b class="serif" style="font-size:16px">Давайте познакомимся</b>
+          </div>
+          <div class="pb" style="font-size:13px">Ваш ассистент уже работает — просто пока без имени. Сейчас несколько вопросов о вас и ваших делах: по ответам он получит имя, характер и аватар и будет помнить контекст.</div>
+          <div class="pn"><span>Новое имя появится и в чатах, которые вы уже с ним начали. Прервать можно в любой момент.</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <p class="note" style="margin-top:18px">
+    <b>Проектное знакомство</b> — тот же экран, другие тексты. Заголовок: «Знакомство с проектом «Название»»,
+    плашка: «Пока у проекта нет руководителя, чаты ведёт ваш личный ассистент — без командных механик.
+    Несколько вопросов о проекте, и у него появится руководитель: персона, которая знает контекст и ведёт команду.»
+  </p>
+
+  <!-- ============ было/стало ============ -->
+  <h2 class="sec">Было и стало</h2>
+  <div class="cols">
+    <div class="stage" style="flex:1;min-width:280px">
+      <div class="cap">Было · гейт, из которого нет выхода</div>
+      <div class="gate-demo" style="height:150px">
+        <div class="under">Список проектов, чаты, задачи…</div>
+        <div class="over">
+          <b class="serif">Знакомство</b>
+          <span>Это обязательный шаг, он проходится один раз</span>
+          <span class="badge-no">навигации и «Пропустить» нет намеренно</span>
+        </div>
+      </div>
+    </div>
+    <div class="stage" style="flex:1;min-width:280px">
+      <div class="cap">Стало · продукт работает, приглашение ждёт</div>
+      <div class="gate-demo" style="height:150px">
+        <div class="under" style="height:100%;display:flex;flex-direction:column;gap:8px">
+          <div style="color:var(--c-text-primary);font-size:12px">Список проектов, чаты, задачи…</div>
+          <div class="invite" style="padding:10px;gap:10px">
+            <div class="avatar-wrap" style="width:28px;height:28px">
+              <div class="avatar" style="width:28px;height:28px;font-size:12px">А</div>
+              <span class="dot" style="width:6px;height:6px"></span>
+            </div>
+            <div class="body"><div class="title serif" style="font-size:13px">Ваш ассистент пока стандартный</div></div>
+            <button class="btn primary" style="height:26px;font-size:11px">Познакомиться</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+function toggleTheme() {
+  var d = document.documentElement.getAttribute('data-theme') === 'dark';
+  document.documentElement.setAttribute('data-theme', d ? 'light' : 'dark');
+  document.getElementById('theme').textContent = d ? 'Тёмная тема' : 'Светлая тема';
+}
+function setView(v) {
+  var mob = v === 'mobile';
+  document.querySelectorAll('.view-desktop').forEach(function (e) { e.classList.toggle('hidden', mob); });
+  document.querySelectorAll('.view-mobile').forEach(function (e) { e.classList.toggle('hidden', !mob); });
+  document.getElementById('dsk').classList.toggle('on', !mob);
+  document.getElementById('mob').classList.toggle('on', mob);
+}
+</script>
+</body>
+</html>

@@ -29,9 +29,14 @@ function wireRealtime() {
   if (_realtimeWired) return;
   _realtimeWired = true;
   // Смена дефолта (онбординг, настройки, удаление с преемником) — перечитываем me,
-  // чтобы резолвер аватаров и гейты видели свежий дефолт без перезагрузки
+  // чтобы резолвер аватаров и гейты видели свежий дефолт без перезагрузки.
+  // 'updated' тоже: ручная правка заготовки-ассистента снимает её статус на бэкенде
+  // (needsOnboarding → false), и без перечитывания точка на плавающей кнопке висела бы
+  // до полной перезагрузки страницы — QA поймал это сценарием M10б. Правка персоны
+  // руками случается редко, лишнее чтение /me здесь дешевле рассинхрона.
   onMessage(msg => {
-    if (msg.type === 'personas_changed' && msg.action === 'default') void refreshMe();
+    if (msg.type === 'personas_changed' && (msg.action === 'default' || msg.action === 'updated'))
+      void refreshMe();
   });
 }
 
@@ -103,11 +108,12 @@ export function useMe(): MeState {
   );
 }
 
-// Дефолт-персона контекста: в проекте — руководитель проекта, вне проекта — личная.
-// null — дефолта нет (онбординг соответствующего уровня не пройден).
+// Дефолт-персона контекста: в проекте — его руководитель, а если руководителя ещё нет —
+// личная дефолт-персона (проект без командных механик ведёт личный ассистент); вне проекта —
+// сразу личная. null — дефолта нет вовсе (осиротевший юзер без ассистента; чинит серверный
+// провижн на рубеже 2.4).
 export function getContextDefaultPersonaId(project?: Pick<Project, 'defaultPersonaId'> | null): string | null {
-  if (project !== undefined && project !== null) return project.defaultPersonaId ?? null;
-  return _me.defaultPersonaId;
+  return project?.defaultPersonaId ?? _me.defaultPersonaId;
 }
 
 // Ошибка-сигнал «нужен онбординг»: хелпер не может создать чат без дефолт-персоны.
@@ -125,20 +131,34 @@ export class OnboardingRequiredError extends Error {
 
 // Единый хелпер создания чата человеком (инвариант «чат только с персоной»).
 // Под флагом чат создаётся от лица дефолт-персоны контекста; без флага — прежние пути
-// (байт-в-байт старое поведение). При отсутствии дефолта под флагом НЕ зовём старый путь
-// и не глотаем 400 — бросаем OnboardingRequiredError (гейт онбординга уже держит экран).
+// (байт-в-байт старое поведение). При отсутствии дефолта под флагом гейта на фронте
+// больше нет (план §4, п.4.3, парная правка с серверным рубежом 2.4): идём на тот же
+// api.sessions.create()/api.chats.create() без personaId — сервер сам провижнит
+// ассистента и продолжит создание с ним (400 остаётся только когда провижн вернул
+// null). OnboardingRequiredError — только на случай, когда и сервер не смог.
 export async function createChatWithContextPersona(
   project?: Pick<Project, 'id' | 'defaultPersonaId'> | null,
   opts?: { mode?: string; name?: string },
 ): Promise<Session> {
   if (getFlag(FLAGS.defaultPersonasOnboarding)) {
     const defaultId = getContextDefaultPersonaId(project);
-    if (!defaultId) throw new OnboardingRequiredError(project ? 'project' : 'user');
-    return api.personas.createChat(defaultId, {
-      mode: opts?.mode ?? 'auto',
-      name: opts?.name,
-      projectId: project?.id,
-    });
+    if (defaultId) {
+      return api.personas.createChat(defaultId, {
+        mode: opts?.mode ?? 'auto',
+        name: opts?.name,
+        projectId: project?.id,
+      });
+    }
+    try {
+      return project
+        ? await api.sessions.create(project.id, opts?.mode ?? 'auto', undefined, opts?.name)
+        : await api.chats.create(opts?.mode ?? 'auto', undefined, opts?.name);
+    } catch (e) {
+      if ((e as Error & { status?: number }).status === 400) {
+        throw new OnboardingRequiredError(project ? 'project' : 'user');
+      }
+      throw e;
+    }
   }
   return project
     ? api.sessions.create(project.id, opts?.mode ?? 'auto', undefined, opts?.name)

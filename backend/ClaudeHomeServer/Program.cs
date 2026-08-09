@@ -153,6 +153,12 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>()
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
+// Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create
+// и страховкой онбординга «Применить итоги разговора». Stateless — singleton.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Personas.PersonaDraftService>();
+// Провижн авто-ассистента (фича default-personas-onboarding): заготовка «Ассистент»
+// как дефолт при первом включении флага. Singleton — статический реестр семафоров.
+builder.Services.AddSingleton<DefaultAssistantProvisioner>();
 // Специальности и пресеты правил: стор настроек специальностей и пресетов правил
 // выбора модели (глобальные + per-owner) + применение шаблонов прав
 builder.Services.AddSingleton<SpecialtySettingsStore>();
@@ -675,6 +681,33 @@ if (!inspectionMode)
     catch (Exception ex)
     {
         Console.Error.WriteLine($"[HandleMigration] миграция пропущена: {ex.Message}");
+    }
+
+// Стартовый проход провижна авто-ассистента (фича default-personas-onboarding, план 2.1):
+// для каждого пользователя под включённым флагом гарантируем действующую дефолт-персону.
+// Идемпотентен (EnsureAsync не плодит дубль), поэтому гонять на каждом старте безопасно —
+// для выключенного флага это мгновенный no-op. Best-effort: сбой одного пользователя не
+// мешает старту. Синхронно (по образцу миграции handle выше) — к моменту готовности сервера
+// принимать запросы ассистент уже создан, и /api/auth/me отдаёт его без провижна на чтение
+// (инвариант плана: провижн НИКОГДА не вызывается на GET). В копии не запускаем: пишет в
+// users.json/personas.json, а инспекционная копия чужие данные не трогает.
+if (!inspectionMode)
+    try
+    {
+        var users = app.Services.GetRequiredService<UserStore>();
+        var provisioner = app.Services.GetRequiredService<DefaultAssistantProvisioner>();
+        foreach (var u in users.GetAll())
+        {
+            try { _ = provisioner.EnsureAsync(u.Id).GetAwaiter().GetResult(); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[DefaultAssistant] провижн пользователя {u.Id} пропущен: {ex.Message}");
+            }
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[DefaultAssistant] стартовый проход пропущен: {ex.Message}");
     }
 
 // Чистка осиротевших temp-конфигов MCP: содержат сервисный токен и могли

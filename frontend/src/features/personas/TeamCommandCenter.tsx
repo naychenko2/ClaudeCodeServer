@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'r
 import {
   Users, MessageSquare, Mic, Workflow, Plus, CheckCircle2, Repeat, Trash2,
   Brain, BookOpen, FileText, UserPlus, UserMinus, ChevronRight,
-  MoreHorizontal, Settings, Wand2, EllipsisVertical, X, Crown,
+  MoreHorizontal, Settings, Wand2, EllipsisVertical, X, Crown, Sparkles,
 } from 'lucide-react';
 import type { ComponentType } from 'react';
 import type { Persona, Project, Session, Task, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft } from '../../types';
@@ -11,6 +11,7 @@ import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { useNow } from '../../lib/useNow';
 import { usePersonas, personaLabel } from '../../lib/personas';
 import { projectColor } from '../../lib/tasks';
@@ -216,7 +217,7 @@ export function TeamCommandCenter({
               inFlight={inFlight} onlineSet={onlineSet} tasksActive={tasksActive} chatsToday={chatsToday}
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
-              onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe}
+              onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} isMobile={isMobile}
               leadId={onboardingOn ? leadId : null} onMakeLead={onboardingOn ? requestMakeLead : undefined} />
           )}
           {tab === 'memory' && (
@@ -246,17 +247,39 @@ export function TeamCommandCenter({
   );
 }
 
+// Пояснение + единственный выход «Познакомиться с проектом» (п.5.4 волны 5): строка
+// «Руководитель проекта: не назначен [Назначить]» уже есть — вторая такая же кнопка
+// рядом была бы дефектом. При пустой команде у той строки «Назначить» нет вовсе (нет
+// кандидатов) — это остаётся единственным выходом, поэтому рендерится и в пустом
+// состоянии тоже. Цвет фразы — C.textSecondary (не textMuted из плана): на фоне
+// карточки textMuted даёт 2.58:1 при кегле 13, ниже порога 4.5:1; textSecondary —
+// 4.46:1/5.6:1. Уточнение плана, не расхождение с макетом — макет этот элемент не рисовал.
+function LeadInviteRow({ project, isMobile, style }: { project: Project; isMobile: boolean; style?: CSSProperties }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 8, ...style }}>
+      <span style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
+        Пока чаты проекта ведёт ваш личный ассистент — без командных механик.
+      </span>
+      <Button variant="ghostAccent" size={isMobile ? 'md' : 'sm'} leftIcon={<Sparkles size={15} />} style={{ alignSelf: 'flex-start' }}
+        onClick={() => window.dispatchEvent(new CustomEvent(OPEN_INTRO_EVENT, { detail: { projectId: project.id } }))}>
+        Познакомиться с проектом
+      </Button>
+    </div>
+  );
+}
+
 // ===== Вкладка 1: Обзор =====
 function OverviewPanel(props: {
   project: Project; team: Persona[]; events: EventRow[] | null; mem: TeamMemoryEntry[] | null; tasks: Task[] | null;
   inFlight: Map<string, string>; onlineSet: Set<string>; tasksActive: number; chatsToday: number;
   personaById: (id: string) => Persona | undefined; onOpenPersona: (id: string) => void; onSwitchTab: (t: Tab) => void; onOpenEvent: (e: EventRow) => void;
   onPickerOpen: () => void; onNewTaskOpen: () => void; onNewPersona: () => void; onFormTeamOpen: () => void; onMenuOpen: () => void; stripe: string;
+  isMobile: boolean;
   // Руководитель проекта (фича default-personas-onboarding): текущий дефолт и смена;
   // onMakeLead не задан — блок руководителя не рисуется (флаг выключен)
   leadId: string | null; onMakeLead?: (p: Persona) => Promise<void>;
 }) {
-  const { project, team, events, mem, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, leadId, onMakeLead } = props;
+  const { project, team, events, mem, inFlight, onlineSet, tasksActive, chatsToday, personaById, onOpenPersona, onSwitchTab, onOpenEvent, onPickerOpen, onNewTaskOpen, onNewPersona, onFormTeamOpen, onMenuOpen, stripe, isMobile, leadId, onMakeLead } = props;
   const recent = (events ?? []).slice(0, 6);
   const topMem = (mem ?? []).slice(0, 3);
   // Меню смены руководителя проекта
@@ -275,6 +298,9 @@ function OverviewPanel(props: {
           <Button variant="primary" size="sm" leftIcon={<UserPlus size={15} />} onClick={onNewPersona}>Новая персона</Button>
           <Button variant="ghost" size="sm" leftIcon={<Wand2 size={15} />} onClick={onFormTeamOpen}>Сформировать команду</Button>
         </div>
+        {/* Команда пуста → строки «Руководитель проекта» с меню выше нет вовсе (нет
+            кандидатов) — «Познакомиться с проектом» остаётся единственным выходом */}
+        {onMakeLead && <LeadInviteRow project={project} isMobile={isMobile} />}
       </div>
     );
   }
@@ -326,6 +352,7 @@ function OverviewPanel(props: {
             )}
           </div>
         )}
+        {onMakeLead && !lead && <LeadInviteRow project={project} isMobile={isMobile} style={{ marginTop: 8 }} />}
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
           <Button variant="primary" size="sm" disabled={team.length < 2} leftIcon={<MessageSquare size={15} />}
             title={team.length < 2 ? 'Нужно минимум 2 персоны в команде' : undefined}

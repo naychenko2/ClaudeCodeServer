@@ -122,6 +122,9 @@ function IntroChatShell({ kind, title, subtitle, project, start, onDone }: {
   // без предпросмотра черновика — финал приходит тем же broadcast'ом, что и обычное
   // завершение интервью (эффект на sessionId ниже переводит гейт в completed).
   const [applyConfirm, setApplyConfirm] = useState(false);
+  // Причина отказа «Применить итоги»: живёт в самом диалоге, чтобы отказ нельзя было
+  // не заметить — диалог остаётся открытым с текстом и кнопкой «Повторить»
+  const [applyError, setApplyError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   // Проектное знакомство: «Создать персону из разговора» — старый путь через quick-create
   // (заготовки-руководителя не существует, применять итоги не к чему) + подтверждение черновика.
@@ -182,13 +185,27 @@ function IntroChatShell({ kind, title, subtitle, project, start, onDone }: {
   const applyTranscript = async () => {
     if (applying) return;
     setApplying(true);
+    setApplyError(null);
     try {
       await api.onboarding.applyTranscript();
+      setApplyConfirm(false);
     } catch (e) {
-      showToast('Знакомство', e instanceof Error ? e.message : 'Не удалось применить итоги разговора');
+      // Диалог при отказе НЕ закрываем и пишем причину прямо в нём. Тоста мало: он
+      // мелькает, а на экране после закрытия диалога ничего не меняется — человек решает,
+      // что кнопка не работает (QA поймал это как молчаливый отказ на 502). Заодно
+      // переводим технические ответы шлюза на человеческий: «Bad Gateway» и обрыв по
+      // таймауту значат одно и то же — сервер не успел, стоит повторить.
+      const status = (e as Error & { status?: number }).status;
+      const raw = e instanceof Error ? e.message : '';
+      setApplyError(
+        status === 404
+          ? 'Нечего применять: разговор ещё не начат или ассистент уже настроен.'
+          : status !== undefined && status >= 500 || !raw || /gateway|timeout|failed to fetch/i.test(raw)
+            ? 'Сервер не успел собрать ассистента по разговору. Попробуйте ещё раз или продолжите интервью — знакомство не потеряно.'
+            : raw,
+      );
     } finally {
       setApplying(false);
-      setApplyConfirm(false);
     }
   };
 
@@ -346,10 +363,11 @@ function IntroChatShell({ kind, title, subtitle, project, start, onDone }: {
       {applyConfirm && (
         <ConfirmDialog
           title="Применить итоги разговора?"
-          subtitle="Ассистент получит имя, характер и аватар по уже сказанному, не дожидаясь конца интервью."
-          confirmLabel="Применить"
+          subtitle={applyError
+            ?? 'Ассистент получит имя, характер и аватар по уже сказанному, не дожидаясь конца интервью.'}
+          confirmLabel={applyError ? 'Повторить' : 'Применить'}
           onConfirm={applyTranscript}
-          onCancel={() => setApplyConfirm(false)}
+          onCancel={() => { setApplyConfirm(false); setApplyError(null); }}
         />
       )}
 

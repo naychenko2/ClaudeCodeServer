@@ -116,11 +116,19 @@ public class DefaultAssistantProvisioner
         // Broadcast строго по факту создания: created (стор персон узнаёт о новой персоне)
         // и default (lib/defaultPersona перечитает /me). Существующую персону не трогаем —
         // событие шлётся только когда заготовка создана в этом вызове.
+        // Отмена запроса здесь уже ничего не значит: персона создана и зафиксирована, а
+        // доставка события клиенту — best-effort. Без этого catch закрытая на полпути вкладка
+        // (ct = HttpContext.RequestAborted из гейта создания чата) роняла бы необработанное
+        // исключение в пайплайн и шумела бы ошибкой в логах и трейсах там, где ошибки нет.
         var groupName = "user_" + userId;
-        await _hub.Clients.Group(groupName)
-            .SendAsync("message", new PersonasChangedMessage("created", created.Id), ct);
-        await _hub.Clients.Group(groupName)
-            .SendAsync("message", new PersonasChangedMessage("default", created.Id), ct);
+        try
+        {
+            await _hub.Clients.Group(groupName)
+                .SendAsync("message", new PersonasChangedMessage("created", created.Id), ct);
+            await _hub.Clients.Group(groupName)
+                .SendAsync("message", new PersonasChangedMessage("default", created.Id), ct);
+        }
+        catch (OperationCanceledException) { /* клиент ушёл — персона всё равно создана */ }
         return created;
     }
 }

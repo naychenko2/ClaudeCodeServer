@@ -335,7 +335,17 @@ public class PersonasController : ControllerBase
         var templated = _specialtyTemplates.Apply(UserId, req.Specialty ?? current.Specialty, current.Specialty,
             access, req.Tools, req.DisallowedTools);
 
-        var isAssistantDraft = _users.GetById(UserId)?.AssistantPersonaId == id;
+        // Статус заготовки снимает только ЧЕЛОВЕК из раздела «Персоны». Правка, пришедшая из
+        // личного знакомства владельца, статус НЕ снимает: интервью само зовёт personas_update
+        // на шаге доработки — задолго до финального personas_set_default. Сняв маркер там, мы
+        // ломали бы три вещи разом: предохранитель Create переставал держать (модель могла
+        // создать вторую персону), apply-transcript отвечал 404 ровно в сценарии «модель не
+        // довела интервью до финала», а возврат к чату знакомства деградировал промпт к
+        // «создай ассистента» поверх уже настроенного. Проверка — та же, что у предохранителя
+        // в Create: вызов из user-онбординг-сессии этого владельца.
+        var fromUserIntro = Request.Headers[DenyOnDelegatedTurnAttribute.CallerHeader].FirstOrDefault() is { Length: > 0 } introCsid
+            && _sessions.GetOwned(introCsid, UserId) is { OnboardingKind: OnboardingKinds.User };
+        var isAssistantDraft = !fromUserIntro && _users.GetById(UserId)?.AssistantPersonaId == id;
         // Снимок характер-релевантных полей ДО мутации: _personas.Get отдаёт живую ссылку
         // (не копию), а _personas.Update правит персону in-place — current и persona ниже
         // оказались бы ОДНИМ объектом, и сравнение «после == после» никогда не показало бы

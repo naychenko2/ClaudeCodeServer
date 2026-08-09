@@ -12,7 +12,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
-    FeatureFlagService flags, DefaultAssistantProvisioner provisioner) : ControllerBase
+    FeatureFlagService flags, DefaultAssistantProvisioner provisioner,
+    PersonaManager personas) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -39,10 +40,24 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
             && flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding))
         {
-            var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
-            if (provisioned is null)
-                return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
-            personaId = provisioned.Id;
+            // Правило «персона контекста» — то же, что на фронте (lib/defaultPersona.ts):
+            // в проекте чат ведёт руководитель, и только если его нет — личный ассистент.
+            // Сервер обязан повторять это правило, иначе не-браузерный потребитель REST
+            // (скрипт, будущий адаптер мессенджера) получил бы в проекте с назначенным
+            // руководителем чат от личного ассистента — и вместе с ним молча потерял бы
+            // командные механики (SessionManager отдаёт их только персоне-руководителю).
+            // Резолв в живую персону, а не проверка поля: сирота не должна подменять правило.
+            var lead = projects.GetById(projectId)?.DefaultPersonaId is { } leadId
+                ? personas.Get(leadId, UserId)
+                : null;
+            if (lead is not null) personaId = lead.Id;
+            else
+            {
+                var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
+                if (provisioned is null)
+                    return BadRequest(new { error = "Новый чат создаётся только с персоной: укажите personaId" });
+                personaId = provisioned.Id;
+            }
         }
         try
         {

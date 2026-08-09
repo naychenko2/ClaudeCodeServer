@@ -89,4 +89,32 @@ public class AssistantStatusTests : IDisposable
         (await MeAsync()).GetProperty("needsOnboarding").GetBoolean().Should().BeTrue(
             "значение роли не изменилось — статус заготовки остаётся");
     }
+
+    // Правка ИЗ САМОГО ЗНАКОМСТВА статус не снимает. Интервью зовёт personas_update на шаге
+    // доработки — задолго до финального personas_set_default. Сняв маркер там, мы ломали бы
+    // три вещи разом: предохранитель Create переставал бы держать (модель могла создать вторую
+    // персону), apply-transcript отвечал бы 404 ровно в сценарии «модель не довела интервью до
+    // финала», а возврат к чату знакомства деградировал бы промпт к «создай ассистента» поверх
+    // уже настроенного. Снимает статус только человек из раздела «Персоны».
+    [Fact]
+    public async Task Update_ИзОнбордингСессии_НеСнимаетСтатусЗаготовки()
+    {
+        var assistantId = await ProvisionAssistantAsync();
+        var sessionId = JsonSerializer.Deserialize<JsonElement>(
+                await (await _client.PostAsync("/api/onboarding/user/start", null)).Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        var request = new HttpRequestMessage(HttpMethod.Put, $"/api/personas/{assistantId}");
+        request.Headers.Add("X-Caller-Session-Id", sessionId);
+        request.Content = JsonContent.Create(new { name = "Марина", role = "Личный помощник" });
+        var response = await _client.SendAsync(request);
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+
+        var me = await MeAsync();
+        me.GetProperty("needsOnboarding").GetBoolean().Should().BeTrue(
+            "интервью ещё не дошло до финала — заготовка остаётся заготовкой, иначе предохранитель " +
+            "перестанет держать, а apply-transcript ответит 404");
+        me.GetProperty("defaultPersonaId").GetString().Should().Be(assistantId,
+            "дефолт не меняется от доработки заготовки внутри знакомства");
+    }
 }

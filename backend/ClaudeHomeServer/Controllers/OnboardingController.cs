@@ -174,7 +174,11 @@ public class OnboardingController(SessionManager sessions, UserStore users,
             return NotFound(new { error = "Нет живой сессии знакомства" });
 
         var gate = LockFor("apply:" + UserId);
-        await gate.WaitAsync(HttpContext.RequestAborted);
+        // Ожидание лока — снаружи try: отмена запроса, пока вызов стоит в очереди (второй клик
+        // по «Применить итоги», пока первый держит генерацию аватара), не должна уходить
+        // необработанным исключением в пайплайн. Release() тут не нужен — лок не взят.
+        try { await gate.WaitAsync(HttpContext.RequestAborted); }
+        catch (OperationCanceledException) { return BadRequest(new { error = "Операция отменена" }); }
         try
         {
             // Перечитываем под локом: конкурентный вызов мог превратить/удалить заготовку.

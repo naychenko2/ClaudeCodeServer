@@ -132,18 +132,6 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {Message}", message);
 
-    // Текст ошибки для диагностической строки: переводы строк — в пробел (иначе запись
-    // рвётся на несколько строк лога и перестаёт грепаться), длинный хвост — под нож.
-    // Ошибка провайдера бывает в килобайты, а для классификации важно её начало.
-    private const int ErrTextLogLimit = 300;
-
-    private static string Trim(string? text)
-    {
-        if (string.IsNullOrWhiteSpace(text)) return "—";
-        var flat = text.Replace('\r', ' ').Replace('\n', ' ').Trim();
-        return flat.Length <= ErrTextLogLimit ? flat : flat[..ErrTextLogLimit] + "…";
-    }
-
     // Эффективный потолок подмен для владельца сессии: per-owner → global → дефолт 3
     // (FallbackSettingsStore.ClampMaxSubstitutions). Info.OwnerId может быть пуст у
     // проектных сессий без владельца — тогда читаем global-слой.
@@ -203,17 +191,23 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     internal Task HandleMessageAsync(ServerMessage msg)
     {
         var turn = _turn;
-        // Диагностика ложных Unreachable (прод 2026-08-09): ход штатно отдавал result-emit,
-        // а через секунду фолбэк получал ProcessGone и менял провайдера. Подозрение —
-        // Exited ДОЖИВАЮЩЕГО процесса приходит, когда оркестрация прежнего хода уже снята
-        // (_turn=null, строка ~601) либо заменена оркестрацией СЛЕДУЮЩЕГО хода: тогда
-        // терминальное событие чужого прогона засчитывается новому ходу как его обрыв.
-        // В SessionManager ту же природу лечат привязкой к RunId (см. DrainOnExitedRun);
-        // здесь привязки нет — сначала подтверждаем гипотезу логом.
-        if (msg is ExitedMessage or ResultMessage)
-            LogInfo($"Событие {msg.GetType().Name}: turn={(turn is null ? "НЕТ (оркестрация снята)" : "есть")}"
-                + (turn is not null ? $" settled={turn.Settled} attemptResolved={turn.AttemptResolved}" : ""));
-        if (turn is null) return _downstream(msg);
+        if (turn is null)
+        {
+            // Осиротевший терминал завершённого прогона. _turn=null значит, что оркестрация
+            // фолбэка снята — SettleAsync/FailExhausted отработали и финал хода (Result/Exited)
+            // УЖЕ ушёл downstream, а SessionManager получил его и разобрал очередь по первому
+            // терминалу. Поздний ExitedMessage доживающего/завершённого процесса (приходит с
+            // опозданием до ~30 мин, либо как «хвост» после штатного result) тут — избыточный
+            // повторный триггер разбора очереди (симптом 2: дублирующиеся авто-ходы
+            // «Персона-исполнитель завершила»). В SessionManager эту же природу лечит
+            // DrainOnExitedRun (привязка к RunId: после первого терминала сбрасывается, и поздний
+            // exited чужого прогона не триггерит), но здесь — второй рубеж: глотаем ExitedMessage,
+            // чтобы он вообще не ушёл вниз как лишний терминал. ResultMessage при turn=null тоже
+            // аномален, но несёт данные хода; фильтровать только его рискованнее возможного дубля,
+            // поэтому вниз пропускаем — а Exited это лишь факт смерти процесса, его потеря безопасна.
+            if (msg is ExitedMessage) return Task.CompletedTask;
+            return _downstream(msg);
+        }
 
         switch (msg)
         {
@@ -426,19 +420,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     ApiErrorStatus = end.Result?.ApiErrorStatus,
                     ErrorText = end.ErrorText,
                     RateLimitRejected = end.Kind == AttemptEndKind.RateLimited,
+                    // Намеренное прерывание (Interrupt ради очереди / «Стоп») — НЕ ошибка доставки.
+                    // Это второй эшелон: первым стоит if (_userInterrupted) выше (SettleAsync без
+                    // классификации), но гонка «interrupt пришёл, когда цикл УЖЕ ушёл в
+                    // классификацию по ProcessGone» (поздний Kill относительно обрыва, либо
+                    // proc убит до result) оставляет end.Kind=ProcessGone при активном turn —
+                    // тогда Classify без этого флага отдал бы Unreachable и менял провайдера
+                    // (симптом 1: 33 ложных подмены). Classify по InterruptedByUser=true → None.
+                    InterruptedByUser = _userInterrupted,
                 };
                 var cls = TurnErrorClassifier.Classify(outcome);
-                // Прод 2026-08-07..09: 33 подмены «opus → эндпоинт недоступен» подряд, причём
-                // в логе рядом НЕТ ни сетевой ошибки, ни смерти процесса, а серии идут по 4
-                // штуки за 20 секунд. Вердикт классификатора виден («unreachable»), а его ВХОД —
-                // нет, поэтому отличить настоящий обрыв от ветки `!HasResult` по умолчанию
-                // (TurnErrorClassifier:76) нечем. Логируем сырые входы: на следующем же
-                // срабатывании станет ясно, что именно приходит вместо result.
-                LogInfo($"Классификация попытки ({currentModel} × {currentKey}): {cls} ← "
-                    + $"kind={end.Kind} subtype={outcome.Subtype ?? "—"} "
-                    + $"status={outcome.ApiErrorStatus ?? "—"} "
-                    + $"rateLimited={outcome.RateLimitRejected} "
-                    + $"errText={Trim(outcome.ErrorText)}");
                 // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
                 if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
 

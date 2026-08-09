@@ -2946,16 +2946,6 @@ public class SessionManager : IDisposable
         }
         if (next is null) return;
 
-        // Диагностика повторной доставки (прод 2026-08-09): в ленте несколько раз подряд
-        // появлялся один и тот же авто-ход «Персона-исполнитель завершила задачу». Сервер
-        // отправляет доклад РОВНО ОДИН раз (проверено по логу «Доклад Z задачи …»), значит
-        // повтор рождается на разборе очереди. Извлечение атомарно под PendingLock, гард
-        // DrainInFlight есть — логируем факт, чтобы увидеть, вытаскивается ли одно и то же
-        // сообщение дважды и каким путём (result / exited / форсаж перехода 0→1).
-        var head = next.Text.Replace('\n', ' ');
-        Console.WriteLine($"[SessionManager] Разбор очереди ({sessionId}): kind={next.Kind} "
-            + $"осталось={entry.Pending.Count} текст={(head.Length <= 60 ? head : head[..60] + "…")}");
-
         bool delivered = false;
         try
         {

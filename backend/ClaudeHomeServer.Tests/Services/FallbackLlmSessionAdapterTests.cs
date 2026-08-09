@@ -1838,4 +1838,82 @@ public class FallbackLlmSessionAdapterTests
         }
         finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
+
+    // === Привязка терминальных событий к прогону (починка прод-дефекта 2026-08-09) ===
+
+    // Симптом 1: намеренное прерывание хода (Interrupt ради очереди / «Стоп») не должно
+    // классифицироваться как обрыв (Unreachable) и запускать подмену провайдера. На проде ход,
+    // уже получивший события (gotEvent=true — модель начала отвечать), при прерывании умирал без
+    // result → ProcessGone → Unreachable → подмена (33 ложных подмены за 3 дня, выели квоту
+    // qwen3.8-max). Interrupt выставляет _userInterrupted, и ход завершается без фолбэка;
+    // дополнительно outcome несёт InterruptedByUser — второй эшелон на случай, если проверка
+    // _userInterrupted в цикле проиграет гонку с поздним обрывом.
+    [Fact]
+    public async Task НамеренныйInterrupt_ПриХодеССобытиями_ПодменыПровайдераНет()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new TextDeltaMessage("начал отвечать"));  // gotEvent=true: ход жив, события были
+            sut.Interrupt();                                     // намеренное прерывание (ради очереди)
+            inner.Emit(new ExitedMessage());                     // процесс убит, result не пришёл
+        });
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ExitedMessage>().Any(), "exited убитого процесса");
+
+        inner.Attempts.Should().ContainSingle("намеренное прерывание — не ошибка доставки, фолбэка нет");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty("подмена провайдера не запускается");
+        pool.IsExhausted("acc-a").Should().BeFalse("Interrupt — не квота, подписка не банится");
+    }
+
+    // Симптом 2: осиротевший ExitedMessage приходит, когда оркестрация фолбэка уже снята
+    // (_turn=null — ход завершился, финал ушёл downstream). Это «хвост» доживающего/позднего
+    // процесса; SessionManager уже разобрал очередь по первому терминалу. Раньше такой Exited
+    // уходил вниз и давал повторный разбор очереди (дублирующиеся авто-ходы «Персона-исполнитель
+    // завершила»). Теперь ExitedMessage при снятой оркестрации глотается адаптером.
+    [Fact]
+    public async Task ОсиротевшийExited_ПослеЗавершённогоХода_НеИдётВниз()
+    {
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // ход завершился успешно
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "result завершённого хода");
+
+        // Оркестрация снята — _turn=null. Поздний Exited доживающего процесса:
+        var before = Downstream().Count;
+        inner.Emit(new ExitedMessage());
+
+        // Exited фильтруется адаптером и НЕ уходит downstream — иначе SessionManager получил бы
+        // повторный терминал и запустил разбор очереди ещё раз.
+        Downstream().OfType<ExitedMessage>().Should().BeEmpty("осиротевший Exited глотается адаптером");
+        Downstream().Count.Should().Be(before, "никаких новых событий вниз не ушло");
+    }
+
+    // Симптом 2 (дополнение): осиротевший Exited фильтруется только при снятой оркестрации.
+    // При активном ходе (turn есть) Exited от текущего прогона обязан дойти до SessionManager —
+    // по нему разбирается очередь после намеренного прерывания (DrainOnExitedRun). Проверка, что
+    // фильтр не отрезал штатный путь: Exited при активном turn уходит вниз как обычно.
+    [Fact]
+    public async Task Exited_ПриАктивномХоде_ИдётВнизКакТерминал()
+    {
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(Success());              // result текущего хода
+            inner.Emit(new ExitedMessage());    // выход процесса — оба при активном turn
+        });
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ExitedMessage>().Any(), "exited при активном ходе");
+
+        // SettleAsync выпускает оба задержанных сообщения (result + exited) — фильтр осиротевших
+        // их не трогает, они ушли пока turn был активен.
+        Downstream().OfType<ResultMessage>().Should().ContainSingle();
+        Downstream().OfType<ExitedMessage>().Should().ContainSingle();
+    }
 }

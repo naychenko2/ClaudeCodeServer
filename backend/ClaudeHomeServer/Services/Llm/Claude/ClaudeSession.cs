@@ -147,9 +147,6 @@ public class ClaudeSession : ILlmSessionAdapter
         public string? TurnMcpPath { get; init; }
         // turnId запуска — по нему pid-файл прогона в песочнице (Kill контейнерного pgid)
         public string? LaunchTurnId { get; init; }
-        // Момент старта прогона — только для диагностики пустой смерти: доли секунды
-        // указывают на гонку TOCTOU, минуты — на обрыв уже работавшего процесса
-        public DateTime StartedAt { get; init; } = DateTime.UtcNow;
         // Снимок промпта, с которым прогон СТАРТОВАЛ. Ходы, доигрывающиеся в этом же процессе,
         // ссылаются на него (inheritedFromId): их собственный промпт модели не уходил.
         public string? PromptSnapshotId { get; init; }
@@ -2384,15 +2381,6 @@ public class ClaudeSession : ILlmSessionAdapter
                 var stderr = await stderrTask;
                 if (!string.IsNullOrWhiteSpace(stderr))
                     Console.Error.WriteLine($"[ClaudeSession stderr] {stderr.Trim()}");
-                // Пустой stderr под активным ходом — улика: процесс ушёл молча, и раньше это
-                // было неотличимо от «stderr не прочитан». Печатаем при любой смерти активного
-                // хода, в том числе после отработавших событий — там и живёт разбираемый дефект.
-                // Остановка пользователем (Interrupt) сюда тоже попадёт: отдельного признака у
-                // неё нет, а выдумывать его ради лога не стоит. Разводится по соседним строкам —
-                // перед Interrupt в логе всегда есть hub-вызов Interrupt.
-                else if (!run.TurnDone)
-                    Console.Error.WriteLine("[ClaudeSession stderr] пуст (процесс умер молча, "
-                        + $"gotEvent={run.TurnGotEvent})");
             }
             catch (OperationCanceledException) { /* сессия отменена — stderr уже не важен */ }
             catch (Exception ex)
@@ -2476,30 +2464,6 @@ public class ClaudeSession : ILlmSessionAdapter
         // флаги после — ждущий прочтёт DiedEmpty=false (хода как будто нет), а SuppressExited уже
         // подавил ExitedMessage → ни result, ни exited, ни ретрая: сессия навсегда залипает в
         // Working (тот же класс бага, что и реанимация зависших чатов). Решение — чистая ф-я (тест).
-        // Диагностика смерти процесса под активным ходом (прод 2026-08-07..09): фолбэк
-        // получал ProcessGone с пустыми status/errText, и понять причину из лога было нечем.
-        //
-        // Условие — ЛЮБАЯ смерть активного хода, а не только «без событий». Первая версия
-        // проверяла !TurnGotEvent и промолчала ровно там, где нужна: 22:46:53 ход выдал
-        // result-emit (13 итераций), а через 2 секунды процесс умер молча → фолбэк увидел
-        // ProcessGone. То есть ход СВОИ события получил, и фильтр по TurnGotEvent их отсекал.
-        //
-        // gotEvent разводит два разных дефекта: false — смерть до первого события (гонка
-        // TOCTOU, лечится ретраем DiedEmpty), true — смерть ПОСЛЕ отработавшего хода, где
-        // ретрая нет и Unreachable уходит наружу, меняя провайдера.
-        if (activeTurnDied)
-        {
-            var willRetry = ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent);
-            string exit;
-            // HasExited/ExitCode кидают, если процесс уже освобождён или не стартовал —
-            // диагностика не должна ронять финализацию прогона
-            try { exit = run.Process.HasExited ? run.Process.ExitCode.ToString() : "ещё жив"; }
-            catch (Exception ex) { exit = $"недоступен ({ex.GetType().Name})"; }
-            Console.WriteLine($"[ClaudeSession] Смерть под активным ходом: exitCode={exit} "
-                + $"прожил={(DateTime.UtcNow - run.StartedAt).TotalSeconds:F1}с "
-                + $"gotEvent={run.TurnGotEvent} retryOnEmptyExit={run.RetryOnEmptyExit} "
-                + $"→ {(willRetry ? "перезапуск на той же паре" : "НАРУЖУ как Unreachable (ретрая нет)")}");
-        }
 
         if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent))
         {

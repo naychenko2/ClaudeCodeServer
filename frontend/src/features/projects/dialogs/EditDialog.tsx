@@ -4,7 +4,7 @@ import { Crown, Folder, GitBranch, Lock, Sparkles, X } from 'lucide-react';
 import type { Project, ProjectGroup, PermissionRule, SystemPromptPart } from '../../../types';
 import { api } from '../../../lib/api';
 import { useOnline } from '../../../hooks/useOnline';
-import { C, FONT, R, SP } from '../../../lib/design';
+import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useFeature, FLAGS } from '../../../lib/featureFlags';
@@ -44,18 +44,16 @@ function ProjectLeadSection({ project, onClose }: { project: Project; onClose: (
       border: `1px solid ${C.border}`, borderRadius: R.xl,
       display: 'flex', flexDirection: 'column', gap: SP.sm,
     }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+      <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+        Руководитель проекта
+      </div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm }}>
         <Crown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.accent, marginTop: 2 }} />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Руководитель проекта
-          </div>
-          <div style={{ fontSize: 13, color: C.textPrimary, lineHeight: 1.5 }}>
-            У проекта нет руководителя. Пока чаты ведёт ваш личный ассистент — без командных механик.
-          </div>
+        <div style={{ fontSize: FS.base, color: C.textPrimary, lineHeight: 1.5 }}>
+          У проекта нет руководителя. Пока чаты ведёт ваш личный ассистент — без командных механик.
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8, flexDirection: isMobile ? 'column' : 'row' }}>
+      <div style={{ display: 'flex', gap: SP.sm, flexDirection: isMobile ? 'column' : 'row' }}>
         <Button variant="ghostAccent" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
           leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} onClick={goIntro}>
           Познакомиться с проектом

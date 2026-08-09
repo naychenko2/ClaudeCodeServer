@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Plus, Sparkles, MessageSquare, Brain, ListChecks, Zap, Users, AtSign } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Persona, Session } from '../../types';
-import { C, FONT, R, SP, CONTENT_MAX_W } from '../../lib/design';
+import { C, FONT, FS, R, SP, CONTENT_MAX_W } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, IntroDot } from '../../components/ui';
 import { personaTitleLines, usePersonas } from '../../lib/personas';
@@ -290,7 +290,7 @@ const inviteCard: React.CSSProperties = {
   background: C.accentLight, border: `1px solid ${C.border}`, borderRadius: R.xxl, padding: SP.lg,
 };
 const inviteTitle: React.CSSProperties = {
-  fontFamily: FONT.serif, fontSize: 16, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em',
+  fontFamily: FONT.serif, fontSize: FS.lg, fontWeight: 600, color: C.textHeading, letterSpacing: '-0.01em',
 };
-const inviteText: React.CSSProperties = { fontSize: 13, color: C.textSecondary, lineHeight: 1.55, maxWidth: 520 };
+const inviteText: React.CSSProperties = { fontSize: FS.base, color: C.textSecondary, lineHeight: 1.55, maxWidth: 520 };
 const inviteActions: React.CSSProperties = { display: 'flex', gap: SP.sm, flex: 'none', flexWrap: 'wrap', justifyContent: 'flex-end' };

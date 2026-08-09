@@ -3,7 +3,7 @@ import { Sparkles } from 'lucide-react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import type { HubTabValue } from '../../components/HubTabs';
 import { HubHeader } from '../../components/HubHeader';
-import { C, FONT, R, SP, CONTENT_MAX_W } from '../../lib/design';
+import { C, FONT, FS, R, SP, PANEL_ANIM, CONTENT_MAX_W } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
@@ -71,8 +71,18 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   const me = useMe();
   const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
   const showMobileInvite = isMobile && me.loaded && introOnboardingOn && me.needsOnboarding && !!defaultPersona;
-  const mobileListRef = useRef<HTMLDivElement>(null);
-  const focusMobileList = () => mobileListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  // Отклик на тап «Выбрать другого ассистента» (Д-3): scrollIntoView контейнера здесь
+  // бесполезен — прокрутка живёт внутри самого PersonaList, а контейнер и так во вьюпорте,
+  // поэтому браузер ничего не делал, и тап выглядел мёртвой кнопкой. Короткая рамка C.accent
+  // (~400мс) честнее по смыслу «вот он, список»: видна всегда, даже когда список прокручен.
+  const [listHighlight, setListHighlight] = useState(false);
+  const highlightTimer = useRef<number | undefined>(undefined);
+  const focusMobileList = () => {
+    setListHighlight(true);
+    window.clearTimeout(highlightTimer.current);
+    highlightTimer.current = window.setTimeout(() => setListHighlight(false), 400);
+  };
+  useEffect(() => () => window.clearTimeout(highlightTimer.current), []);
 
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   useEffect(() => { api.projects.list().then(setProjects).catch(() => {}); }, []);
@@ -275,7 +285,14 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
               <Button variant="ghost" size="md" fullWidth onClick={focusMobileList}>Выбрать другого ассистента</Button>
             </div>
           )}
-          <div ref={mobileListRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>{sidebar}</div>
+          <div style={{
+            flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+            // Рамка всегда 2px (outline не двигает layout), анимируется только её цвет —
+            // переход берём из PANEL_ANIM, новых значений в шкалы не заводим
+            outline: `2px solid ${listHighlight ? C.accent : 'transparent'}`,
+            outlineOffset: -2,
+            transition: `outline-color ${PANEL_ANIM}`,
+          }}>{sidebar}</div>
         </div>
       )
   ) : (
@@ -503,9 +520,9 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
 const mobileInviteCard: React.CSSProperties = {
   flex: 'none', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: SP.sm,
   background: C.accentLight, border: `1px solid ${C.border}`, borderRadius: R.xl,
-  padding: SP.md, margin: '12px 12px 0',
+  padding: SP.md, margin: `${SP.md}px ${SP.md}px 0`,
 };
 const mobileInviteTitle: React.CSSProperties = {
-  fontFamily: FONT.serif, fontSize: 14, fontWeight: 600, color: C.textHeading, lineHeight: 1.3,
+  fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 600, color: C.textHeading, lineHeight: 1.3,
 };
-const mobileInviteText: React.CSSProperties = { fontSize: 12, color: C.textSecondary, lineHeight: 1.5 };
+const mobileInviteText: React.CSSProperties = { fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 };

@@ -132,6 +132,11 @@ export interface DocEntry {
   // «docs/decisions/»). Пара «страница + папка» пришла из code wiki: раздел там
   // существует только так — файл несёт содержание, одноимённая папка даёт детей
   sectionFolder?: string | null;
+  // Тип документа из схемы .docs (см. DocTypeSchema); null — тип не описан
+  type?: string | null;
+  // Свойства шапки; приходят только у типизированных документов — индекс перезапрашивается
+  // на каждое изменение файлов, и возить шапки всех подряд ради метки незачем
+  properties?: DocProperty[] | null;
 }
 
 export interface DocBacklink {
@@ -147,6 +152,11 @@ export interface DocDetail {
   links: DocLink[];
   backlinks: DocBacklink[];
   binary?: boolean;         // pdf/visio/картинка/звук — превью не покажет, только центр
+  type?: string | null;
+  properties?: DocProperty[] | null;   // в отличие от индекса — у ЛЮБОГО документа
+  // Отрезок content, занятый шапкой свойств: по нему превью вырезает эти строки, чтобы
+  // они не задвоились с блоком «Свойства». Считает разбор — только он точно знает границы
+  propsRange?: { start: number; end: number } | null;
 }
 
 export interface DocSearchHit {
@@ -185,13 +195,57 @@ export interface DocOption {
   title: string;
 }
 
-// Группа типов файлов. text=false — файл без текста (pdf, visio, картинка, звук):
-// он числится в списке, но открывается только в центральной области
+// Группа типов ФАЙЛОВ. text=false — файл без текста (pdf, visio, картинка, звук):
+// он числится в списке, но открывается только в центральной области.
+// НЕ путать с DocTypeSchema ниже — там смысловой тип документа (ADR, спека, runbook)
 export interface DocTypeGroup {
   key: string;
   title: string;
   extensions: string[];
   text: boolean;
+}
+
+// ─── Типы документов и их свойства ────────────────────────────────────────
+
+// Свойство документа как оно записано в его шапке: «**Статус:** Принято».
+// link заполнен, когда значение содержит ссылку на документ — путь от корня проекта
+export interface DocProperty {
+  key: string;
+  value: string;
+  link?: string | null;
+}
+
+// Вид свойства = вид редактора в панели
+export type DocPropertyKind = 'choice' | 'date' | 'text' | 'docLink';
+
+// Цвет значения — имя РОЛИ дизайн-системы, а не цвета: зелёного как такового в токенах
+// нет, есть --c-success. Роль кладёт на токен lib/docsTypes.ts
+export type DocPropertyColor = 'gray' | 'accent' | 'success' | 'warning' | 'danger' | 'info' | 'plan';
+
+export interface DocPropertyChoice {
+  value: string;
+  color: DocPropertyColor;
+  title?: string | null;
+}
+
+export interface DocPropertyDef {
+  key: string;                        // ровно то, что стоит в файле перед двоеточием
+  kind: DocPropertyKind;
+  title?: string | null;
+  choices?: DocPropertyChoice[] | null;
+  autoUpdate?: boolean;               // «дата смены»: только у kind='date'
+  required?: boolean;
+}
+
+// Смысловой тип документа: папки + необязательная маска имени файла.
+// НЕ путать с DocTypeGroup выше — там типы ФАЙЛОВ (markdown/pdf/visio)
+export interface DocTypeSchema {
+  id: string;                         // стабильный ключ; переименование заголовка его не меняет
+  title: string;
+  folders: string[];
+  match?: string | null;              // маска имени: «ADR-*.md»
+  badgeProperty?: string | null;      // что показывать плашкой в шапке и точкой в дереве
+  properties: DocPropertyDef[];
 }
 
 // Настройка области: что выбрано, что можно выбрать и что было бы по умолчанию
@@ -209,6 +263,13 @@ export interface DocsScopeInfo {
   // Заполнено, когда .docs есть, но не разобран: область при этом взята из настройки
   // проекта, и без объяснения расхождение «в файле одно, в панели другое» необъяснимо
   scopeFileError?: string | null;
+  // Схема типов документов из .docs. Едет вместе с областью: панель запрашивает настройку
+  // при загрузке, второй запрос ради того же файла был бы лишним
+  docTypes?: DocTypeSchema[] | null;
+  // Секция docTypes есть, но не разобрана: область при этом продолжает работать
+  docTypesError?: string | null;
+  // Роли, которыми можно красить значения выбора (палитра редактора типов)
+  propertyColors?: DocPropertyColor[] | null;
 }
 
 // --- История решений (change-dossiers, этап 1) ---

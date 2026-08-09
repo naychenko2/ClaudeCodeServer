@@ -42,5 +42,8 @@ export { FileStatusBadge } from './FileStatusBadge';
 export type { FileStatus } from './FileStatusBadge';
 export { Dot } from './Dot';
 export { IntroDot } from './IntroDot';
+export { Badge, TONE_DOT } from './Badge';
+export type { BadgeTone, BadgeSize } from './Badge';
+export { SidebarSection } from './SidebarSection';
 export { BackButton } from './BackButton';
 export { WaitingIndicator } from './WaitingIndicator';

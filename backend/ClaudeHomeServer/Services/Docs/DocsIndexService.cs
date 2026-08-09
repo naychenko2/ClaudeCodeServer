@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
@@ -104,17 +105,30 @@ public sealed partial class DocsIndexService(FileService? files = null)
         // Пустое поле не пишем: «home: null» в файле читается как выбранный пустой путь,
         // хотя означает ровно противоположное — «начальный документ выбирается сам»
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // Кириллица — буквами, а не «Ст...»: файл лежит в репозитории, его
+        // читают и правят руками, а ключи свойств документов в нём русские
+        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
     };
 
     // Сырой файл: все оси необязательны. Отсутствующая — «как по умолчанию», пустой массив —
     // осознанное «ничего отсюда» (это разные вещи, и нормализаторы их различают).
     private sealed record ScopeFileShape(
-        List<string>? Folders, List<string>? RootFiles, List<string>? Types, string? Home);
+        List<string>? Folders, List<string>? RootFiles, List<string>? Types, string? Home,
+        // Схема типов документов — СЫРЫМ элементом, а не List<DocTypeDef>: типизированное поле
+        // означало бы, что «"docTypes": 5» роняет разбор ВСЕГО файла и область молча
+        // откатывается к настройке проекта. Секция схемы не вправе утащить за собой область.
+        JsonElement? DocTypes);
 
     // Результат чтения .docs: область либо причина, по которой файл не применился.
     // Ошибку показываем в диалоге — молча игнорировать битый файл нельзя, иначе «почему
     // не применилось» выясняется только по логам сервера.
-    public record ScopeFileResult(DocsScope? Scope, string? Error);
+    // Broken — файл есть, но не разобран: запись в него запрещена (см. WriteScopeFile).
+    public record ScopeFileResult(DocsScope? Scope, string? Error,
+        IReadOnlyList<DocTypeDef>? DocTypes = null, string? DocTypesError = null, bool Broken = false)
+    {
+        // Пустой список, а не null: для потребителя «типов нет» и «файла нет» — одно и то же
+        public IReadOnlyList<DocTypeDef> Types => DocTypes ?? [];
+    }
 
     private readonly ConcurrentDictionary<string, CachedIndex> _cache = new(StringComparer.OrdinalIgnoreCase);
 
@@ -142,14 +156,27 @@ public sealed partial class DocsIndexService(FileService? files = null)
     // scope во всех методах: null — область по умолчанию. Настройка приходит из полей
     // Project.Docs*, разбирать её здесь незачем — сервис не знает про проекты и работает
     // от корня папки.
-    public IReadOnlyList<DocEntry> GetIndex(string rootPath, DocsScope? scope = null) =>
-        GetCorpus(rootPath, scope).Docs;
+    // Тип документа проставляется ПРОЕКЦИЕЙ на выходе, а не при сборке корпуса. Схема типов
+    // живёт в .docs, а отпечаток кеша (Fingerprint) считается по документам: правка схемы не
+    // меняет ни один документ, поэтому тип, зашитый в кеш, показывался бы старым до
+    // перезапуска сервера. Проекция — словарь на десяток типов и сравнение префикса пути.
+    //
+    // docTypes = null — «прочитай схему сам»: .docs крошечный и так читается на каждый
+    // ResolveScope. В DocsScope схему не класть НИ ПРИ КАКИХ УСЛОВИЯХ — это ключ кеша.
+    public IReadOnlyList<DocEntry> GetIndex(string rootPath, DocsScope? scope = null,
+        IReadOnlyList<DocTypeDef>? docTypes = null)
+    {
+        var docs = GetCorpus(rootPath, scope).Docs;
+        var types = docTypes ?? ReadScopeFile(rootPath).Types;
+        return DocTypeSchema.Apply(docs, types);
+    }
 
     // Документ с содержимым и связями. null — путь вне области документации: это и есть
     // гейт эндпоинта. Проверяем ВХОЖДЕНИЕМ В ИНДЕКС, а не сравнением строки с «docs/»:
     // индекс построен обходом реальной файловой системы, поэтому вопрос регистра и
     // разделителей решается один раз здесь, одинаково для Windows и Linux.
-    public DocDetail? GetDoc(string rootPath, string relativePath, DocsScope? scope = null)
+    public DocDetail? GetDoc(string rootPath, string relativePath, DocsScope? scope = null,
+        IReadOnlyList<DocTypeDef>? docTypes = null)
     {
         var corpus = GetCorpus(rootPath, scope);
         var key = NormalizePath(relativePath);
@@ -160,10 +187,23 @@ public sealed partial class DocsIndexService(FileService? files = null)
             return new DocDetail(entry.Path, entry.Title, "", [],
                 corpus.Backlinks.TryGetValue(key, out var refs) ? refs : [], Binary: true);
         if (!corpus.Texts.TryGetValue(key, out var text)) return null;
+
+        // Тип — той же проекцией, что и в индексе. Свойства и границы шапки отдаём ВСЕГДА,
+        // даже без типа: панель по ним решает, что показывать, а вырезает шапку из превью
+        // только у типизированного (иначе документ, начинающийся с «**Важно:** …», молча
+        // терял бы первую строку)
+        var block = DocProperties.Parse(text);
         return new DocDetail(
             entry.Path, entry.Title, text,
             corpus.OutLinks.TryGetValue(key, out var outs) ? outs : [],
-            corpus.Backlinks.TryGetValue(key, out var backs) ? backs : []);
+            corpus.Backlinks.TryGetValue(key, out var backs) ? backs : [],
+            Properties: entry.Properties ?? DocProperties.Values(text, entry.Path),
+            Type: DocTypeSchema.IsTypeable(entry)
+                ? DocTypeSchema.Match(entry.Path, docTypes ?? ReadScopeFile(rootPath).Types)?.Id
+                : null,
+            // Диапазон с захваченной пустой строкой за шапкой: вырезая только строки свойств,
+            // панель оставила бы на их месте две пустые строки подряд
+            PropsRange: block.HasBlock ? new DocPropsRange(block.BlockStart, block.PreviewEnd) : null);
     }
 
     public IReadOnlyList<DocSearchHit> Search(string rootPath, string query,
@@ -281,6 +321,14 @@ public sealed partial class DocsIndexService(FileService? files = null)
     public DocsScope ResolveScope(Project project) =>
         ReadScopeFile(project.RootPath).Scope ?? ScopeOf(project);
 
+    // Область и схема типов за одно чтение .docs: обе живут в одном файле, и запрашивать
+    // его дважды на каждый запрос панели незачем
+    public (DocsScope Scope, IReadOnlyList<DocTypeDef> Types) ResolveScopeAndTypes(Project project)
+    {
+        var file = ReadScopeFile(project.RootPath);
+        return (file.Scope ?? ScopeOf(project), file.Types);
+    }
+
     // Область из файла .docs. Scope = null — файла нет либо он не разобран; тогда действует
     // настройка проекта, а причина уезжает во фронт вместе с описанием области.
     public ScopeFileResult ReadScopeFile(string rootPath)
@@ -297,10 +345,12 @@ public sealed partial class DocsIndexService(FileService? files = null)
 
         ScopeFileShape? parsed;
         try { parsed = JsonSerializer.Deserialize<ScopeFileShape>(json, ScopeFileJson); }
-        catch (JsonException e) { return new ScopeFileResult(null, e.Message); }
+        catch (JsonException e) { return new ScopeFileResult(null, e.Message, Broken: true); }
 
         // Пустой файл или «null» — то же, что отсутствие: описания области в нём нет
         if (parsed is null) return new ScopeFileResult(null, null);
+
+        var docTypes = DocTypeSchema.Read(parsed.DocTypes, out var docTypesError);
 
         // Нормализаторы вызываются поштучно, а не через NormalizeScope: у каждой оси свой
         // дефолт на null, и общий конструктор DocsScope такой формы не принимает
@@ -308,21 +358,71 @@ public sealed partial class DocsIndexService(FileService? files = null)
             NormalizeFolders(parsed.Folders),
             NormalizeRootFiles(parsed.RootFiles),
             NormalizeTypes(parsed.Types),
-            NormalizeHome(parsed.Home)), null);
+            NormalizeHome(parsed.Home)), null, docTypes, docTypesError);
     }
 
-    // Записать область в файл репозитория. Пишем все оси явно: файл читают и правят руками,
-    // и «чего нет — то по умолчанию» в сохранённом виде сбивало бы с толку. Home опускается,
-    // когда его нет: пустая строка в файле выглядела бы как выбранный пустой путь.
-    public void WriteScopeFile(string rootPath, DocsScope scope)
+    public enum ScopeFileWriteStatus { Ok, Broken, Failed }
+
+    // Записать область в файл репозитория.
+    //
+    // Файл ПРАВИТСЯ, а не пересобирается из нашей формы: рядом с осями области в нём живёт
+    // схема типов документов (docTypes), а завтра — что-то ещё. Пересборка означала бы, что
+    // безобидная кнопка «вернуть README в область» стирает схему типов у всех, кто открыл
+    // репозиторий: сюда ведут ПЯТЬ дорог из контроллера, и только одна из них про типы.
+    // Через JsonNode переживают и незнакомые этой версии продукта поля — тот же принцип
+    // терпимости, что уже действует при чтении.
+    //
+    // scope: null — «область не трогать» (правка только схемы). Это не мелочь: наши оси
+    // нормализованы, и запись их обратно в файл, написанный руками, молча срезала бы папки
+    // сверх лимита, зафиксировала бы опущенные оси дефолтами и выбросила бы ключи типов,
+    // которых эта версия продукта не знает.
+    // docTypes: null — «не менять схему», значение — заменить секцию целиком.
+    // Файл есть, но не разобран → отказ: перезаписать его значит уничтожить чужую ручную
+    // правку, о которой мы даже не знаем, что в ней было.
+    public ScopeFileWriteStatus WriteScopeFile(string rootPath, DocsScope? scope,
+        IReadOnlyList<DocTypeDef>? docTypes = null)
     {
-        var normalized = NormalizeScope(scope);
-        var shape = new ScopeFileShape(
-            [.. normalized.Folders], [.. normalized.RootFiles], [.. normalized.Types], normalized.Home);
         var file = Path.Combine(Path.GetFullPath(rootPath), ScopeFileName);
+
+        JsonObject root;
+        try
+        {
+            if (File.Exists(file))
+            {
+                var existing = File.ReadAllText(file);
+                // Пустой файл и «null» — то же, что отсутствие: чтение трактует их так же,
+                // и отказывать в записи было бы необъяснимо («файла как бы нет, а он занят»)
+                if (existing.Trim().Length == 0) root = [];
+                else if (JsonNode.Parse(existing) is { } node) root = node as JsonObject ?? [];
+                else root = [];
+            }
+            else root = [];
+        }
+        catch (JsonException) { return ScopeFileWriteStatus.Broken; }
+
+        if (scope is not null)
+        {
+            var normalized = NormalizeScope(scope);
+            root["folders"] = ToJsonArray(normalized.Folders);
+            root["rootFiles"] = ToJsonArray(normalized.RootFiles);
+            root["types"] = ToJsonArray(normalized.Types);
+            // Home удаляем явно: WhenWritingNull работал только при сериализации целого объекта,
+            // а «home: null» в файле читается как выбранный пустой путь — ровно наоборот
+            if (normalized.Home is { } home) root["home"] = home; else root.Remove("home");
+        }
+        if (docTypes is not null) root["docTypes"] = DocTypeSchema.ToJson(docTypes);
+
         // Без BOM и с \n: файл лежит в репозитории, и лишние байты дают шум в диффе
-        File.WriteAllText(file, JsonSerializer.Serialize(shape, ScopeFileJson).ReplaceLineEndings("\n") + "\n",
+        File.WriteAllText(file, root.ToJsonString(ScopeFileJson).ReplaceLineEndings("\n") + "\n",
             new UTF8Encoding(false));
+        return ScopeFileWriteStatus.Ok;
+    }
+
+    private static JsonArray ToJsonArray(IReadOnlyList<string> items)
+    {
+        var array = new JsonArray();
+        foreach (var item in items) array.Add((JsonNode)JsonValue.Create(item));
+        return array;
     }
 
     // Папки: прямые слэши, без краёв-разделителей, без дублей и без выходов за корень
@@ -372,7 +472,7 @@ public sealed partial class DocsIndexService(FileService? files = null)
     // Одна папка настройки. null — значение непригодно: пустое, абсолютное («C:\…», «/etc»)
     // или уводящее выше корня. Корень проекта («.», «/») тоже отбрасываем: выбор корня
     // означал бы обход всего репозитория, а README и так в области всегда.
-    private static string? NormalizeFolder(string? raw)
+    internal static string? NormalizeFolder(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
         var s = raw.Trim().Replace('\\', '/');
@@ -544,6 +644,11 @@ public sealed partial class DocsIndexService(FileService? files = null)
         {
             ScopeSource = file.Scope is not null ? "file" : "project",
             ScopeFileError = file.Error,
+            // Схема типов едет вместе с областью, а не отдельной ручкой: панель запрашивает
+            // настройку при загрузке, и второй запрос ради того же файла был бы лишним
+            DocTypes = file.Types,
+            DocTypesError = file.DocTypesError,
+            PropertyColors = DocTypeSchema.Colors,
         };
     }
 
@@ -558,8 +663,9 @@ public sealed partial class DocsIndexService(FileService? files = null)
             TypeGroups,
             DefaultScope,
             // Документы области — из них выбирают «Начало»; заодно панель узнаёт,
-            // какой документ им сейчас работает
-            GetIndex(rootPath, scope).Select(d => new DocOption(d.Path, d.Title)).ToList(),
+            // какой документ им сейчас работает. Прямо из корпуса, а не через GetIndex:
+            // типы документов здесь ни к чему, а чтение .docs ради них было бы лишним
+            GetCorpus(rootPath, scope).Docs.Select(d => new DocOption(d.Path, d.Title)).ToList(),
             ResolveHome(rootPath, scope));
     }
 
@@ -707,7 +813,11 @@ public sealed partial class DocsIndexService(FileService? files = null)
 
             var parsed = ParseDocument(text);
             var title = parsed.Title ?? Path.GetFileNameWithoutExtension(file);
-            var entry = new DocEntry(rel, title, info.LastWriteTimeUtc, info.Length, parsed.Headings);
+            // Свойства шапки разбираются здесь, а тип документа — НЕТ (см. комментарий у
+            // GetIndex): свойства зависят только от содержимого файла, поэтому кеш их
+            // подхватывает сам, а тип живёт в .docs, которого нет в отпечатке кеша
+            var entry = new DocEntry(rel, title, info.LastWriteTimeUtc, info.Length, parsed.Headings,
+                Properties: DocProperties.Values(text, rel));
 
             // TryAdd, а не индексатор: на регистрозависимой ФС рядом могут лежать
             // docs/api.md и docs/API.md — дубль по ключу не должен ронять разбор
@@ -1199,6 +1309,217 @@ public sealed partial class DocsIndexService(FileService? files = null)
         return new DocCreateResult(DocCreateStatus.Ok, docPath);
     }
 
+    // ---------- свойства документа ----------
+
+    public enum PropertyWriteStatus { Ok, NotFound, BadKey, BadValue, Failed }
+
+    // Properties — свойства документа ПОСЛЕ записи: панель обновляет плашку, не перезапрашивая
+    // документ. Touched — какие ключи фактически изменились; их больше одного, когда вместе
+    // со свойством переписалась «дата смены».
+    public sealed record PropertyWriteResult(
+        PropertyWriteStatus Status,
+        string? Error = null,
+        IReadOnlyList<DocProperty>? Properties = null,
+        IReadOnlyList<string>? Touched = null);
+
+    // Формат даты в шапке — ISO: так уже написаны существующие ADR, и так же его понимает
+    // поле выбора даты в браузере
+    private const string DateFormat = "yyyy-MM-dd";
+
+    // Свойство — короткая строка шапки, а не текст документа
+    private const int MaxPropertyValueLength = 500;
+
+    // Записать значение свойства в шапку документа.
+    //
+    // value == null — снять свойство (строка уходит из файла); "" — оставить пустой слот.
+    //
+    // Три гейта, и каждый закрывает свою дыру:
+    //   область — иначе эндпоинт стал бы вторым файл-райтером мимо правил FilesController;
+    //   содержимое — иначе правка «свойства» у pdf, лежащего в типизированной папке,
+    //     прочитала бы его как текст и записала обратно испорченным;
+    //   схема — иначе это универсальный редактор чужих markdown-файлов.
+    public PropertyWriteResult WriteProperty(string rootPath, string? path, string? key,
+        string? value, DocsScope? rawScope = null, IReadOnlyList<DocTypeDef>? docTypes = null)
+    {
+        if (files is null)
+            return new PropertyWriteResult(PropertyWriteStatus.Failed, "Файловый сервис недоступен");
+
+        var root = Path.GetFullPath(rootPath);
+        var scope = NormalizeScope(rawScope);
+        var corpus = GetCorpus(root, scope);
+
+        var docKey = NormalizePath(path ?? "");
+        if (docKey is null || !corpus.ByPath.TryGetValue(docKey, out var entry))
+            return new PropertyWriteResult(PropertyWriteStatus.NotFound, "Документ вне области документации");
+
+        // Свойства живут в markdown-шапке: у .txt «**Ключ:**» ничего не значит, а у бинарного
+        // документа текста нет вовсе
+        if (entry.Binary || !Path.GetExtension(entry.Path).Equals(".md", StringComparison.OrdinalIgnoreCase))
+            return new PropertyWriteResult(PropertyWriteStatus.BadKey,
+                "Свойства есть только у markdown-документов");
+
+        var types = docTypes ?? ReadScopeFile(root).Types;
+        var type = DocTypeSchema.Match(entry.Path, types);
+        if (type is null)
+            return new PropertyWriteResult(PropertyWriteStatus.BadKey,
+                $"Тип документа не описан в {ScopeFileName}");
+
+        var trimmedKey = (key ?? "").Trim();
+        var def = type.Properties.FirstOrDefault(p => p.Key.Equals(trimmedKey, StringComparison.OrdinalIgnoreCase));
+        if (def is null)
+            return new PropertyWriteResult(PropertyWriteStatus.BadKey,
+                $"Свойство «{trimmedKey}» не описано в типе «{type.Title}»");
+
+        string? normalized = null;
+        if (value is not null)
+        {
+            normalized = NormalizeValue(def, value, corpus, entry.Path, out var valueError);
+            if (normalized is null)
+                return new PropertyWriteResult(PropertyWriteStatus.BadValue, valueError);
+        }
+
+        byte[] bytes;
+        string text;
+        bool hasBom;
+        try
+        {
+            // С ДИСКА, а не из corpus.Texts: кеш мог отстать от правки, сделанной мимо панели
+            bytes = files.ReadFileBytes(root, entry.Path);
+
+            // Документ не в UTF-8 переписывать нельзя. Терпимый декодер заменил бы каждый
+            // непонятый байт на «?», и обратная запись сохранила бы файл уже испорченным:
+            // один клик по статусу — и CP1251-документ превращается в мусор целиком
+            if (bytes.Length >= 2 && ((bytes[0] == 0xFF && bytes[1] == 0xFE) || (bytes[0] == 0xFE && bytes[1] == 0xFF)))
+                return new PropertyWriteResult(PropertyWriteStatus.Failed,
+                    "Документ сохранён в UTF-16 — свойства правятся только в UTF-8");
+
+            hasBom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+            text = new UTF8Encoding(false, throwOnInvalidBytes: true)
+                .GetString(bytes, hasBom ? 3 : 0, bytes.Length - (hasBom ? 3 : 0));
+        }
+        catch (DecoderFallbackException)
+        {
+            return new PropertyWriteResult(PropertyWriteStatus.Failed,
+                "Документ не в UTF-8 — свойства правятся только в UTF-8");
+        }
+        catch (IOException e) { return new PropertyWriteResult(PropertyWriteStatus.Failed, e.Message); }
+        catch (UnauthorizedAccessException e) { return new PropertyWriteResult(PropertyWriteStatus.Failed, e.Message); }
+
+        var current = DocProperties.Values(text, entry.Path)
+            .FirstOrDefault(p => p.Key.Equals(def.Key, StringComparison.OrdinalIgnoreCase));
+        // null — «снять свойство», и снимать есть что даже когда значение уже пустое:
+        // сравнение с «» считало бы это отсутствием изменений, и строка оставалась бы в файле
+        var changed = current is null
+            ? normalized is not null
+            : normalized is null || current.Value != normalized;
+        if (!changed)
+            return new PropertyWriteResult(PropertyWriteStatus.Ok,
+                Properties: DocProperties.Values(text, entry.Path), Touched: []);
+
+        var edits = new List<DocProperties.Edit> { new(def.Key, normalized) };
+        var touched = new List<string> { def.Key };
+
+        // «Дата смены» переписывается в ТОЙ ЖЕ записи файла: две записи подряд дали бы два
+        // события OnMutated и два прохода синка базы знаний ради одной правки. Только при
+        // фактическом изменении — иначе повторный выбор того же статуса каждый раз бил бы дату
+        var today = DateTime.Now.ToString(DateFormat);
+        foreach (var stamp in type.Properties)
+        {
+            if (stamp.Kind != DocPropertyKind.Date || !stamp.AutoUpdate) continue;
+            if (stamp.Key.Equals(def.Key, StringComparison.OrdinalIgnoreCase)) continue;   // без рекурсии
+            edits.Add(new DocProperties.Edit(stamp.Key, today));
+            touched.Add(stamp.Key);
+        }
+
+        var updated = DocProperties.Write(text, edits, [.. type.Properties.Select(p => p.Key)]);
+
+        try
+        {
+            // Файл с BOM пишем байтами: FileService.WriteFile — это File.WriteAllText, то есть
+            // UTF-8 БЕЗ BOM, и правка одного слова дала бы дифф на весь файл
+            if (hasBom)
+                files.WriteFileBytes(root, entry.Path,
+                    [.. new byte[] { 0xEF, 0xBB, 0xBF }, .. new UTF8Encoding(false).GetBytes(updated)]);
+            else
+                files.WriteFile(root, entry.Path, updated);
+        }
+        catch (IOException e) { return new PropertyWriteResult(PropertyWriteStatus.Failed, e.Message); }
+        catch (UnauthorizedAccessException e) { return new PropertyWriteResult(PropertyWriteStatus.Failed, e.Message); }
+
+        return new PropertyWriteResult(PropertyWriteStatus.Ok,
+            Properties: DocProperties.Values(updated, entry.Path), Touched: touched);
+    }
+
+    // Значение по правилам вида. null — значение непригодно, причина в error.
+    private static string? NormalizeValue(DocPropertyDef def, string raw, DocsCorpus corpus,
+        string docPath, out string? error)
+    {
+        error = null;
+        var value = raw.Trim();
+
+        // Перенос строки разорвал бы шапку: при следующем чтении хвост стал бы отдельным
+        // свойством или вовсе оборвал разбор
+        if (value.Contains('\n') || value.Contains('\r'))
+        {
+            error = "Значение не может содержать перенос строки";
+            return null;
+        }
+
+        // Потолок длины: значение на мегабайт выпихнуло бы документ за MaxDocBytes, после
+        // чего он выпадает из корпуса — и починить его через панель уже нельзя
+        if (value.Length > MaxPropertyValueLength)
+        {
+            error = $"Значение длиннее {MaxPropertyValueLength} символов";
+            return null;
+        }
+
+        if (value.Length == 0)
+        {
+            if (!def.Required) return "";
+            error = $"Свойство «{def.Key}» обязательно";
+            return null;
+        }
+
+        switch (def.Kind)
+        {
+            case DocPropertyKind.Choice:
+                var choice = (def.Choices ?? []).FirstOrDefault(c =>
+                    c.Value.Equals(value, StringComparison.OrdinalIgnoreCase));
+                if (choice is null)
+                {
+                    error = $"Недопустимое значение «{value}» для свойства «{def.Key}»";
+                    return null;
+                }
+                return choice.Value;      // каноничное написание из схемы, а не присланное
+
+            case DocPropertyKind.Date:
+                if (!DateOnly.TryParseExact(value, DateFormat, System.Globalization.CultureInfo.InvariantCulture,
+                        System.Globalization.DateTimeStyles.None, out _))
+                {
+                    error = "Дата в формате ГГГГ-ММ-ДД";
+                    return null;
+                }
+                return value;
+
+            case DocPropertyKind.DocLink:
+                var target = NormalizePath(value);
+                if (target is null || !corpus.ByPath.TryGetValue(target, out var doc))
+                {
+                    error = "Документа нет в области документации";
+                    return null;
+                }
+                // В файл уезжает markdown-ссылка, а не голый путь: её бесплатно чинит
+                // UpdateLinks при переименовании и переносе цели, а сама цель получает
+                // обратную ссылку в графе — голый путь протух бы при первом же переименовании.
+                // Скобки в заголовке экранируем: «План [v2]» иначе оборвал бы подпись ссылки
+                var label = doc.Title.Replace("[", "\\[").Replace("]", "\\]");
+                return $"[{label}]({RelativeLink(docPath, doc.Path)})";
+
+            default:
+                return value;
+        }
+    }
+
     // ---------- переименование ----------
 
     public enum DocRenameStatus { Ok, NotFound, BadName, Conflict, Failed }
@@ -1675,18 +1996,20 @@ public sealed partial class DocsIndexService(FileService? files = null)
 
     internal sealed record ParsedDocument(string? Title, IReadOnlyList<DocHeading> Headings, List<ParsedLink> Links);
 
-    // Заголовок вне блока кода: «## Текст» (до трёх пробелов отступа, как в CommonMark)
+    // Заголовок вне блока кода: «## Текст» (до трёх пробелов отступа, как в CommonMark).
+    // internal, а не private: разбор шапки свойств (DocProperties) опирается на те же
+    // три правила CommonMark, и второй их комплект неминуемо разошёлся бы с этим
     [GeneratedRegex(@"^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$")]
-    private static partial Regex HeadingRegex();
+    internal static partial Regex HeadingRegex();
 
     // Ссылка [текст](цель) — но не картинка ![alt](src): у картинок навигации нет.
     // Хвостовой title в кавычках отбрасывается вместе с пробелом перед ним.
     [GeneratedRegex(@"(?<!\!)\[([^\]]*)\]\(\s*([^)\s]*)(?:\s+""[^""]*"")?\s*\)")]
-    private static partial Regex LinkRegex();
+    internal static partial Regex LinkRegex();
 
     // Ограда блока кода: ``` или ~~~ (с отступом до трёх пробелов)
     [GeneratedRegex(@"^ {0,3}(`{3,}|~{3,})")]
-    private static partial Regex FenceRegex();
+    internal static partial Regex FenceRegex();
 
     internal static ParsedDocument ParseDocument(string markdown)
     {

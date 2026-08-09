@@ -181,4 +181,135 @@ public class DocsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
+
+    // ─── Типы документов и свойства ─────────────────────────────────────────
+
+    // Схема с одним типом на папку docs: свойство-выбор «Статус» и штамп даты
+    private static object AdrTypes() => new
+    {
+        types = new[]
+        {
+            new
+            {
+                id = "doc", title = "Документ", folders = new[] { "docs" },
+                badgeProperty = "Статус",
+                properties = new object[]
+                {
+                    new
+                    {
+                        key = "Статус", kind = "choice",
+                        choices = new[]
+                        {
+                            new { value = "Черновик", color = "info" },
+                            new { value = "Принято", color = "success" },
+                        },
+                    },
+                    new { key = "Дата", kind = "date", autoUpdate = true },
+                },
+            },
+        },
+    };
+
+    [Fact]
+    public async Task ТипыДокументов_Put_СоздаётФайлОбластиИНеТеряетОбласть()
+    {
+        var id = await SetupProjectAsync();
+
+        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/types", AdrTypes());
+
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var scope = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync())
+            .GetProperty("scope");
+        // Файла .docs не было — он создан вместе с действующей областью
+        scope.GetProperty("scopeSource").GetString().Should().Be("file");
+        scope.GetProperty("selected").GetProperty("folders").EnumerateArray()
+            .Select(x => x.GetString()).Should().Equal("docs");
+        scope.GetProperty("docTypes").EnumerateArray().Single()
+            .GetProperty("id").GetString().Should().Be("doc");
+        scope.GetProperty("propertyColors").EnumerateArray().Select(x => x.GetString())
+            .Should().Contain("success");
+    }
+
+    [Fact]
+    public async Task ТипыДокументов_ПослеСохраненияОбласти_СхемаНаМесте()
+    {
+        // Сквозной сторож: сохранение области ведёт к перезаписи того же .docs, и схема
+        // не имеет права исчезнуть от нажатия соседней кнопки
+        var id = await SetupProjectAsync();
+        await _client.PutAsJsonAsync($"/api/projects/{id}/docs/types", AdrTypes());
+
+        await _client.PutAsJsonAsync($"/api/projects/{id}/docs/scope", new
+        {
+            folders = new[] { "docs" },
+            rootFiles = Array.Empty<string>(),
+            types = new[] { "markdown" },
+        });
+
+        var scope = JsonSerializer.Deserialize<JsonElement>(
+            await _client.GetStringAsync($"/api/projects/{id}/docs/scope"));
+        scope.GetProperty("docTypes").EnumerateArray().Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task Свойство_Запись_ВозвращаетСвойстваИСвежийИндекс()
+    {
+        var id = await SetupProjectAsync();
+        await _client.PutAsJsonAsync($"/api/projects/{id}/docs/types", AdrTypes());
+
+        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/property", new
+        {
+            path = "docs/architecture.md", key = "Статус", value = "Принято",
+        });
+
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await put.Content.ReadAsStringAsync());
+        body.GetProperty("properties").EnumerateArray()
+            .Should().Contain(p => p.GetProperty("value").GetString() == "Принято");
+        // Дата смены проставлена той же записью
+        body.GetProperty("touched").EnumerateArray().Select(x => x.GetString())
+            .Should().Equal("Статус", "Дата");
+        // Метка обязана приехать вместе с подтверждением, а не вторым запросом
+        body.GetProperty("index").EnumerateArray()
+            .Single(d => d.GetProperty("path").GetString() == "docs/architecture.md")
+            .GetProperty("type").GetString().Should().Be("doc");
+    }
+
+    [Fact]
+    public async Task Свойство_ВнеОбласти_Возвращает404()
+    {
+        var id = await SetupProjectAsync();
+        await _client.PutAsJsonAsync($"/api/projects/{id}/docs/types", AdrTypes());
+
+        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/property", new
+        {
+            path = "backend/SECRET.md", key = "Статус", value = "Принято",
+        });
+
+        put.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task Свойство_НеописанныйКлюч_Возвращает400()
+    {
+        var id = await SetupProjectAsync();
+        await _client.PutAsJsonAsync($"/api/projects/{id}/docs/types", AdrTypes());
+
+        var put = await _client.PutAsJsonAsync($"/api/projects/{id}/docs/property", new
+        {
+            path = "docs/architecture.md", key = "Произвольный", value = "что угодно",
+        });
+
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task Свойство_ЧужойПроект_Возвращает404()
+    {
+        var put = await _client.PutAsJsonAsync("/api/projects/nonexistent/docs/property", new
+        {
+            path = "docs/a.md", key = "Статус", value = "Принято",
+        });
+
+        put.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
 }

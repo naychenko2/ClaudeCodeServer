@@ -29,8 +29,9 @@ interface Props {
   onSaved: (info: DocsScopeInfo) => void;
 }
 
-// Строка списка с галкой: один вид для папок, файлов корня и типов
-function ScopeRow({ label, hint, on, muted, title, onClick }: {
+// Строка списка с галкой: один вид для папок, файлов корня и типов.
+// Экспортируется — тем же видом выбирает папки редактор типов документов
+export function ScopeRow({ label, hint, on, muted, title, onClick }: {
   label: string;
   hint?: string;
   on: boolean;
@@ -71,7 +72,7 @@ function ScopeRow({ label, hint, on, muted, title, onClick }: {
   );
 }
 
-function SectionTitle({ children, note }: { children: string; note?: string }) {
+export function SectionTitle({ children, note }: { children: string; note?: string }) {
   return (
     <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.xs, padding: `0 ${SP.sm}px` }}>
       <span style={{

@@ -13,14 +13,17 @@ import { DndContext, MouseSensor, TouchSensor, closestCenter, useSensor, useSens
 import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 // ChevronsDownUp/ChevronsUpDown вернутся вместе с кнопками уровней папок (см. controls)
-import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, FolderTree, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, PenLine, Pin, PinOff, Plus, Search, SlidersHorizontal, Trash2, X } from 'lucide-react';
+import { BookOpenText, BookText, Check, ChevronDown, ChevronRight, ChevronsRight, FileQuestion, Folder, FolderCog, FolderTree, Home, Link2, List, Maximize2, MessageSquarePlus, PanelBottom, PenLine, Pin, PinOff, Plus, Search, SlidersHorizontal, Tags, Trash2, X } from 'lucide-react';
 import type { Project, DocEntry, DocDetail, DocSearchHit, DocsScopeInfo } from '../../types';
 import { api } from '../../lib/api';
 import { onFilesChanged } from '../../lib/signalr';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button, ConfirmDialog, EmptyState, FileTypeTile, IconButton, IconSegmented, Menu, MenuItem, MenuSep, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
+import { Button, ConfirmDialog, Dot, EmptyState, FileTypeTile, IconButton, IconSegmented, Menu, MenuItem, MenuSep, PanelHeaderSlot, TextField, TocRow, useHasPanelHeader, usePanelHeaderHold } from '../../components/ui';
+import { DocPropChip, docsSectionHeadStyle } from '../../features/docs/DocsProps';
+import { badgeKeyOf, badgeOf, propDotColor, typeOf } from '../../lib/docsTypes';
 import { DocsScopeDialog } from './DocsScopeDialog';
+import { DocsTypesDialog } from './DocsTypesDialog';
 import { DocsCreateDialog } from './DocsCreateDialog';
 import { DocsRenameDialog } from './DocsRenameDialog';
 import { DocsMoveDialog } from './DocsMoveDialog';
@@ -233,7 +236,7 @@ function DocBadge({ path, home }: { path: string; home?: boolean }) {
 // Отличать «прилипла / не прилипла» пробовали наблюдателем, но в панели несколько
 // вложенных скроллеров (список, превью, закреплённые папки), и корень наблюдения
 // приходилось угадывать — постоянный фон делает то же самое без единого условия.
-function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, active = false, onTogglePin, onContextMenu, press, pressing = false }: {
+function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, onToggle, onOpenPage, onCollapseSubtree, subtreeCollapsed = false, pagePath, pinned = false, active = false, statusColor, statusTitle, onTogglePin, onContextMenu, press, pressing = false }: {
   folder: string;
   // Действия раздела правым кликом — те же, что у строки документа (переименование)
   onContextMenu?: (e: React.MouseEvent) => void;
@@ -266,6 +269,11 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
   // Своей строки у страницы в дереве нет — она и есть эта подпись, поэтому без выделения
   // здесь открытого документа в списке не видно вообще
   active?: boolean;
+  // Метка главного свойства страницы раздела — та же, что у строки документа. Своей
+  // строки в дереве у страницы нет, поэтому без этого статус раздела не видно нигде,
+  // хотя в файле он есть и в превью показывается
+  statusColor?: string;
+  statusTitle?: string;
   onTogglePin?: () => void;
 }) {
   const title = titleProp ?? groupLabel(folder);
@@ -360,9 +368,18 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
             ? `${title} — ${subtreeCollapsed ? 'показать' : 'скрыть'} весь раздел со вложенными`
             : `${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
           titleAttr={`${title} — открыть страницу раздела`}
-          trailing={collapsed
-            ? <span style={{ flexShrink: 0, fontSize: 10, color: C.textMuted }}>{hidden}</span>
-            : undefined}
+          // Точка статуса и счётчик скрытых — одним хвостом: точка ближе к подписи,
+          // потому что она про саму страницу, а счётчик — про её содержимое
+          trailing={(statusColor || collapsed) ? (
+            <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs }}>
+              {statusColor && (
+                <span title={statusTitle} style={{ display: 'flex', pointerEvents: 'none' }}>
+                  <Dot color={statusColor} size={7} />
+                </span>
+              )}
+              {collapsed && <span style={{ fontSize: 10, color: C.textMuted }}>{hidden}</span>}
+            </span>
+          ) : undefined}
         />
       </div>
       {/* Двойной шеврон справа от линии — свернуть/развернуть всё поддерево. Отдельной
@@ -488,11 +505,15 @@ function FolderRow({ label, parent, count, current, onJump }: {
 // и держать его в панели значило бы перерисовывать все строки на каждое движение мыши.
 // Бейдж расширения под курсором превращается в булавку — отдельной кнопки закрепления
 // в строке нет места, а место иконки всё равно занято состоянием документа
-function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, onExpand, onTogglePin, onContextMenu, dropInto, press, pressing = false }: {
+function DocRow({ doc, selected, home, pinned, indent, count, statusColor, statusTitle, onJump, onOpen, onExpand, onTogglePin, onContextMenu, dropInto, press, pressing = false }: {
   doc: DocEntry;
   selected: boolean;
   home: boolean;
   pinned: boolean;
+  // Метка главного свойства типа — ГОТОВЫМИ строками, а не схемой: строка списка остаётся
+  // тупой, как с count и pinned, и не знает про типы документов
+  statusColor?: string;
+  statusTitle?: string;
   // Сдвиг строки вправо — вложенность раздела в виде «Разделы». В дереве его нет:
   // там вложенность обозначена подписью группы, а сдвиг ломал бы левую линию списка
   indent?: number;
@@ -601,6 +622,18 @@ function DocRow({ doc, selected, home, pinned, indent, count, onJump, onOpen, on
         }}>
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.title}</span>
       </button>
+      {/* Метка главного свойства типа — точкой: в строке высотой 22px плашка не помещается,
+          а буква соврала бы («Предложено» и «Принято» начинаются одинаково). Стоит перед
+          хвостом, то есть на «заголовочной» половине строки, и не перехватывает клик
+          ни у одной из двух мишеней */}
+      {statusColor && (
+        <span title={statusTitle} style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center',
+          paddingRight: SP.xs, pointerEvents: 'none',
+        }}>
+          <Dot color={statusColor} size={7} />
+        </span>
+      )}
       {/* Хвост строки раздела: сколько документов внутри. С onJump — кнопка перехода
           в дерево (вид «Документы» с прокруткой к этой группе): список разделов
           отвечает «куда идти», дерево — «что там лежит». Отдельной кнопкой, а не
@@ -702,6 +735,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
   // const [foldersH, setFoldersH] = useState(…);
   const [backlinksOpen, setBacklinksOpen] = useState(false);
   const [tocAnchor, setTocAnchor] = useState<DOMRect | null>(null);
+  const [savingProp, setSavingProp] = useState<string | null>(null);
+  const [propsError, setPropsError] = useState<string | null>(null);
+  const [typesOpen, setTypesOpen] = useState(false);
   // Вид панели. Стартовый — «Начало»: панель чаще открывают «почитать про проект»,
   // чем искать конкретный документ в списке
   const [view, setViewState] = useState<DocsView>(readView);
@@ -1124,6 +1160,41 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
 
   useEffect(() => { loadIndex(); }, [loadIndex]);
 
+  // Свойства документа: тип берётся из схемы .docs, приехавшей вместе с настройкой области
+  const docTypes = scopeInfo?.docTypes ?? null;
+  const docType = typeOf(docTypes, doc);
+  // Ключ главного свойства — общей функцией, а не своим выбором: иначе точка в дереве
+  // и плашка в шапке разошлись бы на типе без явного badgeProperty
+  const badgeKey = badgeKeyOf(docType);
+  const badgeDef = docType?.properties.find(
+    p => p.key.toLowerCase() === (badgeKey ?? '').toLowerCase()) ?? null;
+  const badge = badgeOf(docTypes, doc);
+
+  // Значение не подменяем оптимистично: правка уходит в файл репозитория, и откат
+  // соврал бы про то, что лежит на диске. Пока летит запрос — контрол приглушён
+  const saveProp = useCallback((path: string, key: string, value: string | null) => {
+    setSavingProp(key);
+    setPropsError(null);
+    api.docs.setProperty(project.id, path, key, value)
+      .then(res => {
+        setIndex(res.index);
+        setDoc(d => (d && d.path === path ? { ...d, properties: res.properties } : d));
+      })
+      .catch(() => setPropsError(`Не удалось сохранить «${key}»`))
+      .finally(() => setSavingProp(null));
+  }, [project.id]);
+
+  // Ошибка правки принадлежит документу: без сброса она переезжала бы на следующий,
+  // как будто это с ним что-то не так
+  useEffect(() => { setPropsError(null); }, [selected]);
+
+  // Метка типа для строки дерева: цвет и подсказка готовыми строками — DocRow остаётся
+  // тупым, как с count и pinned
+  const statusOf = useCallback((d: DocEntry) => {
+    const b = badgeOf(docTypes, d);
+    return b ? { statusColor: propDotColor(b.color), statusTitle: `${b.key}: ${b.label}` } : {};
+  }, [docTypes]);
+
   // Основной сценарий правок — Claude меняет docs/ прямо в чате; без подписки корпус
   // (дерево, превью, обратные ссылки) устаревал бы до перезагрузки страницы
   useEffect(() => onFilesChanged(({ projectId, paths }) => {
@@ -1437,6 +1508,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
     <DocsScopeDialog
       projectId={project.id}
       onClose={() => setScopeOpen(false)}
+      onSaved={info => { setScopeInfo(info); loadIndex(); }}
+    />
+  );
+
+  // Редактор типов правит секцию того же файла .docs, поэтому ему нужна уже загруженная
+  // настройка области: из неё он берёт и кандидатов в папки, и источник хранения
+  const typesDialog = typesOpen && scopeInfo && (
+    <DocsTypesDialog
+      projectId={project.id}
+      info={scopeInfo}
+      onClose={() => setTypesOpen(false)}
       onSaved={info => { setScopeInfo(info); loadIndex(); }}
     />
   );
@@ -1770,7 +1852,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       {/* Меню настроек панели: тумблер превью (галка справа — как у группировки
           в списке чатов) и вход в диалог области документации */}
       {settingsAnchor && (
-        <Menu anchor={settingsAnchor} minWidth={230} maxHeight={140} onClose={() => setSettingsAnchor(null)}>
+        <Menu anchor={settingsAnchor} minWidth={230} maxHeight={190} onClose={() => setSettingsAnchor(null)}>
           <MenuItem
             icon={<PanelBottom size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
             onClick={() => { setPreview(!previewEnabled); setSettingsAnchor(null); }}
@@ -1802,6 +1884,13 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             icon={<FolderCog size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
             label="Папки документации"
             onClick={() => { setScopeOpen(true); setSettingsAnchor(null); }}
+          />
+          {/* Типы документов: какие свойства есть у документов папки — статус решения,
+              дата, ответственные */}
+          <MenuItem
+            icon={<Tags size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            label="Типы документов"
+            onClick={() => { setTypesOpen(true); setSettingsAnchor(null); }}
           />
         </Menu>
       )}
@@ -1852,7 +1941,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
       {homeView ? (
         // Без своей шапки: заголовок и так первой строкой документа, а переключиться
         // и настроить область можно в ряду выше — вторая полоса кнопок была бы лишней
-        <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+        <div style={{ position: 'relative', flex: '1 1 auto', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           {/* Развернуть в центре — поверх текста, в правом верхнем углу области чтения.
               Кнопка относится к документу под ней, а не к панели, поэтому и стоит на нём;
               подложка непрозрачная — под кнопкой едет прокручиваемый текст */}
@@ -1866,7 +1955,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               </IconButton>
             </div>
           )}
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
+          <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: `${SP.md}px ${SP.md}px ${SP.xl}px` }}>
             {!homeDoc && <div style={emptyStyle}>Загружаем…</div>}
             {homeDoc && (
               <MarkdownViewer
@@ -1883,7 +1972,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
           </div>
         </div>
       ) : searching ? (
-        <div style={{ flex: 1, overflowY: 'auto', padding: `${SP.xs}px 0` }}>
+        <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px 0` }}>
           {/* null — ответ ещё не пришёл (запрос уходит через 250 мс после ввода) */}
           {hits === null && <div style={emptyStyle}>Ищем…</div>}
           {hits?.length === 0 && <div style={emptyStyle}>Ничего не найдено</div>}
@@ -1905,7 +1994,17 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             ref={treeRef}
             style={previewEnabled
               ? { flexGrow: 0, flexShrink: 1, flexBasis: treeH, display: 'flex', flexDirection: 'column', minHeight: TREE_SQUEEZE_H }
-              : { flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }
+              // Расписано по осям, а не сокращением flex: у одного и того же узла
+              // React не даёт смешивать shorthand и отдельные свойства между рендерами
+              // и на каждом переключении режима ругается в консоль.
+              //
+              // Базис ИМЕННО auto, а не 0. Одиночная панель у центра стоит по контенту
+              // (fill=false в PanelShell — см. panelStretched в PanelZone), то есть высота
+              // родителя тут не задана. Нулевой базис в таком контейнере означает высоту 0:
+              // растягивать flexGrow нечего, свободного места нет — и от панели оставалась
+              // одна шапка. С auto список занимает свою настоящую высоту, а когда она
+              // больше окна, панель упирается в maxHeight:100% и сжимается до скролла
+              : { flexGrow: 1, flexShrink: 1, flexBasis: 'auto', display: 'flex', flexDirection: 'column', minHeight: 0 }
             }
           >
             {/* Итог переименования: сколько ссылок починено и сколько осталось битыми.
@@ -1925,7 +2024,9 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
               </div>
             )}
 
-            <div ref={listRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
+            {/* Базис auto по той же причине, что у контейнера выше: в панели «по контенту»
+                нулевой базис схлопнул бы список в ноль */}
+            <div ref={listRef} style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: `${SP.xs}px ${SP.xs}px` }}>
                 {index?.length === 0 && (
                   // Общий примитив, а не своя вёрстка: пустые состояния в продукте
                   // выглядят одинаково, и это одно из них
@@ -2023,6 +2124,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                     selected={isShown(d.path)}
                     home={d.path === homePath}
                     pinned={pinned.has(d.path)}
+                    {...statusOf(d)}
                     // Вложенность — отступом: подраздел читается как подраздел, а строк
                     // тут по числу разделов, не по числу документов
                     indent={depth * SP.md}
@@ -2110,6 +2212,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                         pressing={!!page && pressingKey === page.path}
                         press={page ? pressProps(page.path, p => openRowMenuAt(page, p)) : undefined}
                         pagePath={page?.path}
+                        {...(page ? statusOf(page) : {})}
                         pinned={!!page && pinned.has(page.path)}
                         // Строкой страница раздела в дереве не рисуется — выделение
                         // открытого документа достаётся подписи его блока
@@ -2145,6 +2248,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               selected={isShown(d.path)}
                               home={d.path === homePath}
                               pinned={pinned.has(d.path)}
+                              {...statusOf(d)}
                               onOpen={() => handleRowClick(d.path)}
                               onExpand={() => handleRowDoubleClick(d.path)}
                               onTogglePin={() => togglePin(d.path)}
@@ -2203,6 +2307,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                               selected={isShown(d.path)}
                               home={d.path === homePath}
                               pinned
+                              {...statusOf(d)}
                               onOpen={() => handleRowClick(d.path)}
                               onExpand={() => handleRowDoubleClick(d.path)}
                               onTogglePin={() => togglePin(d.path)}
@@ -2255,8 +2360,35 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                 <span style={{
                   fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
                   overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  // Иначе во флекс-ряду заголовок не сжимается и выталкивает плашку
+                  minWidth: 0, flexShrink: 1,
                 }}>{doc.title}</span>
+                {/* Плашка главного свойства типа: она про документ, поэтому стоит рядом
+                    с заголовком, а не среди кнопок панели справа от распорки */}
+                {badgeDef && badgeDef.kind === 'choice' && (
+                  <DocPropChip
+                    def={badgeDef}
+                    // значение из файла — по нему меню отмечает текущий пункт;
+                    // подпись может отличаться, если у значения задан свой заголовок
+                    value={badge?.value ?? ''}
+                    label={badge?.label}
+                    tone={badge?.tone}
+                    saving={savingProp === badgeDef.key}
+                    onSave={(key, value) => saveProp(doc.path, key, value)}
+                    // Заголовок документа важнее плашки: она сжимается первой и обрезается
+                    style={{ maxWidth: 160, minWidth: 0, flexShrink: 1 }}
+                  />
+                )}
                 <div style={{ flex: 1 }} />
+                {/* Отказ записи живёт в шапке, а не в ленте свойств: шапка видна всегда,
+                    а лента уезжает с текстом. Без него плашка просто вернулась бы к
+                    старому значению, и причина осталась бы неизвестной */}
+                {propsError && (
+                  <span title={propsError} style={{
+                    fontSize: FS.xs, color: C.danger, flexShrink: 1, minWidth: 0,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{propsError}</span>
+                )}
                 {headings.length > 0 && (
                   <IconButton
                     title="Оглавление"
@@ -2319,6 +2451,10 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
                   </Button>
                 </div>
               )}
+              {/* Документ показывается как есть, со строками свойств в шапке текста:
+                  редактор свойств живёт под шапкой открытого файла в центре, а в узком
+                  превью от него остаётся только плашка главного значения выше. Резать
+                  строки из превью нельзя — тогда шапку документа не видно нигде */}
               {doc && !doc.binary && (
                 <MarkdownViewer content={doc.content} onDocLink={handleDocLink} resolveImageSrc={resolveImage} />
               )}
@@ -2327,7 +2463,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
             {/* Обратные ссылки: кто в документации ведёт на этот документ */}
             {doc && doc.backlinks.length > 0 && (
               <div style={{ flexShrink: 0, borderTop: `1px solid ${C.border}` }}>
-                <button onClick={() => setBacklinksOpen(v => !v)} style={sectionHeadStyle}>
+                <button onClick={() => setBacklinksOpen(v => !v)} style={docsSectionHeadStyle}>
                   {backlinksOpen
                     ? <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
                     : <ChevronRight size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
@@ -2352,6 +2488,7 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
         </>
       )}
       {scopeDialog}
+      {typesDialog}
       {createDialog}
       {/* Удаление — общий ConfirmDialog продукта. У раздела в подзаголовке считаем, что
           именно уйдёт: одна строка списка стоит целой ветки на диске, и узнать об этом
@@ -2414,13 +2551,6 @@ export function DocsPanel({ project, onOpenFile, onAttachToChat, activeFilePath,
 const emptyStyle = {
   padding: `${SP.xl}px ${SP.md}px`, textAlign: 'center' as const,
   fontFamily: FONT.sans, fontSize: FS.sm, color: C.textMuted,
-};
-
-const sectionHeadStyle = {
-  display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%',
-  padding: `${SP.sm}px ${SP.md}px`, border: 'none', background: 'transparent', cursor: 'pointer',
-  fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textSecondary,
-  textTransform: 'uppercase' as const, letterSpacing: '0.03em',
 };
 
 const rowStyle = {

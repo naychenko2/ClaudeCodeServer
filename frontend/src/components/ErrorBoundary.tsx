@@ -162,7 +162,9 @@ export class ErrorBoundary extends Component<Props, State> {
 
           <div style={{ display: 'flex', gap: SP.sm, marginTop: SP.xs, flexWrap: 'wrap', justifyContent: 'center' }}>
             <Button variant="primary" size="md" onClick={this.reload}>Обновить страницу</Button>
-            <Button variant="ghost" size="md" onClick={this.goHome}>На главную</Button>
+            {/* ghostFilled, а не ghost: на холсте страницы ошибки прозрачная
+                кнопка теряется — заливка поверхности отделяет её от фона */}
+            <Button variant="ghostFilled" size="md" onClick={this.goHome}>На главную</Button>
           </div>
 
           {/* Второстепенное — ссылками в один ряд: детали для разбирательства

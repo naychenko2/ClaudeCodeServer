@@ -220,6 +220,33 @@ body {
    (active/orphaned/finished) фон не красят вовсе. */
 .cc-card-shadow { box-shadow: var(--cc-card-shadow); }
 
+/* === Прожатие карточки чата ===
+   Отклик на нажатие: карточка на миг проваливается — чуть сжимается и меняет
+   собственную тень на внутреннюю (--shadow-press). Состоянием НЕ становится:
+   отпустил — вернулась. Что чат выбран, по-прежнему говорят полоса и рамка.
+
+   Вниз идёт быстро и линейно (палец давит), обратно — дольше и с перелётом
+   (cubic-bezier с выходом за 1): пружина, а не откат по той же кривой.
+   Специфичность :active выше, чем у .cc-card-shadow, поэтому inset-тень
+   перебивает обычную без !important.
+
+   Класс вешается на ту же обёртку, что и cc-card-shadow, — там же живут
+   --cc-card-shadow и слой перелива, и transform на них не влияет
+   (::after позиционируется относительно этой же карточки). */
+.cc-card-press {
+  transition: transform 190ms cubic-bezier(.34, 1.4, .64, 1), box-shadow 190ms ease;
+}
+.cc-card-press:active {
+  transform: scale(0.985);
+  box-shadow: var(--shadow-press);
+  transition: transform 90ms ease-out, box-shadow 90ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  /* Движение убираем, отклик оставляем: тень внутрь показывает нажатие без анимации */
+  .cc-card-press, .cc-card-press:active { transition: none; }
+  .cc-card-press:active { transform: none; }
+}
+
 /* Слой перелива поверх фона карточки, но ПОД её содержимым (z-index:0 против
    position:relative у текста и лица). Карточка с overflow:hidden сама обрежет
    его по скруглению — отдельная маска не нужна.

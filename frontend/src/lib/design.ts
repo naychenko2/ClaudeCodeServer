@@ -157,6 +157,7 @@ export const SHADOW = {
   fabNeutral: 'var(--shadow-fab-neutral)', // тот же ореол, но нейтральный — FAB без заливки
   alert:      'var(--shadow-alert)',       // янтарный ореол «нужен ответ» (редуцированное движение)
   thumb:    'var(--shadow-thumb)',      // бегунок переключателя
+  press:    'var(--shadow-press)',      // прожатие: тень внутрь (отклик на нажатие)
 } as const
 
 // === Панели-острова (стиль Rider Islands) ===

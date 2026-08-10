@@ -335,16 +335,22 @@ export function ChatCard({
       onTouchMove={onTpMove}
       onTouchEnd={killLongPress}
       onTouchCancel={killLongPress}
-      className={'cc-card-shadow' + glowClass + unreadClass}
+      // cc-card-press — прожатие под нажатием (index.css). В режиме правки названия
+      // его нет: там внутри поле ввода, и вдавливать карточку при постановке
+      // курсора незачем
+      className={'cc-card-shadow' + (editing ? '' : ' cc-card-press') + glowClass + unreadClass}
       style={{
         position: 'relative',
         // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left
         paddingTop: padV,
         paddingBottom: padV,
         paddingRight: isMobile ? 16 : 12,
-        // у активной карточки добавляем слева место под акцентную полосу,
-        // плюс отступ под контрол ветки в дереве (leadingInset)
-        paddingLeft: (isMobile ? 16 : 12) + (isActive ? 6 : 0) + leadingInset,
+        // Отступ слева одинаковый в любом состоянии: акцентная полоса активного чата
+        // лежит absolute поверх карточки и всего 4px шириной, а текст начинается с
+        // 12/16px — наехать она не может. Прежняя прибавка «под полосу» только толкала
+        // название и превью вправо в момент выделения.
+        // leadingInset — отступ под контрол ветки в дереве чатов
+        paddingLeft: (isMobile ? 16 : 12) + leadingInset,
         borderRadius: isMobile ? 16 : R.xl,
         marginBottom: 5,
         cursor: 'pointer',

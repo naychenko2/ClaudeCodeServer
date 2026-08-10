@@ -1209,6 +1209,74 @@ public class FallbackLlmSessionAdapterTests
             "RateLimit не имеет отношения к размеру окна — кандидат не отсекается по ёмкости");
     }
 
+    // Д4 (инцидент 2026-08-10): наблюдённый потолок ObservedCeiling — точный факт отказа модели,
+    // поэтому отсекает шаг цепочки при ЛЮБОМ классе ошибки, не только при ContextOverflow. На проде
+    // при Unreachable ход ушёл на kimi-k3 с контекстом ~830K (наблюдение уже было от прошлого overflow)
+    // → гарантированный «Prompt is too long» и впустую потраченная подмена. Здесь обрыв sonnet
+    // (Unreachable), шаг 2 m-prev уже падал на 80k → отсеивается, идём к m-alive (шаг 3). Заявленные
+    // окна не заданы — фильтр работает только по наблюдению.
+    [Fact]
+    public async Task НеOverflow_НаблюдённыйПотолокОтсекаетШагЦепочки()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-prev:ApiKey"] = "sk-prev",
+            ["LlmProviders:p-prev:AnthropicBaseUrl"] = "https://prev.example.com",
+            ["LlmProviders:p-prev:Models:0:Id"] = "m-prev",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-alive",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://alive.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var capacity = new ContextCapacityRegistry();
+        capacity.RecordOverflow("m-prev", 80_000);   // в прошлом ходе m-prev не принял 80k
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-prev", "m-alive"], capacity: capacity, lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new TextDeltaMessage("начал"));   // поток оборвался — gotEvent
+            inner.Emit(new ExitedMessage());             // процесс умер без result → Unreachable
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-alive (шаг 3) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // m-prev отсеян по наблюдению при Unreachable (80k ≤ контекста 100k) — попытка 2 = m-alive.
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-alive", "m-alive"),
+            "наблюдённый потолок отсекает шаг цепочки при любом классе ошибки, не только при overflow");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Label.Should().Contain("шаг 3");
+    }
+
+    // Д4 (продолжение): при не-overflow классе неточное ЗАЯВЛЕННОЕ окно каталога НЕ отсекает
+    // кандидата (Major 3 сохранён) — отсекает только точное наблюдение. Тот же Unreachable, но у
+    // m-small лишь заявленное окно 50k (< контекста 100k), а наблюдения нет → кандидат проходит.
+    [Fact]
+    public async Task НеOverflow_ЗаявленноеОкноНеОтсекает_FailOpenПоНаблюдению()
+    {
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-small", "m-small", 50_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-small"], capacity: new(), lastContextTokens: () => 100_000);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new TextDeltaMessage("начал"));   // обрыв потока → Unreachable
+            inner.Emit(new ExitedMessage());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-small (заявленное 50k) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // m-small (заявленное 50k < контекста 100k) при Unreachable ПРОБУЕТСЯ — заявленное окно
+        // отсекает только при ContextOverflow. Наблюдения нет → fail-open по нему.
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-small", "m-small"),
+            "заявленное окно каталога не отсекает кандидата при не-overflow классе (Major 3 сохранён)");
+    }
+
     // Major 3 (запас): заявленное окно, РАВНОЕ контексту, не проходит — нужен 10%-й запас на
     // расхождение токенизаторов. m-tight заявлено 100k, контекст 100k → отсеивается (100k < 110k),
     // идём к m-big. Без запаса (старое точное сравнение) модель «впритык» прошла бы и упала.

@@ -72,7 +72,10 @@ public class SessionManagerTests : IDisposable
                 ["DefaultProjectsPath"] = Path.Combine(_tempDir, "homes"),
                 // Профиль CLI внутри temp — иначе уборка транскриптов при удалении чата
                 // (DeleteAsync) полезла бы в настоящий ~/.claude пользователя
-                ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile")
+                ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile"),
+                // Сериализация отложенной доставки на смерти (Ф1) — в тестах отключена: StubAdapter
+                // держит HasLiveTurn=true вечно, без этого ключа drain-тесты ждали бы потолок.
+                ["Delivery:AwaitProcessExitSeconds"] = "0"
             })
             .Build();
 

@@ -2367,6 +2367,7 @@ public class SessionManager : IDisposable
                     // он заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
                     entry.LoopTurnInFlight = false;
                     entry.DrainOnExitedRun = entry.RunId;
+                    _log.LogInformation("Interrupt адаптера {Session}: callsite=user-message (preempt хода пользователя)", sessionId);
                     entry.Process?.Interrupt();
                 }
                 return SendUserOutcome.Queued;
@@ -2605,6 +2606,7 @@ public class SessionManager : IDisposable
                 && !entry.QueueFrozen)
             {
                 entry.DrainOnExitedRun = entry.RunId;
+                _log.LogInformation("Interrupt адаптера {Session}: callsite=agent-message (preempt хода агента, chats_send)", sessionId);
                 entry.Process?.Interrupt();
             }
             return queued;
@@ -3046,12 +3048,59 @@ public class SessionManager : IDisposable
         }
     }
 
+    // Ожидание подтверждённой смерти прогона предыдущего хода перед отложенной доставкой
+    // (инцидент 2026-08-10, П2-Ф1 «сериализация на смерти»). См. комментарий в DeliverPendingAsync.
+    // Потолок — Delivery:AwaitProcessExitSeconds (дефолт 8): латентность старта авто-хода в
+    // секунды принята владельцем как цена за устранение класса гонок с доживающим прогоном.
+    // По истечении — НЕ fail-open (вернуло бы гонку) и НЕ честная ошибка (доставка нужна):
+    // прерываем доживающий прогон (фоновые агенты гибнут, добиваются в следующем ходе через
+    // notification — как при смене окружения) и коротко ждём его финализации.
+    private async Task AwaitPreviousTurnExitAsync(string sessionId, SessionEntry entry)
+    {
+        var ceiling = int.TryParse(_config["Delivery:AwaitProcessExitSeconds"], out var s) && s >= 0
+            ? s : 8;
+        // Потолок 0 — отключить сериализацию (тесты, или явный opting-out). Иначе ждём смерти.
+        if (ceiling <= 0) return;
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(ceiling);
+        while (Busy(entry.Process))
+        {
+            if (DateTime.UtcNow >= deadline)
+            {
+                _log.LogInformation(
+                    "Ожидание смерти прогона {Session} истекло ({Ceiling} с) — прерываю доживание ради отложенной доставки",
+                    sessionId, ceiling);
+                entry.Process?.Interrupt();
+                // Interrupt асинхронен: прогон финализируется за секунды, даём короткий grace.
+                var grace = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+                while (Busy(entry.Process) && DateTime.UtcNow < grace)
+                    await Task.Delay(50);
+                break;
+            }
+            await Task.Delay(50);
+        }
+    }
+
+    // Адаптер занятprevious-ходом: у него жив прогон CLI (HasLiveTurn — _turnLock держит,
+    // транзрипт пишет) ИЛИ активна фолбэк-оркестрация (OrchestrationActive — между SettleAsync
+    // и finally). В обоих случаях старт нового хода гоняется с предыдущим → сериализуем на
+    // смерти. Чистая функция для прямого тестирования веток (Ф1, инцидент 2026-08-10).
+    internal static bool Busy(ILlmSessionAdapter? p) =>
+        p is { HasLiveTurn: true } or { OrchestrationActive: true };
+
     // Доставка конкретного сообщения из очереди обычным ходом (без повторных гейтов очереди).
     // Пользовательское идёт со своими вложениями и режимом; агентское — как серверная отправка.
     // Возвращает true, если доставка выполнена (ход стартовал — можно ждать result); false —
     // бросилась внутри, ход не поднялся и его повторная обработка по result не придёт (Minor 3).
     private async Task<bool> DeliverPendingAsync(string sessionId, SessionEntry entry, QueuedMessage next)
     {
+        // Сериализация отложенной доставки на смерти предыдущего хода (инцидент 2026-08-10, П2-Ф1):
+        // статус Active ставится по result РАНЬШЕ, чем ClaudeSession отпустит _turnLock и финализирует
+        // прогон. Старт нового хода в этом окне гоняется с доживающим процессом — same-process reuse
+        // (Ч1), лок миграции (Ч2 — держатель .jsonl жив), interrupt свежего прогона. Ждём, пока прогон
+        // умрёт (HasLiveTurn=false) И фолбэк-оркестрация снимется (OrchestrationActive=false) — тогда
+        // _turnLock свободен, транзрипт закрыт, новый ход стартует свежим процессом. Только для
+        // отложенной доставки (из Pending): свежий ход человека через SendDirectAsync сюда не попадает.
+        await AwaitPreviousTurnExitAsync(sessionId, entry);
         try
         {
             if (next.Kind == PendingKind.User)
@@ -3647,7 +3696,10 @@ public class SessionManager : IDisposable
             if (stuck)
                 ReviveStuckSession(sessionId, entry);
             else
+            {
+                _log.LogInformation("Interrupt адаптера {Session}: callsite=stop (Interrupt(sessionId), stuck={Stuck})", sessionId, stuck);
                 entry.Process?.Interrupt();
+            }
         }
     }
 

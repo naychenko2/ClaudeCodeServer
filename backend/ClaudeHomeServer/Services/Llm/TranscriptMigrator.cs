@@ -237,15 +237,24 @@ public static class TranscriptMigrator
     // падал «The process cannot access the file … because it is being used by another process» —
     // кандидат миграции пропускался, подмена провайдера срывалась, а на --resume в новом профиле
     // разговор начинался с нуля (инцидент 2026-08-10). FileShare.ReadWrite открывает источник
-    // параллельно с записью CLI (если он делится чтением — копия мгновенна); иначе — короткий
-    // ретрай: процесс при миграции уже умирающий/убитый и вот-вот отпустит файл. Копия может
-    // отставать на недописанный хвост текущей строки, но полной на момент старта истории хватает
-    // для resume.
+    // параллельно с записью CLI (если он делится чтением — копия мгновенна); иначе — ретрай с
+    // бэкофом: процесс при миграции уже умирающий/убитый (Interrupt подмены) и вот-вот отпустит
+    // файл. Освобождение файла = подтверждённая смерть процесса. Копия может отставать на
+    // недописанный хвост текущей строки, но полной на момент старта истории хватает для resume.
+    //
+    // Прежний ретрай 10×150мс=1.5с не дотягивал до фактического выхода CLI (инцидент 2026-08-10
+    // П3): FileShare.ReadWrite не обходит ЧУЖОЙ эксклюзивный захват, и при живом держателе open
+    // падает IOException до тех пор, пока процесс не умрёт. Бэкоф 100→800мс с потолком 8с
+    // покрывает выход убитого процесса с запасом; по истечении — ошибка уходит наверх, кандидат
+    // пропускается (fail-open: подмена срывается, остаёмся на исходной паре — ход должен идти).
     private static void CopyFileShared(string src, string dst)
     {
         const int bufferSize = 81920;
-        const int maxAttempts = 10;
-        const int stepMs = 150;
+        const int deadlineMs = 8000;
+        const int initialDelayMs = 100;
+        const int maxDelayMs = 800;
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var delayMs = initialDelayMs;
         for (var attempt = 1; ; attempt++)
         {
             try
@@ -253,13 +262,19 @@ public static class TranscriptMigrator
                 using var srcStream = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize);
                 using var dstStream = new FileStream(dst, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize);
                 srcStream.CopyTo(dstStream);
+                if (attempt > 1)
+                    Console.Error.WriteLine(
+                        $"[TranscriptMigrator] Файл освобождён после {attempt} попыток за {(int)sw.Elapsed.TotalMilliseconds} мс ({src})");
                 return;
             }
-            // Занят — подождём отпускания и повторим. Файл отсутствует или недоступен по иной
-            // причине — не ретраим: ошибка уйдёт наверх, TryMigrate вернёт false с причиной.
-            catch (IOException) when (attempt < maxAttempts)
+            // Занят exclusived-держателем (живой CLI) — ждём с бэкофом до подтверждённой смерти
+            // (open успешен = файл свободен = процесс отпустил). Файл отсутствует или недоступен
+            // по иной причине — тоже IOException, но ретраить бессмысленно: потолок по времени
+            // всё равно выведет ошибку наверх (TryMigrate вернёт false с причиной).
+            catch (IOException) when (sw.Elapsed.TotalMilliseconds < deadlineMs)
             {
-                Thread.Sleep(stepMs);
+                Thread.Sleep(delayMs);
+                delayMs = Math.Min(maxDelayMs, (int)(delayMs * 1.5));
             }
         }
     }

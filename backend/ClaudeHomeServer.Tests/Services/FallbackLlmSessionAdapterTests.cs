@@ -1912,6 +1912,62 @@ public class FallbackLlmSessionAdapterTests
         finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
 
+    // Находка ревью 2026-08-10 №1: после успешного хода с подменой restore вызывает
+    // TryCopyTranscriptBack с preserveLongerDestination=false. Приёмник (acc-a) на момент
+    // restore короче источника (deepseek после записи CLI) — функция обязана перезаписать,
+    // иначе следующий ход на --resume из acc-a не нашёл бы свежий ответ модели.
+    [Fact]
+    public async Task preserveLongerDestination_false_on_success_no_dangling_turn()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_preserve_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var providers = BuildProvidersInDir(baseDir);
+            var pool = BuildPool("acc-a");
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            const string csid = "csid-preserve";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var subAccA = Path.Combine(baseDir, "claude-profiles", "sub-acc-a");
+            var deepseek = Path.Combine(baseDir, "claude-profiles", "deepseek");
+            var accAFile = Path.Combine(subAccA, "projects", flat, csid + ".jsonl");
+            Directory.CreateDirectory(Path.GetDirectoryName(accAFile)!);
+            // Приёмник (dst) короче источника на момент restore: 800 байт истории прошлого хода.
+            File.WriteAllText(accAFile, new string('Q', 800));
+
+            var session = new Session { Model = "sonnet", Provider = "acc-a", ClaudeSessionId = csid };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "sonnet", "deepseek-chat" });
+            inner.Sink = sut.HandleMessageAsync;
+            var deepseekFile = Path.Combine(deepseek, "projects", flat, csid + ".jsonl");
+            // acc-a — 429 → шаг цепочки deepseek (прямой перенос acc-a→deepseek, файл = 800 байт).
+            // deepseek — успех, CLI дописывает 192 'A' + "\nANSWER" (200 байт) → deepseek = 1000 байт.
+            inner.Scripts.Enqueue(() => inner.Emit(ApiError("429")));
+            inner.Scripts.Enqueue(() =>
+            {
+                File.AppendAllText(deepseekFile, new string('A', 193) + "\nANSWER");
+                inner.Emit(Success());
+            });
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            // Provider/Model восстановлены, и главное — приёмник переписан на 1000 байт источника
+            // несмотря на то, что до restore он был короче (800 < 1000). preserveLongerDestination=false
+            // на успешном ходе перезаписывает безусловно, иначе --resume из acc-a потерял бы ответ.
+            session.Provider.Should().Be("acc-a");
+            session.Model.Should().Be("sonnet");
+            new FileInfo(accAFile).Length.Should().Be(1000,
+                "приёмник перезаписан 1000-байтным источником: preserve=false на успехе не отказывает перезаписать, когда dst < src");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
     // === Привязка терминальных событий к прогону (починка прод-дефекта 2026-08-09) ===
 
     // Симптом 1: намеренное прерывание хода (Interrupt ради очереди / «Стоп») не должно

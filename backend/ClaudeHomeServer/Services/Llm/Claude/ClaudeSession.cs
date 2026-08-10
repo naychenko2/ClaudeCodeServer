@@ -93,6 +93,15 @@ public class ClaudeSession : ILlmSessionAdapter
     // показывает, сколько ходов УЖЕ запарковано/идёт. >0 для серверского авто-хода — симптом
     // дублирующей доставки (должна идти через видимую серверную очередь, а не этот невидимый лок).
     private int _queuedTurns;
+    // Ре-аттемпт хода фолбэком не должен перепосылать текст в stdin: первый submit уже durable
+    // в .jsonl транскрипта (CLI пишет синхронно с приёмом из stdin, на репро enqueue→dequeue
+    // мгновенны), и повторный submit на новом процессе --resume создал бы второй user-turn
+    // того же текста — дубль, видимый модели (инцидент 2026-08-10). Запоминаем текст последнего
+    // submit'а, снят ли он result'ом и был ли он durable-записан новым процессом; незавершённый
+    // ре-аттемпт тем же текстом идёт без submit — CLI доиграет висящее через --resume.
+    private string? _lastSubmittedTurnText;
+    private volatile bool _lastTurnResolved = true;
+    private bool _lastSubmitWasNewProcess;
     // Сериализует записи в stdin процесса: control_response шлются из SignalR-потоков
     // параллельно с пампом — без лока JSON-строки могут перемешаться
     private readonly SemaphoreSlim _stdinLock = new(1, 1);
@@ -2145,6 +2154,12 @@ public class ClaudeSession : ILlmSessionAdapter
             && TrySubmitTurn(existing, userMessageJson))
         {
             Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
+            // Same-process submit НЕ гарантирован durable (процесс доживает, запись в .jsonl
+            // может не дойти при последующей смерти) — поэтому DiedEmpty-ретрай новым процессом
+            // не должен skip'ать submit. Флаг WasNewProcess=false именно это гарантирует.
+            _lastSubmittedTurnText = text;
+            _lastTurnResolved = false;
+            _lastSubmitWasNewProcess = false;
             // Снимок ДО ожидания конца хода: событие обязано опередить result, иначе
             // TurnAccumulator сбросит текущий ход, и id уже некуда будет прицепить.
             // applied=false — промпт пересобран, но модели не ушёл: работает промпт старта.
@@ -2236,13 +2251,27 @@ public class ClaudeSession : ILlmSessionAdapter
             run.StderrTask = process.StandardError.ReadToEndAsync(ct);
 
             // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
+            var skipResubmit = ShouldSkipResubmit(text, _lastSubmittedTurnText, _lastTurnResolved, _lastSubmitWasNewProcess);
             await _stdinLock.WaitAsync(ct);
             try
             {
-                await process.StandardInput.WriteLineAsync(userMessageJson);
-                await process.StandardInput.FlushAsync();
+                if (skipResubmit)
+                {
+                    // Ре-аттемпт хода фолбэком: прошлый submit новым процессом уже durable в .jsonl,
+                    // но ход не дошёл до result (процесс умер). Повторная запись в stdin создала бы
+                    // второй user-turn = дубль. На --resume CLI сам доиграет висящий user-turn.
+                    Console.Error.WriteLine($"[ClaudeSession] Ре-аттемпт хода без submit — доиграется через --resume (session {Info.Id})");
+                }
+                else
+                {
+                    await process.StandardInput.WriteLineAsync(userMessageJson);
+                    await process.StandardInput.FlushAsync();
+                }
             }
             finally { _stdinLock.Release(); }
+            _lastSubmittedTurnText = text;
+            _lastTurnResolved = false;
+            _lastSubmitWasNewProcess = true;
 
             _run = run;
         }
@@ -2630,6 +2659,16 @@ public class ClaudeSession : ILlmSessionAdapter
     internal static bool ShouldRetryEmptyExit(bool activeTurnDied, bool retryOnEmptyExit, bool turnGotEvent)
         => activeTurnDied && retryOnEmptyExit && !turnGotEvent;
 
+    // Ре-аттемпт хода фолбэком пропускает повторный submit текста. Условие: прошлый submit был
+    // тем же текстом, через НОВЫЙ процесс (durable в .jsonl — CLI пишет синхронно с приёмом) И
+    // ход не завершён result'ом (процесс умер без result — висящий user-turn доиграется на
+    // --resume). WasNewProcess отсекает same-process submit (TrySubmitTurn) и его DiedEmpty-ретрай:
+    // их запись в .jsonl не гарантирована, skip привёл бы к зависанию. Чистая функция для теста.
+    internal static bool ShouldSkipResubmit(string text, string? lastSubmittedText,
+        bool lastTurnResolved, bool lastSubmitWasNewProcess)
+        => !lastTurnResolved && lastSubmitWasNewProcess
+           && lastSubmittedText is not null && text == lastSubmittedText;
+
     private static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys,
         IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
@@ -2868,6 +2907,9 @@ public class ClaudeSession : ILlmSessionAdapter
                         break;
                     }
                     CorrTrace("result-emit", Info.Id, contRun, root);
+                    // Ход получил свой result (success или error) — завершён, ре-аттемпт этого
+                    // текста уже не висящий: повторный ход с тем же текстом пойдёт обычным submit.
+                    _lastTurnResolved = true;
                 }
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 // Числа читаем через безопасные хелперы: openrouter-совместимый поток шлёт

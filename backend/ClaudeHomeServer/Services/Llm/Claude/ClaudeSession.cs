@@ -2682,7 +2682,16 @@ public class ClaudeSession : ILlmSessionAdapter
         // этого флага смерть same-process прогона до ЛЮБОГО события неотличима от гонки TOCTOU
         // (запись в stdin прошла, но CLI уже завершается), и ретрай работал бы даже на обрыв
         // посреди хода. Сбрасывается в TrySubmitTurn — поэтому между ходами не срабатывает.
-        if (!run.TurnDone) run.TurnGotEvent = true;
+        //
+        // НО событие должно принадлежать САМОМУ ходу. Пока SkipResults>0, поток выдаёт хвост
+        // ход-продолжения CLI — его ответ на task-notification, начатый ДО нашего submit'а
+        // (TrySubmitTurn при ContinuationActive делает SkipResults++). Эти строки чужие нашему
+        // ходу: они доказывают, что процесс жив, но НЕ что он взялся за наше сообщение в stdin.
+        // Их учёт взводил TurnGotEvent ложно — продолжение заканчивалось, процесс умирал, не
+        // тронув нашу очередь, и смерть уходила наружу как легитимный Unreachable вместо тихого
+        // ретрая той же парой (инцидент 2026-08-10). result продолжения снимает SkipResults→0,
+        // после чего события нашего хода взводят флаг как обычно.
+        if (!run.TurnDone && Volatile.Read(ref run.SkipResults) == 0) run.TurnGotEvent = true;
 
         // Фактическая модель хода. Одной строкой на все виды событий: CLI называет её и в
         // system/init, и в message.model каждого ответа — разбор в TurnTelemetry.ModelFromEvent.

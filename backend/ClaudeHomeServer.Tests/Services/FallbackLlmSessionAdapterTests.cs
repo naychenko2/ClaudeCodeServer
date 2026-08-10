@@ -31,6 +31,7 @@ public class FallbackLlmSessionAdapterTests
         public int CurrentTurnAgentDepth => 0;
         public bool CurrentTurnSuppressTasksExecute => false;
         public bool HasLiveTurn => false;
+        public bool OrchestrationActive => false;
 
         public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
             int agentDepth = 0, bool suppressTasksExecute = false)
@@ -151,7 +152,9 @@ public class FallbackLlmSessionAdapterTests
         ProviderHealthRegistry? health = null,
         Action? persist = null,
         ContextCapacityRegistry? capacity = null,
-        Func<int>? lastContextTokens = null)
+        Func<int>? lastContextTokens = null,
+        Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
+        Action<string>? orchestrationDone = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -178,7 +181,9 @@ public class FallbackLlmSessionAdapterTests
             health: health,
             persist: persist,
             capacity: capacity,
-            lastContextTokens: lastContextTokens);
+            lastContextTokens: lastContextTokens,
+            enqueueBypass: enqueueBypass,
+            orchestrationDone: orchestrationDone);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }
@@ -1983,5 +1988,60 @@ public class FallbackLlmSessionAdapterTests
         // их не трогает, они ушли пока turn был активен.
         Downstream().OfType<ResultMessage>().Should().ContainSingle();
         Downstream().OfType<ExitedMessage>().Should().ContainSingle();
+    }
+
+    // П3: доставка под активной оркестрацией (повторный авто-ход в ещё занятый чат) раньше шла
+    // байпасом в _inner — невидимая очередь _turnLock без дедупа и фолбэк-защиты. Теперь ход
+    // возвращается в серверную Pending через колбэк EnqueueBypass и дождётся конца оркестрации,
+    // а OrchestrationDone в finally адаптера сигнализирует SessionManager разобрать очередь.
+    [Fact]
+    public async Task БайпасАктивнойОркестрации_ВозвратВPending_Вместо_Inner()
+    {
+        var pool = BuildPool("acc-a");
+        var firstStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var drainSignaled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requeued = new List<string>();
+        var (sut, inner) = BuildSut(pool,
+            enqueueBypass: (_, text, _, _, _) => { lock (requeued) requeued.Add(text); return Task.CompletedTask; },
+            orchestrationDone: _ => drainSignaled.TrySetResult(true));
+        inner.Sink = sut.HandleMessageAsync;
+
+        // Первый ход: стартует оркестрацию и «зависает» (не эмитит result) — _turn остаётся активен.
+        inner.Scripts.Enqueue(() => firstStarted.TrySetResult(true));
+        _ = sut.SendMessageAsync("ход-1");
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        sut.OrchestrationActive.Should().BeTrue("первый ход под оркестрацией, result ещё не пришёл");
+
+        // Второй ход приходит, пока оркестрация активна — уходит в серверную Pending (колбэк),
+        // а НЕ в _inner (inner.Attempts не должен вырасти на этом ходе).
+        await sut.SendMessageAsync("доклад-в-занятый-чат");
+        lock (requeued) requeued.Should().ContainSingle().Which.Should().Be("доклад-в-занятый-чат");
+        inner.Attempts.Should().HaveCount(1, "байпасный ход НЕ уходит в _inner — он ждёт в серверной Pending");
+
+        // Завершаем первый ход: оркестрация сбрасывает _turn и в finally сигнализирует DrainNextPending.
+        inner.Emit(Success());
+        await WaitForAsync(() => !sut.OrchestrationActive, "сброс _turn после result");
+        await drainSignaled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    // Без колбэка EnqueueBypass (тесты без SessionManager) адаптер откатывается к прежнему байпасу
+    // в _inner — чтобы не терять ходы. OrchestrationDone при этом не вызывается (нечего разбирать).
+    [Fact]
+    public async Task БайпасБезКолбэка_ОткатВ_Inner()
+    {
+        var pool = BuildPool("acc-a");
+        var firstStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var (sut, inner) = BuildSut(pool); // без enqueueBypass/orchestrationDone
+        inner.Sink = sut.HandleMessageAsync;
+        inner.Scripts.Enqueue(() => firstStarted.TrySetResult(true));
+        _ = sut.SendMessageAsync("ход-1");
+        await firstStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await sut.SendMessageAsync("ход-2-байпас");
+        // inner получил второй ход напрямую (откат к байпасу при отсутствии колбэка)
+        inner.Attempts.Should().HaveCount(2);
+
+        inner.Emit(Success());
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "result первого хода");
     }
 }

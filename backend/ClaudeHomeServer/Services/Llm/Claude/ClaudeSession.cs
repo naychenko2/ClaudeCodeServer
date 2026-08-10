@@ -239,7 +239,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // но чат при нём уже Active, так что реанимации мёртвого Working это не мешает.
     public bool HasLiveTurn => _run is not null;
 
-    // ORCHERATIONPROP_PLACEHOLDER
+    // ClaudeSession сам по себе не ведёт отдельной «оркестрации поверх хода» — это фолбэк-адаптер
+    // (FallbackLlmSessionAdapter) делает. Здесь всегда false: форсированный drain серверной
+    // очереди не гейтится. См. ILlmSessionAdapter.OrchestrationActive (инцидент 2026-08-10 П3).
+    public bool OrchestrationActive => false;
 
     // Хвостовой ридер главного транскрипта: завершения фоновых задач (<task-notification>)
     // CLI пишет в транскрипт, в stdout завершённого хода их может не быть (проверено live) —

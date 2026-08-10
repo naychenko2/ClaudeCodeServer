@@ -2775,6 +2775,10 @@ public class SessionManagerTests : IDisposable
         // Подставной адаптер изображает занятый чат с идущим ходом: без этого «Стоп»
         // принял бы его за зависший и пошёл бы в реанимацию (SessionManager.Interrupt)
         adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        // Фолбэк-оркестрации нет (обычный адаптер) — dispatchNow-гейт по OrchestrationActive
+        // не должен глушить форсированный разбор очереди. DIM без Setup в Moq возвращает
+        // default, но явная настройка делает тест детерминированным и независимым от версии Moq.
+        adapter.SetupGet(a => a.OrchestrationActive).Returns(false);
         adapter.Setup(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>())).Returns(Task.CompletedTask);
         return adapter;
@@ -2825,10 +2829,15 @@ public class SessionManagerTests : IDisposable
     // а не пустоту очереди — иначе Verify ловит гонку «очередь пуста, мок ещё не позвали».
     private static async Task WaitForAdapterCallAsync(Mock<ILlmSessionAdapter> adapter, TimeSpan timeout)
     {
+        // Ждём именно SendMessageAsync, а не «любой invocation»: dispatchNow-гейт по
+        // OrchestrationActive (П3) обращается к свойству адаптера раньше запуска drain —
+        // этот вызов появляется в Invocations первым и фожно удовлетворял бы старому условию
+        // Count>0, при этом SendMessageAsync ещё в пути (Task.Run drain). Гонка рвала Verify.
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (adapter.Invocations.Count > 0) return;
+            if (adapter.Invocations.Any(i => i.Method.Name == nameof(ILlmSessionAdapter.SendMessageAsync)))
+                return;
             await Task.Delay(10);
         }
     }

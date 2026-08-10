@@ -217,4 +217,15 @@ public sealed record LlmSessionContext(
     // модели в finally, чтобы переписать sessions.json восстановленными значениями — иначе
     // финальный result успевает сохранить подменённую модель (Major 1 ревью). null (тесты) —
     // персист не вызывается.
-    Action? PersistSessions = null);
+    Action? PersistSessions = null,
+    // Requeue хода в серверную Pending-очередь взамен байпаса в _inner (инцидент 2026-08-10 П3):
+    // фолбэк-адаптер вызывает при попытке доставки под активной оркестрацией — SessionManager
+    // ставит ход в очередь (kind=Agent, дедуп по text+persona), и он разбирается штатным drain
+    // после завершения оркестрации (см. OrchestrationDone). Аргументы: sessionId, text, вложения,
+    // глубина делегирования, suppressTasksExecute. null (тесты без SessionManager) — адаптер
+    // откатывается к прежнему байпасу в _inner, чтобы не терять ходы.
+    Func<string, string, IReadOnlyList<string>?, int, bool, Task>? EnqueueBypass = null,
+    // Сигнал «оркестрация хода завершена» (finally фолбэк-адаптера, _turn сброшен): SessionManager
+    // запускает разбор Pending-очереди — ходы, накопленные через EnqueueBypass во время
+    // оркестрации, доставляются штатно (теперь уже в свободный адаптер). null (тесты) — no-op.
+    Action<string>? OrchestrationDone = null);

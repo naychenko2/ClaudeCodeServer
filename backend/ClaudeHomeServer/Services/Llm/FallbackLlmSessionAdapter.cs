@@ -65,6 +65,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // SaveSessions ДО restore), и рестарт сервера в этом окне залипил бы чат на подмене
     // (возврат инцидента 2026-08-07). null (тесты без DI) — персист не вызывается.
     private readonly Action? _persist;
+    // Requeue хода в серверную Pending взамен байпаса в _inner (null — тесты: откат к байпасу).
+    private readonly Func<string, string, IReadOnlyList<string>?, int, bool, Task>? _enqueueBypass;
+    // Сигнал «оркестрация завершена» в finally → SessionManager запускает разбор Pending (null — тесты).
+    private readonly Action<string>? _orchestrationDone;
     // Корень профиля CLI на момент старта сессии (хостовый путь): источник для
     // переноса транскрипта и, у container-пользователя, способ вывести раскладку
     // песочных профилей (родитель = data/sandbox-profiles/{ownerId}).
@@ -76,6 +80,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Активная оркестрация фолбэка (null — сообщения проходят насквозь)
     private FallbackTurn? _turn;
     private readonly object _gate = new();
+    // Был ли requeue обхода в серверную Pending за текущую оркестрацию (finally триггерит drain
+    // только когда есть что разбирать — иначе лишний drain на каждом ходе поверх штатного по result).
+    private int _bypassRequeued;
     private volatile bool _userInterrupted;
     // Снимок MessageCount перед ходом: оркестратор восстанавливает счётчик в конце,
     // чтобы повторы не раздували «сообщения пользователя» (одно user-сообщение = +1)
@@ -96,7 +103,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         ILogger? log = null,
         Action? persist = null,
         ContextCapacityRegistry? capacity = null,
-        Func<int>? lastContextTokens = null)
+        Func<int>? lastContextTokens = null,
+        Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
+        Action<string>? orchestrationDone = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -113,6 +122,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _lastContextTokens = lastContextTokens;
         _log = log;
         _persist = persist;
+        _enqueueBypass = enqueueBypass;
+        _orchestrationDone = orchestrationDone;
         _profileRoot = initialProfileRoot ?? ResolveRootFor(CurrentProviderKey());
     }
 
@@ -120,6 +131,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // сторону на rate_limit_event: ротацией подписок владеет оркестратор (M1 — на одно
     // событие реагирует ровно один механизм, см. комментарий у обработчика RateLimitMessage).
     public bool FallbackTurnActive => _turn is not null;
+
+    // Оркестрация активна (ход под фолбэком) — SessionManager гейтит этим форсированный drain
+    // серверной очереди: ходы, вернувшиеся из-под активной оркестрации через EnqueueBypass,
+    // должны ждать её завершения, а не крутить цикл drain↔requeue (инцидент 2026-08-10 П3).
+    public bool OrchestrationActive => _turn is not null;
 
     // Единая точка логирования: с DI — обычный ILogger, без него (тесты, ручная сборка
     // адаптера) — Console.Error, чтобы диагностика не пропадала совсем
@@ -176,19 +192,26 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     {
         lock (_gate)
         {
-            // Оркестрация уже идёт (нештатно: SessionManager ставит ходы в очередь при
-            // занятом чате) — второй цикл фолбэка не строим, просто делегируем.
-            // ВНИМАНИЕ-ДИАГНОСТИКА: это байпас — ход уходит в _inner (невидимая очередь
-            // _turnLock в ClaudeSession) мимо серверной очереди и фолбэк-оркестрации, без
-            // дедупа и защиты Interrupt'ом. Нештатная ситуация: сервер уже считает чат
-            // свободным (результат хода ушёл downstream → SessionManager дренирует очередь),
-            // а адаптер ещё держит _turn в окне между SettleAsync (послал результат вниз) и
-            // finally (сбрасывает _turn). Повтор таких доставок = симптом дублирующих
-            // авто-ходов (инцидент 2026-08-10). Логируем как WARNING для pinpoint'а источника.
+            // Оркестрация уже идёт (нештатно: SessionManager считает чат свободным — результат
+            // хода ушёл downstream, статус Active, — а адаптер ещё держит _turn в окне между
+            // SettleAsync и finally). Раньше тут был байпас — ход уходил в _inner (невидимая
+            // очередь _turnLock ClaudeSession) мимо серверной Pending, без дедупа и фолбэк-защиты:
+            // гонка same-process давала ложный Unreachable (П1), а повторные доставки — дубли
+            // (П3). Теперь возвращаем ход в серверную очередь Pending: он дождётся конца
+            // оркестрации (finally триггерит drain) и пойдёт под штатным фолбэком как новый _turn.
+            // EnqueuePendingAsync дедупит Agent-сообщения по text+persona — повторный requeue
+            // того же хода безопасен (Duplicate). Колбэк не настроен (тесты без SessionManager) —
+            // откат к прежнему байпасу, чтобы не терять ходы.
             if (_turn is not null)
             {
-                LogWarn($"Доставка при активной оркестрации — байпас в _inner (session {Info.Id}, «{Truncate(text, 60)}»). " +
-                        "Ход уходит в невидимую очередь _turnLock без дедупа/фолбэка.");
+                if (_enqueueBypass is not null)
+                {
+                    Interlocked.Exchange(ref _bypassRequeued, 1);
+                    LogWarn($"Доставка при активной оркестрации — возврат в серверную очередь Pending (session {Info.Id}, «{Truncate(text, 60)}»). " +
+                            "Ход дождётся конца оркестрации и пойдёт под штатным фолбэком.");
+                    return _enqueueBypass(Info.Id, text, attachedPaths, agentDepth, suppressTasksExecute);
+                }
+                LogWarn($"Доставка при активной оркестрации — байпас в _inner (session {Info.Id}, «{Truncate(text, 60)}»): колбэк requeue не настроен (тесты).");
                 return _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute);
             }
             _turn = new FallbackTurn();
@@ -617,6 +640,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 && (appliedModel != origModel || appliedProvider != origProvider))
                 _persist?.Invoke();
             lock (_gate) if (ReferenceEquals(_turn, turn)) _turn = null;
+            // Оркестрация завершена (_turn сброшен → OrchestrationActive=false). Если за время хода
+            // были обходы в серверную Pending (EnqueueBypass), штатный drain по result уже отработал
+            // по ещё пустой очереди — без этой сигнализации requeued-ходы ждали бы следующего хода.
+            // Запускаем разбор: теперь адаптер свободен, и Pending-сообщения пойдут под новым _turn
+            // со штатным фолбэком. Drain идемпотентен (DrainInFlight гейт), пустая очередь — no-op.
+            if (Interlocked.Exchange(ref _bypassRequeued, 0) == 1)
+                _orchestrationDone?.Invoke(Info.Id);
         }
     }
 

@@ -152,6 +152,20 @@ public class SessionManager : IDisposable
 
     public enum PendingKind { Agent, User }
 
+    // Атрибуция доставленного хода для лога «Доставка хода» (инцидент 2026-08-10 П3): кто
+    // инициировал авто-доставку, когда src=auto/origin пустой. Различает точки, прежде бывшие
+    // неразличимыми (drain очереди / work-loop / доклад исполнителя / обход байпаса), и pinpoint'ит
+    // источник остаточных повторных доставок после закрытия байпаса (П3 п.3).
+    public enum DeliveryCause
+    {
+        User,           // hub — человек через SignalR
+        QueueUser,      // fromQueue — пользовательское сообщение из Pending
+        QueueAgent,     // fromQueue — агентское сообщение из Pending (в т.ч. обход байпаса)
+        Direct,         // auto — прямая отправка (SendOrEnqueueAsync при свободном чате: доклад исполнителя и пр.)
+        WorkLoop,       // auto — цикл «до готово» (верификация/продолжение)
+        Unknown,        // auto — точка не помечена (диагностика: проставить cause)
+    }
+
     // Снимок пользовательского сообщения, ушедшего в работу, — для возврата в композер
     // по «Стоп», если пользовательских в очереди не оказалось
     public record UserTurnSnapshot(string Text, IReadOnlyList<string> AttachedPaths, string? Mode);
@@ -2244,7 +2258,9 @@ public class SessionManager : IDisposable
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
             DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
-            PersistSessions: SaveSessions));
+            PersistSessions: SaveSessions,
+            EnqueueBypass: BuildEnqueueBypass(session.Id),
+            OrchestrationDone: BuildOrchestrationDone(session.Id)));
         entry.Process = adapter;
         entry.RunId = runId;
 
@@ -2257,7 +2273,7 @@ public class SessionManager : IDisposable
     // (pending_messages) и тут же прерывает текущий ход — доставляется немедленно по его
     // концу, а не после пассивного ожидания. Возвращаемый исход (Started/Queued) говорит
     // клиенту, рисовать ли оптимистичный баллон.
-    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? staffNote = null)
+    public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
             throw new InvalidOperationException("Сессия не найдена");
@@ -2382,7 +2398,7 @@ public class SessionManager : IDisposable
         }
 
         await SendDirectAsync(sessionId, entry, text, attachedPaths, mode, systemDirective, auto,
-            senderPersonaId, suppressTasksExecute, senderOrigin, staffNote: staffNote);
+            senderPersonaId, suppressTasksExecute, senderOrigin, staffNote: staffNote, cause: cause);
         return SendUserOutcome.Started;
     }
 
@@ -2392,16 +2408,19 @@ public class SessionManager : IDisposable
     private async Task SendDirectAsync(string sessionId, SessionEntry entry, string text,
         IReadOnlyList<string> attachedPaths, string? mode, bool systemDirective, bool auto,
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, bool fromQueue = false,
-        string? staffNote = null)
+        string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
         // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
         // процесс проходит через эту точку. src различает источник — hub (пользователь
         // через SignalR), auto (серверный ход: цикл/автоматизация/доклад исполнителя),
         // fromQueue (доставка пользовательского сообщения из серверной очереди pending).
+        // cause — атрибуция callsite внутри auto/fromQueue (drain/WorkLoop/обход байпаса/…):
+        // pinpoint'ит источник повторных доставок, прежде неразличимых при пустом origin.
         // Дубли видны как повторные строки с одинаковым/похожим text — pinpoint'ят источник.
         var deliverySrc = fromQueue ? "fromQueue" : auto ? "auto" : "hub";
-        _log.LogInformation("Доставка хода {Session}: src={Src} origin={Origin} mode={Mode} text=\"{Text}\"",
-            sessionId, deliverySrc, senderOrigin ?? "-", mode ?? "-",
+        var effectiveCause = cause != DeliveryCause.Unknown ? cause : !auto ? DeliveryCause.User : DeliveryCause.Unknown;
+        _log.LogInformation("Доставка хода {Session}: src={Src} cause={Cause} origin={Origin} mode={Mode} text=\"{Text}\"",
+            sessionId, deliverySrc, effectiveCause, senderOrigin ?? "-", mode ?? "-",
             (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
 
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
@@ -2669,7 +2688,12 @@ public class SessionManager : IDisposable
             dispatchNow = position == 1
                 && !entry.QueueFrozen
                 && (entry.Info.WorkLoop is null || kind == PendingKind.User)
-                && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting);
+                && entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting)
+                // Адаптер ведёт оркестрацию хода (фолбэк) — НЕ форсируем разбор очереди: ход,
+                // вернувшийся из-под оркестрации через EnqueueBypass, должен дождаться её конца
+                // (OrchestrationDone в finally адаптера), иначе drain↔requeue закрутит цикл на
+                // рассинхроне «статус Active, но _turn ещё активен» (инцидент 2026-08-10 П3).
+                && entry.Process?.OrchestrationActive != true;
         }
         await BroadcastPendingAsync(sessionId, entry);
 
@@ -2681,6 +2705,33 @@ public class SessionManager : IDisposable
         // такой постановки нельзя — это был бы собственный, только что запущенный ход
         return new SendAndWaitResult.Queued(position, Duplicate: false, Dispatched: dispatchNow);
     }
+
+    // Постановка хода в серверную Pending взамен байпаса в _inner (инцидент 2026-08-10 П3):
+    // фолбэк-адаптер вызывает при попытке доставки под активной оркестрацией. Ход уходит в
+    // очередь как агентский (kind=Agent, дедуп по text+persona), origin помечает источник для
+    // лога «Доставка хода». dispatchNow внутри EnqueuePendingAsync гейтится OrchestrationActive —
+    // разбор откладывается до OrchestrationDone (finally адаптера).
+    private async Task EnqueueBypassTurn(string sessionId, string text,
+        IReadOnlyList<string>? attachedPaths, int agentDepth, bool suppressTasksExecute)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        await EnqueuePendingAsync(sessionId, entry, text,
+            senderPersonaId: null, senderOrigin: "orchestration-bypass",
+            agentDepth, silent: false, suppressTasksExecute,
+            kind: PendingKind.Agent, attachedPaths: attachedPaths);
+    }
+
+    // Билдеры колбэков для LlmSessionContext: замыкают sessionId сессии (адаптер передаёт тот же
+    // Info.Id, но захват надёжнее — сессия уже известна при создании контекста).
+    private Func<string, string, IReadOnlyList<string>?, int, bool, Task> BuildEnqueueBypass(string sessionId)
+        => (_, text, paths, depth, suppress) => EnqueueBypassTurn(sessionId, text, paths, depth, suppress);
+
+    private Action<string> BuildOrchestrationDone(string sessionId)
+        => __ => { _ = Task.Run(async () =>
+            {
+                try { await DrainNextPendingAsync(sessionId); }
+                catch (Exception ex) { Console.Error.WriteLine($"[SessionManager] Разбор очереди после оркестрации ({sessionId}): {ex.Message}"); }
+            }); };
 
     // Отправить сообщение сразу либо, если чат занят, поставить в очередь — единая точка
     // для серверных отправок (доклад исполнителя). Раньше такие ходы полагались на неявную
@@ -2701,7 +2752,8 @@ public class SessionManager : IDisposable
         }
 
         await SendMessageAsync(sessionId, text, [], auto: true, senderPersonaId: senderPersonaId,
-            suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin, staffNote: staffNote);
+            suppressTasksExecute: suppressTasksExecute, senderOrigin: senderOrigin, staffNote: staffNote,
+            cause: DeliveryCause.Direct);
         return false;
     }
 
@@ -3009,11 +3061,12 @@ public class SessionManager : IDisposable
                 await SendDirectAsync(sessionId, entry, next.Text,
                     next.AttachedPaths ?? [], mode: next.Mode, systemDirective: false, auto: false,
                     senderPersonaId: next.SenderPersonaId, suppressTasksExecute: next.SuppressTasksExecute,
-                    senderOrigin: next.SenderOrigin, fromQueue: true);
+                    senderOrigin: next.SenderOrigin, fromQueue: true, cause: DeliveryCause.QueueUser);
             else
                 await SendMessageAsync(sessionId, next.Text, [], auto: true,
                     senderPersonaId: next.SenderPersonaId, senderOrigin: next.SenderOrigin,
-                    suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote);
+                    suppressTasksExecute: next.SuppressTasksExecute, staffNote: next.StaffNote,
+                    cause: DeliveryCause.QueueAgent);
             return true;
         }
         catch (Exception ex)
@@ -3169,7 +3222,9 @@ public class SessionManager : IDisposable
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
-                PersistSessions: SaveSessions);
+                PersistSessions: SaveSessions,
+                EnqueueBypass: BuildEnqueueBypass(sessionId),
+                OrchestrationDone: BuildOrchestrationDone(sessionId));
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -3206,7 +3261,9 @@ public class SessionManager : IDisposable
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),
                 ExternalMcpProvider: BuildExternalMcpProvider(project.OwnerId, project.Id, persona.Persona),
                 DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info),
-                PersistSessions: SaveSessions);
+                PersistSessions: SaveSessions,
+                EnqueueBypass: BuildEnqueueBypass(sessionId),
+                OrchestrationDone: BuildOrchestrationDone(sessionId));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;

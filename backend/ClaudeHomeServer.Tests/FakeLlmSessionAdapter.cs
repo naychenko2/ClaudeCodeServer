@@ -39,6 +39,7 @@ internal sealed class FakeLlmSessionAdapter : ILlmSessionAdapter
     public int CurrentTurnAgentDepth => 0;
     public bool CurrentTurnSuppressTasksExecute => false;
     public bool HasLiveTurn => false;
+    public bool OrchestrationActive => false;
 
     public Task StartAsync() => Task.CompletedTask;
 

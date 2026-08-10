@@ -153,6 +153,7 @@ export const SHADOW = {
   fab:      'var(--shadow-fab)',        // плавающая круглая кнопка (FAB) с accent-заливкой
   fabNeutral: 'var(--shadow-fab-neutral)', // тот же ореол, но нейтральный — FAB без заливки
   thumb:    'var(--shadow-thumb)',      // бегунок переключателя
+  press:    'var(--shadow-press)',      // прожатие: тень внутрь (отклик на нажатие)
 } as const
 
 // === Панели-острова (стиль Rider Islands) ===

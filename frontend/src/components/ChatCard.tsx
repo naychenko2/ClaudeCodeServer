@@ -335,7 +335,10 @@ export function ChatCard({
       onTouchMove={onTpMove}
       onTouchEnd={killLongPress}
       onTouchCancel={killLongPress}
-      className={'cc-card-shadow' + glowClass + unreadClass}
+      // cc-card-press — прожатие под нажатием (index.css). В режиме правки названия
+      // его нет: там внутри поле ввода, и вдавливать карточку при постановке
+      // курсора незачем
+      className={'cc-card-shadow' + (editing ? '' : ' cc-card-press') + glowClass + unreadClass}
       style={{
         position: 'relative',
         // отдельные longhand-свойства: со shorthand + undefined React обнуляет padding-left

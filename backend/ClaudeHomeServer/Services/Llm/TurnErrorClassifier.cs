@@ -79,8 +79,10 @@ public static class TurnErrorClassifier
         if (string.IsNullOrEmpty(status))
         {
             // Статуса нет — решаем по тексту (напр. «fetch failed» без статуса);
+            // порядок: недоступность → лимит запросов → переполнение контекста;
             // не опознали — None (fail-closed)
             if (LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
+            if (LooksRateLimited(outcome.ErrorText)) return FallbackErrorClass.RateLimit;
             if (LooksContextOverflow(outcome.ErrorText)) return FallbackErrorClass.ContextOverflow;
             return FallbackErrorClass.None;
         }
@@ -156,6 +158,42 @@ public static class TurnErrorClassifier
         if (string.IsNullOrWhiteSpace(value)) return false;
         foreach (var phrase in ContextOverflowPhrases)
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Маркеры лимита запросов в тексте ошибки при пустом статусе (прод-кейс: сторонние
+    // провайдеры отдают в поле статуса «—», а HTTP 429/quota-exhausted — только текстом).
+    // Формулировки без кода ошибки.
+    private static readonly string[] RateLimitPhrases =
+    [
+        "rate limit",
+        "too many requests",
+    ];
+
+    // Код 429 в связке со словом-квалификатором. Голое «429» ловить нельзя — текст
+    // ошибки может ЦИТИРОВАТЬ код (тот же класс грабель, что у overflow-маркеров выше):
+    // узнаваем только в окружении «error/status/http/rejected», характерном для самой
+    // ошибки, а не для разбора инцидента в чате.
+    private static readonly string[] RateLimitCodeMarkers =
+    [
+        "rejected (429)",
+        "error 429",
+        "status 429",
+        "http 429",
+    ];
+
+    private static bool LooksRateLimited(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var phrase in RateLimitPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (var marker in RateLimitCodeMarkers)
+            if (value.Contains(marker, StringComparison.OrdinalIgnoreCase)) return true;
+        // Квота исчерпана: «quota» и «exhausted» совместно — покрывает разные формулировки
+        // («quota has been exhausted», «quota is exhausted»). По отдельности не трактуем.
+        if (value.Contains("quota", StringComparison.OrdinalIgnoreCase)
+            && value.Contains("exhausted", StringComparison.OrdinalIgnoreCase))
+            return true;
         return false;
     }
 

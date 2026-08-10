@@ -21,6 +21,35 @@ public class TurnErrorClassifierTests
     public void ЛимитЗапросов_ЗапускаетФолбэк(string status)
         => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.RateLimit);
 
+    // Прод-кейс 2026-08-09 (qwen/alibabacloud): статус пришёл пустым, но текст ошибки
+    // однозначно о RateLimit — классификатор обязан поднять фолбэк, а не fail-closed.
+    [Fact]
+    public void ЛимитЗапросов_ПустойСтатус_Текст429_КлассRateLimit()
+        => TurnErrorClassifier.Classify(Result(null,
+                "API Error: Request rejected (429) · Your token-plan 1-week quota has been exhausted. The quota will reset at 08-11 07:55:00 UTC."))
+            .Should().Be(FallbackErrorClass.RateLimit,
+                "пустой статус при тексте «(429) … quota … exhausted» — это RateLimit, фолбэк нужен");
+
+    [Theory]
+    [InlineData("rate limit exceeded")]
+    [InlineData("Too Many Requests")]
+    [InlineData("Your token-plan 1-week quota has been exhausted.")]
+    [InlineData("Request rejected (429)")]
+    [InlineData("Error 429: slow down")]
+    [InlineData("HTTP 429")]
+    [InlineData("status 429 returned")]
+    public void ЛимитЗапросов_ПустойСтатус_ПоМаркерамВТексте(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.RateLimit);
+
+    // Цитата «429» в тексте без квалификатора — не RateLimit: голый код в разборе инцидента
+    // не должен запускать фолбэк. Узкие маркеры (error/status/http/rejected + 429) не срабатывают.
+    [Theory]
+    [InlineData("Разбираем инцидент: клиент получил 429 на соседнем сервисе")]
+    [InlineData("В логе мелькнул 429, но запрос прошёл успешно")]
+    public void Цитата429_ПустойСтатус_НеКлассифицируетсяКакRateLimit(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голое «429» в тексте — цитата, а не сам код ошибки");
+
     [Fact]
     public void RateLimitEventRejected_ПоОкнуИсчерпания_ЗапускаетФолбэк()
         => TurnErrorClassifier.Classify(new TurnAttemptOutcome

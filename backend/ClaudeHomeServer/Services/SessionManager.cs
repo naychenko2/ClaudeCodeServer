@@ -3048,6 +3048,11 @@ public class SessionManager : IDisposable
         }
     }
 
+    // Флаг «уже предупредили про opt-out»: выводим ровно один раз на инстанс процесса, иначе
+    // прод-настройки с потолком 0 будут сыпать Warning на каждом ходе. opt-out — исключительный
+    // кейс (тесты или явное выключение защиты), в нормальной работе потолок = 8.
+    private static int _awaitExitOptOutLogged;
+
     // Ожидание подтверждённой смерти прогона предыдущего хода перед отложенной доставкой
     // (инцидент 2026-08-10, П2-Ф1 «сериализация на смерти»). См. комментарий в DeliverPendingAsync.
     // Потолок — Delivery:AwaitProcessExitSeconds (дефолт 8): латентность старта авто-хода в
@@ -3060,7 +3065,16 @@ public class SessionManager : IDisposable
         var ceiling = int.TryParse(_config["Delivery:AwaitProcessExitSeconds"], out var s) && s >= 0
             ? s : 8;
         // Потолок 0 — отключить сериализацию (тесты, или явный opting-out). Иначе ждём смерти.
-        if (ceiling <= 0) return;
+        // Один раз на процесс предупреждаем в лог: защита от гонок на смерти прогона выключена,
+        // это исключительный кейс — в проде потолок должен быть положительным.
+        if (ceiling <= 0)
+        {
+            if (Interlocked.Exchange(ref _awaitExitOptOutLogged, 1) == 0)
+                _log.LogWarning(
+                    "Delivery:AwaitProcessExitSeconds={Ceiling} — сериализация отложенной доставки выключена (opt-out)",
+                    ceiling);
+            return;
+        }
         var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(ceiling);
         while (Busy(entry.Process))
         {

@@ -206,6 +206,15 @@ public class ClaudeSession : ILlmSessionAdapter
         // выставляет TrySubmitTurn (только он уязвим — новый процесс, умерший пустым, = реальный
         // сбой старта). Читает FinalizeRunAsync вместе с TurnGotEvent — см. ShouldRetryEmptyExit.
         public volatile bool RetryOnEmptyExit;
+        // Same-process ход отправлен в доживающий прогон БЕЗ активного continuation и БЕЗ фоновых
+        // задач (фильтр SkipResults из Д1 неприменим — он защищает только режим continuation).
+        // В таком окне процесс после result предыдущего хода уже завершается, и хвостовые события
+        // этого обречённого процесса ненадёжны: они ложно взводят TurnGotEvent и маскируют гонку
+        // TOCTOU под легитимный обрыв → ложный Unreachable → подмена модели (инцидент 2026-08-10,
+        // П2). Смерть same-process хода без result в этом окне трактуется как гонка (тихий ретрай
+        // той же парой) независимо от TurnGotEvent. Выставляет TrySubmitTurn в ветке без
+        // ContinuationActive && !HasPendingBg; читает ShouldRetryEmptyExit.
+        public volatile bool ReuseSubmit;
         // Финализация обнаружила пустую смерть same-process хода: RunTurnAsync по этому
         // признаку проваливается к запуску нового процесса на той же паре (один ретрай),
         // не отдавая смерть наружу. volatile — пишется потоком ридера, читается потоком хода.
@@ -229,6 +238,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Прогон существует — чат занят по-настоящему. Доживание фоновых агентов сюда попадает,
     // но чат при нём уже Active, так что реанимации мёртвого Working это не мешает.
     public bool HasLiveTurn => _run is not null;
+
+    // ORCHERATIONPROP_PLACEHOLDER
 
     // Хвостовой ридер главного транскрипта: завершения фоновых задач (<task-notification>)
     // CLI пишет в транскрипт, в stdout завершённого хода их может не быть (проверено live) —
@@ -1511,10 +1522,23 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 Interlocked.Increment(ref run.SkipResults);
                 run.ContinuationActive = false;
+                // Continuation — отдельный режим: фильтр SkipResults из Д1 защищает его событийный
+                // хвост. ReuseSubmit неприменим (окно продолжения, а не завершающийся прогон).
+                run.ReuseSubmit = false;
                 CorrTrace("submit-turn(skip++)", Info.Id, run);
             }
             else
+            {
+                // Без continuation и фоновых задач прогон после result уже завершается —
+                // same-process submit в такое окно это гонка с умирающим процессом. Хвостовые
+                // события обречённого процесса ложно взвели бы TurnGotEvent (фильтра SkipResults
+                // тут нет) → смерть ушла бы как легитимный Unreachable. Флаг заставляет
+                // ShouldRetryEmptyExit трактовать её как TOCTOU (тихий ретрай той же парой).
+                // Доживающие агенты (HasPendingBg) держат процесс живым — там ход легитимен,
+                // смерть посреди хода реальна, ретрай не нужен.
+                run.ReuseSubmit = !run.HasPendingBg;
                 CorrTrace("submit-turn(no-skip)", Info.Id, run);
+            }
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
@@ -2423,6 +2447,12 @@ public class ClaudeSession : ILlmSessionAdapter
             try { await run.Process.WaitForExitAsync(exitCts.Token); }
             catch (OperationCanceledException) { } // 10 с истекло — идём дальше
         }
+        // Смерть процесса была безмолвной — exit-code недоставало для диагностики причины
+        // (штатный выход CLI по result vs крах). Сохраняем до Dispose: при активной смерти
+        // хода ниже он попадёт в лог, чтобы различить «процесс сам вышел» и «упал по ошибке».
+        int? exitCode = null;
+        try { if (run.Process.HasExited) exitCode = run.Process.ExitCode; }
+        catch (Exception) { /* ExitCode бросает, если процесс ещё не вышел или не задан код */ }
         if (run.StderrTask is { } stderrTask)
             try
             {
@@ -2513,11 +2543,24 @@ public class ClaudeSession : ILlmSessionAdapter
         // подавил ExitedMessage → ни result, ни exited, ни ретрая: сессия навсегда залипает в
         // Working (тот же класс бага, что и реанимация зависших чатов). Решение — чистая ф-я (тест).
 
-        if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent))
+        if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent, run.ReuseSubmit))
         {
             run.DiedEmpty = true;
             run.SuppressExited = true;
-            Console.WriteLine("[ClaudeSession] Same-process ход умер до первого события — перезапуск новым процессом на той же паре");
+            // Диагностика причины смерти (раньше была безмолвной): что убило процесс — штатный
+            // выход по result (exit=0), крах CLI (ненулевой код) или обречённость reuse-окна.
+            // reuse=true — гонка same-process (фильтр SkipResults неприменим), это ожидаемо.
+            Console.WriteLine(
+                $"[ClaudeSession] Same-process ход умер без result — перезапуск новым процессом на той же паре " +
+                $"(reuse={run.ReuseSubmit} gotEvent={run.TurnGotEvent} exit={exitCode?.ToString() ?? "?"})");
+        }
+        else if (activeTurnDied)
+        {
+            // Активный ход умер, но DiedEmpty-ретрай не сработал (обрыв посреди хода с реальной
+            // выдачей — TurnGotEvent=true, либо новый процесс — сбой старта): смерть уйдёт наружу
+            // как ProcessGone/Unreachable. Фиксируем причину для разбора ложных подмен.
+            Console.Error.WriteLine(
+                $"[ClaudeSession] Прогон умер при активном ходе (gotEvent={run.TurnGotEvent} reuse={run.ReuseSubmit} retryOnEmpty={run.RetryOnEmptyExit} exit={exitCode?.ToString() ?? "?"})");
         }
 
         // Резолвим TurnTcs ПОСЛЕ выставления флагов ретрая: будим ждущий same-process путь,
@@ -2655,9 +2698,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // ход был активен (ждуresult) в момент смерти (не между ходами и не после result);
     // retryOnEmptyExit — ход отправлен через same-process submit (TrySubmitTurn, только он
     // уязвим к гонке — новый процесс, умерший пустым, это реальный сбой старта); turnGotEvent —
-    // пришло хотя бы одно событие хода после submit (обрыв посреди хода — НЕ ретрай).
-    internal static bool ShouldRetryEmptyExit(bool activeTurnDied, bool retryOnEmptyExit, bool turnGotEvent)
-        => activeTurnDied && retryOnEmptyExit && !turnGotEvent;
+    // пришло хотя бы одно событие хода после submit (обрыв посреди хода — НЕ ретрай);
+    // reuseSubmit — same-process submit ушёл в доживающий прогон без continuation и фоновых
+    // задач (см. CliRun.ReuseSubmit): процесс обречён, его хвостовые события ненадёжны и ложно
+    // взводят turnGotEvent, поэтому в этом окне смерть без result трактуем как TOCTOU-гонку
+    // (ретрай) даже при turnGotEvent=true (инцидент 2026-08-10 П2 — ложный Unreachable).
+    internal static bool ShouldRetryEmptyExit(bool activeTurnDied, bool retryOnEmptyExit,
+        bool turnGotEvent, bool reuseSubmit)
+        => activeTurnDied && retryOnEmptyExit && (!turnGotEvent || reuseSubmit);
 
     // Ре-аттемпт хода фолбэком пропускает повторный submit текста. Условие: прошлый submit был
     // тем же текстом, через НОВЫЙ процесс (durable в .jsonl — CLI пишет синхронно с приёмом) И

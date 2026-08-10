@@ -145,7 +145,8 @@ public class ClaudeSessionContinuationAttributionTests : IDisposable
         // (в) процесс умирает, не выдав ни одного события нашего хода. FinalizeRunAsync считает
         //     activeTurnDied=!TurnDone=true, и решает ретрай через ту же чистую функцию:
         ClaudeSession.ShouldRetryEmptyExit(
-            activeTurnDied: true, retryOnEmptyExit: true, turnGotEvent: TurnGotEventOf(run))
+            activeTurnDied: true, retryOnEmptyExit: true, turnGotEvent: TurnGotEventOf(run),
+            reuseSubmit: false)
             .Should().BeTrue(
                 "пустая смерть same-process хода — гонка TOCTOU, перезапуск той же парой; " +
                 "SuppressExited гасит ExitedMessage — фолбэк не считает смерть Unreachable");

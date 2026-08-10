@@ -174,9 +174,20 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         lock (_gate)
         {
             // Оркестрация уже идёт (нештатно: SessionManager ставит ходы в очередь при
-            // занятом чате) — второй цикл фолбэка не строим, просто делегируем
+            // занятом чате) — второй цикл фолбэка не строим, просто делегируем.
+            // ВНИМАНИЕ-ДИАГНОСТИКА: это байпас — ход уходит в _inner (невидимая очередь
+            // _turnLock в ClaudeSession) мимо серверной очереди и фолбэк-оркестрации, без
+            // дедупа и защиты Interrupt'ом. Нештатная ситуация: сервер уже считает чат
+            // свободным (результат хода ушёл downstream → SessionManager дренирует очередь),
+            // а адаптер ещё держит _turn в окне между SettleAsync (послал результат вниз) и
+            // finally (сбрасывает _turn). Повтор таких доставок = симптом дублирующих
+            // авто-ходов (инцидент 2026-08-10). Логируем как WARNING для pinpoint'а источника.
             if (_turn is not null)
+            {
+                LogWarn($"Доставка при активной оркестрации — байпас в _inner (session {Info.Id}, «{Truncate(text, 60)}»). " +
+                        "Ход уходит в невидимую очередь _turnLock без дедупа/фолбэка.");
                 return _inner.SendMessageAsync(text, attachedPaths, agentDepth, suppressTasksExecute);
+            }
             _turn = new FallbackTurn();
         }
         _userInterrupted = false;

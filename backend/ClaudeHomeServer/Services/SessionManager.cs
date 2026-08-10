@@ -2394,6 +2394,16 @@ public class SessionManager : IDisposable
         string? senderPersonaId, bool suppressTasksExecute, string? senderOrigin, bool fromQueue = false,
         string? staffNote = null)
     {
+        // ДИАГНОСТИКА повторных доставок (инцидент 2026-08-10): каждая доставка хода в
+        // процесс проходит через эту точку. src различает источник — hub (пользователь
+        // через SignalR), auto (серверный ход: цикл/автоматизация/доклад исполнителя),
+        // fromQueue (доставка пользовательского сообщения из серверной очереди pending).
+        // Дубли видны как повторные строки с одинаковым/похожим text — pinpoint'ят источник.
+        var deliverySrc = fromQueue ? "fromQueue" : auto ? "auto" : "hub";
+        _log.LogInformation("Доставка хода {Session}: src={Src} origin={Origin} mode={Mode} text=\"{Text}\"",
+            sessionId, deliverySrc, senderOrigin ?? "-", mode ?? "-",
+            (text.Length > 60 ? text[..60] : text).Replace('\n', ' '));
+
         // Режим, выбранный в Composer, применяется со следующего хода: процесс claude
         // пересоздаётся в RunTurnAsync и читает --permission-mode из Info.Mode.
         // Режим «План» у провайдера без поддержки тихо игнорируем (защита от рассинхрона UI).

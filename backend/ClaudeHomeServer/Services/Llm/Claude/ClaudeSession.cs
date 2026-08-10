@@ -88,6 +88,11 @@ public class ClaudeSession : ILlmSessionAdapter
     private volatile int _lastContextTokens;
     private readonly CancellationTokenSource _cts = new();
     private readonly SemaphoreSlim _turnLock = new(1, 1);
+    // Диагностика повторных доставок (инцидент 2026-08-10): счётчик ходов, прошедших через
+    // постановку в QueueTurnAsync и не отдавших _turnLock. На момент постановки новой задачи
+    // показывает, сколько ходов УЖЕ запарковано/идёт. >0 для серверского авто-хода — симптом
+    // дублирующей доставки (должна идти через видимую серверную очередь, а не этот невидимый лок).
+    private int _queuedTurns;
     // Сериализует записи в stdin процесса: control_response шлются из SignalR-потоков
     // параллельно с пампом — без лока JSON-строки могут перемешаться
     private readonly SemaphoreSlim _stdinLock = new(1, 1);
@@ -1133,23 +1138,37 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         _ = Task.Run(async () =>
         {
-            if (_cts.IsCancellationRequested) return;
-            await _turnLock.WaitAsync(_cts.Token);
-            try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token); }
-            catch (OperationCanceledException) { /* остановка сессии — штатно */ }
-            catch (Exception ex)
+            // ДИАГНОСТИКА повторных доставок: сколько ходов УЖЕ запарковано/идёт на _turnLock
+            // в момент этой постановки. Логируем только нетривиальный случай (parked>0) —
+            // обычный одиночный ход ничего не пишет. Для серверских авто-ходов parked>0 =
+            // подозрение на дубль (источник — байпас адаптера или ре-энтри).
+            var parked = Interlocked.Increment(ref _queuedTurns) - 1;
+            if (parked > 0)
             {
-                // Статус Error выставит SessionManager по ErrorMessage
-                await _onMessage(new ErrorMessage(ex.Message));
+                var snippet = (fullText.Length > 50 ? fullText[..50] : fullText).Replace('\n', ' ');
+                Console.Error.WriteLine($"[ClaudeSession] Постановка хода в очередь _turnLock: уже запарковано {parked} (session {Info.Id}, «{snippet}»)");
             }
-            finally
+            try
             {
-                // Ход закончился — следующий (если его инициирует человек) идёт с полным
-                // набором инструментов; действует ровно на ход внутри _turnLock
-                _currentTurnAgentDepth = 0;
-                _currentTurnSuppressTasksExecute = false;
-                _turnLock.Release();
+                if (_cts.IsCancellationRequested) return;
+                await _turnLock.WaitAsync(_cts.Token);
+                try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token); }
+                catch (OperationCanceledException) { /* остановка сессии — штатно */ }
+                catch (Exception ex)
+                {
+                    // Статус Error выставит SessionManager по ErrorMessage
+                    await _onMessage(new ErrorMessage(ex.Message));
+                }
+                finally
+                {
+                    // Ход закончился — следующий (если его инициирует человек) идёт с полным
+                    // набором инструментов; действует ровно на ход внутри _turnLock
+                    _currentTurnAgentDepth = 0;
+                    _currentTurnSuppressTasksExecute = false;
+                    _turnLock.Release();
+                }
             }
+            finally { Interlocked.Decrement(ref _queuedTurns); }
         });
 
         return Task.CompletedTask;

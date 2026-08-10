@@ -608,7 +608,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // профиля последней пары (_profileRoot — там лежит свежий ответ) в профиль
                     // исходного провайдера, куда вернётся --resume. Провал не роняет ход (TryCopy).
                     if (appliedProvider != origProvider)
-                        TryCopyTranscriptBack(ResolveRootFor(origProvider));
+                        // Ход прошёл (lastEnd=Result) → копия профиля подмены несёт свежий ответ:
+                        // перезаписываем приёмник, НЕ preserve (иначе «приёмник длиннее» оставит
+                        // висящий turn без ответа → реюрект дубля на следующем ходе, доп. №5).
+                        TryCopyTranscriptBack(ResolveRootFor(origProvider),
+                            preserveLongerDestination: lastEnd is not { Kind: AttemptEndKind.Result });
                     Info.Provider = origProvider;
                     providerRestored = true;
                 }
@@ -871,7 +875,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // исходного профиля не нашёл бы ответ модели. Копируем туда, где его ждёт resume. Провал
     // не роняет ход, но пишем Warning с обоими путями (иначе потеря памяти диалога останется
     // незамеченной). cwd — тот же, что у прямого переноса (TryMigrateTranscript).
-    private bool TryCopyTranscriptBack(string? dstRoot)
+    private bool TryCopyTranscriptBack(string? dstRoot, bool preserveLongerDestination = true)
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
@@ -883,8 +887,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // preserveLongerDestination: не затираем более полную историю приёмника усечённым
         // источником (Minor 1). Skip (приёмник длиннее) возвращается как true, но с причиной в
         // error — логируем её как Warning, иначе потеря полной истории осталась бы незамеченной.
+        // НО когда ход ПРОШЁЛ под подменой (caller передаёт preserve=false), источник = профиль
+        // последней пары — там лежит СВЕЖИЙ ответ, которого у приёмника нет. «Приёмник длиннее»
+        // здесь ложный сигнал (старая история + висящий turn без ответа), и preserve привело бы к
+        // расхождению копий: на следующем ходе --resume из приёмника реплеит висящий turn = дубль
+        // реакции (инцидент 2026-08-10, доп. №5). Поэтому успешный ход → перезапись (preserve=false).
         if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error,
-                preserveLongerDestination: true))
+                preserveLongerDestination: preserveLongerDestination))
         {
             LogWarn($"Обратный перенос транскрипта {Info.Id} не удался: src={_profileRoot}, dst={dstRoot}: {error}");
             return false;

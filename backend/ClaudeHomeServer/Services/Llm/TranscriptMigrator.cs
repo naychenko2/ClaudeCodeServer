@@ -185,7 +185,7 @@ public static class TranscriptMigrator
                     return true;
                 }
             }
-            File.Copy(src, dstFile, overwrite: true);
+            CopyFileShared(src, dstFile);
 
             var srcSessionDir = Path.Combine(Path.GetDirectoryName(src)!, claudeSessionId);
             if (Directory.Exists(srcSessionDir))
@@ -218,7 +218,7 @@ public static class TranscriptMigrator
 
             var dstDir = Path.Combine(configRoot, "projects", FlattenCwd(newCwd));
             Directory.CreateDirectory(dstDir);
-            File.Copy(src, Path.Combine(dstDir, claudeSessionId + ".jsonl"), overwrite: true);
+            CopyFileShared(src, Path.Combine(dstDir, claudeSessionId + ".jsonl"));
 
             var srcSessionDir = Path.Combine(Path.GetDirectoryName(src)!, claudeSessionId);
             if (Directory.Exists(srcSessionDir))
@@ -232,6 +232,38 @@ public static class TranscriptMigrator
         }
     }
 
+    // Копирование файла транскрипта в обход эксклюзивного захвата источника. Живой или умирающий
+    // процесс CLI держит активный .jsonl на запись (durable-очередь queue-operation), и File.Copy
+    // падал «The process cannot access the file … because it is being used by another process» —
+    // кандидат миграции пропускался, подмена провайдера срывалась, а на --resume в новом профиле
+    // разговор начинался с нуля (инцидент 2026-08-10). FileShare.ReadWrite открывает источник
+    // параллельно с записью CLI (если он делится чтением — копия мгновенна); иначе — короткий
+    // ретрай: процесс при миграции уже умирающий/убитый и вот-вот отпустит файл. Копия может
+    // отставать на недописанный хвост текущей строки, но полной на момент старта истории хватает
+    // для resume.
+    private static void CopyFileShared(string src, string dst)
+    {
+        const int bufferSize = 81920;
+        const int maxAttempts = 10;
+        const int stepMs = 150;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                using var srcStream = new FileStream(src, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, bufferSize);
+                using var dstStream = new FileStream(dst, FileMode.Create, FileAccess.Write, FileShare.None, bufferSize);
+                srcStream.CopyTo(dstStream);
+                return;
+            }
+            // Занят — подождём отпускания и повторим. Файл отсутствует или недоступен по иной
+            // причине — не ретраим: ошибка уйдёт наверх, TryMigrate вернёт false с причиной.
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                Thread.Sleep(stepMs);
+            }
+        }
+    }
+
     // Папка сессии (сабагенты и пр.) — без неё resume работает, поэтому ошибки глотаем
     private static void CopyDirectory(string src, string dst)
     {
@@ -242,7 +274,7 @@ public static class TranscriptMigrator
             {
                 var target = Path.Combine(dst, Path.GetRelativePath(src, file));
                 Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(file, target, overwrite: true);
+                CopyFileShared(file, target);
             }
         }
         catch (Exception ex)

@@ -1,3 +1,5 @@
+using System.Threading;
+using System.Threading.Tasks;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 
@@ -75,6 +77,32 @@ public class TranscriptMigratorTests : IDisposable
         var dstFile = Path.Combine(_dst, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl");
         File.Exists(dstFile).Should().BeTrue();
         File.ReadAllText(dstFile).Should().Be("line1\nline2");
+    }
+
+    [Fact]
+    public async Task TryMigrate_ИсточникЗанятКли_КопируетСРетраем()
+    {
+        // Инцидент 2026-08-10: умирающий процесс CLI держит активный .jsonl и не делится чтением
+        // — эксклюзивный File.Copy падал «file is being used by another process». Эмуляция: holder
+        // с FileShare.Write (делится записью, но НЕ чтением — как CLI), отпускаем через ~60мс.
+        // CopyFileShared ретраит с паузой и успевает после отпускания.
+        var srcFile = SeedTranscript(_src, content: "line1\nline2\n");
+        var holdTaken = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var hold = Task.Run(() =>
+        {
+            using var fs = new FileStream(srcFile, FileMode.Open, FileAccess.Write, FileShare.Write);
+            holdTaken.TrySetResult();
+            Thread.Sleep(60);
+        });
+        await holdTaken.Task; // holder взял файл — теперь источник занят
+
+        var ok = TranscriptMigrator.TryMigrate(_src, _dst, Cwd, SessionId, out var error);
+
+        await hold; // holder отпущен
+        ok.Should().BeTrue(error);
+        var dstFile = Path.Combine(_dst, "projects", TranscriptMigrator.FlattenCwd(Cwd), SessionId + ".jsonl");
+        File.Exists(dstFile).Should().BeTrue();
+        File.ReadAllText(dstFile).Should().Be("line1\nline2\n");
     }
 
     [Fact]

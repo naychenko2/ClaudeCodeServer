@@ -128,7 +128,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         else Console.Error.WriteLine($"[ModelFallback] {message}");
     }
 
-    private void LogInfo(string message) => _log?.LogInformation("[ModelFallback] {Message}", message);
+    // sid сессии — при двух параллельных фолбэк-сагах (два чата одновременно) лог без него
+    // нечитаем: строки Подмена/Переполнение/Исчерпание перемешиваются без признака владельца.
+    private void LogInfo(string message) => _log?.LogInformation("[ModelFallback] sid={Sid} {Message}", Info.Id, message);
 
     private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {Message}", message);
 

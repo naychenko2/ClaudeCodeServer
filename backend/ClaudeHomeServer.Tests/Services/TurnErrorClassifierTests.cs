@@ -101,6 +101,27 @@ public class TurnErrorClassifierTests
         => TurnErrorClassifier.Classify(Result("403", "invalid_api_key: invalid x-api-key"))
             .Should().Be(FallbackErrorClass.None);
 
+    // Прод-кейс 2026-08-11 (kimi, чат f9eebaaa): CLI не положил код в api_error_status —
+    // 403 остался только внутри текста ошибки. Ветка пустого статуса обязана спросить про
+    // usage limit, иначе класс выходит None и фолбэк не стартует (пользователь переключал
+    // модель руками). Текст — целиком, как пришёл в ленту.
+    [Fact]
+    public void UsageLimit_ПустойСтатус_ТекстИнцидента_КлассUsageLimit()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate. API Error: 403 You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle..."))
+            .Should().Be(FallbackErrorClass.UsageLimit,
+                "фраза «usage limit» в тексте — исчерпание квоты, фолбэк нужен");
+
+    // Fail-closed: настоящая ошибка аутентификации сменой модели не лечится. «Failed to
+    // authenticate» в начале сообщения Kimi к обратному выводу приводить не должно —
+    // решает наличие фразы про usage limit, а не преамбула.
+    [Fact]
+    public void ОшибкаКлюча_ПустойСтатус_ОстаётсяNone()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate. API Error: 401 invalid api key"))
+            .Should().Be(FallbackErrorClass.None,
+                "неверный ключ — ошибка конфигурации, фолбэк её маскировал бы");
+
     [Fact]
     public void Auth403_БезТекста_ФолбэкНеЗапускает()
         => TurnErrorClassifier.Classify(Result("403")).Should().Be(FallbackErrorClass.None);

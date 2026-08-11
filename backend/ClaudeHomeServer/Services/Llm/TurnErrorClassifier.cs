@@ -79,9 +79,20 @@ public static class TurnErrorClassifier
         if (string.IsNullOrEmpty(status))
         {
             // Статуса нет — решаем по тексту (напр. «fetch failed» без статуса);
-            // порядок: недоступность → лимит запросов → переполнение контекста;
-            // не опознали — None (fail-closed)
+            // порядок: недоступность → лимит использования → лимит запросов → переполнение
+            // контекста; не опознали — None (fail-closed)
             if (LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
+            // Исчерпание квоты при пустом статусе (инцидент 2026-08-11, kimi: CLI не положил
+            // 403 в api_error_status, код остался только в тексте «Failed to authenticate.
+            // API Error: 403 You've reached your usage limit for this billing cycle»). Раньше
+            // ветка про usage limit не спрашивала — класс выходил None, и фолбэк не стартовал.
+            // ПЕРЕД лимитом запросов: «usage limit» — маркер более узкий и более длящийся
+            // (квота биллингового цикла, а не окно запросов), и он же включает кулдаун
+            // провайдера. Текст, где обе семантики сразу, разумнее считать исчерпанием квоты.
+            // Fail-closed не страдает: сама фраза «usage limit» обязательна, поэтому настоящая
+            // ошибка ключа («invalid api key») остаётся None, несмотря на «Failed to
+            // authenticate» в начале сообщения Kimi.
+            if (LooksUsageLimited(outcome.ErrorText)) return FallbackErrorClass.UsageLimit;
             if (LooksRateLimited(outcome.ErrorText)) return FallbackErrorClass.RateLimit;
             if (LooksContextOverflow(outcome.ErrorText)) return FallbackErrorClass.ContextOverflow;
             return FallbackErrorClass.None;
@@ -130,7 +141,8 @@ public static class TurnErrorClassifier
         _ => null,
     };
 
-    // 403 с семантикой исчерпанного лимита использования (а не «ключ плохой»)
+    // Семантика исчерпанного лимита использования (а не «ключ плохой»). Спрашивается и при
+    // статусе 403, и при пустом статусе — сторонние провайдеры оставляют код только в тексте.
     private static bool LooksUsageLimited(string? text) =>
         text is not null
         && (text.Contains("usage limit", StringComparison.OrdinalIgnoreCase)

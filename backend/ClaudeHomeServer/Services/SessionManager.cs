@@ -578,9 +578,8 @@ public class SessionManager : IDisposable
 
         return async text =>
         {
-            var query = text.Trim();
+            var query = KnowledgeService.TrimQuery(text);
             if (query.Length == 0) return null;
-            if (query.Length > 500) query = query[..500];
             try
             {
                 var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore);
@@ -618,9 +617,8 @@ public class SessionManager : IDisposable
         {
             if (!_notesKb.Available || !_notesKb.HasIndex(ownerId)) return null;
 
-            var query = text.Trim();
+            var query = KnowledgeService.TrimQuery(text);
             if (query.Length == 0) return null;
-            if (query.Length > 500) query = query[..500];
 
             try
             {

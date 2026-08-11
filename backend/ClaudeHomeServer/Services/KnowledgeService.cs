@@ -128,6 +128,18 @@ public class KnowledgeService
         return ext == "" || ext == name || TextExtensions.Contains(ext);
     }
 
+    // Жёсткий потолок длины поискового запроса в Dify v1: query длиннее 250 символов
+    // отбивается 400 "String should have at most 250 characters". Обрезаем сами —
+    // иначе recall заметок и памяти персон падает на любом длинном ходе.
+    public const int MaxQueryLength = 250;
+
+    // Нормализация запроса перед отправкой в Dify: trim + обрезка до потолка.
+    public static string TrimQuery(string? query)
+    {
+        var q = query?.Trim() ?? "";
+        return q.Length > MaxQueryLength ? q[..MaxQueryLength] : q;
+    }
+
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly DifyOptions _cfg;
     private readonly WorkspaceKnowledgeStore _workspaceStore;
@@ -241,7 +253,8 @@ public class KnowledgeService
                     value = f.Value ?? "",
                 }),
             };
-        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve", new { query, retrieval_model = retrievalModel });
+        var resp = await client.PostAsJsonAsync($"datasets/{datasetId}/retrieve",
+            new { query = TrimQuery(query), retrieval_model = retrievalModel });
         resp.EnsureSuccessStatusCode();
         var body = await resp.Content.ReadFromJsonAsync<DifyRetrieveResponse>()
             ?? throw new InvalidOperationException("Пустой ответ от Dify при поиске");

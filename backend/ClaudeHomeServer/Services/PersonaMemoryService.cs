@@ -447,12 +447,16 @@ public sealed class PersonaMemoryService
         lock (_saveLock) focus = GetState(personaId).Focus;
 
         IReadOnlyList<PersonaMemoryHit> hits;
-        try { hits = await SearchAsync(ownerId, personaId, query, Math.Max(topK, 6)); }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Persona memory recall {Persona}", personaId);
-            hits = [];
-        }
+        // Пустой запрос Dify отбивает 400, длинный — тоже (потолок 250 символов)
+        var q = KnowledgeService.TrimQuery(query);
+        if (q.Length == 0) hits = [];
+        else
+            try { hits = await SearchAsync(ownerId, personaId, q, Math.Max(topK, 6)); }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Persona memory recall {Persona}", personaId);
+                hits = [];
+            }
 
         var top = hits.Where(h => h.Score >= minScore).Take(topK).ToList();
 

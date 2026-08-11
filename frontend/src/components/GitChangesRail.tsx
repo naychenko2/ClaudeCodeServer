@@ -198,7 +198,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     try { const n = Number(localStorage.getItem(SCOPE_H_KEY)); return Number.isFinite(n) && n >= 60 ? n : SCOPE_H_DEFAULT; }
     catch { return SCOPE_H_DEFAULT; }
   });
-  const [branchMenu, setBranchMenu] = useState(false);           // меню выбора ветки
+  const [branchMenu, setBranchMenu] = useState<DOMRect | null>(null); // меню выбора ветки (якорь кнопки-стрелки)
   const [branchHover, setBranchHover] = useState(false);         // наведение на капсулу ветки
   const [newBranchOpen, setNewBranchOpen] = useState(false);     // диалог новой ветки
   const [newBranchName, setNewBranchName] = useState('');
@@ -341,10 +341,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   };
 
   // Ветки: список грузим лениво при открытии меню, чекаут — только на другую ветку
-  const openBranchMenu = () => { if (!branchMenu) void loadGitBranches(project.id); setBranchMenu(v => !v); };
+  const openBranchMenu = (rect: DOMRect) => { if (!branchMenu) void loadGitBranches(project.id); setBranchMenu(v => v ? null : rect); };
   const doCheckout = (name: string) => { onScopeChange?.(); void gitCheckout(project.id, name); };
   const handleCheckout = (name: string) => {
-    setBranchMenu(false);
+    setBranchMenu(null);
     if (name === status?.branch) return;
     // Грязное дерево — сначала спросим (git иначе перенесёт правки или откажет при конфликте)
     if (workingFiles.length > 0) { setPendingCheckout(name); return; }
@@ -1117,7 +1117,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                   отдельное действие (меню веток), а не часть выбора скоупа */}
               <div style={{ width: 1, flexShrink: 0, background: (isBranch || branchMenu) ? C.accentMuted : C.border }} />
               <button
-                onClick={e => { e.stopPropagation(); openBranchMenu(); }}
+                onClick={e => { e.stopPropagation(); openBranchMenu(e.currentTarget.getBoundingClientRect()); }}
                 disabled={st.busy}
                 title="Выбрать ветку"
                 style={{
@@ -1128,8 +1128,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 <ChevronDown size={14} strokeWidth={ICON_STROKE} color={(branchMenu || isBranch) ? C.accent : C.textMuted} />
               </button>
             </div>
+            {/* anchor-режим (портал по якорю стрелки): панель живёт в карточке с
+                transform, и absolute-меню обрезалось её рамками — как у repoMenu */}
             {branchMenu && (
-              <Menu onClose={() => setBranchMenu(false)} align="left" bottom={34} minWidth={220}>
+              <Menu anchor={branchMenu} minWidth={220} onClose={() => setBranchMenu(null)}>
                 {st.branches.map(b => (
                   <MenuItem
                     key={b.name}
@@ -1143,7 +1145,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 )}
                 <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
                 <MenuItem icon={<Plus size={15} strokeWidth={ICON_STROKE} />} label="Новая ветка…"
-                  onClick={() => { setBranchMenu(false); setNewBranchOpen(true); }} />
+                  onClick={() => { setBranchMenu(null); setNewBranchOpen(true); }} />
               </Menu>
             )}
           </div>

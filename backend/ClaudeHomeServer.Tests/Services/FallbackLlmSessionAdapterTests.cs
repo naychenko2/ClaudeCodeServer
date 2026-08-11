@@ -1048,6 +1048,39 @@ public class FallbackLlmSessionAdapterTests
         marker.Provider.Should().Be("p-alive");
     }
 
+    // Minor 2 ревью: причина стартовой подмены берётся из реестра, а не захардкожена. При
+    // исчерпанной квоте Reason=usage_limit (фронт покажет «Исчерпан лимит», не «Эндпоинт
+    // недоступен»), при обрыве связи — unreachable. Label при этом нейтрален.
+    [Fact]
+    public async Task СтартоваяПодмена_ПричинаИзРеестра_НеЗахардкожена()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkQuotaExhausted("p-dead");   // исчерпанная квота, не обрыв связи
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // старт на m-alive через подмену
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Reason.Should().Be("usage_limit",
+            "причина из реестра: исчерпанная квота, а не захардкоженный unreachable");
+        marker.Label.Should().NotContain("недоступен",
+            "Label нейтрален — точную формулировку фронт берёт из Reason");
+    }
+
     // Исчерпанная квота СТОРОННЕГО провайдера (инцидент 2026-08-11, kimi: текст «usage limit»
     // при пустом статусе) помечает его в кулдауне длинным TTL — следующий ход стартует сразу
     // со следующего живого шага цепочки, не тратя попытку на исчерпанный провайдер.
@@ -1120,6 +1153,35 @@ public class FallbackLlmSessionAdapterTests
         pool.IsExhausted("acc-a").Should().BeTrue("лимитный класс помечает подписку исчерпанной");
         health.IsUnavailable("acc-a").Should().BeFalse(
             "подписки пула кулдауном не помечаются — их здоровье ведёт ClaudeSubscriptionPool");
+    }
+
+    // Major ревью: кулдаун снимается успешным ходом на этом провайдере, а не только по TTL.
+    // Сценарий: p-dead в кулдауне → fail-open остался на нём → ход успешен → кулдаун снят.
+    // Иначе пополенный тариф или поднявшийся эндпоинт простаивал бы весь TTL (час для квоты).
+    [Fact]
+    public async Task Кулдаун_СнимаетсяУспешнымХодомНаПровайдере()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkQuotaExhausted("p-dead");
+        // Без цепочки — стартовую подмену применить некуда, fail-open остаётся на исходной паре
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // успех на p-dead
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().ContainSingle();
+        health.IsUnavailable("p-dead").Should().BeFalse(
+            "успешный ход на провайдере снимает кулдаун — прямой сигнал «уже жив» сильнее TTL");
     }
 
     // --- Переполнение контекста (ContextOverflow) ---

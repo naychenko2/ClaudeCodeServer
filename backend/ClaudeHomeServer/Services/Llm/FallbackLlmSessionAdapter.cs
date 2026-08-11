@@ -376,11 +376,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         try
         {
             // (б) Стартовая подмена при кулдауне (волна 2): если стартовый провайдер помечен
-            // недоступным (возвращал Unreachable/ProviderError в прошлых ходах), не тратим
-            // попытку на мёртвый эндпоинт — стартуем сразу с первого живого шага цепочки.
-            // Маркер provider_switched (Reason=unreachable). fail-open: если ВСЕ шаги цепочки
-            // в кулдауне, остаёмся на исходной паре (ход должен идти). substitutions не тратим —
-            // это выбор стартовой точки, а не подмена по ошибке в этом ходе.
+            // недоступным (возвращал Unreachable/ProviderError в прошлых ходах либо исчерпал
+            // квоту — UsageLimit), не тратим попытку на мёртвый/исчерпанный эндпоинт — стартуем
+            // сразу с первого живого шага цепочки. Маркер provider_switched с Reason из реестра
+            // (фронт покажет «Исчерпан лимит»/«Эндпоинт недоступен» вместо универсальной фразы).
+            // fail-open: если ВСЕ шаги цепочки в кулдауне, остаёмся на исходной паре (ход должен
+            // идти). substitutions не тратим — это выбор стартовой точки, а не подмена по ошибке.
             //
             // Асимметрия с WouldFit (Minor 4 ревью): стартовый шаг намеренно НЕ сверяется с
             // фильтром ёмкости. Кулдаун — про доступность эндпоинта, а не про размер окна, а
@@ -427,9 +428,17 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         appliedProvider = currentKey;
                         anyProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
                         var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
+                        // Причину берём из реестра: исчерпанная квота и мёртвый эндпоинт для
+                        // пользователя — разные ситуации (одна лечится пополнением баланса, другая
+                        // — сетью). Раньше здесь стоял хардкод «unreachable»/«недоступен» со времён,
+                        // когда кулдаун был только про обрыв связи, и при исчерпании квоты подсказка
+                        // врала («Сервис не отвечает»). Label — нейтрален: точную формулировку фронт
+                        // берёт из Reason (providerSwitchReasonLabel предпочитает его перед Label).
+                        var switchReason = _health?.UnavailableReason(origProvider) ?? "unreachable";
                         await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
-                            $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
-                        LogInfo($"Стартовая подмена (кулдаун): «{origModel}» × «{origProvider}» недоступен → старт на «{currentKey}» / «{currentModel}»");
+                            $"Старт на «{slabel}»: исходный провайдер временно исключён",
+                            Auto: true, Reason: switchReason));
+                        LogInfo($"Стартовая подмена (кулдаун, {switchReason}): «{origModel}» × «{origProvider}» исключён → старт на «{currentKey}» / «{currentModel}»");
                     }
                 }
             }
@@ -459,8 +468,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                 if (_userInterrupted) { await SettleAsync(turn); return; }
 
-                // Успех (нет ошибки доставки) — задержанный result уходит наружу, ход окончен
-                if (!IsDeliveryFailure(end)) { await SettleAsync(turn); return; }
+                // Успех (нет ошибки доставки) — задержанный result уходит наружу, ход окончен.
+                // Снимаем кулдаун с провайдера ФАКТИЧЕСКОЙ попытки (currentKey): успешный ход —
+                // прямой сигнал «уже жив», сильнее верхней границы TTL. Без этого пополенный
+                // тариф или поднявшийся эндпоинт простаивал бы в кулдауне весь TTL (час для
+                // исчерпанной квоты), уводя стартовые подмены на чужие модели (Major ревью).
+                // Подписок пула здесь нет (мы их не помечаем), так что Clear для них — no-op.
+                if (!IsDeliveryFailure(end))
+                {
+                    _health?.Clear(currentKey);
+                    await SettleAsync(turn);
+                    return;
+                }
 
                 var outcome = new TurnAttemptOutcome
                 {
@@ -494,7 +513,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 if (IsExternalProvider(currentKey))
                 {
                     if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError)
-                        _health?.MarkUnavailable(currentKey);
+                        _health?.MarkUnavailable(currentKey, cls);
                     // Исчерпанная квота стороннего провайдера (инцидент 2026-08-11, kimi): без отметки
                     // каждый следующий ход снова стартовал бы на нём, тратил попытку и падал до конца
                     // биллингового цикла. MarkExhausted — механизм пула Claude, стороннего он не знает,

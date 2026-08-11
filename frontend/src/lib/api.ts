@@ -1037,6 +1037,10 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify({ parentId }),
       }),
+    // Отметить чат прочитанным (синк непрочитанности между устройствами).
+    // Работает и для проектных сессий, и для чатов вне проектов; не двигает updatedAt
+    markRead: (id: string) =>
+      request<void>(`/chats/${encodeURIComponent(id)}/read`, { method: 'PUT' }),
     // Обновить название чата по текущей переписке (AI-хаб, действие chat.retitle)
     retitle: (id: string) =>
       request<Session>(`/chats/${encodeURIComponent(id)}/retitle`, { method: 'POST' }),

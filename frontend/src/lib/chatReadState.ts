@@ -1,16 +1,21 @@
-// Состояние «прочитанности» чатов — per-device, хранится в localStorage.
-// Ключи: cc_chat_read_{chatId} = timestamp последнего открытия чата.
+// Состояние «прочитанности» чатов — гибрид: localStorage как optimistic-кеш
+// (мгновенное гашение метки, работа офлайн) + серверная отметка Session.lastReadAt
+// (PUT /api/chats/{id}/read) как источник синка между устройствами. Серверное
+// значение приезжает в обычном поллинге списков чатов (5с) — отдельного
+// транспорта синка нет.
 //
-// Чат «непрочитанный», если его updatedAt новее времени последнего прочтения,
-// то есть после нашего последнего визита в него пришли сообщения.
+// Ключи localStorage: cc_chat_read_{chatId} = timestamp последнего открытия чата.
+//
+// Правило: чат «непрочитанный», если updatedAt новее МАКСИМУМА из локальной
+// отметки, серверной lastReadAt и baseline (см. readBaseline). Baseline участвует
+// всегда: новое устройство не вспыхивает пачкой старых «непрочитанных» чатов.
 //
 // Стор реактивный: значения кешируются в памяти (иначе бейдж дёргал бы
 // localStorage по разу на чат при каждом рендере, а список чатов перечитывается
 // поллингом каждые 5с), подписчики уведомляются через useSyncExternalStore.
-//
-// MVP: localStorage. Потом можно мигрировать на бэк (поле lastReadAt в Session,
-// API POST /api/chats/{id}/read) для синхронизации между устройствами.
 import { useSyncExternalStore } from 'react';
+import { api } from './api';
+import { isOnline } from './offline';
 
 const KEY_PREFIX = 'cc_chat_read_';
 // Базовая отметка «когда это устройство впервые увидело список чатов».
@@ -82,6 +87,7 @@ function readBaseline(): number {
 
 // Отметить чат прочитанным — сейчас.
 // Вызывать при открытии чата (selectChat), после отправки сообщения, при создании.
+// Локальная отметка ставится мгновенно, серверная досылается фоном с троттлом.
 export function markChatRead(chatId: string): void {
   const now = Date.now();
   readCache().set(chatId, now);
@@ -89,6 +95,40 @@ export function markChatRead(chatId: string): void {
     localStorage.setItem(KEY_PREFIX + chatId, String(now));
   } catch { /* квота/приватный режим — молча, кеш в памяти уже обновлён */ }
   emit();
+  syncReadToServer(chatId);
+}
+
+// --- фоновый синк отметки на бэк ---
+// Leading + trailing троттл per chat: первый вызов уходит сразу (открытие чата),
+// повторы в окне схлопываются в один trailing-дослов. Trailing обязателен: во время
+// активного хода markChatRead зовётся на каждый status_changed, и без дослова
+// второе устройство видело бы чат непрочитанным весь ход (LastReadAt на бэке
+// отставал бы от UpdatedAt). Окно 5с — под период поллинга списков, чаще нет смысла.
+const SYNC_WINDOW_MS = 5_000;
+const syncState = new Map<string, { sentAt: number; timer: ReturnType<typeof setTimeout> | null }>();
+
+function syncReadToServer(chatId: string): void {
+  const st = syncState.get(chatId);
+  const now = Date.now();
+  if (!st || now - st.sentAt >= SYNC_WINDOW_MS) {
+    sendMarkRead(chatId);
+    return;
+  }
+  if (st.timer !== null) return; // дослов уже взведён — этот вызов он и покроет
+  st.timer = setTimeout(() => {
+    const cur = syncState.get(chatId);
+    if (cur) cur.timer = null;
+    sendMarkRead(chatId);
+  }, SYNC_WINDOW_MS - (now - st.sentAt));
+}
+
+function sendMarkRead(chatId: string): void {
+  const prev = syncState.get(chatId);
+  syncState.set(chatId, { sentAt: Date.now(), timer: prev?.timer ?? null });
+  // Гард заведомого офлайна — против шумной OfflineError; прочие ошибки глотаем:
+  // локальная отметка уже стоит, синк догонит со следующего вызова
+  if (!isOnline()) return;
+  api.chats.markRead(chatId).catch(() => { /* молча */ });
 }
 
 // Время последнего прочтения чата (timestamp ms). 0 — чат ни разу не открывали.
@@ -97,26 +137,27 @@ export function getChatReadTime(chatId: string): number {
 }
 
 // Есть ли в чате непрочитанные сообщения.
-// Чат, который на этом устройстве не открывали, сверяется с baseline: созданный
-// после первого запуска (например персоной или задачей) считается непрочитанным,
-// а существовавший до — нет.
-export function hasUnread(updatedAt: string, chatId: string): boolean {
-  const readTime = getChatReadTime(chatId) || readBaseline();
+// readTime = max(локальная отметка, серверная lastReadAt, baseline): серверная
+// гасит метку, если чат читали на другом устройстве; baseline прикрывает чаты,
+// существовавшие до первого запуска этого устройства (см. шапку модуля).
+export function hasUnread(updatedAt: string, chatId: string, lastReadAt?: string | null): boolean {
+  const serverRead = lastReadAt ? Date.parse(lastReadAt) || 0 : 0; // NaN/битое → 0
+  const readTime = Math.max(getChatReadTime(chatId), serverRead, readBaseline());
   const updatedTime = new Date(updatedAt).getTime();
   if (!Number.isFinite(updatedTime)) return false;
   return updatedTime > readTime;
 }
 
 // Сколько чатов имеют непрочитанные сообщения — для бейджа на иконке рельсы.
-export function countUnreadChats(chats: { id: string; updatedAt: string }[]): number {
-  return chats.reduce((n, c) => n + (hasUnread(c.updatedAt, c.id) ? 1 : 0), 0);
+export function countUnreadChats(chats: { id: string; updatedAt: string; lastReadAt?: string | null }[]): number {
+  return chats.reduce((n, c) => n + (hasUnread(c.updatedAt, c.id, c.lastReadAt) ? 1 : 0), 0);
 }
 
 // Реактивный бейдж: подписка гарантирует ререндер при отметке прочтения — без
 // неё markChatRead писал бы мимо React, и число обновлялось бы только случайно,
 // на постороннем ререндере. Сам подсчёт не мемоизируем: он читает Map в памяти,
 // а не localStorage, и стоит дешевле, чем сравнение зависимостей.
-export function useUnreadChatCount(chats: { id: string; updatedAt: string }[]): number {
+export function useUnreadChatCount(chats: { id: string; updatedAt: string; lastReadAt?: string | null }[]): number {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   return countUnreadChats(chats);
 }
@@ -124,9 +165,9 @@ export function useUnreadChatCount(chats: { id: string; updatedAt: string }[]): 
 // То же для одного чата — подсветка непрочитанности на его карточке. Через ту же
 // подписку: иначе метка гасла бы не при открытии чата, а на случайном ререндере
 // списка (в лучшем случае — на ближайшем поллинге, до 5с спустя).
-export function useHasUnread(updatedAt: string, chatId: string): boolean {
+export function useHasUnread(updatedAt: string, chatId: string, lastReadAt?: string | null): boolean {
   useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-  return hasUnread(updatedAt, chatId);
+  return hasUnread(updatedAt, chatId, lastReadAt);
 }
 
 // Очистка состояния прочтённости (напр. при logout).

@@ -56,6 +56,7 @@ POST                /api/personas/ask                  { handle, question, conte
 POST                /api/chats/group                   { personaIds[], mode?, name? } → Session  (групповой чат, флаг persona-group-chats)
 PUT                 /api/chats/{id}/participants       { personaIds[] } → Session  (состав группы; спикер сохраняется, иначе ведущая)
 PUT                 /api/chats/{id}/loop               { enabled } → Session  (цикл «до готово», флаг work-loop; работает и для проектных сессий)
+PUT                 /api/chats/{id}/read               → 204  (отметка прочтения: Session.lastReadAt, синк непрочитанности между устройствами; не двигает updatedAt; работает и для проектных сессий)
 PUT/DELETE          /api/admin/local-actions/{key}     { enabled } → { key, enabled, source }  (маршрут фонового действия локаль/claude; только admin; DELETE — сброс к конфигу/дефолту)
 GET                 /api/admin/backup                  → { enabled, effectivePath, secretsPath, intervalHours, lastSuccessAt, lastError, recent[3] }  (только admin; настройки правятся в конфиге, не отсюда)
 POST                /api/admin/backup/run              → { file, createdAt, summary }  (ручной снимок; только admin. Восстановление — не через API: exe --restore или меню трея)

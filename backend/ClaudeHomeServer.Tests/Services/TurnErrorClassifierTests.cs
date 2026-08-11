@@ -71,6 +71,37 @@ public class TurnErrorClassifierTests
     public void ОшибкаПровайдера_5xx_ЗапускаетФолбэк(string status)
         => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.ProviderError);
 
+    // Паритет «статус ↔ текст»: 5xx/перегрузка при ПУСТОМ статусе распознаётся по тексту.
+    // Сценарий — CLI отдал код только в тексте (инциденты, где api_error_status пришёл null).
+    // Маркеры — канонические reason phrases/type, по одному на каждый 5xx + overloaded_error.
+    [Theory]
+    [InlineData("API Error: overloaded_error")]
+    [InlineData("Internal Server Error")]
+    [InlineData("Error 502 Bad Gateway")]
+    [InlineData("Service Unavailable")]
+    [InlineData("Gateway Timeout")]
+    public void ОшибкаПровайдера_ПустойСтатус_ПоМаркерамВТексте(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ProviderError);
+
+    // Гейт от ложных срабатываний: общие слова «server error»/«overloaded» НЕ входят в маркеры.
+    // Ход, ЦИТИРУЮЩИЙ их в разборе инцидента, не должен уезжать на другого провайдера — тот же
+    // приём, что у ContextOverflow (узкие формулировки) и RateLimit (429 с квалификатором).
+    [Theory]
+    [InlineData("Разбираем инцидент: у нас была server error на эндпоинте")]
+    [InlineData("В логах мелькнула server error, но запрос прошёл")]
+    [InlineData("Сервис был overloaded весь вчерашний день")]
+    public void ЦитатаServerError_ПустойСтатус_НеКлассифицируетсяКакProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голые «server error»/«overloaded» слишком обычны в разборе — нужны точные reason phrases 5xx");
+
+    // Регрессия: статус 5xx решает по коду и не анализирует текст — даже цитата overflow
+    // не переключает класс (ветка статусов доходит до 5xx раньше ContextOverflow-проверки).
+    [Fact]
+    public void Статус500_ОстаётсяProviderError_ДажеПриOverflowТексте()
+        => TurnErrorClassifier.Classify(Result("500", "Разбираем «Prompt is too long» из прошлого"))
+            .Should().Be(FallbackErrorClass.ProviderError,
+                "статус 5xx решает по коду, текст не анализируется");
+
     [Fact]
     public void ОбрывПотока_БезResult_ЗапускаетФолбэк()
         => TurnErrorClassifier.Classify(new TurnAttemptOutcome { HasResult = false })

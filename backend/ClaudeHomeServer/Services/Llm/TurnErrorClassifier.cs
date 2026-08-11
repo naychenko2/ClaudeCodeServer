@@ -79,8 +79,11 @@ public static class TurnErrorClassifier
         if (string.IsNullOrEmpty(status))
         {
             // Статуса нет — решаем по тексту (напр. «fetch failed» без статуса);
-            // порядок: недоступность → лимит использования → лимит запросов → переполнение
-            // контекста; не опознали — None (fail-closed)
+            // порядок: недоступность → лимит использования → ошибка провайдера → лимит
+            // запросов → переполнение контекста; не опознали — None (fail-closed).
+            // Инвариант паритета «статус ↔ текст» (ADR §2): каждый признак, что ловится по
+            // статусу, обязан ловиться и по тексту — CLI часто отдаёт apiErrorStatus=null,
+            // и тогда текст единственный сигнал (на этом перекосе вскрылись прод-инциденты).
             if (LooksUnreachable(outcome.ErrorText)) return FallbackErrorClass.Unreachable;
             // Исчерпание квоты при пустом статусе (инцидент 2026-08-11, kimi: CLI не положил
             // 403 в api_error_status, код остался только в тексте «Failed to authenticate.
@@ -93,6 +96,11 @@ public static class TurnErrorClassifier
             // ошибка ключа («invalid api key») остаётся None, несмотря на «Failed to
             // authenticate» в начале сообщения Kimi.
             if (LooksUsageLimited(outcome.ErrorText)) return FallbackErrorClass.UsageLimit;
+            // Ошибка провайдера (5xx/перегрузка) перед лимитом запросов: перегруженный эндпоинт
+            // уходит в кулдаун, а не ждёт сброса секундного окна — тяжелее по последствиям.
+            // Маркеры — канонические reason phrases/type 5xx, не общие слова (см. LooksProviderError):
+            // закрывает паритет со статусами overloaded_error/5xx при пустом api_error_status.
+            if (LooksProviderError(outcome.ErrorText)) return FallbackErrorClass.ProviderError;
             if (LooksRateLimited(outcome.ErrorText)) return FallbackErrorClass.RateLimit;
             if (LooksContextOverflow(outcome.ErrorText)) return FallbackErrorClass.ContextOverflow;
             return FallbackErrorClass.None;
@@ -206,6 +214,33 @@ public static class TurnErrorClassifier
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
         foreach (var marker in RateLimitCodeMarkers)
             if (value.Contains(marker, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    // Маркеры ошибки провайдера в тексте при пустом статусе — паритет со статусами
+    // overloaded_error/5xx (прод-кейс: CLI отдал 5xx без кода в api_error_status). Каждый
+    // маркер — канонический error type или HTTP reason phrase 5xx: overloaded_error (Anthropic),
+    // internal server error (500), bad gateway (502), service unavailable (503),
+    // gateway timeout (504). Голое «server error»/«overloaded» сюда НЕ входят — слишком
+    // обычны в разборе инцидентов, и ход, ЦИТИРУЮЩИЙ их, не должен уезжать на фолбэк (тот же
+    // гейт от ложных срабатываний, что у ContextOverflow и RateLimit). Редкие 5xx без общей
+    // формулировки (501 Not Implemented и т.п.) при пустом статусе остаются None: их код почти
+    // всегда приезжает в api_error_status, а ловить «not implemented» как маркер — ловить и
+    // содержательные ответы о нереализованных функциях. Fail-closed сохраняется.
+    private static readonly string[] ProviderErrorPhrases =
+    [
+        "overloaded_error",
+        "internal server error",
+        "bad gateway",
+        "service unavailable",
+        "gateway timeout",
+    ];
+
+    private static bool LooksProviderError(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        foreach (var phrase in ProviderErrorPhrases)
+            if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
     }
 

@@ -338,6 +338,74 @@ public class SessionManagerTests : IDisposable
             .Should().Be(new ClaudeHomeServer.Services.Llm.TurnDelegationState(0, false));
     }
 
+    // --- MarkRead: отметка прочтения (синк непрочитанности между устройствами) ---
+
+    [Fact]
+    public async Task MarkRead_УстанавливаетLastReadAt_НеТрогаяUpdatedAt()
+    {
+        var dir = MkProjectDir("mr");
+        var project = _projectManager.Create("MR", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var updatedBefore = session.UpdatedAt;
+
+        _sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+
+        session.LastReadAt.Should().NotBeNull();
+        // Инвариант conventions.md: отметка прочтения — настройка, не активность,
+        // иначе чат прыгал бы в списке и сам метил себя непрочитанным
+        session.UpdatedAt.Should().Be(updatedBefore, "MarkRead не должен двигать UpdatedAt");
+        session.LastReadAt.Should().BeOnOrAfter(updatedBefore);
+    }
+
+    [Fact]
+    public async Task MarkRead_ПовторнаяОтметка_НеПереписываетСвежую()
+    {
+        var dir = MkProjectDir("mr2");
+        var project = _projectManager.Create("MR2", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        _sut.MarkRead(session.Id, TestUserId);
+        var first = session.LastReadAt;
+
+        // LastReadAt уже >= UpdatedAt → идемпотентный ранний выход без перезаписи
+        _sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+        session.LastReadAt.Should().Be(first, "повторная отметка при свежей — no-op");
+
+        // Новая активность двигает UpdatedAt вперёд — следующая отметка снова пишет
+        session.UpdatedAt = DateTime.UtcNow.AddMinutes(1);
+        _sut.MarkRead(session.Id, TestUserId).Should().BeTrue();
+        session.LastReadAt.Should().BeAfter(first!.Value);
+    }
+
+    [Fact]
+    public async Task MarkRead_ЧужойВладелецИлиНесуществующая_False()
+    {
+        var dir = MkProjectDir("mr3");
+        var project = _projectManager.Create("MR3", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        _sut.MarkRead(session.Id, "another-user").Should().BeFalse();
+        session.LastReadAt.Should().BeNull("чужая отметка не должна применяться");
+        _sut.MarkRead("does-not-exist", TestUserId).Should().BeFalse();
+    }
+
+    [Fact]
+    public void LastReadAt_Сериализация_UtcСуффиксZ_И_RoundTrip()
+    {
+        // Клиент сравнивает Date.parse(lastReadAt) с Date.parse(updatedAt): без суффикса Z
+        // (Kind=Unspecified) браузер прочитал бы время как локальное и непрочитанность
+        // уехала бы на часовой пояс. Опции — как у SessionManager (_jsonOpts: только enum-конвертер)
+        var opts = new JsonSerializerOptions { Converters = { new JsonStringEnumConverter() } };
+        var session = new Session { Mode = ClaudeMode.Auto, LastReadAt = DateTime.UtcNow };
+
+        var json = JsonSerializer.Serialize(session, opts);
+        json.Should().MatchRegex("\"LastReadAt\":\"[^\"]+Z\"", "UTC обязан уезжать на диск с суффиксом Z");
+
+        var restored = JsonSerializer.Deserialize<Session>(json, opts)!;
+        restored.LastReadAt.Should().Be(session.LastReadAt);
+        restored.LastReadAt!.Value.Kind.Should().Be(DateTimeKind.Utc);
+    }
+
     [Fact]
     public async Task Update_ExplicitValues_AreApplied()
     {

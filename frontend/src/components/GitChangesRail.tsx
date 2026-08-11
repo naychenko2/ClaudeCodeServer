@@ -70,8 +70,14 @@ const scopeRowStyle = (active: boolean, hovered: boolean, pressing = false): CSS
 // кнопки разной ширины, и пара распадалась бы. Запас к самой длинной подписи —
 // на случай другой метрики шрифта; boxSizing держит рамку внутри ширины, поэтому
 // светлая (с рамкой) и accent (без) кнопки совпадают до пикселя.
-// Различает их только заливка: фиксация светлая, публикация accent
+// Различает их только заливка: фиксация светлая, публикация accent.
+// На узкой панели (планшет, ужатая колонка) подписи прячутся и пара живёт
+// иконками ОДНОЙ компактной ширины — габарит по-прежнему общий, смысл
+// доносят тултипы. Порог — ниже дефолтной ширины колонки (COL_DEFAULT 340),
+// чтобы обычная раскладка подписи не теряла
 const ACTION_BTN_W = 118;
+const ACTION_BTN_W_ICON = 34;
+const ACTION_LABELS_MIN_W = 320;
 const actionBtnBase: CSSProperties = {
   flexShrink: 0, width: ACTION_BTN_W, height: ROW_H, boxSizing: 'border-box',
   borderRadius: R.md, cursor: 'pointer',
@@ -213,6 +219,20 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // Меню настроек репозитория живёт порталом: пока оно открыто, контролы шапки не
   // гаснут — иначе кнопка, которой его открыли, исчезает под курсором
   usePanelHeaderHold(!!repoMenu);
+
+  // Ширина панели — прячем подписи главных кнопок на узкой колонке (планшет).
+  // До первого замера (0) считаем панель широкой, чтобы подписи не мигали
+  const railRef = useRef<HTMLDivElement>(null);
+  const [railW, setRailW] = useState(0);
+  useEffect(() => {
+    const el = railRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setRailW(el.clientWidth));
+    ro.observe(el);
+    setRailW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const compactActions = railW > 0 && railW < ACTION_LABELS_MIN_W;
 
   // Загрузка стора + стека незапушенных + remote при монтировании панели
   useEffect(() => {
@@ -786,7 +806,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div ref={railRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {headerControls}
       {repoMenuEl}
       {st.error && (
@@ -999,10 +1019,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
                       title="Зафиксировать изменения"
-                      style={{ ...commitBtnStyle, marginLeft: 'auto' }}
+                      style={{ ...commitBtnStyle, marginLeft: 'auto', ...(compactActions ? { width: ACTION_BTN_W_ICON } : null) }}
                     >
                       <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                      Зафиксировать
+                      {!compactActions && 'Зафиксировать'}
                     </button>
                   </>
                 )}
@@ -1175,10 +1195,11 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               ...publishBtnStyle,
               cursor: canPublish && !st.busy ? 'pointer' : 'default',
               opacity: canPublish && !st.busy ? 1 : 0.4,
+              ...(compactActions ? { width: ACTION_BTN_W_ICON } : null),
             }}
           >
             <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            Опубликовать
+            {!compactActions && 'Опубликовать'}
           </button>
         </div>
       </div>

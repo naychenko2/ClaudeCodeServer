@@ -39,17 +39,16 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 ## Среда исполнения пользователей (local / container)
 
 Изоляция per-**пользователь**: `User.ExecutionEnvironment` = `local` (процессы на машине
-сервера с полным доступом) | `container` (общая docker-песочница `cc-sandbox`); бэкенд
-всегда НА ХОСТЕ (Windows). Все 6 точек запуска процессов идут через `IProcessLauncher` /
-`ILauncherFactory.ForOwner(ownerId)` (драйверы `LocalProcessRunner` / `DockerProcessRunner`);
-системные one-shot (changelog, каталог моделей) — всегда local. Пути: бэкенд работает
-ТОЛЬКО с хостовыми, `IPathMapper` переводит в контейнерные в момент запуска (путь вне
-монтирований → ошибка, аналог SafeJoin). Домашние папки юзеров — единая точка
-[UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs)
-(+ override `Projects:UserHomeOverrides` в appsettings.Local.json).
-**Инвариант:** смена `ExecutionEnvironment` при существующих чатах запрещена. Токен подписки
-(`CLAUDE_CODE_OAUTH_TOKEN`) в песочницу доставляется per-exec (`DockerProcessRunner.BuildTurnEnv`
-на каждый `docker exec`), а не запекается при создании контейнера.
+сервера) | `container` (общая docker-песочница `cc-sandbox`); бэкенд всегда НА ХОСТЕ (Windows).
+Все точки запуска процессов идут через `IProcessLauncher` / `ILauncherFactory.ForOwner(ownerId)`
+(драйверы `LocalProcessRunner` / `DockerProcessRunner`); системные one-shot — всегда local.
+Пути: бэкенд работает ТОЛЬКО с хостовыми, `IPathMapper` переводит в контейнерные в момент
+запуска. Домашние папки юзеров — единая точка
+[UserHomeResolver.cs](backend/ClaudeHomeServer/Services/UserHomeResolver.cs).
+
+**Инварианты:** смена `ExecutionEnvironment` при существующих чатах запрещена; токен подписки
+доставляется в песочницу per-exec, а не запекается при создании контейнера.
+
 **Перед правками в `Services/Execution/`, `SandboxManager`, `UserHomeResolver` — прочитай
 [docs/architecture/sandbox.md](docs/architecture/sandbox.md)** (монтирования, interrupt, MCP из песочницы, overrides).
 
@@ -86,109 +85,62 @@ Frontend (src/):
 
 ## Дизайн-макеты
 
-Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`
-
-Ключевые файлы:
-- `Claude Code Desktop.dc.html` — десктопные макеты (все состояния)
-- `shots/desktop-files.png`, `shots/01-desktop-file.png`, `shots/02-desktop-file.png` — скриншоты
+Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключевые файлы:
+`Claude Code Desktop.dc.html` (десктопные макеты, все состояния), `shots/*.png`.
 
 ## Дизайн-система
 
-**Полная конвенция — [docs/design/guidelines.md](docs/design/guidelines.md). Обязательна
-для ЛЮБЫХ изменений UI** — гайд и есть общая канва, по которой идут все дальнейшие
-доработки. Выжимка железных правил:
+**Полная конвенция — [docs/design/guidelines.md](docs/design/guidelines.md), обязательна
+для ЛЮБЫХ изменений UI.** Живой эталон — витрина UI-кита: в dev по `#/ui-kit` без
+авторизации, исходник [UiKitPage.tsx](frontend/src/dev/UiKitPage.tsx) (в production-бандл
+не попадает). Железные правила:
 
-**Живой эталон UI-кита** — витрина: в dev открывается по `#/ui-kit` (без авторизации),
-исходник [UiKitPage.tsx](frontend/src/dev/UiKitPage.tsx). Показывает все токены и
-примитивы в одном месте — при UI-задачах читай его как референс правильного применения
-дизайн-системы (токены, паттерны, состав примитивов). В production-бандл не попадает.
-
-- Цвета — только токены `C.*` из [design.ts](frontend/src/lib/design.ts) (CSS-переменные,
-  тёмная тема бесплатно). Сырой hex в `.tsx` — дефект; значения тем живут в
-  [theme.css](frontend/src/lib/theme.css) (новый цвет — в ОБЕ темы). Текст на заливке
-  токеном — `C.onAccent`, на подложке вне темы (палитра, фото, лайтбокс) — `C.onDark`.
-- **Проверяется линтом:** `cd frontend; npm run lint:design` обязан быть зелёным (правило
-  `design/no-raw-color`; исключения — список `RAW_COLOR_ALLOWED` в eslint.config.js либо
-  построчный `eslint-disable-next-line` с причиной). Гейт стоит **перед коммитом**, а не
-  после каждой правки: щиток судит только цвета и на изменениях раскладки, логики или
-  замене токена на токен ловить ему нечего. По ходу работы хватает `npx tsc -b`.
-- Размеры — из шкал: `FS` (шрифты), `SP` (отступы), `R` (радиусы), `SHADOW`, `Z`, `MODAL_W`.
-- Контролы — только из `frontend/src/components/ui/` (Button, Modal, Field, Menu, Toggle,
-  Island/IslandScaffold…) плюс общие Toolbar/EmptyState. Самодельные кнопки/модалки из
-  div — дефект; не хватает примитива — расширь его или заведи в `ui/`.
+- Цвета — только токены `C.*` из [design.ts](frontend/src/lib/design.ts); сырой hex в `.tsx` —
+  дефект; значения тем — в [theme.css](frontend/src/lib/theme.css) (новый цвет — в ОБЕ темы).
+- **Проверяется линтом:** `cd frontend; npm run lint:design` обязан быть зелёным. Гейт стоит
+  **перед коммитом**, а не после каждой правки; по ходу работы хватает `npx tsc -b`.
+- Размеры — из шкал `FS`, `SP`, `R`, `SHADOW`, `Z`, `MODAL_W`.
+- Контролы — только из `frontend/src/components/ui/`; самодельные кнопки/модалки из div — дефект.
 - Accent-дисциплина: оранжевый `C.accent` — только главное действие и активные состояния.
-- Шрифты: PT Serif (заголовки), Hanken Grotesk (UI), JetBrains Mono (код). Иконки —
-  lucide-react + `ICON_SIZE`.
-- Стили: только inline-objects, без Tailwind/CSS-modules.
-- Каждый экран живёт на мобиле (`useIsMobile`, шторки вместо модалок).
-- Новый раздел строится по «Рецепту нового раздела» из гайда (эталон — KnowledgePage);
-  для заметного UI перед коммитом **предложить** прогон через субагента `designer`
-  и дождаться ответа — сам, без спроса, он не запускается.
+- Шрифты: PT Serif (заголовки), Hanken Grotesk (UI), JetBrains Mono (код); иконки — lucide-react.
+- Стили: только inline-objects, без Tailwind/CSS-modules. Каждый экран живёт на мобиле (`useIsMobile`).
+- Новый раздел — по «Рецепту нового раздела» из гайда (эталон — KnowledgePage); для заметного
+  UI перед коммитом **предложить** прогон через субагента `designer` и дождаться ответа.
 
 ## LLM-провайдеры (Services/Llm)
 
 Единственный рантайм — claude CLI (`Llm/Claude/ClaudeSession`); сторонние провайдеры
-(DeepSeek, GLM) подключаются env-оверрайдами процесса на каждый ход (`ANTHROPIC_BASE_URL`,
-`ANTHROPIC_AUTH_TOKEN`, модельные переменные). Конфиг — секция `LlmProviders`; ключи —
-в appsettings.Local.json (пустой `ApiKey` = провайдер выключен). Резолв провайдера, цены
-и возможности — `LlmProviderRegistry`. Инварианты:
+(DeepSeek, GLM) подключаются env-оверрайдами процесса на каждый ход. Конфиг — секция
+`LlmProviders`, ключи в appsettings.Local.json (пустой `ApiKey` = провайдер выключен);
+резолв, цены и возможности — `LlmProviderRegistry`. Инварианты:
 
 - Смена провайдера у начатой сессии — 400 (транскрипт живёт у эндпоинта).
-- Профили CLI `data/claude-profiles/{key}` изолируют OAuth-логин ~/.claude (иначе CLI
-  пошлёт чужому эндпоинту токен подписки → 401); креденшалы в профили не копируются никогда.
-- Иммунитет к системному окружению: на КАЖДОМ запуске claude из унаследованного env
-  вычищаются `ANTHROPIC_*`, `CLAUDE_CONFIG_DIR` и пр. (`ProviderEnvKeys` → `ClearEnv`) —
-  маршрут CLI задаёт только сервер; `CLAUDE_CODE_OAUTH_TOKEN` не трогается.
-- One-shot вызовы — всегда `--safe-mode` + `--no-session-persistence` (авто-деградация,
-  если CLI флага не знает); состав флагов — `OneShotClaudeRunner.BuildArgs` (под тестом).
-- **Три слота моделей + таблица назначений.** Слоты **двухуровневые**: личный per-user слот
-  (`User.ModelTierStrong|Medium|Weak`) поверх глобального инстанса
-  (`AppSettings.ModelTierStrong|Medium|Weak`, уровень 2 диалога «Поставщики моделей»).
-  Каждое МЕСТО применения модели — строка каталога `LocalActionCatalog` со значением
-  «слот | конкретная модель | локальная (только фон)» в `LocalActionOverridesStore`
-  (`tier:strong|medium|weak`; легаси `claude`/`default` ≙ средняя). Таблица назначений
-  **глобальная** (админ решает, каким слотом идёт место), но слот в ней разрешается в модель
-  **по владельцу действия** через `UserModelTierResolver.ModelFor(tier, ownerId)` —
-  единственную точку склейки (ею пользуются и `ModelAssignmentResolver`, и `CheapTextRunner`;
-  дублировать её логику нельзя). Агентные места (`Agentic: true`, группа «Чаты и персоны»):
-  `chat-new`, `chat-persona`, `tasks-executor`, `subagent-consultant`, `modules-llm` — им
-  локаль и `direct:`-модели недоступны, резолвит `ModelAssignmentResolver`; фоновым —
-  `CheapTextRunner` по маршруту. Пустая модель сущности (`Session.Model`, `Persona.Model`) =
-  «по назначению места»; явная модель и пины пантеона сильнее. **Уровень (тир) можно задать
-  точечно** — `TaskItem.ModelTier` и `Persona.ModelTier` (`strong|medium|weak`, пусто = место):
-  у исполнения задачи порядок `задача → Persona.Model → Persona.ModelTier → место`
-  (`TaskExecutionService.ResolveExecutorModel`), у чатов персоны, групповых чатов, смены
-  спикера и `PersonaAskService` — `Persona.Model → Persona.ModelTier → место`
-  (`ModelAssignmentResolver.PersonaModel`, владельца резолвить только через
-  `SessionManager.ResolveOwnerId`). Значения приходят и из MCP от LLM-постановщика, поэтому
-  разбор — белый список трёх имён (`ModelTiers.TryParse`), не `Enum.TryParse`.
-  Шлюз на границе запуска — `ClaudeSession.EffectiveModel` (ключ места по сессии) и
-  `OneShotClaudeRunner.ResolveModel` (резолв ДО `BuildCliEnv`, `NormalizeModel` — ПОСЛЕ).
-  Значение в сессии не фиксируется: `Model = null` резолвится каждый ход, смена настройки
-  подхватывается сама. Заданный уровень — исключение: он разворачивается в модель при
-  создании сессии (`SessionManager.ResolveDefaultModel`) и дальше живёт как обычная явная
-  модель чата, поэтому смена слота задним числом на уже начатый чат не влияет.
-- **Фолбэк хода — только по цепочке.** Цепочка есть у любого хода: пресеты/слоты
-  разворачиваются штатно, явная модель достраивает хвост цепочки слота своего тира
-  (`TierOfModel` — членство в развёрнутых цепочках). Порядок: ротация подписок пула
-  (тихо, потолок не тратится) → шаги цепочки (маркер в ленте, потолок тратится) →
-  честная ошибка; автоподбора нет. Подмена живёт в пределах хода (restore с CAS +
-  персист), кулдаун недоступности — только сторонние провайдеры
-  (`ProviderHealthRegistry`). Классы ошибок, запускающих фолбэк (`TurnErrorClassifier`):
-  RateLimit / UsageLimit / ProviderError / Unreachable / ContextOverflow; прочее —
-  fail-closed. `ContextOverflow` («Prompt is too long») идёт по цепочке к модели с бóльшим
-  окном: фильтр ёмкости (`ContextCapacityRegistry` — наблюдаемый размер отказа, строгое
-  сравнение; заявленное окно — с 10%-м запасом) применяется только к этому классу, оценка
-  контекста сбрасывается при `/compact`. Детали — ADR-007 §4/§4.1/§4.4.
+- Профили CLI `data/claude-profiles/{key}` изолируют OAuth-логин ~/.claude (иначе CLI пошлёт
+  чужому эндпоинту токен подписки → 401); креденшалы в профили не копируются никогда.
+- Иммунитет к системному окружению: на КАЖДОМ запуске из унаследованного env вычищаются
+  `ANTHROPIC_*`, `CLAUDE_CONFIG_DIR` и пр. (`ProviderEnvKeys` → `ClearEnv`); маршрут CLI задаёт
+  только сервер, `CLAUDE_CODE_OAUTH_TOKEN` не трогается.
+- One-shot вызовы — всегда `--safe-mode` + `--no-session-persistence` (состав флагов —
+  `OneShotClaudeRunner.BuildArgs`, под тестом).
+- **Три слота моделей (strong/medium/weak) + глобальная таблица назначений.** Слот личный
+  per-user поверх глобального инстанса; каждое МЕСТО применения модели — строка каталога
+  `LocalActionCatalog`. Слот разрешается в модель **по владельцу действия** через
+  `UserModelTierResolver.ModelFor(tier, ownerId)` — единственную точку склейки, дублировать её
+  логику нельзя. Агентным местам (`Agentic: true`) локаль и `direct:`-модели недоступны.
+  Приоритет: явная модель сущности → её `ModelTier` → назначение места. Шлюзы на границе
+  запуска — `ClaudeSession.EffectiveModel` и `OneShotClaudeRunner.ResolveModel`.
+- **Фолбэк хода — только по цепочке**, автоподбора нет: ротация подписок пула (тихо) → шаги
+  цепочки (маркер в ленте) → честная ошибка. Классы ошибок (`TurnErrorClassifier`): RateLimit /
+  UsageLimit / ProviderError / Unreachable / ContextOverflow; прочее — fail-closed.
 
-Фоновые one-shot действия (теги, сводки, память, changelog…) считаются дёшево по цепочке
-«выбранное → локальная Ollama → claude» (`LocalActionRouter` + `CheapTextRunner`, каталог —
-`LocalActionCatalog`, `direct:`-модели OpenRouter — прямой HTTP-адаптер `CloudCheapClient`);
-исполнителя каждого места выбирает админ в диалоге «Поставщики моделей» (уровень 3
-«Кто что выполняет»), выбор действует сразу. Дефолтный маршрут — слот по профилю сложности
-(Small/Text → слабая, Large → средняя); зашитый в потребителе тир (обычно `haiku`) остаётся
-фолбэком на случай пустого слота. **Перед правками в `Services/Llm/` — прочитай
-[docs/architecture/llm-providers.md](docs/architecture/llm-providers.md).**
+Фоновые one-shot действия (теги, сводки, память, changelog…) считаются дёшево по маршруту
+`LocalActionRouter` + `CheapTextRunner`; исполнителя каждого места выбирает админ в диалоге
+«Поставщики моделей», выбор действует сразу.
+
+**Перед правками в `Services/Llm/` — прочитай
+[docs/architecture/llm-providers.md](docs/architecture/llm-providers.md)**; слоты и таблица
+назначений — [model-presets-and-tiers.md](docs/features/model-presets-and-tiers.md), цепочки
+фолбэка и ёмкость контекста — [ADR-007](docs/adr/ADR-007-model-preset-chains.md) §4.
 
 ## Claude Code CLI subprocess
 
@@ -209,88 +161,62 @@ WorkingDirectory = `project.RootPath`
 
 Каждый — один файл `mcp/{имя}-server/index.js`: чистый Node, stdio JSON-RPC, **без
 зависимостей**. Подключение per-ход: `ClaudeSession.BuildTurnMcpConfig` собирает временный
-MCP-конфиг и передаёт env (`*_API_URL`, сервисный JWT владельца, `*_PROJECT_ID`) + подсказку
-в системный промпт; данные per-owner — токен ограничивает доступ. **Правило именования
-инструментов:** не плодить однокоренные имена с пересекающейся семантикой (`execute` vs
-`complete` — LLM путает; спутает человек в списке из 10+ — спутает и LLM).
-**Инвариант: состав `tools/list` не зависит от хода** — он входит в сигнатуру запуска CLI,
-и любая его зависимость от свойств хода (глубина делегирования, текст, флаги) перезапускает
-процесс со всеми MCP-серверами: «Stream closed» на незавершённых вызовах и «No such tool
-available». Ограничения по ходу — на бэкенде: серверы шлют `X-Caller-Session-Id`, экшены
-помечены `[DenyOnDelegatedTurn]`; сторож — `McpToolsetStabilityTests`. **Состав режется по
-фактическому спросу:** редко звавшиеся наборы уходят за tool-ключ с дефолтом «выключено», а не
-удаляются (модуль заметок `notes-annotations`, запись истории `git_write` в wsp, уведомления
-по роли), плюс потолок выдачи `files_read` — раздел «Диета состава по данным использования»
-в доке ниже. **Диагностика:**
-`GET /api/mcp/calls` (админ) — счётчики вызовов, доля отказов и последние сбои по каждому
-инструменту (заголовки `X-Caller-Session-Id` + `X-Mcp-Tool` → `McpCallLogMiddleware`). Состав
-инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех инструментов
-при живом бэкенде → явный `McpTasksApiUrl`) — [docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md).
+MCP-конфиг и передаёт env (`*_API_URL`, сервисный JWT владельца) + подсказку в системный
+промпт; данные per-owner — токен ограничивает доступ.
 
-**Личный реестр MCP-серверов** — раздел «MCP-серверы»: свои внешние серверы владельца (не
-встроенные продуктовые выше) со статусом, пробой, входом по OAuth и доступом по
-проектам/персонам. Хранение — `McpServerRecord` в `data/mcp-servers.json` (без секретов) +
-`data/mcp-secrets.json` (значения, в `BackupPaths.SecretFileNames`) + `data/mcp-status.json`
-(наблюдения, в бэкап не едет). Каскад доступности — allow-list (единственная модель): сервер
-не едет никуда, пока не включён в проекте чата (`Project.McpServersOn`) ИЛИ выдан персоне
-чата (привязка `mcp:<ключ>` с `Mode != Off`, без `condition` — тот же инвариант состава
-хода); чат вне проекта без персоны — по `McpServerRecord.AllowOutsideProjects`. Чистое
-OR-правило — `McpDelivery.ShouldDeliver`. История перехода с прежней deny-модели —
-[mcp-allowlist-plan.md](docs/research/mcp-allowlist-plan.md).
-Доставка в ход — `SessionManager.BuildExternalMcpProvider` →
-`ClaudeSession.BuildTurnMcpConfig`, `AuthVersion` в отпечатке запуска. Известное ограничение:
-полный цикл входа по OAuth не проверялся на реальном сервере с учётными данными. Подробности —
-[docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
+- **Правило именования:** не плодить однокоренные имена с пересекающейся семантикой
+  (`execute` vs `complete` — LLM путает).
+- **Инвариант: состав `tools/list` не зависит от хода** — он входит в сигнатуру запуска CLI,
+  и любая его зависимость от свойств хода перезапускает процесс со всеми MCP-серверами
+  («Stream closed», «No such tool available»). Ограничения по ходу — на бэкенде
+  (`X-Caller-Session-Id` + `[DenyOnDelegatedTurn]`); сторож — `McpToolsetStabilityTests`.
+- Состав режется по фактическому спросу: редко звавшиеся наборы уходят за tool-ключ с дефолтом
+  «выключено», а не удаляются.
+- **Диагностика:** `GET /api/mcp/calls` (админ) — счётчики вызовов, доля отказов и последние
+  сбои по каждому инструменту.
+
+Состав инструментов, живучесть stdio-цикла и грабли HTTPS-деплоя («fetch failed» у всех
+инструментов при живом бэкенде → явный `McpTasksApiUrl`) —
+[docs/architecture/mcp-servers.md](docs/architecture/mcp-servers.md).
+
+**Личный реестр MCP-серверов** (раздел «MCP-серверы») — внешние серверы владельца со статусом,
+пробой, входом по OAuth и доступом по проектам/персонам. Каскад доступности — **allow-list,
+единственная модель**: сервер не едет никуда, пока не включён в проекте чата ИЛИ выдан персоне
+чата; чат вне проекта без персоны — по `McpServerRecord.AllowOutsideProjects`. Чистое OR-правило
+— `McpDelivery.ShouldDeliver`. Известное ограничение: полный цикл входа по OAuth не проверялся на
+реальном сервере. Подробности — [docs/architecture/mcp-registry.md](docs/architecture/mcp-registry.md).
 
 ## Заметки и Знания (Dify RAG)
 
 Заметки — Obsidian-совместимый markdown-vault (`[[wikilinks]]`, backlinks, граф): настоящие
-`.md` в личном vault `data/notes/{userId}` + `notes/` проектов; бэкенд `NotesService`,
-MCP notes-server; семантика — Dify-датасет `{username}:notes` (без `Dify:ApiKey` тихо
-выключена). Знания — менеджер Dify-датасетов (`KnowledgeBasesController`; Dify — источник
-истины, классификация по имени датасета; каждый `{id}`-эндпоинт проверяет релевантность
-юзеру, иначе 403). Файлы проектов синкаются в датасеты дифф-по-хешам с дебаунсом 15с
-(`ProjectKnowledgeSyncService`) + lifecycle-каскады (удаление проекта/юзера, смена RootPath).
-Контуры Dev/Prod на одном Dify разводит `Dify:Namespace`. **Перед правками — прочитай
-[docs/architecture/knowledge.md](docs/architecture/knowledge.md).**
+`.md` в личном vault `data/notes/{userId}` + `notes/` проектов; семантика — Dify-датасет
+`{username}:notes` (без `Dify:ApiKey` тихо выключена). Знания — менеджер Dify-датасетов
+(Dify — источник истины; каждый `{id}`-эндпоинт проверяет релевантность юзеру, иначе 403).
+Файлы проектов синкаются дифф-по-хешам с дебаунсом 15с (`ProjectKnowledgeSyncService`) +
+lifecycle-каскады. Контуры Dev/Prod на одном Dify разводит `Dify:Namespace`.
+**Перед правками — прочитай [docs/architecture/knowledge.md](docs/architecture/knowledge.md).**
 
 ## Интеграция с мессенджерами (Max / Telegram) — не реализовано
 
-Исследование (июль 2026): Max Bot API зрелый (REST, webhook'ы, inline-кнопки, mini-apps),
-но C# SDK нет — писать свой клиент. География — только РФ, модерация ботов обязательна.
-**Сценарий, оправдывающий интеграцию:** CCS крутится на сервере, юзер не за компьютером,
-нужно знать о завершении задач или реагировать на permission-запросы через мессенджер.
-Полноценный чат с Claude через мессенджер делать **не надо** — мессенджер не отрендерит
-diff/артефакты/виджеты, это убивает UX CCS.
-
-Use cases (с резолюциями), архитектура интеграции (куда встраивать: webhook-контроллер
-по образцу `PersonaAutomationService`, `IMessengerClient` для нескольких адаптеров, mapping
-`external_chat_id ↔ session_id`) и расширенные варианты использования (личка с глобальной
-персоной, проект-специфичные чаты, уведомления от имени персон — через `Session.PersonaId`
-и `Session.ProjectId` как оси routing'а) — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
-**Решение по ботам:** один бот с routing по чатам для solo (CCS-уведомления + телеметрия,
-см. [observability.md](docs/observability/overview.md) «Future Epics — Alerting»); переход на двух
-ботов при появлении второго юзера или шумной телеметрии. Общая .NET-библиотека Max API
-клиента — переиспользуется между CCS и сервисом телеметрии.
+Оправдывающий сценарий: CCS крутится на сервере, юзер не за компьютером, нужно знать о
+завершении задач или реагировать на permission-запросы. Полноценный чат с Claude через
+мессенджер делать **не надо** — он не отрендерит diff/артефакты/виджеты. **Max для ботов
+закрыт** (только верифицированные юрлица РФ). Исследование, архитектура интеграции и решение
+по ботам — [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
 
 ## Персоны
 
 «Персоны = контакты, Чаты = разговоры»: персона — отдельная per-owner сущность
-(`data/personas.json`, не .md-агент) с ролью/характером/аватаром/моделью/зоной/долгой
-памятью. Чат с персоной = `Session.PersonaId`: слой персоны (контракт
-`PersonaPromptBuilder` + recall памяти) пересобирается каждый ход и переживает рестарт;
-зона определяет scope чата (глобальная → вне проекта, проектная → её проект). Память —
-`data/persona-memory.json` + семантический слой в Dify; auto-recall в промпт каждого хода.
-Инварианты:
+(`data/personas.json`, не .md-агент) с ролью/характером/аватаром/моделью/зоной/долгой памятью.
+Чат с персоной = `Session.PersonaId`: слой персоны (`PersonaPromptBuilder` + recall памяти)
+пересобирается каждый ход и переживает рестарт; зона определяет scope чата. Инварианты:
 
 - У задач `PersonaId != null ⇒ Assignee = Claude` (`TaskManager.NormalizePersonaAssignee`).
 - Доступы: `Persona.Access` (full/readOnly/custom) → `PersonaAccessPolicy` формирует
   disallowed-инструменты; `Persona.Tools` гейтит tasks/notes/web.
 
-Флаги: `personas`, `persona-memory-autolearn`, `persona-memory-consolidation`,
-`persona-mentions`, `persona-group-chats`. **Перед правками в персонах (промпт, память,
-групповые чаты, пантеон OmO, аватары, MCP personas/memory) — прочитай
-[docs/architecture/personas.md](docs/architecture/personas.md).**
+**Перед правками в персонах (промпт, память, групповые чаты, пантеон OmO, аватары, MCP
+personas/memory) — прочитай [docs/architecture/personas.md](docs/architecture/personas.md).**
 
 ## Механики OmO в чатах
 
@@ -315,66 +241,42 @@ Use cases (с резолюциями), архитектура интеграци
 
 ## Observability (OpenTelemetry)
 
-Двухрежимная observability через OTel SDK: **dev** → Aspire Dashboard (in-memory, для
-живого дебага), **production** → SigNoz (ClickHouse, persistent 30d traces / 90d metrics).
-**Алерты** доставляются в уведомления CCS (колокол + тост + web push на PWA, категория
-«Алерт»): `AlertPollingService` раз в 60с опрашивает `GET /api/v1/alerts` SigNoz и шлёт
-админам новые срабатывания через существующий `NotificationService`. Опрос, а не webhook —
-боевой хост слушает HTTPS с сертом на домен, и запрос из контейнера падает по SNI.
-Правила — код (`docker/observability/alerts/*.json` + `apply-alerts.ps1`), дедупликация
-по `fingerprint` (одно правило = по алерту на серию разреза), состояние —
-`data/alert-state.json`. Рассылает только инстанс с `Telemetry:Alerts:Enabled` (подписки
-per-инстанс). Страховка на случай мёртвого CCS — email-канал самого SigNoz для правила
-«Пульс телеметрии пропал». **Max для ботов закрыт** (только верифицированные юрлица РФ) —
-см. [docs/research/messenger-integration.md](docs/research/messenger-integration.md).
-**Раздел «Телеметрия» в UI** (меню аватара, admin-only): SigNoz встроен `<iframe>` через
-same-origin проброс `/telemetry-proxy/**` (middleware в Program.cs, cookie `cc_telemetry`,
-роль по `UserStore`). SigNoz релоцирует SPA под префикс через env `SIGNOZ_GLOBAL_EXTERNAL__URL`
-(overlay, переменная `SIGNOZ_EXTERNAL_URL`); фронт решает iframe/заглушку по
-`GET /api/telemetry/status`. Включение — `Telemetry:Ui:Enabled`.
+Двухрежимная через OTel SDK: **dev** → Aspire Dashboard (in-memory), **production** → SigNoz
+(ClickHouse, 30d traces / 90d metrics). Включение per-instance — секция `Telemetry` в
+`appsettings.Local.json`; все порты (SigNoz UI :3301, OTLP :4317/4318) bind'ятся к `127.0.0.1`.
+PII-санитайзер (`PiiSanitizingProcessor`) сидит первым в pipeline — оба backend'а получают
+очищенные данные. **`SpendStore` = source of truth для billing (токены/стоимость), OTel-метрики
+его НЕ дублируют.**
 
-- **Central doc**: [docs/observability/overview.md](docs/observability/overview.md) — scope, архитектура,
-  дублирование с существующими сторами, privacy (PII sanitizer), cardinality guardrails,
-  sampling strategy, future epics.
-- **Audit**: [docs/observability/audit.md](docs/observability/audit.md) — карта
-  существующих observability-поверхностей (SpendStore JSONL, ModuleLlmUsageStore,
-  McpCallLog in-memory, ProjectEventLogService SQLite). **SpendStore = source of truth
-  для billing (токены/стоимость), OTel метрики НЕ дублируют его.**
-- **SigNoz setup**: [docs/observability/signoz-setup.md](docs/observability/signoz-setup.md) —
-  развёртывание vendored SigNoz v0.134.0 (`docker/observability/`), retention, backup,
-  troubleshooting.
+**Алерты** доставляются в уведомления CCS (категория «Алерт»): `AlertPollingService` раз в 60с
+опрашивает `GET /api/v1/alerts` SigNoz. Опрос, а не webhook — боевой хост слушает HTTPS с сертом
+на домен, и запрос из контейнера падает по SNI. Правила — код
+(`docker/observability/alerts/*.json`), рассылает только инстанс с `Telemetry:Alerts:Enabled`.
 
-Включение per-instance через `appsettings.Local.json` секция `Telemetry`. Все порты
-(SigNoz UI :3301, OTLP :4317/4318) bind'ятся к `127.0.0.1` через overlay
-`docker-compose.observability.yml`. PII-санитайзер (`PiiSanitizingProcessor`) сидит первым
-в pipeline — оба backend'а получают очищенные данные. **Перед правками в `Telemetry/`
-или новыми метриками — прочитай [docs/observability/overview.md](docs/observability/overview.md).**
+**Раздел «Телеметрия» в UI** (admin-only): SigNoz встроен `<iframe>` через same-origin проброс
+`/telemetry-proxy/**`; включение — `Telemetry:Ui:Enabled`.
+
+Доки: [overview.md](docs/observability/overview.md) (архитектура, privacy, cardinality, sampling,
+future epics) · [audit.md](docs/observability/audit.md) (карта существующих поверхностей) ·
+[signoz-setup.md](docs/observability/signoz-setup.md) (развёртывание, retention, backup).
+**Перед правками в `Telemetry/` или новыми метриками — прочитай
+[docs/observability/overview.md](docs/observability/overview.md).**
 
 ## Реализовано
 
 Ядро: auth по API-ключу, проекты, сессии, чат (вложения/голос/режимы ⚡📋❓), файловый
-менеджер с diff/revert, empty states. Поверх ядра: виджеты в чате (sandbox-iframe + строгая
-CSP), артефакты сессии (панель, derived из ленты), продуктовая история «Что нового»
-(AI-сводка коммитов по дням), плагин oh-my-claudecode (авто-установка + роутинг персон
-в сабагенты), задачи v3 (напоминания, регулярные, web push, Claude/персона-исполнитель),
-бэкапы каталога `data` (расписание + `exe --backup/--restore/--inspect`, меню трея, виджет
-на главной; настройка — секция `Backup` в `appsettings.Local.json`), панель «Документация»
-(документация проекта настраиваемой областью — файлы корня + папки + типы файлов, дефолт `README.md` + `docs/**` + Markdown
-как связный корпус: дерево, оглавление, поиск,
-переходы по ссылкам, обратные ссылки, отправка документа или раздела в чат; **типы документов
-со свойствами** — статус ADR и прочие поля правятся колонкой справа от открытого документа
-(там же, секцией ниже, живут комментарии к нему),
-значения живут строками `**Ключ:** значение` в шапке самого md, схема типов — секцией
-`docTypes` в `.docs` репозитория),
-панель
-«Сервисы» (дев-серверы проекта: инференс запусков из манифестов и конфигураций Rider,
-включая составные; страница в iframe через прокси `/preview/**`, живые логи, распознавание
-сервисов, поднятых вне продукта). **Ключи и эндпоинты панели «Сервисы» остались `preview`**
-— переименована только подпись. Ридер ссылок (панель «Чтение» рядом с чатом):
-`POST /api/reader/read` сам идёт по внешнему URL (рубежи адресов на каждом
-хопе редиректа, только markdown на проводе, без кук/креденшалов/кеша — [ADR-005](docs/adr/ADR-005-link-reader-server.md)),
-`GET /api/reader/image` тем же SsrfGuard проксирует картинки статьи, чтобы браузер не ходил
-на CDN сайта напрямую.
+менеджер с diff/revert, empty states.
+
+Поверх ядра: виджеты в чате (sandbox-iframe + строгая CSP), артефакты сессии, продуктовая
+история «Что нового» (AI-сводка коммитов по дням), плагин oh-my-claudecode, задачи v3
+(напоминания, регулярные, web push, Claude/персона-исполнитель), бэкапы каталога `data`
+(расписание + `exe --backup/--restore/--inspect`, меню трея, виджет на главной), панель
+«Документация» (корпус md с деревом, оглавлением, поиском, обратными ссылками и типами
+документов со свойствами), панель «Сервисы» (дев-серверы проекта в iframe через прокси
+`/preview/**` — **ключи и эндпоинты остались `preview`**, переименована только подпись),
+ридер ссылок (панель «Чтение»: `POST /api/reader/read` и `GET /api/reader/image` под общим
+SsrfGuard — [ADR-005](docs/adr/ADR-005-link-reader-server.md)).
+
 Детали каждой фичи — [docs/architecture/features.md](docs/architecture/features.md).
 
 ## Фич-флаги (feature toggles)
@@ -383,11 +285,9 @@ Dark launch: фича коммитится выключенной и включ�
 функции». Реестр (source of truth) — в коде: `FeatureFlagCatalog.All`
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs)); хранение —
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
-хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
-(2026-08); в каталоге осталось два флага — `workspace-destructive` (постоянный
-предохранитель от необратимого удаления) и `default-personas-onboarding` (ассистент по
-умолчанию заводится автоматически при первом входе, знакомство — по приглашению, а не
-обязательный экран; детали — [docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md)).
+хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно (2026-08);
+в каталоге осталось два флага — `workspace-destructive` и `default-personas-onboarding`
+(детали — [docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md)).
 Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
 
 **Как добавить новый флаг (3 шага):**
@@ -422,83 +322,37 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 
 ## Соглашения
 
-- **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`, [.github/workflows/ci.yml](.github/workflows/ci.yml)),
-  а разработка идёт на Windows — тесты обязаны быть платформонезависимыми, иначе зелёные
-  локально они падают в CI. Главная ловушка — пути: `Path.IsPathRooted("C:\\…")` на Linux
-  даёт `false`, поэтому Windows-литералы там считаются относительными и проверки путей
-  срабатывают не по тому правилу. Пути в тестах строить от `Path.GetTempPath()` +
-  `Path.Combine`, разделители не хардкодить. Помнить и про остальное: регистрозависимость
-  ФС, отсутствие `.exe`, недоступность WinAPI.
-  **Вторая ловушка — тайминги.** Раннер CI слабее рабочей машины и гоняет тесты параллельно,
-  так что ThreadPool там голодает: коллбэк `Timer`/фоновая задача приезжает много позже
-  своего срока. Слепая пауза (`await Task.Delay(500)` в расчёте на окно в 30мс) даёт
-  плавающий провал вида «collection is empty» — ждать надо **событие**, а не время:
-  `TaskCompletionSource` + `Task.WhenAny(tcs.Task, Task.Delay(таймаут))` со щедрым потолком
-  (образец — `WorkflowWatcherTests`, `SessionManagerTests`).
-  Сомневаешься — прогони набор в контейнере:
-  `docker run --rm -v "<репа>:/src" -w /src/backend mcr.microsoft.com/dotnet/sdk:10.0 dotnet test ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj`
-  (после этого пересобери локально: контейнер оставляет в `bin`/`obj` Linux-артефакты).
-  Если `bin` занят запущенным продуктом («Access to the path … is denied»), добавь
-  `-p:ArtifactsPath=/tmp/artifacts` — сборка уедет мимо рабочего дерева и гасить процесс не придётся.
-- **Тесты и их категории.** Большинство — чистые юнит-тесты (Services, моки, in-memory),
-  1–50ms. Медленные — две группы: **Controllers** (поднимают `WebApplicationFactory` —
-  полный HTTP-pipeline ASP.NET, 400–970ms) и **GitServiceTests** (гоняют настоящий `git`
-  CLI во временных репо, помечены `[Trait("Category", "Slow")]`, 500–720ms). Интеграционные MCP
-  — HTTP-вызовы к MCP-серверам, 400–800ms. На итеративную правку гоняй только релевантный
-  набор: `dotnet test --filter "FullyQualifiedName~SessionManagerTests"`; медленные категории
-  (Controllers, GitServiceTests, интеграционные MCP) запускай только при правках в коде, который
-  они покрывают, либо при действительной необходимости — полный прогон перед коммитом/PR.
-- Хранилище проектов: `data/projects.json` рядом с executable
-- **Одна папка — один проект на владельца**: `RootPath` нормализуется при создании и смене папки
-  (`Path.GetFullPath` — схлопывает двойные разделители), а `ProjectManager.EnsureRootFree`
-  отклоняет повторное подключение той же папки (400 «Эта папка уже подключена как проект …»).
-  Причина: датасет знаний в Dify и запись `WorkspaceKnowledge` ключуются по `RootPath` —
-  проекты-близнецы спорили бы за одну базу. У **разных** владельцев общая папка допустима:
-  на этом держатся каскады «соседей по папке» (`GetByRootPath`)
-- Метаданные сессий персистятся в `data/sessions.json`, история чата — `data/sessions/{claudeSessionId}/history.json`; процессы claude in-memory, resume через `--resume <claude-session-id>`
-- **Удаление чата уносит и транскрипт claude CLI** (`{профиль}/projects/{уплощенный cwd}/{csid}.jsonl`
-  плюс одноименную папку сабагентов): `SessionManager.DeleteTranscript` → `TranscriptMigrator.DeleteEverywhere`.
-  Ищем во ВСЕХ профилях (`LlmProviderRegistry.GetAllConfigRoots` + `sandbox-profiles/{ownerId}/*`),
-  потому что переезды между профилями (`TryMigrate`) и рабочими папками (`TryRelocateCwd`) намеренно
-  оставляют копии. Иначе переписка удаленного чата жила на диске до плановой уборки CLI (~30 дней).
-  **Инвариант:** удаляется только файл с точным именем `{csid}.jsonl` — никогда по маске, по времени
-  и никогда сама папка. Один `~/.claude` делят dev-, прод- и контейнерный инстансы плюс интерактивные
-  сессии самого пользователя (ее слаг совпадает со слагом проекта, подключенного в CCS!), так что
-  «вычистить лишнее из папки» = снести чужую историю. Сборщика «сирот» по этой же причине нет.
-  **Гейт общего разговора:** сессия, созданная с `resumeSessionId`, несет ТОТ ЖЕ `ClaudeSessionId`,
-  поэтому история и транскрипт удаляются только когда на них не ссылается другой живой чат —
-  иначе у него пропадала лента (это баг, описанный в `WorkspacePage.tsx`) и вся память `--resume`.
-  **Валидация:** `resumeSessionId` из тела запроса садится в `ClaudeSessionId`, а тот становится
-  именем папки `data/sessions/{csid}` и файла транскрипта, которые удаляются рекурсивно — поэтому
-  `StartNewSessionAsync` пропускает только `^[A-Za-z0-9_-]{1,128}$` (`TranscriptMigrator.IsSafeSessionId`),
-  иначе 400. Без гейта `resumeSessionId: ".."` означал бы `Directory.Delete` всей папки `data`.
-  Проверка на белом списке, а не через `Path.GetFileName`: тот пропускает `.` и `..`, а на Linux
-  еще и `..\..\` целиком (обратный слеш там — легальный символ имени)
-- Временные чаты: `Session.ExpiresAfterMinutes` (null — обычный чат), пресеты срока — часы в шапке чата и пункт меню его карточки в списке; `ChatExpiryService` (тик 60с) удаляет чаты, неактивные дольше срока (кроме статусов Working/Waiting); `DeleteAsync` чистит историю на диске и шлёт `chat_deleted`.
-  **Настройки чата не двигают `UpdatedAt`** (по нему идут сортировка списка, секции дерева и непрочитанность): `SetExpiry` его не трогает, а `Update` ставит только при реальной правке имени/модели/усилия/тегов. Чтобы отсчёт срока при этом не стартовал в прошлом, включение пишет `Session.ExpiryAnchor` — дедлайн считается от него, если он позже активности (`ChatExpiryService.CountFrom`, зеркало на фронте — `lib/expiry.ts`)
-- Уведомления о ходе — два уровня: общий рубильник браузера (localStorage + разрешение, тумблер в разделе «Уведомления» перед строкой поиска) и мьют одного чата `Session.NotificationsMuted` (кнопка в шапке чата, пункт меню карточки). Склейка — `lib/notify.ts`
-- Path traversal защита: `FileService.SafeJoin` — все пути через неё
-- git diff/revert через `git` CLI; если не git-репо — возвращает null
-- **Новое хранилище → сверься с бэкапом.** Всё в `data/` попадает в архив по умолчанию
-  (`BackupPaths.ShouldInclude` работает от обратного — исключениями), поэтому думать надо,
-  когда добавляешь: (1) **кеш, лог или временный файл** в `data/` → добавь в исключения,
-  иначе мусор поедет в облако; (2) **секрет или ключ** → в `BackupPaths.SecretFileNames`,
-  иначе он уедет в облачную папку вместе с архивом; (3) **хранилище ВНЕ `data/`** (как
-  профили CLI или корень песочницы) → реши явно, бэкапить ли, и допиши в
-  `BackupCore.CopyDataTo`; (4) **не-JSON стор** (вторая БД и т.п.) → копирование файлом
-  может дать протухший снимок, нужен свой способ (у SQLite — `BackupDatabase`);
-  (5) **критичный стор** → добавь в `BackupValidation.Validate`, иначе его порча не
-  остановит восстановление. Ломающее изменение формата любого стора = инкремент
-  `BackupSchema.Version` (иначе старый код молча обнулит стор при откате).
-  Детали — [docs/architecture/features.md](docs/architecture/features.md#бэкапы-и-восстановление)
+Полная версия с разбором граблей — [docs/architecture/conventions.md](docs/architecture/conventions.md).
+Главное:
+
+- **ВАЖНО: CI гоняет тесты на Linux** (`ubuntu-latest`), а разработка идёт на Windows — тесты
+  обязаны быть платформонезависимыми. Две ловушки: **пути** (строить от `Path.GetTempPath()` +
+  `Path.Combine`, Windows-литералы на Linux считаются относительными) и **тайминги** (раннер
+  слабее, ThreadPool голодает — ждать **событие** через `TaskCompletionSource` +
+  `Task.WhenAny`, а не `Task.Delay`).
+- **Категории тестов.** Большинство — юниты 1–50ms. Медленные: Controllers
+  (`WebApplicationFactory`), `GitServiceTests` (`[Trait("Category", "Slow")]`), интеграционные MCP.
+  На итеративную правку — `dotnet test --filter "FullyQualifiedName~<Набор>"`; полный прогон —
+  перед коммитом/PR.
+- **Одна папка — один проект на владельца** (`ProjectManager.EnsureRootFree`, 400 при повторе):
+  датасет Dify ключуется по `RootPath`. У разных владельцев общая папка допустима.
+- **Удаление чата уносит и транскрипт claude CLI** во всех профилях. Инвариант: только файл с
+  точным именем `{csid}.jsonl`, никогда по маске и никогда сама папка (один `~/.claude` делят
+  все инстансы плюс интерактивные сессии пользователя). `resumeSessionId` валидируется белым
+  списком `^[A-Za-z0-9_-]{1,128}$` — иначе `".."` снёс бы всю папку `data`.
+- **Настройки чата не двигают `UpdatedAt`** (по нему идут сортировка, секции дерева и
+  непрочитанность); срок временного чата считается от `Session.ExpiryAnchor`.
+- **Новое хранилище → сверься с бэкапом.** Всё в `data/` попадает в архив по умолчанию:
+  кеш/логи — в исключения, секреты — в `BackupPaths.SecretFileNames`, сторы вне `data/` — в
+  `BackupCore.CopyDataTo`, не-JSON стор — свой способ снимка, критичный стор — в
+  `BackupValidation.Validate`. Ломающее изменение формата = инкремент `BackupSchema.Version`.
 - **HTTP-клиент к опциональной зависимости — через `AddQuietHttpClient`**
-  ([Services/Http/QuietHttpLogger.cs](backend/ClaudeHomeServer/Services/Http/QuietHttpLogger.cs)).
-  Дефолтный логгер `IHttpClientFactory` печатает КАЖДЫЙ провалившийся запрос как Error со
-  стектрейсом, и погашенная зависимость (OTLP-коллектор, локальная Ollama) забивает консоль
-  портянками, в которых не видно настоящих ошибок. Тихий клиент даёт одну строку Warning
-  с последствием («Телеметрия не уходит») не чаще раза в 5 минут. Признак «опциональной»:
-  вызывающий уже умеет жить без неё — ловит ошибку и уходит в фолбэк
-- Комментарии в коде по-русски
+  ([QuietHttpLogger.cs](backend/ClaudeHomeServer/Services/Http/QuietHttpLogger.cs)): дефолтный
+  логгер печатает каждый провал как Error со стектрейсом и забивает консоль.
+- Path traversal защита: `FileService.SafeJoin` — все пути через неё.
+- Хранилище проектов — `data/projects.json`; метаданные сессий — `data/sessions.json`, история
+  чата — `data/sessions/{claudeSessionId}/history.json`, resume через `--resume`.
+- Комментарии в коде по-русски.
 
 ## Коммиты
 

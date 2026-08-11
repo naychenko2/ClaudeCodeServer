@@ -55,6 +55,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // отказа) отсеивает при ЛЮБОМ классе ошибки, заявленное окно каталога — только при
     // ContextOverflow (Major 3 ревью). null (тесты) — оценка 0, фильтр по ёмкости выключен.
     private readonly Func<int>? _lastContextTokens;
+    // Источник оценки контекста для диагностики («живая» / «из истории» / «нет»): параллельный
+    // Func<string>, собираемый фабрикой из того же замыкания, что и _lastContextTokens. Без него
+    // очередной провал оценки пришлось бы снова ловить по «~0 токенов» в проде. null (тесты без
+    // фабрики) — «нет». Контракт Func<int> оценки не меняется — это отдельный диагностический сигнал.
+    private readonly Func<string>? _contextSource;
     // Лог подмен: без него оркестрацию нечем отлаживать на стенде (что классифицировали,
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
@@ -105,7 +110,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         ContextCapacityRegistry? capacity = null,
         Func<int>? lastContextTokens = null,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
-        Action<string>? orchestrationDone = null)
+        Action<string>? orchestrationDone = null,
+        Func<string>? contextSource = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -120,6 +126,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _health = health;
         _capacity = capacity;
         _lastContextTokens = lastContextTokens;
+        _contextSource = contextSource;
         _log = log;
         _persist = persist;
         _enqueueBypass = enqueueBypass;
@@ -531,7 +538,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 {
                     var ctxN = ContextEstimate();
                     _capacity?.RecordOverflow(currentModel, ctxN);
-                    LogInfo($"Переполнение контекста: «{currentModel}» × «{currentKey}» не принял ~{ctxN} токенов");
+                    LogInfo($"Переполнение контекста: «{currentModel}» × «{currentKey}» не принял ~{ctxN} токенов (оценка: {ContextSource()})");
                 }
 
                 trace.Add(new AttemptTrace(currentModel, currentKey, cls));
@@ -854,10 +861,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private bool IsExternalProvider(string? key) =>
         _providers is not null && _providers.GetByKey(key ?? "") is not null;
 
-    // Оценка размера контекста текущего хода (ClaudeSession.LastContextTokens). 0 — значение
-    // недоступно (тесты без accessor'а, совсем новый чат без истории): фильтр по ёмкости при этом
-    // выключается (WouldFit возвращает true), поведение как до защиты от overflow.
+    // Оценка размера контекста текущего хода. Составная (собирается фабрикой): живое значение
+    // (ClaudeSession.LastContextTokens — usage последнего assistant-сообщения), а при его
+    // отсутствии — фолбэк на историю чата (LastContextFromHistory, переживает рестарт). 0 —
+    // значения нет совсем: фильтр по ёмкости выключается (WouldFit возвращает true), поведение
+    // как до защиты от overflow. Источник оценки (живая/из истории/нет) — ContextSource().
     private int ContextEstimate() => _lastContextTokens?.Invoke() ?? 0;
+
+    // Источник оценки контекста для диагностики. Имя источника собирается фабрикой из того же
+    // замыкания, что и ContextEstimate, поэтому согласовано с реальной цифрой: «живая» —
+    // ContextEstimate > 0 от usage; «из истории» — фолбэк к StoredResultMessage.ContextTokens;
+    // «нет» — оценка 0 (фильтр fail-open, наблюдение не записывается).
+    private string ContextSource() => _contextSource?.Invoke() ?? "нет";
 
     // Запас на расхождение токенизаторов: оценка контекста измерена токенизатором ДРУГОЙ модели
     // (расхождение 10–30%), поэтому заявленное окно должно вмещать контекст с 10%-м запасом — иначе

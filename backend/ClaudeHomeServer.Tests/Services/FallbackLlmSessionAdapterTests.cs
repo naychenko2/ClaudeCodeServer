@@ -159,7 +159,9 @@ public class FallbackLlmSessionAdapterTests
         ContextCapacityRegistry? capacity = null,
         Func<int>? lastContextTokens = null,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
-        Action<string>? orchestrationDone = null)
+        Action<string>? orchestrationDone = null,
+        Func<string>? contextSource = null,
+        ILogger? log = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -184,11 +186,13 @@ public class FallbackLlmSessionAdapterTests
             fallbackSettings: store,
             effectiveChain: chain is null ? null : () => chain,
             health: health,
+            log: log,
             persist: persist,
             capacity: capacity,
             lastContextTokens: lastContextTokens,
             enqueueBypass: enqueueBypass,
-            orchestrationDone: orchestrationDone);
+            orchestrationDone: orchestrationDone,
+            contextSource: contextSource);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }
@@ -1301,6 +1305,33 @@ public class FallbackLlmSessionAdapterTests
         error.Text.Should().NotContain("Ни одна из доступных моделей не ответила");
         var final = Downstream().OfType<ResultMessage>().Should().ContainSingle().Subject;
         final.Subtype.Should().Be("error");
+    }
+
+    // Источник оценки контекста логируется при overflow (диагностика фолбэк-оценки): иначе следующий
+    // провал пришлось бы снова ловить по «~0 токенов» в проде. contextSource — параллельный Func<string>,
+    // собираемый фабрикой из того же замыкания, что и lastContextTokens («живая» / «из истории» / «нет»).
+    [Fact]
+    public async Task Overflow_ИсточникОценки_Логируется()
+    {
+        var spy = new SpyLogger();
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-big", "m-big", 1_000_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-big"], capacity: new(),
+            lastContextTokens: () => 80_000,   // как если бы фабрика достала 80k из истории
+            contextSource: () => "из истории", // живая оценка 0 → фолбэк на историю чата
+            log: spy);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-big — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // Наблюдение записалось с оценкой из истории (не 0), и лог донёс источник
+        Downstream().OfType<ResultMessage>().Should().NotBeEmpty();
+        spy.Entries.Should().Contain(e => e.Message.Contains("Переполнение контекста")
+            && e.Message.Contains("оценка: из истории"),
+            "источник оценки пишется в лог для диагностики фолбэк-оценки");
     }
 
     // --- Фиксы ревью ContextOverflow (Major 1–3, Minor-review) ---

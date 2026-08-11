@@ -168,6 +168,80 @@ public class ChatHistoryServiceTests : IDisposable
             .Which.TurnWorktree.Should().BeNull();
     }
 
+    // --- Последний_known_размер_контекста (фолбэк оценки для ContextCapacityRegistry) ---
+    // Обратный проход до последнего result с ContextTokens>0. Серверный аналог фронтового
+    // lastContextOf: живое значение usage теряется при обрыве хода/рестарте, а StoredResultMessage
+    // переживает и то, и другое — поэтому реестр ёмкости опирается на историю как на фолбэк.
+
+    [Fact]
+    public async Task LastContextFromHistory_НесуществующийЧат_ReturnsNull()
+    {
+        _sut.LastContextFromHistory("no-such-session").Should().BeNull();
+    }
+
+    [Fact]
+    public void LastContextFromHistory_ПустойId_ReturnsNull()
+    {
+        _sut.LastContextFromHistory("").Should().BeNull("пустой id — грузить нечего");
+        _sut.LastContextFromHistory("   ").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task LastContextFromHistory_НетResultВИстории_ReturnsNull()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId, [new StoredUserMessage("hi"), new StoredTextMessage("ответ")]);
+
+        _sut.LastContextFromHistory(sessionId).Should().BeNull("result с токенами отсутствует");
+    }
+
+    [Fact]
+    public async Task LastContextFromHistory_ПоследнийResultСКонтекстом_ReturnsЕго()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId,
+        [
+            new StoredUserMessage("hi"),
+            new StoredResultMessage("success", 100, 1, contextTokens: 50_000),
+        ]);
+
+        _sut.LastContextFromHistory(sessionId).Should().Be(50_000);
+    }
+
+    // Несколько ходов — берём ПОСЛЕДНИЙ (контекст растёт: самый свежий result — лучшая оценка
+    // текущего размера). Это ключевое свойство для фолбэка оценки при ContextOverflow.
+    [Fact]
+    public async Task LastContextFromHistory_НесколькоРезультатов_БерётПоследний()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId,
+        [
+            new StoredResultMessage("success", 100, 1, contextTokens: 30_000),
+            new StoredResultMessage("success", 200, 2, contextTokens: 80_000),
+        ]);
+
+        _sut.LastContextFromHistory(sessionId).Should().Be(80_000, "самый свежий result");
+    }
+
+    // Последний result с нулём/null (ход без usage, старая история до поля) — пропускается,
+    // берём предыдущий ненулевой. 0 — это «оценки нет» (guard RecordOverflow), и возвращать его
+    // как фолбэк бессмысленно: реестр всё равно не записался бы.
+    [Fact]
+    public async Task LastContextFromHistory_ПоследнийResultСНулём_БерётПредыдущийНенулевой()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        await _sut.SaveAsync(sessionId,
+        [
+            new StoredResultMessage("success", 100, 1, contextTokens: 60_000),
+            new StoredUserMessage("ещё"),
+            // Последний result: ContextTokens отсутствует (null) — как старая история до поля
+            new StoredResultMessage("success", 200, 2),
+        ]);
+
+        _sut.LastContextFromHistory(sessionId).Should().Be(60_000,
+            "null/0 у последнего result пропущен — берём предыдущий ненулевой");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

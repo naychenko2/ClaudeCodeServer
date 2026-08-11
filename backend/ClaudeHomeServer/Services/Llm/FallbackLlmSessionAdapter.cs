@@ -291,12 +291,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 {
                     if (turn.Settled) return _downstream(msg);
                     if (turn.SwallowCleanup) return Task.CompletedTask; // процесс убит ротацией — глотаем
-                    turn.Hold(msg);
                     // Терминал ЧУЖОГО прогона: ход этой попытки в нём не подавался (штатная смерть
                     // прогона предыдущего хода, доживавшего после своего result). Попытку не трогаем —
                     // иначе её исход становится ProcessGone → Unreachable → подмена модели на живой
                     // подписке (инцидент 2026-08-11: opus → glm-5.2 без единой ошибки доставки).
+                    // Глотаем ДО turn.Hold: иначе чужой Exited осядет в held и при SettleAsync
+                    // (foreach var m in held await _downstream(m)) уйдёт downstream лишним терминалом —
+                    // та же природа, что в ветке _turn is null выше.
                     if (!IsOwnExited(exited.TurnSeq, turn.AttemptTurnSeq)) return Task.CompletedTask;
+                    turn.Hold(msg);
                     // Процесс умер без result — обрыв потока. Если попытка уже разрешена
                     // result'ом — это штатный выход после хода, не новый исход
                     if (!turn.AttemptResolved) turn.ResolveAttempt(AttemptEndKind.ProcessGone);

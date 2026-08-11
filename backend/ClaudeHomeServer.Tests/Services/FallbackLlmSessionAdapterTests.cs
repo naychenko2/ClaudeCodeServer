@@ -2158,6 +2158,42 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Should().OnlyContain(r => r.Subtype == "success");
     }
 
+    // Та же асимметрия, что в ветке _turn is null (SettleAsync → foreach held): чужой ExitedMessage
+    // не должен оседать в turn.Held — иначе при успешном Settle он уйдёт downstream лишним терминалом
+    // и триггернет в SessionManager повторный разбор очереди (та же природа, что симптом 2
+    // инцидента 2026-08-10 — дублирующиеся авто-ходы «Персона-исполнитель завершила»). Защита
+    // обязана стоять ДО turn.Hold, поэтому проверяем итог после полного цикла хода, а не только
+    // отсутствие подмены (это разные утверждения — дописывать в ExitedПредыдущегоПрогона_…
+    // нельзя, иначе переплетаются сценарии).
+    [Fact]
+    public async Task ExitedПредыдущегоПрогона_НеУходитDownstream_ПриУспешномХоде()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool);
+
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        await sut.SendMessageAsync("первый ход");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "result первого хода");
+        var firstRunSeq = inner.SubmittedTurnSeq;
+
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ExitedMessage(firstRunSeq));   // чужой терминал, метка = снимку попытки
+            inner.Emit(Success());                        // собственный ход отвечает штатно
+        });
+
+        await sut.SendMessageAsync("второй ход");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Count() == 2, "result второго хода");
+        // SettleAsync отработал — если бы чужой exited сидел в held, он бы уже уехал downstream.
+        // Дополнительно ждём снятия _turn (finally) на случай гонки foreach с проверкой.
+        await WaitForAsync(() => !sut.OrchestrationActive, "завершение оркестрации");
+
+        Downstream().OfType<ExitedMessage>().Should().BeEmpty(
+            "чужой ExitedMessage глотается до Held, иначе SettleAsync выпустит его downstream лишним терминалом");
+        Downstream().OfType<ResultMessage>().Should().HaveCount(2);
+        Downstream().OfType<ResultMessage>().Should().OnlyContain(r => r.Subtype == "success");
+    }
+
     // Обратная сторона: exited СОБСТВЕННОГО прогона (метка = метке хода) по-прежнему
     // резолвит попытку как ProcessGone — обрыв доставки, ход перезапускается на другой паре.
     [Fact]

@@ -15,6 +15,29 @@ export interface ProjectTag {
   color?: string;
 }
 
+// Фон рабочего пространства проекта (фича project-backgrounds, ADR-008). Wire-формат
+// совпадает с ProjectBackgroundView бэка: kind — lowercase-строка, tileVersion — имя файла
+// тайла (оно же cache-buster у GET tile.svg, только при generated), failReason — класс
+// отказа. У проекта без фона поле отсутствует/null (генерацию не пробовали).
+export type ProjectBackgroundKind = 'pending' | 'generated' | 'standard' | 'failed';
+
+export interface ProjectBackground {
+  kind: ProjectBackgroundKind;
+  tileVersion?: string | null;
+  failReason?: string | null;   // no-model | bad-json | rejected | io
+}
+
+// Ответ POST .../background/generate|reset (ADR-008 §7): итог операции с судьбой
+// предложенного моделью цвета. colorApplied=false + suggestedColorKey — сервер цвет не
+// трогал (он выбран руками), фронт показывает диалог подтверждения смены цвета.
+export interface BackgroundResult {
+  kind: ProjectBackgroundKind;
+  tileVersion?: string | null;
+  suggestedColorKey?: string | null;
+  colorApplied: boolean;
+  failReason?: string | null;
+}
+
 export interface Project {
   id: string;
   name: string;
@@ -22,6 +45,7 @@ export interface Project {
   relativePath?: string;
   createdAt: string;
   updatedAt: string;
+  ownerId?: string;          // владелец проекта; бэк отдаёт, фронту нужно для гейта фона
   groupId?: string;          // группа проекта; отсутствует = без группы
   sessionCount?: number;
   difyDatasetId?: string;
@@ -40,6 +64,9 @@ export interface Project {
   defaultPersonaId?: string | null;
   // Живая сессия онбординга проекта — для резюма прерванного интервью
   onboardingSessionId?: string | null;
+  // Фон рабочего пространства (фича project-backgrounds): null/отсутствует — генерацию
+  // не пробовали (стандартный фон). Гейтом по флагу + владение (только владелец меняет)
+  background?: ProjectBackground | null;
 }
 
 // Иконка проекта (по образцу PersonaAvatar): инициалы на цветном фоне или картинка

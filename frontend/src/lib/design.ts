@@ -180,8 +180,14 @@ export const ISLAND = {
   // === Фон-холст (CanvasBackdrop) ===
   ink:  'var(--canvas-ink)',   // rgb-триплет «туши» дудл-паттерна
   glow: 'var(--canvas-glow)',  // accent-нимб холста
-  patternAlpha: 'var(--canvas-alpha)', // непрозрачность линий паттерна
+  patternAlpha: 'var(--canvas-alpha)', // непрозрачность нейтральной туши (0.05)
   patternSize:  'var(--canvas-tile)',  // размер тайла паттерна
+  // Альфа ЦВЕТНОЙ (проектной) туши в themed-режиме (фича project-backgrounds) —
+  // отдельна от patternAlpha: цвет-на-цвете требует выше плотности (0.14 против 0.05).
+  // Значение живёт в theme.css (--canvas-project-alpha), едино для обеих тем;
+  // для раздельного override переопределить там же в :root[data-theme="dark"].
+  // CanvasBackdrop в themed-режиме красит слой туши через rgba(ink, projectInkAlpha).
+  projectInkAlpha: 'var(--canvas-project-alpha)',
 } as const
 
 // === Слои (z-index) ===

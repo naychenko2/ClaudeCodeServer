@@ -9,6 +9,7 @@ import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../c
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
 import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useIsMobile } from '../../../lib/breakpoints';
+import { useMe } from '../../../lib/defaultPersona';
 import { getNav } from '../../../lib/nav';
 import { OPEN_INTRO_EVENT } from '../../onboarding/OnboardingPage';
 import { GroupSelect } from '../GroupSelect';
@@ -16,6 +17,7 @@ import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/G
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
+import { BackgroundSection } from './BackgroundSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 
 // Строка «Руководитель проекта не назначен» (фича default-personas-onboarding, п.5.3):
@@ -214,6 +216,12 @@ type View = 'main' | 'prompt' | 'rules';
 
 export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
   const online = useOnline();
+  // Фон проекта — только под флагом и только владельцу: участник без прав владельца фон
+  // менять не может (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем
+  // за тем же условием, чтобы не показывать недоступное действие.
+  const bgEnabled = useFeature(FLAGS.projectBackgrounds);
+  const me = useMe();
+  const isOwner = !project.ownerId || project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
   const [name, setName] = useState(project.name);
   const [groupId, setGroupId] = useState(project.groupId ?? '');
@@ -491,6 +499,14 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       <GitHistorySection project={project} />
+      {bgEnabled && isOwner && (
+        <BackgroundSection
+          project={project}
+          iconColor={iconColor}
+          onColorChange={setIconColor}
+          onProjectUpdated={onProjectUpdated ?? (() => {})}
+        />
+      )}
       <ProjectSyncToggle projectId={project.id} online={online} />
     </Modal>
   );

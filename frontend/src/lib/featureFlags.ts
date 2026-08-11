@@ -10,6 +10,7 @@ import { useSyncExternalStore } from 'react';
 export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
   defaultPersonasOnboarding: 'default-personas-onboarding',
+  projectBackgrounds: 'project-backgrounds',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

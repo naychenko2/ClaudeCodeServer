@@ -1,7 +1,14 @@
+import { memo, useEffect, useState, useSyncExternalStore } from 'react';
+import type { Project } from '../../types';
 import { ISLAND } from '../../lib/design';
+import { AGENT_COLORS } from '../AgentSelector';
+import { projectColor } from '../../lib/tasks';
+import { getEffectiveTheme, subscribeThemeMode } from '../../lib/themeMode';
+import { api } from '../../lib/api';
+import { useFeature, FLAGS } from '../../lib/featureFlags';
 
 // Фон страницы под островами (Islands): два декоративных слоя поверх bgMain —
-// мягкий accent-нимб (ISLAND.glow) и дудл-паттерн в тематике продукта (терминал,
+// мягкий нимб (accent-свечение) и дудл-паттерн в тематике продукта (терминал,
 // скобки, git, чат, файлы...). Паттерн — один SVG-тайл через mask-image: цвет линий
 // задаёт background-color rgba(var(--canvas-ink), α), поэтому темизация бесплатная —
 // в тёмной теме тушь светлеет одной CSS-переменной, без второй картинки.
@@ -10,6 +17,13 @@ import { ISLAND } from '../../lib/design';
 // верха окна): родитель обязан иметь position:'relative' и isolation:'isolate'
 // (иначе слои zIndex:-1 провалятся под его собственный background).
 // pointer-events: none — клики, сплиттеры и DnD не задеваются.
+//
+// Свой фон проекта (фича project-backgrounds, ADR-008). Когда передан project И флаг
+// включён, два входа берутся от проекта, а не из дизайн-системы: источник маски —
+// сгенерированный по смыслу проекта тайл (URL), а цвет туши и верхнего нимба — цвет
+// проекта из палитры. Без project/флага — стандартный дудл-тайл и нативные переменные
+// холста. Пустого экрана без фона не бывает ни в одном состоянии: до готовности
+// тайла, во время генерации и при её падении всегда показывается стандартный дудл.
 
 // Тайл 260×260: 12 дудлов + разбросанные мелочи, лёгкий разворот у каждого —
 // рисунок «от руки», как на бумаге. stroke чёрный — в mask важна только альфа.
@@ -61,23 +75,81 @@ const DOODLE_TILE = `
 
 const DOODLE_URI = `url("data:image/svg+xml,${encodeURIComponent(DOODLE_TILE.trim())}")`;
 
-export function CanvasBackdrop() {
+// Эффективный цвет проекта: ключ палитры из icon.color, иначе детерминированный фолбэк
+// по хешу id — ровно как у ProjectIcon, чтобы иконка в доке, метки задач и фон говорили
+// одно. Возвращает hex палитры AGENT_COLORS.
+function projectInkHex(project: Project): string {
+  const key = project.icon?.color;
+  return key && AGENT_COLORS[key] ? AGENT_COLORS[key] : projectColor(project.id).main;
+}
+
+// hex (#rrggbb / #rgb) → «r, g, b» для rgba(): маске нужен триплет, не var().
+function hexToRgb(hex: string): string {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.split('').map(c => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  return `${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}`;
+}
+
+export const CanvasBackdrop = memo(function CanvasBackdrop({ project }: { project?: Project }) {
+  const themed = useFeature(FLAGS.projectBackgrounds) && !!project;
+
+  // Тема — реактивно: альфа верхнего нимба в тёмной чуть ниже (как у accent-радиала в
+  // theme.css), чтобы цвет проекта не тяжелел экран на тёмном (критерий снятия флага).
+  const isDark = useSyncExternalStore(subscribeThemeMode, getEffectiveTheme, getEffectiveTheme) === 'dark';
+
+  // Источник маски: URL тайла проекта (только при generated). mask-image не даёт
+  // onload/onerror, поэтому предзагружаем через Image и ставим URL только при успехе —
+  // иначе при 404 маска пуста и слой паттерна заливается плотным цветом. До успешной
+  // загрузки, при ошибке и в остальных состояниях — стандартный дудл (Инвариант ADR-008 §11.2).
+  const tileUrl = themed ? api.projects.backgroundTileUrl(project!) : null;
+  const [loadedUrl, setLoadedUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!tileUrl) { setLoadedUrl(null); return; }
+    let cancelled = false;
+    const img = new Image();
+    img.onload = () => { if (!cancelled) setLoadedUrl(tileUrl); };
+    img.onerror = () => { if (!cancelled) setLoadedUrl(null); };
+    img.src = tileUrl;
+    return () => { cancelled = true; };
+  }, [tileUrl]);
+
+  const maskUri = loadedUrl ? `url("${loadedUrl}")` : DOODLE_URI;
   const maskProps = {
-    maskImage: DOODLE_URI,
-    WebkitMaskImage: DOODLE_URI,
+    maskImage: maskUri,
+    WebkitMaskImage: maskUri,
     maskSize: `${ISLAND.patternSize} ${ISLAND.patternSize}`,
     WebkitMaskSize: `${ISLAND.patternSize} ${ISLAND.patternSize}`,
     maskRepeat: 'repeat',
     WebkitMaskRepeat: 'repeat',
   } as const;
+
+  // Цвет туши и нимба: цвет проекта (при вкл. флаге) либо нативные переменные холста.
+  // Инвариант: var(--canvas-*) тут только в режиме фолбэка — в themed-режиме цвет один
+  // и тот же для туши и верхнего нимба (одна точка истины — icon.color проекта).
+  let ink: string = ISLAND.ink;           // «r, g, b» в themed, иначе var(--canvas-ink)
+  let glow: string = ISLAND.glow;         // свой radial в themed, иначе var(--canvas-glow)
+  let inkAlpha: string = ISLAND.patternAlpha; // нейтральная тушь (0.05) в фолбэке
+  if (themed) {
+    const rgb = hexToRgb(projectInkHex(project!));
+    ink = rgb;
+    // Цветная тушь требует выше плотности, чем нейтральная (0.14 против 0.05) — иначе
+    // подобранный Майей фон остаётся на 5% и визуально невидим (ADR-008, волна 4).
+    inkAlpha = ISLAND.projectInkAlpha;
+    // Вариант 3 (согласован с дизайнером Майей): красим И тушь, И верхний нимб цветом
+    // проекта. Нижний зеленоватый отблеск не рисуем — он уместен лишь с дефолтным
+    // accent, с произвольным цветом проекта конфликтует. Альфа — как у accent-радиала.
+    glow = `radial-gradient(140% 70% at 50% 0%, rgba(${rgb}, ${isDark ? 0.11 : 0.13}), transparent 55%)`;
+  }
+
   return (
     <div aria-hidden style={{ position: 'absolute', inset: 0, zIndex: -1, pointerEvents: 'none' }}>
-      <div style={{ position: 'absolute', inset: 0, background: ISLAND.glow }} />
+      <div style={{ position: 'absolute', inset: 0, background: glow }} />
       <div style={{
         position: 'absolute', inset: 0,
-        backgroundColor: `rgba(${ISLAND.ink}, ${ISLAND.patternAlpha})`,
+        backgroundColor: `rgba(${ink}, ${inkAlpha})`,
         ...maskProps,
       }} />
     </div>
   );
-}
+});

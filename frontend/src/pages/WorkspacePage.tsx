@@ -1396,7 +1396,7 @@ const windowWidth = useWindowWidth();
     return (
       // Дудл-фон и на мобиле: виден под лентой чата и в пустых состояниях.
       // Высота — измеренная viewportH, а не 100dvh: см. комментарий при viewportH
-      <PageCanvas style={{ height: viewportH }}>
+      <PageCanvas project={project} style={{ height: viewportH }}>
         {/* Верхняя шапка — только в режиме списка (sidebar). В режиме чата своя
             самодостаточная шапка ChatHeaderBar с кнопкой «назад»; у файла — шапка FileViewer */}
         {!openFile && mobileView === 'sidebar' && (
@@ -1523,7 +1523,7 @@ const windowWidth = useWindowWidth();
   }
 
   return (
-    <PageCanvas>
+    <PageCanvas project={project}>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
       <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={() => setEditProjectOpen(true)} />
 

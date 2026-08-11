@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
+import type { Project } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { CanvasBackdrop } from './CanvasBackdrop';
 
@@ -16,7 +17,7 @@ import { CanvasBackdrop } from './CanvasBackdrop';
 //
 // style — точечные отличия конкретного экрана (центрирование, position:'fixed'
 // у оверлея истории, height:'100%' у вложенной страницы). Перекрывает дефолты.
-export function PageCanvas({ children, style }: { children?: ReactNode; style?: CSSProperties }) {
+export function PageCanvas({ children, style, project }: { children?: ReactNode; style?: CSSProperties; project?: Project }) {
   return (
     <div style={{
       height: '100dvh',
@@ -29,8 +30,11 @@ export function PageCanvas({ children, style }: { children?: ReactNode; style?: 
       isolation: 'isolate',
       ...style,
     }}>
-      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём */}
-      <CanvasBackdrop />
+      {/* Дудл-фон на всю страницу — от самого верха окна, шапка лежит на нём.
+          project — когда есть, CanvasBackdrop красит тушь/нимб цветом проекта и
+          подключает сгенерированный тайл (фича project-backgrounds); без него —
+          стандартный дудл, как на всех внешних экранах. */}
+      <CanvasBackdrop project={project} />
       {children}
     </div>
   );

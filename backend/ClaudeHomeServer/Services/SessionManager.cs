@@ -811,6 +811,20 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
+    // Отметить чат прочитанным (синк непрочитанности между устройствами).
+    // UpdatedAt намеренно не трогаем (как в SetExpiry): прочтение — не активность чата.
+    // false — сессии нет или она не принадлежит owner'у (контроллер отдаёт 404).
+    // Идемпотентность: LastReadAt уже >= UpdatedAt → true без перезаписи файла
+    // (SaveSessions пишет весь список — незачем гонять диск на повторных отметках).
+    public bool MarkRead(string sessionId, string ownerId)
+    {
+        if (GetOwned(sessionId, ownerId) is not { } s) return false;
+        if (s.LastReadAt >= s.UpdatedAt) return true;
+        s.LastReadAt = DateTime.UtcNow;
+        SaveSessions();
+        return true;
+    }
+
     // Opt-out «Истории решений» (ADR-004 §6): тумблер «Не сохранять решения из этого чата».
     // Персистится в sessions.json; DossierCaptureService проверяет его при захвате коммита.
     public Session? SetExcludeFromDossiers(string sessionId, bool value)

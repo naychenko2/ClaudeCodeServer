@@ -63,7 +63,8 @@ public class HomeController(SessionManager sessions, ProjectManager projects) : 
         s.IsPinned,
         s.Tags,
         s.Participants,
-        s.ExpiresAfterMinutes);
+        s.ExpiresAfterMinutes,
+        s.LastReadAt);
 }
 
 // Строка сводки: сессия + имя проекта (чтобы фронт не тянул список проектов отдельно).
@@ -86,4 +87,7 @@ public record HomeSessionDto(
     bool IsPinned,
     List<string> Tags,
     List<string>? Participants,
-    int? ExpiresAfterMinutes);
+    int? ExpiresAfterMinutes,
+    // Серверная отметка прочтения (синк между устройствами); дефолт — чтобы не ломать
+    // конструирование именованными аргументами в тестах
+    DateTime? LastReadAt = null);

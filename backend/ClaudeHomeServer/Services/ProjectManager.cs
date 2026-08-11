@@ -301,9 +301,13 @@ public class ProjectManager
     /// </summary>
     /// <param name="candidatesOnly">
     /// Режим массового прогона (ADR-008 §10): забирать только проекты, которых генерация
-    /// НИКОГДА не касалась (<c>Background == null</c>), плюс протухший Pending. Проверка
-    /// идёт под тем же локом, что и захват, — иначе кнопка «Вернуть стандартный», нажатая
-    /// между выбором кандидатов и их обработкой, была бы перетёрта прогоном.
+    /// НИКОГДА не касалась (<c>Background == null</c>), плюс протухший Pending, плюс Failed.
+    /// Failed сюда попадает единственным путём — транзиентный возврат по явному включению
+    /// флага (<c>ProjectBackgroundBackfill.IsCandidate</c> с <c>allowTransientRetry</c>);
+    /// какой именно Failed подходит, решает IsCandidate, здесь — только механика захвата.
+    /// Generated/Standard не проходят — защита от перетирания чужой успешной работы.
+    /// Проверка идёт под тем же локом, что и захват, — иначе кнопка «Вернуть стандартный»,
+    /// нажатая между выбором кандидатов и их обработкой, была бы перетёрта прогоном.
     /// </param>
     public bool TryBeginBackground(string id, TimeSpan? staleAfter = null, bool candidatesOnly = false)
     {
@@ -317,7 +321,9 @@ public class ProjectManager
                 && current.StartedAt is { } started
                 && DateTime.UtcNow - started < stale)
                 return false;
-            if (candidatesOnly && current is not null and not { Kind: ProjectBackgroundKind.Pending })
+            if (candidatesOnly && current is not null
+                               and not { Kind: ProjectBackgroundKind.Pending }
+                               and not { Kind: ProjectBackgroundKind.Failed })
                 return false;
 
             project.Background = new ProjectBackground

@@ -12,12 +12,15 @@ import { onMessage } from './signalr';
 
 interface MeState {
   loaded: boolean;
+  // id текущего пользователя (== Project.ownerId бэка) — нужен гейтам «только владелец»
+  // (например, смена фона проекта), без прокидывания auth пропсом через всё дерево
+  userId: string | null;
   defaultPersonaId: string | null;
   needsOnboarding: boolean;
   onboardingSessionId: string | null;
 }
 
-let _me: MeState = { loaded: false, defaultPersonaId: null, needsOnboarding: false, onboardingSessionId: null };
+let _me: MeState = { loaded: false, userId: null, defaultPersonaId: null, needsOnboarding: false, onboardingSessionId: null };
 const _listeners = new Set<() => void>();
 let _realtimeWired = false;
 
@@ -45,6 +48,7 @@ export function setMeFromServer(me: Me): void {
   wireRealtime();
   _me = {
     loaded: true,
+    userId: me.userId ?? null,
     defaultPersonaId: me.defaultPersonaId ?? null,
     needsOnboarding: !!me.needsOnboarding,
     onboardingSessionId: me.onboardingSessionId ?? null,
@@ -54,7 +58,7 @@ export function setMeFromServer(me: Me): void {
 
 // Сброс при разлогине — данные не должны протечь следующему аккаунту
 export function clearMe(): void {
-  _me = { loaded: false, defaultPersonaId: null, needsOnboarding: false, onboardingSessionId: null };
+  _me = { loaded: false, userId: null, defaultPersonaId: null, needsOnboarding: false, onboardingSessionId: null };
   emit();
 }
 

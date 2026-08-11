@@ -42,8 +42,8 @@ const DRAG_THRESHOLD = 5;     // порог в px: клик → перетаск
 
 // Цвет несёт смысл: waiting — медовый warning («брось дело, нужен ответ»),
 // working — контрастный accent (прямо сейчас идёт работа), unread — нейтрально-
-// серый (сюда не заходили, не событие). Движение добавляет второй канал: working
-// мерцает, unread стоит ровно, waiting мерцает медленнее
+// серый (сюда не заходили, не событие). Медовый и accent на 8px-точке почти
+// неотличимы, поэтому waiting дополнительно выделен формой — полое колечко
 const STATUS_COLOR: Record<ProjectActivity['status'], string> = {
   waiting: C.warning,
   working: C.accent,
@@ -58,9 +58,10 @@ const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
 
 // Мерцание точки: waiting дышит медленно (тревожить, но не дёргать), working —
 // живее (там прямо сейчас идёт работа), unread не мерцает вовсе. cc-dot нужен
-// всем: он рисует цветную заливку (::after), ободок и непрозрачную подложку
+// всем: он рисует цветную заливку (::after), ободок и непрозрачную подложку.
+// waiting вдобавок полый (cc-dot--ring) — по цвету он сливается с working
 const STATUS_PULSE: Record<ProjectActivity['status'], string> = {
-  waiting: ' cc-dot cc-dot-pulse cc-dot-pulse--slow',
+  waiting: ' cc-dot cc-dot--ring cc-dot-pulse cc-dot-pulse--slow',
   working: ' cc-dot cc-dot-pulse',
   unread: ' cc-dot',
 };

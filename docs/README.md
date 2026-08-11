@@ -53,6 +53,19 @@
 [audit.md](design/audit.md) (сверка реализации с макетами), `mockups/` — кликабельные
 прототипы в HTML.
 
+**adr/** —
+[ADR-001](adr/ADR-001-task-and-chat-origin.md) (происхождение задач и чатов),
+[ADR-002](adr/ADR-002-code-graph-god-nodes-in-prompt.md) (god-nodes Code Graph в промпт хода),
+[ADR-003](adr/ADR-003-code-graph-in-worktrees.md) (Code Graph в чатах с worktree),
+[ADR-004](adr/ADR-004-change-dossiers.md) (паспорта изменений),
+[ADR-005](adr/ADR-005-link-reader-server.md) (серверная часть режима чтения ссылок),
+[ADR-006](adr/ADR-006-reader-embed-check.md) (проверка встраиваемости для «Чтения»),
+[ADR-007](adr/ADR-007-model-preset-chains.md) (пресет как именованная цепочка моделей),
+[ADR-008](adr/ADR-008-project-background-generation.md) (фон проекта: контракт генерации
+без разметки, серверная сборка тайла и форма хранения);
+[model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
+(резолв модели и фолбэк хода по цепочке).
+
 **research/** — материалы с датой: [feature-parity.md](research/feature-parity.md),
 [messenger-integration.md](research/messenger-integration.md) (не реализовано),
 [roadmap-team-zone.md](research/roadmap-team-zone.md). Читать как «так было тогда».

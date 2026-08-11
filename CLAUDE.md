@@ -384,10 +384,14 @@ Dark launch: фича коммитится выключенной и включ�
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs)); хранение —
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
 хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
-(2026-08); в каталоге осталось два флага — `workspace-destructive` (постоянный
-предохранитель от необратимого удаления) и `default-personas-onboarding` (ассистент по
+(2026-08); в каталоге три флага: `workspace-destructive` (постоянный
+предохранитель от необратимого удаления), `default-personas-onboarding` (ассистент по
 умолчанию заводится автоматически при первом входе, знакомство — по приглашению, а не
-обязательный экран; детали — [docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md)).
+обязательный экран; детали — [docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md))
+и `project-backgrounds` (рисунок и цвет фона подбираются моделью по смыслу проекта;
+контракт генерации без разметки, серверная сборка тайла и форма хранения —
+[ADR-008](docs/adr/ADR-008-project-background-generation.md), тексты интерфейса и критерии
+снятия флага — [docs/features/project-backgrounds.md](docs/features/project-backgrounds.md)).
 Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
 
 **Как добавить новый флаг (3 шага):**

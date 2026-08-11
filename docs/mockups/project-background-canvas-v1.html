@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Фон проекта — цветной холст · макет v1</title>
+<style>
+/* ===== Токены, две темы как локальные скоупы (.tl / .td) ===== */
+:root {
+  /* Дудл-тайлы общие для тем (техника продукта: mask-image, см. CanvasBackdrop.tsx) */
+  --tile-std: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22260%22%20height%3D%22260%22%20viewBox%3D%220%200%20260%20260%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cg%20transform%3D%22translate(18%2C20)%20rotate(-7)%22%3E%3Crect%20x%3D%220%22%20y%3D%220%22%20width%3D%2234%22%20height%3D%2225%22%20rx%3D%224%22%2F%3E%3Cpath%20d%3D%22M7%209l4.5%204-4.5%204M17%2017h10%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(104%2C14)%20rotate(6)%22%3E%3Cpath%20d%3D%22M10%200C5%200%206%206%206%208c0%202-3%202.5-3%202.5S6%2011%206%2013c0%202-1%208%204%208%22%2F%3E%3Cpath%20d%3D%22M22%200c5%200%204%206%204%208%200%202%203%202.5%203%202.5S26%2011%2026%2013c0%202%201%208-4%208%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(186%2C26)%20rotate(-4)%22%3E%3Ccircle%20cx%3D%225%22%20cy%3D%225%22%20r%3D%224%22%2F%3E%3Ccircle%20cx%3D%225%22%20cy%3D%2227%22%20r%3D%224%22%2F%3E%3Ccircle%20cx%3D%2226%22%20cy%3D%2216%22%20r%3D%224%22%2F%3E%3Cpath%20d%3D%22M5%209v14M5%2016h9c5%200%208-1.5%208%200%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(30%2C86)%20rotate(5)%22%3E%3Cpath%20d%3D%22M2%204a4%204%200%20014-4h20a4%204%200%20014%204v12a4%204%200%2001-4%204H12l-7%206v-6H6a4%204%200%2001-4-4z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(112%2C80)%20rotate(-10)%22%3E%3Cpath%20d%3D%22M13%200l3.2%209.3L26%2012.5l-9.8%203.2L13%2025l-3.2-9.3L0%2012.5l9.8-3.2z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(190%2C92)%20rotate(8)%22%3E%3Cpath%20d%3D%22M4%200h13l9%209v19a3%203%200%2001-3%203H4a3%203%200%2001-3-3V3a3%203%200%20013-3z%22%2F%3E%3Cpath%20d%3D%22M17%200v9h9M7%2018h12M7%2024h8%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(20%2C168)%20rotate(-5)%22%3E%3Cpath%20d%3D%22M1%205a3%203%200%20013-3h8l4%204h13a3%203%200%20013%203v14a3%203%200%2001-3%203H4a3%203%200%2001-3-3z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(96%2C160)%20rotate(10)%22%3E%3Ccircle%20cx%3D%2214%22%20cy%3D%2214%22%20r%3D%2213%22%2F%3E%3Cpath%20d%3D%22M8.5%2014.5l4%204L20%2010%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(176%2C170)%20rotate(-8)%22%3E%3Ccircle%20cx%3D%2213%22%20cy%3D%2213%22%20r%3D%225%22%2F%3E%3Cpath%20d%3D%22M13%200v4M13%2022v4M0%2013h4M22%2013h4M3.8%203.8l2.9%202.9M19.3%2019.3l2.9%202.9M22.2%203.8l-2.9%202.9M6.7%2019.3l-2.9%202.9%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(66%2C224)%20rotate(4)%22%3E%3Cpath%20d%3D%22M8%200L0%208l8%208M26%200l8%208-8%208%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(212%2C214)%20rotate(-6)%22%3E%3Cpath%20d%3D%22M9%2022h8M10%2026h6M13%200a9%209%200%20015%2016.5V19H8v-2.5A9%209%200%200113%200z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(146%2C226)%20rotate(9)%22%3E%3Crect%20x%3D%220%22%20y%3D%224%22%20width%3D%2226%22%20height%3D%2218%22%20rx%3D%223%22%2F%3E%3Cpath%20d%3D%22M8%204V1.5M18%204V1.5M0%2010h26%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+  --tile-docs: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22240%22%20height%3D%22240%22%20viewBox%3D%220%200%20240%20240%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cg%20transform%3D%22translate(20%2C24)%20rotate(-6)%22%3E%3Cpath%20d%3D%22M5%200h16l5%205v21a2%202%200%2001-2%202H5a2%202%200%2001-2-2V2a2%202%200%20012-2z%22%2F%3E%3Cpath%20d%3D%22M21%200v6h5M8%2012h12M8%2017h12M8%2022h7%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(118%2C30)%20rotate(7)%22%3E%3Cpath%20d%3D%22M2%202h18v22H2z%22%2F%3E%3Cpath%20d%3D%22M6%208h10M6%2013h10M6%2018h6%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(40%2C104)%20rotate(5)%22%3E%3Cpath%20d%3D%22M13%200L4%2022h4l5-11%205%2011h4z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(120%2C108)%20rotate(-8)%22%3E%3Crect%20x%3D%222%22%20y%3D%223%22%20width%3D%2224%22%20height%3D%2220%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M2%209h24M9%203v4M19%203v4M9%2019v-4M9%2019h6%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(196%2C120)%20rotate(6)%22%3E%3Cpath%20d%3D%22M3%200h12a3%203%200%20013%203v20a3%203%200%2001-3%203H3a3%203%200%2001-3-3V3a3%203%200%20013-3z%22%2F%3E%3Cpath%20d%3D%22M8%206h6M8%2011h6M8%2016h4%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(28%2C182)%20rotate(-5)%22%3E%3Cpath%20d%3D%22M2%206l8-4%208%204v14a2%202%200%2001-2%202H4a2%202%200%2001-2-2z%22%2F%3E%3Cpath%20d%3D%22M2%2010h16%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(120%2C186)%20rotate(8)%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%2210%22%2F%3E%3Cpath%20d%3D%22M12%207v5l3%203%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(196%2C196)%20rotate(-6)%22%3E%3Cpath%20d%3D%22M5%202h14v22l-7-4-7%204z%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+}
+.tl, :root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4;
+  --c-msg-bg:rgba(251,248,242,.42);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --canvas-ink:42,37,31;
+}
+.td {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037;
+  --c-msg-bg:rgba(46,42,37,.38);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 6px 20px rgba(0,0,0,.40);
+  --canvas-ink:237,230,219;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:#2A251F; color:#EDE6DB;
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+}
+
+/* ===== Служебная обвязка ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:#332C25; border-bottom:1px solid #453F37; color:#EDE6DB;
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; flex:1; min-width:200px; }
+.bar .sub { font-size:12px; color:#B3A897; }
+.wrap { max-width:1180px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:44px 0 4px; font-size:22px; font-weight:600; color:#EDE6DB;
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+p.note { margin:0 0 18px; color:#B3A897; font-size:13px; max-width:74ch; }
+p.note code { background:#3D3830; padding:1px 5px; border-radius:6px; font-size:12px; color:#EDE6DB; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#8A8072; margin:0 0 10px; }
+.cols { display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start; }
+.cols > * { flex:1; min-width:300px; }
+
+/* ===== Холст-фон (CanvasBackdrop) ===== */
+.canvas-box { position:relative; overflow:hidden; isolation:isolate; }
+.canvas-box > .glow { position:absolute; inset:0; z-index:0; }
+.canvas-box > .ink {
+  position:absolute; inset:0; z-index:0;
+  background-color:rgba(var(--canvas-ink), .11); /* в проде 0.05 — усилено для ревью */
+  -webkit-mask-image:var(--tile, var(--tile-std)); mask-image:var(--tile, var(--tile-std));
+  -webkit-mask-size:var(--ts, 220px); mask-size:var(--ts, 220px);
+  -webkit-mask-repeat:repeat; mask-repeat:repeat;
+}
+.glow.std {
+  background:
+    radial-gradient(140% 70% at 50% 0%, rgba(217,119,87,.13), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(110,140,120,.10), transparent 60%);
+}
+.td .glow.std {
+  background:
+    radial-gradient(140% 70% at 50% 0%, rgba(227,138,106,.11), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(110,140,120,.08), transparent 60%);
+}
+.glow.pro {
+  background:
+    radial-gradient(140% 70% at 50% 0%, rgba(var(--pro-r),var(--pro-g),var(--pro-b),.18), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(var(--pro-r),var(--pro-g),var(--pro-b),.11), transparent 60%);
+}
+
+/* ===== Рабочее пространство ===== */
+.ws { position:relative; border-radius:14px; border:1px solid var(--c-border); overflow:hidden; }
+.hub {
+  position:relative; z-index:2; height:44px; display:flex; align-items:center; gap:10px;
+  padding:0 14px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.hub .logo { width:22px; height:22px; border-radius:7px; background:var(--c-accent); }
+.hub .crumb { font-size:13px; color:var(--c-text-secondary); }
+.hub .crumb b { color:var(--c-text-heading); font-weight:600; }
+.hub .spacer { flex:1; }
+.hub .ghost-btn {
+  width:30px; height:30px; border-radius:8px; border:1px solid var(--c-border);
+  background:transparent; color:var(--c-text-muted); cursor:pointer;
+}
+.body { position:relative; z-index:2; display:flex; gap:8px; padding:8px; height:560px; }
+
+.rail {
+  width:212px; flex:none; background:var(--c-bg-panel); border:1px solid var(--c-border-light);
+  border-radius:14px; display:flex; flex-direction:column; overflow:hidden;
+}
+.rail .proj { display:flex; align-items:center; gap:9px; padding:10px 12px; border-bottom:1px solid var(--c-border-light); }
+.rail .proj .pi { width:30px; height:30px; border-radius:9px; background:#5E8B4E; color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:14px; flex:none; }
+.rail .proj .pn { font-size:13px; font-weight:600; color:var(--c-text-heading); line-height:1.25; }
+.rail .proj .pn small { display:block; font-weight:400; color:var(--c-text-muted); font-size:11px; }
+.rail .list { flex:1; overflow-y:auto; padding:6px; }
+.rail .item { display:flex; align-items:center; gap:8px; padding:7px 9px; border-radius:9px; font-size:12.5px; color:var(--c-text-primary); cursor:pointer; }
+.rail .item:hover { background:var(--c-bg-selected); }
+.rail .item.active { background:var(--c-accent-light); color:var(--c-text-heading); font-weight:600; }
+.rail .item .d { width:6px; height:6px; border-radius:50%; background:var(--c-text-muted); flex:none; }
+.rail .item.active .d { background:var(--c-accent); }
+
+.chat { flex:1; min-width:0; background:transparent; display:flex; flex-direction:column; }
+.chat-head {
+  height:44px; flex:none; display:flex; align-items:center; gap:10px; padding:0 14px;
+  background:var(--c-bg-panel); border:1px solid var(--c-border-light); border-bottom:none; border-radius:14px 14px 0 0;
+}
+.chat-head .tt { font-size:14px; font-weight:600; color:var(--c-text-heading); }
+.chat-head .badge { font-size:11px; color:var(--c-text-muted); }
+.chat-head .spacer { flex:1; }
+.feed { flex:1; overflow-y:auto; padding:18px 18px 8px; display:flex; flex-direction:column; gap:14px; }
+.msg { display:flex; gap:10px; max-width:78%; }
+.msg.ai { align-self:flex-start; }
+.msg.user { align-self:flex-end; flex-direction:row-reverse; }
+.msg .av { width:28px; height:28px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:12px; color:#fff; }
+.msg.ai .av { background:var(--c-accent); }
+.msg.user .av { background:#3E7CA6; }
+.msg .b {
+  background:var(--c-msg-bg); border:1px solid var(--c-border-light); border-radius:14px;
+  padding:10px 13px; font-size:13px; line-height:1.55; color:var(--c-text-primary); backdrop-filter:blur(2px);
+}
+.msg.user .b { background:var(--c-accent-light); border-color:transparent; }
+.msg .b p { margin:0 0 7px; }
+.msg .b p:last-child { margin-bottom:0; }
+.msg .b .who { font-size:11px; color:var(--c-text-muted); margin-bottom:3px; font-weight:600; }
+.tool {
+  align-self:flex-start; max-width:78%; background:#2A251F; color:#D8CFC0;
+  border-radius:10px; padding:8px 12px; font-family:"JetBrains Mono",monospace; font-size:11.5px; line-height:1.5;
+  white-space:pre-wrap;
+}
+.tool .th { color:var(--c-accent); margin-bottom:3px; font-weight:600; }
+.composer {
+  flex:none; margin:0 18px 14px; background:var(--c-bg-card); border:1px solid var(--c-border);
+  border-radius:16px; padding:9px 12px; display:flex; align-items:center; gap:10px; box-shadow:var(--shadow-island);
+}
+.composer .ph { flex:1; color:var(--c-text-muted); font-size:13px; }
+.composer .send { width:32px; height:32px; border-radius:50%; border:none; background:var(--c-accent); color:var(--c-on-accent); cursor:pointer; font-size:15px; flex:none; }
+
+/* Свайлы имён цветов */
+.swatches { display:flex; gap:12px; flex-wrap:wrap; }
+.sw { display:flex; flex-direction:column; gap:6px; }
+.sw .chip { width:84px; height:56px; border-radius:10px; }
+.sw .nm { font-size:12px; color:#EDE6DB; font-weight:500; }
+.sw .nm small { display:block; color:#8A8072; font-weight:400; font-size:10.5px; font-family:"JetBrains Mono",monospace; }
+
+/* Мобильный фрейм */
+.mframe { width:372px; max-width:100%; border:1px solid #453F37; border-radius:26px; overflow:hidden; background:var(--c-bg-main); position:relative; flex:none; }
+.mframe .mhub { height:48px; display:flex; align-items:center; gap:10px; padding:0 14px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border); position:relative; z-index:2; }
+.mframe .mhub .logo { width:24px; height:24px; border-radius:8px; background:var(--c-accent); }
+.mframe .mhub .pn { font-size:14px; font-weight:600; color:var(--c-text-heading); }
+.mframe .mfeed { position:relative; z-index:2; height:440px; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:12px; }
+.mframe .mmsg { display:flex; gap:8px; max-width:84%; }
+.mframe .mmsg.ai { align-self:flex-start; }
+.mframe .mmsg.user { align-self:flex-end; flex-direction:row-reverse; }
+.mframe .mmsg .av { width:26px; height:26px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; color:#fff; }
+.mframe .mmsg.ai .av { background:var(--c-accent); }
+.mframe .mmsg.user .av { background:#3E7CA6; }
+.mframe .mmsg .b { background:var(--c-msg-bg); border:1px solid var(--c-border-light); border-radius:13px; padding:8px 11px; font-size:12.5px; line-height:1.5; color:var(--c-text-primary); }
+.mframe .mmsg.user .b { background:var(--c-accent-light); border-color:transparent; }
+.mframe .mmsg .b p { margin:0 0 5px; }
+.mframe .mmsg .b p:last-child { margin:0; }
+.mframe .mcomposer { position:relative; z-index:2; margin:0 12px 14px; background:var(--c-bg-card); border:1px solid var(--c-border); border-radius:16px; padding:9px 12px; display:flex; align-items:center; gap:10px; }
+.mframe .mcomposer .ph { flex:1; color:var(--c-text-muted); font-size:13px; }
+.mframe .mcomposer .send { width:34px; height:34px; border-radius:50%; border:none; background:var(--c-accent); color:var(--c-on-accent); font-size:15px; flex:none; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>Фон проекта — цветной холст · макет v1</h1>
+  <span class="sub">Обе темы рядом · стандартный vs сгенерированный · мобилка · длинная переписка</span>
+</div>
+
+<div class="wrap">
+
+  <!-- ===== Палитра имён цветов ===== -->
+  <h2 class="sec">Цвета проектов — палитра имён</h2>
+  <p class="note">Генератор подбирает цвет по смыслу и даёт ему имя. Нимб холста собирается из rgb-триплета цвета; тушь дудла остаётся нейтральной. Ниже — примеры пар «цвет → имя» для свайл-превью и диалога.</p>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#5E8B4E,#3F7A4F)"></div><div class="nm">изумрудный<small>#5E8B4E</small></div></div>
+    <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#1A9DAF,#15798A)"></div><div class="nm">морской<small>#1A9DAF</small></div></div>
+    <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#6C5CB0,#52488F)"></div><div class="nm">сливовый<small>#6C5CB0</small></div></div>
+    <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#D97757,#B85E40)"></div><div class="nm">терракотовый<small>#D97757</small></div></div>
+    <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#8A6A28,#6A5014)"></div><div class="nm">горчичный<small>#8A6A28</small></div></div>
+    <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#3E7CA6,#2C5C80)"></div><div class="nm">индиго<small>#3E7CA6</small></div></div>
+    <div class="sw"><div class="chip" style="background:linear-gradient(135deg,#B4452F,#8A3220)"></div><div class="nm">кирпичный<small>#B4452F</small></div></div>
+  </div>
+
+  <!-- ===== Стандартный vs сгенерированный (светлая) ===== -->
+  <h2 class="sec">Стандартный и сгенерированный — рядом, светлая тема</h2>
+  <p class="note">Слева — сегодняшний нейтральный холст (оранжевый нимб <code>ISLAND.glow</code>). Справа — сгенерированный: нимб цвета проекта + дудл по смыслу. Цвет виден в зазорах между островами и сквозь полупрозрачные <code>msgBg</code>-пузыри — лента остаётся читаемой.</p>
+
+  <div class="cols">
+    <div class="tl">
+      <p class="cap">Стандартный · светлая</p>
+      <div class="ws canvas-box">
+        <div class="glow std"></div><div class="ink"></div>
+        <div class="hub"><div class="logo"></div><span class="crumb"><b>Документация продукта</b></span><div class="spacer"></div><button class="ghost-btn">⚙</button></div>
+        <div class="body">
+          <div class="rail">
+            <div class="proj"><div class="pi">Д</div><div class="pn">Документация продукта<small>стандартный фон</small></div></div>
+            <div class="list">
+              <div class="item active"><span class="d"></span>Раздел «Начало работы»</div>
+              <div class="item"><span class="d"></span>API-справочник</div>
+              <div class="item"><span class="d"></span>ЧаВо</div>
+              <div class="item"><span class="d"></span>Релиз-ноуты 3.4</div>
+              <div class="item"><span class="d"></span>Глоссарий терминов</div>
+            </div>
+          </div>
+          <div class="chat">
+            <div class="chat-head"><span class="tt">Раздел «Начало работы»</span><span class="badge">· 12 сообщений</span><div class="spacer"></div></div>
+            <div class="feed">
+              <div class="msg user"><div class="av">А</div><div class="b"><p>Перепиши вводный абзац: короче, без штампов про «мощную платформу».</p></div></div>
+              <div class="msg ai"><div class="av">М</div><div class="b"><div class="who">Майя</div><p>Ловлишь главный враг вводного абзаца — пустые слова. Вот вариант без них:</p><p>«Платформа работает из коробки: создайте проект, подключите папку — и можно вести переписку. Остальное подстроится.»</p></div></div>
+              <div class="tool"><div class="th">✎ Edit · docs/getting-started.md</div>- Наша мощная платформа предоставляет…
++ Платформа работает из коробки…</div>
+            </div>
+            <div class="composer"><span class="ph">Напишите сообщение…</span><button class="send">➤</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tl">
+      <p class="cap">Сгенерированный · изумрудный · светлая</p>
+      <div class="ws canvas-box" style="--pro-r:94; --pro-g:139; --pro-b:78; --tile:var(--tile-docs)">
+        <div class="glow pro"></div><div class="ink"></div>
+        <div class="hub"><div class="logo" style="background:#5E8B4E"></div><span class="crumb"><b>Документация продукта</b></span><div class="spacer"></div><button class="ghost-btn">⚙</button></div>
+        <div class="body">
+          <div class="rail">
+            <div class="proj"><div class="pi">Д</div><div class="pn">Документация продукта<small>цвет: изумрудный</small></div></div>
+            <div class="list">
+              <div class="item active"><span class="d"></span>Раздел «Начало работы»</div>
+              <div class="item"><span class="d"></span>API-справочник</div>
+              <div class="item"><span class="d"></span>ЧаВо</div>
+              <div class="item"><span class="d"></span>Релиз-ноуты 3.4</div>
+              <div class="item"><span class="d"></span>Глоссарий терминов</div>
+            </div>
+          </div>
+          <div class="chat">
+            <div class="chat-head"><span class="tt">Раздел «Начало работы»</span><span class="badge">· 12 сообщений</span><div class="spacer"></div></div>
+            <div class="feed">
+              <div class="msg user"><div class="av">А</div><div class="b"><p>Перепиши вводный абзац: короче, без штампов про «мощную платформу».</p></div></div>
+              <div class="msg ai"><div class="av">М</div><div class="b"><div class="who">Майя</div><p>Ловлишь главный враг вводного абзаца — пустые слова. Вот вариант без них:</p><p>«Платформа работает из коробки: создайте проект, подключите папку — и можно вести переписку. Остальное подстроится.»</p></div></div>
+              <div class="tool"><div class="th">✎ Edit · docs/getting-started.md</div>- Наша мощная платформа предоставляет…
++ Платформа работает из коробки…</div>
+            </div>
+            <div class="composer"><span class="ph">Напишите сообщение…</span><button class="send">➤</button></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Сгенерированный, тёмная тема + длинная переписка ===== -->
+  <h2 class="sec">Сгенерированный фон — тёмная тема и длинная переписка</h2>
+  <p class="note">Та же история в тёмной теме: тушь дудла светлеет одним токеном <code>--canvas-ink</code>, нимб остаётся изумрудным. Ниже — длинная переписка: несколько сообщений, длинный ответ ассистента, блоки правок. Лента лежит на полупрозрачных <code>msgBg</code>-листах — цветной холст просвечивает, текст остаётся читаемым.</p>
+
+  <div class="td">
+    <p class="cap">Тёмная тема · длинная переписка поверх цветного холста</p>
+    <div class="ws canvas-box" style="--pro-r:94; --pro-g:139; --pro-b:78; --tile:var(--tile-docs)">
+      <div class="glow pro"></div><div class="ink"></div>
+      <div class="hub"><div class="logo" style="background:#5E8B4E"></div><span class="crumb"><b>Документация продукта</b></span><div class="spacer"></div><button class="ghost-btn">⚙</button></div>
+      <div class="body">
+        <div class="rail">
+          <div class="proj"><div class="pi">Д</div><div class="pn">Документация продукта<small>цвет: изумрудный</small></div></div>
+          <div class="list">
+            <div class="item active"><span class="d"></span>Раздел «Начало работы»</div>
+            <div class="item"><span class="d"></span>API-справочник</div>
+            <div class="item"><span class="d"></span>ЧаВо</div>
+            <div class="item"><span class="d"></span>Релиз-ноуты 3.4</div>
+            <div class="item"><span class="d"></span>Глоссарий терминов</div>
+          </div>
+        </div>
+        <div class="chat">
+          <div class="chat-head"><span class="tt">Раздел «Начало работы»</span><span class="badge">· 12 сообщений</span><div class="spacer"></div></div>
+          <div class="feed">
+            <div class="msg user"><div class="av">А</div><div class="b"><p>Перепиши вводный абзац: короче, без штампов про «мощную платформу».</p></div></div>
+            <div class="msg ai"><div class="av">М</div><div class="b"><div class="who">Майя</div><p>Ловлишь главный враг вводного абзаца — пустые слова. Вот вариант без них:</p><p>«Платформа работает из коробки: создайте проект, подключите папку — и можно вести переписку. Остальное подстроится.»</p><p>Одно предложение, активный залог, ноль прилагательных-усилителей. Читатель за 3 секунды понимает, что делать руками.</p></div></div>
+            <div class="tool"><div class="th">✎ Edit · docs/getting-started.md</div>- Наша мощная платформа предоставляет широкие
+  возможности для командной разработки…
++ Платформа работает из коробки: создайте
+  проект, подключите папку — и можно вести
+  переписку.</div>
+            <div class="msg user"><div class="av">А</div><div class="b"><p>Хорошо. Теперь секцию «Требования» — у неё список в пять уровней, это не читается.</p></div></div>
+            <div class="msg ai"><div class="av">М</div><div class="b"><div class="who">Майя</div><p>Пять уровней вложенности — это «спрятали за деревьями лес». Разделю на две группы: обязательное (ОС, браузер) и желательное (память, диск). Желательное уйдёт под &lt;details&gt; — кто дойдёт, тот раскроет.</p><p>Сохрани идентичность: те же маркеры, что у списка возможностей выше, чтобы секции читались как родные.</p></div></div>
+            <div class="msg user"><div class="av">А</div><div class="b"><p>Ок, делай. И сними «рекомендуется» — слово-сорняк.</p></div></div>
+            <div class="msg ai"><div class="av">М</div><div class="b"><div class="who">Майя</div><p>Готово. Обязательное — два пункта, желательное — четыре под спойлером. «Рекомендуется» заменил на конкретику: «8 ГБ ОЗУ хватает для пяти параллельных проектов».</p></div></div>
+            <div class="tool"><div class="th">✎ Edit · docs/getting-started.md</div>### Требования
+  - Windows 10 / macOS 12 / Linux
+  - Node.js 20+
+  &lt;details&gt; Желательное …&lt;/details&gt;</div>
+          </div>
+          <div class="composer"><span class="ph">Напишите сообщение…</span><button class="send">➤</button></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Мобильная раскладка ===== -->
+  <h2 class="sec">Мобильная раскладка — цветной холст</h2>
+  <p class="note">PWA на узком экране: шапка-остров, лента на цветном холсте, композер снизу. Пузыри <code>msgBg</code> держат контраст и здесь. Обе темы — рядом.</p>
+
+  <div class="cols">
+    <div class="tl">
+      <p class="cap">Мобилка · изумрудный · светлая</p>
+      <div class="mframe canvas-box" style="--pro-r:94; --pro-g:139; --pro-b:78; --tile:var(--tile-docs)">
+        <div class="glow pro"></div><div class="ink"></div>
+        <div class="mhub"><div class="logo" style="background:#5E8B4E"></div><span class="pn">Документация продукта</span></div>
+        <div class="mfeed">
+          <div class="mmsg user"><div class="av">А</div><div class="b"><p>Перепиши вводный абзац: короче, без штампов.</p></div></div>
+          <div class="mmsg ai"><div class="av">М</div><div class="b"><p>Ловлишь главный враг — пустые слова. Вариант:</p><p>«Платформа работает из коробки: создайте проект, подключите папку — и можно вести переписку.»</p></div></div>
+          <div class="mmsg user"><div class="av">А</div><div class="b"><p>Ок. Секцию «Требования» тоже — там пять уровней списка.</p></div></div>
+          <div class="mmsg ai"><div class="av">М</div><div class="b"><p>Разделю на обязательное и желательное (под спойлер). «Рекомендуется» заменю на конкретику по памяти.</p></div></div>
+          <div class="mmsg user"><div class="av">А</div><div class="b"><p>Делай.</p></div></div>
+        </div>
+        <div class="mcomposer"><span class="ph">Сообщение…</span><button class="send">➤</button></div>
+      </div>
+    </div>
+
+    <div class="td">
+      <p class="cap">Мобилка · изумрудный · тёмная</p>
+      <div class="mframe canvas-box" style="--pro-r:94; --pro-g:139; --pro-b:78; --tile:var(--tile-docs)">
+        <div class="glow pro"></div><div class="ink"></div>
+        <div class="mhub"><div class="logo" style="background:#5E8B4E"></div><span class="pn">Документация продукта</span></div>
+        <div class="mfeed">
+          <div class="mmsg user"><div class="av">А</div><div class="b"><p>Перепиши вводный абзац: короче, без штампов.</p></div></div>
+          <div class="mmsg ai"><div class="av">М</div><div class="b"><p>Ловлишь главный враг — пустые слова. Вариант:</p><p>«Платформа работает из коробки: создайте проект, подключите папку — и можно вести переписку.»</p></div></div>
+          <div class="mmsg user"><div class="av">А</div><div class="b"><p>Ок. Секцию «Требования» тоже — там пять уровней списка.</p></div></div>
+          <div class="mmsg ai"><div class="av">М</div><div class="b"><p>Разделю на обязательное и желательное (под спойлер). «Рекомендуется» заменю на конкретику по памяти.</p></div></div>
+          <div class="mmsg user"><div class="av">А</div><div class="b"><p>Делай.</p></div></div>
+        </div>
+        <div class="mcomposer"><span class="ph">Сообщение…</span><button class="send">➤</button></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

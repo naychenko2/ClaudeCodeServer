@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Фон проекта — блок настроек и состояния · макет v1</title>
+<style>
+/* ===== Токены (из theme.css / design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4;
+  --c-danger:#B4452F; --c-danger-text:#B4452F;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+  --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --canvas-ink:42,37,31;
+  --canvas-alpha:0.11; /* в проде 0.05 — здесь усилено для читаемости макета-ревью */
+
+  /* Дудл-тайлы (техника продукта: mask-image, см. CanvasBackdrop.tsx) */
+  --tile-std: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22260%22%20height%3D%22260%22%20viewBox%3D%220%200%20260%20260%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.9%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cg%20transform%3D%22translate(18%2C20)%20rotate(-7)%22%3E%3Crect%20x%3D%220%22%20y%3D%220%22%20width%3D%2234%22%20height%3D%2225%22%20rx%3D%224%22%2F%3E%3Cpath%20d%3D%22M7%209l4.5%204-4.5%204M17%2017h10%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(104%2C14)%20rotate(6)%22%3E%3Cpath%20d%3D%22M10%200C5%200%206%206%206%208c0%202-3%202.5-3%202.5S6%2011%206%2013c0%202-1%208%204%208%22%2F%3E%3Cpath%20d%3D%22M22%200c5%200%204%206%204%208%200%202%203%202.5%203%202.5S26%2011%2026%2013c0%202%201%208-4%208%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(186%2C26)%20rotate(-4)%22%3E%3Ccircle%20cx%3D%225%22%20cy%3D%225%22%20r%3D%224%22%2F%3E%3Ccircle%20cx%3D%225%22%20cy%3D%2227%22%20r%3D%224%22%2F%3E%3Ccircle%20cx%3D%2226%22%20cy%3D%2216%22%20r%3D%224%22%2F%3E%3Cpath%20d%3D%22M5%209v14M5%2016h9c5%200%208-1.5%208%200%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(30%2C86)%20rotate(5)%22%3E%3Cpath%20d%3D%22M2%204a4%204%200%20014-4h20a4%204%200%20014%204v12a4%204%200%2001-4%204H12l-7%206v-6H6a4%204%200%2001-4-4z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(112%2C80)%20rotate(-10)%22%3E%3Cpath%20d%3D%22M13%200l3.2%209.3L26%2012.5l-9.8%203.2L13%2025l-3.2-9.3L0%2012.5l9.8-3.2z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(190%2C92)%20rotate(8)%22%3E%3Cpath%20d%3D%22M4%200h13l9%209v19a3%203%200%2001-3%203H4a3%203%200%2001-3-3V3a3%203%200%20013-3z%22%2F%3E%3Cpath%20d%3D%22M17%200v9h9M7%2018h12M7%2024h8%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(20%2C168)%20rotate(-5)%22%3E%3Cpath%20d%3D%22M1%205a3%203%200%20013-3h8l4%204h13a3%203%200%20013%203v14a3%203%200%2001-3%203H4a3%203%200%2001-3-3z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(96%2C160)%20rotate(10)%22%3E%3Ccircle%20cx%3D%2214%22%20cy%3D%2214%22%20r%3D%2213%22%2F%3E%3Cpath%20d%3D%22M8.5%2014.5l4%204L20%2010%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(176%2C170)%20rotate(-8)%22%3E%3Ccircle%20cx%3D%2213%22%20cy%3D%2213%22%20r%3D%225%22%2F%3E%3Cpath%20d%3D%22M13%200v4M13%2022v4M0%2013h4M22%2013h4M3.8%203.8l2.9%202.9M19.3%2019.3l2.9%202.9M22.2%203.8l-2.9%202.9M6.7%2019.3l-2.9%202.9%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(66%2C224)%20rotate(4)%22%3E%3Cpath%20d%3D%22M8%200L0%208l8%208M26%200l8%208-8%208%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(212%2C214)%20rotate(-6)%22%3E%3Cpath%20d%3D%22M9%2022h8M10%2026h6M13%200a9%209%200%20015%2016.5V19H8v-2.5A9%209%200%200113%200z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(146%2C226)%20rotate(9)%22%3E%3Crect%20x%3D%220%22%20y%3D%224%22%20width%3D%2226%22%20height%3D%2218%22%20rx%3D%223%22%2F%3E%3Cpath%20d%3D%22M8%204V1.5M18%204V1.5M0%2010h26%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+  --tile-docs: url("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%22240%22%20height%3D%22240%22%20viewBox%3D%220%200%20240%20240%22%20fill%3D%22none%22%20stroke%3D%22%23000%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cg%20transform%3D%22translate(20%2C24)%20rotate(-6)%22%3E%3Cpath%20d%3D%22M5%200h16l5%205v21a2%202%200%2001-2%202H5a2%202%200%2001-2-2V2a2%202%200%20012-2z%22%2F%3E%3Cpath%20d%3D%22M21%200v6h5M8%2012h12M8%2017h12M8%2022h7%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(118%2C30)%20rotate(7)%22%3E%3Cpath%20d%3D%22M2%202h18v22H2z%22%2F%3E%3Cpath%20d%3D%22M6%208h10M6%2013h10M6%2018h6%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(40%2C104)%20rotate(5)%22%3E%3Cpath%20d%3D%22M13%200L4%2022h4l5-11%205%2011h4z%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(120%2C108)%20rotate(-8)%22%3E%3Crect%20x%3D%222%22%20y%3D%223%22%20width%3D%2224%22%20height%3D%2220%22%20rx%3D%222%22%2F%3E%3Cpath%20d%3D%22M2%209h24M9%203v4M19%203v4M9%2019v-4M9%2019h6%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(196%2C120)%20rotate(6)%22%3E%3Cpath%20d%3D%22M3%200h12a3%203%200%20013%203v20a3%203%200%2001-3%203H3a3%203%200%2001-3-3V3a3%203%200%20013-3z%22%2F%3E%3Cpath%20d%3D%22M8%206h6M8%2011h6M8%2016h4%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(28%2C182)%20rotate(-5)%22%3E%3Cpath%20d%3D%22M2%206l8-4%208%204v14a2%202%200%2001-2%202H4a2%202%200%2001-2-2z%22%2F%3E%3Cpath%20d%3D%22M2%2010h16%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(120%2C186)%20rotate(8)%22%3E%3Ccircle%20cx%3D%2212%22%20cy%3D%2212%22%20r%3D%2210%22%2F%3E%3Cpath%20d%3D%22M12%207v5l3%203%22%2F%3E%3C%2Fg%3E%3Cg%20transform%3D%22translate(196%2C196)%20rotate(-6)%22%3E%3Cpath%20d%3D%22M5%202h14v22l-7-4-7%204z%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E");
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B;
+  --c-danger:#E8785E; --c-danger-text:#EE8A72;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 6px 20px rgba(0,0,0,.40);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --canvas-ink:237,230,219;
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+  transition:background .2s, color .2s;
+}
+.serif { font-family:"PT Serif",Georgia,"Times New Roman",serif; letter-spacing:-.01em; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:200px; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button {
+  font:inherit; font-size:12px; padding:6px 14px; cursor:pointer;
+  background:transparent; border:none; color:var(--c-text-secondary);
+}
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1080px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:48px 0 4px; font-size:22px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:72ch; }
+p.note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 10px; }
+.stage { margin-bottom:14px; }
+.cols { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+.cols > * { flex:1; min-width:280px; }
+
+/* ===== Дудл-холст (CanvasBackdrop в миниатюре) ===== */
+.canvas-box { position:relative; border-radius:10px; overflow:hidden; isolation:isolate; background:var(--c-bg-main); }
+.canvas-box .glow { position:absolute; inset:0; z-index:0; }
+.canvas-box .ink {
+  position:absolute; inset:0; z-index:0;
+  background-color:rgba(var(--canvas-ink), var(--canvas-alpha));
+  -webkit-mask-image:var(--tile, var(--tile-std)); mask-image:var(--tile, var(--tile-std));
+  -webkit-mask-size:var(--ts, 160px); mask-size:var(--ts, 160px);
+  -webkit-mask-repeat:repeat; mask-repeat:repeat;
+}
+/* Нимб по умолчанию (стандартный холст) */
+.glow.std {
+  background:
+    radial-gradient(140% 70% at 50% 0%, rgba(217,119,87,.13), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(110,140,120,.10), transparent 60%);
+}
+[data-theme="dark"] .glow.std {
+  background:
+    radial-gradient(140% 70% at 50% 0%, rgba(227,138,106,.11), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(110,140,120,.08), transparent 60%);
+}
+/* Нимб проектного цвета — --pro-r/g/b на .canvas-box */
+.glow.pro {
+  background:
+    radial-gradient(140% 70% at 50% 0%, rgba(var(--pro-r),var(--pro-g),var(--pro-b),.18), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(var(--pro-r),var(--pro-g),var(--pro-b),.11), transparent 60%);
+}
+
+/* ===== Примитивы продукта ===== */
+.btn {
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+  font:inherit; font-size:12px; font-weight:500; padding:0 12px; height:32px;
+  border-radius:12px; cursor:pointer; white-space:nowrap;
+  border:1px solid transparent; background:transparent; color:var(--c-text-primary);
+  transition:background .15s, border-color .15s, opacity .15s;
+}
+.btn:focus-visible { outline:none; box-shadow:var(--shadow-focus); }
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); border-color:var(--c-accent); font-weight:600; }
+.btn.primary:hover { filter:brightness(1.05); }
+.btn.ghost { color:var(--c-text-secondary); border-color:var(--c-border); }
+.btn.ghost:hover { background:var(--c-bg-selected); }
+.btn:disabled, .btn[disabled] { opacity:.5; cursor:default; }
+.btn.md { height:40px; font-size:13px; padding:0 16px; }
+.btn.full { width:100%; }
+
+/* Спиннер */
+.spin {
+  width:14px; height:14px; border-radius:50%; flex:none;
+  border:2px solid var(--c-accent-soft); border-top-color:var(--c-accent);
+  animation:sp 0.7s linear infinite;
+}
+@keyframes sp { to { transform:rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spin { animation-duration:1.6s; } }
+
+/* Секция настроек (карточка) */
+.section {
+  padding:9px 12px; background:var(--c-bg-white); border:1px solid var(--c-border);
+  border-radius:12px; display:flex; flex-direction:column; gap:9px;
+}
+.section-label {
+  font-size:12px; font-weight:600; color:var(--c-text-secondary);
+  text-transform:uppercase; letter-spacing:.05em;
+}
+.bg-row { display:flex; align-items:center; gap:12px; }
+.swatch { width:88px; height:60px; flex:none; box-shadow:inset 0 0 0 1px var(--c-border-light); }
+.bg-meta { min-width:0; flex:1; }
+.bg-title { font-size:13px; font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:7px; }
+.bg-title .err-ico { color:var(--c-danger); display:inline-flex; }
+.bg-title.ok-ico::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--c-accent); flex:none; }
+.bg-sub { font-size:12px; color:var(--c-text-secondary); margin-top:2px; }
+.bg-sub.err { color:var(--c-danger-text); }
+.bg-sub .cname { font-weight:600; color:var(--c-text-primary); }
+.bg-acts { display:flex; gap:8px; }
+.bg-acts.stack { flex-direction:column; align-items:stretch; }
+
+/* Диалог (Modal) */
+.overlay {
+  position:relative; background:var(--c-overlay); border-radius:14px; padding:48px 24px;
+  display:flex; justify-content:center; align-items:flex-start;
+}
+.modal {
+  width:500px; max-width:100%; background:var(--c-bg-card); border-radius:20px;
+  box-shadow:var(--shadow-modal); padding:18px 18px 14px; display:flex; flex-direction:column; gap:12px;
+  position:relative; z-index:1;
+}
+.modal.compact { width:380px; padding:18px; gap:14px; }
+.modal h3.mt { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em; }
+.modal .body-p { margin:0; font-size:13.5px; line-height:1.55; color:var(--c-text-primary); }
+.modal .body-p .cname { color:var(--c-accent); font-weight:600; }
+.modal .swatch-mini { width:100%; height:64px; border-radius:10px; }
+.modal-actions { display:flex; justify-content:flex-end; gap:8px; padding-top:4px; }
+
+/* Превью иконки+имени проекта в шапке диалога */
+.proj-head { display:flex; align-items:center; gap:12px; }
+.proj-ico {
+  width:44px; height:44px; border-radius:12px; flex:none; display:flex; align-items:center; justify-content:center;
+  font-weight:600; font-size:17px; color:#fff;
+}
+.proj-name { font-family:"PT Serif",Georgia,serif; font-size:20px; font-weight:500; color:var(--c-text-heading); }
+
+/* Строки настроек (контекст диалога) */
+.list-card { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+.list-row {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:9px 14px; font-size:13px; color:var(--c-text-primary);
+}
+.list-row + .list-row { border-top:1px solid var(--c-border-light); }
+.list-row .muted { color:var(--c-text-muted); }
+
+/* Мобильная шторка */
+.mobile-frame {
+  width:372px; max-width:100%; border:1px solid var(--c-border); border-radius:26px; overflow:hidden;
+  background:var(--c-bg-main); box-shadow:var(--shadow-island); position:relative;
+}
+.mobile-frame .sheet {
+  position:absolute; left:0; right:0; bottom:0; background:var(--c-bg-card);
+  border-radius:22px 22px 0 0; box-shadow:0 -10px 46px var(--c-overlay);
+  padding:10px 14px 20px; max-height:88%; overflow-y:auto; z-index:2;
+}
+.mobile-frame .grab { width:38px; height:4px; border-radius:999px; background:var(--c-border); margin:2px auto 12px; }
+.mobile-frame .sheet-title { font-size:15px; font-weight:600; color:var(--c-text-heading); margin:0 2px 12px; font-family:"PT Serif",Georgia,serif; }
+.callout { font-size:11px; color:var(--c-text-muted); margin:10px 0 0; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>Фон проекта · блок настроек и состояния — макет v1</h1>
+  <div class="toggle">
+    <button id="tLight" class="on">Светлая</button>
+    <button id="tDark">Тёмная</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- ===== 1. Блок в контексте диалога (сгенерирован) ===== -->
+  <h2 class="sec">Где живёт блок</h2>
+  <p class="note">Секция <code>Фон проекта</code> встаёт в диалоге «Редактировать проект» рядом с Git и MCP — та же карточка-секция. Сверху свайл-превью холста, снизу статус и две кнопки. Показано состояние <strong>«сгенерирован»</strong> — самое полное.</p>
+  <div class="stage overlay">
+    <div class="modal">
+      <h3 class="mt">Редактировать проект</h3>
+      <div class="proj-head">
+        <div class="proj-ico" style="background:#5E8B4E">Д</div>
+        <div class="proj-name">Документация продукта</div>
+      </div>
+      <div class="list-card">
+        <div class="list-row"><span><span class="muted">📁 </span>C:\Sources\ai-home\docs</span></div>
+        <div class="list-row"><span><strong>Системный промпт</strong><span class="muted"> · не задан</span></span><button class="btn ghost">Редактировать</button></div>
+      </div>
+
+      <!-- СЕКЦИЯ ФОНА — сгенерирован -->
+      <div class="section">
+        <div class="section-label">Фон проекта</div>
+        <div class="bg-row">
+          <div class="canvas-box swatch" style="--pro-r:94; --pro-g:139; --pro-b:78; --tile:var(--tile-docs)">
+            <div class="glow pro"></div>
+            <div class="ink"></div>
+          </div>
+          <div class="bg-meta">
+            <div class="bg-title ok-ico">Фон по смыслу проекта</div>
+            <div class="bg-sub">Цвет — <span class="cname">изумрудный</span></div>
+          </div>
+        </div>
+        <div class="bg-acts">
+          <button class="btn primary">✨ Сгенерировать заново</button>
+          <button class="btn ghost">↺ Вернуть стандартный</button>
+        </div>
+      </div>
+
+      <div class="list-card">
+        <div class="list-row"><span>История файлов (Git)<span class="muted"> · 142 коммита</span></span></div>
+      </div>
+      <div class="modal-actions">
+        <button class="btn ghost">Отмена</button>
+        <button class="btn primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 2. Все состояния секции ===== -->
+  <h2 class="sec">Состояния генерации</h2>
+  <p class="note">Первые три состояния — всегда на <strong>стандартном дудл-тайле</strong>: фон ещё не сгенерирован, поэтому и превью, и холст под ними нейтральные. Высота тела фиксирована по самому высокому состоянию — диалог не подпрыгивает при смене.</p>
+
+  <div class="cols">
+    <!-- Не сгенерирован -->
+    <div class="stage">
+      <p class="cap">Не сгенерирован</p>
+      <div class="section" style="min-height:158px; justify-content:space-between">
+        <div class="section-label">Фон проекта</div>
+        <div class="bg-row">
+          <div class="canvas-box swatch">
+            <div class="glow std"></div>
+            <div class="ink"></div>
+          </div>
+          <div class="bg-meta">
+            <div class="bg-title">Стандартный фон</div>
+            <div class="bg-sub">Нейтральный дудл-паттерн без цвета</div>
+          </div>
+        </div>
+        <div class="bg-acts">
+          <button class="btn primary">✨ Сгенерировать</button>
+          <button class="btn ghost" disabled>↺ Вернуть стандартный</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Генерация идёт -->
+    <div class="stage">
+      <p class="cap">Генерация идёт</p>
+      <div class="section" style="min-height:158px; justify-content:space-between">
+        <div class="section-label">Фон проекта</div>
+        <div class="bg-row">
+          <div class="canvas-box swatch" style="opacity:.7">
+            <div class="glow std"></div>
+            <div class="ink"></div>
+          </div>
+          <div class="bg-meta">
+            <div class="bg-title"><span class="spin"></span> Генерируем фон…</div>
+            <div class="bg-sub">Подбираем дудл и цвет по смыслу проекта</div>
+          </div>
+        </div>
+        <div class="bg-acts">
+          <button class="btn primary" disabled>✨ Сгенерировать</button>
+          <button class="btn ghost" disabled>↺ Вернуть стандартный</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cols" style="margin-top:16px">
+    <!-- Генерация упала -->
+    <div class="stage">
+      <p class="cap">Генерация упала</p>
+      <div class="section" style="min-height:158px; justify-content:space-between">
+        <div class="section-label">Фон проекта</div>
+        <div class="bg-row">
+          <div class="canvas-box swatch">
+            <div class="glow std"></div>
+            <div class="ink"></div>
+          </div>
+          <div class="bg-meta">
+            <div class="bg-title"><span class="err-ico">⚠</span> Не получилось сгенерировать</div>
+            <div class="bg-sub err">Проверьте связь и попробуйте снова</div>
+          </div>
+        </div>
+        <div class="bg-acts">
+          <button class="btn primary">↻ Повторить</button>
+          <button class="btn ghost">↺ Вернуть стандартный</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Сгенерирован (цветной) -->
+    <div class="stage">
+      <p class="cap">Сгенерирован</p>
+      <div class="section" style="min-height:158px; justify-content:space-between">
+        <div class="section-label">Фон проекта</div>
+        <div class="bg-row">
+          <div class="canvas-box swatch" style="--pro-r:94; --pro-g:139; --pro-b:78; --tile:var(--tile-docs)">
+            <div class="glow pro"></div>
+            <div class="ink"></div>
+          </div>
+          <div class="bg-meta">
+            <div class="bg-title ok-ico">Фон по смыслу проекта</div>
+            <div class="bg-sub">Цвет — <span class="cname">изумрудный</span></div>
+          </div>
+        </div>
+        <div class="bg-acts">
+          <button class="btn primary">✨ Сгенерировать заново</button>
+          <button class="btn ghost">↺ Вернуть стандартный</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 3. Диалог предупреждения ===== -->
+  <h2 class="sec">Диалог: цвет изменится</h2>
+  <p class="note">Появляется при «Сгенерировать заново», если новый цвет отличается. Ширина <code>MODAL_W.confirm</code> (380). Вопрос дословно из спеки. Если бы генератор выдал тот же цвет — диалога нет, перегенерация прошла бы тихо.</p>
+  <div class="stage overlay">
+    <div class="modal compact">
+      <div class="canvas-box swatch-mini" style="--pro-r:26; --pro-g:157; --pro-b:175; --tile:var(--tile-docs)">
+        <div class="glow pro"></div>
+        <div class="ink"></div>
+      </div>
+      <p class="body-p">Цвет проекта изменится на <span class="cname">морской</span>. Оставить прежний?</p>
+      <div class="modal-actions">
+        <button class="btn ghost">Оставить прежний</button>
+        <button class="btn primary">Сменить на морской</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== 4. Мобильная шторка ===== -->
+  <h2 class="sec">Мобильная раскладка</h2>
+  <p class="note">На мобиле диалог настроек — bottom-sheet, секция скроллится внутри. Кнопки — <code>fullWidth</code>, <code>size=md</code>, столбиком: tap-зоны вместо hover. Показано состояние «генерация упала» (две активные кнопки) — самое напряжённое по высоте. За шторкой виден цветной холст проекта.</p>
+  <div class="stage">
+    <div class="mobile-frame">
+      <div class="canvas-box" style="height:560px; --pro-r:94; --pro-g:139; --pro-b:78; --tile:var(--tile-docs)">
+        <div class="glow pro"></div>
+        <div class="ink"></div>
+        <div class="sheet">
+          <div class="grab"></div>
+          <h3 class="sheet-title">Редактировать проект</h3>
+
+          <div class="proj-head" style="margin-bottom:12px">
+            <div class="proj-ico" style="width:38px;height:38px;font-size:15px;border-radius:10px;background:#5E8B4E">Д</div>
+            <div class="proj-name" style="font-size:17px">Документация продукта</div>
+          </div>
+
+          <div class="section" style="margin-bottom:12px">
+            <div class="section-label">Фон проекта</div>
+            <div class="bg-row">
+              <div class="canvas-box swatch">
+                <div class="glow std"></div>
+                <div class="ink"></div>
+              </div>
+              <div class="bg-meta">
+                <div class="bg-title"><span class="err-ico">⚠</span> Не получилось</div>
+                <div class="bg-sub err">Проверьте связь и попробуйте снова</div>
+              </div>
+            </div>
+            <div class="bg-acts stack">
+              <button class="btn primary md full">↻ Повторить</button>
+              <button class="btn ghost md full">↺ Вернуть стандартный</button>
+            </div>
+          </div>
+
+          <div class="list-card">
+            <div class="list-row"><span>История файлов (Git)</span></div>
+          </div>
+          <div class="modal-actions" style="margin-top:14px">
+            <button class="btn ghost md full" style="flex:1">Отмена</button>
+            <button class="btn primary md full" style="flex:1">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <p class="callout">372px — узкая лента. Свайл-превью 88×60, статус читается в две строки, кнопки во всю ширину.</p>
+  </div>
+
+</div>
+
+<script>
+  var html = document.documentElement;
+  document.getElementById('tLight').onclick = function(){ html.setAttribute('data-theme','light'); sync(); };
+  document.getElementById('tDark').onclick = function(){ html.setAttribute('data-theme','dark'); sync(); };
+  function sync(){
+    document.getElementById('tLight').classList.toggle('on', html.getAttribute('data-theme')!=='dark');
+    document.getElementById('tDark').classList.toggle('on', html.getAttribute('data-theme')==='dark');
+  }
+</script>
+</body>
+</html>

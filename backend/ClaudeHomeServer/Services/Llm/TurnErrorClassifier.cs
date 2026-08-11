@@ -143,10 +143,15 @@ public static class TurnErrorClassifier
 
     // Семантика исчерпанного лимита использования (а не «ключ плохой»). Спрашивается и при
     // статусе 403, и при пустом статусе — сторонние провайдеры оставляют код только в тексте.
+    // «quota» + «exhausted» — исчерпание квоты (биллинговый цикл), а не окно запросов: lived
+    // здесь, чтобы провайдер уходил в кулдаун, а не долбился каждый ход (инцидент 2026-08-11,
+    // другая формулировка). По отдельности слова не трактуем — слишком обычны в разборе ошибок.
     private static bool LooksUsageLimited(string? text) =>
         text is not null
         && (text.Contains("usage limit", StringComparison.OrdinalIgnoreCase)
-            || text.Contains("usage_limit", StringComparison.OrdinalIgnoreCase));
+            || text.Contains("usage_limit", StringComparison.OrdinalIgnoreCase)
+            || (text.Contains("quota", StringComparison.OrdinalIgnoreCase)
+                && text.Contains("exhausted", StringComparison.OrdinalIgnoreCase)));
 
     // Признаки переполнения контекста. Anthropic CLI шлёт «Prompt is too long» (видели на проде:
     // kimi-k3 с заявленным окном 1M упал с этим текстом — тариф режет раньше конфига).
@@ -174,8 +179,8 @@ public static class TurnErrorClassifier
     }
 
     // Маркеры лимита запросов в тексте ошибки при пустом статусе (прод-кейс: сторонние
-    // провайдеры отдают в поле статуса «—», а HTTP 429/quota-exhausted — только текстом).
-    // Формулировки без кода ошибки.
+    // провайдеры отдают в поле статуса «—», а HTTP 429 — только текстом). Формулировки без
+    // кода ошибки. Исчерпание квоты («quota exhausted») сюда НЕ относится — это UsageLimit.
     private static readonly string[] RateLimitPhrases =
     [
         "rate limit",
@@ -201,11 +206,6 @@ public static class TurnErrorClassifier
             if (value.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
         foreach (var marker in RateLimitCodeMarkers)
             if (value.Contains(marker, StringComparison.OrdinalIgnoreCase)) return true;
-        // Квота исчерпана: «quota» и «exhausted» совместно — покрывает разные формулировки
-        // («quota has been exhausted», «quota is exhausted»). По отдельности не трактуем.
-        if (value.Contains("quota", StringComparison.OrdinalIgnoreCase)
-            && value.Contains("exhausted", StringComparison.OrdinalIgnoreCase))
-            return true;
         return false;
     }
 

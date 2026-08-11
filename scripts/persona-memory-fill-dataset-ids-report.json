@@ -1,0 +1,291 @@
+{
+  "generated_at_utc": "2026-08-11T10:20:30.261810+00:00",
+  "backup": "C:\\ClaudeData\\prod\\persona-memory.json.bak-20260811-132030",
+  "applied": [
+    {
+      "persona_id": "defc2b2f-97c4-4f62-9bfb-027398d11a2c",
+      "user": "andrey",
+      "handle": "oleg",
+      "dataset_id": "5ceaffe7-36e6-43f9-af07-a64722070037",
+      "dataset_name": "andrey:persona:oleg",
+      "match_rule": "exact",
+      "document_count": 1,
+      "word_count": 698,
+      "updated_at": 1784735673
+    },
+    {
+      "persona_id": "028be44b-f40c-4f48-89d2-1df3ecbd8152",
+      "user": "andrey",
+      "handle": "viktor",
+      "dataset_id": "077479df-4e6d-41ab-81b2-b43747581c0e",
+      "dataset_name": "andrey:persona:viktor",
+      "match_rule": "exact",
+      "document_count": 12,
+      "word_count": 4088,
+      "updated_at": 1784219087
+    },
+    {
+      "persona_id": "69bd630c-4a52-4c25-a571-1df70ab21276",
+      "user": "andrey",
+      "handle": "sergey",
+      "dataset_id": "af00232c-bcf9-4629-8474-7d39c8c7b604",
+      "dataset_name": "andrey:persona:sergey",
+      "match_rule": "exact",
+      "document_count": 5,
+      "word_count": 4125,
+      "updated_at": 1784119584
+    },
+    {
+      "persona_id": "a634d4bd-e40f-4ff6-9757-a1f558984755",
+      "user": "andrey",
+      "handle": "sergey",
+      "dataset_id": "af00232c-bcf9-4629-8474-7d39c8c7b604",
+      "dataset_name": "andrey:persona:sergey",
+      "match_rule": "exact",
+      "document_count": 5,
+      "word_count": 4125,
+      "updated_at": 1784119584
+    },
+    {
+      "persona_id": "4c0af648-9e2e-458c-85c4-cdb8f4f12c8a",
+      "user": "andrey",
+      "handle": "viktor",
+      "dataset_id": "077479df-4e6d-41ab-81b2-b43747581c0e",
+      "dataset_name": "andrey:persona:viktor",
+      "match_rule": "exact",
+      "document_count": 12,
+      "word_count": 4088,
+      "updated_at": 1784219087
+    },
+    {
+      "persona_id": "d2524720-ab12-45ad-8796-453354f3ef3d",
+      "user": "andrey",
+      "handle": "elena",
+      "dataset_id": "aeaecbe1-590d-4854-bc72-f51d35656df2",
+      "dataset_name": "andrey:persona:elena",
+      "match_rule": "exact",
+      "document_count": 15,
+      "word_count": 2136,
+      "updated_at": 1784714146
+    },
+    {
+      "persona_id": "6df6eff1-7f44-4b5e-8320-2e6934f09042",
+      "user": "andrey",
+      "handle": "natalya",
+      "dataset_id": "ccd7d42c-5098-4b4c-8b0e-409a7c8473a0",
+      "dataset_name": "andrey:persona:natalya",
+      "match_rule": "exact",
+      "document_count": 118,
+      "word_count": 27070,
+      "updated_at": 1784038486
+    },
+    {
+      "persona_id": "23f61a90-2e20-48fc-b595-c452102eb9a7",
+      "user": "andrey",
+      "handle": "olga",
+      "dataset_id": "bd9aeeab-fe98-4b79-bd36-6c5879271ed3",
+      "dataset_name": "andrey:persona:olga",
+      "match_rule": "exact",
+      "document_count": 17,
+      "word_count": 2859,
+      "updated_at": 1784055508
+    },
+    {
+      "persona_id": "3265fbb7-5f39-401b-acc0-5e4438ac8029",
+      "user": "andrey",
+      "handle": "viktor",
+      "dataset_id": "077479df-4e6d-41ab-81b2-b43747581c0e",
+      "dataset_name": "andrey:persona:viktor",
+      "match_rule": "exact",
+      "document_count": 12,
+      "word_count": 4088,
+      "updated_at": 1784219087
+    },
+    {
+      "persona_id": "64cecd5b-fed5-45e2-b97e-056f2cc5a20b",
+      "user": "andrey",
+      "handle": "igor",
+      "dataset_id": "7bec717b-4622-4422-af21-ff18d4cf3fc9",
+      "dataset_name": "andrey:persona:igor",
+      "match_rule": "exact",
+      "document_count": 117,
+      "word_count": 23379,
+      "updated_at": 1786017618
+    },
+    {
+      "persona_id": "0b461266-6bdb-47f2-9ca3-47068de62b74",
+      "user": "andrey",
+      "handle": "kira",
+      "dataset_id": "910f308c-1e6f-4222-a412-10ace03cf925",
+      "dataset_name": "andrey:persona:kira",
+      "match_rule": "exact",
+      "document_count": 0,
+      "word_count": 0,
+      "updated_at": 1784718001
+    },
+    {
+      "persona_id": "ef62a910-319d-4706-8950-957d8be4b6aa",
+      "user": "andrey",
+      "handle": "mark",
+      "dataset_id": "095cb915-c144-4d53-ae21-b55eadb2740d",
+      "dataset_name": "andrey:persona:mark",
+      "match_rule": "exact",
+      "document_count": 11,
+      "word_count": 1903,
+      "updated_at": 1783888194
+    },
+    {
+      "persona_id": "8da76cd8-7b1d-408f-a97b-a88e55fc18bd",
+      "user": "andrey",
+      "handle": "architect",
+      "dataset_id": "9ae5440f-85b1-43b6-9c4b-f5962a277701",
+      "dataset_name": "andrey:persona:architect",
+      "match_rule": "exact",
+      "document_count": 108,
+      "word_count": 16968,
+      "updated_at": 1784745916
+    },
+    {
+      "persona_id": "54fee6a6-cdf0-4ce9-b645-036aff461436",
+      "user": "anna",
+      "handle": "vera",
+      "dataset_id": "5f0c7b6d-a6e0-4027-b409-df309e3f238d",
+      "dataset_name": "anna:persona:vera",
+      "match_rule": "exact",
+      "document_count": 3,
+      "word_count": 1361,
+      "updated_at": 1784357355
+    },
+    {
+      "persona_id": "3a0257d8-f199-4936-8fd3-1a621fc4d111",
+      "user": "anna",
+      "handle": "oksana",
+      "dataset_id": "15e89308-1bb7-4f64-99c3-9a3f2ed52ce0",
+      "dataset_name": "anna:persona:oksana",
+      "match_rule": "exact",
+      "document_count": 2,
+      "word_count": 940,
+      "updated_at": 1784357024
+    },
+    {
+      "persona_id": "2cc6cf2d-4952-4f61-9445-2235b25f2946",
+      "user": "andrey",
+      "handle": "denis",
+      "dataset_id": "c5300dae-6d3f-4a2f-861c-99d8ae6f26b2",
+      "dataset_name": "andrey:persona:denis",
+      "match_rule": "exact",
+      "document_count": 144,
+      "word_count": 21929,
+      "updated_at": 1784451228
+    },
+    {
+      "persona_id": "2c928d03-f150-4684-8acf-d3f41dfc46f8",
+      "user": "andrey",
+      "handle": "mark",
+      "dataset_id": "095cb915-c144-4d53-ae21-b55eadb2740d",
+      "dataset_name": "andrey:persona:mark",
+      "match_rule": "exact",
+      "document_count": 11,
+      "word_count": 1903,
+      "updated_at": 1783888194
+    },
+    {
+      "persona_id": "bcc45cb5-0c75-4711-8002-641c5bb11113",
+      "user": "andrey",
+      "handle": "lev",
+      "dataset_id": "666ea1a0-cc11-498b-b210-27e32329a2f2",
+      "dataset_name": "andrey:persona:lev",
+      "match_rule": "exact",
+      "document_count": 23,
+      "word_count": 4554,
+      "updated_at": 1783805986
+    },
+    {
+      "persona_id": "58c5b4e1-8b53-4a17-98a0-cb7fa2c9e37f",
+      "user": "andrey",
+      "handle": "igor",
+      "dataset_id": "7bec717b-4622-4422-af21-ff18d4cf3fc9",
+      "dataset_name": "andrey:persona:igor",
+      "match_rule": "exact",
+      "document_count": 117,
+      "word_count": 23379,
+      "updated_at": 1786017618
+    },
+    {
+      "persona_id": "765a7588-3622-4593-96c2-b73eb5420dc7",
+      "user": "andrey",
+      "handle": "vera",
+      "dataset_id": "75b31534-9162-45ba-873d-3ce2cc55a4a4",
+      "dataset_name": "andrey:persona:vera",
+      "match_rule": "exact",
+      "document_count": 134,
+      "word_count": 29233,
+      "updated_at": 1784449245
+    },
+    {
+      "persona_id": "8ab4ae28-a7d7-49d4-af69-48e394956294",
+      "user": "andrey",
+      "handle": "kira",
+      "dataset_id": "910f308c-1e6f-4222-a412-10ace03cf925",
+      "dataset_name": "andrey:persona:kira",
+      "match_rule": "exact",
+      "document_count": 0,
+      "word_count": 0,
+      "updated_at": 1784718001
+    },
+    {
+      "persona_id": "98b310a7-a2f4-4700-a221-b058e8424e6d",
+      "user": "anna",
+      "handle": "alisa",
+      "dataset_id": "4480d66c-9557-4042-a56c-4819ede1286b",
+      "dataset_name": "anna:persona:alisa",
+      "match_rule": "exact",
+      "document_count": 20,
+      "word_count": 3374,
+      "updated_at": 1785361669
+    },
+    {
+      "persona_id": "ea25a246-fc41-4e9d-94e1-d6bdcb540e2a",
+      "user": "andrey",
+      "handle": "oleg",
+      "dataset_id": "5ceaffe7-36e6-43f9-af07-a64722070037",
+      "dataset_name": "andrey:persona:oleg",
+      "match_rule": "exact",
+      "document_count": 1,
+      "word_count": 698,
+      "updated_at": 1784735673
+    },
+    {
+      "persona_id": "28431eb8-b95a-4c1b-b3ea-a0431c8ebeb1",
+      "user": "andrey",
+      "handle": "marina",
+      "dataset_id": "7132e831-8cc7-4782-b6f4-a97be01e2fc6",
+      "dataset_name": "andrey:persona:marina",
+      "match_rule": "exact",
+      "document_count": 3,
+      "word_count": 1209,
+      "updated_at": 1785772427
+    },
+    {
+      "persona_id": "4a07d08e-71d2-4cf9-b70f-4b18b0bf4f68",
+      "user": "andrey",
+      "handle": "dmitriy",
+      "dataset_id": "a099b4b0-6479-4dc3-a343-71c9e45997a3",
+      "dataset_name": "andrey:persona:dmitriy",
+      "match_rule": "exact",
+      "document_count": 20,
+      "word_count": 4339,
+      "updated_at": 1784142330
+    }
+  ],
+  "totals": {
+    "persona_memory_entries": 159,
+    "datasets_fetched": 144,
+    "will_update": 25,
+    "skipped_already_filled": 71,
+    "no_match_in_dify": 56,
+    "not_in_personas": 7,
+    "no_owner_user": 0
+  },
+  "still_empty_after": 63
+}

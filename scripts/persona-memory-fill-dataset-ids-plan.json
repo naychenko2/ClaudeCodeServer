@@ -1,0 +1,765 @@
+{
+  "generated_at_utc": "2026-08-11T10:20:38.972232+00:00",
+  "totals": {
+    "persona_memory_entries": 159,
+    "datasets_fetched": 144,
+    "will_update": 0,
+    "skipped_already_filled": 96,
+    "no_match_in_dify": 56,
+    "not_in_personas": 7,
+    "no_owner_user": 0
+  },
+  "by_rule": {
+    "exact": [],
+    "suffix-max-docs-updated": []
+  },
+  "will_update": [],
+  "skipped_already_filled": [
+    {
+      "persona_id": "7cf8546e-7d13-43be-a631-2d157006c202",
+      "dataset_id": "86c4fd99-fe58-40cd-82fc-2fc44b71ff59"
+    },
+    {
+      "persona_id": "d63c5790-0fa3-4eae-9e45-12d00c8b7b16",
+      "dataset_id": "3c8e20a0-26ce-437b-8d9b-c401194998ba"
+    },
+    {
+      "persona_id": "f915391f-9ee1-4400-9b5b-5b3fa021335d",
+      "dataset_id": "d785cf00-72a8-4af0-84ec-cb5ee8b29245"
+    },
+    {
+      "persona_id": "a7cdaf9b-1a28-4e34-bdd4-540ad179c2aa",
+      "dataset_id": "bdd0cba1-00d4-4174-907a-ba2d11d286de"
+    },
+    {
+      "persona_id": "4fc5857b-5e7a-4d69-b59b-bbd6cb1ab310",
+      "dataset_id": "9cf91183-aa81-4e6b-8a30-51cfc27d6fc5"
+    },
+    {
+      "persona_id": "ae1449e0-6ef2-4915-80d1-beb2a7879e70",
+      "dataset_id": "666ea1a0-cc11-498b-b210-27e32329a2f2"
+    },
+    {
+      "persona_id": "eeacd3d4-6bac-4af9-ab13-aaa4e84c9b31",
+      "dataset_id": "709ffbec-4c5a-47d9-8b29-67b92cb22cd0"
+    },
+    {
+      "persona_id": "defc2b2f-97c4-4f62-9bfb-027398d11a2c",
+      "dataset_id": "5ceaffe7-36e6-43f9-af07-a64722070037"
+    },
+    {
+      "persona_id": "028be44b-f40c-4f48-89d2-1df3ecbd8152",
+      "dataset_id": "077479df-4e6d-41ab-81b2-b43747581c0e"
+    },
+    {
+      "persona_id": "0a722041-ffc1-4eb6-8256-e0552083b515",
+      "dataset_id": "095cb915-c144-4d53-ae21-b55eadb2740d"
+    },
+    {
+      "persona_id": "1766593a-b2c3-41da-b28a-a616c7661be4",
+      "dataset_id": "f12a3068-3ec9-4806-ae8c-b0f63aaf925e"
+    },
+    {
+      "persona_id": "c5dc6d01-d1bd-4308-85ea-53d4c420a6c8",
+      "dataset_id": "52d71a92-2df7-420e-a0e7-3fc592087c91"
+    },
+    {
+      "persona_id": "5292fba7-c286-4773-a3d2-18c59893644a",
+      "dataset_id": "aeaecbe1-590d-4854-bc72-f51d35656df2"
+    },
+    {
+      "persona_id": "3258c01d-541b-4e91-84ab-4c9ff84ae9b1",
+      "dataset_id": "62a0db8a-e1f3-4c07-8ed4-76bd6685ad65"
+    },
+    {
+      "persona_id": "8999fc8c-d4de-4c9e-b33f-8cf33e064b37",
+      "dataset_id": "af00232c-bcf9-4629-8474-7d39c8c7b604"
+    },
+    {
+      "persona_id": "b428b311-d99b-4f42-bd9f-1d14ea9d2d21",
+      "dataset_id": "1278e6be-2901-4db1-a40f-81f3f357c487"
+    },
+    {
+      "persona_id": "fd69833a-3ce3-47fb-8029-a0e9172b6589",
+      "dataset_id": "29fad79c-d6f9-4087-b2e6-d9cf1e36443f"
+    },
+    {
+      "persona_id": "cdf38381-42da-43ea-90c0-1d9cc13e4d4c",
+      "dataset_id": "ccd7d42c-5098-4b4c-8b0e-409a7c8473a0"
+    },
+    {
+      "persona_id": "784a42c5-8316-466d-a4dc-de8e90f19045",
+      "dataset_id": "077479df-4e6d-41ab-81b2-b43747581c0e"
+    },
+    {
+      "persona_id": "4aa0e49f-c4ec-4585-815e-f9025fe73860",
+      "dataset_id": "5ceaffe7-36e6-43f9-af07-a64722070037"
+    },
+    {
+      "persona_id": "48ce75e7-781b-4eee-bb61-d6ec162cd129",
+      "dataset_id": "a099b4b0-6479-4dc3-a343-71c9e45997a3"
+    },
+    {
+      "persona_id": "69bd630c-4a52-4c25-a571-1df70ab21276",
+      "dataset_id": "af00232c-bcf9-4629-8474-7d39c8c7b604"
+    },
+    {
+      "persona_id": "a15e0312-d492-4949-869c-dfd7f0b72f77",
+      "dataset_id": "bd9aeeab-fe98-4b79-bd36-6c5879271ed3"
+    },
+    {
+      "persona_id": "a634d4bd-e40f-4ff6-9757-a1f558984755",
+      "dataset_id": "af00232c-bcf9-4629-8474-7d39c8c7b604"
+    },
+    {
+      "persona_id": "4c0af648-9e2e-458c-85c4-cdb8f4f12c8a",
+      "dataset_id": "077479df-4e6d-41ab-81b2-b43747581c0e"
+    },
+    {
+      "persona_id": "d2524720-ab12-45ad-8796-453354f3ef3d",
+      "dataset_id": "aeaecbe1-590d-4854-bc72-f51d35656df2"
+    },
+    {
+      "persona_id": "6df6eff1-7f44-4b5e-8320-2e6934f09042",
+      "dataset_id": "ccd7d42c-5098-4b4c-8b0e-409a7c8473a0"
+    },
+    {
+      "persona_id": "37a018d0-b6f2-407a-8172-9d7607082c77",
+      "dataset_id": "9a5dfb05-1227-44e3-926b-336d56518598"
+    },
+    {
+      "persona_id": "f174ae5b-43c2-48bf-9d11-df2f9d92438a",
+      "dataset_id": "bcec8190-7c1e-4555-86e7-d2a89b129224"
+    },
+    {
+      "persona_id": "0ef99246-e32e-4ac7-a397-3fd1346741ce",
+      "dataset_id": "3c622f63-7c0b-4c70-9056-f27a7ea84891"
+    },
+    {
+      "persona_id": "cc09d8bc-237f-485f-b6b2-94924e7a69fc",
+      "dataset_id": "7dc09888-ab9f-4ecc-9196-5a2fbe4c9540"
+    },
+    {
+      "persona_id": "540415f0-e1e3-44c8-acd3-ce2145b3e322",
+      "dataset_id": "a0cd907c-a3ba-4b47-b44c-eec0278c897b"
+    },
+    {
+      "persona_id": "e474f8fa-48b4-4837-b471-240487978b5b",
+      "dataset_id": "342b75b2-0f9b-4b04-8c7e-8e48c1b1e96e"
+    },
+    {
+      "persona_id": "c0e9745c-9c5e-44e0-adb0-e5fc3d0015bf",
+      "dataset_id": "9ff2a253-8f1c-416a-83dc-73f8b912aaa2"
+    },
+    {
+      "persona_id": "c3c9c7e7-9dc2-4add-9563-cf41bc383380",
+      "dataset_id": "183ead16-a08d-40f0-8716-9fa26af7b644"
+    },
+    {
+      "persona_id": "24379239-8153-443e-8167-f695688c5f47",
+      "dataset_id": "15e89308-1bb7-4f64-99c3-9a3f2ed52ce0"
+    },
+    {
+      "persona_id": "933aa88f-8935-474d-83f0-9ab7d07bd8a9",
+      "dataset_id": "5f0c7b6d-a6e0-4027-b409-df309e3f238d"
+    },
+    {
+      "persona_id": "23f61a90-2e20-48fc-b595-c452102eb9a7",
+      "dataset_id": "bd9aeeab-fe98-4b79-bd36-6c5879271ed3"
+    },
+    {
+      "persona_id": "3265fbb7-5f39-401b-acc0-5e4438ac8029",
+      "dataset_id": "077479df-4e6d-41ab-81b2-b43747581c0e"
+    },
+    {
+      "persona_id": "64cecd5b-fed5-45e2-b97e-056f2cc5a20b",
+      "dataset_id": "7bec717b-4622-4422-af21-ff18d4cf3fc9"
+    },
+    {
+      "persona_id": "a6c8a29b-45a8-4a62-bc44-1ac17f3b4361",
+      "dataset_id": "bd82b09f-6de9-41d9-b43f-9a3772194bf1"
+    },
+    {
+      "persona_id": "efad1d9f-78de-4177-9964-8296c53aadfc",
+      "dataset_id": "404837bc-fd2f-4a03-8a30-630201563e6d"
+    },
+    {
+      "persona_id": "0b461266-6bdb-47f2-9ca3-47068de62b74",
+      "dataset_id": "910f308c-1e6f-4222-a412-10ace03cf925"
+    },
+    {
+      "persona_id": "2090bbd7-84bf-4780-b13d-95acae861403",
+      "dataset_id": "53a035dc-1b43-432c-85f4-7f7474a255e8"
+    },
+    {
+      "persona_id": "cea98276-504c-447a-a102-e84ea9ec3354",
+      "dataset_id": "c5300dae-6d3f-4a2f-861c-99d8ae6f26b2"
+    },
+    {
+      "persona_id": "5270c8a6-7122-49ee-8bc4-a4ebe7aecea3",
+      "dataset_id": "75b31534-9162-45ba-873d-3ce2cc55a4a4"
+    },
+    {
+      "persona_id": "c1358751-511b-4a9e-b0c5-4c5ebfb2a7ec",
+      "dataset_id": "557150f7-4380-4d43-9096-fc76dff8c247"
+    },
+    {
+      "persona_id": "6a4568ae-1aeb-4ae4-a486-8d9f3db0a05b",
+      "dataset_id": "2371cca2-a464-42fd-a3ed-7e3e6e4ec483"
+    },
+    {
+      "persona_id": "27f3170b-f39b-4351-a206-02a8eabfa90d",
+      "dataset_id": "746eddbf-8065-4de3-b62d-0e2debe4be83"
+    },
+    {
+      "persona_id": "f4dbce09-353f-4249-b3c6-203b8b08da86",
+      "dataset_id": "c94fa45e-2a3a-4d41-85a7-b1c8773952b2"
+    },
+    {
+      "persona_id": "d5eedeb4-8ce9-42e8-a5be-6ae55a56740e",
+      "dataset_id": "836b4416-99b3-42c4-9c87-29eb0fa480e0"
+    },
+    {
+      "persona_id": "6fcd652e-8c8b-441c-aec6-cfed7d1fd104",
+      "dataset_id": "9ae5440f-85b1-43b6-9c4b-f5962a277701"
+    },
+    {
+      "persona_id": "dcea554b-3542-4357-a80c-b5e2ee9edde6",
+      "dataset_id": "6d49c591-5c3e-4cc9-8175-0479188813e9"
+    },
+    {
+      "persona_id": "69926510-2bc9-4131-a22d-bc760c07b843",
+      "dataset_id": "bbba7ee1-77ad-485c-96bc-cf0644ffd527"
+    },
+    {
+      "persona_id": "6e308c25-97ab-434e-8f70-57adf878d8ad",
+      "dataset_id": "36f83131-d1f6-49fc-9416-e2222821131e"
+    },
+    {
+      "persona_id": "2bab0503-5c44-4102-900a-dc362e01bc5f",
+      "dataset_id": "6a414551-8357-4112-91c9-cfe24e60c6f8"
+    },
+    {
+      "persona_id": "19d8456f-0c8b-413d-a19e-a7878a8ffed1",
+      "dataset_id": "4b07a64f-707d-4d16-857a-b298638ddd5a"
+    },
+    {
+      "persona_id": "ef62a910-319d-4706-8950-957d8be4b6aa",
+      "dataset_id": "095cb915-c144-4d53-ae21-b55eadb2740d"
+    },
+    {
+      "persona_id": "2fe15aee-e94e-4ddb-bb06-bcf54d551bc4",
+      "dataset_id": "5daf371e-d726-4e24-9d61-9411ae86d155"
+    },
+    {
+      "persona_id": "cb04863d-89a1-4d06-8b31-8fe9c58704e6",
+      "dataset_id": "3af1a819-e672-459b-8cf6-e14a25ca76cc"
+    },
+    {
+      "persona_id": "e4245e2b-fa75-430f-9677-5a77544c2fd0",
+      "dataset_id": "b35604a8-6771-4d92-8872-bfcba25d2790"
+    },
+    {
+      "persona_id": "5b7530be-08e9-4437-9c99-8e50adcb0482",
+      "dataset_id": "5315e0ea-a8d3-4237-8451-b5d2ad11573c"
+    },
+    {
+      "persona_id": "cb1bb9ca-b5c6-423f-8882-4ad00a1aa75e",
+      "dataset_id": "2d1d0b27-fd3c-4cf5-9eed-5f15d6ab47f7"
+    },
+    {
+      "persona_id": "5e318fff-d488-473e-b8ed-ac57373a4ef8",
+      "dataset_id": "3f850d26-85ac-407b-9ccb-9ebe54442f24"
+    },
+    {
+      "persona_id": "8af76dd7-5a4e-47a8-8b21-56e0b1b02811",
+      "dataset_id": "50ac2026-2262-4f31-b3c6-f279c1ea3553"
+    },
+    {
+      "persona_id": "e6128dd7-0f37-4aa1-89da-a8f6a8df63b5",
+      "dataset_id": "43fd254b-913c-4b07-ac51-df8f576e0170"
+    },
+    {
+      "persona_id": "042b97d4-19ef-42b4-82a6-d25d86fedb59",
+      "dataset_id": "963ca021-536f-414a-9454-927e8275d06a"
+    },
+    {
+      "persona_id": "d47a0e7b-d66c-42e7-bb16-5b583458d2c0",
+      "dataset_id": "7c50c6f7-7b2f-4d31-90dc-dc950c6281d3"
+    },
+    {
+      "persona_id": "affed052-08cb-418a-b3ab-6eb3689c83a5",
+      "dataset_id": "a1d12f80-4cca-4734-bbe5-5a5cc830f513"
+    },
+    {
+      "persona_id": "846eab46-a92f-4fbe-b4f5-785051e77c34",
+      "dataset_id": "bcc00bd0-9e0f-4305-a32f-88b1106a3927"
+    },
+    {
+      "persona_id": "c81e5334-76e0-43f6-bb83-6e0c25b362c1",
+      "dataset_id": "2c3e47f2-fb13-4384-9506-925bd915919f"
+    },
+    {
+      "persona_id": "8da76cd8-7b1d-408f-a97b-a88e55fc18bd",
+      "dataset_id": "9ae5440f-85b1-43b6-9c4b-f5962a277701"
+    },
+    {
+      "persona_id": "911bb1e7-842c-40ac-8daf-5e02d369bf24",
+      "dataset_id": "a98434c6-5130-467c-a332-88c37ff46d9c"
+    },
+    {
+      "persona_id": "e37a7fc4-e9ef-4179-a9e9-8d2b690bd35d",
+      "dataset_id": "b9d8d843-752a-4bf1-97f9-d9aa7b3e013b"
+    },
+    {
+      "persona_id": "b8c62621-b4e0-4d15-bd2b-b1385d8ff43d",
+      "dataset_id": "4480d66c-9557-4042-a56c-4819ede1286b"
+    },
+    {
+      "persona_id": "29c782a9-c653-40b0-89b9-7feee1e2a2b5",
+      "dataset_id": "026cd7a2-b0d0-45f2-9c95-f9fd478bee09"
+    },
+    {
+      "persona_id": "a2916161-64cf-4777-af94-614942e0949f",
+      "dataset_id": "0b3a55ae-168a-49ec-b45d-2f02eb1c699d"
+    },
+    {
+      "persona_id": "85f2f3ab-c7ad-4b1a-903f-85b08f20bef1",
+      "dataset_id": "ca432c6f-c2c9-495a-b93d-a66b31e43117"
+    },
+    {
+      "persona_id": "f15b2587-a433-42c9-b5d3-aa2782256561",
+      "dataset_id": "66e71194-f205-4a9b-9030-615c76f3227b"
+    },
+    {
+      "persona_id": "54fee6a6-cdf0-4ce9-b645-036aff461436",
+      "dataset_id": "5f0c7b6d-a6e0-4027-b409-df309e3f238d"
+    },
+    {
+      "persona_id": "3a0257d8-f199-4936-8fd3-1a621fc4d111",
+      "dataset_id": "15e89308-1bb7-4f64-99c3-9a3f2ed52ce0"
+    },
+    {
+      "persona_id": "d2f86036-6388-4b0d-82f5-86bb9c13f20d",
+      "dataset_id": "8486cce9-71a1-4bd3-af3a-ceef835c9d79"
+    },
+    {
+      "persona_id": "2cc6cf2d-4952-4f61-9445-2235b25f2946",
+      "dataset_id": "c5300dae-6d3f-4a2f-861c-99d8ae6f26b2"
+    },
+    {
+      "persona_id": "2c928d03-f150-4684-8acf-d3f41dfc46f8",
+      "dataset_id": "095cb915-c144-4d53-ae21-b55eadb2740d"
+    },
+    {
+      "persona_id": "bcc45cb5-0c75-4711-8002-641c5bb11113",
+      "dataset_id": "666ea1a0-cc11-498b-b210-27e32329a2f2"
+    },
+    {
+      "persona_id": "58c5b4e1-8b53-4a17-98a0-cb7fa2c9e37f",
+      "dataset_id": "7bec717b-4622-4422-af21-ff18d4cf3fc9"
+    },
+    {
+      "persona_id": "765a7588-3622-4593-96c2-b73eb5420dc7",
+      "dataset_id": "75b31534-9162-45ba-873d-3ce2cc55a4a4"
+    },
+    {
+      "persona_id": "8ab4ae28-a7d7-49d4-af69-48e394956294",
+      "dataset_id": "910f308c-1e6f-4222-a412-10ace03cf925"
+    },
+    {
+      "persona_id": "bdbea570-78a9-4919-bbd3-a8de354dc489",
+      "dataset_id": "7132e831-8cc7-4782-b6f4-a97be01e2fc6"
+    },
+    {
+      "persona_id": "939d2712-cc95-4089-89e8-18662959778a",
+      "dataset_id": "2e661459-e896-4518-a5c1-4d4690e1fec5"
+    },
+    {
+      "persona_id": "98de9390-ae18-441c-b594-ed268f59ac50",
+      "dataset_id": "1a91d004-b5a8-47ed-9807-5def87199d3a"
+    },
+    {
+      "persona_id": "98b310a7-a2f4-4700-a221-b058e8424e6d",
+      "dataset_id": "4480d66c-9557-4042-a56c-4819ede1286b"
+    },
+    {
+      "persona_id": "bf0f3909-0bdd-49bd-874b-3b10743f518e",
+      "dataset_id": "7bec717b-4622-4422-af21-ff18d4cf3fc9"
+    },
+    {
+      "persona_id": "ea25a246-fc41-4e9d-94e1-d6bdcb540e2a",
+      "dataset_id": "5ceaffe7-36e6-43f9-af07-a64722070037"
+    },
+    {
+      "persona_id": "28431eb8-b95a-4c1b-b3ea-a0431c8ebeb1",
+      "dataset_id": "7132e831-8cc7-4782-b6f4-a97be01e2fc6"
+    },
+    {
+      "persona_id": "4a07d08e-71d2-4cf9-b70f-4b18b0bf4f68",
+      "dataset_id": "a099b4b0-6479-4dc3-a343-71c9e45997a3"
+    }
+  ],
+  "no_match_in_dify": [
+    {
+      "persona_id": "d0b001fb-90c2-4407-81a7-6bbbbd2cd12c",
+      "user": "andrey",
+      "handle": "sonya",
+      "expected_name": "andrey:persona:sonya"
+    },
+    {
+      "persona_id": "c6c935e1-54ad-4368-b96b-f3bc70ede1f0",
+      "user": "andrey",
+      "handle": "masha",
+      "expected_name": "andrey:persona:masha"
+    },
+    {
+      "persona_id": "f89df1f4-1f34-44ff-8c95-9f84c47a8dbf",
+      "user": "andrey",
+      "handle": "vladimir",
+      "expected_name": "andrey:persona:vladimir"
+    },
+    {
+      "persona_id": "92638ab9-6504-45ce-adb8-287ee7fa3abd",
+      "user": "grisha",
+      "handle": "viktor",
+      "expected_name": "grisha:persona:viktor"
+    },
+    {
+      "persona_id": "31760b6d-bb9f-47ff-908a-dbc8bec8521e",
+      "user": "anna",
+      "handle": "reader35",
+      "expected_name": "anna:persona:reader35"
+    },
+    {
+      "persona_id": "318a11fa-7164-4ec2-9f10-27fda6a4a12e",
+      "user": "anna",
+      "handle": "dasha",
+      "expected_name": "anna:persona:dasha"
+    },
+    {
+      "persona_id": "06977f92-e471-4f81-8135-4242014a5ef8",
+      "user": "anna",
+      "handle": "maksim",
+      "expected_name": "anna:persona:maksim"
+    },
+    {
+      "persona_id": "529ff4a7-9f16-444a-8bc4-357c0c019ffa",
+      "user": "anna",
+      "handle": "sofya",
+      "expected_name": "anna:persona:sofya"
+    },
+    {
+      "persona_id": "353be681-b642-490a-894a-973f06fa45e5",
+      "user": "anna",
+      "handle": "gleb",
+      "expected_name": "anna:persona:gleb"
+    },
+    {
+      "persona_id": "5b03293a-a0f8-4d2e-8b11-bbc9e8950fef",
+      "user": "anna",
+      "handle": "misha",
+      "expected_name": "anna:persona:misha"
+    },
+    {
+      "persona_id": "bb52caaa-6745-42b1-9bcf-82e5b1f1b0a6",
+      "user": "anna",
+      "handle": "roman",
+      "expected_name": "anna:persona:roman"
+    },
+    {
+      "persona_id": "66e0d8ae-5003-49a5-8e34-8174300981e1",
+      "user": "andrey",
+      "handle": "maksim",
+      "expected_name": "andrey:persona:maksim"
+    },
+    {
+      "persona_id": "f6129821-980a-46aa-8eca-4efef806884e",
+      "user": "andrey",
+      "handle": "lena",
+      "expected_name": "andrey:persona:lena"
+    },
+    {
+      "persona_id": "5088cc28-9ff0-48d2-8962-82f324eedb74",
+      "user": "andrey",
+      "handle": "fizioterapevt-lfk",
+      "expected_name": "andrey:persona:fizioterapevt-lfk"
+    },
+    {
+      "persona_id": "7405b0cd-7c49-4dbe-bd24-e575fa016f21",
+      "user": "andrey",
+      "handle": "auditor-bezopasnosti",
+      "expected_name": "andrey:persona:auditor-bezopasnosti"
+    },
+    {
+      "persona_id": "d2487769-1c9f-4f03-87b8-7414a871137a",
+      "user": "andrey",
+      "handle": "endocrinolog",
+      "expected_name": "andrey:persona:endocrinolog"
+    },
+    {
+      "persona_id": "d41d2070-7c32-441e-89dc-570482399d44",
+      "user": "andrey",
+      "handle": "dietolog",
+      "expected_name": "andrey:persona:dietolog"
+    },
+    {
+      "persona_id": "cc03c64f-b5bb-4db3-8743-90af666c14cf",
+      "user": "andrey",
+      "handle": "gastroenterolog",
+      "expected_name": "andrey:persona:gastroenterolog"
+    },
+    {
+      "persona_id": "3c527a19-8d5c-4f29-a8ff-73294a9dd85d",
+      "user": "andrey",
+      "handle": "nefrolog",
+      "expected_name": "andrey:persona:nefrolog"
+    },
+    {
+      "persona_id": "f8773ed5-1e71-41ab-8b87-d22022e02007",
+      "user": "andrey",
+      "handle": "psiholog-pp",
+      "expected_name": "andrey:persona:psiholog-pp"
+    },
+    {
+      "persona_id": "4d9a99b5-b59b-4ed5-8c4f-2e9baf4e2193",
+      "user": "andrey",
+      "handle": "ortoped",
+      "expected_name": "andrey:persona:ortoped"
+    },
+    {
+      "persona_id": "ca4f0657-c249-4c95-b95d-aa3c91d18b7f",
+      "user": "andrey",
+      "handle": "oftalmolog",
+      "expected_name": "andrey:persona:oftalmolog"
+    },
+    {
+      "persona_id": "f663aae1-ad5d-4964-a446-54acec92e239",
+      "user": "anna",
+      "handle": "psycholog",
+      "expected_name": "anna:persona:psycholog"
+    },
+    {
+      "persona_id": "4a46e8d7-ecbb-4512-a4b4-c23241ed78c6",
+      "user": "anna",
+      "handle": "cyberpsy",
+      "expected_name": "anna:persona:cyberpsy"
+    },
+    {
+      "persona_id": "52033beb-fb8d-43a2-94a7-ccce7a67005a",
+      "user": "anna",
+      "handle": "margo",
+      "expected_name": "anna:persona:margo"
+    },
+    {
+      "persona_id": "cb67e084-0e1e-41ae-b699-26566720c38f",
+      "user": "andrey",
+      "handle": "fin-expert",
+      "expected_name": "andrey:persona:fin-expert"
+    },
+    {
+      "persona_id": "5f337c49-fed4-48f1-90b7-16a7fa260568",
+      "user": "anna",
+      "handle": "itsmm",
+      "expected_name": "anna:persona:itsmm"
+    },
+    {
+      "persona_id": "8412fd81-0685-4d83-85b9-f3b660714cd5",
+      "user": "anna",
+      "handle": "katya",
+      "expected_name": "anna:persona:katya"
+    },
+    {
+      "persona_id": "8806a874-a9b2-4af7-a39f-b0a15d50a405",
+      "user": "andrey",
+      "handle": "pediatr",
+      "expected_name": "andrey:persona:pediatr"
+    },
+    {
+      "persona_id": "df86f188-5ec0-4e81-a7e4-aa0e52ac559f",
+      "user": "anna",
+      "handle": "asya",
+      "expected_name": "anna:persona:asya"
+    },
+    {
+      "persona_id": "d7d98dde-fbbe-49eb-be9e-2c6f7b5fb3fb",
+      "user": "andrey",
+      "handle": "psihiatr",
+      "expected_name": "andrey:persona:psihiatr"
+    },
+    {
+      "persona_id": "fb3d5b61-f0f3-4153-80bf-0d9bdd38fbe6",
+      "user": "anna",
+      "handle": "grisha",
+      "expected_name": "anna:persona:grisha"
+    },
+    {
+      "persona_id": "9268dc38-85f2-461a-9fe7-6b7cb356d084",
+      "user": "andrey",
+      "handle": "psiholog",
+      "expected_name": "andrey:persona:psiholog"
+    },
+    {
+      "persona_id": "4fcc3426-3005-4e69-b83e-14ec1e529d5d",
+      "user": "andrey",
+      "handle": "nevrolog",
+      "expected_name": "andrey:persona:nevrolog"
+    },
+    {
+      "persona_id": "2fcd6c17-0cb3-48a0-a4a6-84a7d9b5affd",
+      "user": "anna",
+      "handle": "rita",
+      "expected_name": "anna:persona:rita"
+    },
+    {
+      "persona_id": "d5522e8c-3cda-4ae5-bafa-e52326e2bce2",
+      "user": "andrey",
+      "handle": "kardiolog",
+      "expected_name": "andrey:persona:kardiolog"
+    },
+    {
+      "persona_id": "32a92135-06c3-4120-b69a-6a792e383f7a",
+      "user": "andrey",
+      "handle": "farmakolog",
+      "expected_name": "andrey:persona:farmakolog"
+    },
+    {
+      "persona_id": "a2299a4b-91c9-45e2-b8c4-b778ce4f6b75",
+      "user": "andrey",
+      "handle": "advokat-pacienta",
+      "expected_name": "andrey:persona:advokat-pacienta"
+    },
+    {
+      "persona_id": "fd44ca31-8e5b-4685-8e63-43fd28cba759",
+      "user": "andrey",
+      "handle": "moderator",
+      "expected_name": "andrey:persona:moderator"
+    },
+    {
+      "persona_id": "29e922c0-cc56-4051-a3a6-91e2917723f2",
+      "user": "anna",
+      "handle": "ilya",
+      "expected_name": "anna:persona:ilya"
+    },
+    {
+      "persona_id": "981f1ec1-563b-4a9e-833a-342777ef1add",
+      "user": "anna",
+      "handle": "nastya",
+      "expected_name": "anna:persona:nastya"
+    },
+    {
+      "persona_id": "df1afcdc-2843-430b-802b-661284d2c385",
+      "user": "anna",
+      "handle": "yulya",
+      "expected_name": "anna:persona:yulya"
+    },
+    {
+      "persona_id": "91e7396b-bdd5-4a78-98ad-af7cb4cbaf70",
+      "user": "anna",
+      "handle": "mark",
+      "expected_name": "anna:persona:mark"
+    },
+    {
+      "persona_id": "23ac27e6-2910-439d-b663-b67687ee6ce3",
+      "user": "anna",
+      "handle": "liza",
+      "expected_name": "anna:persona:liza"
+    },
+    {
+      "persona_id": "ab8ba008-0001-4055-aae4-cb90c72fd810",
+      "user": "anna",
+      "handle": "marta",
+      "expected_name": "anna:persona:marta"
+    },
+    {
+      "persona_id": "236b9498-9fb6-41ff-93ce-b2261e4728f3",
+      "user": "anna",
+      "handle": "lera",
+      "expected_name": "anna:persona:lera"
+    },
+    {
+      "persona_id": "56f98777-8bbc-4bd9-8d4c-57e7a8befcca",
+      "user": "anna",
+      "handle": "inna",
+      "expected_name": "anna:persona:inna"
+    },
+    {
+      "persona_id": "635d8bcc-a2d6-4513-9e3c-80e807ae11c6",
+      "user": "anna",
+      "handle": "gera",
+      "expected_name": "anna:persona:gera"
+    },
+    {
+      "persona_id": "0e9f1c0d-88bf-469f-8b35-6196676570d0",
+      "user": "andrey2",
+      "handle": "qacoord",
+      "expected_name": "andrey2:persona:qacoord"
+    },
+    {
+      "persona_id": "d6b44146-67e5-43fd-ae47-6d6933e4e1fc",
+      "user": "andrey2",
+      "handle": "igor",
+      "expected_name": "andrey2:persona:igor"
+    },
+    {
+      "persona_id": "387f235c-746e-481e-850a-309af52cf21b",
+      "user": "anna",
+      "handle": "olga",
+      "expected_name": "anna:persona:olga"
+    },
+    {
+      "persona_id": "0d42def1-479d-4c4f-acee-e86b517651c4",
+      "user": "anna",
+      "handle": "olya",
+      "expected_name": "anna:persona:olya"
+    },
+    {
+      "persona_id": "74090929-1a5f-49ad-960d-4e1aa051ec7f",
+      "user": "anna",
+      "handle": "daniil",
+      "expected_name": "anna:persona:daniil"
+    },
+    {
+      "persona_id": "fb46f3c8-7f9a-4e09-b69d-4a8d87dc4220",
+      "user": "anna",
+      "handle": "sonya",
+      "expected_name": "anna:persona:sonya"
+    },
+    {
+      "persona_id": "3e6ebeef-eee4-48c0-b213-e82975949f58",
+      "user": "anna",
+      "handle": "sofiya",
+      "expected_name": "anna:persona:sofiya"
+    },
+    {
+      "persona_id": "34e6e63f-2029-4448-b0aa-cdb72e84d687",
+      "user": "anna",
+      "handle": "artur",
+      "expected_name": "anna:persona:artur"
+    }
+  ],
+  "not_in_personas": [
+    {
+      "persona_id": "b056b021-437f-465f-8624-8f449722fc1d"
+    },
+    {
+      "persona_id": "cc2673f9-12e0-4046-8db6-092ef328c6bc"
+    },
+    {
+      "persona_id": "5235a55d-df30-45b7-831e-2490b32d3fe8"
+    },
+    {
+      "persona_id": "07111cd1-a9da-48a7-b852-d59bf3159ae1"
+    },
+    {
+      "persona_id": "91cd4617-1680-4ea2-8612-73d434129310"
+    },
+    {
+      "persona_id": "eb9e5261-6d3f-485f-b366-cc879faacd73"
+    },
+    {
+      "persona_id": "4aabf3a4-45fd-4faa-8ada-e327c78ff2e4"
+    }
+  ],
+  "no_owner_user": []
+}

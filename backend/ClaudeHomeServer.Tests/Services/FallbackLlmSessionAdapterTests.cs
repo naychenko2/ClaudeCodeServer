@@ -1048,6 +1048,80 @@ public class FallbackLlmSessionAdapterTests
         marker.Provider.Should().Be("p-alive");
     }
 
+    // Исчерпанная квота СТОРОННЕГО провайдера (инцидент 2026-08-11, kimi: текст «usage limit»
+    // при пустом статусе) помечает его в кулдауне длинным TTL — следующий ход стартует сразу
+    // со следующего живого шага цепочки, не тратя попытку на исчерпанный провайдер.
+    [Fact]
+    public async Task ИсчерпаннаяКвотаСтороннего_КулдаунИСтартСоСледующегоШага()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead", "m-alive"], health: health);
+        // Ход 1: как в ленте инцидента — текст ошибки с «usage limit», result без статуса
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage(
+                "Failed to authenticate. API Error: 403 You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle...",
+                ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // m-alive — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал хода 1");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации хода 1");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-alive", "m-alive"), "фолбэк ушёл на шаг 2 цепочки");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Reason.Should().Be("usage_limit");
+        health.IsUnavailable("p-dead").Should().BeTrue("исчерпанная квота стороннего — кулдаун");
+
+        // Ход 2: стартовая подмена — p-dead в кулдауне, попытку на него не тратим
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        await sut.SendMessageAsync("ещё раз");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Count() == 2, "финал хода 2");
+
+        inner.Attempts.Should().HaveCount(3);
+        inner.Attempts[2].Should().Be(("p-alive", "m-alive"),
+            "следующий ход стартует со следующего живого шага цепочки");
+    }
+
+    // Инвариант ADR-007 §4.3: здоровье подписок пула Claude ведёт ClaudeSubscriptionPool.
+    // UsageLimit у подписки помечает её исчерпанной в пуле и НЕ попадает в ProviderHealthRegistry.
+    [Fact]
+    public async Task ИсчерпаннаяКвотаПодпискиПула_ВКулдаунНеПопадает()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, BuildProviders(), health: health);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage("API Error: 403 usage limit reached", ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Provider.Should().Be("acc-b", "ротация подписок пула — уровень 1");
+        pool.IsExhausted("acc-a").Should().BeTrue("лимитный класс помечает подписку исчерпанной");
+        health.IsUnavailable("acc-a").Should().BeFalse(
+            "подписки пула кулдауном не помечаются — их здоровье ведёт ClaudeSubscriptionPool");
+    }
+
     // --- Переполнение контекста (ContextOverflow) ---
     // Репро инцидента 09.08: фолбэк ушёл на шаг цепочки, но ПРИНЯВШАЯ модель не переварила
     // контекст → ход умер с «Prompt is too long». Теперь overflow — шаг по цепочке, а не смерть хода.

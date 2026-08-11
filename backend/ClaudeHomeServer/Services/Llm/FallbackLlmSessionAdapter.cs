@@ -484,15 +484,24 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                 // Кулдаун недоступности (волна 2): провайдер, вернувший Unreachable/ProviderError,
                 // помечаем недоступным на TTL — следующие ходы и шаги цепочки пропустят его сразу.
-                // Лимитные классы (429/usage) сюда не попадают: это квота аккаунта, не мёртвый эндпоинт.
+                // RateLimit сюда не попадает: окно запросов у аккаунта отпускает быстро, и это
+                // квота, а не мёртвый эндпоинт.
                 // ТОЛЬКО для сторонних провайдеров: ключи подписок пула Claude НЕ помечаем — их
                 // здоровье уже ведёт ClaudeSubscriptionPool (исчерпание/ротация). Иначе один
                 // транзитный 529 на «claude» уводил бы все новые ходы с цепочкой на сторонний шаг 2
                 // мимо живой «claude-2» (Major 2 ревью). Стартовая подмена для нативного ключа тогда
                 // не срабатывает (IsUnavailable всегда false) — пул отработает уровень 1 штатно.
-                if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError
-                    && IsExternalProvider(currentKey))
-                    _health?.MarkUnavailable(currentKey);
+                if (IsExternalProvider(currentKey))
+                {
+                    if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError)
+                        _health?.MarkUnavailable(currentKey);
+                    // Исчерпанная квота стороннего провайдера (инцидент 2026-08-11, kimi): без отметки
+                    // каждый следующий ход снова стартовал бы на нём, тратил попытку и падал до конца
+                    // биллингового цикла. MarkExhausted — механизм пула Claude, стороннего он не знает,
+                    // поэтому память об исчерпании ведём здесь, длинным TTL (QuotaCooldownMinutes).
+                    else if (cls == FallbackErrorClass.UsageLimit)
+                        _health?.MarkQuotaExhausted(currentKey);
+                }
 
                 // ContextOverflow: модель не приняла контекст — запоминаем наблюдённый потолок
                 // ёмкости (модель не вместила ~N токенов), чтобы в этом и следующих ходах не

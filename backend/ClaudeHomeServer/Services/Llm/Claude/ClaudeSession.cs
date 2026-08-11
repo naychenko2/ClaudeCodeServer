@@ -222,6 +222,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // Прогон запущен с --prompt-suggestions: после result ждём выхода CLI дольше
         // (PromptSuggestionExitGrace) — подсказка генерится и приходит после result
         public bool PromptSuggestionsActive { get; init; }
+        // Номер ПОСЛЕДНЕГО хода, отданного этому прогону (ClaudeSession._turnSeq). Прогон живёт
+        // дольше хода (same-process submit), поэтому метка обновляется на каждой подаче. Уезжает
+        // наружу в ExitedMessage: по ней фолбэк отличает смерть своего прогона от чужой.
+        // Пишет поток хода, читает reader — доступ через Interlocked.
+        public long LastTurnSeq;
 
         public bool HasPendingBg
         {
@@ -234,6 +239,14 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Текущий прогон; присваивает поток хода (под _turnLock), обнуляет финализация reader'а
     private CliRun? _run;
+
+    // Сквозной номер ходов, отданных прогонам этой сессии: инкремент в RunTurnAsync на каждый
+    // ход, значение садится в CliRun.LastTurnSeq того прогона, который ход принял (живой через
+    // stdin или новый процесс). Монотонность — единственное требование: сравниваются только
+    // метки одной сессии (см. ILlmSessionAdapter.SubmittedTurnSeq и ExitedMessage.TurnSeq).
+    private long _turnSeq;
+
+    public long SubmittedTurnSeq => Interlocked.Read(ref _turnSeq);
 
     // Прогон существует — чат занят по-настоящему. Доживание фоновых агентов сюда попадает,
     // но чат при нём уже Active, так что реанимации мёртвого Working это не мешает.
@@ -1513,7 +1526,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Отдать ход живому процессу доживающего прогона (same-process ход). false — прогон
     // непригоден (умер/stdin закрыт/запись сорвалась): ход пойдёт новым процессом
-    private bool TrySubmitTurn(CliRun run, string userMessageJson)
+    private bool TrySubmitTurn(CliRun run, string userMessageJson, long turnSeq)
     {
         _stdinLock.Wait();
         try
@@ -1542,6 +1555,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 run.ReuseSubmit = !run.HasPendingBg;
                 CorrTrace("submit-turn(no-skip)", Info.Id, run);
             }
+            // Ход принят живым прогоном — его exited теперь наш (метка обновляется до записи
+            // в stdin: reader увидит уже новое значение, если процесс умрёт сразу после submit)
+            Interlocked.Exchange(ref run.LastTurnSeq, turnSeq);
             run.TurnTcs = CliRun.NewTcs();
             run.TurnDone = false;
             run.TurnGotEvent = false;       // новый ход — событий прогона ещё не было
@@ -1585,6 +1601,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // MCP-конфиг ниже собирается уже с учётом анти-рекурсии, сброс — в finally
         _currentTurnAgentDepth = agentDepth;
         _currentTurnSuppressTasksExecute = suppressTasksExecute;
+
+        // Номер этого хода: садится в прогон, который его примет (CliRun.LastTurnSeq), и уходит
+        // наружу в ExitedMessage. Выделяем ДО подачи — снимок SubmittedTurnSeq, снятый вызывающим
+        // раньше (фолбэк на старте попытки), гарантированно меньше нашего номера.
+        var turnSeq = Interlocked.Increment(ref _turnSeq);
 
         // Картинки, которые модель показывает в ленте, живут в служебной папке вложений —
         // в git-статусе проекта они светиться не должны. Лениво (один раз за жизнь сессии)
@@ -2178,7 +2199,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // переживают смену хода. Собранный temp MCP-конфиг не пригодился — убираем.
         var existing = _run;
         if (existing is not null && existing.TurnDone && existing.Signature == signature
-            && TrySubmitTurn(existing, userMessageJson))
+            && TrySubmitTurn(existing, userMessageJson, turnSeq))
         {
             Console.WriteLine("[ClaudeSession] Ход отдан живому процессу прогона (фоновые агенты доживают)");
             // Same-process submit НЕ гарантирован durable (процесс доживает, запись в .jsonl
@@ -2273,7 +2294,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
             _fileWatcher.Start();
 
-            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId };
+            run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq };
             // Читаем stderr асинхронно, иначе при переполнении буфера процесс зависнет
             run.StderrTask = process.StandardError.ReadToEndAsync(ct);
 
@@ -2313,7 +2334,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (turnMcpPath != null)
                 try { File.Delete(turnMcpPath); }
                 catch { /* temp-каталог приберёт ОС */ }
-            await _onMessage(new ExitedMessage());
+            await _onMessage(new ExitedMessage(turnSeq));
             throw;
         }
 
@@ -2573,7 +2594,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Статусом владеет SessionManager: Finished/Active он выставит по ExitedMessage.
         // Пустая смерть same-process хода наружу не идёт (SuppressExited выше) — её поглотит ретрай.
         if (!run.SuppressExited)
-            await _onMessage(new ExitedMessage());
+            await _onMessage(new ExitedMessage(Interlocked.Read(ref run.LastTurnSeq)));
     }
 
     /// <summary>

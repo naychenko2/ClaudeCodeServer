@@ -32,10 +32,15 @@ public class FallbackLlmSessionAdapterTests
         public bool CurrentTurnSuppressTasksExecute => false;
         public bool HasLiveTurn => false;
         public bool OrchestrationActive => false;
+        // Номер поданных прогонам ходов (калька ClaudeSession.SubmittedTurnSeq): растёт на
+        // каждой подаче. Тесты, которым метка не нужна, эмитят ExitedMessage() с TurnSeq=0 —
+        // адаптер трактует такое exited как своё (fail-open), поведение прежнее.
+        public long SubmittedTurnSeq { get; private set; }
 
         public Task SendMessageAsync(string text, IReadOnlyList<string>? attachedPaths = null,
             int agentDepth = 0, bool suppressTasksExecute = false)
         {
+            SubmittedTurnSeq++;
             Attempts.Add((Info.Provider ?? "", Info.Model));
             if (Scripts.Count > 0) Scripts.Dequeue()();
             return Task.CompletedTask;
@@ -2099,5 +2104,99 @@ public class FallbackLlmSessionAdapterTests
 
         inner.Emit(Success());
         await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "result первого хода");
+    }
+
+    // Инцидент 2026-08-11: чат «Проверка MCP vdi» уехал с opus на glm-5.2 при живой подписке.
+    // Ход человека пришёл через 4 с после result предыдущего хода, а ещё через 3 с штатно умер
+    // ДОЖИВАВШИЙ процесс предыдущего прогона — его exited резолвил попытку нового хода как
+    // ProcessGone → Unreachable → подмена модели. Решение вынесено чистой функцией: метка
+    // прогона в exited против снимка на начало попытки.
+    [Fact]
+    public void IsOwnExited_ЧужойПрогонНеРезолвитПопытку_СвойРезолвит()
+    {
+        // Снимок на начало попытки = 7 (последний ход подан предыдущему прогону).
+        // Его exited несёт ту же метку — терминал чужого прогона.
+        FallbackLlmSessionAdapter.IsOwnExited(exitedTurnSeq: 7, attemptTurnSeq: 7)
+            .Should().BeFalse("прогон обслуживал ход, поданный ДО попытки — его смерть не наш обрыв");
+        FallbackLlmSessionAdapter.IsOwnExited(exitedTurnSeq: 6, attemptTurnSeq: 7)
+            .Should().BeFalse("прогон ещё старше — тем более чужой");
+        // Ход попытки подан после снимка, поэтому его прогон несёт метку строго больше.
+        FallbackLlmSessionAdapter.IsOwnExited(exitedTurnSeq: 8, attemptTurnSeq: 7)
+            .Should().BeTrue("прогон принял ход этой попытки — его смерть = обрыв доставки");
+        // Метки нет (адаптер без прогонов, тесты) — прежнее поведение.
+        FallbackLlmSessionAdapter.IsOwnExited(exitedTurnSeq: 0, attemptTurnSeq: 0)
+            .Should().BeTrue("метка недоступна — fail-open, иначе попытка зависла бы навсегда");
+    }
+
+    // Репро инцидента целиком: попытка идёт, приходит exited ПРЕДЫДУЩЕГО прогона (метка = снимку),
+    // затем нормальный result собственного хода. Подмены модели быть не должно.
+    [Fact]
+    public async Task ExitedПредыдущегоПрогона_ПриЖивойПопытке_ПодменыНет()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool);
+
+        // Первый ход: завершается result'ом, но его процесс ещё доживает (exited пока не пришёл).
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        await sut.SendMessageAsync("первый ход");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "result первого хода");
+        var firstRunSeq = inner.SubmittedTurnSeq;
+
+        // Второй ход человека — и на нём штатно умирает процесс ПЕРВОГО прогона.
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ExitedMessage(firstRunSeq));   // чужой терминал: ход в нём подан раньше
+            inner.Emit(Success());                        // собственный ход отвечает штатно
+        });
+
+        await sut.SendMessageAsync("второй ход");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Count() == 2, "result второго хода");
+
+        inner.Attempts.Should().HaveCount(2, "чужой exited не должен перезапускать ход");
+        inner.Attempts[1].Provider.Should().Be("acc-a", "подписка не менялась");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty("подмены модели нет");
+        Downstream().OfType<ResultMessage>().Should().OnlyContain(r => r.Subtype == "success");
+    }
+
+    // Обратная сторона: exited СОБСТВЕННОГО прогона (метка = метке хода) по-прежнему
+    // резолвит попытку как ProcessGone — обрыв доставки, ход перезапускается на другой паре.
+    [Fact]
+    public async Task СвоёExited_РезолвитProcessGone_ХодПерезапускается()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new TextDeltaMessage("начал отвечать и"));
+            inner.Emit(new ExitedMessage(inner.SubmittedTurnSeq));   // умер процесс ЭТОГО хода
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        inner.Attempts.Should().HaveCount(2, "обрыв своего прогона — ошибка доставки, ход перезапускается");
+        inner.Attempts[1].Provider.Should().Be("acc-b");
+    }
+
+    // Своё exited ПОСЛЕ result не создаёт второго исхода: попытка уже разрешена result'ом,
+    // exited остаётся обычным терминалом (существующая проверка AttemptResolved).
+    [Fact]
+    public async Task СвоёExitedПослеResult_НовогоИсходаНет()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(Success());
+            inner.Emit(new ExitedMessage(inner.SubmittedTurnSeq));   // штатный выход после хода
+        });
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ExitedMessage>().Any(), "exited после result");
+
+        inner.Attempts.Should().ContainSingle("успешный ход не перезапускается");
+        Downstream().OfType<ResultMessage>().Should().ContainSingle();
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
 }

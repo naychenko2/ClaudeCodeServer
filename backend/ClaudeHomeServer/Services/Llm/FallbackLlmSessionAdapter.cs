@@ -163,6 +163,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     public int CurrentTurnAgentDepth => _inner.CurrentTurnAgentDepth;
     public bool CurrentTurnSuppressTasksExecute => _inner.CurrentTurnSuppressTasksExecute;
     public bool HasLiveTurn => _inner.HasLiveTurn;
+    public long SubmittedTurnSeq => _inner.SubmittedTurnSeq;
 
     public Task StartAsync() => _inner.StartAsync();
     public Task CompactAsync() => _inner.CompactAsync();
@@ -285,12 +286,17 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return Task.CompletedTask;
                 }
 
-            case ExitedMessage:
+            case ExitedMessage exited:
                 lock (turn.Sync)
                 {
                     if (turn.Settled) return _downstream(msg);
                     if (turn.SwallowCleanup) return Task.CompletedTask; // процесс убит ротацией — глотаем
                     turn.Hold(msg);
+                    // Терминал ЧУЖОГО прогона: ход этой попытки в нём не подавался (штатная смерть
+                    // прогона предыдущего хода, доживавшего после своего result). Попытку не трогаем —
+                    // иначе её исход становится ProcessGone → Unreachable → подмена модели на живой
+                    // подписке (инцидент 2026-08-11: opus → glm-5.2 без единой ошибки доставки).
+                    if (!IsOwnExited(exited.TurnSeq, turn.AttemptTurnSeq)) return Task.CompletedTask;
                     // Процесс умер без result — обрыв потока. Если попытка уже разрешена
                     // result'ом — это штатный выход после хода, не новый исход
                     if (!turn.AttemptResolved) turn.ResolveAttempt(AttemptEndKind.ProcessGone);
@@ -434,7 +440,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 TaskCompletionSource<AttemptEnd> attemptTcs;
                 lock (turn.Sync)
                 {
-                    turn.BeginAttempt();
+                    // Снимок номера ходов ДО подачи: ход попытки получит номер больше него,
+                    // а всё, что подавалось раньше (в т.ч. ход, чей прогон ещё доживает), —
+                    // меньше или равно. По этой границе отсеиваем чужие exited (см. IsOwnExited)
+                    turn.BeginAttempt(_inner.SubmittedTurnSeq);
                     attemptTcs = turn.AttemptTcs;
                 }
 
@@ -653,6 +662,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 _orchestrationDone?.Invoke(Info.Id);
         }
     }
+
+    // Принадлежит ли пришедший exited прогону, которому подан ход ТЕКУЩЕЙ попытки. Чистая
+    // функция (по образцу ClaudeSession.ShouldRetryEmptyExit): HandleMessageAsync применяет
+    // её исход, тест вызывает напрямую.
+    //   exitedTurnSeq — номер последнего хода умершего прогона (ExitedMessage.TurnSeq);
+    //   attemptTurnSeq — снимок номера ходов на начало попытки (BeginAttempt).
+    // Ход попытки подаётся ПОСЛЕ снимка, поэтому его прогон всегда несёт метку строго больше.
+    // Метка не больше снимка = прогон обслуживал ход, поданный до попытки: его смерть — штатный
+    // конец предыдущего хода, а не обрыв нашего (инцидент 2026-08-11). 0 — метки нет (адаптер
+    // без прогонов, тесты): fail-open, считаем своим — прежнее поведение, иначе попытка,
+    // резолвившаяся только по exited, зависла бы навсегда.
+    internal static bool IsOwnExited(long exitedTurnSeq, long attemptTurnSeq) =>
+        exitedTurnSeq <= 0 || exitedTurnSeq > attemptTurnSeq;
 
     // Ошибка доставки: всё, кроме чистого успеха. API-ошибка провайдера приходит как
     // subtype=success + is_error (в протоколе остаётся следом api_error_status и текстом
@@ -1110,6 +1132,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // этой попытки — уборка, их глотаем до начала следующей попытки
         public bool SwallowCleanup;
         public bool AttemptResolved;
+        // Снимок ClaudeSession.SubmittedTurnSeq на начало попытки: exited прогона с меткой не
+        // больше этой — терминал чужого прогона (см. IsOwnExited). 0 — метки недоступны.
+        public long AttemptTurnSeq;
         public List<ServerMessage> Held = [];
         public string? ErrorText;
         public string? RateLimitResetsAt;
@@ -1119,9 +1144,10 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
         // Новая попытка: чистый TCS и сброшенные признаки (задержанное предыдущей
         // попыткой уже решено оркестратором)
-        public void BeginAttempt()
+        public void BeginAttempt(long submittedTurnSeq = 0)
         {
             AttemptTcs = NewTcs();
+            AttemptTurnSeq = submittedTurnSeq;
             AttemptResolved = false;
             SwallowCleanup = false;
             Held.Clear();

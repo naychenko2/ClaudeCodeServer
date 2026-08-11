@@ -163,7 +163,13 @@ public record CompactBoundaryMessage(string Trigger, int? PreTokens, int? PostTo
 public record CompactStatusMessage(string? Status, string? CompactResult = null, string? CompactError = null)
     : ServerMessage("compact_status");
 
-public record ExitedMessage()
+// TurnSeq — номер последнего хода, отданного УМЕРШЕМУ прогону (ClaudeSession.SubmittedTurnSeq).
+// По нему фолбэк-оркестратор отличает смерть СВОЕГО прогона от штатной смерти предыдущего:
+// exited прогона, чей ход подан до начала попытки, не должен резолвить её как обрыв доставки
+// (инцидент 2026-08-11: ложный Unreachable → подмена модели). 0 — метка недоступна (иной
+// адаптер, тесты): оркестратор трактует такое exited как своё (fail-open, прежнее поведение).
+// В ленту не идёт — служебная привязка к прогону, клиенту не нужна.
+public record ExitedMessage([property: JsonIgnore] long TurnSeq = 0)
     : ServerMessage("exited");
 
 // Terminal PTY: вывод от сервера к клиенту (Data = фрагмент текста)

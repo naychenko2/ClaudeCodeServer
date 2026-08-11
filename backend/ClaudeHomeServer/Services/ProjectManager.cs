@@ -299,7 +299,13 @@ public class ProjectManager
     /// прогона или тик и кнопка не заберут один проект дважды. Протухший Pending (сервер
     /// упал в середине) перезабирается.
     /// </summary>
-    public bool TryBeginBackground(string id, TimeSpan? staleAfter = null)
+    /// <param name="candidatesOnly">
+    /// Режим массового прогона (ADR-008 §10): забирать только проекты, которых генерация
+    /// НИКОГДА не касалась (<c>Background == null</c>), плюс протухший Pending. Проверка
+    /// идёт под тем же локом, что и захват, — иначе кнопка «Вернуть стандартный», нажатая
+    /// между выбором кандидатов и их обработкой, была бы перетёрта прогоном.
+    /// </param>
+    public bool TryBeginBackground(string id, TimeSpan? staleAfter = null, bool candidatesOnly = false)
     {
         var stale = staleAfter ?? TimeSpan.FromMinutes(10);
         lock (_saveLock)
@@ -310,6 +316,8 @@ public class ProjectManager
             if (current is { Kind: ProjectBackgroundKind.Pending }
                 && current.StartedAt is { } started
                 && DateTime.UtcNow - started < stale)
+                return false;
+            if (candidatesOnly && current is not null and not { Kind: ProjectBackgroundKind.Pending })
                 return false;
 
             project.Background = new ProjectBackground

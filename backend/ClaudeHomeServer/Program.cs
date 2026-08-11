@@ -258,6 +258,10 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
     ClaudeHomeServer.Services.Llm.CheapTextRunner>();
 // Фон рабочего пространства проекта: JSON от модели → собранный сервером SVG-тайл (ADR-008)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundService>();
+// Разовая генерация фонов существующим проектам при включении флага (ADR-008 §10) плюс
+// подстраховка на старте: прогон идемпотентен, повторный запуск ничего не перетирает
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfill>();
+AddHosted<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfillService>();
 // Общий LLM-резолвер записи памяти (Mem0 ADD/UPDATE/DELETE/NOOP) — авто-путь обоих слоёв памяти
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Memory.MemoryWriteResolver>();
 // One-shot ответы персон от их лица (persona_ask из MCP персон)

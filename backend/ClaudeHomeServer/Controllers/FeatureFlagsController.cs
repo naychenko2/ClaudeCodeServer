@@ -11,7 +11,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/feature-flags")]
 public class FeatureFlagsController(FeatureFlagService flags, UserStore users,
-    DefaultAssistantProvisioner provisioner) : ControllerBase
+    DefaultAssistantProvisioner provisioner,
+    ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfill backgroundBackfill) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -46,6 +47,12 @@ public class FeatureFlagsController(FeatureFlagService flags, UserStore users,
         // зовёт refreshMe). План 2.2. Выключение флага персоны не трогает (план 3г).
         if (req.Enabled && key == FeatureFlagKeys.DefaultPersonasOnboarding)
             await provisioner.EnsureAsync(UserId);
+
+        // Включение флага фонов — штатный триггер разовой генерации существующим проектам
+        // (ADR-008 §10). В фоне: 39 вызовов сильной модели в HTTP-запрос не укладываются,
+        // а прогон идемпотентен — повторное включение флага ничего не перетирает
+        if (req.Enabled && key == FeatureFlagKeys.ProjectBackgrounds)
+            backgroundBackfill.KickOff(UserId);
 
         return Ok(new { values = flags.GetEffective(UserId) });
     }

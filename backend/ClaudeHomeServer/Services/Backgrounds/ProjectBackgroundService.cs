@@ -39,9 +39,15 @@ public sealed class ProjectBackgroundService(
     // но модель может быть сторонним провайдером — фон не стоит расширения поверхности утечки
     private const int PromptBudget = 800;
 
-    public async Task<BackgroundResult> GenerateAsync(Project project, CancellationToken ct = default)
+    /// <param name="candidateOnly">
+    /// Массовый прогон (ADR-008 §10): брать только проекты, которых генерация никогда не
+    /// касалась, и протухший Pending. Generated / Standard / Failed не трогаются никогда —
+    /// вызов на них возвращает текущее состояние, модель не дёргается.
+    /// </param>
+    public async Task<BackgroundResult> GenerateAsync(Project project, CancellationToken ct = default,
+        bool candidateOnly = false)
     {
-        if (!projects.TryBeginBackground(project.Id))
+        if (!projects.TryBeginBackground(project.Id, candidatesOnly: candidateOnly))
             return Describe(projects.GetById(project.Id));
 
         string raw;

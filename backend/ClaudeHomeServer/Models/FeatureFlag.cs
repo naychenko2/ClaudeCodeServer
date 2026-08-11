@@ -28,6 +28,10 @@ public static class FeatureFlagKeys
     // Персоны по умолчанию и знакомство: каждый новый чат человека — с персоной; заготовка-
     // ассистент провижнится при первом входе, знакомство дорабатывает её по приглашению.
     public const string DefaultPersonasOnboarding = "default-personas-onboarding";
+
+    // Свой фон у каждого проекта: тайл-дудл и цвет генерируются по смыслу проекта
+    // (ADR-008). Выключен — везде рисуется прежний статический фон.
+    public const string ProjectBackgrounds = "project-backgrounds";
 }
 
 /// <summary>
@@ -58,6 +62,15 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.DefaultPersonasOnboarding,
             Title: "Персоны по умолчанию и знакомство",
             Description: "Каждый новый чат начинается с персоной. При первом входе ассистент создаётся автоматически; знакомство — по приглашению, а не обязательный экран.",
+            Default: false,
+            Stage: "dev"),
+
+        // Фон рабочего пространства, нарисованный моделью по смыслу проекта (ADR-008).
+        // Гейтит оба POST-эндпоинта фона на бэке и раздел «Оформление» на фронте.
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.ProjectBackgrounds,
+            Title: "Свой фон у каждого проекта",
+            Description: "Рисунок и цвет фона подбираются по смыслу проекта: финансы, поездки, учёба и код больше не выглядят одинаково, а фон совпадает по цвету с иконкой проекта. Не понравился — «Сгенерировать заново» или «Вернуть стандартный» в настройках проекта.",
             Default: false,
             Stage: "dev"),
     ];

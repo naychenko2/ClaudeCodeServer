@@ -42,6 +42,10 @@ public class ProjectManager
     // Ассеты конкретного проекта — data/project-icons/{id}/ (аналог PersonaManager.AssetsDir).
     public string IconsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "project-icons");
 
+    // Тайлы фонов: data/project-backgrounds/{id}/tile-{guid}.svg (ADR-008 §6).
+    // В бэкап едут по общему правилу — исключений и своего способа копирования не требуют.
+    public string BackgroundsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "project-backgrounds");
+
     // Container-пользователь заперт в корне песочницы: путь вне него claude не увидит
     // (в контейнер монтируется только Sandbox:ProjectsRoot), а FileService увидел бы хост —
     // расхождение недопустимо
@@ -284,6 +288,109 @@ public class ProjectManager
         try { File.Delete(Path.Combine(IconsDir, projectId, file)); } catch { /* не критично */ }
     }
 
+    // === Фон проекта (ADR-008) ===
+    // Состояние живёт в самой записи проекта — отдельного стора «что уже прогнали» нет,
+    // поэтому повторный запуск массового прогона это no-op. UpdatedAt здесь НЕ трогаем:
+    // по нему идёт сортировка списка проектов, а фоновая генерация 39 фонов перетасовала
+    // бы его целиком.
+
+    /// <summary>
+    /// Взять проект в работу: Pending + StartedAt под тем же локом, что и Save. Два тика
+    /// прогона или тик и кнопка не заберут один проект дважды. Протухший Pending (сервер
+    /// упал в середине) перезабирается.
+    /// </summary>
+    public bool TryBeginBackground(string id, TimeSpan? staleAfter = null)
+    {
+        var stale = staleAfter ?? TimeSpan.FromMinutes(10);
+        lock (_saveLock)
+        {
+            var project = _projects.GetValueOrDefault(id);
+            if (project is null) return false;
+            var current = project.Background;
+            if (current is { Kind: ProjectBackgroundKind.Pending }
+                && current.StartedAt is { } started
+                && DateTime.UtcNow - started < stale)
+                return false;
+
+            project.Background = new ProjectBackground
+            {
+                Kind = ProjectBackgroundKind.Pending,
+                TileFile = current?.TileFile,   // прежний тайл живёт, пока новый не готов
+                StartedAt = DateTime.UtcNow,
+                GeneratedAt = current?.GeneratedAt,
+                Attempts = (current?.Attempts ?? 0) + 1,
+            };
+            JsonFileStore.Save(_storePath, _projects.Values.ToList());
+        }
+        return true;
+    }
+
+    /// <summary>Успешная генерация: ссылка на новый тайл, прежний файл удаляется.</summary>
+    public Project SetBackgroundGenerated(string id, string tileFile)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        DeleteBackgroundAsset(id, project.Background?.TileFile, keep: tileFile);
+        project.Background = new ProjectBackground
+        {
+            Kind = ProjectBackgroundKind.Generated,
+            TileFile = tileFile,
+            GeneratedAt = DateTime.UtcNow,
+            Attempts = project.Background?.Attempts ?? 1,
+        };
+        Save();
+        return project;
+    }
+
+    /// <summary>«Вернуть стандартный»: файл удаляется, автопрогон такой проект не трогает.</summary>
+    public Project SetBackgroundStandard(string id)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        DeleteBackgroundAsset(id, project.Background?.TileFile, keep: null);
+        project.Background = new ProjectBackground
+        {
+            Kind = ProjectBackgroundKind.Standard,
+            Attempts = project.Background?.Attempts ?? 0,
+        };
+        Save();
+        return project;
+    }
+
+    /// <summary>Неудача генерации: прежний тайл (если был) остаётся, повтор — только руками.</summary>
+    public Project SetBackgroundFailed(string id, string reason)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        var previous = project.Background;
+        // Был удачный тайл — остаёмся на нём: неудачная перегенерация не должна отбирать
+        // у пользователя уже работающий фон
+        project.Background = previous is { Kind: ProjectBackgroundKind.Pending, TileFile: not null }
+            ? new ProjectBackground
+            {
+                Kind = ProjectBackgroundKind.Generated,
+                TileFile = previous.TileFile,
+                GeneratedAt = previous.GeneratedAt,
+                Attempts = previous.Attempts,
+                FailReason = reason,
+            }
+            : new ProjectBackground
+            {
+                Kind = ProjectBackgroundKind.Failed,
+                Attempts = previous?.Attempts ?? 1,
+                FailReason = reason,
+            };
+        Save();
+        return project;
+    }
+
+    // Удалить прежний тайл фона (кроме keep); ошибки удаления не критичны
+    private void DeleteBackgroundAsset(string projectId, string? file, string? keep)
+    {
+        if (string.IsNullOrEmpty(file) || file == keep) return;
+        try { File.Delete(Path.Combine(BackgroundsDir, projectId, file)); } catch { /* не критично */ }
+    }
+
     /// <summary>Сохраняет git-настройки проекта (remote, режим авто-коммита, override промпта коммита).</summary>
     /// <remarks>Конвенция строковых полей: null = «не менять», "" = «очистить» (сбросить в null).</remarks>
     public Project UpdateGitSettings(string id, string? remoteUrl = null, bool? autoCommit = null,
@@ -430,6 +537,13 @@ public class ProjectManager
             try
             {
                 var dir = Path.Combine(IconsDir, id);
+                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
+            }
+            catch { /* не критично */ }
+            // …и тайлы фона: осиротевших файлов не остаётся, сборщика сирот не требуется
+            try
+            {
+                var dir = Path.Combine(BackgroundsDir, id);
                 if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
             }
             catch { /* не критично */ }

@@ -24,6 +24,25 @@ public class ProjectIcon
     public AvatarCropState? Crop { get; set; }
 }
 
+// Состояние фона проекта (ADR-008 §6). Pending — генерация в работе (протухает через
+// 10 минут, если сервер упал), Standard — пользователь вернул стандартный дудл,
+// Failed — генерация не удалась (повтор только руками).
+public enum ProjectBackgroundKind { Pending, Generated, Standard, Failed }
+
+// Фон проекта: сам тайл лежит файлом в data/project-backgrounds/{id}/, в записи — только
+// ссылка и состояние (стор читается и пишется целиком, тайл на 2-6 КБ ему не место).
+public sealed class ProjectBackground
+{
+    public ProjectBackgroundKind Kind { get; set; }
+    // Имя файла в data/project-backgrounds/{id}/ (только при Kind == Generated)
+    public string? TileFile { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? GeneratedAt { get; set; }
+    public int Attempts { get; set; }
+    // no-model | bad-json | rejected | io
+    public string? FailReason { get; set; }
+}
+
 public class Project
 {
     public string Id { get; init; } = Guid.NewGuid().ToString();
@@ -79,4 +98,7 @@ public class Project
     // сервер доезжает в проект только при явном включении. null/пустой список = «не включён
     // никто». Ось каскада реестр → проект → персона (см. SessionManager.BuildExternalMcpProvider).
     public List<string>? McpServersOn { get; set; }
+    // Фон рабочего пространства (фича project-backgrounds). null = генерацию НИКОГДА не
+    // пробовали — единственный кандидат массового прогона (ADR-008 §10).
+    public ProjectBackground? Background { get; set; }
 }

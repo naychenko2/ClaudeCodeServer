@@ -99,6 +99,8 @@ public static class LocalActionCatalog
     public const string PromptAudit = "prompt-audit";
     // Паспорта изменений (ADR-004, этап 1): выжимка «зачем/решения/отказы/грабли» на коммит
     public const string DossierSummary = "dossier-summary";
+    // Фон проекта (ADR-008): JSON со списком фигур дудла и ключом цвета палитры
+    public const string ProjectBackground = "project-background";
 
     // Дефолты профилей. Переопределяются
     // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs|CloudNumPredict}.
@@ -196,6 +198,13 @@ public static class LocalActionCatalog
         // обязателен, Text/Small молча обрежут хвост промпта (num_ctx Ollama) и дадут
         // выдуманную выжимку, ради борьбы с которой заведён отдельный флаг recall.
         new(DossierSummary, "Выжимка паспорта изменения", "Паспорта изменений", CheapProfile.Large, DefaultLocal: true),
+        // Фон проекта: 8–14 фигур дудла — это 2–4 КБ JSON, на Small/Text потолок вывода
+        // обрежет ответ на полуслове и даст неотличимый от таймаута «bad-json». Локаль
+        // выключена намеренно (решение владельца): рисование SVG не текстовая задача, а
+        // DefaultLocal: false заодно убирает локаль из страховочного шага цепочки —
+        // «сойдёт за успех» тут дороже честного отказа.
+        new(ProjectBackground, "Фон проекта", "Проекты", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Strong),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

@@ -1,3 +1,4 @@
+using System.Text;
 using ClaudeHomeServer.Services;
 using FluentAssertions;
 
@@ -77,6 +78,38 @@ public class WorkflowMetaResolverTests : IDisposable
     public void Небезопасное_имя_отклоняется(string name)
     {
         WorkflowMetaResolver.TryGetMetaBlock([_dir], name).Should().BeNull();
+    }
+
+    // Сторож от кракозябр на карточке механики: meta-блок едет в input.script вызова Workflow,
+    // и фронт рисует из него заголовок и подписи фаз. Файл пишем БАЙТАМИ в UTF-8 без BOM —
+    // ровно как лежат встроенные механики — и требуем посимвольного совпадения кириллицы.
+    [Fact]
+    public void Кириллица_из_utf8_файла_читается_без_потерь()
+    {
+        const string script = """
+            export const meta = {
+              name: 'red-team-unique',
+              description: 'Красная команда: N атакующих с разных углов',
+              phases: [
+                { title: 'Атака' },
+                { title: 'Усиление' },
+                { title: 'Синтез' },
+              ],
+            }
+
+            phase('Атака')
+            """;
+        File.WriteAllBytes(Path.Combine(_dir, "red-team-unique.js"),
+            new UTF8Encoding(encoderShouldEmitUTF8Identifier: false).GetBytes(script));
+
+        var block = WorkflowMetaResolver.TryGetMetaBlock([_dir], "red-team-unique");
+
+        block.Should().NotBeNull();
+        block.Should().Contain("Красная команда: N атакующих с разных углов");
+        block.Should().Contain("Атака").And.Contain("Усиление").And.Contain("Синтез");
+        // Признак однобайтового декодирования UTF-8: кириллица из d0-байтов вырождается в пары,
+        // начинающиеся с U+0420 «Р» («Атака» → «РђС‚Р°РєР°»). В самом скрипте этой буквы нет.
+        block.Should().NotContain("Р");
     }
 
     [Fact]

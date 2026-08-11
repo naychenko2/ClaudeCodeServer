@@ -3615,11 +3615,15 @@ public class ClaudeSession : ILlmSessionAdapter
         return dict;
     }
 
-    // Каталоги workflow-скриптов профиля этой сессии (тот же файл, что видит CLI):
-    // сторонний провайдер — его изолированный профиль, основной Claude — ~/.claude/workflows.
+    // Каталог workflow-скриптов профиля ЭТОГО хода (ровно тот файл, что исполняет CLI):
+    // _cliConfigRoot приходит из SessionManager.ConfigRootFor — единственной точки, знающей
+    // раскладку профилей (сторонний провайдер, подписка пула sub-*, песочница). Своя усечённая
+    // копия этой логики знала только про провайдеров реестра и уводила ходы на подписке пула
+    // в хостовый ~/.claude/workflows, куда однажды попали копии механик, перекодированные мимо
+    // UTF-8: CLI исполнял правильный скрипт из профиля, а в карточку ехали кракозябры.
     private IReadOnlyList<string> WorkflowScriptDirs() =>
-        _providers?.GetByKey(Info.Provider) is not null
-            ? [Path.Combine(_providers.GetProfileDir(Info.Provider), "workflows")]
+        _cliConfigRoot is { Length: > 0 } root
+            ? [Path.Combine(root, "workflows")]
             : [WorkflowMetaResolver.GlobalWorkflowsDir];
 
     // Permission-запрос старого канала (sdk_control_request) — общий пайплайн DecidePermissionAsync

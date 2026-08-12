@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, MoreHorizontal, Search, Undo2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, GitCommit, MoreHorizontal, Search, Undo2, X } from 'lucide-react';
 import type { Project, GitCommitDetail, GitFileChange } from '../types';
 import { api } from '../lib/api';
 import { gitRevertCommit, gitRestoreFile, useGitState, loadGitRemote } from '../lib/git';
@@ -279,6 +279,17 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
       {/* Шапка коммита */}
       <div style={{ padding: '12px 16px 10px', borderBottom: `1px solid ${C.border}`, background: C.bgCard, flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
+          {/* Левый верхний угол: «Закрыть» + иконка коммита — тем же порядком, что
+              [X] + плитка расширения у панели обычного файла. Кнопка закрытия
+              переехала сюда с правого края, чтобы обе «закрывалки» центральных
+              панелей жили в одной точке экрана. alignItems:center — иконка встаёт
+              по центру кнопки, на уровне первой строки subject */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+            <IconButton size="md" onClick={onClose} title="Закрыть">
+              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+            </IconButton>
+            <GitCommit size={18} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
+          </div>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: FONT.serif, fontSize: 16.5, fontWeight: 700, color: C.textHeading, lineHeight: 1.35, overflowWrap: 'anywhere' }}>
               {detail?.subject ?? (notFound ? 'Коммит не найден' : 'Загрузка…')}
@@ -313,9 +324,10 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
               </div>
             )}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 2, flexShrink: 0 }}>
-            {/* Технический revert скрыт в документном режиме — там адресный возврат файла */}
-            {!docMode && (
+          {/* Действия коммита остались на правом краю шапки; закрытие теперь слева */}
+          {!docMode && (
+            <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
+              {/* Технический revert скрыт в документном режиме — там адресный возврат файла */}
               <div style={{ position: 'relative' }}>
                 <IconButton size="md" active={actionsMenu} onClick={() => setActionsMenu(v => !v)} title="Действия">
                   <MoreHorizontal size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
@@ -330,11 +342,8 @@ export function GitCommitView({ project, sha, initialPath, onClose, isMobile = f
                   </Menu>
                 )}
               </div>
-            )}
-            <IconButton size="md" onClick={onClose} title="Закрыть">
-              <X size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-            </IconButton>
-          </div>
+            </div>
+          )}
         </div>
       </div>
 

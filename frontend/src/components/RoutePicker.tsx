@@ -1,12 +1,17 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import type { CSSProperties } from 'react';
+import { ChevronDown, CircleAlert } from 'lucide-react';
 import { ModelPicker } from './ModelPicker';
 import { QuickOptionCard } from './QuickOptionCard';
 import { PresetOptions } from './PresetOptions';
+import { Button } from './ui';
 import { TIERS, TIER_ORDER, routeTier, tierSubtitle, type TierKey } from '../lib/modelProvidersShared';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { usePresets, presetIdOf } from '../lib/presets';
-import { C, FONT, FS, R, SHADOW, Z } from '../lib/design';
+import {
+  validateLocalActionRoute, routeCanSave, RATE_PICKER_HINT,
+} from '../lib/routeFormat';
+import { C, FONT, FS, R, SHADOW, Z, FIELD } from '../lib/design';
 import type { ModelOption } from '../lib/models';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
 
@@ -21,7 +26,7 @@ const PANEL_MAX_H = 340;
 export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle, title,
-  showTiers = true, showPresets = false, presetCreation, presetScope,
+  showTiers = true, showPresets = false, presetCreation, presetScope, manual,
 }: {
   route: string;
   label: string;
@@ -61,6 +66,12 @@ export function RoutePicker({
   // ограничены общими пресетами), не задан — личный контекст (создание в owner, в списке
   // видны оба слоя). Прокидывается в PresetOptions.scope как есть.
   presetScope?: 'global' | 'owner';
+  // Блок ручного ввода id маршрута с клиентской валидацией (ADR-009). Включается только
+  // для local-action-контекстов (вкладка «Применение»): карточки выбора дают значение
+  // с уже корректным префиксом, а редкий ручной ввод проверяется по тому же перечню
+  // форм, что и бэкенд — сохранение заблокировано, пока значение невалидно. Не задан —
+  // блок не рендерится (слоты/матрицы/исключения работают как раньше).
+  manual?: { models?: ModelOption[]; presetIds?: string[] };
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
@@ -73,6 +84,28 @@ export function RoutePicker({
   const presets = usePresets();
   const activeTier = routeTier(route);
   const interactive = !busy && !readOnly;
+
+  // === Ручной ввод id маршрута (блок `manual`) ===
+  // Черновик живёт только пока панель открыта: при открытии восстанавливается из
+  // текущего значения места. Ошибка показывается после первого взаимодействия
+  // (правка/blur) либо сразу, если сохранённое значение уже кривое — иначе человек
+  // не поймёт, почему значение «не работает» (макет model-route-error-state §3).
+  const manualCtx = manual;
+  const [draft, setDraft] = useState(route);
+  const [touched, setTouched] = useState(false);
+  useEffect(() => {
+    if (!open || !manualCtx) return;
+    setDraft(route);
+    setTouched(!routeCanSave(route, { models: manualCtx.models, presetIds: manualCtx.presetIds }));
+  }, [open, route, manualCtx]);
+
+  const draftCheck = manualCtx
+    ? validateLocalActionRoute(draft, { models: manualCtx.models, presetIds: manualCtx.presetIds })
+    : null;
+  const draftError = draftCheck && !draftCheck.ok && draftCheck.message ? draftCheck.message : null;
+  const draftValid = manualCtx
+    ? routeCanSave(draft, { models: manualCtx.models, presetIds: manualCtx.presetIds }) && draft.trim() !== (route ?? '').trim()
+    : false;
 
   useEffect(() => { if (!open) setPresetEditing(false); }, [open]);
 
@@ -182,6 +215,18 @@ export function RoutePicker({
           hideDefault
         />
       )}
+      {manualCtx && !presetEditing && (
+        <RouteManualEntry
+          draft={draft}
+          onChange={v => { setDraft(v); setTouched(true); }}
+          onBlur={() => setTouched(true)}
+          showError={touched && !!draftError}
+          error={draftError}
+          canSave={draftValid}
+          disabled={!!busy || readOnly}
+          onSave={() => pick(draft)}
+        />
+      )}
     </div>
   ) : null;
 
@@ -253,6 +298,77 @@ export function RoutePicker({
         />
       </button>
       {panel}
+    </div>
+  );
+}
+
+// === Блок ручного ввода id маршрута (нижняя секция панели выбора) ===
+// Сюда приходят только local-action-контексты (через prop `manual`). Стилистически —
+// та же карточка-поле, что в макете model-route-error-state.html: моноширинный инпут,
+// danger-рамка/фон/ринг на ошибке, конкретный текст под полем с CircleAlert и всегда
+// видимая подсказка о том, что модель берётся из списка (текст — из docs/features).
+function RouteManualEntry({ draft, onChange, onBlur, showError, error, canSave, disabled, onSave }: {
+  draft: string;
+  onChange: (v: string) => void;
+  onBlur: () => void;
+  showError: boolean;
+  error: string | null;
+  canSave: boolean;
+  disabled: boolean;
+  onSave: () => void;
+}) {
+  const [focused, setFocused] = useState(false);
+  const err = showError && !!error;
+  // Геометрия — поле ввода проекта (FIELD): моноширинный шрифт, R.xl, padding 10/13.
+  // error вытесняет accent-фокус: рамка/фон/ринг красные (макет §3 «error-состояние»).
+  const fieldStyle: CSSProperties = {
+    background: err ? C.dangerBg : FIELD.background,
+    border: `1px solid ${err ? C.danger : focused ? FIELD.borderFocus : C.border}`,
+    borderRadius: FIELD.borderRadius,
+    padding: '10px 13px',
+    fontSize: FIELD.fontSize,
+    color: FIELD.color,
+    outline: 'none',
+    fontFamily: FONT.mono,
+    width: '100%',
+    boxSizing: 'border-box',
+    boxShadow: err ? SHADOW.focusDanger : focused ? SHADOW.focus : 'none',
+    transition: 'border-color 0.15s, box-shadow 0.15s, background 0.15s',
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 2 }}>
+      <div style={{
+        fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+        textTransform: 'uppercase', letterSpacing: '0.06em',
+      }}>
+        Или ввести id вручную
+      </div>
+      <input
+        value={draft}
+        onChange={e => onChange(e.target.value)}
+        onBlur={() => { setFocused(false); onBlur(); }}
+        onFocus={() => setFocused(true)}
+        placeholder="tier:strong · preset:{id} · local · id модели"
+        spellCheck={false}
+        autoComplete="off"
+        aria-invalid={err}
+        aria-describedby={err ? 'route-manual-err' : undefined}
+        style={fieldStyle}
+      />
+      {err && (
+        <div id="route-manual-err" style={{
+          display: 'flex', alignItems: 'flex-start', gap: 7, marginTop: 1,
+          fontSize: FS.sm, lineHeight: 1.45, color: C.dangerText,
+        }}>
+          <CircleAlert size={14} strokeWidth={2.2} style={{ flexShrink: 0, marginTop: 1, color: C.dangerText }} />
+          <span>{error}</span>
+        </div>
+      )}
+      <div style={{ fontSize: FS.xs, lineHeight: 1.45, color: C.textMuted }}>{RATE_PICKER_HINT}</div>
+      <Button size="sm" variant="primary" disabled={disabled || !canSave} onClick={onSave}
+        style={{ alignSelf: 'flex-start', marginTop: 2 }}>
+        Сохранить
+      </Button>
     </div>
   );
 }

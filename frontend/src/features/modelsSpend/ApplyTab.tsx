@@ -214,6 +214,9 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
   const route = a.route ?? '';
   const localOnStrong = !!a.requiresStrong && route === 'local';
   const { preset, broken: brokenPreset } = resolvePlacePreset(route, a.preset, presets, settingsLoaded);
+  // Места каталога — общие для всех, поэтому личный пресет сюда не подставить
+  // (бэк 400 по global-слою): валидация ручного ввода тоже проверяет только общие.
+  const globalPresetIds = presets.filter(p => p.scope === 'global').map(p => p.id);
 
   const triggerLabel = brokenPreset
     ? 'Пресет удалён — по умолчанию'
@@ -269,6 +272,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
           presetCreation={{ settings, savingScope, onSaveLayer }}
           busy={busy}
           onChange={onPick}
+          manual={{ models, presetIds: globalPresetIds }}
         />
       </div>
     </div>

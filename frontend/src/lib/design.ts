@@ -144,6 +144,7 @@ export const SP = {
 // Значения — CSS-переменные (theme.css): на тёмной теме тени усилены.
 export const SHADOW = {
   focus:    'var(--shadow-focus)',      // focus-ring контролов
+  focusDanger: 'var(--shadow-focus-danger)', // focus-ring ошибочного поля (цвет danger)
   card:     'var(--shadow-card)',       // лёгкая тень карточек
   island:   'var(--shadow-island)',     // панель-остров: заметнее card (контакт + разлёт)
   islandDrop: 'var(--drop-island)',     // та же тень для CSS filter: повторяет контур (SVG, PNG с прозрачностью)

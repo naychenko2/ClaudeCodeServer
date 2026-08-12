@@ -36,6 +36,11 @@ cd frontend; npm run build     # production-сборка (tsc -b + vite)
 # Vite проксирует /api и /hubs (WebSocket) на :5000
 ```
 
+Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным
+`ASPNETCORE_ENVIRONMENT=Development`): порождённые процессы наследуют `Production`, а там
+`Kestrel:Endpoints` уводит стенд на занятый боевым инстансом :80, и `ASPNETCORE_URLS` это не
+чинит. Разбор и команда фонового запуска — [docs/operations/dev-stand-host.md](docs/operations/dev-stand-host.md).
+
 ## Среда исполнения пользователей (local / container)
 
 Изоляция per-**пользователь**: `User.ExecutionEnvironment` = `local` (процессы на машине

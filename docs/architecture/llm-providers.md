@@ -207,6 +207,21 @@ UI скрывает недоступное (`useModelCaps` в `lib/models.ts`), 
 `/api/chat`, `think:false`), OpenRouter — прямым HTTP (`CloudCheapClient`, OpenAI-совместимый
 `/chat/completions`), оба мимо claude CLI (старт CLI ~15с убил бы смысл «быстро и часто»).
 Маршрутизация — per-action, исполнителя выбирает админ:
+
+**`CheapHttpSources` — общий механизм, не только для бесплатных источников.** Помимо
+`openrouter`/`freellmapi` тем же адаптером `CloudCheapClient` заведены и уже настроенные
+ПЛАТНЫЕ провайдеры чата — `deepseek`, `glm`, `kimi`, `minimax` (секция `Provider` каждого
+ключа `CheapHttpSources:{key}` указывает на обычную запись `LlmProviders:{key}`, `ApiKey` —
+тот же, что и в чате). Выгода для платных источников — **скорость**, а не деньги: прямой
+`/chat/completions` экономит старт CLI-подпроцесса (~15с) на каждый фоновый вызов, стоимость
+вызова не меняется и продолжает считаться как обычно (`SpendRecord`, провайдер
+`{key}-direct`). Выбор источника для конкретного места (действия) — обычный путь через
+`LocalActionRouter`/UI «Поставщики моделей», отдельного кода не требуется: `direct:<modelId>`
+попадает в маршрут места так же, как id любой другой модели каталога.
+Известное ограничение на 12.08.2026: для `kimi` и `minimax` маршрут `/chat/completions`
+подтверждён только структурой ответа 401 (не 404) на живом эндпоинте без ключа — финальная
+проверка кодом 200 с реальным ключом не выполнена (детали и источники —
+[appsettings.json](../../backend/ClaudeHomeServer/appsettings.json), секция `CheapHttpSources`).
 - **Каталог** — [LocalActionCatalog.cs](../../backend/ClaudeHomeServer/Services/Llm/LocalActionCatalog.cs):
   все фоновые действия (ключ, группа, профиль вызова small/text/large, `DefaultLocal` —
   рекомендация). **changelog** («Что нового») входит — идёт через `RunDetailedAsync` (сохраняет

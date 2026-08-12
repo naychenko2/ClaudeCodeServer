@@ -1,14 +1,16 @@
+using System.Globalization;
 using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Llm;
 
-// Прямой HTTP-адаптер к одному или нескольким OpenAI-совместимым источникам для
-// БЕСПЛАТНОГО выполнения фоновых one-shot действий. Источники задаются секцией
-// CheapHttpSources:{key}:{ Provider, Models[] }; пустая секция — фолбэк на legacy
-// OpenRouter:Provider + OpenRouter:DirectModels. Маршрут модели сохраняет префикс
-// direct:<modelId>; источник внутри резолвится по id модели через курируемый список
-// каждого источника. Коллизия id между источниками разрешается в пользу первого по
-// порядку в конфиге.
+// Прямой HTTP-адаптер к одному или нескольким OpenAI-совместимым источникам для фоновых
+// one-shot действий. Источники задаются секцией CheapHttpSources:{key}:{ Provider, Models[] };
+// пустая секция — фолбэк на legacy OpenRouter:Provider + OpenRouter:DirectModels. Provider —
+// ключ из LlmProviders: и бесплатные (openrouter, freellmapi), и уже настроенные платные
+// (deepseek/glm/kimi/minimax) — ApiKey тот же, что у чатового провайдера, выгода для платных —
+// скорость (без старта CLI ~15с), а не деньги. Маршрут модели сохраняет префикс direct:<modelId>;
+// источник внутри резолвится по id модели через курируемый список каждого источника. Коллизия id
+// между источниками разрешается в пользу первого по порядку в конфиге.
 public sealed class CloudCheapClient
 {
     // Префикс id модели в маршруте действия, помечающий прямой транспорт: "direct:<modelId>".
@@ -45,7 +47,14 @@ public sealed class CloudCheapClient
     // Text == null — шаг не удался (ошибка/429/таймаут/пусто), вызывающий идёт дальше по цепочке.
     public readonly record struct CloudTextResult(string? Text, bool Truncated);
 
-    public record Source(string Key, string ProviderKey, string ApiBaseUrl, string ApiKey, IReadOnlyList<string> Models)
+    // Temperature источника для тела /chat/completions. Дефолт 0 — детерминированность
+    // фоновых one-shot действий (теги, сводки, JSON-парсинг). Per-source override нужен для
+    // провайдеров, не принимающих 0: kimi на всех моделях каталога требует ровно 1 и падает
+    // 400 «invalid temperature: only 1 is allowed» (прод 2026-08-12). Берётся из
+    // CheapHttpSources:{key}:Temperature.
+    public record Source(
+        string Key, string ProviderKey, string ApiBaseUrl, string ApiKey,
+        IReadOnlyList<string> Models, double Temperature = 0)
     {
         public bool Configured => !string.IsNullOrWhiteSpace(ApiBaseUrl) && !string.IsNullOrWhiteSpace(ApiKey);
     }
@@ -73,10 +82,13 @@ public sealed class CloudCheapClient
                 .Where(id => !string.IsNullOrWhiteSpace(id))
                 .OfType<string>()
                 .ToList();
+            var temperature = double.TryParse(child["Temperature"],
+                NumberStyles.Float | NumberStyles.AllowThousands, CultureInfo.InvariantCulture, out var t)
+                ? t : 0;
             _sources.Add(new Source(sourceKey, providerKey,
                 cfg?.ApiBaseUrl?.TrimEnd('/') ?? "",
                 cfg?.ApiKey ?? "",
-                models));
+                models, temperature));
         }
     }
 
@@ -91,7 +103,7 @@ public sealed class CloudCheapClient
         _sources.Add(new Source(ProviderKey, ProviderKey,
             cfg?.ApiBaseUrl?.TrimEnd('/') ?? "",
             cfg?.ApiKey ?? "",
-            models));
+            models, 0));
     }
 
     // Найти источник, к которому относится id модели. Первый подходящий источник
@@ -147,7 +159,7 @@ public sealed class CloudCheapClient
                 {
                     model,
                     stream = false,
-                    temperature = 0,
+                    temperature = source.Temperature,
                     max_tokens = maxTokens,
                     messages = new[] { new { role = "user", content = prompt } },
                 }),

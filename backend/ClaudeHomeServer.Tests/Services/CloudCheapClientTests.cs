@@ -71,6 +71,81 @@ public class CloudCheapClientTests
         return cfg;
     }
 
+    // OpenAI-compatible direct-источники (см. appsettings.json CheapHttpSources) — endpoint-пути
+    // и id моделей согласованы с конфигом: {ApiBaseUrl}/chat/completions.
+    private static Dictionary<string, string?> WithDeepSeek(Dictionary<string, string?> cfg)
+    {
+        cfg["LlmProviders:deepseek:DisplayName"] = "DeepSeek";
+        cfg["LlmProviders:deepseek:ApiKey"] = "test-key";
+        cfg["LlmProviders:deepseek:AnthropicBaseUrl"] = "https://api.deepseek.com/anthropic";
+        cfg["LlmProviders:deepseek:ApiBaseUrl"] = "https://api.deepseek.com";
+        cfg["CheapHttpSources:deepseek:Provider"] = "deepseek";
+        cfg["CheapHttpSources:deepseek:Models:0:Id"] = "deepseek-v4-flash";
+        cfg["CheapHttpSources:deepseek:Models:0:DisplayName"] = "DeepSeek Flash";
+        cfg["CheapHttpSources:deepseek:Models:0:ContextWindow"] = "1000000";
+        cfg["CheapHttpSources:deepseek:Models:1:Id"] = "deepseek-v4-pro";
+        cfg["CheapHttpSources:deepseek:Models:1:DisplayName"] = "DeepSeek Pro";
+        cfg["CheapHttpSources:deepseek:Models:1:ContextWindow"] = "1000000";
+        return cfg;
+    }
+
+    private static Dictionary<string, string?> WithGlm(Dictionary<string, string?> cfg)
+    {
+        cfg["LlmProviders:glm:DisplayName"] = "GLM";
+        cfg["LlmProviders:glm:ApiKey"] = "test-key";
+        cfg["LlmProviders:glm:AnthropicBaseUrl"] = "https://api.z.ai/api/anthropic";
+        cfg["LlmProviders:glm:ApiBaseUrl"] = "https://api.z.ai/api/paas/v4";
+        cfg["CheapHttpSources:glm:Provider"] = "glm";
+        cfg["CheapHttpSources:glm:Models:0:Id"] = "glm-5.2";
+        cfg["CheapHttpSources:glm:Models:0:DisplayName"] = "GLM 5.2";
+        cfg["CheapHttpSources:glm:Models:0:ContextWindow"] = "200000";
+        cfg["CheapHttpSources:glm:Models:1:Id"] = "glm-4.7";
+        cfg["CheapHttpSources:glm:Models:1:DisplayName"] = "GLM 4.7";
+        cfg["CheapHttpSources:glm:Models:1:ContextWindow"] = "200000";
+        cfg["CheapHttpSources:glm:Models:2:Id"] = "glm-4.5-air";
+        cfg["CheapHttpSources:glm:Models:2:DisplayName"] = "GLM 4.5 Air";
+        cfg["CheapHttpSources:glm:Models:2:ContextWindow"] = "128000";
+        return cfg;
+    }
+
+    private static Dictionary<string, string?> WithKimi(Dictionary<string, string?> cfg)
+    {
+        cfg["LlmProviders:kimi:DisplayName"] = "Kimi";
+        cfg["LlmProviders:kimi:ApiKey"] = "test-key";
+        cfg["LlmProviders:kimi:AnthropicBaseUrl"] = "https://api.kimi.com/coding";
+        cfg["LlmProviders:kimi:ApiBaseUrl"] = "https://api.kimi.com/coding/v1";
+        cfg["CheapHttpSources:kimi:Provider"] = "kimi";
+        cfg["CheapHttpSources:kimi:Models:0:Id"] = "kimi-k3";
+        cfg["CheapHttpSources:kimi:Models:0:DisplayName"] = "Kimi K3";
+        cfg["CheapHttpSources:kimi:Models:0:ContextWindow"] = "1048576";
+        cfg["CheapHttpSources:kimi:Models:1:Id"] = "kimi-k2.6";
+        cfg["CheapHttpSources:kimi:Models:1:DisplayName"] = "Kimi K2.6";
+        cfg["CheapHttpSources:kimi:Models:1:ContextWindow"] = "262144";
+        cfg["CheapHttpSources:kimi:Models:2:Id"] = "kimi-k2.7-code-highspeed";
+        cfg["CheapHttpSources:kimi:Models:2:DisplayName"] = "Kimi K2.7 Code (highspeed)";
+        cfg["CheapHttpSources:kimi:Models:2:ContextWindow"] = "262144";
+        return cfg;
+    }
+
+    private static Dictionary<string, string?> WithMinimax(Dictionary<string, string?> cfg)
+    {
+        cfg["LlmProviders:minimax:DisplayName"] = "MiniMax";
+        cfg["LlmProviders:minimax:ApiKey"] = "test-key";
+        cfg["LlmProviders:minimax:AnthropicBaseUrl"] = "https://api.minimax.io/anthropic";
+        cfg["LlmProviders:minimax:ApiBaseUrl"] = "https://api.minimax.io/v1";
+        cfg["CheapHttpSources:minimax:Provider"] = "minimax";
+        cfg["CheapHttpSources:minimax:Models:0:Id"] = "MiniMax-M3";
+        cfg["CheapHttpSources:minimax:Models:0:DisplayName"] = "MiniMax M3";
+        cfg["CheapHttpSources:minimax:Models:0:ContextWindow"] = "1048576";
+        cfg["CheapHttpSources:minimax:Models:1:Id"] = "MiniMax-M2.7";
+        cfg["CheapHttpSources:minimax:Models:1:DisplayName"] = "MiniMax M2.7";
+        cfg["CheapHttpSources:minimax:Models:1:ContextWindow"] = "1048576";
+        cfg["CheapHttpSources:minimax:Models:2:Id"] = "MiniMax-M2.7-highspeed";
+        cfg["CheapHttpSources:minimax:Models:2:DisplayName"] = "MiniMax M2.7 Highspeed";
+        cfg["CheapHttpSources:minimax:Models:2:ContextWindow"] = "1048576";
+        return cfg;
+    }
+
     [Fact]
     public void MultiSource_ResolvesModelToCorrectSource()
     {
@@ -79,6 +154,24 @@ public class CloudCheapClientTests
         Assert.Equal("freellmapi", client.ResolveSource("direct:auto:fast")?.Key);
         Assert.Equal("freellmapi", client.ResolveSource("direct:auto:smart")?.Key);
         Assert.Equal("openrouter", client.ResolveSource("direct:nvidia/nemotron:free")?.Key);
+    }
+
+    [Fact]
+    public void MultiSource_ResolvesNewSourcesToCorrectSource()
+    {
+        var client = Build(WithMinimax(WithKimi(WithGlm(WithDeepSeek(WithFreeLlmApi(WithOpenRouter(new())))))));
+
+        Assert.Equal("deepseek", client.ResolveSource("direct:deepseek-v4-flash")?.Key);
+        Assert.Equal("deepseek", client.ResolveSource("direct:deepseek-v4-pro")?.Key);
+        Assert.Equal("glm", client.ResolveSource("direct:glm-5.2")?.Key);
+        Assert.Equal("glm", client.ResolveSource("direct:glm-4.7")?.Key);
+        Assert.Equal("glm", client.ResolveSource("direct:glm-4.5-air")?.Key);
+        Assert.Equal("kimi", client.ResolveSource("direct:kimi-k3")?.Key);
+        Assert.Equal("kimi", client.ResolveSource("direct:kimi-k2.6")?.Key);
+        Assert.Equal("kimi", client.ResolveSource("direct:kimi-k2.7-code-highspeed")?.Key);
+        Assert.Equal("minimax", client.ResolveSource("direct:MiniMax-M3")?.Key);
+        Assert.Equal("minimax", client.ResolveSource("direct:MiniMax-M2.7")?.Key);
+        Assert.Equal("minimax", client.ResolveSource("direct:MiniMax-M2.7-highspeed")?.Key);
     }
 
     [Fact]
@@ -99,6 +192,98 @@ public class CloudCheapClientTests
         Assert.Contains("openrouter", logger.Warnings[0]);
         Assert.Contains("freellmapi", logger.Warnings[0]);
         Assert.Contains("nvidia/nemotron:free", logger.Warnings[0]);
+    }
+
+    [Fact]
+    public void Collision_NewSourceVsExisting_FirstSourceWins_AndLogsWarning()
+    {
+        var cfg = WithDeepSeek(WithOpenRouter(new()));
+        // Коллизия: id нового источника deepseek совпадает с id существующего legacy openrouter.
+        // Legacy openrouter добавляется в _sources ПЕРВЫМ (до цикла по CheapHttpSources),
+        // поэтому он выигрывает независимо от порядка секции CheapHttpSources в конфиге.
+        cfg["CheapHttpSources:deepseek:Models:2:Id"] = "nvidia/nemotron:free";
+        cfg["CheapHttpSources:deepseek:Models:2:DisplayName"] = "Nemotron Clone";
+        cfg["CheapHttpSources:deepseek:Models:2:ContextWindow"] = "1000000";
+
+        var logger = new CaptureLogger();
+        var client = Build(cfg, logger);
+
+        var source = client.ResolveSource("direct:nvidia/nemotron:free");
+        Assert.Equal("openrouter", source?.Key);
+        Assert.Contains("openrouter", logger.Warnings[0]);
+        Assert.Contains("deepseek", logger.Warnings[0]);
+        Assert.Contains("nvidia/nemotron:free", logger.Warnings[0]);
+    }
+
+    [Theory]
+    [InlineData("deepseek-v4-flash", "https://api.deepseek.com/chat/completions")]
+    [InlineData("glm-5.2", "https://api.z.ai/api/paas/v4/chat/completions")]
+    [InlineData("kimi-k3", "https://api.kimi.com/coding/v1/chat/completions")]
+    [InlineData("MiniMax-M3", "https://api.minimax.io/v1/chat/completions")]
+    public async Task GenerateDetailedAsync_BuildsRequestAgainstSourceEndpoint(string modelId, string expectedUrl)
+    {
+        var cfg = WithMinimax(WithKimi(WithGlm(WithDeepSeek(new()))));
+        var config = TestConfig.Build(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance);
+
+        await client.GenerateDetailedAsync($"direct:{modelId}", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Equal(expectedUrl, stub.Handler.LastRequestUri?.ToString());
+    }
+
+    private const string OkJson = """
+        {
+          "choices": [{
+            "index": 0,
+            "finish_reason": "stop",
+            "message": {"role": "assistant", "content": "ok"}
+          }],
+          "usage": {"prompt_tokens": 1, "completion_tokens": 1}
+        }
+        """;
+
+    // Без per-source override температуры CloudCheapClient шлёт temperature=0 — детерминированность
+    // фоновых one-shot действий (теги, сводки, JSON-парсинг). Проверяем на нескольких источниках,
+    // включая kimi без override: пока CheapHttpSources:kimi:Temperature не задан — тоже 0.
+    [Theory]
+    [InlineData("deepseek-v4-flash")]
+    [InlineData("glm-5.2")]
+    [InlineData("MiniMax-M3")]
+    [InlineData("kimi-k3")]
+    public async Task GenerateDetailedAsync_DefaultTemperature_IsZero(string modelId)
+    {
+        var cfg = WithMinimax(WithKimi(WithGlm(WithDeepSeek(new()))));
+        var config = TestConfig.Build(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance);
+
+        await client.GenerateDetailedAsync($"direct:{modelId}", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Contains("\"temperature\":0", stub.Handler.LastRequestBody);
+    }
+
+    // kimi на всех моделях каталога принимает ТОЛЬКО temperature=1 и падает 400 при 0
+    // (прод 2026-08-12). CheapHttpSources:kimi:Temperature=1 обязан попасть в тело запроса.
+    [Theory]
+    [InlineData("kimi-k3")]
+    [InlineData("kimi-k2.6")]
+    [InlineData("kimi-k2.7-code-highspeed")]
+    public async Task GenerateDetailedAsync_KimiTemperatureOverride_SendsOne(string modelId)
+    {
+        var cfg = WithKimi(new());
+        cfg["CheapHttpSources:kimi:Temperature"] = "1";
+        var config = TestConfig.Build(cfg);
+        var providers = new LlmProviderRegistry(config);
+        var stub = new StubHttpFactory(OkJson);
+        var client = new CloudCheapClient(stub, config, providers, NullLogger<CloudCheapClient>.Instance);
+
+        await client.GenerateDetailedAsync($"direct:{modelId}", "p", TimeSpan.FromSeconds(5), maxTokens: 128);
+
+        Assert.Contains("\"temperature\":1", stub.Handler.LastRequestBody);
+        Assert.DoesNotContain("\"temperature\":0", stub.Handler.LastRequestBody);
     }
 
     [Fact]
@@ -174,20 +359,30 @@ public class CloudCheapClientTests
         Assert.Equal("{\"summary\":\"X\"}", result.Text);
     }
 
-    // Подставной HTTP для unit-тестов CloudCheapClient: отдаёт заготовленный JSON
-    // без проверки URL, заголовков и тела. Достаточно для проверки парсинга ответа.
+    // Подставной HTTP для unit-тестов CloudCheapClient: отдаёт заготовленный JSON.
+    // Handler хранит последний RequestUri — используется тестами, проверяющими,
+    // на какой endpoint ушёл запрос (остальные тесты его игнорируют).
     private sealed class StubHttpFactory(string json) : IHttpClientFactory
     {
-        public HttpClient CreateClient(string name) => new(new StubHandler(json));
+        public StubHandler Handler { get; } = new(json);
+        public HttpClient CreateClient(string name) => new(Handler);
     }
 
     private sealed class StubHandler(string json) : System.Net.Http.HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        public Uri? LastRequestUri { get; private set; }
+        public string? LastRequestBody { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            LastRequestUri = request.RequestUri;
+            LastRequestBody = request.Content is null ? null
+                : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
             {
                 Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
-            });
+            };
+        }
     }
 }

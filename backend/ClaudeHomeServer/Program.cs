@@ -49,6 +49,11 @@ var inspectionOverrides = ClaudeHomeServer.Services.Backup.BackupCli.InspectionO
 if (inspectionOverrides is not null) builder.Configuration.AddInMemoryCollection(inspectionOverrides);
 var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
 
+// Таймстемп в консольном логе (I11): обёртка Console.Out/Error добавляет UTC-время в начало
+// каждой строки — и для ILogger, и для голых Console.WriteLine. Здесь, чтобы Local.json тоже
+// мог переопределить формат. Ключ Logging:Console:TimestampFormat; пусто — без обёртки.
+TimestampedConsoleWriter.Enable(builder.Configuration["Logging:Console:TimestampFormat"]);
+
 // Зачистка процессов-сирот от предыдущего запуска сервера (краш/форс-килл):
 // на Windows дочерние node-процессы MCP-серверов не умирают при смерти родителя —
 // без этого они копятся и съедают гигабайты памяти. Должно быть ДО первого Process.Start.

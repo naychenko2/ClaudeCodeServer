@@ -1,7 +1,8 @@
 // Панель «Изменения» рельсы проекта (workspace-cc-panels) — Source Control.
 // Две зоны: вверху файлы активного скоупа (текущие изменения ИЛИ выбранный коммит),
 // внизу селектор скоупов (строка «Не зафиксировано» + стек незапушенных коммитов).
-// Данные/мутации — через стор lib/git.ts; форма фиксации и диалог промпта — локально.
+// Данные/мутации — через стор lib/git.ts; форма фиксации — локально, диалог стиля
+// сообщений коммита — общий с git-баром над композером (CommitPromptDialog).
 // Здесь же настройки самого репозитория (авто-ведение истории, вход в Forgejo) —
 // единственная git-поверхность продукта после того, как «Файлы» вернулись к дереву.
 
@@ -9,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
-  Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Wand2, Folder,
+  Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Folder,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
   Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink,
 } from 'lucide-react';
@@ -25,11 +26,12 @@ import { splitPath, relTime } from '../lib/gitFormat';
 import { useIsTouch } from '../lib/breakpoints';
 import { useLongPress } from '../hooks/useLongPress';
 import { PublishDialog } from './PublishDialog';
+import { CommitPromptDialog } from './CommitPromptDialog';
 import { ListDateDivider } from './ListDateDivider';
 import { EmptyState } from './EmptyState';
 import { dayGroupTitle } from '../lib/chatGroups';
 import { authorEmoji, authorName } from '../lib/authorEmoji';
-import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, IconSegmented, FileTypeTile, FileStatusBadge, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { Modal, ModalActions, TextArea, TextField, IconButton, Button, Menu, MenuItem, MenuSep, PanelHeaderSlot, IconSegmented, FileTypeTile, FileStatusBadge, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 const COMMIT_SUMMARY_MAX = 72;
@@ -725,15 +727,15 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           ]}
         />
         </>}
-        {/* Настройки репозитория: авто-ведение истории и веб-UI git-сервера.
+        {/* Настройки репозитория: авто-ведение истории, веб-UI git-сервера и стиль
+            сообщений коммита. Кнопка безусловная — стиль настраивают и при чистом
+            дереве, когда формы фиксации (её прежней точки входа) на экране нет.
             anchor-режим меню — слот шапки лежит внутри карточки с transform,
             и absolute-позиционирование уехало бы вместе с ней */}
-        {remote && (
-          <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
-            onClick={e => setRepoMenu(repoMenu ? null : e.currentTarget.getBoundingClientRect())}>
-            <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-          </IconButton>
-        )}
+        <IconButton size="xs" title="Настройки репозитория" active={!!repoMenu}
+          onClick={e => setRepoMenu(repoMenu ? null : e.currentTarget.getBoundingClientRect())}>
+          <Settings size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        </IconButton>
     </>
   );
 
@@ -747,37 +749,51 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     );
 
   // Меню настроек репозитория — портал по якорю кнопки в шапке
-  const repoMenuEl = repoMenu && remote && (
-    <Menu anchor={repoMenu} minWidth={260} maxHeight={200} onClose={() => setRepoMenu(null)}>
-      <MenuItem
-        icon={remote.autoCommit ? <Check size={15} strokeWidth={2} /> : <></>}
-        label={
-          <span title="Каждый ход ИИ фиксируется коммитом. Для документов; не для кода с параллельной ручной работой">
-            Авто-сохранение после хода ИИ
-          </span>
-        }
-        onClick={handleToggleAutoCommit}
-      />
-      <MenuItem
-        disabled={!remote.autoCommit}
-        icon={remote.autoCommit && remote.autoPush ? <Check size={15} strokeWidth={2} /> : <></>}
-        label="…и отправлять на сервер"
-        onClick={handleToggleAutoPush}
-      />
-      {remote.serverEnabled && (
+  const repoMenuEl = repoMenu && (
+    // Высота карточки зависит от состава: пункты про Forgejo и сам блок remote
+    // появляются не всегда — считаем по фактически видимым строкам
+    <Menu anchor={repoMenu} minWidth={260} maxHeight={remote ? 200 : 60} onClose={() => setRepoMenu(null)}>
+      {/* Настройки авто-ведения истории — только когда remote-инфо загружено */}
+      {remote && <>
         <MenuItem
-          icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
-          label="Вход в Forgejo…"
-          onClick={() => { setRepoMenu(null); void openForgejoCreds(); }}
+          icon={remote.autoCommit ? <Check size={15} strokeWidth={2} /> : <></>}
+          label={
+            <span title="Каждый ход ИИ фиксируется коммитом. Для документов; не для кода с параллельной ручной работой">
+              Авто-сохранение после хода ИИ
+            </span>
+          }
+          onClick={handleToggleAutoCommit}
         />
-      )}
-      {remote.htmlUrl && (
         <MenuItem
-          icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
-          label="Открыть в Forgejo"
-          onClick={() => { setRepoMenu(null); window.open(remote.htmlUrl!, '_blank', 'noopener'); }}
+          disabled={!remote.autoCommit}
+          icon={remote.autoCommit && remote.autoPush ? <Check size={15} strokeWidth={2} /> : <></>}
+          label="…и отправлять на сервер"
+          onClick={handleToggleAutoPush}
         />
-      )}
+        {remote.serverEnabled && (
+          <MenuItem
+            icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
+            label="Вход в Forgejo…"
+            onClick={() => { setRepoMenu(null); void openForgejoCreds(); }}
+          />
+        )}
+        {remote.htmlUrl && (
+          <MenuItem
+            icon={<ExternalLink size={15} strokeWidth={ICON_STROKE} />}
+            label="Открыть в Forgejo"
+            onClick={() => { setRepoMenu(null); window.open(remote.htmlUrl!, '_blank', 'noopener'); }}
+          />
+        )}
+        <MenuSep />
+      </>}
+      {/* Стиль сообщений коммита: правила для ✨-генерации и делегированного чату
+          коммита. Прежде открывался только шестерёнкой внутри формы фиксации —
+          при чистом дереве до него было не добраться */}
+      <MenuItem
+        icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />}
+        label="Стиль сообщений коммита…"
+        onClick={() => { setRepoMenu(null); setPromptOpen(true); }}
+      />
     </Menu>
   );
 
@@ -1408,93 +1424,5 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
 
       {promptOpen && <CommitPromptDialog project={project} onClose={() => setPromptOpen(false)} />}
     </div>
-  );
-}
-
-// === Диалог настройки промпта AI-описания коммита ===
-// Два уровня редактируются в одном окне: «Общий» (per-user) и «Промпт этого проекта».
-// Тог выбирает активный уровень (какой применяется к ✨-генерации) и что редактируется.
-function CommitPromptDialog({ project, onClose }: { project: Project; onClose: () => void }) {
-  const [globalText, setGlobalText] = useState('');
-  const [projectText, setProjectText] = useState('');
-  const [level, setLevel] = useState<'global' | 'project'>('global');
-  const [busy, setBusy] = useState(false);
-  const [detecting, setDetecting] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    void api.git.getCommitPrompt(project.id).then(i => {
-      if (!alive) return;
-      setGlobalText(i.global ?? '');
-      setProjectText(i.projectOverride ?? '');
-      setLevel(i.useProject ? 'project' : 'global');
-    }).catch(() => {});
-    return () => { alive = false; };
-  }, [project.id]);
-
-  const isProject = level === 'project';
-  const text = isProject ? projectText : globalText;
-  const setText = isProject ? setProjectText : setGlobalText;
-
-  const detect = async () => {
-    setDetecting(true);
-    try { setText((await api.git.detectCommitStyle(project.id)).prompt); }
-    catch { /* мало истории/ошибка — оставляем поле */ }
-    finally { setDetecting(false); }
-  };
-
-  const save = async () => {
-    setBusy(true);
-    // Global пишем всегда; project override — только когда активен проектный уровень
-    try { await api.git.setCommitPrompt(project.id, globalText.trim(), projectText.trim(), isProject); onClose(); }
-    catch { setBusy(false); }
-  };
-
-  const seg = (val: 'global' | 'project', label: string) => (
-    <button
-      onClick={() => setLevel(val)}
-      style={{
-        flex: 1, padding: '7px 12px', fontSize: 12.5, fontWeight: 600, cursor: 'pointer', border: 'none',
-        fontFamily: FONT.sans, background: level === val ? C.accent : 'transparent',
-        color: level === val ? C.onAccent : C.textSecondary, transition: 'background 0.12s',
-      }}
-    >{label}</button>
-  );
-
-  return (
-    <Modal
-      width={560}
-      onClose={onClose}
-      title="Промпт коммита"
-      subtitle="Правила стиля для ✨-генерации сообщения. Активен выбранный уровень."
-      footer={<ModalActions confirmLabel="Сохранить" onConfirm={save} loading={busy} onCancel={onClose} />}
-    >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        {/* Два тога: какой уровень редактируем и применяем */}
-        <div style={{ display: 'flex', border: `1px solid ${C.border}`, borderRadius: R.lg, overflow: 'hidden' }}>
-          {seg('global', 'Общий промпт')}
-          <div style={{ width: 1, background: C.border }} />
-          {seg('project', 'Промпт этого проекта')}
-        </div>
-        <TextArea
-          value={text}
-          onChange={setText}
-          placeholder={isProject
-            ? 'Пусто — для этого проекта используется общий промпт'
-            : 'Пусто — сообщения в стиле по умолчанию (Conventional Commits на русском). Опишите свои правила стиля…'}
-          minHeight={180}
-          maxHeight={340}
-          autoGrow
-        />
-        <button
-          onClick={() => { if (!detecting) void detect(); }}
-          disabled={detecting}
-          style={{ alignSelf: 'flex-start', display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: R.md, cursor: 'pointer', border: `1.5px dashed ${C.dashed}`, background: 'none', color: C.accent, fontSize: 12.5, fontFamily: FONT.sans }}
-        >
-          <Wand2 size={14} strokeWidth={ICON_STROKE} />
-          {detecting ? 'Анализирую историю…' : 'Определить стиль AI'}
-        </button>
-      </div>
-    </Modal>
   );
 }

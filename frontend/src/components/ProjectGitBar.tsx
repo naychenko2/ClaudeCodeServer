@@ -8,7 +8,7 @@
 // узнать «где мы работаем» было бы неоткуда (композер значение дерева не показывает,
 // там только кнопка-тумблер).
 import { useEffect, useState } from 'react';
-import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, MessageSquare } from 'lucide-react';
+import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, MessageSquare, Sparkles } from 'lucide-react';
 import type { Project, Session } from '../types';
 import { C, FONT, R, SP } from '../lib/design';
 import { basename } from '../lib/paths';
@@ -16,7 +16,8 @@ import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat
 import type { TurnTree } from '../lib/turnWorktree';
 import { wsPanels } from '../pages/workspace/panelStackState';
 import { PublishDialog } from './PublishDialog';
-import { Menu, MenuItem } from './ui';
+import { CommitPromptDialog } from './CommitPromptDialog';
+import { Menu, MenuItem, MenuSep } from './ui';
 import { ICON_STROKE } from './ui/icons';
 
 export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive = false, onCommitOwn, onCommitAll }: {
@@ -35,6 +36,9 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
   const status = st.status;
   const { reveal } = wsPanels.use();
   const [publishConfirm, setPublishConfirm] = useState(false);
+  // Диалог стиля сообщений коммита — общий с панелью «Изменения»; открывается из
+  // попапа фиксации, чтобы правила правились там же, где коммит и запускают
+  const [promptOpen, setPromptOpen] = useState(false);
   // rect кнопки «Зафиксировать» — открытое меню выбора области коммита (null = закрыто)
   const [commitMenu, setCommitMenu] = useState<DOMRect | null>(null);
   // Чат в отдельном worktree: запросы стора уже идут в его дерево (gitSessionContext),
@@ -184,9 +188,9 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
             <ChevronDown size={14} strokeWidth={ICON_STROKE} color={C.textMuted} />
           </button>
           {commitMenu && (
-            // maxHeight — фактическая высота карточки (два пункта MenuItem ~34px +
-            // padding карточки): по ней Menu решает, открываться вверх или вниз
-            <Menu anchor={commitMenu} minWidth={200} maxHeight={88} gap={4} onClose={() => setCommitMenu(null)}>
+            // maxHeight — фактическая высота карточки (три пункта MenuItem ~34px,
+            // разделитель и padding): по ней Menu решает, открываться вверх или вниз
+            <Menu anchor={commitMenu} minWidth={200} maxHeight={124} gap={4} onClose={() => setCommitMenu(null)}>
               <MenuItem
                 icon={<MessageSquare size={15} strokeWidth={ICON_STROKE} />}
                 label="Только этот чат"
@@ -196,6 +200,13 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
                 icon={<FolderGit2 size={15} strokeWidth={ICON_STROKE} />}
                 label="Всё дерево"
                 onClick={() => { setCommitMenu(null); onCommitAll(); }}
+              />
+              {/* Не область коммита, а его оформление — отделяем чертой */}
+              <MenuSep />
+              <MenuItem
+                icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />}
+                label="Стиль сообщений коммита…"
+                onClick={() => { setCommitMenu(null); setPromptOpen(true); }}
               />
             </Menu>
           )}
@@ -244,6 +255,10 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     {publishConfirm && (
       <PublishDialog projectId={project.id} onClose={() => setPublishConfirm(false)} />
     )}
+
+    {/* Стиль сообщений коммита — из попапа фиксации; тот же диалог, что в настройках
+        панели «Изменения» (один источник правды по уровням «общий»/«проектный») */}
+    {promptOpen && <CommitPromptDialog project={project} onClose={() => setPromptOpen(false)} />}
     </>
   );
 }

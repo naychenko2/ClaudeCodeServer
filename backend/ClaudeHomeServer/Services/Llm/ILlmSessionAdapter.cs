@@ -38,6 +38,14 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // для детерминированных тестов (DIM SetupGet игнорирует, что ломало gate в SessionManagerTests).
     bool OrchestrationActive { get; }
 
+    // Доживающий прогон держит незавершённые фоновые задачи (run_in_background агенты, Workflow).
+    // SessionManager гейтит этим terminus Active→Finished после result хода: пока фоновая работа
+    // жива, статус нельзя менять на Finished — иначе UI «завершено» обманет пользователя, когда
+    // синтез панели экспертов прилетит в ленту спустя минуты (P12/P15). Имя сознательно совпадает
+    // с CliRun.HasPendingBg — это одно понятие, не плодим однокоренные. Регулярное свойство, не
+    // DIM: Moq перехватывает его SetupGet'ом для детерминированных тестов (как OrchestrationActive
+    // выше); default-реализация ломала бы gate в SessionManagerTests.
+    bool HasPendingBg { get; }
     // Сквозной номер ходов, ОТДАННЫХ процессам CLI за жизнь адаптера (растёт на каждой подаче
     // хода прогону — новому процессу или живому через stdin). По нему фолбэк-оркестратор
     // привязывает попытку к прогону: exited с TurnSeq не больше снимка на начало попытки —

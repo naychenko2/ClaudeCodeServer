@@ -73,6 +73,13 @@ public class SessionManager : IDisposable
         // при живых фоновых агентах). Чужие ходы (REST-канал агентов, /compact,
         // ходы-продолжения CLI) протокола не несут и цикл не двигают.
         public volatile bool LoopTurnInFlight;
+        // Момент, когда result/error хода перевёл статус в Active (ход завершён, ждём exited для
+        // финального Finished). Источник «зависшей» Active: exited приходит лишь со смертью
+        // прогона, а прогон доживает фоновых агентов до BgLingerTimeout (30 мин) или вовсе не
+        // выходит — статуса Finished нет, чат висит active. Sweep-terminus в SaveSessions по этой
+        // метке отличает «зависший Active» (нужно довести до Finished) от «идущий ход» (Working/
+        // Waiting метки не имеют). DateTime? — struct, доступ под PendingLock. null — хода нет.
+        public DateTimeOffset? LastTurnEndedAt;
         // Разбор очереди (DrainNextPendingAsync) вне цикла идёт по одному сообщению за раз —
         // следующее уйдёт по result уже этого хода. Параллельные drain (выключение цикла из
         // SetWorkLoopAsync + штатный drain из OnMessageAsync по result) без этого флага
@@ -129,6 +136,17 @@ public class SessionManager : IDisposable
     // Дальше какой глубины цепочка автоотчётов не идёт. 3 — как у делегирования задач:
     // исполнитель → постановщик → его постановщик, дальше эскалация теряет смысл.
     private const int MaxReportChainDepth = 3;
+
+    // Grace-окно для sweep-terminus Active→Finished (P12/P15): если после result хода exited
+    // прогона не пришёл (доживающий прогон при живых фоновых агентах, подавленный SuppressExited,
+    // висящий без работы процесс) — по истечении окна sweep доводит статус до Finished сам.
+    // Размер — ровно на перечитывание клиентом истории хода по active-статусу (useSession.ts:
+    // по active клиент перечитывает, по finished — нет; мгновенный переход закрыл бы окно доставки).
+    // Секунды, не минуты: долгий grace лишь растягивает окно ложного active. По истечении решает
+    // признак живости (HasLiveTurn/HasPendingBg), а не время — sweep не лезет в прогон с живой
+    // фоновой работой (панель экспертов идёт > 10 мин). Калибруется через Session:StuckActiveGraceSeconds.
+    private const int DefaultStuckActiveGraceSeconds = 15;
+    private readonly int _stuckActiveGraceSeconds;
 
     // Ожидающее доставки сообщение. Kind: User — сообщение человека из «честной очереди»
     // (доставляется со своими вложениями и режимом, как при обычной отправке); Agent —
@@ -406,6 +424,10 @@ public class SessionManager : IDisposable
         _jwt = jwt;
         _server = server;
         _config = config;
+        // Sweep-terminus grace (P12/P15): потолок ожидания exited после result до принудительного
+        // Active→Finished. <=0 — выключить sweep (только для тестов/отладки).
+        _stuckActiveGraceSeconds = int.TryParse(config["Session:StuckActiveGraceSeconds"], out var grace)
+            && grace >= 0 ? grace : DefaultStuckActiveGraceSeconds;
         _notesKb = notesKb;
         _flags = flags;
         _personas = personas;
@@ -692,8 +714,78 @@ public class SessionManager : IDisposable
             {
                 Console.Error.WriteLine($"[SessionManager] Не удалось сохранить {_sessionsFilePath}: {ex.Message}");
             }
+
+            // P12/P15: sweep-terminus. SaveSessions зовётся из ~50 точек (включая автосохранение
+            // по таймеру AutoSaveInterval) — этого довольно, чтобы без отдельного таймера
+            // гарантированно довести зависшую в Active сессию до Finished. Ранний выход, когда
+            // кандидатов нет, — O(N) под _saveLock только если хоть одна сессия в «завершённом Active».
+            if (_stuckActiveGraceSeconds <= 0) return;
+            if (!_sessions.Values.Any(e => e.Info.Status == SessionStatus.Active && e.LastTurnEndedAt.HasValue))
+                return;
+            foreach (var entry in _sessions.Values)
+                TrySweepStuckActive(entry);
         }
     }
+
+    // P12/P15: гарантированный terminus Active→Finished. Штатно Finished выставляет ExitedMessage,
+    // но exited приходит лишь со смертью прогона — а прогон доживает фоновых агентов (до
+    // BgLingerTimeout, 30 мин) либо вовсе не выходит (висящий без работы процесс, подавленный
+    // SuppressExited). Без sweep чат висел active неопределённо долго (формы а/б/в).
+    // Условие terminus: ход завершён (LastTurnEndedAt по result→Active) И grace истёк И НЕТ живой
+    // фоновой работы — процесс мёртв (!HasLiveTurn) либо доживает впустую без единой фоновой задачи
+    // (HasLiveTurn && !HasPendingBg). Живой Workflow (HasPendingBg) НЕ трогаем: Finished при живой
+    // работе хуже вечного active — синтез панели прилетел бы в «завершённый» чат. Планировщик
+    // штаба (TeamPlanningInFlight, до 300 с без CLI-прогона) и активная итерация цикла
+    // (LoopTurnInFlight) гейтятся отдельно — фоновые режимы между ходами, не держащие прогон.
+    // ApplyStatusAsync запускаем через Task.Run ВНЕ _saveLock: иначе его SaveSessions взяла бы
+    // лок повторно (System.Threading.Lock не реентерабелен). Порядок локов _saveLock→PendingLock
+    // консистентен, обратного нигде нет.
+    private void TrySweepStuckActive(SessionEntry entry)
+    {
+        if (entry.Info.Status != SessionStatus.Active) return;
+        if (entry.LastTurnEndedAt is not { } endedAt) return;
+        if ((DateTimeOffset.UtcNow - endedAt).TotalSeconds < _stuckActiveGraceSeconds) return;
+        // Фоновые режимы без прогона между ходами: HasLiveTurn=false, но работа идёт, Finished был
+        // бы ложным («Finished при живой работе хуже вечного active»). Планировщик штаба живёт до
+        // 300 с без CLI-прогона. Цикл «до готово» между итерациями: после result хода LoopTurnInFlight
+        // уже сброшен, статус Active, метка свежая — но цикл ещё включён (WorkLoop != null) и вот-вот
+        // поднимет следующую итерацию; пауза при ретрае/фолбэке/тормозах провайдера может превысить
+        // grace, и ложный Finished мигнул бы «завершено» посреди цикла. Поэтому гейт — по включённому
+        // циклу, а не по маркеру итерации: как только SetWorkLoopAsync обнулил WorkLoop (форма в),
+        // сессия становится обычным кандидатом, и sweep её закрывает.
+        if (entry.TeamPlanningInFlight) return;
+        if (entry.Info.WorkLoop is not null) return;
+
+        var adapter = entry.Process as ILlmSessionAdapter;
+        var alive = adapter is { HasLiveTurn: true };
+        var hasBg = adapter is { HasPendingBg: true };
+        // Живой прогон с фоновой работой — не трогаем (панель экспертов, Workflow). Иначе terminus:
+        // процесс мёртв (!alive) либо доживает впустую без единой фоновой задачи (alive && !hasBg).
+        if (alive && hasBg) return;
+
+        // Захват решения под PendingLock — повторный sweep или OnMessageAsync (новый ход) увидят сброс
+        // и не запустят дубль. Перепроверка статуса/метки — гонка с параллельным сменщиком статуса.
+        lock (entry.PendingLock)
+        {
+            if (entry.Info.Status != SessionStatus.Active || entry.LastTurnEndedAt is null) return;
+            entry.LastTurnEndedAt = null;
+        }
+
+        var sid = entry.Info.Id;
+        _log.LogWarning(
+            "[SessionManager] Sweep terminus: Active→Finished после result хода ({Sid}: exited прогона не было, alive={Alive}, bg={Bg})",
+            sid, alive, hasBg);
+        _ = Task.Run(async () =>
+        {
+            try { await ApplyStatusAsync(sid, entry, SessionStatus.Finished); }
+            catch (Exception ex) { _log.LogError(ex, "[SessionManager] Sweep ApplyStatus не удался ({Sid})", sid); }
+        });
+    }
+
+    // Только для тестов: запустить sweep-terminus (P12/P15) вне обычных триггеров SaveSessions,
+    // чтобы детерминированно проверить переход Active→Finished по истечению grace. Прод-код
+    // триггерит sweep каждым SaveSessions (включая автосохранение) — этого API тестам не нужно.
+    internal void RunStuckActiveSweepForTests() => SaveSessions();
 
     // --- Публичное API ---
 
@@ -6720,7 +6812,17 @@ public class SessionManager : IDisposable
                 entry.PendingInteraction = null;
 
             if (newStatus.HasValue)
+            {
+                // P12/P15: отметим момент, когда статус стал Active — sweep в SaveSessions по этой
+                // метке доведёт до Finished, если exited прогона не придёт (доживающий прогон при
+                // живых фоновых агентах до BgLingerTimeout, подавленный SuppressExited, висящий без
+                // работы процесс). Любой иной статус (Working/Waiting — идёт ход/карточка; Finished/
+                // Error — терминальный) — «завершённого Active» нет, метку гасим. Под PendingLock:
+                // struct DateTimeOffset? читает sweep под тем же локом; lock короткий, без await.
+                lock (entry.PendingLock)
+                    entry.LastTurnEndedAt = newStatus == SessionStatus.Active ? DateTimeOffset.UtcNow : null;
                 await ApplyStatusAsync(sessionId, entry, newStatus.Value);
+            }
 
             // Цикл «до готово»: решение о продолжении — по result/error хода, нёсшего
             // протокол цикла (LoopTurnInFlight). Раньше триггером был exited, но после

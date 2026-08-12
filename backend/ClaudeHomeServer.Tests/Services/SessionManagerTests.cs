@@ -6660,4 +6660,180 @@ public class SessionManagerTests : IDisposable
         result.Should().Be("Обновил конфиг и перезапустил сервис.",
             "суть уведомления обязана строиться по маршруту места notification-summary, не только на локали");
     }
+
+    // --- P12/P15: sweep-terminus Active→Finished при потере exited прогона ---
+
+    // Помощник: метку времени «ход завершён, ждём exited» — в прошлое за grace-окно.
+    private static void SetLastTurnEndedAt(object entry, DateTimeOffset? value) =>
+        entry.GetType().GetField("LastTurnEndedAt")!.SetValue(entry, value);
+
+    private static DateTimeOffset? GetLastTurnEndedAt(object entry) =>
+        (DateTimeOffset?)entry.GetType().GetField("LastTurnEndedAt")!.GetValue(entry);
+
+    // Негативная проверка sweep: метка НЕ обнулена ↔ sweep не сработал (детерминированно, без
+    // таймингов fire-and-forget ApplyStatus: обнуление идёт синхронно под PendingLock до Task.Run).
+    private static void AssertSweepSkipped(SessionManager sut, string sessionId, object entry)
+    {
+        GetLastTurnEndedAt(entry).Should().NotBeNull("sweep не должен был сработать");
+        sut.GetById(sessionId)!.Status.Should().Be(SessionStatus.Active);
+    }
+
+    [Fact]
+    public async Task Sweep_МёртвыйПрогонПослеResult_ПереводитВFinished()
+    {
+        // Форма (б): result пришёл, exited не пришёл, прогон умер. На следующий день HasLiveTurn=false
+        // — sweep закрывает зависший Active (без sweep — вечный active).
+        var session = await MkBusySessionAsync("sweep-dead");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false); // процесса нет
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active);
+
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow.AddSeconds(-30)); // exited давно не пришёл
+
+        _sut.RunStuckActiveSweepForTests();
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Finished,
+            TimeSpan.FromSeconds(2));
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Finished);
+    }
+
+    [Fact]
+    public async Task Sweep_ЖивойПрогонБезФоновойРаботы_ПереводитВFinished()
+    {
+        // Висящий без работы прогон (HasLiveTurn=true, HasPendingBg=false): ждать !HasLiveTurn
+        // пришлось бы до BgLingerTimeout (минуты) — sweep даёт быстрый terminus по живости фоновой
+        // работы. Это и есть обоснование HasPendingBg поверх HasLiveTurn (медленно верный ≈ неверный).
+        var session = await MkBusySessionAsync("sweep-alive-nobg");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);   // прогон висит
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false); // но фоновых задач нет
+        SetProcess(entry, adapter.Object);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow.AddSeconds(-30));
+
+        _sut.RunStuckActiveSweepForTests();
+
+        await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Finished,
+            TimeSpan.FromSeconds(2));
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Finished);
+    }
+
+    [Fact]
+    public async Task Sweep_ЖивойПрогонСФоновойРаботой_НеТрогает()
+    {
+        // Панель экспертов / Workflow: прогон жив и держит фоновые задачи. Finished преждевременен
+        // (синтез панели прилетел бы в «завершённый» чат спустя минуты) — sweep обязан молчать.
+        var session = await MkBusySessionAsync("sweep-alive-bg");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true); // фоновые агенты работают
+        SetProcess(entry, adapter.Object);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow.AddSeconds(-30));
+
+        _sut.RunStuckActiveSweepForTests();
+
+        AssertSweepSkipped(_sut, session.Id, entry);
+    }
+
+    [Fact]
+    public async Task Sweep_ВключённыйЦиклДоГотово_НеТрогает()
+    {
+        // Пауза между итерациями цикла: LoopTurnInFlight сброшен по result, статус Active, метка
+        // свежая — но WorkLoop ещё включён. Sweep не должен мигать Finished посреди цикла
+        // (ретрай/фолбэк могут затянуть паузу свыше grace — найдка архитектора).
+        var session = await MkBusySessionAsync("sweep-loop");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        SetProcess(entry, adapter.Object);
+        await _sut.SetWorkLoopAsync(session.Id, true); // цикл включён — WorkLoop != null
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow.AddSeconds(-30));
+
+        _sut.RunStuckActiveSweepForTests();
+
+        AssertSweepSkipped(_sut, session.Id, entry);
+        _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("цикл не выключен — sweep не имеет права его трогать");
+    }
+
+    [Fact]
+    public async Task Sweep_ПланировщикШтабаВФоне_НеТрогает()
+    {
+        // Планировщик «Командной реализации» работает до 300 с без CLI-прогона (HasLiveTurn=false),
+        // статус Active — sweep без гейта закрыл бы сессию в разгар планирования.
+        var session = await MkBusySessionAsync("sweep-plan");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        SetProcess(entry, adapter.Object);
+        entry.GetType().GetField("TeamPlanningInFlight")!.SetValue(entry, true);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow.AddSeconds(-30));
+
+        _sut.RunStuckActiveSweepForTests();
+
+        AssertSweepSkipped(_sut, session.Id, entry);
+    }
+
+    [Fact]
+    public async Task Sweep_ВGraceОкне_НеТрогает()
+    {
+        // Свежий result → метка только что проставлена, grace не истёк — sweep молчит даже при
+        // мёртвом процессе: клиент ещё перечитывает историю хода по active-статусу (useSession.ts).
+        var session = await MkBusySessionAsync("sweep-grace");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null));
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow); // свежая метка — grace не истёк
+
+        _sut.RunStuckActiveSweepForTests();
+
+        AssertSweepSkipped(_sut, session.Id, entry);
+    }
+
+    [Fact]
+    public async Task ExitedШтатно_ПереводитВFinished()
+    {
+        // Регресс: штатный переход Active→Finished по ExitedMessage не сломан sweep'ом — exited
+        // по-прежнему закрывает ход мгновенно, не дожидаясь grace.
+        var session = await MkBusySessionAsync("sweep-exited");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Active);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+
+        _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Finished);
+    }
 }

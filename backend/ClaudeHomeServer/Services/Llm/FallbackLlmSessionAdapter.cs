@@ -170,6 +170,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     public int CurrentTurnAgentDepth => _inner.CurrentTurnAgentDepth;
     public bool CurrentTurnSuppressTasksExecute => _inner.CurrentTurnSuppressTasksExecute;
     public bool HasLiveTurn => _inner.HasLiveTurn;
+    // Фоновые задачи живут в обёрнутом ClaudeSession-прогоне — делегируем (P12/P15: фолбэк
+    // запускает ход через inner CLI, pending bg у inner).
+    public bool HasPendingBg => _inner.HasPendingBg;
     public long SubmittedTurnSeq => _inner.SubmittedTurnSeq;
 
     public Task StartAsync() => _inner.StartAsync();

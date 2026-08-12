@@ -258,6 +258,17 @@ public class ClaudeSession : ILlmSessionAdapter
     // очереди не гейтится. См. ILlmSessionAdapter.OrchestrationActive (инцидент 2026-08-10 П3).
     public bool OrchestrationActive => false;
 
+    // Доживающий прогон держит незавершённые фоновые задачи (run_in_background агенты, Workflow).
+    // SessionManager гейтит этим terminus Active→Finished после result хода: пока фоновая работа
+    // жива, Finished преждевременен (синтез панели экспертов может прилететь в ленту спустя минуты
+    // — P12/P15). Тем же признаком пользуется CloseStdinIfIdle, чтобы не закрыть stdin у прогона с
+    // живыми агентами. Чтение _run — как в HasLiveTurn: ссылка атомарна, устаревший в момент чтения
+    // run даёт лишь консервативный «фоновые есть» (sweep пропустит), что безопаснее ложного terminus.
+    public bool HasPendingBg
+    {
+        get { var run = _run; return run is not null && run.HasPendingBg; }
+    }
+
     // Хвостовой ридер главного транскрипта: завершения фоновых задач (<task-notification>)
     // CLI пишет в транскрипт, в stdout завершённого хода их может не быть (проверено live) —
     // без ридера pending прогона не опустел бы и процесс висел бы до потолка BgLingerTimeout

@@ -367,6 +367,47 @@ describe('тройное состояние связи', () => {
   });
 });
 
+describe('becameVisibleRecently: тихое окно после возврата вкладки', () => {
+  // Достаём visibilitychange-хендлер, зарегистрированный initConnectivity в застабленном
+  // document, — тесты гоняют реальный обработчик, а не переизобретают его логику
+  function visibilityHandler(doc: { addEventListener: ReturnType<typeof vi.fn> }): () => void {
+    const call = doc.addEventListener.mock.calls.find(([ev]) => ev === 'visibilitychange');
+    expect(call).toBeDefined();
+    return call![1] as () => void;
+  }
+
+  it('вкладка не уходила в фон — окно не активно, тост не глушится', () => {
+    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn() });
+    offline.initConnectivity();
+    expect(offline.becameVisibleRecently()).toBe(false);
+  });
+
+  it('возврат вкладки открывает окно; спустя 5с оно закрывается', () => {
+    const doc = { visibilityState: 'hidden', addEventListener: vi.fn() };
+    vi.stubGlobal('document', doc);
+    offline.initConnectivity();
+    const handler = visibilityHandler(doc);
+
+    doc.visibilityState = 'visible';
+    handler();
+    expect(offline.becameVisibleRecently()).toBe(true);
+
+    // Восстановление позже тихого окна (пользователь наблюдал офлайн) — тост уместен
+    vi.advanceTimersByTime(5_100);
+    expect(offline.becameVisibleRecently()).toBe(false);
+  });
+
+  it('уход вкладки в фон отметку не ставит', () => {
+    const doc = { visibilityState: 'hidden', addEventListener: vi.fn() };
+    vi.stubGlobal('document', doc);
+    offline.initConnectivity();
+    const handler = visibilityHandler(doc);
+
+    handler(); // visibilitychange при hidden — уход в фон
+    expect(offline.becameVisibleRecently()).toBe(false);
+  });
+});
+
 describe('ранний degraded-таймер в request()', () => {
   // «Призрачная сеть»: fetch отвечает, но медленно
   function delayed(ms: number, resp: unknown) {

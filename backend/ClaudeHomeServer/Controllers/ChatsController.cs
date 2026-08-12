@@ -132,6 +132,13 @@ public class ChatsController(SessionManager sessions, FileService files, Feature
         catch (InvalidOperationException ex) { return BadRequest(new { error = ex.Message }); }
     }
 
+    // Отметить чат прочитанным (синк непрочитанности между устройствами). Один эндпоинт
+    // на оба списка (как /parent и /loop) — GetOwned внутри MarkRead резолвит и проектную
+    // сессию. Отметка не двигает UpdatedAt и не поднимает чат в списке.
+    [HttpPut("{id}/read")]
+    public IActionResult MarkRead(string id)
+        => sessions.MarkRead(id, UserId) ? NoContent() : NotFound();
+
     // Назначить/снять собеседника у чата ДО первого хода (селектор в пустом чате):
     // персону (personaId) или .md-агента (agentName) — взаимоисключающе; оба пустые = снять.
     // Начатую сессию менять нельзя (клиент делает форк).

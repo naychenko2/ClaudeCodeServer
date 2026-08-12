@@ -84,13 +84,14 @@ function aggregate(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<st
     // Непрочитанность считаем только по чатам, видимым в фильтре ЭТОГО проекта:
     // иначе скрытая выполненная задача светилась бы в рельсе, хотя в списке её нет
     if (!visibleInProjectFilter(s)) continue;
-    if (hasUnread(s.updatedAt, s.id)) put(s.projectId, { status: 'unread' });
+    if (hasUnread(s.updatedAt, s.id, s.lastReadAt)) put(s.projectId, { status: 'unread' });
   }
   return next;
 }
 
 // Последний ответ сервера. Нужен, чтобы пересобрать агрегат без запроса, когда
-// изменилась только прочитанность (она живёт локально, в localStorage)
+// изменилась только прочитанность (гибрид: локальная отметка в localStorage
+// меняется мгновенно, серверная lastReadAt приедет со следующим поллингом)
 let _lastSummary: { active: HomeSessionInfo[]; recent: HomeSessionInfo[] } | null = null;
 
 function recompute() {

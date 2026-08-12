@@ -70,8 +70,14 @@ const scopeRowStyle = (active: boolean, hovered: boolean, pressing = false): CSS
 // кнопки разной ширины, и пара распадалась бы. Запас к самой длинной подписи —
 // на случай другой метрики шрифта; boxSizing держит рамку внутри ширины, поэтому
 // светлая (с рамкой) и accent (без) кнопки совпадают до пикселя.
-// Различает их только заливка: фиксация светлая, публикация accent
+// Различает их только заливка: фиксация светлая, публикация accent.
+// На узкой панели (планшет, ужатая колонка) подписи прячутся и пара живёт
+// иконками ОДНОЙ компактной ширины — габарит по-прежнему общий, смысл
+// доносят тултипы. Порог — ниже дефолтной ширины колонки (COL_DEFAULT 340),
+// чтобы обычная раскладка подписи не теряла
 const ACTION_BTN_W = 118;
+const ACTION_BTN_W_ICON = 34;
+const ACTION_LABELS_MIN_W = 320;
 const actionBtnBase: CSSProperties = {
   flexShrink: 0, width: ACTION_BTN_W, height: ROW_H, boxSizing: 'border-box',
   borderRadius: R.md, cursor: 'pointer',
@@ -198,7 +204,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     try { const n = Number(localStorage.getItem(SCOPE_H_KEY)); return Number.isFinite(n) && n >= 60 ? n : SCOPE_H_DEFAULT; }
     catch { return SCOPE_H_DEFAULT; }
   });
-  const [branchMenu, setBranchMenu] = useState(false);           // меню выбора ветки
+  const [branchMenu, setBranchMenu] = useState<DOMRect | null>(null); // меню выбора ветки (якорь кнопки-стрелки)
   const [branchHover, setBranchHover] = useState(false);         // наведение на капсулу ветки
   const [newBranchOpen, setNewBranchOpen] = useState(false);     // диалог новой ветки
   const [newBranchName, setNewBranchName] = useState('');
@@ -213,6 +219,20 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // Меню настроек репозитория живёт порталом: пока оно открыто, контролы шапки не
   // гаснут — иначе кнопка, которой его открыли, исчезает под курсором
   usePanelHeaderHold(!!repoMenu);
+
+  // Ширина панели — прячем подписи главных кнопок на узкой колонке (планшет).
+  // До первого замера (0) считаем панель широкой, чтобы подписи не мигали
+  const railRef = useRef<HTMLDivElement>(null);
+  const [railW, setRailW] = useState(0);
+  useEffect(() => {
+    const el = railRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setRailW(el.clientWidth));
+    ro.observe(el);
+    setRailW(el.clientWidth);
+    return () => ro.disconnect();
+  }, []);
+  const compactActions = railW > 0 && railW < ACTION_LABELS_MIN_W;
 
   // Загрузка стора + стека незапушенных + remote при монтировании панели
   useEffect(() => {
@@ -341,10 +361,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   };
 
   // Ветки: список грузим лениво при открытии меню, чекаут — только на другую ветку
-  const openBranchMenu = () => { if (!branchMenu) void loadGitBranches(project.id); setBranchMenu(v => !v); };
+  const openBranchMenu = (rect: DOMRect) => { if (!branchMenu) void loadGitBranches(project.id); setBranchMenu(v => v ? null : rect); };
   const doCheckout = (name: string) => { onScopeChange?.(); void gitCheckout(project.id, name); };
   const handleCheckout = (name: string) => {
-    setBranchMenu(false);
+    setBranchMenu(null);
     if (name === status?.branch) return;
     // Грязное дерево — сначала спросим (git иначе перенесёт правки или откажет при конфликте)
     if (workingFiles.length > 0) { setPendingCheckout(name); return; }
@@ -786,7 +806,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   }
 
   return (
-    <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+    <div ref={railRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {headerControls}
       {repoMenuEl}
       {st.error && (
@@ -999,10 +1019,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                     <button
                       onClick={e => { e.stopPropagation(); void openCommitForm(); }}
                       title="Зафиксировать изменения"
-                      style={{ ...commitBtnStyle, marginLeft: 'auto' }}
+                      style={{ ...commitBtnStyle, marginLeft: 'auto', ...(compactActions ? { width: ACTION_BTN_W_ICON } : null) }}
                     >
                       <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-                      Зафиксировать
+                      {!compactActions && 'Зафиксировать'}
                     </button>
                   </>
                 )}
@@ -1117,7 +1137,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                   отдельное действие (меню веток), а не часть выбора скоупа */}
               <div style={{ width: 1, flexShrink: 0, background: (isBranch || branchMenu) ? C.accentMuted : C.border }} />
               <button
-                onClick={e => { e.stopPropagation(); openBranchMenu(); }}
+                onClick={e => { e.stopPropagation(); openBranchMenu(e.currentTarget.getBoundingClientRect()); }}
                 disabled={st.busy}
                 title="Выбрать ветку"
                 style={{
@@ -1128,8 +1148,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 <ChevronDown size={14} strokeWidth={ICON_STROKE} color={(branchMenu || isBranch) ? C.accent : C.textMuted} />
               </button>
             </div>
+            {/* anchor-режим (портал по якорю стрелки): панель живёт в карточке с
+                transform, и absolute-меню обрезалось её рамками — как у repoMenu */}
             {branchMenu && (
-              <Menu onClose={() => setBranchMenu(false)} align="left" bottom={34} minWidth={220}>
+              <Menu anchor={branchMenu} minWidth={220} onClose={() => setBranchMenu(null)}>
                 {st.branches.map(b => (
                   <MenuItem
                     key={b.name}
@@ -1143,7 +1165,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 )}
                 <div style={{ height: 1, background: C.border, margin: '4px 6px' }} />
                 <MenuItem icon={<Plus size={15} strokeWidth={ICON_STROKE} />} label="Новая ветка…"
-                  onClick={() => { setBranchMenu(false); setNewBranchOpen(true); }} />
+                  onClick={() => { setBranchMenu(null); setNewBranchOpen(true); }} />
               </Menu>
             )}
           </div>
@@ -1173,10 +1195,11 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               ...publishBtnStyle,
               cursor: canPublish && !st.busy ? 'pointer' : 'default',
               opacity: canPublish && !st.busy ? 1 : 0.4,
+              ...(compactActions ? { width: ACTION_BTN_W_ICON } : null),
             }}
           >
             <UploadCloud size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-            Опубликовать
+            {!compactActions && 'Опубликовать'}
           </button>
         </div>
       </div>

@@ -39,6 +39,22 @@ export function subscribeConnectionState(fn: () => void): () => void {
   return () => _listeners.delete(fn);
 }
 
+// Отметка последнего возврата вкладки в видимость — «тихое окно» для тоста
+// «Связь восстановлена». Фоновый разрыв сокета (планшет заморозил/затроттлил вкладку
+// при переключении приложений) пользователь не наблюдал, а формальный переход
+// offline → online при заморозке вообще случается уже ПОСЛЕ разморозки — поэтому
+// привязываемся не к видимости в момент обрыва, а ко времени с момента возврата.
+// 0 = вкладка не уходила в фон с загрузки, окно не активно.
+let _lastBecameVisibleAt = 0;
+const VISIBILITY_QUIET_WINDOW_MS = 5_000;
+
+// true — вкладка стала видимой только что (меньше VISIBILITY_QUIET_WINDOW_MS назад).
+// Читает App.tsx: восстановление связи в этом окне не озвучивается тостом.
+export function becameVisibleRecently(): boolean {
+  return _lastBecameVisibleAt !== 0
+    && Date.now() - _lastBecameVisibleAt < VISIBILITY_QUIET_WINDOW_MS;
+}
+
 export function setConnectionState(value: ConnectionState) {
   // Успех (обычный запрос ответил, зонд достучался) сбрасывает счётчик промахов —
   // иначе накопленные фейлы могли бы тут же снова увести в офлайн.
@@ -365,7 +381,10 @@ export function initConnectivity() {
   window.addEventListener('focus', () => forceConnectivityCheck());
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') forceConnectivityCheck();
+      if (document.visibilityState === 'visible') {
+        _lastBecameVisibleAt = Date.now();
+        forceConnectivityCheck();
+      }
     });
   }
 

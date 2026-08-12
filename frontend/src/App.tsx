@@ -17,7 +17,7 @@ import { AiLauncher } from './components/ai/AiLauncher'
 import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { resetAiAwaiting } from './lib/ai/awaiting'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
-import { initConnectivity } from './lib/offline'
+import { initConnectivity, becameVisibleRecently } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
@@ -357,13 +357,17 @@ export default function App() {
   }), [])
 
   // Toast «Связь восстановлена» — только на переходе offline → online (старт офлайн
-  // и первый онлайн не озвучиваем; прогрев кэша и drain очередей делается эффектом ниже)
+  // и первый онлайн не озвучиваем; прогрев кэша и drain очередей делается эффектом ниже).
+  // «Тихое окно»: восстановление в первые секунды после возврата вкладки в видимость
+  // не озвучиваем — это фоновый разрыв сокета (планшет заморозил вкладку при
+  // переключении приложений), пользователь его не видел, и тост на каждый возврат
+  // в приложение был бы спамом.
   const wasOfflineRef = useRef(false)
   useEffect(() => {
     if (!online) { wasOfflineRef.current = true; return }
     if (wasOfflineRef.current) {
       wasOfflineRef.current = false
-      showToast('Связь восстановлена', 'Обновляем…')
+      if (!becameVisibleRecently()) showToast('Связь восстановлена', 'Обновляем…')
     }
   }, [online])
 

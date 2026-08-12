@@ -580,6 +580,10 @@ export interface Session {
   // Момент установки срока: отсчёт идёт от него, если он позже последней активности
   // (иначе короткий срок на давно неактивном чате означал бы удаление сразу)
   expiryAnchor?: string | null;
+  // Серверная отметка прочтения чата (синк непрочитанности между устройствами);
+  // null/отсутствует — через API не отмечали. Непрочитанность считает chatReadState.ts:
+  // updatedAt > max(локальная отметка, эта, baseline)
+  lastReadAt?: string | null;
   // Чат заглушён: браузерные уведомления по нему не показываются
   notificationsMuted?: boolean;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
@@ -638,6 +642,8 @@ export interface HomeSessionInfo {
   tags?: string[];
   participants?: string[] | null;
   expiresAfterMinutes?: number | null;
+  // Серверная отметка прочтения (синк между устройствами) — для точки активности проекта
+  lastReadAt?: string | null;
 }
 
 export interface HomeSummaryResponse {

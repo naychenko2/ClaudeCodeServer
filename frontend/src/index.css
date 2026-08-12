@@ -322,6 +322,15 @@ body {
 .cc-dot-pulse::after { animation: cc-dot-pulse 1.8s ease-in-out infinite; }
 /* «Ждёт ответа» мерцает медленнее: сигнал тревожный, но дёргать глаз не должен */
 .cc-dot-pulse--slow::after { animation-duration: 3.4s; }
+/* «Ждёт ответа» — полое колечко вместо сплошной заливки: медовый warning и
+   accent на точке в 8px почти неразличимы по цвету, форма даёт второй канал
+   отличия (работает и при дальтонизме). В дырке видна непрозрачная подложка
+   span'а цвета холста */
+.cc-dot--ring::after {
+  background: transparent;
+  border: 2px solid var(--cc-dot-c);
+  box-sizing: border-box;
+}
 @keyframes cc-dot-pulse {
   0%, 100% { opacity: 1; }
   50%      { opacity: .25; }

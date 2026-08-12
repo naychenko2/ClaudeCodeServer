@@ -306,7 +306,7 @@ export function ChatCard({
   // статусного перелива нет: приоритет у него, два движения на карточке дрались
   // бы. Слой у обоих один и тот же (::after), так что классы взаимоисключающие.
   // Хук, а не голая функция: по подписке метка гаснет сразу при открытии чата
-  const unread = useHasUnread(s.updatedAt, s.id);
+  const unread = useHasUnread(s.updatedAt, s.id, s.lastReadAt);
   const unreadClass = !hasGlow && unread ? ' cc-unread' : '';
   const statusVars = {
     '--cc-status-c': STATUS_CONFIG[s.status].color,

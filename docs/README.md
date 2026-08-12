@@ -28,6 +28,8 @@
 ## Что где лежит
 
 **architecture/** — [api.md](architecture/api.md) (справочник REST),
+[conventions.md](architecture/conventions.md) (соглашения разработки: тесты и CI на Linux,
+хранилища, транскрипты, чеклист бэкапа),
 [features.md](architecture/features.md) (детали реализованных фич),
 [sandbox.md](architecture/sandbox.md) (среда исполнения local/container),
 [llm-providers.md](architecture/llm-providers.md),

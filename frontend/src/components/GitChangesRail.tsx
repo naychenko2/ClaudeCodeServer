@@ -634,8 +634,20 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           color: active ? C.textHeading : C.textSecondary,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{c.subject}</span>
-        {/* Хвост строки — короткий хеш, приглушённым, как счётчик документов у раздела */}
-        <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
+        {/* Хвост строки — время коммита (HH:MM) + короткий хеш, приглушёнными.
+            Дата ясна из разделителя группы дня, поэтому только время; полный
+            relTime («2 ч назад») — в подсказке на всю мету. Хеш визуально
+            подчинён временем (чуть тусклее), чтобы глазом раньше ловить часы */}
+        {(() => {
+          const t = Date.parse(c.date);
+          const hhmm = isNaN(t) ? '' : new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+          return (
+            <span title={relTime(c.date)} style={{ display: 'flex', gap: 6, flexShrink: 0, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+              {hhmm && <span>{hhmm}</span>}
+              <span style={{ opacity: 0.55 }}>{c.shortSha}</span>
+            </span>
+          );
+        })()}
       </div>
     );
   };

@@ -167,7 +167,7 @@ public class ClaudeSession : ILlmSessionAdapter
         public string? PromptSnapshotId { get; init; }
         public Task? ReaderTask { get; set; }
         // Смерть прогона зафиксирована диагностирована (маркер в лог + ErrorMessage клиенту).
-        // Взводит HandleProcessExited по событию Exited (опережает финализацию), либо — для гонки
+        // Взводит HandleProcessExitedAsync по событию Exited (опережает финализацию), либо — для гонки
         // EOF-раньше-callback — ветка activeTurnDied в FinalizeRunAsync. Гарантирует ровно один
         // маркер смерти и одно сообщение об ошибке на прогон (см. P27).
         public volatile bool DeathDiagnosed;
@@ -271,6 +271,26 @@ public class ClaudeSession : ILlmSessionAdapter
     public bool HasPendingBg
     {
         get { var run = _run; return run is not null && run.HasPendingBg; }
+    }
+
+    // Процесс завершил ход (result), но намеренно держат живым с открытым stdin: CLI ведёт
+    // (ContinuationActive) или вот-вот начнёт (окно ContinuationStartGrace, см. ResolveWatchdog)
+    // ход-продолжение — ответ на task_notification завершившегося фонового агента. Sweep-terminus в
+    // SessionManager гейтит этим ложный Finished посреди разгоняющегося продолжения. Формула — калька
+    // состояния «ContinuationStartGrace» из ResolveWatchdog (turnDone && !stdinClosed && !hasPendingBg)
+    // ПЛЮС активное продолжение (ContinuationActive — тоже turnDone && !stdinClosed, но может быть и
+    // с hasPendingBg, если параллельно работает ещё один bg-агент). Чтение _run — как в HasLiveTurn/
+    // HasPendingBg: ссылка атомарна, устаревший в момент чтения run даёт лишь консервативное
+    // «продолжение идёт» (sweep пропустит), что безопаснее ложного terminus.
+    public bool IsContinuationInFlight
+    {
+        get
+        {
+            var run = _run;
+            return run is not null
+                && run.TurnDone && !run.StdinClosed
+                && (run.ContinuationActive || !run.HasPendingBg);
+        }
     }
 
     // Хвостовой ридер главного транскрипта: завершения фоновых задач (<task-notification>)
@@ -2315,11 +2335,11 @@ public class ClaudeSession : ILlmSessionAdapter
             _fileWatcher.Start();
 
             run = new CliRun { Process = process, Signature = signature, TurnMcpPath = turnMcpPath, LaunchTurnId = _currentTurnId, PromptSuggestionsActive = promptSuggestionsActive, PromptSnapshotId = turnSnapshotId, LastTurnSeq = turnSeq };
-            // Смерть процесса — по событию ОС (см. HandleProcessExited): EnableRaisingEvents=true
+            // Смерть процесса — по событию ОС (см. HandleProcessExitedAsync): EnableRaisingEvents=true
             // выставлен в spec. Подписка обязательна: закрытие stdout ненадёжно как сигнал гибели
             // (дочерние node-процессы MCP держат pipe — P27), и без Exited обрыв хода зависает
             // в «ожидании» без единого маркера в логе.
-            process.Exited += (_, _) => HandleProcessExited(run);
+            process.Exited += (_, _) => _ = HandleProcessExitedAsync(run);
             // stderr CLI перехватываем построчно и немедленно (до P27 не перехватывался вовсе,
             // 0 строк в логе): при крахе это единственный источник причины, ждать финализации
             // нельзя — она может не стартовать часами. BeginErrorReadLine исключает ручное чтение
@@ -2332,7 +2352,7 @@ public class ClaudeSession : ILlmSessionAdapter
             process.BeginErrorReadLine();
             // Между Start и подпиской процесс мог умереть — обработаем сразу, иначе Exited уже
             // не сработает (событие стреляет только при переходе жив→мёртв, а мы его проспали).
-            if (process.HasExited) HandleProcessExited(run);
+            if (process.HasExited) _ = HandleProcessExitedAsync(run);
 
             // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
             var skipResubmit = ShouldSkipResubmit(text, _lastSubmittedTurnText, _lastTurnResolved, _lastSubmitWasNewProcess);
@@ -2415,13 +2435,16 @@ public class ClaudeSession : ILlmSessionAdapter
                         // Тишина дольше таймаута. Пока ждали, мог начаться same-process ход —
                         // тогда переармируем (чтение держим, оно ещё валидно)
                         if (armedTurnDone && !run.TurnDone) continue;
-                        if (!run.TurnDone)
+                        if (!run.TurnDone && !run.DeathDiagnosed)
                         {
                             // Активный ход молчит дольше допустимого (генерация оборвана,
                             // инструмент завис ИЛИ result хода проглочен корреляцией — тогда
                             // индикатор залипал до этого момента) — прерываем с ошибкой, спиннер снимется.
                             // Взводим DeathDiagnosed ДО Kill: Kill стрельнёт событием Exited →
-                            // HandleProcessExited, и по флагу не пришлёт второй ErrorMessage/маркер.
+                            // HandleProcessExitedAsync, и по флагу не пришлёт второй ErrorMessage/маркер.
+                            // Гейт !DeathDiagnosed — обратная гонка: процесс УЖЕ умер, Exited опередил
+                            // таймаут и HandleProcessExitedAsync выставил маркер + свою ошибку; без гейта
+                            // здесь прилетело бы второе «Модель не отвечает» (3.2).
                             CorrTrace($"watchdog-timeout({timeout.TotalMinutes:0}min)", Info.Id, run);
                             run.DeathDiagnosed = true;
                             await _onMessage(new ErrorMessage(
@@ -2458,7 +2481,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // Активный ход из-за краха цикла не дождётся result — без явной ошибки клиенту
             // UI навсегда завис бы на «Размышление…» (ExitedMessage из finally не гасит плашку
             // размышления). Шлём ошибку, чтобы ход честно завершился. DeathDiagnosed — ДО сообщения:
-            // finally убьёт процесс → Exited → HandleProcessExited, и по флагу не пришлёт дубль
+            // finally убьёт процесс → Exited → HandleProcessExitedAsync, и по флагу не пришлёт дубль
             // ErrorMessage (текст краха цикла здесь точнее, чем «процесс завершился»).
             if (!run.TurnDone)
             {
@@ -2615,7 +2638,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // Активный ход умер, но DiedEmpty-ретрай не сработал (обрыв посреди хода с реальной
             // выдачей — TurnGotEvent=true, либо новый процесс — сбой старта): смерть уйдёт наружу
             // как ProcessGone/Unreachable. Фиксируем причину для разбора ложных подмен — но только
-            // если это не сделал HandleProcessExited (он реагирует на событие Exited и обычно
+            // если это не сделал HandleProcessExitedAsync (он реагирует на событие Exited и обычно
             // опережает финализацию; fallback здесь — для гонки, когда EOF пришёл раньше callback'а).
             if (!run.DeathDiagnosed)
             {
@@ -2646,7 +2669,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // ретрая/ExitedMessage штатно) и при обрыве активного хода шлёт ErrorMessage (UI видит ошибку,
     // не вечное ожидание). Гонка same-process без события (DiedEmpty-ретрай) наружу не вылазит —
     // её поглотит перезапуск новым процессом, ErrorMessage не нужен.
-    private void HandleProcessExited(CliRun run)
+    private async Task HandleProcessExitedAsync(CliRun run)
     {
         // Прогон уже заместительён новым (несовместимый ход убил старый — SuppressExited):
         // смерть Expected, её не эскалируем.
@@ -2671,18 +2694,21 @@ public class ClaudeSession : ILlmSessionAdapter
 
         if (!activeTurn) return;
 
+        // Обрыв активного хода без ретрая: клиент обязан видеть ошибку, иначе гибель процесса
+        // выглядит как штатное ожидание ввода (P27). Ретраемая same-process смерть сюда не идёт.
+        // Шлём ДО Kill дерева и с await: Kill закрывает дочерние stdout-pipe → разблокируется ридер
+        // → FinalizeRunAsync пошлёт ExitedMessage. Без await (или после Kill) гонка ставила бы ошибку
+        // в ленту ПОСЛЕ терминала хода (3.4). Шаблон await _onMessage(ErrorMessage) — как в watchdog.
+        if (!willRetry)
+        {
+            try { await _onMessage(new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен")); }
+            catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
+        }
+
         // Kill дерева: даже мёртвый родитель может оставить потомков-node, держащих stdout-pipe;
         // без этого висящее ReadLineAsync не вернётся и финализация не стартует.
         try { _launcher.Kill(run.Process, run.LaunchTurnId); }
         catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] Kill прогона при смерти не удался: {ex.Message}"); }
-
-        // Обрыв активного хода без ретрая: клиент обязан видеть ошибку, иначе гибель процесса
-        // выглядит как штатное ожидание ввода (P27). Ретраемая same-process смерть сюда не идёт.
-        if (!willRetry)
-        {
-            try { _ = _onMessage(new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен")); }
-            catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
-        }
     }
 
     /// <summary>

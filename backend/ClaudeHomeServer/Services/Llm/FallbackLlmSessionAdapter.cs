@@ -173,6 +173,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Фоновые задачи живут в обёрнутом ClaudeSession-прогоне — делегируем (P12/P15: фолбэк
     // запускает ход через inner CLI, pending bg у inner).
     public bool HasPendingBg => _inner.HasPendingBg;
+    // Продолжение живёт в обёрнутом ClaudeSession-прогоне — делегируем (как HasPendingBg).
+    public bool IsContinuationInFlight => _inner.IsContinuationInFlight;
     public long SubmittedTurnSeq => _inner.SubmittedTurnSeq;
 
     public Task StartAsync() => _inner.StartAsync();

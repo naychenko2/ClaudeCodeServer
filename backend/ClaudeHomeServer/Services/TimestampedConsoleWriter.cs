@@ -11,11 +11,13 @@ namespace ClaudeHomeServer.Services;
 // Без времени в логе события бэкенда невозможно сопоставить с UTC-таймстемпами транскриптов
 // CLI (инцидент P27/I11: корневая причина падения хода не установлена именно из-за этого).
 //
-// Включение и формат — ключ Logging:Console:TimestampFormat в appsettings: значение — шаблон
+// Включение и формат — ключ Diagnostics:ConsoleTimestampFormat в appsettings: значение — шаблон
 // DateTime.UtcNow.ToString (напр. «yyyy-MM-ddTHH:mm:ss.fffZ»); пусто или отсутствие — обёртка
-// выключена, вывод остаётся как есть. Внимание: это НЕ стандартный путь ConsoleLoggerOptions
-// (тот лежит в Logging:Console:FormatterOptions:TimestampFormat и здесь НЕ задаётся — иначе
-// ILogger-строки получили бы двойной таймстемп).
+// выключена, вывод остаётся как есть. Ключ держим ПОД Diagnostics, не под Logging:Console: прежнее
+// имя Logging:Console:TimestampFormat биндилось во фреймворчный ConsoleLoggerOptions.TimestampFormat
+// (устаревшее, но живое), и при отсутствии FormatterName провайдер копировал его в SimpleConsoleFormatter —
+// тогда ILogger-строки получали ВТОРОЙ таймстемп (с липовым суффиксом Z: форматтер пишет локальное
+// время). Обёртка ставит ровно одно время на любую строку (ILogger и Console.WriteLine).
 //
 // ПОТОКОБЕЗОПАСНОСТЬ. Сам по себе TimestampWriter НЕ потокобезопасен: общий `StringBuilder _line`
 // при одновременной записи из двух потоков перемешается посимвольно. В обычном сценарии спасает
@@ -122,6 +124,22 @@ public static class TimestampedConsoleWriter
                 if (_line.Length > 0) FlushLine();
                 _inner.Flush();
             }
+        }
+
+        // Dispose (shutdown): дочистить хвост (см. Flush), иначе незавершённая строка теряется —
+        // комментарий класса обещает вывод «при Flush/Dispose», и без переопределения TextWriter.
+        // Dispose(bool) здесь молча проглатывал бы накопленный _line (3.3).
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                lock (_lock)
+                {
+                    if (_line.Length > 0) FlushLine();
+                    _inner.Dispose();
+                }
+            }
+            base.Dispose(disposing);
         }
     }
 }

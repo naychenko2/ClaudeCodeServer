@@ -33,6 +33,7 @@ public class FallbackLlmSessionAdapterTests
         public bool HasLiveTurn => false;
         public bool OrchestrationActive => false;
         public bool HasPendingBg => false;
+        public bool IsContinuationInFlight => false;
         // Номер поданных прогонам ходов (калька ClaudeSession.SubmittedTurnSeq): растёт на
         // каждой подаче. Тесты, которым метка не нужна, эмитят ExitedMessage() с TurnSeq=0 —
         // адаптер трактует такое exited как своё (fail-open), поведение прежнее.

@@ -51,8 +51,11 @@ var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
 
 // Таймстемп в консольном логе (I11): обёртка Console.Out/Error добавляет UTC-время в начало
 // каждой строки — и для ILogger, и для голых Console.WriteLine. Здесь, чтобы Local.json тоже
-// мог переопределить формат. Ключ Logging:Console:TimestampFormat; пусто — без обёртки.
-TimestampedConsoleWriter.Enable(builder.Configuration["Logging:Console:TimestampFormat"]);
+// мог переопределить формат. Ключ Diagnostics:ConsoleTimestampFormat — НЕ под Logging:Console:
+// то имя (Logging:Console:TimestampFormat) биндится во фреймворчный ConsoleLoggerOptions.
+// TimestampFormat, и форматтер ILogger печатал второй таймстемп (с липовым Z — локальное время).
+// Пусто — без обёртки.
+TimestampedConsoleWriter.Enable(builder.Configuration["Diagnostics:ConsoleTimestampFormat"]);
 
 // Зачистка процессов-сирот от предыдущего запуска сервера (краш/форс-килл):
 // на Windows дочерние node-процессы MCP-серверов не умирают при смерти родителя —

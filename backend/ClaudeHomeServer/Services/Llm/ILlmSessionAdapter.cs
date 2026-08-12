@@ -46,6 +46,19 @@ public interface ILlmSessionAdapter : IAsyncDisposable
     // DIM: Moq перехватывает его SetupGet'ом для детерминированных тестов (как OrchestrationActive
     // выше); default-реализация ломала бы gate в SessionManagerTests.
     bool HasPendingBg { get; }
+
+    // Процесс завершил ход (result), но намеренно держат живым с открытым stdin: CLI ведёт
+    // (ContinuationActive) или вот-вот начнёт (окно ContinuationStartGrace, см. ClaudeSession.
+    // ResolveWatchdog) ход-продолжение — ответ на task_notification завершившегося фонового агента.
+    // SessionManager гейтит этим sweep-terminus Active→Finished: после result ПЕРВОГО хода метка
+    // LastTurnEndedAt стоит минуты, пока bg-агент дорабатывал, и к моменту старта продолжения grace
+    // давно истёк — без этого признака sweep ставил бы Finished ровно тогда, когда CLI начинает
+    // генерировать продолжение, и text_delta летели в «завершённый» чат (клиент по finished историю
+    // хода не перечитывает — контент теряется, P16-сценарий). Терминус «висящий без работы процесс»
+    // сохраняется: после ContinuationStartGrace ридер сам убьёт такой процесс, alive станет false.
+    // Регулярное свойство, не DIM — Moq перехватывает SetupGet'ом для детерминированных тестов
+    // (как HasPendingBg); default-false у фейков безопасно (sweep завершает idle-процесс).
+    bool IsContinuationInFlight { get; }
     // Сквозной номер ходов, ОТДАННЫХ процессам CLI за жизнь адаптера (растёт на каждой подаче
     // хода прогону — новому процессу или живому через stdin). По нему фолбэк-оркестратор
     // привязывает попытку к прогону: exited с TurnSeq не больше снимка на начало попытки —

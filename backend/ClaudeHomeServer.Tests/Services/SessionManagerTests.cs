@@ -6897,14 +6897,16 @@ public class SessionManagerTests : IDisposable
     [Fact]
     public async Task Sweep_ЖивойПрогонБезФоновойРаботы_ПереводитВFinished()
     {
-        // Висящий без работы прогон (HasLiveTurn=true, HasPendingBg=false): ждать !HasLiveTurn
-        // пришлось бы до BgLingerTimeout (минуты) — sweep даёт быстрый terminus по живости фоновой
-        // работы. Это и есть обоснование HasPendingBg поверх HasLiveTurn (медленно верный ≈ неверный).
+        // Висящий без работы прогон (HasLiveTurn=true, нет ни HasPendingBg, ни IsContinuationInFlight):
+        // ждать !HasLiveTurn пришлось бы до BgLingerTimeout (минуты) — sweep даёт быстрый terminus.
+        // Это форма «процесс держат плагинные хуки/мосты без единой задачи и без продолжения» —
+        // единственный случай, когда живый прогон корректно доводится до Finished (после grace).
         var session = await MkBusySessionAsync("sweep-alive-nobg");
         var entry = GetEntry(session.Id);
         var adapter = StubAdapter(entry);
         adapter.SetupGet(a => a.HasLiveTurn).Returns(true);   // прогон висит
-        adapter.SetupGet(a => a.HasPendingBg).Returns(false); // но фоновых задач нет
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false); // фоновых задач нет
+        adapter.SetupGet(a => a.IsContinuationInFlight).Returns(false); // продолжения нет
         SetProcess(entry, adapter.Object);
 
         await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
@@ -6916,6 +6918,31 @@ public class SessionManagerTests : IDisposable
         await WaitForConditionAsync(() => _sut.GetById(session.Id)!.Status == SessionStatus.Finished,
             TimeSpan.FromSeconds(2));
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Finished);
+    }
+
+    [Fact]
+    public async Task Sweep_ЖивойПрогонВПродолжении_НеТрогает()
+    {
+        // Bg-агент доработал (HasPendingBg=false), но процесс ЖИВ и генерит ход-продолжение — ответ
+        // на task_notification завершившегося агента (IsContinuationInFlight=true). LastTurnEndedAt
+        // стоит с result ПЕРВОГО хода (минуты назад, grace давно истёк) — без гейта продолжения sweep
+        // ставил бы Finished ровно когда CLI начинает генерацию, и text_delta летели в «завершённый»
+        // чат: клиент по finished историю хода не перечитывает, контент теряется (P16-сценарий).
+        var session = await MkBusySessionAsync("sweep-alive-continuation");
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);       // bg-агент завершён
+        adapter.SetupGet(a => a.IsContinuationInFlight).Returns(true); // но идёт ход-продолжение
+        SetProcess(entry, adapter.Object);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        SetLastTurnEndedAt(entry, DateTimeOffset.UtcNow.AddSeconds(-30));
+
+        _sut.RunStuckActiveSweepForTests();
+
+        AssertSweepSkipped(_sut, session.Id, entry);
     }
 
     [Fact]

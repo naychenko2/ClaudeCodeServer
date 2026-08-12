@@ -743,8 +743,6 @@ public class SessionManager : IDisposable
     private void TrySweepStuckActive(SessionEntry entry)
     {
         if (entry.Info.Status != SessionStatus.Active) return;
-        if (entry.LastTurnEndedAt is not { } endedAt) return;
-        if ((DateTimeOffset.UtcNow - endedAt).TotalSeconds < _stuckActiveGraceSeconds) return;
         // Фоновые режимы без прогона между ходами: HasLiveTurn=false, но работа идёт, Finished был
         // бы ложным («Finished при живой работе хуже вечного active»). Планировщик штаба живёт до
         // 300 с без CLI-прогона. Цикл «до готово» между итерациями: после result хода LoopTurnInFlight
@@ -759,22 +757,33 @@ public class SessionManager : IDisposable
         var adapter = entry.Process as ILlmSessionAdapter;
         var alive = adapter is { HasLiveTurn: true };
         var hasBg = adapter is { HasPendingBg: true };
-        // Живой прогон с фоновой работой — не трогаем (панель экспертов, Workflow). Иначе terminus:
-        // процесс мёртв (!alive) либо доживает впустую без единой фоновой задачи (alive && !hasBg).
-        if (alive && hasBg) return;
+        var cont = adapter is { IsContinuationInFlight: true };
+        // Живой прогон с фоновой работой (панель экспертов, Workflow) ИЛИ идущим/готовым начаться
+        // ходом-продолжением (task_notification завершившегося bg-агента) — не трогаем: Finished
+        // посреди работы хуже вечного active. Сценарий продолжения: bg-агент дорабатывал минуты,
+        // LastTurnEndedAt стоит с result ПЕРВОГО хода, к старту продолжения grace давно истёк —
+        // без гейта IsContinuationInFlight sweep ставил бы Finished ровно когда CLI начинает
+        // генерировать продолжение, и text_delta летели в «завершённый» чат. Иначе terminus: процесс
+        // мёртв (!alive) либо доживает впустую без работы и без продолжения (alive && !hasBg && !cont)
+        // — после ContinuationStartGrace ридер сам убьёт такой процесс, и alive станет false.
+        if (alive && (hasBg || cont)) return;
 
         // Захват решения под PendingLock — повторный sweep или OnMessageAsync (новый ход) увидят сброс
-        // и не запустят дубль. Перепроверка статуса/метки — гонка с параллельным сменщиком статуса.
+        // и не запустят дубль. LastTurnEndedAt читается/пишется ТОЛЬКО под PendingLock (контракт поля,
+        // см. объявление): DateTimeOffset? неатомарен, чтение вне лока даёт порванное значение
+        // (HasValue=true, устаревшие ticks). Перепроверка статуса — гонка с параллельным сменщиком.
         lock (entry.PendingLock)
         {
-            if (entry.Info.Status != SessionStatus.Active || entry.LastTurnEndedAt is null) return;
+            if (entry.Info.Status != SessionStatus.Active) return;
+            if (entry.LastTurnEndedAt is not { } endedAt) return;
+            if ((DateTimeOffset.UtcNow - endedAt).TotalSeconds < _stuckActiveGraceSeconds) return;
             entry.LastTurnEndedAt = null;
         }
 
         var sid = entry.Info.Id;
         _log.LogWarning(
-            "[SessionManager] Sweep terminus: Active→Finished после result хода ({Sid}: exited прогона не было, alive={Alive}, bg={Bg})",
-            sid, alive, hasBg);
+            "[SessionManager] Sweep terminus: Active→Finished после result хода ({Sid}: exited прогона не было, alive={Alive}, bg={Bg}, cont={Cont})",
+            sid, alive, hasBg, cont);
         _ = Task.Run(async () =>
         {
             try { await ApplyStatusAsync(sid, entry, SessionStatus.Finished); }

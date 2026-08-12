@@ -5,7 +5,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { routeLabel, type ProviderData, type TierKey } from '../../lib/modelProvidersShared';
 import { RoutePicker } from '../../components/RoutePicker';
 import { EffectiveLine } from '../../components/EffectiveLine';
-import { resolvePlacePreset, stepsWord, usePresets, useSpecialtySettings } from '../../lib/presets';
+import { invalidateEffectiveLines, resolvePlacePreset, stepsWord, usePresets, useSpecialtySettings } from '../../lib/presets';
 import { C, FS, R } from '../../lib/design';
 import { api } from '../../lib/api';
 import { loadModels, type ModelOption } from '../../lib/models';
@@ -62,6 +62,9 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
       await api.localActions.applyPreset(key);
       const d = await api.usage.get().catch(() => undefined);
       setInfo(d?.ollama ?? { enabled: false, actions: [] });
+      // Назначения мест изменились — строки «Сейчас пойдёт» нужно пересчитать свежим
+      // серверным резолвом, иначе они покажут старую модель до переоткрытия модалки
+      invalidateEffectiveLines();
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось применить пресет'); }
     finally { setPresetBusy(null); }
   }
@@ -77,6 +80,9 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
       patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
       void loadModels();
+      // Кэш effective-line ключуется по actionKey и сам по себе не видит смену маршрута —
+      // сбрасываем, чтобы подсказка перерисовалась сразу, а не после переоткрытия модалки
+      invalidateEffectiveLines();
     } catch (e) { patch(a); setError(e instanceof Error ? e.message : 'Не удалось сохранить'); }
     finally { setBusy(null); }
   }
@@ -87,6 +93,7 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
       const res = await api.localActions.reset(a.key);
       patch({ ...a, route: res.route, preset: res.preset ?? null, routedToOllama: res.route === 'local',
         source: res.source as OllamaActionInfo['source'] });
+      invalidateEffectiveLines();
     } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось сбросить'); }
     finally { setBusy(null); }
   }

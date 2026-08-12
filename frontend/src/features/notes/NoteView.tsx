@@ -8,7 +8,7 @@ import { lazy, Suspense } from 'react';
 import { MarkdownViewer, stripFrontmatter } from '../../components/MarkdownViewer';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку
 const NoteEditor = lazy(() => import('./NoteEditor').then(m => ({ default: m.NoteEditor })));
-import { BackButton, ConfirmDialog, IconButton, Splitter, IslandSplitter, Modal, WaitingIndicator } from '../../components/ui';
+import { BackButton, ConfirmDialog, IconButton, Modal, WaitingIndicator } from '../../components/ui';
 import { useAiJob, runAiJob, patchAiJobResult, resetAiJob } from '../../lib/aiJobStore';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { tbBtnPrimary, tbBtnGhost } from '../../components/Toolbar';
@@ -29,11 +29,10 @@ import {
   SourceBadge,
   IconTrash, IconLink, IconSparkle, IconFolder, IconFolderMove,
 } from './shared';
-import { usePanelWidth } from './usePanelWidth';
 
 // Просмотр и правка одной заметки; связи (backlinks/исходящие/упоминания/граф) —
 // в правом сайдбаре на десктопе, снизу на мобильном.
-export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile, connectionsBelow, onBack, extraToolbar, hero }: {
+export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSelectNote, onDeleted, onTag, isMobile, connectionsBelow, onBack, extraToolbar, hero, onOpenFileRef }: {
   noteId: string;
   existingTitles: Set<string>;
   onWikilink: (target: string) => void;
@@ -52,21 +51,19 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
   // Стиль Islands (раздел «Заметки», десктоп): шапка — заголовок раздела прямо
   // на холсте (как в календаре/чатах), тело заметки — карточка-остров
   hero?: boolean;
+  // Открыть привязанный файл проекта (чип file: в тулбаре). Без колбэка (раздел
+  // хаба — там центр не открывает файлы проектов) чип информационный, не кликается.
+  onOpenFileRef?: (path: string) => void;
 }) {
   const version = useNotesVersion();
   const online = useOnline();
-  // Перетаскиваемая ширина сайдбара связей (справа: тянем влево — растёт)
-  const [connWidth, connDragging, startConnDrag] = usePanelWidth('cc_notes_conn_width', 280, 230, 460, true);
-  // Правый сайдбар: вкладки «Комментарии» / «Связи». При наличии комментариев активна «Комментарии».
-  const [sideTab, setSideTab] = useState<'comments' | 'connections'>('connections');
-  const [commentTotal, setCommentTotal] = useState(0);
-  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);   // контейнер вкладки комментариев (портал панели)
-  const autoTabRef = useRef(false);
-  useEffect(() => {
-    if (commentTotal > 0 && !autoTabRef.current) { setSideTab('comments'); autoTabRef.current = true; }
-  }, [commentTotal]);
-  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс панели в начальное состояние при смене заметки
-  useEffect(() => { autoTabRef.current = false; setSideTab('connections'); setCommentTotal(0); }, [noteId]);
+  // Контейнер панели комментариев (портал из DocCommentedMarkdown). Плавающий сайдбар
+  // связей справа от текста заметки — как у документов (см. docSide в FileViewer):
+  // aside с float:right внутри обёртки display:flow-root. Свёрнутые секции связей
+  // стягиваются в компактные строки, а текст заметки обтекает их слева — место не
+  // пропадает в пустой колонке. На мобильном/узком (connectionsBelow) связи уезжают
+  // под контент, сайдбара нет → panelTarget не нужен.
+  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
   const [note, setNote] = useState<NoteDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState(false);
@@ -464,6 +461,24 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             <MessageCircle size={11} strokeWidth={2} /> Из чата
           </button>
         )}
+        {/* Привязка к файлу проекта (frontmatter file:) — переход к файлу; битая
+            привязка (файл удалён/переименован) — состояние «файл не найден» */}
+        {!editing && note.file && (
+          note.fileMissing
+            ? <span title={`${note.file} — файл не найден`}
+                style={{ fontSize: 11, color: C.warning, flex: 'none', display: 'flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}>
+                <FileText size={11} strokeWidth={2} /> файл не найден
+              </span>
+            : <button onClick={onOpenFileRef ? () => onOpenFileRef(note.file!) : undefined}
+                disabled={!onOpenFileRef}
+                title={note.file}
+                style={{ fontSize: 11, color: C.info, flex: 'none', background: 'none', border: 'none',
+                  cursor: onOpenFileRef ? 'pointer' : 'default', fontFamily: FONT.sans,
+                  display: 'flex', alignItems: 'center', gap: 3, padding: 0, maxWidth: 180 }}>
+                <FileText size={11} strokeWidth={2} style={{ flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{note.file.split('/').pop()}</span>
+              </button>
+        )}
         {!editing && note.expiresAt && (() => {
           const left = new Date(note.expiresAt).getTime() - now;
           if (left <= 0) return <span style={{ fontSize: 11, color: C.warning, flex: 'none', whiteSpace: 'nowrap' }}>⏳ скоро</span>;
@@ -497,8 +512,8 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
         </div>
       </div>
 
-      {/* Тело: контент + сайдбар связей (десктоп). В hero-режиме контент живёт
-          прямо на холсте (без рамки), островом оформлен только сайдбар связей */}
+      {/* Тело: контент со плавающим сайдбаром связей (десктоп). В hero-режиме контент
+          живёт прямо на холсте (без рамки), островом оформлен только сайдбар связей */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', overflow: 'hidden' }}>
       {editing ? (
         /* Правка — редактор на всю контентную зону (как правка файла); кнопки — в тулбаре */
@@ -721,29 +736,51 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
             )}
           </div>
         )}
-        {/* data-selection-scope — «Копировать как Markdown/HTML» из master работает
-            и поверх слоя комментариев */}
-        <div data-selection-scope="doc" data-selection-priority="2">
-          {ann ? (
-            // Просмотр без frontmatter — служебные поля (annotates/anchor_*) не текст
-            <MarkdownViewer content={stripFrontmatter(note.content).body} existingTitles={existingTitles} onWikilink={onWikilink}
-              resolveNote={resolveNote} embedSource={note.source} hideLeadingH1={hero} />
-          ) : (
-            // Обычная заметка — тоже документ: выделение → комментарий, панель снизу
-            // (правая колонка занята связями). Заметки-комментарии не аннотируются
-            // выделением — тред ведётся ответами.
-            <DocCommentedMarkdown
-              scope={note.source}
-              docPath={note.source === 'personal' ? note.path : 'notes/' + note.path}
-              content={note.content}
-              isMobile={isMobile}
-              panelBelow={isMobile || connectionsBelow}
-              panelTarget={!isMobile && !connectionsBelow ? panelEl : null}
-              deferPanel={!isMobile && !connectionsBelow}
-              onCounts={total => setCommentTotal(total)}
-              viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source, hideLeadingH1: hero }}
-            />
+        {/* Плавающий сайдбар связей (десктоп): aside с float:right внутри flow-root —
+            свёрнутые секции связей освобождают место, и текст заметки обтекает их
+            слева, как у документов (docSide в FileViewer). Теги/AI/карточка комментария
+            живут выше на полной ширине — обтекает только тело заметки. */}
+        <div style={{ display: 'flow-root' }}>
+          {!isMobile && !connectionsBelow && (
+            <aside style={hero ? {
+              float: 'right', width: 290, marginLeft: 18, marginBottom: 14, padding: '10px 12px',
+              background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow,
+            } : {
+              float: 'right', width: 290, marginLeft: 18, marginBottom: 14,
+              borderLeft: `1px solid ${C.border}`, paddingLeft: 14,
+            }}>
+              {/* Контейнер панели комментариев — портал из DocCommentedMarkdown; пока
+                  комментариев нет, пуст и высоты не занимает */}
+              <div ref={setPanelEl} />
+              <NoteTasksSection noteId={note.id} version={version} />
+              <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
+                onWikilink={onWikilink} onLinkMention={linkMention} />
+            </aside>
           )}
+          {/* data-selection-scope — «Копировать как Markdown/HTML» из master работает
+              и поверх слоя комментариев */}
+          <div data-selection-scope="doc" data-selection-priority="2">
+            {ann ? (
+              // Просмотр без frontmatter — служебные поля (annotates/anchor_*) не текст
+              <MarkdownViewer content={stripFrontmatter(note.content).body} existingTitles={existingTitles} onWikilink={onWikilink}
+                resolveNote={resolveNote} embedSource={note.source} hideLeadingH1={hero} />
+            ) : (
+              // Обычная заметка — тоже документ: выделение → комментарий. Панель
+              // комментариев уходит порталом в плавающий сайдбар (panelEl) на десктопе,
+              // снизу — на мобильном/узком. Заметки-комментарии не аннотируются
+              // выделением — тред ведётся ответами.
+              <DocCommentedMarkdown
+                scope={note.source}
+                docPath={note.source === 'personal' ? note.path : 'notes/' + note.path}
+                content={note.content}
+                isMobile={isMobile}
+                panelBelow={isMobile || connectionsBelow}
+                panelTarget={!isMobile && !connectionsBelow ? panelEl : null}
+                deferPanel={!isMobile && !connectionsBelow}
+                viewer={{ onWikilink, existingTitles, resolveNote, embedSource: note.source, hideLeadingH1: hero }}
+              />
+            )}
+          </div>
         </div>
 
         {/* Мобильный/планшет: задачи из заметки + связи снизу под контентом (сайдбару нет места) */}
@@ -757,53 +794,6 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
       </div>
       )}
 
-      {/* Десктоп: сайдбар связей справа — стиль как при просмотре заметки в файлах
-          (прозрачный фон, тонкая линия-сплиттер), ширина перетаскивается.
-          В hero-режиме связи — карточка-остров, ресайз живёт в прозрачном зазоре.
-          На планшете/узком экране (connectionsBelow) связи уходят под контент. */}
-      {!editing && !isMobile && !connectionsBelow && (
-        <>
-          {hero
-            ? <IslandSplitter active={connDragging} onMouseDown={startConnDrag} />
-            : <Splitter active={connDragging} onMouseDown={startConnDrag} />}
-          <aside style={{
-            width: connWidth, flex: 'none', display: 'flex', flexDirection: 'column',
-            overflow: 'hidden', boxSizing: 'border-box',
-            // Фон — bgMain, в тон левому сайдбару-острову
-            ...(hero ? { background: C.bgMain, border: `1px solid ${ISLAND.border}`, borderRadius: ISLAND.radius, boxShadow: ISLAND.shadow } : {}),
-          }}>
-            {/* Вкладки показываем только когда у документа есть комментарии — иначе просто связи */}
-            {commentTotal > 0 && (
-              <div style={{ display: 'flex', gap: 2, padding: '8px 12px 0', flexShrink: 0, borderBottom: `1px solid ${C.borderLight}` }}>
-                {(['comments', 'connections'] as const).map(t => (
-                  <button key={t} onClick={() => setSideTab(t)} style={{
-                    flex: 1, padding: '6px 8px', border: 'none', background: 'none', cursor: 'pointer',
-                    fontFamily: FONT.sans, fontSize: 12.5, fontWeight: sideTab === t ? 700 : 500,
-                    color: sideTab === t ? C.textHeading : C.textMuted,
-                    borderBottom: `2px solid ${sideTab === t ? C.accent : 'transparent'}`, marginBottom: -1,
-                  }}>
-                    {t === 'comments' ? `Комментарии${commentTotal ? ` · ${commentTotal}` : ''}` : 'Связи'}
-                  </button>
-                ))}
-              </div>
-            )}
-            {/* Вкладка «Комментарии» — контейнер для портала панели (всегда в DOM, скрыт вне активной вкладки) */}
-            <div ref={setPanelEl} style={{
-              display: commentTotal > 0 && sideTab === 'comments' ? 'block' : 'none',
-              flex: 1, overflowY: 'auto', padding: '12px 14px 24px',
-            }} />
-            {/* Вкладка «Связи» — задачи + backlinks/упоминания/граф */}
-            <div style={{
-              display: commentTotal > 0 && sideTab === 'comments' ? 'none' : 'block',
-              flex: 1, overflowY: 'auto', padding: '12px 14px 24px',
-            }}>
-              <NoteTasksSection noteId={note.id} version={version} />
-              <NoteConnections note={note} onOpenNote={id => onSelectNote(id)}
-                onWikilink={onWikilink} onLinkMention={linkMention} />
-            </div>
-          </aside>
-        </>
-      )}
       </div>
 
       {showMove && (

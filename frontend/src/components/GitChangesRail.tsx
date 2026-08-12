@@ -12,7 +12,7 @@ import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Folder,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
-  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff,
 } from 'lucide-react';
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../types';
 import { api } from '../lib/api';
@@ -1107,6 +1107,21 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                   >
                     <GitCommit size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
                     <span title={c.subject} style={{ flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: active ? 600 : 400, color: active ? C.textHeading : C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.subject}</span>
+                    {/* Открыть коммит в центре — кнопкой ПЕРЕД хешом, а не кликом по
+                        строке: клик по строке выбирает скоуп (файлы коммита в верхней
+                        зоне), и второе действие ему не навесить. Видна по наведению И
+                        у выбранного коммита — иначе на тач-раскладке до неё не добраться,
+                        а после клика она исчезала бы из-под курсора. В потоке (не
+                        absolute, как у стэша): здесь она соседствует с хешом, а не
+                        замещает его, и flex:1 у заголовка абсорбирует ширину — строка
+                        не дёргается */}
+                    {(hovered || active) && (
+                      <IconButton size="xs" title="Открыть коммит"
+                        style={{ flexShrink: 0 }}
+                        onClick={e => { e.stopPropagation(); selectScope(c.sha); onOpenCommit(c.sha); }}>
+                        <FileDiff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                      </IconButton>
+                    )}
                     <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
                   </div>
                 );

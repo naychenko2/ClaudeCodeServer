@@ -5159,6 +5159,10 @@ public class SessionManager : IDisposable
                 // Практика возвращается в работу: волны идут дальше, стадию вернём в «волна»
                 // (для «завершить» координатор сам подведёт итог — стадию двигать не станем;
                 // для «остановить» стадия остаётся прежней — работа не возобновляется).
+                // P23 (прод 2026-08-12): но если все плановые волны уже закрыты — возвращать в Wave
+                // некуда, это вечная «волна N из N» без работы. В Idle: итерация завершена, режим
+                // ждёт новой вводной. Хода координатору здесь нет, поэтому не Checking (оно зависло
+                // бы без хода проверки), а сразу Idle — итог уже подведён в ходе работы волн.
                 // «Чинить дальше» (m4, второй проход Глеба) — координатор чинит и перепроверяет
                 // САМ, раздачи волны здесь нет (starter ниже зовётся только для
                 // runNext/addBudget/resume): уводить стадию в Wave означало бы, что упавший
@@ -5186,7 +5190,9 @@ public class SessionManager : IDisposable
                     // стадию Wave выставит сама раздача (TeamWaveService.StartWaveCore).
                     _ => team.WaveNumber == 0
                         ? team.StageBeforeDecision ?? team.Stage
-                        : TeamImplementStage.Wave,
+                        : AllPlannedWavesClosed(team)
+                            ? TeamImplementStage.Idle
+                            : TeamImplementStage.Wave,
                 };
                 // Решение принято, карточка гаснет — сохранённая стадия отработана
                 team.StageBeforeDecision = null;
@@ -5594,6 +5600,21 @@ public class SessionManager : IDisposable
         // ожидание и снова обнулит отсечки.
         RestoreWaveWatchdogIfPaused(sessionId, entry);
 
+        // P23 (прод 2026-08-12): практика в «ждёт решения» по карточке блокера, но координатор
+        // в этом ходе снял предмет блокера сам — продолжил работу маркером team:work или подвёл
+        // итог при закрытых волнах плана. Карточку не держать: иначе она висит по решённому
+        // вопросу, стадия сто́ит в AwaitingDecision, а человек отвечает кнопкой на уже ненужную
+        // эскалацию (прогон Веры P23: координатор сам закрыл задачу и подвёл итог, карточка
+        // осталась висеть). Если погасили — перечитываем состояние команды: стадия сменилась,
+        // и дальше HandleTeamTurnEndAsync идёт по ней (team:work разберёт StartTeamWorkAsync,
+        // Checking доводится до Idle ниже).
+        if (team.Stage == TeamImplementStage.AwaitingDecision
+            && await TryAutoResolveTeamBlockerAsync(sessionId, entry, turnText)
+            && entry.Info.TeamImplement is { } teamAfterResolve)
+        {
+            team = teamAfterResolve;
+        }
+
         if (ParseEscalationMarker(turnText) is { } marker)
         {
             // Тупик в волне (Э8) — не «жду решения», а возврат в интервью: волны на паузе,
@@ -5637,9 +5658,17 @@ public class SessionManager : IDisposable
         // карточкой (а не построится — карточку даст сбой/таймаут планировщика). Без флага
         // тревога «Координатор не понял вводную» поднималась на живой работе и висела
         // красной рядом с пришедшим планом.
+        // Прод 2026-08-12 (P16): тот же аргумент — для async-субагента координатора. Ход,
+        // что закончился текстом «запустил разведку», но в фоновом Tool-вызове оставил живого
+        // агента (entry.Process.HasPendingBg), — НЕ тупик: координатор ждёт собственного
+        // результата, и следующий ход (пробуждение по task-notification) почти наверняка
+        // принесёт маркер team:work. Без исключения гард поднимал «Координатор не понял
+        // вводную» на живой работе и уводил стадию в AwaitingDecision — тогда штатный
+        // team:work уже не потреблялся (StartTeamWorkAsync её не принимает), и человеку
+        // приходилось отвечать на ложную карточку (прогон Веры P16).
         var stalledStage = team.Stage == TeamImplementStage.Interview
             || (team.Stage == TeamImplementStage.Planning && team.WaveNumber == 0);
-        if (stalledStage && !asked && !entry.TeamPlanningInFlight)
+        if (stalledStage && !asked && !entry.TeamPlanningInFlight && !AsyncAgentInFlight(entry))
         {
             // Волна 6 (живая приёмка волны 5): ход мог не завершиться маркером по ДВУМ разным
             // причинам, и текст карточки должен их различать. «Координатор не понял вводную»/
@@ -5707,6 +5736,85 @@ public class SessionManager : IDisposable
             Wave = team.WaveNumber,
             Actions = TeamEscalationActions.For(TeamEscalationKind.ProductDecision),
         };
+    }
+
+    // Все плановые волны итерации закрыты — работа по плану закончена. P23: это сигнал того,
+    // что карточка блокера стала неактуальна финалом итерации (координатор подвёл итог, а
+    // стадия зависла в AwaitingDecision), и критерий терминального состояния при возврате из
+    // «ждёт решения» (RespondTeamEscalation / ResumeTeamFromDecisionOnUserInput) — иначе
+    // практика формально «в волне N из N» после полностью закрытых волн. PlannedWaves == 0
+    // (план не запускался) никогда не считаем закрытым набором.
+    private static bool AllPlannedWavesClosed(SessionTeamImplement team) =>
+        team.PlannedWaves > 0 && team.ClosedWave >= team.PlannedWaves;
+
+    // У координатора есть живый фоновый субагент (Tool Agent и т.п.) — ход, завершённый
+    // текстом без маркера, не тупик: координатор ждёт собственного результата. P16: по этому
+    // признаку гард молчаливого тупика молчит (аналог TeamPlanningInFlight). entry.Process —
+    // адаптер текущего прогона CLI; HasPendingBg истинно, пока прогон доживает фоновых агентов.
+    private static bool AsyncAgentInFlight(SessionEntry entry) => entry.Process?.HasPendingBg ?? false;
+
+    // P23: авто-гашение карточки блокера, когда координатор сам снял её предмет. Разбудившийся
+    // по докладу-блокеру координатор (BlockerReactionTurn) отвечает ходом — и если этот ход
+    // продолжает работу (маркер team:work) либо закрывает итерацию (все волны плана закрыты),
+    // карточку более не держать: звать человека по решённому вопросу не нужно (прогон P23:
+    // координатор сам закрыл задачу и подвёл итог, карточка висела в AwaitingDecision). true —
+    // погасил и сдвинул стадию; false — оснований для авто-резолва нет (ждём человека).
+    private async Task<bool> TryAutoResolveTeamBlockerAsync(string sessionId, SessionEntry entry, string turnText)
+    {
+        if (entry.Info.TeamImplement is not { } team) return false;
+        if (team.Stage != TeamImplementStage.AwaitingDecision) return false;
+
+        // Последняя открытая карточка блокера в истории чата (вехи остановки живут дольше хода).
+        var openBlocker = entry.Accumulator?.GetAll()
+            .OfType<StoredTeamEscalationMessage>()
+            .Where(m => !m.Escalation.Resolved && m.Escalation.Kind == TeamEscalationKind.Blocker)
+            .LastOrDefault();
+        if (openBlocker is null) return false;
+
+        // Координатор снял блокер действием, а не молчанием: либо продолжает работу маркером
+        // team:work, либо итерация финиширована (все плановые волны закрыты). Иначе карточка
+        // уместна — координатор реально ждёт решения человека, оставляем как есть.
+        var hasWork = ParseWorkMarker(turnText) is not null;
+        var allWavesClosed = AllPlannedWavesClosed(team);
+        if (!hasWork && !allWavesClosed) return false;
+
+        // Гасим карточку тем же путём, что кнопка человека (RespondTeamEscalationAsync):
+        // помечаем Resolved, пишем снимок истории, рассылаем WS с resolved=true (иначе на F5
+        // карточка вновь подсветилась бы как ждущая ответа).
+        var card = openBlocker.Escalation;
+        if (entry.Accumulator is { } acc)
+        {
+            acc.OnTeamEscalationResolved(openBlocker.EscalationId, "answer");
+            FireAndForget(acc.SaveSnapshotAsync(_history),
+                $"сохранение истории после авто-гашения карточки блокера ({sessionId})");
+        }
+        await BroadcastAsync(sessionId, new TeamEscalationMessage(openBlocker.EscalationId,
+            TeamEscalationKind.Blocker.ToWireToken(), card.Title, card.Details, card.Actions,
+            card.TaskId, card.Wave, Resolved: true, ChosenActionId: "answer", card.PersonaId));
+
+        // Стадию возвращаем так, чтобы практика поехала дальше без призрака ожидания:
+        // 1) team:work запускает перепланирование: при закрытых волнах это новая итерация (Idle
+        //    — StartTeamWorkAsync её сбросит), иначе Planning (RunTeamPlanningAsync в той же итерации).
+        // 2) без team:work, но с закрытыми волнами — финальная проверка (Checking); её в этом же
+        //    вызове HandleTeamTurnEndAsync доведёт до Idle (терминал), координатор итог уже подвёл.
+        // Возвращать StageBeforeDecision (там обычно Wave) нельзя — работы в старой волне больше нет.
+        WithTeamState(sessionId, t =>
+        {
+            t.Stage = hasWork
+                ? (allWavesClosed ? TeamImplementStage.Idle : TeamImplementStage.Planning)
+                : TeamImplementStage.Checking;
+            t.StageBeforeDecision = null;
+            t.WaveStartedAt = null;
+            t.WaveActivityAt = null;
+            return true;
+        });
+        entry.Info.UpdatedAt = DateTime.UtcNow;
+        SaveSessions();
+        await BroadcastTeamImplementAsync(sessionId, entry);
+        _log.LogInformation("Карточка блокера {CardId} чата-штаба {SessionId} погашена автоматически: " +
+            "координатор снял блокер сам ({Reason})", openBlocker.EscalationId, sessionId,
+            hasWork ? "team:work" : "все волны плана закрыты");
+        return true;
     }
 
     // Новая вводная разложена планировщиком и уходит в волну (Э5). Гард по стадии: работу
@@ -6001,6 +6109,8 @@ public class SessionManager : IDisposable
     // сторожа. Бюджет и счёт волн НЕ трогаем: итерация та же самая, обнуляет их только новая
     // вводная (ResetTeamIterationOnUserInput) — иначе достаточно было бы отвечать на карточки,
     // чтобы бесконечно продлевать потолок идущей практике.
+    // P23: если все плановые волны уже закрыты — возвращать в Wave некуда (вечная «волна N из
+    // N»), идём в Idle: итерация завершена, режим ждёт новой вводной.
     // Карточку в ленте не гасим: она остаётся историей, а повторное решение по ней приведёт
     // практику в то же состояние (путь идемпотентен по стадии).
     private void ResumeTeamFromDecisionOnUserInput(string sessionId, SessionEntry entry)
@@ -6011,7 +6121,9 @@ public class SessionManager : IDisposable
         {
             t.Stage = t.WaveNumber == 0
                 ? t.StageBeforeDecision ?? TeamImplementStage.Planning
-                : TeamImplementStage.Wave;
+                : AllPlannedWavesClosed(t)
+                    ? TeamImplementStage.Idle
+                    : TeamImplementStage.Wave;
             t.StageBeforeDecision = null;
             // Вернулись в волну — заводим страховку таймаута заново (как решение по карточке):
             // без отсечки сторож молчал бы, и повторное зависание осталось бы незамеченным

@@ -3973,6 +3973,144 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
     }
 
+    // Прод 2026-08-12 (P16): ход координатора, завершённый текстом без маркера, но оставивший
+    // живой фоновый субагент (entry.Process.HasPendingBg) — НЕ молчаливый тупик: координатор
+    // ждёт собственного результата, и следующий ход (пробуждение по task-notification) принесёт
+    // маркер team:work. Гард обязан молчать, иначе карточка «не понял вводную» уводит стадию
+    // в AwaitingDecision, и тогда штатный team:work уже не потребляется (StartTeamWorkAsync её
+    // не принимает).
+    [Fact]
+    public async Task КонецХодаБезМаркера_ЖивойAsyncСубагент_НеДаётЛожнойТревоги()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-async-agent-inflight");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage = TeamImplementStage.Planning;
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(true); // координатор запустил async-агента
+        SetProcess(entry, adapter.Object);
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Запустил разведку кода, жду результат.", failed: false);
+
+        _sentMessages.OfType<TeamEscalationMessage>().Should().BeEmpty(
+            "ход, оставивший живого async-субагента, — это работа, а не тупик координатора");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Planning,
+            "стадия не ушла в AwaitingDecision по ложной тревоге");
+    }
+
+    // Прод 2026-08-12 (P23): карточка блокера гаснет, когда координатор, разбуженный докладом,
+    // продолжает работу маркером team:work — человека просить решения по решённому вопросу
+    // не нужно. Стадия уходит из AwaitingDecision в перепланирование вводной.
+    [Fact]
+    public async Task КарточкаБлокера_КоординаторПродолжилРаботу_ГаснетАвтоматом()
+    {
+        var (session, backend, frontend) = await MakeTeamStabAsync("ti-blocker-autoresolve-work");
+        SetPlannerAnswer(backend, frontend);
+        var blocker = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Исполнитель застрял",
+            Details = "нет доступа к API",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, blocker);
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "<team:work>переделать интеграцию через мок-сервер</team>", failed: false);
+
+        Sent<TeamEscalationMessage>().Should().Contain(m => m.EscalationId == blocker.Id && m.Resolved,
+            "координатор снял блокер сам — карточка не должна висеть");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Confirming,
+            "team:work запустил перепланирование, координатор ждёт согласования нового плана");
+    }
+
+    // Прод 2026-08-12 (P23): карточка блокера гаснет, когда итерация финиширована — все
+    // плановые волны закрыты, координатор подвёл итог, а карточка висела в AwaitingDecision.
+    // Практика приходит в терминальное Idle, а не остаётся ждать человека по решённому вопросу.
+    [Fact]
+    public async Task КарточкаБлокера_ВсеВолныЗакрытыИтогом_ГаснетВTerminus()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-blocker-autoresolve-final");
+        var blocker = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Исполнитель застрял",
+            Details = "нет доступа к API",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, blocker);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 2; t.PlannedWaves = 2; t.ClosedWave = 2;
+            return true;
+        });
+
+        await _sut.HandleTeamTurnEndAsync(session.Id,
+            "Итог: задача закрыта, волна выполнена.", failed: false);
+
+        Sent<TeamEscalationMessage>().Should().Contain(m => m.EscalationId == blocker.Id && m.Resolved,
+            "блокер снят финалом итерации — карточка не должна висеть");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Idle,
+            "при закрытых волнах практика приходит в терминальное Idle, а не ждёт человека");
+    }
+
+    // Парная страховка к двум тестам выше: карточка блокера уместна, когда координатор НЕ снял
+    // предмет блокера — ни team:work, ни закрытых волн. Тогда человека зовём, как и раньше.
+    [Fact]
+    public async Task КарточкаБлокера_КоординаторНеСнял_ОстаётсяЖдатьЧеловека()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-blocker-keep");
+        var blocker = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Исполнитель застрял",
+            Details = "нет доступа к API",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, blocker);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1; t.PlannedWaves = 2; t.ClosedWave = 0;
+            return true;
+        });
+
+        await _sut.HandleTeamTurnEndAsync(session.Id, "Разбираюсь, что можно сделать.", failed: false);
+
+        Sent<TeamEscalationMessage>().Should().NotContain(m => m.Resolved,
+            "координатор не снял блокер — авто-гашения быть не должно");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.AwaitingDecision,
+            "практика ждёт решения человека по актуальному блокеру");
+    }
+
+    // Прод 2026-08-12 (P23, вторичный симптом): после ответа человека на карточку остановки
+    // при закрытых волнах плана практика приходит в Idle (итерация завершена), а не висит в
+    // вечной «волне N из N». Путь по умолчанию (actionId "answer") симметричен
+    // ResumeTeamFromDecisionOnUserInput — оба не возвращают в мёртвый Wave.
+    [Fact]
+    public async Task RespondEscalation_ВсеВолныЗакрыты_ВозвращаетВIdleАНеВWave()
+    {
+        var (session, _, _) = await MakeTeamStabAsync("ti-respond-terminal");
+        var blocker = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Blocker,
+            Title = "Исполнитель застрял",
+            Details = "нет доступа к API",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Blocker),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, blocker);
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 2; t.PlannedWaves = 2; t.ClosedWave = 2;
+            return true;
+        });
+
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, blocker.Id, "answer", userId: TestUserId);
+
+        ok.Should().BeTrue();
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Idle,
+            "возвращать в Wave некуда — все волны плана закрыты, итерация завершена");
+    }
+
     // Minor «дубль уведомления эскалации» (волна 3): ветка is_error в ClaudeSession шлёт
     // синтетический ErrorMessage(ExpectResultFollows: true) и следом безусловно ResultMessage
     // того же хода — раньше OnMessageAsync независимо запускал HandleTeamTurnEndAsync на КАЖДОМ

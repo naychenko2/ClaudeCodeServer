@@ -870,20 +870,33 @@ const windowWidth = useWindowWidth();
     // только в глобальном ChatsPage
     markChatRead(session.id);
     if (!autoSelect) {
-      // явный выбор — закрываем файл, просмотр коммита, открытую задачу и граф, показываем чат во весь экран
-      setOpenFile(null);
-      setOpenFileDiffMode(false);
+      // Файл, открытый В СПЛИТЕ, смену чата переживает: там чат и файл стоят рядом
+      // двумя островами и друг другу не мешают — закрывать нечего. Так же ведёт себя
+      // сосед по месту в центре, ридер (его этот обработчик не трогает вовсе).
+      // Полноэкранный файл — наоборот, чат собой закрывает, и выбор чата его убирает;
+      // на мобиле и планшете сплита нет вовсе (см. DesktopWorkspace), значит и там
+      // файл уходит.
+      const keepSplitFile = !isMobile && !isTablet && !!openFile && !fileFullscreen;
+      // явный выбор — закрываем файл (кроме сплита), просмотр коммита, открытую задачу
+      // и граф, показываем чат во весь экран
+      if (!keepSplitFile) {
+        setOpenFile(null);
+        setOpenFileDiffMode(false);
+      }
       setOpenCommitSha(null);
       setOpenCommitFile(null);
       setSelectedTaskId(null);
       setGraphOpen(false);
       // Пишем запись истории с chatId — для URL #/project/{id}/chat/{chatId}
-      // и кнопки «назад/вперёд» браузера.
+      // и кнопки «назад/вперёд» браузера. Оставленный в сплите файл несём в том же
+      // снимке: popstate восстанавливает file и chatId независимо, иначе «назад»
+      // вернул бы чат без файла, который с экрана не уходил.
+      const file = keepSplitFile ? openFile : null;
       if (isMobile) {
         setMobileView('chat');
-        navPush({ screen: 'project', project, view: 'chat', file: null, chatId: session.id });
+        navPush({ screen: 'project', project, view: 'chat', file, chatId: session.id });
       } else {
-        navPush({ screen: 'project', project, view: 'sidebar', file: null, chatId: session.id });
+        navPush({ screen: 'project', project, view: 'sidebar', file, chatId: session.id });
       }
     }
   };

@@ -8,43 +8,17 @@
 // узнать «где мы работаем» было бы неоткуда (композер значение дерева не показывает,
 // там только кнопка-тумблер).
 import { useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
-import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, MessageSquare } from 'lucide-react';
+import { GitBranch, FolderGit2, Check, CloudUpload, ChevronDown, MessageSquare, Sparkles } from 'lucide-react';
 import type { Project, Session } from '../types';
-import { C, FONT, FS, R, SP } from '../lib/design';
+import { C, FONT, R, SP } from '../lib/design';
 import { basename } from '../lib/paths';
 import { ensureGit, useGitState, loadUnpushedLog, clearGitError, workingDiffStat } from '../lib/git';
 import type { TurnTree } from '../lib/turnWorktree';
 import { wsPanels } from '../pages/workspace/panelStackState';
 import { PublishDialog } from './PublishDialog';
-import { Menu } from './ui';
+import { CommitPromptDialog } from './CommitPromptDialog';
+import { Menu, MenuItem, MenuSep } from './ui';
 import { ICON_STROKE } from './ui/icons';
-
-// Строка меню коммита в стиле оглавления DocsPanel (TocRow): плотный ряд,
-// hover-подложка bgInset, приглушённый текст до наведения. Роль та же —
-// «выбрать вариант из короткого списка», поэтому и вид общий. Иконка слева
-// разводит варианты на глаз: область коммита — это чат или всё дерево.
-function CommitMenuRow({ icon, label, onClick }: { icon: ReactNode; label: string; onClick: () => void }) {
-  const [hover, setHover] = useState(false);
-  return (
-    <button
-      onClick={onClick}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 6, width: '100%', minHeight: 22,
-        padding: `1px ${SP.sm}px`, border: 'none', borderRadius: R.md, cursor: 'pointer',
-        textAlign: 'left', fontFamily: FONT.sans, fontSize: FS.sm, lineHeight: 1.35, minWidth: 0,
-        background: hover ? C.bgInset : 'transparent',
-        color: hover ? C.textHeading : C.textSecondary,
-      }}
-    >
-      {/* Иконка держит цвет строки (currentColor) — гаснет и оживает вместе с текстом */}
-      <span style={{ flexShrink: 0, display: 'flex' }}>{icon}</span>
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
-    </button>
-  );
-}
 
 export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive = false, onCommitOwn, onCommitAll }: {
   project: Project;
@@ -62,6 +36,9 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
   const status = st.status;
   const { reveal } = wsPanels.use();
   const [publishConfirm, setPublishConfirm] = useState(false);
+  // Диалог стиля сообщений коммита — общий с панелью «Изменения»; открывается из
+  // попапа фиксации, чтобы правила правились там же, где коммит и запускают
+  const [promptOpen, setPromptOpen] = useState(false);
   // rect кнопки «Зафиксировать» — открытое меню выбора области коммита (null = закрыто)
   const [commitMenu, setCommitMenu] = useState<DOMRect | null>(null);
   // Чат в отдельном worktree: запросы стора уже идут в его дерево (gitSessionContext),
@@ -211,16 +188,25 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
             <ChevronDown size={14} strokeWidth={ICON_STROKE} color={C.textMuted} />
           </button>
           {commitMenu && (
-            <Menu anchor={commitMenu} minWidth={190} maxHeight={90} gap={2} onClose={() => setCommitMenu(null)}>
-              <CommitMenuRow
-                icon={<MessageSquare size={14} strokeWidth={ICON_STROKE} />}
+            // maxHeight — фактическая высота карточки (три пункта MenuItem ~34px,
+            // разделитель и padding): по ней Menu решает, открываться вверх или вниз
+            <Menu anchor={commitMenu} minWidth={200} maxHeight={124} gap={4} onClose={() => setCommitMenu(null)}>
+              <MenuItem
+                icon={<MessageSquare size={15} strokeWidth={ICON_STROKE} />}
                 label="Только этот чат"
                 onClick={() => { setCommitMenu(null); onCommitOwn(); }}
               />
-              <CommitMenuRow
-                icon={<FolderGit2 size={14} strokeWidth={ICON_STROKE} />}
+              <MenuItem
+                icon={<FolderGit2 size={15} strokeWidth={ICON_STROKE} />}
                 label="Всё дерево"
                 onClick={() => { setCommitMenu(null); onCommitAll(); }}
+              />
+              {/* Не область коммита, а его оформление — отделяем чертой */}
+              <MenuSep />
+              <MenuItem
+                icon={<Sparkles size={15} strokeWidth={ICON_STROKE} />}
+                label="Стиль сообщений коммита…"
+                onClick={() => { setCommitMenu(null); setPromptOpen(true); }}
               />
             </Menu>
           )}
@@ -269,6 +255,10 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     {publishConfirm && (
       <PublishDialog projectId={project.id} onClose={() => setPublishConfirm(false)} />
     )}
+
+    {/* Стиль сообщений коммита — из попапа фиксации; тот же диалог, что в настройках
+        панели «Изменения» (один источник правды по уровням «общий»/«проектный») */}
+    {promptOpen && <CommitPromptDialog project={project} onClose={() => setPromptOpen(false)} />}
     </>
   );
 }

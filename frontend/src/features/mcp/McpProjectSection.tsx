@@ -1,14 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
+import { Plug } from 'lucide-react';
 import { api } from '../../lib/api';
-import { C, FS, R, SP } from '../../lib/design';
+import { C, FS, SP } from '../../lib/design';
 import { Toggle } from '../../components/ui';
+import { useIsMobile } from '../../lib/breakpoints';
 import type { McpServer, Project } from '../../types';
+import { AccordionSection } from '../projects/dialogs/AccordionSection';
 
 // Секция «MCP-серверы» в настройках проекта: тумблеры своих серверов в этом проекте.
 // Allow-list модель: Project.McpServersOn — сервер не едет никуда, пока его здесь
 // не включили явно. Встроенных серверов продукта тут нет: они доступны всегда.
 // Своих серверов нет — секция не рисуется вовсе, чтобы не занимать место пустотой.
 export function McpProjectSection({ project, onUpdated }: { project: Project; onUpdated?: (updated: Project) => void }) {
+  const isMobile = useIsMobile();
   const [servers, setServers] = useState<McpServer[]>([]);
   const [on, setOn] = useState<string[]>(project.mcpServersOn ?? []);
   const [err, setErr] = useState('');
@@ -45,24 +49,28 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
       });
   };
 
+  // Сводка статуса в заголовке аккордеона: сколько серверов включено. Считаем по
+  // фактически отрисованным серверам (on может хранить ключи уже удалённых).
+  const onCount = servers.filter(s => on.includes(s.key)).length;
+  const summary = onCount === 0
+    ? 'Ничего не включено'
+    : isMobile ? `${onCount} из ${servers.length}` : `${onCount} из ${servers.length} включено`;
+
   return (
-    <div style={{
-      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl, overflow: 'hidden',
-    }}>
-      <div style={{
-        padding: '10px 14px 6px', fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
-      }}>
-        MCP-серверы в проекте
-        <span style={{ display: 'block', fontWeight: 400, fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
-          Включённый здесь сервер поедет в ходы этого проекта — всем его чатам и персонам. В остальных проектах он не появится, пока не включён и там.
-        </span>
-      </div>
-      {servers.map(server => (
+    <AccordionSection
+      icon={Plug}
+      title={isMobile ? 'MCP-серверы' : 'MCP-серверы в проекте'}
+      summary={summary}
+    >
+      {servers.map((server, i) => (
         <div
           key={server.id}
           style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: SP.sm,
-            padding: '9px 14px', borderTop: `1px solid ${C.borderLight}`,
+            padding: '8px 4px',
+            // Контейнер аккордеона уже дал верхнюю границу тела — у первой строки
+            // свою не рисуем, иначе двойная линия.
+            borderTop: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
             opacity: server.enabled ? 1 : 0.62,
           }}
           title={server.enabled ? undefined : 'Сервер выключен в личном реестре — в ходы он не едет нигде'}
@@ -82,9 +90,9 @@ export function McpProjectSection({ project, onUpdated }: { project: Project; on
       ))}
       {err && (
         <div style={{
-          padding: '7px 14px', fontSize: FS.sm, color: C.dangerText, background: C.dangerBg,
+          padding: '7px 4px', fontSize: FS.sm, color: C.dangerText, background: C.dangerBg,
         }}>{err}</div>
       )}
-    </div>
+    </AccordionSection>
   );
 }

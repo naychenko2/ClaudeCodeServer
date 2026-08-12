@@ -18,6 +18,7 @@ import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
 import { BackgroundSection } from './BackgroundSection';
+import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 
 // Строка «Руководитель проекта не назначен» (фича default-personas-onboarding, п.5.3):
@@ -123,16 +124,31 @@ function GitHistorySection({ project }: { project: Project }) {
     ? new Date(firstDate).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
     : null;
 
+  const isMobile = useIsMobile();
+  // Сводка статуса git-репозитория в заголовке аккордеона (словарь сводок спецификации).
+  // Во время загрузки сводки нет: git-статус приезжает отдельным запросом, и до него
+  // заголовок читается просто как название секции.
+  const gitSummary: { text: string; tone: AccordionSummaryTone } | undefined = (() => {
+    if (loading) return undefined;
+    if (err) return { text: 'Ошибка — откройте', tone: 'err' };
+    if (!isRepo) return { text: 'Не ведётся', tone: 'neutral' };
+    const c = commitCount === null ? '' : (commitCount >= 1000 ? '1000+' : `${commitCount}`);
+    if (autoCommit) {
+      return autoPush
+        ? { text: isMobile ? 'Авто · push' : 'Авто · push вкл', tone: 'ok' }
+        : { text: isMobile ? `Авто · ${c}` : `Авто · ${c} коммитов`, tone: 'ok' };
+    }
+    return { text: isMobile ? `Ручная · ${c}` : `Ручная · ${c} коммитов`, tone: 'neutral' };
+  })();
+
   return (
-    <div style={{
-      padding: '9px 12px', background: C.bgWhite,
-      border: `1px solid ${C.border}`, borderRadius: R.xl,
-      display: 'flex', flexDirection: 'column', gap: 5,
-    }}>
-      <div style={{ fontSize: 12, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        История файлов (Git)
-      </div>
-      {err && <div style={{ fontSize: 12, color: C.dangerText }}>{err}</div>}
+    <AccordionSection
+      icon={GitBranch}
+      title={isMobile ? 'История файлов' : 'История файлов (Git)'}
+      summary={gitSummary?.text}
+      summaryTone={gitSummary?.tone}
+    >
+      {err && <div style={{ fontSize: 12, color: C.dangerText, marginBottom: 5 }}>{err}</div>}
       {/* Высота тела фиксирована снизу ВО ВСЕХ состояниях: git-статус приезжает
           отдельным запросом, и без резерва диалог подпрыгивал на ~90px в момент
           ответа. Одного скелета мало — у репозитория готовый набор (бейдж и две
@@ -177,7 +193,7 @@ function GitHistorySection({ project }: { project: Project }) {
         </>
       )}
       </div>
-    </div>
+    </AccordionSection>
   );
 }
 

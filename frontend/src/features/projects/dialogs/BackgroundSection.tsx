@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Sparkles, RotateCcw, AlertTriangle } from 'lucide-react';
+import { Sparkles, RotateCcw, AlertTriangle, Image } from 'lucide-react';
 import type { Project, ProjectBackground, BackgroundResult } from '../../../types';
 import { api } from '../../../lib/api';
 import { C, R, SP, FS, MODAL_W } from '../../../lib/design';
@@ -10,6 +10,7 @@ import { agentDotColor } from '../../../components/AgentSelector';
 import { projectColor } from '../../../lib/tasks';
 import { backgroundColorName } from '../backgroundColors';
 import { invalidateProjectsCache } from '../useAllProjects';
+import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
 
 // Компактная маска стандартного дудла для превью настроек. CanvasBackdrop правит другая
 // волна (и не экспортирует свой тайл) — тут своя мини-аппроксимация: несколько иконок,
@@ -183,59 +184,71 @@ export function BackgroundSection({ project, iconColor, onColorChange, onProject
       : null;
   const isStatusErr = isFailed;
 
+  // Сводка в заголовке аккордеона (docs/mockups/edit-project-compact-proposal.md,
+  // словарь сводок). Цвет — только при сгенерированном фоне; иные состояния — текстом.
+  const bgSummary: { text: string; tone: AccordionSummaryTone } = loading
+    ? { text: 'Рисуем фон…', tone: 'neutral' }
+    : isFailed
+      ? { text: 'Не получилось', tone: 'err' }
+      : isGenerated && colorKey
+        ? { text: isMobile ? 'Свой' : `Свой · ${backgroundColorName(colorKey)}`, tone: 'neutral' }
+        : { text: 'Стандартный', tone: 'neutral' };
+
   return (
-    <div style={{
-      padding: '9px 12px', background: C.bgWhite,
-      border: `1px solid ${C.border}`, borderRadius: R.xl,
-      display: 'flex', flexDirection: 'column', gap: SP.sm,
-    }}>
-      <div style={{ fontSize: FS.sm, fontWeight: 600, color: C.textSecondary, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-        Фон рабочего пространства
-      </div>
-      <div style={{ fontSize: FS.base, color: C.textSecondary, lineHeight: 1.5 }}>
-        Рисунок и цвет подобраны по смыслу проекта. Фон еле заметен и не мешает работе.
-      </div>
+    <>
+      <AccordionSection
+        icon={Image}
+        title="Фон рабочего пространства"
+        summary={bgSummary.text}
+        summaryTone={bgSummary.tone}
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <div style={{ fontSize: FS.base, color: C.textSecondary, lineHeight: 1.5 }}>
+            Рисунок и цвет подобраны по смыслу проекта. Фон еле заметен и не мешает работе.
+          </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.md }}>
-        <BackdropPreview width={88} height={60} project={project} iconColor={iconColor} faded={loading} />
-        <div style={{ minWidth: 0, flex: 1 }}>
-          {/* При сгенерированном фоне показываем цвет; генерация/ошибка — статусной строкой */}
-          {isGenerated && colorKey && (
-            <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, display: 'flex', alignItems: 'center', gap: SP.sm }}>
-              <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(colorKey), flexShrink: 0 }} />
-              Цвет — <span style={{ color: C.textPrimary }}>{backgroundColorName(colorKey)}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.md }}>
+            <BackdropPreview width={88} height={60} project={project} iconColor={iconColor} faded={loading} />
+            <div style={{ minWidth: 0, flex: 1 }}>
+              {/* При сгенерированном фоне показываем цвет; генерация/ошибка — статусной строкой */}
+              {isGenerated && colorKey && (
+                <div style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading, display: 'flex', alignItems: 'center', gap: SP.sm }}>
+                  <span style={{ width: 7, height: 7, borderRadius: '50%', background: agentDotColor(colorKey), flexShrink: 0 }} />
+                  Цвет — <span style={{ color: C.textPrimary }}>{backgroundColorName(colorKey)}</span>
+                </div>
+              )}
+              {statusLine && (
+                <div style={{
+                  fontSize: FS.base, fontWeight: isStatusErr ? 600 : 400,
+                  color: isStatusErr ? C.dangerText : C.textPrimary, lineHeight: 1.45,
+                  display: 'flex', alignItems: 'flex-start', gap: SP.sm,
+                }}>
+                  {isStatusErr && <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.danger, marginTop: 2 }} />}
+                  <span>{statusLine}</span>
+                </div>
+              )}
+              {err && (
+                <div style={{ fontSize: FS.sm, color: C.dangerText, marginTop: 2 }}>{err}</div>
+              )}
             </div>
-          )}
-          {statusLine && (
-            <div style={{
-              fontSize: FS.base, fontWeight: isStatusErr ? 600 : 400,
-              color: isStatusErr ? C.dangerText : C.textPrimary, lineHeight: 1.45,
-              display: 'flex', alignItems: 'flex-start', gap: SP.sm,
-            }}>
-              {isStatusErr && <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, color: C.danger, marginTop: 2 }} />}
-              <span>{statusLine}</span>
-            </div>
-          )}
-          {err && (
-            <div style={{ fontSize: FS.sm, color: C.dangerText, marginTop: 2 }}>{err}</div>
-          )}
+          </div>
+
+          <div style={{ display: 'flex', gap: SP.sm, flexDirection: isMobile ? 'column' : 'row' }}>
+            <Button variant="primary" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
+              loading={loading} disabled={loading}
+              leftIcon={!loading ? <Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : undefined}
+              onClick={generate}>
+              Сгенерировать заново
+            </Button>
+            <Button variant="ghost" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
+              disabled={!canReset}
+              leftIcon={<RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+              onClick={reset}>
+              Вернуть стандартный
+            </Button>
+          </div>
         </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: SP.sm, flexDirection: isMobile ? 'column' : 'row' }}>
-        <Button variant="primary" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
-          loading={loading} disabled={loading}
-          leftIcon={!loading ? <Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /> : undefined}
-          onClick={generate}>
-          Сгенерировать заново
-        </Button>
-        <Button variant="ghost" size={isMobile ? 'md' : 'sm'} fullWidth={isMobile}
-          disabled={!canReset}
-          leftIcon={<RotateCcw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
-          onClick={reset}>
-          Вернуть стандартный
-        </Button>
-      </div>
+      </AccordionSection>
 
       {confirm && (
         <Modal
@@ -258,6 +271,6 @@ export function BackgroundSection({ project, iconColor, onColorChange, onProject
           </div>
         </Modal>
       )}
-    </div>
+    </>
   );
 }

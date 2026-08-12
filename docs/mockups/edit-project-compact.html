@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Редактировать проект — компактный диалог со сворачиваемыми секциями · макет v1</title>
+<style>
+/* ===== Токены (из theme.css / design.ts) ===== */
+:root {
+  --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+  --c-on-accent:#FBF8F2;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5; --c-accent-soft:#E8A990;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+  --c-danger:#B4452F; --c-danger-text:#B4452F; --c-danger-bg:#FBF1EC;
+  --c-success-text:#3F7A4F; --c-success-bg:#E9F1E8;
+  --c-overlay:rgba(23,19,15,.42);
+  --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+  --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+  --shadow-thumb:0 1px 3px rgba(42,37,31,.12);
+}
+[data-theme="dark"] {
+  --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+  --c-on-accent:#201C18;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C; --c-accent-soft:#9A5E48;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037; --c-dashed:#4A443B; --c-track:#453F37;
+  --c-danger:#E8785E; --c-danger-text:#EE8A72; --c-danger-bg:#331F1B;
+  --c-success-text:#8FCB79; --c-success-bg:#232E20;
+  --c-overlay:rgba(0,0,0,.62);
+  --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+  --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+  --shadow-thumb:0 1px 3px rgba(0,0,0,.45);
+}
+* { box-sizing:border-box; }
+body {
+  margin:0; background:var(--c-bg-main); color:var(--c-text-primary);
+  font-family:"Hanken Grotesk","Segoe UI",system-ui,-apple-system,sans-serif;
+  font-size:13px; line-height:1.5;
+  transition:background .2s, color .2s;
+}
+.mono { font-family:"JetBrains Mono","Courier New",monospace; }
+
+/* ===== Служебная обвязка макета (не часть продукта) ===== */
+.bar {
+  position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+  padding:12px 24px; background:var(--c-bg-panel); border-bottom:1px solid var(--c-border);
+}
+.bar h1 { margin:0; font-size:16px; font-weight:600; color:var(--c-text-heading); flex:1; min-width:200px;
+  font-family:"PT Serif",Georgia,serif; }
+.bar .toggle { display:flex; border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+.bar .toggle button {
+  font:inherit; font-size:12px; padding:6px 14px; cursor:pointer;
+  background:transparent; border:none; color:var(--c-text-secondary);
+}
+.bar .toggle button.on { background:var(--c-text-heading); color:var(--c-bg-main); }
+.wrap { max-width:1180px; margin:0 auto; padding:28px 24px 96px; }
+h2.sec {
+  margin:48px 0 4px; font-size:22px; font-weight:600; color:var(--c-text-heading);
+  font-family:"PT Serif",Georgia,serif; letter-spacing:-.01em;
+}
+h2.sec:first-of-type { margin-top:8px; }
+p.note { margin:0 0 18px; color:var(--c-text-secondary); font-size:13px; max-width:76ch; }
+p.note code { background:var(--c-bg-inset); padding:1px 5px; border-radius:6px; font-size:12px; }
+.cap { font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--c-text-muted); margin:0 0 10px; }
+.scene { display:flex; gap:28px; flex-wrap:wrap; align-items:flex-start; }
+.ruler {
+  font-size:12px; color:var(--c-text-muted); margin-top:10px; display:flex; align-items:center; gap:8px;
+}
+.ruler b { color:var(--c-text-secondary); font-weight:600; }
+
+/* ===== Сцена-«экран»: оверлей + модалка (имитация) ===== */
+.screen {
+  background:var(--c-bg-panel); border:1px solid var(--c-border); border-radius:14px;
+  padding:28px 20px; display:flex; justify-content:center; position:relative; overflow:hidden;
+}
+.screen.mobile { padding:0; align-items:flex-end; display:flex; min-height:640px; }
+
+/* ===== Модалка (Modal.tsx, десктоп) ===== */
+.modal {
+  width:500px; max-width:100%; background:var(--c-bg-main); border-radius:20px;
+  box-shadow:var(--shadow-modal); display:flex; flex-direction:column; overflow:hidden;
+}
+.modal .body { padding:26px 28px 20px; display:flex; flex-direction:column; gap:18px; }
+.modal h2 {
+  margin:0; font-family:"PT Serif",Georgia,serif; font-weight:500; font-size:22px;
+  color:var(--c-text-heading); letter-spacing:-.01em; line-height:1.25;
+}
+.modal .footer {
+  padding:16px 28px; border-top:1px solid var(--c-border-light);
+  display:flex; gap:10px; justify-content:flex-end;
+}
+
+/* Мобильная шторка (Modal.tsx, <768px) */
+.sheet {
+  width:390px; max-width:100%; background:var(--c-bg-main);
+  border-top-left-radius:22px; border-top-right-radius:22px;
+  box-shadow:var(--shadow-sheet); display:flex; flex-direction:column;
+}
+.sheet .grip { display:flex; justify-content:center; padding:10px 0 4px; }
+.sheet .grip i { width:38px; height:4px; border-radius:2px; background:var(--c-track); }
+.sheet .body { padding:8px 18px 16px; display:flex; flex-direction:column; gap:16px; }
+.sheet h2 {
+  margin:0; font-family:"PT Serif",Georgia,serif; font-weight:500; font-size:21px;
+  color:var(--c-text-heading); letter-spacing:-.01em;
+}
+.sheet .footer {
+  padding:12px 18px; border-top:1px solid var(--c-border-light);
+  display:flex; flex-direction:column; gap:10px;
+}
+
+/* ===== Кнопки (ui/Button) ===== */
+.btn {
+  font:inherit; font-weight:600; border:none; cursor:pointer; border-radius:12px;
+  display:inline-flex; align-items:center; justify-content:center; gap:6px;
+}
+.btn.primary { background:var(--c-accent); color:var(--c-on-accent); padding:9px 18px; font-size:13.5px; }
+.btn.ghost { background:transparent; color:var(--c-text-secondary); padding:9px 14px; font-size:13.5px;
+  border:1px solid var(--c-border); }
+.btn.sm { padding:6px 12px; font-size:12.5px; border-radius:10px; }
+.btn.ghostAccent { background:transparent; color:var(--c-accent); padding:8px 14px; font-size:13px;
+  border:1px solid var(--c-accent-muted); }
+.btn.block { width:100%; }
+
+/* ===== Поля (ui/Field, input) ===== */
+.field label {
+  display:block; font-size:12px; font-weight:600; color:var(--c-text-secondary);
+  text-transform:uppercase; letter-spacing:.05em; margin-bottom:6px;
+}
+.input {
+  width:100%; height:36px; padding:0 12px; border-radius:12px; font:inherit; font-size:14px;
+  border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary); outline:none;
+}
+.select {
+  width:100%; height:36px; padding:0 12px; border-radius:12px; font:inherit; font-size:13.5px;
+  border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary);
+  display:flex; align-items:center; justify-content:space-between;
+}
+
+/* ===== Блок иконки/имени (ProjectIconSection) ===== */
+.iconrow { display:flex; gap:14px; align-items:flex-start; }
+.iconprev {
+  width:64px; height:64px; border-radius:16px; flex-shrink:0; position:relative;
+  background:var(--c-accent); color:var(--c-on-accent);
+  display:flex; align-items:center; justify-content:center;
+  font-family:"PT Serif",Georgia,serif; font-size:24px; font-weight:600;
+}
+.iconprev .pen {
+  position:absolute; right:-6px; bottom:-6px; width:24px; height:24px; border-radius:50%;
+  background:var(--c-bg-white); border:1px solid var(--c-border); color:var(--c-text-secondary);
+  display:flex; align-items:center; justify-content:center;
+}
+.colordots { display:flex; gap:8px; margin-top:10px; }
+.colordots i {
+  width:20px; height:20px; border-radius:50%; cursor:pointer; border:2px solid transparent;
+}
+.colordots i.sel { border-color:var(--c-text-heading); }
+
+/* ===== Карточка-список (SettingsRow) ===== */
+.cardlist {
+  background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; overflow:hidden;
+}
+.row {
+  display:flex; align-items:center; justify-content:space-between; gap:12px;
+  padding:9px 14px; border-bottom:1px solid var(--c-border-light);
+}
+.row:last-child { border-bottom:none; }
+.row .l { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.row .l b { font-weight:600; color:var(--c-text-heading); }
+.row .l span.m { color:var(--c-text-muted); }
+
+/* ===== Тумблер (ui/Toggle) ===== */
+.tgl {
+  position:relative; width:44px; height:26px; border-radius:999px; border:none; cursor:pointer;
+  background:var(--c-track); flex-shrink:0; transition:background .15s;
+}
+.tgl.on { background:var(--c-accent); }
+.tgl i {
+  position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%;
+  background:var(--c-bg-white); box-shadow:var(--shadow-thumb); transition:left .15s;
+}
+.tgl.on i { left:21px; }
+
+/* ===== Lead-баннер (ProjectLeadSection) ===== */
+.lead {
+  padding:8px 12px; background:var(--c-bg-white); border:1px solid var(--c-border);
+  border-radius:12px; display:flex; flex-direction:column; gap:8px;
+}
+.lead .cap2 {
+  font-size:12px; font-weight:600; color:var(--c-text-secondary);
+  text-transform:uppercase; letter-spacing:.05em;
+}
+.lead .txt { display:flex; align-items:flex-start; gap:8px; font-size:13px; line-height:1.5; }
+.lead .txt svg { flex-shrink:0; color:var(--c-accent); margin-top:2px; }
+.lead .acts { display:flex; gap:8px; }
+
+/* ============================================================
+   НОВОЕ: сворачиваемая секция (AccordionSection)
+   Строка-заголовок 44px: иконка + название + сводка статуса + chevron.
+   Тело — существующее содержимое секции, раскрывается по клику.
+   ============================================================ */
+.acc {
+  background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px;
+  overflow:hidden;
+}
+.acc > .head {
+  display:flex; align-items:center; gap:10px; padding:10px 14px; min-height:44px;
+  cursor:pointer; user-select:none;
+}
+.acc > .head:hover { background:var(--c-bg-selected); }
+.acc > .head svg.ic { flex-shrink:0; color:var(--c-text-muted); }
+.acc > .head .t { font-size:13px; font-weight:600; color:var(--c-text-heading); }
+.acc > .head .sum {
+  margin-left:auto; font-size:12px; color:var(--c-text-muted); text-align:right;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
+}
+.acc > .head .sum.ok { color:var(--c-success-text); }
+.acc > .head .sum.err { color:var(--c-danger-text); font-weight:600; }
+.acc > .head svg.ch { flex-shrink:0; color:var(--c-text-muted); transition:transform .15s; }
+.acc.open > .head svg.ch { transform:rotate(180deg); }
+.acc > .bodywrap { display:none; border-top:1px solid var(--c-border-light); padding:10px 12px 12px; }
+.acc.open > .bodywrap { display:block; }
+
+/* --- тело Git-секции (существующее, без изменений) --- */
+.gitbody { display:flex; flex-direction:column; gap:5px; }
+.gitstatus {
+  display:flex; align-items:center; gap:8px; padding:6px 10px; border-radius:10px;
+  background:var(--c-success-bg); color:var(--c-success-text); font-size:12px;
+}
+.gitstatus span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gitcard {
+  display:flex; align-items:center; gap:8px; padding:7px 10px; cursor:pointer;
+  border-radius:10px; border:1px solid var(--c-border); background:var(--c-bg-white);
+}
+.gitcard.active { border-color:var(--c-accent); background:var(--c-accent-light); }
+.gitcard .dot {
+  width:13px; height:13px; border-radius:50%; flex-shrink:0;
+  border:1.5px solid var(--c-dashed);
+}
+.gitcard.active .dot {
+  border-color:var(--c-accent); background:var(--c-accent);
+  box-shadow:inset 0 0 0 2.5px var(--c-bg-white);
+}
+.gitcard .n { font-size:13px; font-weight:500; color:var(--c-text-primary); }
+.gitcard.active .n { font-weight:600; color:var(--c-text-heading); }
+.gitpush { display:flex; align-items:center; gap:8px; padding:1px 10px 0 31px; font-size:12px; }
+.gitpush .tgl { width:36px; height:22px; }
+.gitpush .tgl i { width:16px; height:16px; }
+.gitpush .tgl.on i { left:17px; }
+
+/* --- тело MCP-секции --- */
+.mcprow {
+  display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:8px 4px; border-top:1px solid var(--c-border-light); font-size:13px;
+}
+.mcprow:first-child { border-top:none; }
+
+/* --- тело секции фона --- */
+.bgprev {
+  width:88px; height:60px; border-radius:10px; flex-shrink:0; position:relative; overflow:hidden;
+  background:var(--c-bg-main); box-shadow:inset 0 0 0 1px var(--c-border-light);
+}
+.bgprev::before {
+  content:""; position:absolute; inset:0;
+  background:
+    radial-gradient(130% 75% at 50% 0%, rgba(217,119,87,.20), transparent 55%),
+    radial-gradient(120% 60% at 50% 110%, rgba(217,119,87,.12), transparent 60%);
+}
+.bgprev svg { position:absolute; inset:0; width:100%; height:100%; opacity:.35; color:var(--c-text-secondary); }
+.bgrow { display:flex; align-items:center; gap:12px; }
+.bgrow .col { min-width:0; flex:1; }
+.bgcolor-line { font-size:13px; font-weight:600; color:var(--c-text-heading); display:flex; align-items:center; gap:8px; }
+.bgcolor-line i { width:7px; height:7px; border-radius:50%; background:var(--c-accent); flex-shrink:0; }
+
+/* --- тело sync-секции --- */
+.syncrow { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.syncrow .t { font-size:14px; font-weight:600; color:var(--c-text-heading); }
+.syncrow .h { font-size:12px; color:var(--c-text-muted); margin-top:2px; }
+
+/* Линейка высоты (служебная) */
+.hmark { display:flex; gap:6px; align-items:baseline; }
+</style>
+</head>
+<body>
+
+<div class="bar">
+  <h1>«Редактировать проект» — компактный диалог · макет v1</h1>
+  <div class="toggle" id="themeToggle">
+    <button class="on" data-t="light">Светлая</button>
+    <button data-t="dark">Тёмная</button>
+  </div>
+</div>
+
+<div class="wrap">
+
+<p class="note">
+  Приём: секции-возможности (<code>MCP-серверы</code>, <code>История файлов</code>, <code>Фон</code>,
+  <code>Офлайн</code>) сворачиваются в строки с иконкой и однострочной сводкой статуса.
+  Верхняя «форма» — иконка/имя, группа, карточка-список (путь/промпт/скрытые/правила) —
+  остаётся развёрнутой: это идентичность проекта, за ней в диалог приходят чаще всего.
+  Строки кликабельны — попробуйте. Сводка в заголовке показывает текущее состояние,
+  не открывая секцию.
+</p>
+
+<!-- ================= СЦЕНА 1: десктоп, минимальный состав ================= -->
+<h2 class="sec">1. Минимальный состав</h2>
+<p class="note">
+  Нет групп, руководитель назначен, своих MCP-серверов нет, фича фонов выключена.
+  Две обязательные секции — «История файлов» и «Офлайн» — свёрнуты. Диалог ≈ 560px —
+  помещается целиком на любом экране.
+</p>
+<div class="scene">
+  <div class="screen">
+    <div class="modal">
+      <div class="body">
+        <h2>Редактировать проект</h2>
+
+        <div class="iconrow">
+          <div class="iconprev">AI<span class="pen"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></span></div>
+          <div style="flex:1; min-width:0;">
+            <input class="input" value="AI Home">
+            <div class="colordots">
+              <i style="background:#D97757" class="sel"></i><i style="background:#5E8B4E"></i><i style="background:#3E7CA6"></i><i style="background:#6C5CB0"></i><i style="background:#C9923E"></i><i style="background:#B4452F"></i>
+            </div>
+          </div>
+        </div>
+
+        <div class="cardlist">
+          <div class="row"><div class="l mono" style="font-size:12.5px; color:var(--c-text-secondary); display:flex; align-items:center; gap:8px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted); flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            C:\Sources\ClaudeCodeServer</div></div>
+          <div class="row"><div class="l"><b>Системный промпт</b> <span class="m">· Отвечай по-русски, код с коммен…</span></div>
+            <button class="btn ghost sm">Редактировать</button></div>
+          <div class="row"><div class="l">Скрытые файлы и папки</div><button class="tgl"><i></i></button></div>
+          <div class="row"><div class="l"><b>Правила разрешений</b> <span class="m">· 2 правила</span></div>
+            <button class="btn ghost sm">Настроить</button></div>
+        </div>
+
+        <!-- Сворачиваемые секции -->
+        <div class="acc">
+          <div class="head" onclick="this.parentElement.classList.toggle('open')">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+            <span class="t">История файлов (Git)</span>
+            <span class="sum">Не ведётся</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="bodywrap">
+            <div class="gitbody">
+              <div class="gitcard active"><span class="dot"></span><span class="n">Без ведения истории</span></div>
+              <div class="gitcard"><span class="dot"></span><span class="n">Ручное ведение истории</span></div>
+              <div class="gitcard"><span class="dot"></span><span class="n">Автоматическое ведение истории</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="acc">
+          <div class="head" onclick="this.parentElement.classList.toggle('open')">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span class="t">Офлайн-доступ</span>
+            <span class="sum">Выключен</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="bodywrap">
+            <div class="syncrow">
+              <div><div class="t">Синхронизировать весь проект</div><div class="h">Скачать все файлы проекта для офлайна</div></div>
+              <button class="tgl"><i></i></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="footer">
+        <button class="btn ghost">Отмена</button>
+        <button class="btn primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="ruler">Высота диалога: <b>≈ 560px</b> · было с тем же составом ≈ 640px, а с полным — свыше 1100px</div>
+
+<!-- ================= СЦЕНА 2: десктоп, полный состав ================= -->
+<h2 class="sec">2. Полный состав — все условные секции видны</h2>
+<p class="note">
+  Группы есть, руководитель не назначен (lead-баннер — это призыв к действию, он остаётся
+  развёрнутым и условным), 3 своих MCP-сервера, фича фонов включена. Все четыре секции —
+  строками по 44px со сводкой; «История файлов» раскрыта для примера. Сводки читаются как
+  ответ на вопрос «а что у меня тут настроено?» — без открытия.
+</p>
+<div class="scene">
+  <div class="screen">
+    <div class="modal">
+      <div class="body">
+        <h2>Редактировать проект</h2>
+
+        <div class="iconrow">
+          <div class="iconprev">AI<span class="pen"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></span></div>
+          <div style="flex:1; min-width:0;">
+            <input class="input" value="AI Home">
+            <div class="colordots">
+              <i style="background:#D97757" class="sel"></i><i style="background:#5E8B4E"></i><i style="background:#3E7CA6"></i><i style="background:#6C5CB0"></i><i style="background:#C9923E"></i><i style="background:#B4452F"></i>
+            </div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>Группа</label>
+          <div class="select">Работа
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted)"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <div class="cardlist">
+          <div class="row"><div class="l mono" style="font-size:12.5px; color:var(--c-text-secondary); display:flex; align-items:center; gap:8px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color:var(--c-text-muted); flex-shrink:0"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            C:\Sources\ClaudeCodeServer</div></div>
+          <div class="row"><div class="l"><b>Системный промпт</b> <span class="m">· Отвечай по-русски, код с коммен…</span></div>
+            <button class="btn ghost sm">Редактировать</button></div>
+          <div class="row"><div class="l">Скрытые файлы и папки</div><button class="tgl"><i></i></button></div>
+          <div class="row"><div class="l"><b>Правила разрешений</b> <span class="m">· 2 правила</span></div>
+            <button class="btn ghost sm">Настроить</button></div>
+        </div>
+
+        <div class="lead">
+          <div class="cap2">Руководитель проекта</div>
+          <div class="txt">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"/><path d="M5 20h14"/></svg>
+            <span>У проекта нет руководителя. Пока чаты ведёт ваш личный ассистент — без командных механик.</span>
+          </div>
+          <div class="acts">
+            <button class="btn ghostAccent sm">Познакомиться с проектом</button>
+            <button class="btn ghost sm">Назначить руководителя</button>
+          </div>
+        </div>
+
+        <div class="acc">
+          <div class="head" onclick="this.parentElement.classList.toggle('open')">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8V2"/><path d="M15 8V2"/><path d="M12 22v-5"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>
+            <span class="t">MCP-серверы в проекте</span>
+            <span class="sum">2 из 3 включено</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="bodywrap">
+            <div class="mcprow"><span>Заметки</span><button class="tgl on"><i></i></button></div>
+            <div class="mcprow"><span>Задачи</span><button class="tgl on"><i></i></button></div>
+            <div class="mcprow" style="opacity:.62"><span>Файловое хранилище</span><button class="tgl"><i></i></button></div>
+          </div>
+        </div>
+
+        <div class="acc open">
+          <div class="head" onclick="this.parentElement.classList.toggle('open')">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+            <span class="t">История файлов (Git)</span>
+            <span class="sum ok">Авто · 128 коммитов</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="bodywrap">
+            <div class="gitbody">
+              <div class="gitstatus">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+                <span>История ведётся · 128 коммитов · с 3 марта</span>
+              </div>
+              <div class="gitcard"><span class="dot"></span><span class="n">Ручное ведение истории</span></div>
+              <div class="gitcard active"><span class="dot"></span><span class="n">Автоматическое ведение истории</span></div>
+              <div class="gitpush"><button class="tgl on"><i></i></button><span>Ещё и отправлять копию на git-сервер (push)</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="acc">
+          <div class="head" onclick="this.parentElement.classList.toggle('open')">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            <span class="t">Фон рабочего пространства</span>
+            <span class="sum">Свой · Янтарный</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="bodywrap">
+            <div class="bgrow" style="margin-bottom:10px;">
+              <div class="bgprev"></div>
+              <div class="col">
+                <div class="bgcolor-line"><i></i>Цвет — <span style="color:var(--c-text-primary)">Янтарный</span></div>
+              </div>
+            </div>
+            <div style="display:flex; gap:8px;">
+              <button class="btn primary sm">Сгенерировать заново</button>
+              <button class="btn ghost sm">Вернуть стандартный</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="acc">
+          <div class="head" onclick="this.parentElement.classList.toggle('open')">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span class="t">Офлайн-доступ</span>
+            <span class="sum ok">Все файлы доступны офлайн</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="bodywrap">
+            <div class="syncrow">
+              <div><div class="t">Синхронизировать весь проект</div><div class="h">Все файлы проекта доступны офлайн</div></div>
+              <button class="tgl on"><i></i></button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="footer">
+        <button class="btn ghost">Отмена</button>
+        <button class="btn primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="ruler">Высота диалога со всеми секциями (git раскрыт): <b>≈ 850px</b> · все свёрнуты: <b>≈ 750px</b> · было — свыше 1100px даже без раскрытого содержимого</div>
+
+<!-- ================= СЦЕНА 3: мобила ================= -->
+<h2 class="sec">3. Мобильная шторка</h2>
+<p class="note">
+  Тот же состав в bottom-sheet: строки секций — полноценные tap-зоны 44px, hover не нужен.
+  Раскрыта секция «Фон» — кнопки действий становятся во всю ширину (как сейчас).
+  Свёрнутые секции оставляют шторку короткой: контент виден без скролла на iPhone SE.
+</p>
+<div class="scene">
+  <div class="screen mobile" style="background:var(--c-overlay);">
+    <div class="sheet">
+      <div class="grip"><i></i></div>
+      <div class="body">
+        <h2>Редактировать проект</h2>
+
+        <div class="iconrow">
+          <div class="iconprev" style="width:56px; height:56px; font-size:20px;">AI<span class="pen"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></span></div>
+          <div style="flex:1; min-width:0;">
+            <input class="input" value="AI Home">
+          </div>
+        </div>
+
+        <div class="cardlist">
+          <div class="row"><div class="l"><b>Системный промпт</b> <span class="m">· задан</span></div>
+            <button class="btn ghost sm">Редактировать</button></div>
+          <div class="row"><div class="l">Скрытые файлы и папки</div><button class="tgl"><i></i></button></div>
+          <div class="row"><div class="l"><b>Правила разрешений</b> <span class="m">· 2 правила</span></div>
+            <button class="btn ghost sm">Настроить</button></div>
+        </div>
+
+        <div class="acc">
+          <div class="head">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8V2"/><path d="M15 8V2"/><path d="M12 22v-5"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>
+            <span class="t">MCP-серверы</span>
+            <span class="sum">2 из 3</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <div class="acc">
+          <div class="head">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+            <span class="t">История файлов</span>
+            <span class="sum ok">Авто · 128</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <div class="acc open">
+          <div class="head">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+            <span class="t">Фон рабочего пространства</span>
+            <span class="sum">Свой</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+          <div class="bodywrap">
+            <div class="bgrow" style="margin-bottom:10px;">
+              <div class="bgprev"></div>
+              <div class="col">
+                <div class="bgcolor-line"><i></i>Цвет — <span style="color:var(--c-text-primary)">Янтарный</span></div>
+              </div>
+            </div>
+            <div style="display:flex; flex-direction:column; gap:8px;">
+              <button class="btn primary block">Сгенерировать заново</button>
+              <button class="btn ghost block">Вернуть стандартный</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="acc">
+          <div class="head">
+            <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            <span class="t">Офлайн-доступ</span>
+            <span class="sum">Выкл</span>
+            <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+          </div>
+        </div>
+      </div>
+      <div class="footer">
+        <button class="btn primary block">Сохранить</button>
+        <button class="btn ghost block">Отмена</button>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="ruler">На мобиле свёрнутые заголовки секций <b>не короче 44px</b> — палец попадает без прицеливания</div>
+
+<!-- ================= СЦЕНА 4: словарь сводок ================= -->
+<h2 class="sec">4. Сводки в заголовках — словарь состояний</h2>
+<p class="note">
+  Сводка — одна короткая строка справа, <code>FS.sm</code>, <code>C.textMuted</code>; «включено/работает» —
+  <code>C.successText</code>, ошибка секции — <code>C.dangerText</code> + «Ошибка — откройте».
+  Данные для сводок уже грузятся при открытии диалога (git-статус, список серверов, фон, sync-метки) —
+  новых запросов не появляется; сворачивание меняет только рендер.
+</p>
+<div class="scene">
+  <div class="screen" style="display:block; padding:20px;">
+    <div style="display:grid; gap:10px; max-width:460px; margin:0 auto;">
+      <div class="acc"><div class="head" style="cursor:default">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <span class="t">История файлов (Git)</span><span class="sum">Не ведётся</span>
+        <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+      <div class="acc"><div class="head" style="cursor:default">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <span class="t">История файлов (Git)</span><span class="sum ok">Ручная · 42 коммита</span>
+        <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+      <div class="acc"><div class="head" style="cursor:default">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <span class="t">История файлов (Git)</span><span class="sum err">Ошибка — откройте</span>
+        <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+      <div class="acc"><div class="head" style="cursor:default">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        <span class="t">Фон рабочего пространства</span><span class="sum">Стандартный</span>
+        <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+      <div class="acc"><div class="head" style="cursor:default">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg>
+        <span class="t">Фон рабочего пространства</span><span class="sum">Рисуем фон…</span>
+        <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+      <div class="acc"><div class="head" style="cursor:default">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span class="t">Офлайн-доступ</span><span class="sum">Синхронизируется…</span>
+        <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+      <div class="acc"><div class="head" style="cursor:default">
+        <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 8V2"/><path d="M15 8V2"/><path d="M12 22v-5"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg>
+        <span class="t">MCP-серверы в проекте</span><span class="sum">Ничего не включено</span>
+        <svg class="ch" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div></div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script>
+document.getElementById('themeToggle').addEventListener('click', function (e) {
+  var b = e.target.closest('button');
+  if (!b) return;
+  this.querySelectorAll('button').forEach(function (x) { x.classList.toggle('on', x === b); });
+  document.documentElement.setAttribute('data-theme', b.dataset.t);
+});
+// На мобильной сцене заголовки тоже кликабельны
+document.querySelectorAll('.sheet .acc > .head').forEach(function (h) {
+  h.addEventListener('click', function () { h.parentElement.classList.toggle('open'); });
+});
+</script>
+</body>
+</html>

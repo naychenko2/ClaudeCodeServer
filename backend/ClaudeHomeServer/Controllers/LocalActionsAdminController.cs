@@ -104,18 +104,22 @@ public class LocalActionsAdminController(
         return Ok(Describe(key));
     }
 
-    // null — модель годится. Провайдер должен быть настроен (иначе вызов гарантированно
-    // упадёт в фолбэк и выбор был бы бессмысленной декорацией), а сама модель — существовать
-    // в каталоге: опечатка в id иначе всплыла бы только при первом фоновом вызове.
+    // null — модель годится. Классификация значения по каталогу (ADR-009 §1, форма 8):
+    // обычная модель / модель без поставщика (есть только как direct:) / неизвестная.
+    // Тексты ошибок — утверждённые, из docs/features/model-route-format-validation.md.
+    // Провайдер должен быть настроен (иначе вызов упадёт в фолбэк и выбор был бы декорацией) —
+    // но эту проверку делаем только для найденной обычной модели: для «без поставщика» и
+    // «неизвестная» причина яснее из текста классификатора, а не из «провайдер выключен».
     private async Task<string?> ValidateModelAsync(string model, CancellationToken ct)
     {
+        var known = await models.GetModelsAsync(ct);
+        var verdict = LocalActionRouteValidator.ClassifyModelRoute(model, known.Select(m => m.Value));
+        if (verdict is not null) return verdict;
+
         if (providers.ResolveByModel(model) is { } p && !p.Enabled)
             return $"Провайдер «{p.DisplayName}» не настроен — задайте LlmProviders:{p.Key}:ApiKey";
 
-        var known = await models.GetModelsAsync(ct);
-        return known.Any(m => string.Equals(m.Value, model, StringComparison.OrdinalIgnoreCase))
-            ? null
-            : $"Модель «{model}» отсутствует в каталоге";
+        return null;
     }
 
     private object Describe(string key)

@@ -100,6 +100,76 @@ public class LocalActionsAdminControllerTests : IClassFixture<TestWebApplication
         var put = await _admin.PutAsJsonAsync(
             $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "нет-такой-модели" });
         put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        // Текст — утверждённый route.unknownModel (docs/features/model-route-format-validation.md):
+        // слово «каталог» из прежней формулировки убрано — человеку оно ничего не говорит
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("error").GetString()!.Should().Contain("не найдена среди доступных");
+        body.GetProperty("error").GetString()!.Should().Contain("«нет-такой-модели»");
+    }
+
+    // --- Восемь допустимых форм значения маршрута (ADR-009 §1). Места, где это проверяется
+    //     в других тестах: claude (АдминПереключаетМаршрутИВидитЭтоВUsage), tier:strong
+    //     (АдминНазначаетМестуСлотТира), preset:{id} (ПресетДопустимМестуКаталога_ПриНаличииВСторе).
+    //     Здесь — остальные формы, включая «голое имя обычной модели» (форма 8). ---
+
+    [Fact]
+    public async Task Форма_Local_ПринимаетсяДляНеагентногоМеста()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "local" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("route").GetString().Should().Be("local");
+        body.GetProperty("source").GetString().Should().Be("admin");
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.NotesTags}");
+    }
+
+    [Fact]
+    public async Task Форма_Default_ПринимаетсяИНормализуетсяВСреднийСлот()
+    {
+        // Легаси-значение «default» (v1) трактуется как tier:medium (LocalActionRouter.Parse)
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "default" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("route").GetString().Should().Be("tier:medium");
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.NotesTags}");
+    }
+
+    [Theory]
+    [InlineData("tier:medium")]
+    [InlineData("tier:weak")]
+    public async Task Форма_TierСлот_Принимается(string route)
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("route").GetString().Should().Be(route);
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.NotesTags}");
+    }
+
+    [Fact]
+    public async Task Форма_ОбычнаяМодель_Принимается()
+    {
+        // Форма 8: голое имя модели из каталога (здесь — алиас Claude из статического
+        // fallback каталога тестового хоста: claude CLI выключен, провайдеры без ApiKey).
+        // ADR-009 §1: обычная модель — допустимое значение; голое имя валидно.
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "haiku" });
+        put.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await put.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("route").GetString().Should().Be("haiku");
+        body.GetProperty("source").GetString().Should().Be("admin");
+        await _admin.DeleteAsync($"/api/admin/local-actions/{LocalActionCatalog.NotesTags}");
+    }
+
+    [Fact]
+    public async Task ПустойМаршрут400()
+    {
+        var put = await _admin.PutAsJsonAsync(
+            $"/api/admin/local-actions/{LocalActionCatalog.NotesTags}", new { route = "   " });
+        put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 
     [Fact]

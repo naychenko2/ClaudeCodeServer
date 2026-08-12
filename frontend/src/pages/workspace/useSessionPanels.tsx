@@ -8,6 +8,7 @@
 import type { ReactNode } from 'react';
 import type { Session } from '../../types';
 import { C, FONT } from '../../lib/design';
+import { plural } from '../../lib/spend';
 import { useSessionArtifacts } from '../../hooks/useSessionArtifacts';
 import { PlanSection } from '../../components/artifacts/PlanSection';
 import { AgentsSection } from '../../components/artifacts/AgentsSection';
@@ -15,7 +16,7 @@ import { ContextSection } from '../../components/artifacts/ContextSection';
 // В meta.tsx свой PanelKey (категории артефактов) — берём оттуда только panelBadge,
 // а ключи панелей остаются из реестра зон
 import { panelBadge } from '../../components/artifacts/meta';
-import type { PanelKey } from './panelCatalog';
+import type { PanelKey, RailBadgeInfo } from './panelCatalog';
 
 // Пустой стейт панельки (открыта, но контента ещё нет)
 function emptyPanel(text: string): ReactNode {
@@ -33,8 +34,9 @@ export interface SessionPanels {
   // открывать (План — если был план, Агенты — если есть контент, Персона — если
   // собеседник персона); иначе иконка скрыта целиком, а с ней и разделитель групп.
   visible: (k: PanelKey, isOpen: boolean) => boolean;
-  // Число в кружке над иконкой рельсы — «сколько требует внимания», не «всего»
-  railBadge: (k: PanelKey) => number | null;
+  // Кружки над иконкой рельсы: primary — «сколько требует внимания», secondary —
+  // второй индикатор (у сессионных не используется), hint — расшифровка в тултипе
+  railBadge: (k: PanelKey) => RailBadgeInfo | null;
   // Значок в шапке карточки
   headerBadge: (k: PanelKey) => string | null;
 }
@@ -68,14 +70,18 @@ export function useSessionPanels(session: Session | null, projectId?: string, ro
     },
 
     // План — неодобренные (status ≠ approved), Агенты — открытые (running);
-    // у Персоны счётчика нет
+    // у Персоны счётчика нет. hint расшифровывает число в тултипе кнопки рельсы
     railBadge: k => {
-      let n: number;
-      if (k === 'plan') n = artifacts.plans.filter(p => p.status !== 'approved').length;
-      else if (k === 'agents') n = [...artifacts.agents, ...artifacts.workflows.flatMap(w => w.agents)]
-        .filter(a => a.status === 'running').length;
-      else return null;
-      return n > 0 ? n : null;
+      if (k === 'plan') {
+        const n = artifacts.plans.filter(p => p.status !== 'approved').length;
+        return n > 0 ? { primary: n, hint: `${n} ${plural(n, 'ждёт одобрения', 'ждут одобрения', 'ждут одобрения')}` } : null;
+      }
+      if (k === 'agents') {
+        const n = [...artifacts.agents, ...artifacts.workflows.flatMap(w => w.agents)]
+          .filter(a => a.status === 'running').length;
+        return n > 0 ? { primary: n, hint: `${n} ${plural(n, 'выполняется', 'выполняются', 'выполняются')}` } : null;
+      }
+      return null;
     },
 
     headerBadge: k => {

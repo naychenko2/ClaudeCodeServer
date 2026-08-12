@@ -9,7 +9,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
-import { SESSION_KEYS } from './workspace/panelCatalog';
+import { SESSION_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
@@ -38,7 +38,8 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey, ensureTasksLoaded } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
-import { useGitState, ensureGit } from '../lib/git';
+import { useGitState, ensureGit, loadUnpushedLog } from '../lib/git';
+import { plural } from '../lib/spend';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { useFeature, FLAGS } from '../lib/featureFlags';
@@ -516,16 +517,51 @@ const windowWidth = useWindowWidth();
   // Все источники — уже подписанные сторы/стейт; git тянем тем же глобальным стором
   // (ensureGit — идемпотентная первичная загрузка, чтобы кружок был виден до открытия панели).
   const gitState = useGitState(project.id);
-  useEffect(() => { ensureGit(project.id); }, [project.id]);
-  const railCounts = useMemo(() => ({
-    // Число изменённых файлов — дедуп по пути (файл может быть и staged, и unstaged)
-    changes: gitState.status
+  useEffect(() => {
+    ensureGit(project.id);
+    // Стек незапушенных коммитов нужен второму (серому) кружку «Изменений» ДО открытия
+    // панели: ensureGit грузит только статус. Realtime и focus-обработчик стора
+    // держат стек свежим дальше — здесь лишь первая подтяжка
+    void loadUnpushedLog(project.id);
+  }, [project.id]);
+  const railBadges = useMemo<Partial<Record<PanelKey, RailBadgeInfo>>>(() => {
+    // «Изменения»: основной кружок — незафиксированные файлы (дедуп по пути), второй
+    // (серый) — незапушенные коммиты. hint расшифровывает оба в тултипе кнопки
+    const changesFiles = gitState.status
       ? new Set([...gitState.status.staged, ...gitState.status.unstaged, ...gitState.status.untracked].map(f => f.path)).size
-      : 0,
-    tasks: allTasks.filter(t => t.projectId === project.id && t.status !== 'done').length,
-    terminal: terminals.length,
-    preview: previewServices.filter(s => s.status === 'started').length,
-  }), [gitState.status, allTasks, project.id, terminals, previewServices]);
+      : 0;
+    const unpushed = gitState.unpushed.length;
+    // Цвета инвертированы: незафиксированные файлы — серые (норма, рабочее состояние),
+    // неопубликованные коммиты — оранжевые/accent (требуют пуша, главное внимание).
+    // Порядок строк в тултипе сохранён (сначала незафиксированные, потом неопубликованные),
+    // меняется только цвет точек
+    const changesHint: { text: string; tone: 'accent' | 'muted' }[] = [];
+    if (changesFiles > 0) changesHint.push({ text: `${changesFiles} ${plural(changesFiles, 'незафиксированный', 'незафиксированных', 'незафиксированных')}`, tone: 'muted' });
+    if (unpushed > 0) changesHint.push({ text: `${unpushed} ${plural(unpushed, 'неопубликованный', 'неопубликованных', 'неопубликованных')}`, tone: 'accent' });
+    const activeTasks = allTasks.filter(t => t.projectId === project.id && t.status !== 'done').length;
+    const startedPreviews = previewServices.filter(s => s.status === 'started').length;
+    return {
+      changes: {
+        primary: changesFiles || undefined,
+        primaryTone: 'muted',
+        secondary: unpushed || undefined,
+        secondaryTone: 'accent',
+        hint: changesHint.length > 0 ? changesHint : undefined,
+      },
+      tasks: {
+        primary: activeTasks || undefined,
+        hint: activeTasks > 0 ? `${activeTasks} ${plural(activeTasks, 'активная', 'активных', 'активных')}` : undefined,
+      },
+      terminal: {
+        primary: terminals.length || undefined,
+        hint: terminals.length > 0 ? `${terminals.length} ${plural(terminals.length, 'запущенный', 'запущенных', 'запущенных')}` : undefined,
+      },
+      preview: {
+        primary: startedPreviews || undefined,
+        hint: startedPreviews > 0 ? `${startedPreviews} ${plural(startedPreviews, 'запущенный', 'запущенных', 'запущенных')}` : undefined,
+      },
+    };
+  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
@@ -1553,7 +1589,7 @@ const windowWidth = useWindowWidth();
           project={project}
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
-          railCounts={railCounts}
+          railBadges={railBadges}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}

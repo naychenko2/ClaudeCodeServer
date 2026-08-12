@@ -46,10 +46,26 @@ export type PanelKey = typeof PANEL_KEYS[number];
 // (chats); собирает их PanelZone в RailItem. primary — основной кружок (оранжевый,
 // правый верхний угол), secondary — второй (серый, правый нижний; сейчас это
 // незапушенные коммиты на «Изменениях»), hint — расшифровка в тултипе-плашке.
+//
+// hint — либо строка (одно значение, рисуется с оранжевой точкой как primary),
+// либо список линий: каждая со своим тоном под соответствующий кружок на иконке
+// (accent — оранжевый/primary, muted — серый/secondary). Так в тултипе «Изменений»
+// две строки: ●(оранж) N незафиксированных и ●(сер) N неопубликованных.
+export interface HintLine {
+  text: string;
+  tone?: 'accent' | 'muted';   // дефолт 'accent'
+}
+export type RailHint = string | readonly HintLine[];
+
 export interface RailBadgeInfo {
   primary?: number;
   secondary?: number;
-  hint?: string;
+  // Тон каждого кружка (дефолт: primary=accent/оранжевый, secondary=muted/серый).
+  // «Изменения» инвертирует: незафиксированные файлы — серые (норма, рабочее состояние),
+  // неопубликованные коммиты — оранжевые (требуют пуша)
+  primaryTone?: 'accent' | 'muted';
+  secondaryTone?: 'accent' | 'muted';
+  hint?: RailHint;
 }
 
 // Иконка и заголовок панели — общие для обеих зон.

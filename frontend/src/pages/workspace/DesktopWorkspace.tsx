@@ -27,7 +27,7 @@ import { TocPanel } from './TocPanel';
 import { useSessionPanels } from './useSessionPanels';
 import type { DocToc } from '../../hooks/useHeadings';
 import { startPointerDrag } from '../../lib/pointerDrag';
-import type { PanelKey } from './panelCatalog';
+import type { PanelKey, RailBadgeInfo } from './panelCatalog';
 import { ReaderHeaderBar } from './reader/ReaderHeaderBar';
 import { ReaderBody } from './reader/ReaderBody';
 import type { ReaderPanelActions, ReaderPanelState } from './reader/useReaderPanel';
@@ -116,8 +116,9 @@ interface Props {
   panels: Partial<Record<PanelKey, ReactNode>>;
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки в чате
   onOpenReader?: (url: string) => void;
-  // Числа-кружки на кнопках проекта в рельсе (changes/tasks/terminal/preview)
-  railCounts?: Partial<Record<PanelKey, number>>;
+  // Кружки-индикаторы на кнопках проекта в рельсе (changes/tasks/terminal/preview):
+  // primary (основной), secondary (серый; незапушенные), hint (расшифровка в тултипе)
+  railBadges?: Partial<Record<PanelKey, RailBadgeInfo>>;
   // Открыть режим «Стена» (док стены под доком проектов; вкладки в таббаре у стены нет)
   onOpenWall?: () => void;
 }
@@ -294,7 +295,7 @@ export function DesktopWorkspace(p: Props) {
       <PanelZone
         side="left"
         panels={zonePanels}
-        railCounts={p.railCounts}
+        railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         railFooter={
           // Вертикаль капсул у края окна: док проектов, под ним — док стены (вход в
@@ -423,7 +424,7 @@ export function DesktopWorkspace(p: Props) {
         side="right"
         compact={p.isTablet}
         panels={zonePanels}
-        railCounts={p.railCounts}
+        railBadges={p.railBadges}
         sessionPanels={sessionPanels}
         centerFileOpen={!!p.openFile}
       />

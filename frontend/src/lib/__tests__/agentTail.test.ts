@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration, isBgLaunchResult, asyncLaunchAckNote } from '../agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isBgLaunchResult, asyncLaunchAckNote, bgEmptyAnswerNote } from '../agentTail';
 
 // Реальный формат хвоста из транскриптов CLI: строка agentId (с подсказкой SendMessage
 // в скобках) + блок <usage> с переводами строк между парами ключ-значение
@@ -90,7 +90,47 @@ describe('asyncLaunchAckNote', () => {
     expect(asyncLaunchAckNote(false)).toBe('Агент работает в фоне — его ход виден в списке действий.');
   });
 
-  it('прерванный агент — честная пометка вместо «работает в фоне»', () => {
-    expect(asyncLaunchAckNote(true)).toBe('Агент прерван — задача не завершена.');
+  it('прерванный агент — про обрыв выдачи, без категоричного «задача не завершена»', () => {
+    const note = asyncLaunchAckNote(true);
+    expect(note).toBe('Выдача прервана — ответа нет');
+    // P8: не утверждаем, что задача не сделана — координатор мог восстановить результат
+    expect(note).not.toContain('задача не завершена');
+    expect(note).not.toContain('ответа не будет');
+  });
+});
+
+describe('bgEmptyAnswerNote', () => {
+  // P8: подпись тела карточки консультанта при отсутствии ответного текста. Раньше один
+  // текст «Агент прерван — ответа не будет» шёл на все случаи — она лгала, когда агент
+  // реально отработал (видно «Активность · N действий») или результат получен
+  // координатором другим каналом. Ни одна подпись не должна утверждать «ответа не будет».
+
+  it('обрыв + была активность — направляет в Активность, без «ответа не будет»', () => {
+    const note = bgEmptyAnswerNote({ settledNoText: true, bgAborted: true, hasToolActivity: true });
+    expect(note).toBe('Выдача прервана — детали в Активности');
+    expect(note).not.toContain('ответа не будет');
+  });
+
+  it('обрыв без активности — честная констатация, без «ответа не будет»', () => {
+    const note = bgEmptyAnswerNote({ settledNoText: true, bgAborted: true, hasToolActivity: false });
+    expect(note).toBe('Выдача прервана — ответа нет');
+    expect(note).not.toContain('ответа не будет');
+  });
+
+  it('штатное завершение без текста (не обрыв) — дефолт, никакого «прерван»', () => {
+    // Координатор мог получить результат вне карточки; слово «прерван» тут — ложь.
+    const note = bgEmptyAnswerNote({ settledNoText: true, bgAborted: false, hasToolActivity: true });
+    expect(note).toBeUndefined();
+  });
+
+  it('ответный текст есть (включая восстановленный retry) — подписи об обрыве нет', () => {
+    // Сценарий «оборвать выдачу, дать координатору восстановить»: если результат попал
+    // в поток (settledNoText=false), карточка показывает ответ, а не пометку об обрыве.
+    expect(bgEmptyAnswerNote({ settledNoText: false, bgAborted: true, hasToolActivity: true })).toBeUndefined();
+    expect(bgEmptyAnswerNote({ settledNoText: false, bgAborted: false, hasToolActivity: false })).toBeUndefined();
+  });
+
+  it('агент ещё работает (не settled) — подписи нет', () => {
+    expect(bgEmptyAnswerNote({ settledNoText: false, bgAborted: undefined, hasToolActivity: false })).toBeUndefined();
   });
 });

@@ -57,13 +57,15 @@ describe('PersonaConsultCard — шапка при прерванном аген
     running: false,
     isError: false,
     answer: '',
-    emptyAnswerNote: 'Агент прерван — ответа не будет',
+    emptyAnswerNote: 'Выдача прервана — ответа нет',
   };
 
-  it('aborted: статус «прервано» в шапке', () => {
+  it('aborted: статус «прервано» в шапке и пометка про обрыв выдачи', () => {
     const html = renderToStaticMarkup(createElement(PersonaConsultCard, { ...base, aborted: true }));
     expect(html).toContain('прервано');
-    expect(html).toContain('Агент прерван — ответа не будет');
+    expect(html).toContain('Выдача прервана — ответа нет');
+    // P8: категоричного «ответа не будет» карточка не утверждает
+    expect(html).not.toContain('ответа не будет');
   });
 
   it('без aborted: шапка без статуса, дефолтная пометка пустого ответа', () => {

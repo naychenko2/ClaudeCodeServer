@@ -3,7 +3,7 @@ import { Bot } from 'lucide-react';
 import type { ChatItem, Persona } from '../../types';
 import { C, FONT, SHADOW } from '../../lib/design';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
-import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck } from '../../lib/agentTail';
+import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, bgEmptyAnswerNote } from '../../lib/agentTail';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { ToolUseView, toolWord } from './ToolUseView';
@@ -64,7 +64,7 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
   // Чип роли вызова в шапке: 'консультант' у Task-консультаций чата; null — скрыть
   // (в Workflow персона — полноценный агент, «консультант» там неверен)
   badge?: string | null;
-  // Пометка вместо пустого ответа (напр. «Агент прерван — ответа не будет»);
+  // Пометка вместо пустого ответа (напр. «Выдача прервана — ответа нет»);
   // undefined — дефолтная «Ответ передан без текста»
   emptyAnswerNote?: string;
 }) {
@@ -233,7 +233,11 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   // Пока агент работает (до события bg_agent_done → item.bgDone), ВСЕ его тексты остаются
   // в «Активности» — промежуточные реплики не выдаём за ответ. После bgDone ответом
   // становится последний текст потока (из активности убираем, чтобы не дублировался);
-  // прерван (bgAborted) — тексты остаются активностью, в теле пометка «ответа не будет».
+  // прерван (bgAborted) — тексты остаются активностью, в теле честная пометка про обрыв
+  // выдачи (см. bgEmptyAnswerNote). Категоричного «ответа не будет» не пишем: координатор
+  // мог восстановить результат другим каналом (resume / чтение файла плана), а перехода
+  // «прерван → ответ» в самой карточке нет — bgDone замораживается в chatReducer, и retry
+  // координатора доезжает отдельными элементами ленты, а не текстом в этот tool_use.
   const asyncAck = item.result !== undefined && isAsyncLaunchAck(item.result);
   const running = item.result === undefined || (asyncAck && item.bgDone !== true);
   const settledBg = asyncAck && item.bgDone === true;
@@ -244,8 +248,11 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
   const answer = asyncAck
     ? (lastTextIdx >= 0 ? (activity![lastTextIdx].item as { text: string }).text : '')
     : (item.result ?? '');
-  // Завершился без ответного текста (или прерван вместе с процессом) — ответа не будет
-  const bgNoAnswer = settledBg && lastTextIdx < 0;
+  const emptyAnswerNote = bgEmptyAnswerNote({
+    settledNoText: settledBg && lastTextIdx < 0,
+    bgAborted: item.bgAborted,
+    hasToolActivity: !!activity && activity.some(e => e.item.kind === 'tool_use'),
+  });
 
   // Обычный сабагент (не персона) — стандартная карточка инструмента
   if (!persona) return <ToolUseView item={item} online={online} onOpenFile={onOpenFile} />;
@@ -261,7 +268,7 @@ export const PersonaTaskView = memo(function PersonaTaskView({ item, online, onO
       isError={!!item.isError}
       aborted={settledBg && item.bgAborted === true}
       answer={answer}
-      emptyAnswerNote={bgNoAnswer ? 'Агент прерван — ответа не будет' : undefined}
+      emptyAnswerNote={emptyAnswerNote}
       badge={badge}
     >
       {/* Активность консультанта: весь поток сабагента — инструменты, текст, размышления.

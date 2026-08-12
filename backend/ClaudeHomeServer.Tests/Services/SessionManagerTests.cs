@@ -4063,6 +4063,59 @@ public class SessionManagerTests : IDisposable
         SessionManager.ParseWorkMarker("Киру выбрал планировщик: фронт — её зона").Should().BeNull();
     }
 
+    // P19: координатор вкладывает дамп компонента в постановку — код обязан дойти до планировщика
+    // целиком. До фикса код-блок вырезался из всего текста хода ДО извлечения маркера, и в
+    // plan-v1.md после строки «Текущий код компонента:» было пусто.
+    [Fact]
+    public void МаркерРаботы_КодБлокВнутриМаркера_СохраняетсяЦеликом()
+    {
+        var text = "<team:work>Текущий код компонента:\n```tsx\nfunction Foo() { return null; }\n```\nПерепиши.</team:work>";
+        var expected = "Текущий код компонента:\n```tsx\nfunction Foo() { return null; }\n```\nПерепиши.";
+
+        SessionManager.ParseWorkMarker(text).Should().Be(expected);
+    }
+
+    // Инлайн-код тоже сохраняется внутри постановки (не только fenced).
+    [Fact]
+    public void МаркерРаботы_ИнлайнКодВнутриМаркера_Сохраняется()
+    {
+        SessionManager.ParseWorkMarker("<team:work>замени `foo()` на `bar()` везде</team>")
+            .Should().Be("замени `foo()` на `bar()` везде");
+    }
+
+    // Сохранённое свойство (на него есть прод-инцидент): открывающий тег, процитированный в
+    // код-блоке, маркером НЕ считается — даже если рядом ниже стоит настоящий маркер.
+    [Fact]
+    public void МаркерРаботы_ЦитатаВКодБлокеИИнлайн_НеСчитается_НастоящийБерётся()
+    {
+        // Цитата целым fenced-блоком — не активная постановка
+        SessionManager.ParseWorkMarker("Протокол:\n```\n<team:work>переписать компонент</team:work>\n```\nПонятно?")
+            .Should().BeNull();
+        // Инлайн-цитата `<team:work>…</team>` — не маркер; настоящий маркер ниже разбирается
+        SessionManager.ParseWorkMarker("Маркер ставится так: `<team:work>…</team>`.\n<team:work>реальная работа</team>")
+            .Should().Be("реальная работа");
+    }
+
+    // Смежное (та же правка для эскалации): код внутри <escalate:check> не теряется.
+    [Fact]
+    public void МаркерЭскалации_КодБлокВнутриМаркера_СохраняетсяЦеликом()
+    {
+        var text = "<escalate:check>падает тут:\n```\nAssert.True(false)\n```\nсмотри трейс</escalate:check>";
+
+        var parsed = SessionManager.ParseEscalationMarker(text);
+        parsed.Should().NotBeNull();
+        parsed!.Value.Kind.Should().Be(TeamEscalationKind.CheckFailed);
+        parsed.Value.Text.Should().Be("падает тут:\n```\nAssert.True(false)\n```\nсмотри трейс");
+    }
+
+    // Маркер разговора (<team:talk/>) — самодостаточный тег, та же защита от цитаты в код-блоке.
+    [Fact]
+    public void МаркерРазговора_ЦитатаВКодБлоке_НеСчитается_НастоящийСрабатывает()
+    {
+        SessionManager.HasTalkMarker("Вот пример:\n```\n<team:talk/>\n```\nтак выглядит").Should().BeFalse();
+        SessionManager.HasTalkMarker("Вопросов нет.<team:talk/>").Should().BeTrue();
+    }
+
     // Волна 6 (живая приёмка волны 5, скриншоты w5-02/w5-03): маркеры протокола протекали в
     // видимый текст координатора — воспроизведено 4 раза, в т.ч. с закрытием тега по имени.
     // StripTeamProtocolMarkers — общая функция очистки и для сохранённой истории (TurnAccumulator),

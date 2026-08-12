@@ -5334,15 +5334,14 @@ public class SessionManager : IDisposable
     internal static (TeamEscalationKind Kind, string Text)? ParseEscalationMarker(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
-        var stripped = System.Text.RegularExpressions.Regex.Replace(text, "```[\\s\\S]*?(```|$)", "");
-        stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "`[^`\n]*`", "");
-        // Закрывающий тег — с именем или без: модель по XML-привычке пишет </escalate:check>
-        // вместо канонического </escalate> (в thinking цитирует формат верно, при генерации
-        // закрывает по имени) — строгое сравнение роняло маркер в молчаливый тупик.
-        var m = System.Text.RegularExpressions.Regex.Match(stripped,
-            @"<escalate:(deviation|check|decision|clarify)>([\s\S]*?)</escalate(?::\w+)?>");
-        if (!m.Success) return null;
-        var kind = m.Groups[1].Value switch
+        // Теги маркера ищем ВНЕ код-блоков (модель любит цитировать протокол примером), а
+        // содержимое между ними берём из ОРИГИНАЛЬНОГО текста — со всем вложенным кодом.
+        // Закрытие по имени (</escalate:check>) терпит close-регэксп: строгое сравнение роняло
+        // маркер в молчаливый тупик (модель по XML-привычке закрывает тег по имени при генерации).
+        var found = FindPairedMarkerOutsideCode(text, EscalateOpenTagRegex, EscalateCloseTagRegex);
+        if (found is null) return null;
+        var (openEnd, closeStart, openMatch) = found.Value;
+        var kind = openMatch.Groups[1].Value switch
         {
             "deviation" => TeamEscalationKind.PlanDeviation,
             "check" => TeamEscalationKind.CheckFailed,
@@ -5350,7 +5349,7 @@ public class SessionManager : IDisposable
             "clarify" => TeamEscalationKind.NeedsClarification,
             _ => TeamEscalationKind.ProductDecision,
         };
-        return (kind, m.Groups[2].Value.Trim());
+        return (kind, text[openEnd..closeStart].Trim());
     }
 
     // Маркер работы в ответе координатора (Э5): `<team:work>постановка</team>`. Им координатор
@@ -5360,14 +5359,15 @@ public class SessionManager : IDisposable
     internal static string? ParseWorkMarker(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
-        var stripped = System.Text.RegularExpressions.Regex.Replace(text, "```[\\s\\S]*?(```|$)", "");
-        stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "`[^`\n]*`", "");
-        // Закрытие — </team> или </team:work>: на длинной постановке модель закрывает тег
-        // по имени, и строгий </team> не распознавал маркер — вводная падала в карточку
-        // «Координатор не понял вводную» (прод 2026-07-31).
-        var m = System.Text.RegularExpressions.Regex.Match(stripped, @"<team:work>([\s\S]*?)</team(?::work)?>");
-        if (!m.Success) return null;
-        var request = m.Groups[1].Value.Trim();
+        // Теги маркера ищем ВНЕ код-блоков (модель любит цитировать протокол примером), а
+        // содержимое между ними берём из ОРИГИНАЛЬНОГО текста — со всем вложенным кодом. Без
+        // этого код-блок внутри <team:work> (дамп компонента в разведке) вырезался до извлечения,
+        // и планировщик получал постановку без кода (P19). Закрытие по имени (</team:work>)
+        // терпит close-регэксп — фикс инцидента 2026-07-31 сохранён.
+        var found = FindPairedMarkerOutsideCode(text, WorkOpenTagRegex, WorkCloseTagRegex);
+        if (found is null) return null;
+        var (openEnd, closeStart, _) = found.Value;
+        var request = text[openEnd..closeStart].Trim();
         return request.Length == 0 ? null : request;
     }
 
@@ -5378,9 +5378,12 @@ public class SessionManager : IDisposable
     internal static bool HasTalkMarker(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) return false;
-        var stripped = System.Text.RegularExpressions.Regex.Replace(text, "```[\\s\\S]*?(```|$)", "");
-        stripped = System.Text.RegularExpressions.Regex.Replace(stripped, "`[^`\n]*`", "");
-        return System.Text.RegularExpressions.Regex.IsMatch(stripped, @"<team:talk\s*/>");
+        // Самодостаточный тег — хотя бы один match целиком вне код-блоков (как у парных маркеров:
+        // процитированный в ```-примере маркер не считается активным вызовом).
+        var ranges = GetCodeBlockRanges(text);
+        foreach (System.Text.RegularExpressions.Match m in TalkMarkerRegex.Matches(text))
+            if (IsRangeOutsideCode(ranges, m.Index, m.Index + m.Length)) return true;
+        return false;
     }
 
     // Волна 6 (живая приёмка волны 5): маркеры протокола — внутренняя договорённость между
@@ -5399,6 +5402,22 @@ public class SessionManager : IDisposable
         new(@"<team:work>[\s\S]*?</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex TalkMarkerRegex =
         new(@"<team:talk\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    // Открывающие/закрывающие теги для РАЗБОРА маркеров вне код-блоков (Parse*/Has* выше).
+    // Отдельно от WorkMarkerRegex/EscalateMarkerRegex (тем нужен весь маркер одним куском для
+    // удаления из ленты): найти закрывающий тег ВНЕ кода одним lazy-регэкспом нельзя — он
+    // свернётся на закрывающем теге, процитированном внутри код-блока, и настоящий маркер с
+    // вложенным кодом (P19) не соберётся. Поэтому ищем теги по отдельности и проверяем, что
+    // оба лежат вне код-блоков, а содержимое между ними берём из оригинала.
+    private static readonly System.Text.RegularExpressions.Regex WorkOpenTagRegex =
+        new("<team:work>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex WorkCloseTagRegex =
+        new(@"</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex EscalateOpenTagRegex =
+        new(@"<escalate:(deviation|check|decision|clarify)>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex EscalateCloseTagRegex =
+        new(@"</escalate(?::\w+)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     // Осиротевший закрывающий тег без пары (прод 2026-08-02, находка Веры): в длинном
     // структурированном ответе модель иногда закрывает маркер повторно или цитирует закрытие
     // отдельно от открытия, которое уже вырезано парным регэкспом выше (например тем же именем
@@ -5431,6 +5450,51 @@ public class SessionManager : IDisposable
         text = TalkMarkerRegex.Replace(text, "");
         text = OrphanCloserRegex.Replace(text, "");
         return text;
+    }
+
+    // Диапазоны fenced- (```...```) и инлайн- (`...`) код-блоков в порядке появления. В отличие
+    // от прежнего вырезания кода перед разбором маркера, позиции позволяют найти теги ВНЕ кода
+    // и вернуть содержимое маркера из оригинала — со всем вложенным кодом (фикс P19: раньше
+    // код-блок внутри <team:work> вырезался до извлечения, и планировщик получал пустую постановку).
+    private static List<(int Start, int End)> GetCodeBlockRanges(string text)
+    {
+        var ranges = new List<(int Start, int End)>();
+        foreach (System.Text.RegularExpressions.Match code in CodeSpanOrFenceRegex.Matches(text))
+            ranges.Add((code.Index, code.Index + code.Length));
+        return ranges;
+    }
+
+    // Целиком ли диапазон [start, end) лежит вне код-блоков (не пересекается ни с одним).
+    private static bool IsRangeOutsideCode(List<(int Start, int End)> ranges, int start, int end)
+    {
+        foreach (var (s, e) in ranges)
+            if (start < e && end > s) return false;   // пересечение с код-блоком
+        return true;
+    }
+
+    // Первый парный маркер (openTag...closeTag), у которого ОБА тега целиком лежат вне код-блоков.
+    // Возвращает границы в оригинальном тексте и match открывающего тега (для групп — напр. тип
+    // эскалации). Содержимое между тегами (включая вложенный код) вызывающий берёт из оригинала
+    // через text[openEnd..closeStart]. Так процитированный в ```-примере маркер не сработает
+    // (тег внутри код-блока), а код внутри настоящей постановки не потеряется.
+    private static (int OpenEnd, int CloseStart, System.Text.RegularExpressions.Match OpenMatch)?
+        FindPairedMarkerOutsideCode(
+            string text,
+            System.Text.RegularExpressions.Regex openTagRegex,
+            System.Text.RegularExpressions.Regex closeTagRegex)
+    {
+        var ranges = GetCodeBlockRanges(text);
+        for (var om = openTagRegex.Match(text); om.Success; om = om.NextMatch())
+        {
+            var openEnd = om.Index + om.Length;
+            if (!IsRangeOutsideCode(ranges, om.Index, openEnd)) continue;   // открывающий в коде — цитата
+            for (var cm = closeTagRegex.Match(text, openEnd); cm.Success; cm = cm.NextMatch())
+            {
+                if (IsRangeOutsideCode(ranges, cm.Index, cm.Index + cm.Length))
+                    return (openEnd, cm.Index, om);   // закрывающий вне кода — настоящий маркер
+            }
+        }
+        return null;
     }
 
     // Полные открывающие теги маркеров (без вариативных \s* — тем, которые их допускают,

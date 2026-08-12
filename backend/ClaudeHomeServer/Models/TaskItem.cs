@@ -51,6 +51,13 @@ public class TaskItem
     public DateTime? ClaudeStartedAt { get; set; }
     // Итог последнего запуска: success | error; null — ещё выполняется или не запускалась
     public string? ClaudeResult { get; set; }
+    // Исполнитель встал насовсем (не «ход упал», а «дальше работать нечем»): отметка времени
+    // и причина на проводе (auth_failed — не удалось авторизоваться у провайдера модели).
+    // Отдельного статуса нет намеренно — задача остаётся InProgress, признак лишь снимает
+    // с «в работе» немой характер (уведомление владельцу + пометка в карточке).
+    // Сбрасывается при повторном запуске исполнителя (TaskManager.MarkClaudeStarted).
+    public DateTime? ExecutorStoppedAt { get; set; }
+    public string? ExecutorStopReason { get; set; }
     // Идемпотентность join двух независимых сигналов завершения (CT-8): R — конец хода
     // (ClaudeResult) и D — Status=Done (tasks_complete/PUT). CAS TaskManager.TryMarkCompletionDelivered
     // гарантирует ровно одну доставку L0/Z-доклада вне зависимости от порядка их прихода.

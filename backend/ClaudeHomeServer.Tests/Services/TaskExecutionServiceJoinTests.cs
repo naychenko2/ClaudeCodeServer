@@ -162,6 +162,88 @@ public class TaskExecutionServiceJoinTests : IDisposable
     private async Task<int> CountNotificationsAsync(string ownerId) =>
         (await _notifStore.GetListAsync(ownerId)).Count;
 
+    // ─── Остановка исполнителя: терминальный отказ хода не должен молчать ──────
+
+    // Прод-инцидент 04.08.2026: ходы исполнителя падали с 401, задача осталась «в работе»,
+    // уведомлений — ноль. CLI отдаёт такой отказ формально успешным ходом (subtype=success,
+    // api_error_status пуст), а текст приезжает отдельным ErrorMessage перед result.
+    [Fact]
+    public async Task OnSessionMessage_ХодУпалНаАвторизации_СтавитПометкуИУведомляет()
+    {
+        var task = CreateTrackedTask();
+        var session = new Session { Id = "sess-1" };
+
+        await _sut.OnSessionMessageAsync(session, new ErrorMessage(
+            "Failed to authenticate. API Error: 401 invalid access token or token expired",
+            ExpectResultFollows: true));
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        var after = _tasks.GetById(task.Id)!;
+        after.ExecutorStopReason.Should().Be(ExecutorStopClassifier.AuthFailedReason);
+        after.ExecutorStoppedAt.Should().NotBeNull();
+        after.ClaudeResult.Should().Be("error", "формально успешный ход исполнителя на самом деле не состоялся");
+        (await CountNotificationsAsync(task.OwnerId!)).Should()
+            .Be(1, "владелец обязан узнать об остановке ровно одним уведомлением");
+    }
+
+    // Рабочая ошибка хода — прежнее поведение: пометки «исполнитель встал» нет,
+    // уведомление обычное («Не смог выполнить задачу»)
+    [Fact]
+    public async Task OnSessionMessage_ОбычныйПровалХода_БезПометкиОстановки()
+    {
+        var task = CreateTrackedTask();
+        var session = new Session { Id = "sess-1" };
+
+        await _sut.OnSessionMessageAsync(session, new ErrorMessage("Bash command failed with exit code 1"));
+        await _sut.OnSessionMessageAsync(session, Result("error"));
+
+        var after = _tasks.GetById(task.Id)!;
+        after.ExecutorStopReason.Should().BeNull();
+        after.ExecutorStoppedAt.Should().BeNull();
+        after.ClaudeResult.Should().Be("error");
+        (await CountNotificationsAsync(task.OwnerId!)).Should().Be(1);
+    }
+
+    // Человек починил доступ и перезапустил исполнителя — пометка обязана сняться,
+    // иначе задача навсегда «остановлена» даже после успешного перезапуска
+    [Fact]
+    public async Task OnSessionMessage_ПовторныйЗапускПослеОстановки_СниметПометку()
+    {
+        var task = CreateTrackedTask();
+        var session = new Session { Id = "sess-1" };
+        await _sut.OnSessionMessageAsync(session, new ErrorMessage("API Error: 401 Unauthorized"));
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+        _tasks.GetById(task.Id)!.ExecutorStopReason.Should().NotBeNull();
+
+        _tasks.MarkClaudeStarted(task.Id, "sess-2", DateTime.UtcNow);
+
+        var after = _tasks.GetById(task.Id)!;
+        after.ExecutorStopReason.Should().BeNull();
+        after.ExecutorStoppedAt.Should().BeNull();
+    }
+
+    // Текст ошибки относится к ЗАВЕРШИВШЕМУСЯ ходу: следующий ход той же сессии не должен
+    // унаследовать чужие маркеры (иначе один 401 помечал бы остановкой все дальнейшие ходы)
+    [Fact]
+    public async Task OnSessionMessage_СледующийХодПослеОшибки_НеНаследуетЕёТекст()
+    {
+        var task = CreateTrackedTask();
+        var session = new Session { Id = "sess-1" };
+        await _sut.OnSessionMessageAsync(session, new ErrorMessage("API Error: 401 Unauthorized"));
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        // Перезапуск: задача снова ждёт result, ход прошёл чисто
+        _tasks.MarkClaudeStarted(task.Id, "sess-1", DateTime.UtcNow);
+        await _sut.OnSessionMessageAsync(session, Result("success"));
+
+        var after = _tasks.GetById(task.Id)!;
+        after.ExecutorStopReason.Should().BeNull();
+        after.ClaudeResult.Should().Be("success");
+    }
+
+    private static ResultMessage Result(string subtype) =>
+        new(subtype, DurationMs: 10, NumTurns: 1, Usage: null, TotalCostUsd: null);
+
     // ─── (а) порядок R → D ────────────────────────────────────────────────────
 
     [Fact]

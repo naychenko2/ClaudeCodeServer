@@ -326,6 +326,11 @@ public class TaskManager
         task.LinkedSessionId = sessionId;
         task.ClaudeStartedAt = atUtc;
         task.ClaudeResult = null;
+        // Пометка «исполнитель встал» снимается ЛЮБЫМ повторным запуском: человек починил
+        // ключ и перезапустил — задача не должна остаться «остановленной» навсегда.
+        // Если причина не ушла, следующий ход поставит пометку заново.
+        task.ExecutorStoppedAt = null;
+        task.ExecutorStopReason = null;
         if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
         task.UpdatedAt = DateTime.UtcNow;
         Save();
@@ -338,6 +343,20 @@ public class TaskManager
         var task = _tasks.GetValueOrDefault(id);
         if (task is null) return null;
         task.ClaudeResult = result;
+        task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
+    // Исполнитель встал насовсем (терминальный отказ хода — см. ExecutorStopClassifier):
+    // статус НЕ трогаем (доска, фильтры, MCP и напоминания держатся за todo/inProgress/done),
+    // пометка живёт отдельными полями и снимается перезапуском (MarkClaudeStarted).
+    public TaskItem? MarkExecutorStopped(string id, DateTime atUtc, string reason)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ExecutorStoppedAt = atUtc;
+        task.ExecutorStopReason = reason;
         task.UpdatedAt = DateTime.UtcNow;
         Save();
         return task;

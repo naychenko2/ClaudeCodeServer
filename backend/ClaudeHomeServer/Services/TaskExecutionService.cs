@@ -68,6 +68,14 @@ public class TaskExecutionService
     // claim на входе метода закрывает окно: конкурентный вызов получает мгновенный явный отказ
     // вместо гонки, а не решает загадочную «первую» ошибку молча.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _launching = new();
+    // Текст ошибки последнего хода по сессии-исполнителю: ErrorMessage приходит ПЕРЕД result,
+    // а распознавание терминального отказа (ExecutorStopClassifier) читает и статус, и текст.
+    // Ключей столько же, сколько живых чатов-исполнителей: запись кладётся только для сессии
+    // с отслеживаемой задачей и снимается её result'ом либо удалением чата.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> _turnErrors = new();
+    // Потолок накопленного текста ошибки: маркеры отказа стоят в первых строках, а держать
+    // в памяти простыню от многошагового хода незачем
+    private const int TurnErrorTextLimit = 4000;
     // Учёт размера постановки по секциям (шаг 4 плана оптимизации токенов). null — стор
     // не подключён (тесты без DI): замер тогда идёт только в лог, запуск задачи не страдает.
     private readonly Spend.TaskPromptMetricsStore? _promptMetrics;
@@ -100,6 +108,9 @@ public class TaskExecutionService
         _log = log;
         _notif = notif;
         _sessions.OnSessionMessage += OnSessionMessageAsync;
+        // Чат-исполнитель удалён/протух по TTL, не дождавшись result — снимаем накопленный
+        // текст ошибки, чтобы буфер не жил дольше самой сессии
+        _sessions.OnSessionDeleted += s => _turnErrors.TryRemove(s.Id, out _);
         // Точка B join-а (CT-8): D-сигнал (Status=Done из tasks_complete/PUT/UI) может прийти
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
         // единственный путь в Done, поднимает событие ровно на переходе
@@ -532,7 +543,7 @@ public class TaskExecutionService
     // метод напрямую с синтетическими Session/ResultMessage вместо живого хода claude.exe.
     internal async Task OnSessionMessageAsync(Session session, ServerMessage msg)
     {
-        if (msg is not (ResultMessage or PermissionRequestMessage or AskQuestionMessage)) return;
+        if (msg is not (ResultMessage or ErrorMessage or PermissionRequestMessage or AskQuestionMessage)) return;
 
         // Ищем задачу этой сессии с незавершённым запуском исполнителя
         var task = FindTracked(session.Id);
@@ -540,12 +551,29 @@ public class TaskExecutionService
 
         switch (msg)
         {
+            // Текст ошибки хода приезжает ОТДЕЛЬНЫМ сообщением перед result (CLI кладёт
+            // API-ошибку в result-поле при subtype=success + is_error) — копим его до result,
+            // иначе терминальный отказ не с чем распознавать (ResultMessage текста не несёт).
+            case ErrorMessage err:
+                NoteTurnError(session.Id, err.Text);
+                return;
             case ResultMessage result:
                 {
-                    var ok = IsSuccess(result);
+                    var errorText = TakeTurnError(session.Id);
+                    // Терминальный отказ («дальше работать нечем») сильнее subtype: 401 у CLI
+                    // регулярно приходит как формально успешный ход
+                    var stopReason = ExecutorStopClassifier.Classify(result, errorText);
+                    var ok = IsSuccess(result) && stopReason is null;
                     var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                     if (updated is null) return;
                     await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+                    if (stopReason is not null)
+                    {
+                        // Своё уведомление вместо обычного «Не смог выполнить задачу»: у человека
+                        // должно быть ровно одно сообщение о судьбе задачи, и оно про причину
+                        await HandleExecutorStoppedAsync(updated, stopReason);
+                        break;
+                    }
                     if (!ok)
                     {
                         // Провал хода — L0 «не выполнена» требует только сигнал R (этот ход),
@@ -585,6 +613,72 @@ public class TaskExecutionService
                 }
         }
     }
+
+    // Копим текст ошибок хода до его result (их может быть несколько — напр. ошибка API
+    // и следом обрыв потока)
+    private void NoteTurnError(string sessionId, string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return;
+        _turnErrors.AddOrUpdate(sessionId, text,
+            (_, prev) => prev.Length >= TurnErrorTextLimit ? prev : prev + "\n" + text);
+    }
+
+    // Забрать и очистить: текст относится к ЗАВЕРШИВШЕМУСЯ ходу, следующий копится с нуля
+    private string? TakeTurnError(string sessionId) =>
+        _turnErrors.TryRemove(sessionId, out var text) ? text : null;
+
+    // Исполнитель встал насовсем: пометка на задаче + уведомление владельцу + (если задачу
+    // ставила персона) доклад ей с пробуждением. Перезапуск НЕ делаем: причина терминальная,
+    // повтор упёрся бы в неё же и дал серию одинаковых уведомлений.
+    private async Task HandleExecutorStoppedAsync(TaskItem task, string reason)
+    {
+        var stopped = _tasks.MarkExecutorStopped(task.Id, DateTime.UtcNow, reason) ?? task;
+        await _hub.BroadcastTaskChangedAsync(stopped.OwnerId!, "updated", stopped);
+
+        var persona = stopped.PersonaId is not null ? _personas.Get(stopped.PersonaId, stopped.OwnerId!) : null;
+        await NotifyAsync(stopped, BuildExecutorStoppedNotification(stopped, persona));
+        _log.LogWarning("Исполнитель задачи {TaskId} «{Title}» остановлен: {Reason} (сессия {SessionId})",
+            stopped.Id, stopped.Title, reason, stopped.LinkedSessionId);
+
+        // Постановщика-персону будим ходом: делегированная работа встала, и её чат — тот же
+        // канал, по которому исполнитель докладывает о блокере (chats_report_up). Задачу ставил
+        // человек (CreatedByPersonaId == null) — будить некого, хватает уведомления выше.
+        if (stopped.CreatedByPersonaId is null || stopped.LinkedSessionId is null) return;
+        try
+        {
+            var result = await _sessions.ReportUpAsync(stopped.LinkedSessionId,
+                BuildExecutorStoppedReport(stopped, reason), stopped.OwnerId!, withTurn: true);
+            _log.LogInformation("Остановка исполнителя задачи {TaskId}: доклад постановщику — {Result}",
+                stopped.Id, result);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Не удалось доложить постановщику об остановке исполнителя задачи {TaskId}", stopped.Id);
+        }
+    }
+
+    // Уведомление владельцу: почему работа встала и что задача ждёт его. Лицо — персона-исполнитель
+    internal static NotificationMessage BuildExecutorStoppedNotification(TaskItem task, Persona? persona = null) => new(
+        Title: "Исполнитель остановился",
+        Body: $"{task.Title}: {ExecutorStopText(task.ExecutorStopReason)}. Работа не идёт, задача ждёт вас",
+        Url: TaskSchedulerService.TaskUrl(task),
+        Kind: "claude",
+        PersonaId: persona?.Id,
+        ProjectId: task.ProjectId,
+        TaskId: task.Id,
+        Tag: "Исполнитель");
+
+    // Причина человеческим языком. Категория пока одна; неизвестная (пометку поставил более
+    // новый код) — общая формулировка вместо служебного ключа в глазах пользователя.
+    internal static string ExecutorStopText(string? reason) => reason == ExecutorStopClassifier.AuthFailedReason
+        ? "не удалось авторизоваться у провайдера модели"
+        : "исполнение прервано";
+
+    // Текст доклада постановщику-персоне: факт, причина и что делать (перезапуск — его решение)
+    internal static string BuildExecutorStoppedReport(TaskItem task, string reason) =>
+        $"⛔ Исполнитель остановился по задаче «{task.Title}» (id: {task.Id}): " +
+        $"{ExecutorStopText(reason)}. Работа не идёт, автоперезапуска не будет — " +
+        "нужно решение человека (починить доступ и перезапустить исполнителя).";
 
     // Точка B join-а: TaskManager.TaskCompleted — синхронное событие (Update не может стать
     // async без переделки всех вызывающих — UI/MCP/NoteTaskSyncService), поэтому доставку

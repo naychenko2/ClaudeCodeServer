@@ -21,19 +21,21 @@ public class TurnErrorClassifierTests
     public void ЛимитЗапросов_ЗапускаетФолбэк(string status)
         => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.RateLimit);
 
-    // Прод-кейс 2026-08-09 (qwen/alibabacloud): статус пришёл пустым, но текст ошибки
-    // однозначно о RateLimit — классификатор обязан поднять фолбэк, а не fail-closed.
+    // Прод-кейс 2026-08-09 (qwen/alibabacloud): статус пришёл пустым, текст содержит и код
+    // 429, и «quota … exhausted». Исчерпание недельной квоты токен-плана — это UsageLimit
+    // (исчерпание биллингового цикла, а не секундное окно запросов), поэтому «quota exhausted»
+    // доминирует над цитатой 429: для стороннего провайдера это значит кулдаун, а не долбление
+    // каждый ход до конца цикла. Фолбэк запускается в обоих случаях — меняется только кулдаун.
     [Fact]
-    public void ЛимитЗапросов_ПустойСтатус_Текст429_КлассRateLimit()
+    public void ИсчерпаниеКвоты_ПустойСтатус_ТекстС429ИQuotaExhausted_КлассUsageLimit()
         => TurnErrorClassifier.Classify(Result(null,
                 "API Error: Request rejected (429) · Your token-plan 1-week quota has been exhausted. The quota will reset at 08-11 07:55:00 UTC."))
-            .Should().Be(FallbackErrorClass.RateLimit,
-                "пустой статус при тексте «(429) … quota … exhausted» — это RateLimit, фолбэк нужен");
+            .Should().Be(FallbackErrorClass.UsageLimit,
+                "«quota … exhausted» — исчерпание квоты (UsageLimit), доминирует над цитатой 429");
 
     [Theory]
     [InlineData("rate limit exceeded")]
     [InlineData("Too Many Requests")]
-    [InlineData("Your token-plan 1-week quota has been exhausted.")]
     [InlineData("Request rejected (429)")]
     [InlineData("Error 429: slow down")]
     [InlineData("HTTP 429")]
@@ -69,6 +71,37 @@ public class TurnErrorClassifierTests
     public void ОшибкаПровайдера_5xx_ЗапускаетФолбэк(string status)
         => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.ProviderError);
 
+    // Паритет «статус ↔ текст»: 5xx/перегрузка при ПУСТОМ статусе распознаётся по тексту.
+    // Сценарий — CLI отдал код только в тексте (инциденты, где api_error_status пришёл null).
+    // Маркеры — канонические reason phrases/type, по одному на каждый 5xx + overloaded_error.
+    [Theory]
+    [InlineData("API Error: overloaded_error")]
+    [InlineData("Internal Server Error")]
+    [InlineData("Error 502 Bad Gateway")]
+    [InlineData("Service Unavailable")]
+    [InlineData("Gateway Timeout")]
+    public void ОшибкаПровайдера_ПустойСтатус_ПоМаркерамВТексте(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.ProviderError);
+
+    // Гейт от ложных срабатываний: общие слова «server error»/«overloaded» НЕ входят в маркеры.
+    // Ход, ЦИТИРУЮЩИЙ их в разборе инцидента, не должен уезжать на другого провайдера — тот же
+    // приём, что у ContextOverflow (узкие формулировки) и RateLimit (429 с квалификатором).
+    [Theory]
+    [InlineData("Разбираем инцидент: у нас была server error на эндпоинте")]
+    [InlineData("В логах мелькнула server error, но запрос прошёл")]
+    [InlineData("Сервис был overloaded весь вчерашний день")]
+    public void ЦитатаServerError_ПустойСтатус_НеКлассифицируетсяКакProviderError(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голые «server error»/«overloaded» слишком обычны в разборе — нужны точные reason phrases 5xx");
+
+    // Регрессия: статус 5xx решает по коду и не анализирует текст — даже цитата overflow
+    // не переключает класс (ветка статусов доходит до 5xx раньше ContextOverflow-проверки).
+    [Fact]
+    public void Статус500_ОстаётсяProviderError_ДажеПриOverflowТексте()
+        => TurnErrorClassifier.Classify(Result("500", "Разбираем «Prompt is too long» из прошлого"))
+            .Should().Be(FallbackErrorClass.ProviderError,
+                "статус 5xx решает по коду, текст не анализируется");
+
     [Fact]
     public void ОбрывПотока_БезResult_ЗапускаетФолбэк()
         => TurnErrorClassifier.Classify(new TurnAttemptOutcome { HasResult = false })
@@ -100,6 +133,52 @@ public class TurnErrorClassifierTests
     public void InvalidKey403_ФолбэкНеЗапускает_ЭтоОшибкаКонфигурации()
         => TurnErrorClassifier.Classify(Result("403", "invalid_api_key: invalid x-api-key"))
             .Should().Be(FallbackErrorClass.None);
+
+    // Прод-кейс 2026-08-11 (kimi, чат f9eebaaa): CLI не положил код в api_error_status —
+    // 403 остался только внутри текста ошибки. Ветка пустого статуса обязана спросить про
+    // usage limit, иначе класс выходит None и фолбэк не стартует (пользователь переключал
+    // модель руками). Текст — целиком, как пришёл в ленту.
+    [Fact]
+    public void UsageLimit_ПустойСтатус_ТекстИнцидента_КлассUsageLimit()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate. API Error: 403 You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle..."))
+            .Should().Be(FallbackErrorClass.UsageLimit,
+                "фраза «usage limit» в тексте — исчерпание квоты, фолбэк нужен");
+
+    // Fail-closed: настоящая ошибка аутентификации сменой модели не лечится. «Failed to
+    // authenticate» в начале сообщения Kimi к обратному выводу приводить не должно —
+    // решает наличие фразы про usage limit, а не преамбула.
+    [Fact]
+    public void ОшибкаКлюча_ПустойСтатус_ОстаётсяNone()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate. API Error: 401 invalid api key"))
+            .Should().Be(FallbackErrorClass.None,
+                "неверный ключ — ошибка конфигурации, фолбэк её маскировал бы");
+
+    // «quota» + «exhausted» — исчерпание квоты (UsageLimit), не RateLimit-окно: lived раньше
+    // в LooksRateLimited, но провайдер с такой формулировкой при пустом статусе уходил бы в
+    // RateLimit и не помечался в кулдауне — тот же инцидент, другая формулировка.
+    [Theory]
+    [InlineData("Your quota has been exhausted. Please upgrade your plan.")]
+    [InlineData("quota is exhausted")]
+    public void ИсчерпаниеКвоты_ПустойСтатус_QuotaExhausted_КлассUsageLimit(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.UsageLimit);
+
+    // Голое слово quota/exhausted по отдельности — НЕ UsageLimit (слишком обычны в текстах).
+    [Theory]
+    [InlineData("Your daily quota is 1000")]
+    [InlineData("resources exhausted")]
+    public void ГолаяQuota_Exhausted_НеКлассифицируется(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None);
+
+    // 429 по статусу остаётся RateLimit независимо от текста — ветка решает по статусу,
+    // до LooksUsageLimited/LooksRateLimited дело не доходит (Minor 3 ревью: проверка).
+    [Fact]
+    public void Статус429_ОстаётсяRateLimit_ДажеПриQuotaExhaustedВТексте()
+        => TurnErrorClassifier.Classify(Result("429",
+                "Your quota has been exhausted."))
+            .Should().Be(FallbackErrorClass.RateLimit,
+                "статус 429 решает по коду, текст не анализируется");
 
     [Fact]
     public void Auth403_БезТекста_ФолбэкНеЗапускает()

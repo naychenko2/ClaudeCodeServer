@@ -66,6 +66,24 @@ public class ChatHistoryService
         return Task.FromResult(messages);
     }
 
+    // Последний известный размер контекста чата из истории — серверный аналог фронтового
+    // lastContextOf: обратный проход до последнего result с ContextTokens>0. Фолбэк оценки
+    // контекста для ContextCapacityRegistry, когда живое значение (usage текущего хода,
+    // ClaudeSession.LastContextTokens) недоступно: ход упал до первого assistant-сообщения,
+    // сервер перезапущен, чат холодно открыт. null — значения в истории нет (новый чат либо
+    // старая история до поля ContextTokens). ContextOverflow — редкий путь (ошибка), а
+    // LoadAsync фактически синхронен (Task.FromResult), поэтому блокировка потока здесь
+    // безопасна: настоящего await и SynchronizationContext нет (ASP.NET Core).
+    public int? LastContextFromHistory(string claudeSessionId)
+    {
+        if (string.IsNullOrWhiteSpace(claudeSessionId)) return null;
+        var messages = LoadAsync(claudeSessionId).GetAwaiter().GetResult();
+        for (var i = messages.Count - 1; i >= 0; i--)
+            if (messages[i] is StoredResultMessage { ContextTokens: > 0 } r)
+                return r.ContextTokens;
+        return null;
+    }
+
     // tool_result фонового запуска — квитанция CLI, а не ответ (зеркало isAsyncLaunchAck
     // на фронте + маркеры workflow/resume)
     private static bool IsBgLaunchAck(string result) =>

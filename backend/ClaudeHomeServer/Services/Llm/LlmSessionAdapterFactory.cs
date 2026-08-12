@@ -41,6 +41,11 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
     // Наблюдаемая ёмкость окна модели (ContextOverflow): модель, не принявшая контекст, не
     // получает следующие ходы с контекстом ≥ N. null (тесты) — fail-open. Singleton на процесс.
     private readonly ContextCapacityRegistry? _capacity;
+    // История чата — фолбэк оценки контекста при ContextOverflow (адаптер:530). Живое значение
+    // (ClaudeSession.LastContextTokens) теряется при обрыве хода до assistant-сообщения, рестарте
+    // сервера и холодном старте чата; последнее StoredResultMessage.ContextTokens переживает и то,
+    // и другое. null (тесты без DI) — фолбэк на историю выключен, оценка идёт только живая.
+    private readonly ChatHistoryService? _chatHistory;
     // Логгер фолбэк-оркестрации: без него подмены нечем отлаживать (что
     // классифицировали, куда переключились, почему кандидат отвергнут). null в тестах
     // без DI — адаптер пишет в Console.Error, чтобы не терять диагностику совсем.
@@ -53,6 +58,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         FallbackSettingsStore? fallbackSettings = null,
         ProviderHealthRegistry? health = null,
         ContextCapacityRegistry? capacity = null,
+        ChatHistoryService? chatHistory = null,
         ILogger<LlmSessionAdapterFactory>? log = null)
     {
         _assignments = assignments;
@@ -60,6 +66,7 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         _fallbackSettings = fallbackSettings;
         _health = health;
         _capacity = capacity;
+        _chatHistory = chatHistory;
         _log = log;
         _mcpConfigPath = config["McpConfigPath"];
         _falMcpApiKey = config["Fal:McpApiKey"];
@@ -119,8 +126,45 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
             context.OnMessage, _subscriptionPool, _providers, context.RootPath,
             context.Launcher, context.CliConfigRoot, _fallbackSettings,
             () => claudeSession.EffectiveTurnChain, _health, _log, context.PersistSessions,
-            _capacity, () => claudeSession.LastContextTokens,
-            context.EnqueueBypass, context.OrchestrationDone);
+            _capacity, BuildContextEstimate(claudeSession),
+            context.EnqueueBypass, context.OrchestrationDone,
+            contextSource: BuildContextSource(claudeSession));
         return fallback;
+    }
+
+    // Оценка размера контекста хода как составной Func<int> (контракт адаптера — Func<int>,
+    // НЕ трогаем). Точка склейки зависимостей: живое значение (ClaudeSession.LastContextTokens —
+    // usage последнего assistant-сообщения) приоритет; при его отсутствии — фолбэк на историю
+    // чата (LastContextFromHistory). Составная оценка НЕ живёт в ClaudeSession — обёртка
+    // процесса не должна знать про персистентный стор истории (слойность).
+    //
+    // Ловушка занижения: значение из истории — от ПРЕДЫДУЩЕГО хода, а контекст растёт, поэтому
+    // оно занижено относительно текущего. Для RecordOverflow («не принял хотя бы столько») это
+    // приемлемо; для фильтра WouldFit — тоже: он применяется при ContextOverflow с запасом
+    // ContextCapacityMargin (1.1), а альтернатива (0 → реестр не наполняется, фильтр fail-open)
+    // хуже — следующий ход снова пойдёт на ту же модель и снова упадёт (инцидент 10–11.08:
+    // 7 из 13 overflow на проде — с оценкой 0, наблюдение не записалось).
+    private Func<int> BuildContextEstimate(Claude.ClaudeSession claudeSession) =>
+        () => ResolveContext(claudeSession).Tokens;
+
+    // Диагностический сигнал источника оценки (параллельный Func<string>, "из того же замыкания"):
+    // иначе следующий пробел снова пришлось бы ловить по «~0 токенов» в проде. Значение — для
+    // лога оркестратора (адаптер:530), наружу не идёт. Контракт Func<int> не меняется.
+    private Func<string> BuildContextSource(Claude.ClaudeSession claudeSession) =>
+        () => ResolveContext(claudeSession).Source;
+
+    // Склейка источников оценки: живая → из истории → нет. Вынесена в чистую функцию для
+    // тестирования композиции (живая приоритет, историю не затирает) без подъёма фабрики.
+    internal static (int Tokens, string Source) ComposeContext(int live, int? fromHistory) =>
+        live > 0 ? (live, "живая")
+        : fromHistory is > 0 ? (fromHistory.Value, "из истории")
+        : (0, "нет");
+
+    private (int Tokens, string Source) ResolveContext(Claude.ClaudeSession claudeSession)
+    {
+        var live = claudeSession.LastContextTokens;
+        if (live > 0) return (live, "живая");
+        var fromHistory = _chatHistory?.LastContextFromHistory(claudeSession.Info.ClaudeSessionId ?? "");
+        return ComposeContext(live, fromHistory);
     }
 }

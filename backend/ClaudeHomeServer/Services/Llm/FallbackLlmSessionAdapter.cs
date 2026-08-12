@@ -55,6 +55,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // отказа) отсеивает при ЛЮБОМ классе ошибки, заявленное окно каталога — только при
     // ContextOverflow (Major 3 ревью). null (тесты) — оценка 0, фильтр по ёмкости выключен.
     private readonly Func<int>? _lastContextTokens;
+    // Источник оценки контекста для диагностики («живая» / «из истории» / «нет»): параллельный
+    // Func<string>, собираемый фабрикой из того же замыкания, что и _lastContextTokens. Без него
+    // очередной провал оценки пришлось бы снова ловить по «~0 токенов» в проде. null (тесты без
+    // фабрики) — «нет». Контракт Func<int> оценки не меняется — это отдельный диагностический сигнал.
+    private readonly Func<string>? _contextSource;
     // Лог подмен: без него оркестрацию нечем отлаживать на стенде (что классифицировали,
     // куда переключились, почему кандидат отвергнут). null (тесты без DI) — пишем в
     // Console.Error, как делал код до появления логгера.
@@ -105,7 +110,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         ContextCapacityRegistry? capacity = null,
         Func<int>? lastContextTokens = null,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
-        Action<string>? orchestrationDone = null)
+        Action<string>? orchestrationDone = null,
+        Func<string>? contextSource = null)
     {
         _inner = inner;
         _effectiveModel = effectiveModel;
@@ -120,6 +126,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         _health = health;
         _capacity = capacity;
         _lastContextTokens = lastContextTokens;
+        _contextSource = contextSource;
         _log = log;
         _persist = persist;
         _enqueueBypass = enqueueBypass;
@@ -376,11 +383,12 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         try
         {
             // (б) Стартовая подмена при кулдауне (волна 2): если стартовый провайдер помечен
-            // недоступным (возвращал Unreachable/ProviderError в прошлых ходах), не тратим
-            // попытку на мёртвый эндпоинт — стартуем сразу с первого живого шага цепочки.
-            // Маркер provider_switched (Reason=unreachable). fail-open: если ВСЕ шаги цепочки
-            // в кулдауне, остаёмся на исходной паре (ход должен идти). substitutions не тратим —
-            // это выбор стартовой точки, а не подмена по ошибке в этом ходе.
+            // недоступным (возвращал Unreachable/ProviderError в прошлых ходах либо исчерпал
+            // квоту — UsageLimit), не тратим попытку на мёртвый/исчерпанный эндпоинт — стартуем
+            // сразу с первого живого шага цепочки. Маркер provider_switched с Reason из реестра
+            // (фронт покажет «Исчерпан лимит»/«Эндпоинт недоступен» вместо универсальной фразы).
+            // fail-open: если ВСЕ шаги цепочки в кулдауне, остаёмся на исходной паре (ход должен
+            // идти). substitutions не тратим — это выбор стартовой точки, а не подмена по ошибке.
             //
             // Асимметрия с WouldFit (Minor 4 ревью): стартовый шаг намеренно НЕ сверяется с
             // фильтром ёмкости. Кулдаун — про доступность эндпоинта, а не про размер окна, а
@@ -427,9 +435,17 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                         appliedProvider = currentKey;
                         anyProviderSwitch = true;   // старт на шаге цепочки = смена поставщика
                         var slabel = string.IsNullOrWhiteSpace(currentModel) ? KeyLabel(currentKey) : currentModel;
+                        // Причину берём из реестра: исчерпанная квота и мёртвый эндпоинт для
+                        // пользователя — разные ситуации (одна лечится пополнением баланса, другая
+                        // — сетью). Раньше здесь стоял хардкод «unreachable»/«недоступен» со времён,
+                        // когда кулдаун был только про обрыв связи, и при исчерпании квоты подсказка
+                        // врала («Сервис не отвечает»). Label — нейтрален: точную формулировку фронт
+                        // берёт из Reason (providerSwitchReasonLabel предпочитает его перед Label).
+                        var switchReason = _health?.UnavailableReason(origProvider) ?? "unreachable";
                         await _downstream(new ProviderSwitchedMessage(currentKey, currentModel,
-                            $"Старт на «{slabel}»: исходный провайдер недоступен", Auto: true, Reason: "unreachable"));
-                        LogInfo($"Стартовая подмена (кулдаун): «{origModel}» × «{origProvider}» недоступен → старт на «{currentKey}» / «{currentModel}»");
+                            $"Старт на «{slabel}»: исходный провайдер временно исключён",
+                            Auto: true, Reason: switchReason));
+                        LogInfo($"Стартовая подмена (кулдаун, {switchReason}): «{origModel}» × «{origProvider}» исключён → старт на «{currentKey}» / «{currentModel}»");
                     }
                 }
             }
@@ -459,8 +475,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                 if (_userInterrupted) { await SettleAsync(turn); return; }
 
-                // Успех (нет ошибки доставки) — задержанный result уходит наружу, ход окончен
-                if (!IsDeliveryFailure(end)) { await SettleAsync(turn); return; }
+                // Успех (нет ошибки доставки) — задержанный result уходит наружу, ход окончен.
+                // Снимаем кулдаун с провайдера ФАКТИЧЕСКОЙ попытки (currentKey): успешный ход —
+                // прямой сигнал «уже жив», сильнее верхней границы TTL. Без этого пополенный
+                // тариф или поднявшийся эндпоинт простаивал бы в кулдауне весь TTL (час для
+                // исчерпанной квоты), уводя стартовые подмены на чужие модели (Major ревью).
+                // Подписок пула здесь нет (мы их не помечаем), так что Clear для них — no-op.
+                if (!IsDeliveryFailure(end))
+                {
+                    _health?.Clear(currentKey);
+                    await SettleAsync(turn);
+                    return;
+                }
 
                 var outcome = new TurnAttemptOutcome
                 {
@@ -484,15 +510,24 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
                 // Кулдаун недоступности (волна 2): провайдер, вернувший Unreachable/ProviderError,
                 // помечаем недоступным на TTL — следующие ходы и шаги цепочки пропустят его сразу.
-                // Лимитные классы (429/usage) сюда не попадают: это квота аккаунта, не мёртвый эндпоинт.
+                // RateLimit сюда не попадает: окно запросов у аккаунта отпускает быстро, и это
+                // квота, а не мёртвый эндпоинт.
                 // ТОЛЬКО для сторонних провайдеров: ключи подписок пула Claude НЕ помечаем — их
                 // здоровье уже ведёт ClaudeSubscriptionPool (исчерпание/ротация). Иначе один
                 // транзитный 529 на «claude» уводил бы все новые ходы с цепочкой на сторонний шаг 2
                 // мимо живой «claude-2» (Major 2 ревью). Стартовая подмена для нативного ключа тогда
                 // не срабатывает (IsUnavailable всегда false) — пул отработает уровень 1 штатно.
-                if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError
-                    && IsExternalProvider(currentKey))
-                    _health?.MarkUnavailable(currentKey);
+                if (IsExternalProvider(currentKey))
+                {
+                    if (cls is FallbackErrorClass.Unreachable or FallbackErrorClass.ProviderError)
+                        _health?.MarkUnavailable(currentKey, cls);
+                    // Исчерпанная квота стороннего провайдера (инцидент 2026-08-11, kimi): без отметки
+                    // каждый следующий ход снова стартовал бы на нём, тратил попытку и падал до конца
+                    // биллингового цикла. MarkExhausted — механизм пула Claude, стороннего он не знает,
+                    // поэтому память об исчерпании ведём здесь, длинным TTL (QuotaCooldownMinutes).
+                    else if (cls == FallbackErrorClass.UsageLimit)
+                        _health?.MarkQuotaExhausted(currentKey);
+                }
 
                 // ContextOverflow: модель не приняла контекст — запоминаем наблюдённый потолок
                 // ёмкости (модель не вместила ~N токенов), чтобы в этом и следующих ходах не
@@ -503,7 +538,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 {
                     var ctxN = ContextEstimate();
                     _capacity?.RecordOverflow(currentModel, ctxN);
-                    LogInfo($"Переполнение контекста: «{currentModel}» × «{currentKey}» не принял ~{ctxN} токенов");
+                    LogInfo($"Переполнение контекста: «{currentModel}» × «{currentKey}» не принял ~{ctxN} токенов (оценка: {ContextSource()})");
                 }
 
                 trace.Add(new AttemptTrace(currentModel, currentKey, cls));
@@ -826,10 +861,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     private bool IsExternalProvider(string? key) =>
         _providers is not null && _providers.GetByKey(key ?? "") is not null;
 
-    // Оценка размера контекста текущего хода (ClaudeSession.LastContextTokens). 0 — значение
-    // недоступно (тесты без accessor'а, совсем новый чат без истории): фильтр по ёмкости при этом
-    // выключается (WouldFit возвращает true), поведение как до защиты от overflow.
+    // Оценка размера контекста текущего хода. Составная (собирается фабрикой): живое значение
+    // (ClaudeSession.LastContextTokens — usage последнего assistant-сообщения), а при его
+    // отсутствии — фолбэк на историю чата (LastContextFromHistory, переживает рестарт). 0 —
+    // значения нет совсем: фильтр по ёмкости выключается (WouldFit возвращает true), поведение
+    // как до защиты от overflow. Источник оценки (живая/из истории/нет) — ContextSource().
     private int ContextEstimate() => _lastContextTokens?.Invoke() ?? 0;
+
+    // Источник оценки контекста для диагностики. Имя источника собирается фабрикой из того же
+    // замыкания, что и ContextEstimate, поэтому согласовано с реальной цифрой: «живая» —
+    // ContextEstimate > 0 от usage; «из истории» — фолбэк к StoredResultMessage.ContextTokens;
+    // «нет» — оценка 0 (фильтр fail-open, наблюдение не записывается).
+    private string ContextSource() => _contextSource?.Invoke() ?? "нет";
 
     // Запас на расхождение токенизаторов: оценка контекста измерена токенизатором ДРУГОЙ модели
     // (расхождение 10–30%), поэтому заявленное окно должно вмещать контекст с 10%-м запасом — иначе

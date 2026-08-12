@@ -159,7 +159,9 @@ public class FallbackLlmSessionAdapterTests
         ContextCapacityRegistry? capacity = null,
         Func<int>? lastContextTokens = null,
         Func<string, string, IReadOnlyList<string>?, int, bool, Task>? enqueueBypass = null,
-        Action<string>? orchestrationDone = null)
+        Action<string>? orchestrationDone = null,
+        Func<string>? contextSource = null,
+        ILogger? log = null)
     {
         var session = new Session { Model = model, Provider = provider, OwnerId = ownerId };
         var inner = new FakeInnerAdapter(session);
@@ -184,11 +186,13 @@ public class FallbackLlmSessionAdapterTests
             fallbackSettings: store,
             effectiveChain: chain is null ? null : () => chain,
             health: health,
+            log: log,
             persist: persist,
             capacity: capacity,
             lastContextTokens: lastContextTokens,
             enqueueBypass: enqueueBypass,
-            orchestrationDone: orchestrationDone);
+            orchestrationDone: orchestrationDone,
+            contextSource: contextSource);
         inner.Sink = sut.HandleMessageAsync;
         return (sut, inner);
     }
@@ -1048,6 +1052,142 @@ public class FallbackLlmSessionAdapterTests
         marker.Provider.Should().Be("p-alive");
     }
 
+    // Minor 2 ревью: причина стартовой подмены берётся из реестра, а не захардкожена. При
+    // исчерпанной квоте Reason=usage_limit (фронт покажет «Исчерпан лимит», не «Эндпоинт
+    // недоступен»), при обрыве связи — unreachable. Label при этом нейтрален.
+    [Fact]
+    public async Task СтартоваяПодмена_ПричинаИзРеестра_НеЗахардкожена()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkQuotaExhausted("p-dead");   // исчерпанная квота, не обрыв связи
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead", "m-alive"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // старт на m-alive через подмену
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Single();
+        marker.Reason.Should().Be("usage_limit",
+            "причина из реестра: исчерпанная квота, а не захардкоженный unreachable");
+        marker.Label.Should().NotContain("недоступен",
+            "Label нейтрален — точную формулировку фронт берёт из Reason");
+    }
+
+    // Исчерпанная квота СТОРОННЕГО провайдера (инцидент 2026-08-11, kimi: текст «usage limit»
+    // при пустом статусе) помечает его в кулдауне длинным TTL — следующий ход стартует сразу
+    // со следующего живого шага цепочки, не тратя попытку на исчерпанный провайдер.
+    [Fact]
+    public async Task ИсчерпаннаяКвотаСтороннего_КулдаунИСтартСоСледующегоШага()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+            ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+            ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+            ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead", "m-alive"], health: health);
+        // Ход 1: как в ленте инцидента — текст ошибки с «usage limit», result без статуса
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage(
+                "Failed to authenticate. API Error: 403 You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle...",
+                ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // m-alive — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал хода 1");
+        await WaitForAsync(() => !sut.FallbackTurnActive, "завершение оркестрации хода 1");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p-alive", "m-alive"), "фолбэк ушёл на шаг 2 цепочки");
+        Downstream().OfType<ProviderSwitchedMessage>().Single().Reason.Should().Be("usage_limit");
+        health.IsUnavailable("p-dead").Should().BeTrue("исчерпанная квота стороннего — кулдаун");
+
+        // Ход 2: стартовая подмена — p-dead в кулдауне, попытку на него не тратим
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+        await sut.SendMessageAsync("ещё раз");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Count() == 2, "финал хода 2");
+
+        inner.Attempts.Should().HaveCount(3);
+        inner.Attempts[2].Should().Be(("p-alive", "m-alive"),
+            "следующий ход стартует со следующего живого шага цепочки");
+    }
+
+    // Инвариант ADR-007 §4.3: здоровье подписок пула Claude ведёт ClaudeSubscriptionPool.
+    // UsageLimit у подписки помечает её исчерпанной в пуле и НЕ попадает в ProviderHealthRegistry.
+    [Fact]
+    public async Task ИсчерпаннаяКвотаПодпискиПула_ВКулдаунНеПопадает()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, BuildProviders(), health: health);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage("API Error: 403 usage limit reached", ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Provider.Should().Be("acc-b", "ротация подписок пула — уровень 1");
+        pool.IsExhausted("acc-a").Should().BeTrue("лимитный класс помечает подписку исчерпанной");
+        health.IsUnavailable("acc-a").Should().BeFalse(
+            "подписки пула кулдауном не помечаются — их здоровье ведёт ClaudeSubscriptionPool");
+    }
+
+    // Major ревью: кулдаун снимается успешным ходом на этом провайдере, а не только по TTL.
+    // Сценарий: p-dead в кулдауне → fail-open остался на нём → ход успешен → кулдаун снят.
+    // Иначе пополенный тариф или поднявшийся эндпоинт простаивал бы весь TTL (час для квоты).
+    [Fact]
+    public async Task Кулдаун_СнимаетсяУспешнымХодомНаПровайдере()
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+            ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+            ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+        };
+        var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+        var pool = BuildPool("acc-a");
+        var health = new ProviderHealthRegistry();
+        health.MarkQuotaExhausted("p-dead");
+        // Без цепочки — стартовую подмену применить некуда, fail-open остаётся на исходной паре
+        var (sut, inner) = BuildSut(pool, providers, model: "m-dead", provider: "p-dead",
+            chain: ["m-dead"], health: health);
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // успех на p-dead
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().ContainSingle();
+        health.IsUnavailable("p-dead").Should().BeFalse(
+            "успешный ход на провайдере снимает кулдаун — прямой сигнал «уже жив» сильнее TTL");
+    }
+
     // --- Переполнение контекста (ContextOverflow) ---
     // Репро инцидента 09.08: фолбэк ушёл на шаг цепочки, но ПРИНЯВШАЯ модель не переварила
     // контекст → ход умер с «Prompt is too long». Теперь overflow — шаг по цепочке, а не смерть хода.
@@ -1165,6 +1305,33 @@ public class FallbackLlmSessionAdapterTests
         error.Text.Should().NotContain("Ни одна из доступных моделей не ответила");
         var final = Downstream().OfType<ResultMessage>().Should().ContainSingle().Subject;
         final.Subtype.Should().Be("error");
+    }
+
+    // Источник оценки контекста логируется при overflow (диагностика фолбэк-оценки): иначе следующий
+    // провал пришлось бы снова ловить по «~0 токенов» в проде. contextSource — параллельный Func<string>,
+    // собираемый фабрикой из того же замыкания, что и lastContextTokens («живая» / «из истории» / «нет»).
+    [Fact]
+    public async Task Overflow_ИсточникОценки_Логируется()
+    {
+        var spy = new SpyLogger();
+        var pool = BuildPool("acc-a");
+        var providers = BuildWindowProviders(("p-big", "m-big", 1_000_000));
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet",
+            chain: ["sonnet", "m-big"], capacity: new(),
+            lastContextTokens: () => 80_000,   // как если бы фабрика достала 80k из истории
+            contextSource: () => "из истории", // живая оценка 0 → фолбэк на историю чата
+            log: spy);
+        inner.Scripts.Enqueue(() => EmitOverflow(inner));   // sonnet — overflow
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));  // m-big — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финальный result");
+
+        // Наблюдение записалось с оценкой из истории (не 0), и лог донёс источник
+        Downstream().OfType<ResultMessage>().Should().NotBeEmpty();
+        spy.Entries.Should().Contain(e => e.Message.Contains("Переполнение контекста")
+            && e.Message.Contains("оценка: из истории"),
+            "источник оценки пишется в лог для диагностики фолбэк-оценки");
     }
 
     // --- Фиксы ревью ContextOverflow (Major 1–3, Minor-review) ---

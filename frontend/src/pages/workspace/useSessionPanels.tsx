@@ -5,11 +5,13 @@
 // Из-за этого сессионные панели были прибиты к правой рельсе: перенести их влево
 // было нечем — там просто не существовало их контента. Хук поднимает сборку на
 // уровень экрана, и обе зоны получают эти панели наравне с остальными.
+import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { Session } from '../../types';
 import { C, FONT } from '../../lib/design';
 import { plural } from '../../lib/spend';
-import { useSessionArtifacts } from '../../hooks/useSessionArtifacts';
+import { useSessionArtifacts, computeChangedPaths } from '../../hooks/useSessionArtifacts';
+import { useSession } from '../../hooks/useSession';
 import { PlanSection } from '../../components/artifacts/PlanSection';
 import { AgentsSection } from '../../components/artifacts/AgentsSection';
 import { ContextSection } from '../../components/artifacts/ContextSection';
@@ -39,6 +41,11 @@ export interface SessionPanels {
   railBadge: (k: PanelKey) => RailBadgeInfo | null;
   // Значок в шапке карточки
   headerBadge: (k: PanelKey) => string | null;
+  // Пути, изменённые активным чатом (для фильтра «только файлы чата» в панели
+  // «Изменения»). undefined — фильтр недоступен: нет активного чата, чат живёт
+  // в своём worktree (его правки в git status корня не попадают) либо история
+  // ещё грузится (тогл при переключении чата на миг пропадает — осознанно).
+  changedPaths: Set<string> | undefined;
 }
 
 export function useSessionPanels(session: Session | null, projectId?: string, rootPath?: string): SessionPanels {
@@ -46,6 +53,12 @@ export function useSessionPanels(session: Session | null, projectId?: string, ro
   // Артефакты сессии питают План и Агентов (бейджи + содержимое панелек).
   // Персона (context) данные тянет сама через ContextSection.
   const artifacts = useSessionArtifacts(sessionId, projectId, rootPath ?? '', null);
+  // Второй вызов useSession дёшев (стор общий, см. useSession.ts) — artifacts
+  // items наружу не отдаёт, а для множества изменённых путей нужна сама лента
+  const { items, isHistoryLoading } = useSession(sessionId, projectId);
+  const changedPaths = useMemo(
+    () => computeChangedPaths(items, rootPath ?? ''),
+    [items, rootPath]);
   const plansCount = artifacts.plans.length;
   // executingTask=false: в рельсе artifacts считаются без заголовка задачи-исполнителя
   const badgeOpts = { executingTask: false, personaId: session?.personaId ?? null, isChat: !projectId };
@@ -89,5 +102,9 @@ export function useSessionPanels(session: Session | null, projectId?: string, ro
       if (k === 'agents' || k === 'context') return panelBadge(k, artifacts, badgeOpts).badge;
       return null;
     },
+
+    changedPaths: sessionId && !session?.worktreePath && !isHistoryLoading
+      ? changedPaths
+      : undefined,
   };
 }

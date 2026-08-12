@@ -209,7 +209,8 @@ const PERSONA_FIELDS = {
   specialty: {
     type: 'string',
     enum: ['none', 'analyst', 'planner', 'reviewer', 'executor', 'secretary',
-      'coordinator', 'mentor', 'designer', 'consultant', 'librarian', 'tester'],
+      'coordinator', 'mentor', 'designer', 'consultant', 'librarian', 'tester',
+      'backendExecutor', 'frontendExecutor', 'devopsExecutor'],
     description: 'Специализация для оркестрации команды (роутинг типовых сабагентов на персону); '
       + 'executor/tester при access "full" даёт право править файлы — выставляй осознанно',
   },

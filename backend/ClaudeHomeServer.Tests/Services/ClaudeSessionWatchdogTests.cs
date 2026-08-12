@@ -32,6 +32,22 @@ public class ClaudeSessionNumberParsingTests
         Assert.Null(ClaudeSession.DoubleProp(e, "missing"));
     }
 
+    // api_error_status CLI отдаёт то строкой-ярлыком, то ЧИСЛОМ (HTTP-код). Регрессия: парсинг
+    // принимал только строку, из-за чего 401/429/500 терялись и классификатор фолбэка
+    // (TurnErrorClassifier) с ExecutorStopClassifier не видели статуса вовсе.
+    [Fact]
+    public void StatusProp_ЧислоИСтрока_ПриводятсяКСтроке()
+    {
+        var e = El("""{"num": 401, "rate": 429, "srv": 500, "label": "rate_limit", "z": null, "b": true}""");
+        Assert.Equal("401", ClaudeSession.StatusProp(e, "num"));
+        Assert.Equal("429", ClaudeSession.StatusProp(e, "rate"));
+        Assert.Equal("500", ClaudeSession.StatusProp(e, "srv"));
+        Assert.Equal("rate_limit", ClaudeSession.StatusProp(e, "label"));
+        Assert.Null(ClaudeSession.StatusProp(e, "z"));        // JSON null — не кидать
+        Assert.Null(ClaudeSession.StatusProp(e, "b"));        // не число и не строка
+        Assert.Null(ClaudeSession.StatusProp(e, "missing"));  // поля нет вовсе
+    }
+
     // ParseUsage обязан брать агрегат modelUsage (сумма по всем итерациям хода), а не usage
     // последней итерации — иначе стоимость ходов у сторонних провайдеров занижена в разы
     [Fact]

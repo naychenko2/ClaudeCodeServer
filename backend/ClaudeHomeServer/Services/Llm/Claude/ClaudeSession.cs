@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -2990,8 +2991,7 @@ public class ClaudeSession : ILlmSessionAdapter
                 var durationMs = LongProp(root, "duration_ms");
                 var numTurns = IntProp(root, "num_turns");
                 var totalCost = DoubleProp(root, "total_cost_usd");
-                var apiErr = root.TryGetProperty("api_error_status", out var ae) && ae.ValueKind == JsonValueKind.String
-                    ? ae.GetString() : null;
+                var apiErr = StatusProp(root, "api_error_status");
                 List<string>? denials = null;
                 if (root.TryGetProperty("permission_denials", out var pd) && pd.ValueKind == JsonValueKind.Array && pd.GetArrayLength() > 0)
                 {
@@ -3774,6 +3774,22 @@ public class ClaudeSession : ILlmSessionAdapter
         o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.Number && e.TryGetDouble(out var v) ? v : (double?)null;
     internal static string? StringProp(JsonElement o, string name) =>
         o.TryGetProperty(name, out var e) && e.ValueKind == JsonValueKind.String ? e.GetString() : null;
+
+    // api_error_status приходит и строкой (ярлык CLI: "rate_limit", "authentication_error"),
+    // и ЧИСЛОМ (HTTP-код: 401, 429, 500) — CLI не приводит его к одному типу. Числовой код
+    // приводим к строке прямо на границе парсинга, чтобы весь конвейер ниже
+    // (ResultMessage.ApiErrorStatus, TurnErrorClassifier, ExecutorStopClassifier) работал
+    // с одним строковым представлением. Без этого числовые коды молча терялись.
+    internal static string? StatusProp(JsonElement o, string name)
+    {
+        if (!o.TryGetProperty(name, out var e)) return null;
+        return e.ValueKind switch
+        {
+            JsonValueKind.String => e.GetString(),
+            JsonValueKind.Number => e.TryGetInt32(out var code) ? code.ToString(CultureInfo.InvariantCulture) : null,
+            _ => null,
+        };
+    }
 
     public async ValueTask DisposeAsync()
     {

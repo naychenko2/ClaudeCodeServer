@@ -385,19 +385,13 @@ export function Composer({
   focusSignal,
 }: ComposerProps) {
   const asstName = useAssistantName();
-  // Черновик per-session: инициализируем из стора и синхронизируем при переключении чата
+  // Черновик per-session. Composer смонтирован с key={sessionId} (см. ChatPanel), поэтому
+  // смена чата = полное перемонтирование, и text заново инициализируется из getDraft(sessionId).
+  // Здесь — только write-through: сохраняем набранный текст в стор черновиков этого чата,
+  // чтобы он пережил переключение и возвращение.
   const [text, setText] = useState(() => getDraft(sessionId));
-  const draftSessionRef = useRef(sessionId);
   useEffect(() => {
-    if (draftSessionRef.current !== sessionId) {
-      // Смена чата (Composer переиспользуется без размонтирования): сохраняем черновик
-      // уходящего чата и подгружаем черновик открытого
-      setDraft(draftSessionRef.current, text);
-      draftSessionRef.current = sessionId;
-      setText(getDraft(sessionId));
-    } else {
-      setDraft(sessionId, text);
-    }
+    setDraft(sessionId, text);
   }, [sessionId, text]);
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
@@ -685,6 +679,7 @@ export function Composer({
       onSend(t, attachments);
       setTeamMech(null);
       setTeamOpen(false);
+      setTeamSettings(DEFAULT_TEAM_SETTINGS);
       resetInput();
       return;
     }
@@ -712,6 +707,7 @@ export function Composer({
       onSend(buildTeamTurnText(teamMech, t, teamSettings, chatContext), [], { auto: true });
       setTeamMech(null);
       setTeamOpen(false);
+      setTeamSettings(DEFAULT_TEAM_SETTINGS);
       resetInput();
       return;
     }

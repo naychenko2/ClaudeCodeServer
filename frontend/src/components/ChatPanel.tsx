@@ -1814,6 +1814,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
             onChange={e => { const fs = Array.from(e.target.files ?? []); e.target.value = ''; if (fs.length) handleChatUpload(fs); }}
           />
           <Composer
+            // key по чату: Composer полностью перемонтируется при смене сессии, поэтому
+            // его внутренний стейт (текст черновика, teamMech/teamOpen/teamSettings,
+            // открытые меню и пр.) не течёт между чатами. Текст восстанавливается из
+            // стора черновиков (getDraft) уже под новый sessionId.
+            key={session.id}
             sessionId={session.id}
             offline={!online}
             onSend={handleSend}

@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
-using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 
 namespace ClaudeHomeServer.Services;
@@ -163,15 +162,11 @@ public class PersonaManager
         return AllTools.All(clean.Contains) ? null : clean;
     }
 
-    // Нормализация ячейки матрицы уровней персоны (ADR-007 §2): пусто → null, иначе id модели
-    // или "preset:{id}". Claude-ID чистим от алиаса окна (как Model), пресет не трогаем.
-    // tier:* в ячейке запрещает контроллер (ячейка уже адресована уровнем) — здесь не проверяем.
-    private static string? NormalizeTierCell(string? cell)
-    {
-        if (string.IsNullOrWhiteSpace(cell)) return null;
-        var v = cell.Trim();
-        return LocalActionOverridesStore.IsPresetRoute(v) ? v : LlmProviderRegistry.StripClaudeWindowAlias(v);
-    }
+    // Нормализация ячейки матрицы уровней персоны (ADR-007 §2): пусто → null, иначе трим
+    // (id модели, в т.ч. тир-алиас с окном opus[1m], либо "preset:{id}"). Окно [1m] не срезаем:
+    // стор хранит намерение, рантайм резолвит его по способности пула. tier:* в ячейке запрещает
+    // контроллер (ячейка уже адресована уровнем) — здесь не проверяем.
+    private static string? NormalizeTierCell(string? cell) => TrimToNull(cell);
 
     // Нормализация контракта (P1): трим слотов, выброс пустых элементов списков;
     // полностью пустой контракт эквивалентен отсутствию → null (legacy-режим).
@@ -264,7 +259,8 @@ public class PersonaManager
             Description = description,
             SystemPrompt = systemPrompt,
             Contract = NormalizeContract(contract),
-            Model = LlmProviderRegistry.StripClaudeWindowAlias(model),
+            // Стор хранит намерение (в т.ч. opus[1m]); окно резолвится в рантайме по пулу
+            Model = TrimToNull(model),
             // Уровень модели: мусор и пустая строка — «не задан» (валидация — в контроллере)
             ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null,
             // Свои модели по уровням (ADR-007 §2): значение ячейки — id модели ИЛИ "preset:{id}".
@@ -469,7 +465,7 @@ public class PersonaManager
             if (systemPrompt is not null) persona.SystemPrompt = systemPrompt;
             // null — не менять; объект с пустыми слотами — сбросить контракт (нормализуется в null)
             if (contract is not null) persona.Contract = NormalizeContract(contract);
-            if (model is not null) persona.Model = model.Length == 0 ? null : LlmProviderRegistry.StripClaudeWindowAlias(model);
+            if (model is not null) persona.Model = TrimToNull(model);
             // Уровень модели: null — не менять, "" (и мусор — его отсекает контроллер) — сбросить
             if (modelTier is not null)
                 persona.ModelTier = ModelTiers.TryParse(modelTier, out var tier) ? tier : null;
@@ -873,18 +869,6 @@ public class PersonaManager
                 changed = true;
             }
             processed.Add(p);
-        }
-
-        // Проход 4: нормализация legacy-моделей — тир-алиас с окном (opus[1m]) → базовый (opus).
-        // Рантайм и так стрипает окно перед --model, но в сторе оставалось «конкретное» значение.
-        foreach (var p in _personas.Values.Where(p => !string.IsNullOrEmpty(p.Model)))
-        {
-            var norm = LlmProviderRegistry.StripClaudeWindowAlias(p.Model);
-            if (!string.Equals(norm, p.Model, StringComparison.Ordinal))
-            {
-                p.Model = norm;
-                changed = true;
-            }
         }
 
         if (changed) Save();

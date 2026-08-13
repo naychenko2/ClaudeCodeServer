@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Llm;
 
 namespace ClaudeHomeServer.Services;
 
@@ -205,14 +206,39 @@ public class ClaudeSubscriptionPool
     public static bool RequiresOpus(string? model) =>
         !string.IsNullOrWhiteSpace(model) && model.Contains("opus", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Аккаунт может обслужить модель: для Opus-тира — только SupportsOpus-планы.</summary>
-    /// Ключи вне пула (сторонние провайдеры deepseek/glm) не наша забота — true.
+    /// <summary>Аккаунт может обслужить модель: для Opus-тира — только SupportsOpus-планы,</summary>
+    /// для тир-алиаса с окном [1m] — только Supports1M-планы. Ключи вне пула (сторонние
+    /// провайдеры deepseek/glm) не наша забота — true.
     public bool SupportsModel(string key, string? model)
     {
-        if (!RequiresOpus(model)) return true;
         var sub = _subscriptions.FirstOrDefault(s => s.Key == key);
-        return sub is null || sub.SupportsOpus;
+        // Ключ вне пула — не наша забота (сторонний провайдер): считаем, что тянет.
+        if (sub is null) return true;
+        if (RequiresOpus(model) && !sub.SupportsOpus) return false;
+        if (LlmProviderRegistry.IsClaudeTierWindowAlias(model) && !sub.Supports1M) return false;
+        return true;
     }
+
+    /// <summary>Суффикс [1m] тир-алиаса остаётся, если в пуле есть живой кандидат с поддержкой</summary>
+    /// 1M-окна; иначе срезается в базовый алиас (деградация в 200K вместо падения хода на
+    /// аккаунте без доступа). Не-тир-алиасы (полные id, сторонние провайдеры, обычные модели)
+    /// не трогает — их суффикс разбирает сам CLI. Пул пуст (локальный Claude) — модель как есть
+    /// (default Supports1M=true). См. коммит 639136c4: срез был лекарством от рулетки «попали
+    /// на учётку без 1M-доступа → ход упал»; теперь подписка выбирается по способности (Pick),
+    /// а срез остаётся лишь страховкой, когда способных не осталось.
+    public string? ResolveWindowAlias(string? model)
+    {
+        if (!LlmProviderRegistry.IsClaudeTierWindowAlias(model)) return model;
+        return HasLive1MCandidate(model)
+            ? model
+            : LlmProviderRegistry.StripClaudeWindowAlias(model);
+    }
+
+    // Есть ли сейчас в пуле живой (не исчерпанный, не auth-dead) аккаунт, способный обслужить
+    // тир-алиас с 1M-окном. Пул пуст → локальный Claude (default Supports1M=true) → true.
+    private bool HasLive1MCandidate(string? model) =>
+        _subscriptions.Count == 0
+        || AllKeys().Any(k => !IsExhausted(k) && !IsAuthDead(k) && SupportsModel(k, model));
 
     /// <summary>Аккаунт «в ротации» для новых чатов.</summary>
     /// Выведен, если исчерпан (rejected/100% — жёсткое состояние, `utilization` при rejected

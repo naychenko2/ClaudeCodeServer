@@ -461,6 +461,116 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.SupportsModel(ClaudeSubscriptionPool.PrimaryKey, "opus").Should().BeTrue();
     }
 
+    // --- Доступность 1M-окна (opus[1m] не должен упасть на аккаунте без 1M-доступа) ---
+
+    // Подписка limitedKey — план без 1M-окна (Supports1M=false); fullKeys — тянут 1M (default).
+    private IConfiguration ConfigWith200KPlan(string limitedKey, params string[] fullKeys)
+    {
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:{limitedKey}:OAuthToken"] = "token-" + limitedKey,
+            [$"{ClaudeSubscriptionPool.Section}:{limitedKey}:Supports1M"] = "false",
+        };
+        foreach (var key in fullKeys)
+            dict[$"{ClaudeSubscriptionPool.Section}:{key}:OAuthToken"] = "token-" + key;
+        return new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+    }
+
+    [Fact]
+    public void SupportsModel_Supports1MFalse_ОтсекаетТолькоОкно()
+    {
+        var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim"));
+        // Тир-алиас с окном — отсекается; без окна — обслуживается
+        pool.SupportsModel("lim", "opus[1m]").Should().BeFalse();
+        pool.SupportsModel("lim", "sonnet[1m]").Should().BeFalse();
+        pool.SupportsModel("lim", "opus").Should().BeTrue();
+        pool.SupportsModel("lim", "haiku").Should().BeTrue();
+        // Ключ вне пула (сторонний провайдер) — не наша забота
+        pool.SupportsModel("glm", "glm-5.2[1m]").Should().BeTrue();
+    }
+
+    [Fact]
+    public void ResolveWindowAlias_ПустойПул_ОставляетСуффикс()
+    {
+        // Локальный Claude (default Supports1M=true) — суффикс доезжает до --model
+        var pool = new ClaudeSubscriptionPool(Config());
+        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus[1m]");
+    }
+
+    [Fact]
+    public void ResolveWindowAlias_ВсеПодпискиТянут1M_ОставляетСуффикс()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("a", "b"));
+        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus[1m]");
+        pool.ResolveWindowAlias("sonnet[1m]").Should().Be("sonnet[1m]");
+    }
+
+    [Fact]
+    public void ResolveWindowAlias_НиктоНеТянет1M_СрезаетВ200K()
+    {
+        // Обе подписки без 1M → деградация в 200K (срез суффикса), а не падение хода
+        var dict = new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+            [$"{ClaudeSubscriptionPool.Section}:a:OAuthToken"] = "token-a",
+            [$"{ClaudeSubscriptionPool.Section}:a:Supports1M"] = "false",
+            [$"{ClaudeSubscriptionPool.Section}:b:OAuthToken"] = "token-b",
+            [$"{ClaudeSubscriptionPool.Section}:b:Supports1M"] = "false",
+        };
+        var pool = new ClaudeSubscriptionPool(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+
+        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus");
+        pool.ResolveWindowAlias("sonnet[1m]").Should().Be("sonnet");
+    }
+
+    [Fact]
+    public void ResolveWindowAlias_СмешанныйПул_ОставляетПокаЕстьЖивой1M()
+    {
+        // Есть живая 1M-подписка "full" — суффикс сохраняется
+        var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
+        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus[1m]");
+    }
+
+    [Fact]
+    public void ResolveWindowAlias_1MИсчерпаны_ДеградируетВ200K()
+    {
+        // Единственная 1M-подписка исчерпана, осталась живая 200K — живого 1M-кандидата нет,
+        // суффикс срезается (ход в 200K), а не падает на ждущей 200K с opus[1m]
+        var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
+        pool.MarkExhausted("full", DateTime.UtcNow.AddHours(2));
+
+        pool.ResolveWindowAlias("opus[1m]").Should().Be("opus");
+    }
+
+    [Theory]
+    // Не-тир-алиасы — суффикс не режем: полные id и сторонние провайдеры разбирает сам CLI
+    [InlineData("glm-5.2[1m]", "glm-5.2[1m]")]
+    [InlineData("claude-fable-5[1m]", "claude-fable-5[1m]")]
+    // Базовый алиас и обычные модели — без изменений (окна в них нет)
+    [InlineData("opus", "opus")]
+    [InlineData("deepseek-chat", "deepseek-chat")]
+    [InlineData(null, null)]
+    public void ResolveWindowAlias_НеТирАлиасы_НеТрогает(string? input, string? expected)
+    {
+        var pool = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim"));
+        pool.ResolveWindowAlias(input).Should().Be(expected);
+    }
+
+    [Fact]
+    public void Pick_Пин1M_ВыбираетСпособнуюПодписку()
+    {
+        // lim (200K, но свободнее) и full (1M) — opus[1m] идёт на full, мимо 200K-рулетки
+        var config = ConfigWith200KPlan("lim", "full");
+        var usage = new UsageService(config);
+        RecordUtil(usage, "full", 0.7);
+        RecordUtil(usage, "lim", 0.0); // lim свободнее, но 1M не умеет
+        var pool = new ClaudeSubscriptionPool(config, usage);
+
+        for (var i = 0; i < 20; i++)
+            pool.Pick("opus[1m]").Should().Be("full");
+    }
+
     // --- Приоритизация по тарифу (высший тариф среди доступных выигрывает) ---
 
     // Конфиг с тарифами: словарь key → tier ("" = не задавать). primaryTier задаёт тариф

@@ -160,6 +160,12 @@ public class LlmProviderRegistry
         return match.Success ? match.Groups[1].Value.ToLowerInvariant() : model;
     }
 
+    // Базовый Claude-тир-алиас с суффиксом 1M-окна (opus[1m]/sonnet[1m]/haiku[1m]).
+    // Только такие модели требуют проверки способности подписки перед --model: полные id
+    // (claude-fable-5[1m]) и модели сторонних провайдеров (glm-5.2[1m]) CLI разбирает сам.
+    public static bool IsClaudeTierWindowAlias(string? model) =>
+        !string.IsNullOrWhiteSpace(model) && ClaudeTierWindowAlias.IsMatch(model.Trim());
+
     public LlmCapabilities CapabilitiesFor(string? model) =>
         ResolveByModel(model) is { } p ? CapabilitiesOf(p) : LlmCapabilitiesCatalog.Claude;
 

@@ -125,6 +125,24 @@ public class LlmProviderRegistryTests
         LlmProviderRegistry.StripClaudeWindowAlias(input).Should().Be(input);
     }
 
+    [Theory]
+    // Базовые тир-алиасы с суффиксом окна — требуют проверки способности подписки (Supports1M)
+    [InlineData("opus[1m]")]
+    [InlineData("sonnet[1m]")]
+    [InlineData("haiku[1m]")]
+    [InlineData("OPUS[1M]")]
+    // Не тир-алиасы: полные id и сторонние провайдеры разбирает сам CLI, без проверки пулом
+    [InlineData("opus", false)]
+    [InlineData("claude-fable-5[1m]", false)]
+    [InlineData("glm-5.2[1m]", false)]
+    [InlineData("deepseek-chat", false)]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    public void IsClaudeTierWindowAlias_ТолькоБазовыеТирАлиасыСОкном(string? input, bool expected = true)
+    {
+        LlmProviderRegistry.IsClaudeTierWindowAlias(input).Should().Be(expected);
+    }
+
     [Fact]
     public void ResolveByModel_ВыключенныйПровайдер_ВсёРавноРезолвится()
     {

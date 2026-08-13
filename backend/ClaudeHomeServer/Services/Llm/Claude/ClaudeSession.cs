@@ -28,6 +28,14 @@ public class ClaudeSession : ILlmSessionAdapter
     // учитывается по модели, которой реально идёт ход. Сам резолв остаётся приватным.
     internal string? EffectiveTurnModel => EffectiveModel;
 
+    // Модель для --model / set_model: суффикс [1m] тир-алиаса остаётся, пока в пуле есть живой
+    // кандидат с поддержкой 1M-окна; иначе срезается в базовый алиас (деградация в 200K вместо
+    // падения хода на аккаунте без доступа — см. ClaudeSubscriptionPool.ResolveWindowAlias).
+    // Пул не задан (нет подписок) — срезаем безусловно: локальный вход не описан в конфиге, и
+    // безопаснее идти в надёжном 200K, чем рисковать падением на неизвестном аккаунте.
+    private string? ResolveModelForCli(string? model) =>
+        _subscriptionPool?.ResolveWindowAlias(model) ?? LlmProviderRegistry.StripClaudeWindowAlias(model);
+
     // Цепочка хода для фолбэка (ADR-007 §4): упорядоченные конкретные модели пресета (первая =
     // основная, остальные = план подмен). Пустая Info.Model → резолв по месту мог дать пресет;
     // цепочка нужна оркестратору, чтобы при сбое шагать по ней, а не автоподбирать. Без резолвера
@@ -1538,7 +1546,7 @@ public class ClaudeSession : ILlmSessionAdapter
 
     // Смена модели на лету: control_request set_model в stdin живого процесса. CLI применяет
     // её к последующим round-trip'ам идущего хода и отвечает control_response success (reader
-    // игнорирует). Модель нормализуем как для --model (снимаем window-алиас [1m]). Нет
+    // игнорирует). Модель нормализуем как для --model (резолв [1m] по способности пула). Нет
     // процесса — false: SessionManager уже обновил Info.Model, следующий ход пересоздастся с ней.
     public bool TrySetModelLive(string model)
     {
@@ -1548,7 +1556,7 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             type = "control_request",
             request_id = "setmodel_" + Guid.NewGuid().ToString("N")[..12],
-            request = new { subtype = "set_model", model = LlmProviderRegistry.StripClaudeWindowAlias(model) ?? model }
+            request = new { subtype = "set_model", model = ResolveModelForCli(model) ?? model }
         });
         WriteLineToStdin(req);
         return true;
@@ -1754,7 +1762,7 @@ public class ClaudeSession : ILlmSessionAdapter
         // Пустая модель сессии = «по умолчанию»: подставляем глобальную настройку, а не
         // отдаём выбор CLI (иначе «по умолчанию» значило бы в разных местах разные модели)
         if (EffectiveModel is { } turnModel && !string.IsNullOrWhiteSpace(turnModel))
-            args.AddRange(["--model", LlmProviderRegistry.StripClaudeWindowAlias(turnModel)!]);
+            args.AddRange(["--model", ResolveModelForCli(turnModel)!]);
 
         if (!string.IsNullOrWhiteSpace(Info.Effort))
             args.AddRange(["--effort", Info.Effort]);

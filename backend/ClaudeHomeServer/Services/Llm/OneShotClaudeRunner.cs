@@ -99,6 +99,11 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             ? userTiers?.ModelFor(ModelTier.Medium, ownerId) ?? appSettings?.TierModel(ModelTier.Medium)
             : model);
 
+    // Суффикс [1m] тир-алиаса остаётся, пока в пуле есть живой кандидат с поддержкой 1M-окна;
+    // иначе срезается (деградация в 200K). Без пула — срезаем безусловно (безопасный 200K).
+    private string? ResolveWindowAlias(string? model) =>
+        subscriptionPool?.ResolveWindowAlias(model) ?? LlmProviderRegistry.StripClaudeWindowAlias(model);
+
     // Env процесса + ключ аккаунта пула, которым реально пойдёт вызов (null — сторонний
     // провайдер ИЛИ пул пуст/недоступен, тогда возвращённый Env тоже null — CLI наследует
     // окружение сервера, как раньше). Родная модель Claude (BuildCliEnv не нашёл стороннего
@@ -143,6 +148,10 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         // ДО BuildArgs и BuildCliEnv — env маршрутизации обязан считаться от итоговой модели,
         // иначе glm/kimi из настройки уехали бы на эндпоинт Anthropic
         model = ResolveModel(model, ownerId);
+        // Резолв окна [1m] — тоже до BuildArgs/ResolveEnv: и --model, и выбор подписки пула
+        // (Pick) должны сходиться на одной модели (иначе Pick по opus[1m] выбрал бы 1M-аккаунт,
+        // а --model ушёл бы срезанным opus, или наоборот).
+        model = ResolveWindowAlias(model);
 
         var withFlag = !_persistSessions && !_flagUnsupported;
         var args = BuildArgs(Claude.ClaudeRuntimeSettings.HooksOffArgs(launcher),
@@ -265,7 +274,9 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
         if (!string.IsNullOrWhiteSpace(model))
         {
             args.Add("--model");
-            args.Add(LlmProviderRegistry.StripClaudeWindowAlias(model)!);
+            // Модель уже финальна: резолв окна [1m] по способности пула делает вызывающий
+            // (RunCliAsync), BuildArgs только подставляет её как есть.
+            args.Add(model!);
         }
         if (!string.IsNullOrWhiteSpace(effort))
         {

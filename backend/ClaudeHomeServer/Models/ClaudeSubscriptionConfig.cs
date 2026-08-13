@@ -25,6 +25,13 @@ public class ClaudeSubscriptionConfig
     // «There's an issue with the selected model (opus)».
     public bool SupportsOpus { get; set; } = true;
 
+    // Аккаунту доступно 1M-окно контекста (суффикс [1m] у тир-алиасов opus/sonnet/haiku).
+    // false — пул не отдаёт такому аккаунту чаты с пином тир-алиаса+окна (opus[1m] и т.п.),
+    // иначе CLI на таком аккаунте падает «model may not exist / no access». Default true —
+    // соответствует текущему состоянию пула (все подписки тянут 1M). Когда способных не
+    // осталось — ClaudeSubscriptionPool деградирует срезом суффикса (ход в 200K), а не падением.
+    public bool Supports1M { get; set; } = true;
+
     // Тариф подписки: "pro" | "max" | "max5" | "max20" (варианты записи нормализуются).
     // Пул отдаёт приоритет более высоким тарифам среди доступных аккаунтов; при равенстве
     // тарифа — наименее загруженному. Пусто/не распознано — тариф не задан (низший приоритет).

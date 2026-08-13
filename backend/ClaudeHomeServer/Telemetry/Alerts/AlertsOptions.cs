@@ -11,8 +11,13 @@ public sealed record AlertsOptions
 {
     public bool Enabled { get; init; }
 
-    /// <summary>Внешний адрес SigNoz — по нему же строятся ссылки в уведомлениях.</summary>
-    public string SignozUrl { get; init; } = "http://localhost:3301";
+    /// <summary>
+    /// Внешний адрес SigNoz — по нему же строятся ссылки в уведомлениях.
+    /// С v0.134 обязан включать base-path <c>/telemetry-proxy</c>: SigNoz поднят с env
+    /// <c>SIGNOZ_GLOBAL_EXTERNAL__URL</c> и весь API/UI живёт под этим префиксом
+    /// (без него — 404 на всё, кроме health).
+    /// </summary>
+    public string SignozUrl { get; init; } = "http://localhost:3301/telemetry-proxy";
 
     public string? ApiKey { get; init; }
 
@@ -41,7 +46,7 @@ public sealed record AlertsOptions
         return new AlertsOptions
         {
             Enabled = section.GetValue<bool>("Enabled"),
-            SignozUrl = section.GetValue<string>("SignozUrl") ?? "http://localhost:3301",
+            SignozUrl = section.GetValue<string>("SignozUrl") ?? "http://localhost:3301/telemetry-proxy",
             ApiKey = section.GetValue<string>("ApiKey"),
             PollSeconds = section.GetValue<int?>("PollSeconds") ?? 60,
             Environments = section.GetSection("Environments").Get<string[]>() ?? [],

@@ -1,7 +1,13 @@
 namespace ClaudeHomeServer.Telemetry.Alerts;
 
 /// <summary>
-/// Чтение активных алертов из SigNoz (<c>GET /api/v1/alerts</c>).
+/// Чтение активных алертов из SigNoz (<c>GET {SignozUrl}/api/v1/alerts</c>).
+///
+/// С v0.134 SigNoz поднимает ВЕСЬ HTTP-сервер (UI и API) под base-path из env
+/// <c>SIGNOZ_GLOBAL_EXTERNAL__URL</c> — у нас это <c>/telemetry-proxy</c> (см.
+/// docker-compose.observability.yml). Поэтому <c>SignozUrl</c> обязан включать префикс:
+/// <c>http://localhost:3301/telemetry-proxy</c>. Без него живы только health-пробы,
+/// остальное отвечает 404 (проверено на живом стенде v0.134.0).
 ///
 /// Направление запроса — от приложения к SigNoz. Обратное (webhook из контейнера в CCS)
 /// упирается в привязку боевого хоста по имени: http.sys отвечает
@@ -32,7 +38,15 @@ public sealed class SignozAlertsClient(
             using var response = await http.SendAsync(request, ct);
             if (!response.IsSuccessStatusCode)
             {
-                log.LogWarning("SigNoz вернул {Code} на запрос алертов", (int)response.StatusCode);
+                // 404 при живом SigNoz почти всегда означает забытый base-path: с v0.134
+                // весь API живёт под /telemetry-proxy — подсказываем прямо в логе, чтобы
+                // не диагностировать это заново по одному коду ответа
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    log.LogWarning(
+                        "SigNoz вернул 404 на запрос алертов — проверь, что Telemetry:Alerts:SignozUrl "
+                        + "включает base-path (например http://localhost:3301/telemetry-proxy)");
+                else
+                    log.LogWarning("SigNoz вернул {Code} на запрос алертов", (int)response.StatusCode);
                 return null;
             }
 

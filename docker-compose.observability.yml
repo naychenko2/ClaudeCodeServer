@@ -37,6 +37,11 @@ services:
     # prod — задать в .env рядом с compose, напр. https://<домен>/telemetry-proxy).
     environment:
       - SIGNOZ_GLOBAL_EXTERNAL__URL=${SIGNOZ_EXTERNAL_URL:-http://localhost:3301/telemetry-proxy}
+      # Секрет подписи JWT-сессий SigNoz (без него — CRITICAL в логе и уязвимые сессии,
+      # см. github.com/SigNoz/signoz/issues/8400). Значение — в .env рядом с compose
+      # (в .gitignore), НЕ хардкодить здесь. Пустое значение = прежнее поведение
+      # (эфемерный секрет + CRITICAL), стек при этом поднимается.
+      - SIGNOZ_TOKENIZER_JWT_SECRET=${SIGNOZ_TOKENIZER_JWT_SECRET:-}
     ports: !override
       - "${OBS_BIND:-127.0.0.1}:3301:8080"
 

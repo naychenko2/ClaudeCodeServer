@@ -17,7 +17,7 @@ namespace ClaudeHomeServer.Services;
 // ProjectKnowledgeTurnSync) и сверка при открытии панели БЗ. Дебаунс — как у заметок
 // (NotesKnowledgeService). Без настроенного Dify всё тихо выключено; ошибки Dify best-effort:
 // логируются и не роняют файловые операции.
-public sealed class ProjectKnowledgeSyncService
+public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncParticipant
 {
     private static readonly TimeSpan SyncDebounce = TimeSpan.FromSeconds(15);
 
@@ -266,6 +266,66 @@ public sealed class ProjectKnowledgeSyncService
             wk.DocumentTags?.Remove(k);
         }
         _wkStore.Save(wk);
+    }
+
+    // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
+    // Цель на каждую папку с датасетом БЗ; ключ записи — относительный путь файла.
+    // Карта wk.Docs мутируется под _syncLock (существующие исключения HandleRename/
+    // ForgetDocument — свойство кода, реконсайлер его не ухудшает). Датасет общий для
+    // проектов одной папки — OwnerUserIds несёт всех владельцев (как BroadcastAsync).
+    public IReadOnlyList<Knowledge.KnowledgeSyncTarget> ListTargets()
+    {
+        var targets = new List<Knowledge.KnowledgeSyncTarget>();
+        foreach (var wk in _wkStore.All())
+        {
+            if (string.IsNullOrEmpty(wk.DifyDatasetId)) continue;
+            var rootPath = wk.RootPath;
+            var owners = _projects.GetByRootPath(rootPath).Select(p => p.OwnerId).Distinct().ToList();
+            targets.Add(new Knowledge.KnowledgeSyncTarget(
+                wk.DifyDatasetId!, owners,
+                $"project:{WorkspaceKnowledgeStore.NormalizePath(rootPath)}",
+                docIds => ResolveDocsAsync(rootPath, docIds),
+                keys => InvalidateDocsAsync(rootPath, keys),
+                () => QueueSync(rootPath)));
+        }
+        return targets;
+    }
+
+    private async Task<IReadOnlyList<(string DocId, string EntryKey)>> ResolveDocsAsync(
+        string rootPath, IReadOnlyCollection<string> docIds)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            var wk = _wkStore.GetByPath(rootPath);
+            if (wk?.Docs is null) return [];
+            var byDocId = wk.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+            return docIds
+                .Where(byDocId.ContainsKey)
+                .Select(d => (d, byDocId[d]))
+                .ToList();
+        }
+        finally { _syncLock.Release(); }
+    }
+
+    private async Task InvalidateDocsAsync(string rootPath, IReadOnlyCollection<string> entryKeys)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            var wk = _wkStore.GetByPath(rootPath);
+            if (wk?.Docs is null) return;
+            var changed = false;
+            foreach (var key in entryKeys)
+                if (wk.Docs.TryGetValue(key, out var doc) && doc.Hash.Length > 0)
+                {
+                    // Замена объекта, не правка поля — на случай общих снапшотов
+                    wk.Docs[key] = new WorkspaceDocRef { DocId = doc.DocId, Hash = "" };
+                    changed = true;
+                }
+            if (changed) _wkStore.Save(wk);
+        }
+        finally { _syncLock.Release(); }
     }
 
     // Первичное построение карты для датасета, созданного до фичи (имя документа = путь).

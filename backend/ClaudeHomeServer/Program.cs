@@ -475,6 +475,18 @@ builder.Services.AddSingleton<ProjectKnowledgeSyncService>();
 AddHosted<ProjectKnowledgeTurnSync>();
 // Каскадная уборка знаний при удалении пользователя (UsersController)
 builder.Services.AddSingleton<UserKnowledgeCascade>();
+// Участники реконсайлера error-документов Dify: пять владельцев локальных сторов
+// «запись → {DocId, Hash}» (форвард на существующие singleton'ы, не новые экземпляры)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<PersonaMemoryService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<TeamMemoryService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<NotesKnowledgeService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

@@ -29,6 +29,7 @@ export interface DifyDocument {
   id: string;
   name: string;
   indexingStatus: string;
+  error?: string | null;   // текст ошибки индексации (только у indexingStatus === 'error')
   tags?: string[];
 }
 

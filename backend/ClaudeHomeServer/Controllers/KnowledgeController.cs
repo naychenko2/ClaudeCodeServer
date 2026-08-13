@@ -60,6 +60,8 @@ public class KnowledgeController(
                 id = d.Id,
                 name = d.Name,
                 indexingStatus = d.IndexingStatus,
+                // Текст ошибки индексации — причина, по которой документ выпал из поиска
+                error = d.Error,
                 tags = tags.TryGetValue(d.Name, out var t) ? t : [],
             });
             return Ok(new { datasetId = wk.DifyDatasetId, documents = docsDto, total = docs.Total });

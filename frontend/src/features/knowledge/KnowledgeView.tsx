@@ -338,12 +338,22 @@ function DocumentsList({ docs, err, onOpen, onRemove }: {
                 fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary,
                 whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               }}>{d.name}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, fontSize: 11, color: C.textSecondary }}>
+              {/* У документа в статусе error к подписи добавляется текст ошибки Dify:
+                  ручным документам автолечение недоступно, и это единственный ключ к причине */}
+              <div
+                title={d.error || undefined}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, marginTop: 2, fontSize: 11,
+                  color: C.textSecondary, minWidth: 0,
+                }}
+              >
                 <span style={{
                   width: 7, height: 7, borderRadius: '50%', background: st.dot,
                   animation: st.pulse ? 'kb-pulse 1.2s infinite' : undefined, flex: 'none',
                 }} />
-                {st.label}
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {st.label}{d.error ? ` · ${d.error}` : ''}
+                </span>
               </div>
             </div>
             {/* Индикатор кликабельности — шеврон «раскрыть» */}

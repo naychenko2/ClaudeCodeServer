@@ -1784,6 +1784,7 @@ export interface KnowledgeDocument {
   id: string;
   name: string;
   indexingStatus: string;       // completed | indexing | error и т.п. (строка Dify)
+  error?: string | null;        // текст ошибки индексации (только у статуса error)
 }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {

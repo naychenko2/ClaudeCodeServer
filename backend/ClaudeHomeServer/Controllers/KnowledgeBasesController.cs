@@ -64,7 +64,7 @@ public class KnowledgeBasesController(KnowledgeService knowledge, IHubContext<Se
             var docs = await knowledge.ListAllDocumentsAsync(id);
             return Ok(new KnowledgeBaseDetail(
                 c.Id, c.Title, c.Type, c.Visibility, c.DocumentCount, c.CreatedAt, c.Deletable, c.Description,
-                docs.Data.Select(x => new KnowledgeDocumentDto(x.Id, x.Name, x.IndexingStatus)).ToList()));
+                docs.Data.Select(x => new KnowledgeDocumentDto(x.Id, x.Name, x.IndexingStatus, x.Error)).ToList()));
         }
         catch (HttpRequestException ex) { return StatusCode(502, new { error = $"Dify недоступен: {ex.Message}" }); }
     }
@@ -310,7 +310,9 @@ public record KnowledgeBaseSummary(
     string Id, string Title, string Type, string Visibility,
     int DocumentCount, DateTime? CreatedAt, bool Deletable, string? Description);
 
-public record KnowledgeDocumentDto(string Id, string Name, string IndexingStatus);
+// Error — текст ошибки индексации от Dify (только у документов в статусе error): для тех,
+// у кого автолечения нет (ручные документы), это единственный ключ к причине
+public record KnowledgeDocumentDto(string Id, string Name, string IndexingStatus, string? Error = null);
 
 public record KnowledgeBaseDetail(
     string Id, string Title, string Type, string Visibility,

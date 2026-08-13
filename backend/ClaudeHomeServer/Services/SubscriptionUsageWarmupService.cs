@@ -214,6 +214,18 @@ public sealed class SubscriptionUsageWarmupService(
         usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt,
             m.OverageStatus, m.OverageResetsAt, subscriptionKey: key, source: "probe");
 
+        // P31: rate_limit_event пришёл — значит пробный ход авторизовался и дошёл до эндпоинта.
+        // auth-dead снимаем по любому окну (а не только exhaustion-окну) и независимо от исчерпания:
+        // probe ходит на auth-dead аккаунты (KeysDueForPing/AllKeys их не фильтруют), и это
+        // единственный путь узнать, что протухший токен починили — без этой ветки пометка висела
+        // до рестарта процесса (блокер ревью P29: MarkAuthDead был необратим вне Reset, гейтящегося
+        // исчерпанием). Доказательствоworkingоспособности — сам факт заголовков лимитов в ответе.
+        if (pool.IsAuthDead(key))
+        {
+            pool.ClearAuthDead(key);
+            Console.Error.WriteLine($"[SubscriptionWarmup] '{key}': подписка ответила — снята пометка auth-dead");
+        }
+
         if (!ClaudeSubscriptionPool.IsExhaustionWindow(m.LimitType))
             return;
 

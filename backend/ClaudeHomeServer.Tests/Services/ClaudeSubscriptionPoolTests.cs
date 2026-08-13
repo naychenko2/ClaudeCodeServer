@@ -662,4 +662,37 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         var pick = Enumerable.Range(0, 20).Select(_ => pool.Pick()).Distinct().ToList();
         pick.Should().NotContain("dead", "auth-dead никогда не воскреснет — он хуже исчерпанного");
     }
+
+    // P31: ClearAuthDead снимает ТОЛЬКО пометку auth-dead, не трогая исчерпание. До фикса снять
+    // auth-dead можно было лишь через Reset, гейтящийся исчерпанием — транзитный 401 выключал
+    // подписку до рестарта процесса (блокер ревью P29).
+    [Fact]
+    public void ClearAuthDead_СнимаетТолькоAuthDead_НеТрогаяИсчерпание()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("acc-a", "acc-b"));
+        pool.MarkAuthDead("acc-a");
+        pool.MarkExhausted("acc-a", DateTime.UtcNow.AddHours(2));
+
+        pool.ClearAuthDead("acc-a");
+
+        pool.IsAuthDead("acc-a").Should().BeFalse("auth-dead снят");
+        pool.IsExhausted("acc-a").Should().BeTrue("исчерпание не тронуто — ClearAuthDead ≠ Reset");
+    }
+
+    // P31, сценарий приёмки: транзитный 401 → MarkAuthDead → аккаунт доказал работоспособность
+    // (rate_limit_event пришёл) → ClearAuthDead → подписка снова в ротации БЕЗ рестарта процесса.
+    [Fact]
+    public void ClearAuthDead_ВозвращаетВРотацию_БезРестартаПроцесса()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("acc-a", "acc-b"));
+        pool.MarkAuthDead("acc-a");
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("acc-b", "acc-a помечена auth-dead и исключена из ротации");
+
+        // Токен починили, аккаунт ответил — пометка снята
+        pool.ClearAuthDead("acc-a");
+
+        pool.IsAuthDead("acc-a").Should().BeFalse();
+        pool.IsInRotation("acc-a").Should().BeTrue("подписка вернулась в ротацию");
+    }
 }

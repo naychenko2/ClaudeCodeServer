@@ -300,8 +300,9 @@ public class ClaudeSubscriptionPool
 
     /// <summary>Пометить подписку как негодную по auth (протухший OAuth/ключ, P29).</summary>
     /// В отличие от <see cref="MarkExhausted"/>, без срока: токен не воскреснет сам до ручного
-    /// перевхода. Снимается <see cref="Reset"/>, рестартом сервера или успешным ходом (в обработчике
-    /// rate_limit SessionManager при ответе подписки).
+    /// перевхода. Снимается <see cref="ClearAuthDead"/>/рестартом сервера, когда аккаунт доказал
+    /// работоспособность (пришёл rate_limit_event — значит запрос дошёл до эндпоинта и аутентификация
+    /// прошла, до лимитов он бы не дошёл). Полный <see cref="Reset"/> чистит и auth-dead, и exhausted.
     public void MarkAuthDead(string key)
     {
         if (!string.IsNullOrEmpty(key)) _authDead[key] = 1;
@@ -310,4 +311,15 @@ public class ClaudeSubscriptionPool
     /// <summary>Подписка помечена негодной по auth (протухший токен/ключ)?</summary>
     public bool IsAuthDead(string key)
         => !string.IsNullOrEmpty(key) && _authDead.ContainsKey(key);
+
+    /// <summary>Снять ТОЛЬКО пометку auth-dead, не трогая исчерпание.</summary>
+    /// Вызывается там, где аккаунт доказал работоспособность (rate_limit_event от подписки —
+    /// в обработчике хода SessionManager и в идл-пинге warmup). До P31 снять auth-dead можно было
+    /// только через <see cref="Reset"/>, а он гейтится исчерпанием: auth-dead-подписка не исчерпана
+    /// → Reset не зовётся → транзитный 401 выключал платную подписку до рестарта процесса, хотя
+    /// токен уже починили (P31, блокер ревью P29).
+    public void ClearAuthDead(string key)
+    {
+        if (!string.IsNullOrEmpty(key)) _authDead.TryRemove(key, out _);
+    }
 }

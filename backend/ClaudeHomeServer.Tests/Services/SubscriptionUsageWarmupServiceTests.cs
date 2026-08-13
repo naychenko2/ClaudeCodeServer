@@ -146,6 +146,40 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
         pool.IsExhausted("second").Should().BeTrue();
     }
 
+    // P31: rate_limit_event — доказательство аутентификации (до лимитов запрос не дошёл бы).
+    // Снимаем auth-dead по ЛЮБОМУ окну (а не только exhaustion-окну) и независимо от исчерпания:
+    // probe ходит на auth-dead аккаунты, и это единственный путь узнать, что протухший токен
+    // починили. До фикса MarkAuthDead был необратим вне Reset, гейтящегося исчерпанием (блокер P29).
+    [Fact]
+    public void RecordAndGuard_ЗдоровыйОтвет_СнимаетAuthDead_ДажеПоНеизвестномуОкну()
+    {
+        var (svc, pool, _, _) = MkService(subKeys: ["second"]);
+        pool.MarkAuthDead("second");
+
+        // Неизвестное окно (seven_day_overage_included) — раньше оно вообще не трогало пул,
+        // но auth-dead обязано сняться: запрос авторизовался и дошёл.
+        svc.RecordAndGuard("second", new RateLimitMessage("seven_day_overage_included",
+            DateTime.UtcNow.AddDays(5).ToString("o"), "allowed", 0.1, false));
+
+        pool.IsAuthDead("second").Should().BeFalse("подписка ответила — auth-dead снят");
+    }
+
+    // P31, сценарий приёмки: транзитный 401 выключил подписку → перевход → probe прошёл →
+    // подписка снова в ротации без рестарта процесса. auth-dead при этом НЕ исчерпана.
+    [Fact]
+    public void RecordAndGuard_AuthDeadНеИсчерпана_СнимаетПометкуИВозвращаетВРотацию()
+    {
+        var (svc, pool, _, _) = MkService(subKeys: ["acc-a", "acc-b"]);
+        pool.MarkAuthDead("acc-a");
+        pool.IsExhausted("acc-a").Should().BeFalse("auth-dead — это не квота");
+
+        svc.RecordAndGuard("acc-a", new RateLimitMessage("five_hour",
+            DateTime.UtcNow.AddHours(2).ToString("o"), "allowed", 0.2, false));
+
+        pool.IsAuthDead("acc-a").Should().BeFalse();
+        pool.IsInRotation("acc-a").Should().BeTrue("подписка вернулась в ротацию");
+    }
+
     // --- IdlePingMinutes: 0 выключает механизм ---
 
     [Fact]

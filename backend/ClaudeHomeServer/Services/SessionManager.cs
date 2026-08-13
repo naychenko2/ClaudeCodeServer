@@ -6942,6 +6942,16 @@ public class SessionManager : IDisposable
                 case RateLimitMessage m:
                     _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
                     _activity?.Touch(entry?.Info.Provider);
+                    // P31: rate_limit_event от подписки — доказательство аутентификации (до лимитов
+                    // запрос не дошёл бы). Снимаем auth-dead независимо от окна и исчерпания: иначе
+                    // транзитный 401 + перевход (claude setup-token) выключали подписку до рестарта
+                    // процесса, хотя токен уже починили (блокер ревью P29). По любому окну, не только
+                    // exhaustion-окну: заголовки лимитов приходят с каждым ответом авторизованного API.
+                    if (entry is not null && _subscriptionPool.IsAuthDead(entry.Info.Provider))
+                    {
+                        _subscriptionPool.ClearAuthDead(entry.Info.Provider);
+                        Console.WriteLine($"[SessionManager] Подписка «{entry.Info.Provider}» отвечает (ход {sessionId}) — снята пометка auth-dead");
+                    }
                     // Состояние пула правим только по известным окнам (IsExhaustionWindow):
                     // rejected неизвестного окна — транзитная телеметрия CLI, она попадает
                     // в usage для экрана, но ротацию не трогает.

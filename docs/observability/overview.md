@@ -171,7 +171,8 @@ truth для billing/accounting — метрики токенов и стоим�
 high-cardinality тег (например, `user_id` или `file_path`) невозможно: компилятор и тесты
 не дадут.
 
-**Allowlist тегов:** `{provider, model, execution, tool_name, outcome, error_type, reason}`.
+**Allowlist тегов:** `{provider, model, execution, tool_name, outcome, error_type, reason,
+dataset_type, healability}`.
 
 **`execution` — песочница или хост.** Значений ровно два (`local`/`docker`), берутся из кода
 (`TurnTelemetry.ExecutionKind` по `IProcessLauncher.IsSandboxed`), ограничитель значений им не
@@ -201,6 +202,12 @@ CLI»), и в тег уходил литерал `unknown`. На боевом х
 `TurnTelemetry.ModelFromEvent`, намерение осталось фолбэком на случай, если CLI модель не
 назвал. В спане `chat.turn` тег ставится дважды: намерением при старте хода и фактом, когда
 CLI его сообщит.
+
+**Оговорка про гейджи.** Теги `dataset_type` и `healability` (`ccs.dify.error_documents`)
+задаются не Record*-методом, а измерением в `GaugeRegistrar`, поэтому ни фасад, ни
+`MetricTagGuard` их не фильтруют. Ограничитель им и не нужен: оба значения — закрытые
+множества из кода (5 префиксов `Label` × 2 состояния лечимости), снаружи туда не приходит
+ничего. В allowlist они внесены как документация состава тегов.
 
 **Ограничитель значений** — `Telemetry/MetricTagGuard.cs`, вызывается внутри `ServerMetrics`
 (единственная точка записи, мимо не пройти). Две ступени:
@@ -263,6 +270,39 @@ CLI его сообщит.
 График показывал сотни, не падал после рестарта и не реагировал на работу. **Ряд
 `ccs.sessions.active` до этой правки означал другое — сравнивать его с новыми точками
 нельзя.**
+
+## Метрики реконсайлера знаний
+
+Документы, упавшие на индексации в Dify (статус `error`), и их восстановление — контур описан
+в [architecture/knowledge.md](../architecture/knowledge.md#восстановление-error-документов-dify-реконсайлер).
+
+| Метрика | Тип | Что считает |
+|---|---|---|
+| `ccs.dify.error_documents` | ObservableGauge, `{document}` | документы в статусе `error` на последнем обходе, с разрезом по типу датасета и лечимости |
+| `ccs.dify.documents_recovered` | ObservableCounter, `{document}` | записи, вернувшиеся из `error` после пересоздания (считается по исчезновению из error-множества, а не по попытке лечения) |
+
+Теги гейджа: `dataset_type` (`notes` | `persona` | `team` | `dossiers` | `project`) и
+`healability` (`healable` — документ сопоставлен с записью локального стора и будет пересоздан;
+`unhealable` — сирота или ручной документ, источника контента у CCS нет). Всего 5 × 2 ряда.
+
+**Почему разрез по лечимости обязателен.** Без него гейдж врёт: unhealable-документы
+неустранимы, их количество не падает никогда, и общий ряд читался бы как «поломка, которая не
+проходит». Целевое состояние — `healable → 0` при ненулевом `unhealable`.
+
+**Почему `Label` цели в тегах нет.** Он содержит id персоны и путь проекта — это и PII, и
+кардинальность. Агрегация по типу датасета делается до измерения, чистой функцией
+`KnowledgeIndexReconciler.AggregateByType`; поимённый разбор берётся из логов реконсайлера и
+UI «Знаний», а не из метрики.
+
+**Регистрация — в `GaugeRegistrar`, не в `ServerMetrics`:** обе метрики читают снапшот
+runtime-объекта (`KnowledgeIndexReconciler.LastCounts` / `RecoveredTotal`), а `ServerMetrics` —
+статический фасад без доступа к DI. Гейдж многотеговый, поэтому `observeValues` с
+`IEnumerable<Measurement<long>>`, а не скалярный `observeValue`, как у гейджей сессий.
+Счётчик восстановленных — тоже Observable: значение живёт в реконсайлере и только растёт,
+инкрементировать его снаружи нечем.
+
+При `Dify:Reconcile:Mode=off` (дефолт) реконсайлер не обходит цели — обе метрики остаются
+пустыми, это не сбой сбора.
 
 ## Resource Attributes
 

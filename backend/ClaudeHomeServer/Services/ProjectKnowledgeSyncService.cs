@@ -280,7 +280,12 @@ public sealed class ProjectKnowledgeSyncService : Knowledge.IKnowledgeSyncPartic
         {
             if (string.IsNullOrEmpty(wk.DifyDatasetId)) continue;
             var rootPath = wk.RootPath;
-            var owners = _projects.GetByRootPath(rootPath).Select(p => p.OwnerId).Distinct().ToList();
+            var owners = _projects.GetByRootPath(rootPath)
+                .Select(p => p.OwnerId)
+                .Where(o => !string.IsNullOrEmpty(o))
+                .Select(o => o!)
+                .Distinct()
+                .ToList();
             targets.Add(new Knowledge.KnowledgeSyncTarget(
                 wk.DifyDatasetId!, owners,
                 $"project:{WorkspaceKnowledgeStore.NormalizePath(rootPath)}",

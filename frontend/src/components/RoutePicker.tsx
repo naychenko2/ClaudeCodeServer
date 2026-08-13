@@ -249,7 +249,7 @@ export function RoutePicker({
             boxShadow: open ? SHADOW.focus : 'none',
           }}
         >
-          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10.5, color: C.textMuted }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: FS.xs, color: C.textMuted }}>
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{cardTitle}</span>
             {interactive && (
               <ChevronDown size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}

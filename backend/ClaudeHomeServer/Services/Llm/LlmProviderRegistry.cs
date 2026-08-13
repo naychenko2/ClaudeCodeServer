@@ -503,12 +503,16 @@ public class LlmProviderRegistry
         }
 
         // Модель-дефолты (как для CLI-провайдеров, но без ANTHROPIC_BASE_URL).
-        // ТОЛЬКО полные id: тир-алиасы (opus/sonnet/haiku) CLI резолвит лишь во флаге
-        // --model — из ANTHROPIC_MODEL алиас уходит в API сырым id и валит ход
-        // «There's an issue with the selected model (opus)» (воспроизведено на проде:
-        // чат Алисы с пином opus на подписке my-second). Алиас в env не ставим —
-        // модель задаёт --model, который ClaudeSession передаёт всегда.
-        if (!string.IsNullOrWhiteSpace(model) && !IsClaudeTierAlias(model))
+        // ТОЛЬКО полные id: тир-алиасы (opus/sonnet/haiku, в т.ч. с суффиксом окна
+        // opus[1m]/sonnet[1m]/haiku[1m]) CLI резолвит лишь во флаге --model — из
+        // ANTHROPIC_MODEL алиас уходит в API сырым id и валит ход «There's an issue
+        // with the selected model (opus[1m])» (воспроизведено на проде). Полные id
+        // с окном (claude-fable-5[1m]) и модели сторонних провайдеров (glm-5.2[1m])
+        // сюда не относятся — их суффикс разбирает сам CLI, env им нужен.
+        // Модель задаёт --model, который ClaudeSession передаёт всегда.
+        if (!string.IsNullOrWhiteSpace(model)
+            && !IsClaudeTierAlias(model)
+            && !IsClaudeTierWindowAlias(model))
         {
             env["ANTHROPIC_MODEL"] = model;
             env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model;

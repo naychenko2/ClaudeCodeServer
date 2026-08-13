@@ -42,11 +42,16 @@ public class LlmProviderRegistryTests
     }
 
     // Тир-алиас в ANTHROPIC_MODEL не резолвится CLI (уходит в API сырым id и валит ход
-    // «issue with the selected model») — env-дефолты ставятся только для полных id
+    // «issue with the selected model») — env-дефолты ставятся только для полных id.
+    // Включая суффикс окна: opus[1m] отсекается так же, как голый opus (регресс
+    // 89bb8bd5 — пока суффикс срезался раньше этого места, защита не срабатывала).
     [Theory]
     [InlineData("opus")]
     [InlineData("sonnet")]
     [InlineData("Haiku")]
+    [InlineData("opus[1m]")]
+    [InlineData("sonnet[1m]")]
+    [InlineData("haiku[1m]")]
     public void BuildOAuthCliEnv_ТирАлиас_БезEnvМодели(string alias)
     {
         var env = Create().BuildOAuthCliEnv("second", "tok-123", model: alias)!;
@@ -55,11 +60,18 @@ public class LlmProviderRegistryTests
         env.Should().NotContainKey("ANTHROPIC_DEFAULT_OPUS_MODEL");
     }
 
-    [Fact]
-    public void BuildOAuthCliEnv_ПолныйId_СтавитEnvМодель()
+    // Полные id (в т.ч. с окном claude-fable-5[1m]) и модели сторонних провайдеров
+    // (glm-5.2[1m]) — суффикс разбирает сам CLI, env-дефолты им нужны
+    [Theory]
+    [InlineData("claude-opus-4-8")]
+    [InlineData("claude-fable-5[1m]")]
+    [InlineData("glm-5.2[1m]")]
+    public void BuildOAuthCliEnv_ПолныйId_СтавитEnvМодель(string model)
     {
-        var env = Create().BuildOAuthCliEnv("second", "tok-123", model: "claude-opus-4-8")!;
-        env["ANTHROPIC_MODEL"].Should().Be("claude-opus-4-8");
+        var env = Create().BuildOAuthCliEnv("second", "tok-123", model: model)!;
+        env["ANTHROPIC_MODEL"].Should().Be(model);
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL"].Should().Be(model);
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"].Should().Be(model);
     }
 
     [Fact]

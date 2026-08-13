@@ -163,6 +163,12 @@ public static class TurnErrorClassifier
         FallbackErrorClass.ProviderError => "provider_error",
         FallbackErrorClass.Unreachable => "unreachable",
         FallbackErrorClass.ContextOverflow => "context_overflow",
+        // P31: auth_failure несёт причину в маркер смены провайдера. До фикса здесь был null —
+        // и маркер уходил с Reason: null (в логе «причина неизвестно»), а стартовая подмена через
+        // ProviderHealthRegistry.UnavailableReason подставляла ?? "unreachable" → пользователь
+        // видел «Сервис не отвечает» при протухшем ключе. Тот же класс бага, что раньше чинили
+        // хардкодом unreachable в стартовой подмене.
+        FallbackErrorClass.AuthFailure => "auth_failure",
         _ => null,
     };
 
@@ -184,15 +190,20 @@ public static class TurnErrorClassifier
     // провайдеров, не общие слова: голое «oauth»/«token»/«key» слишком обычны в разборе
     // инцидентов. Спрашивается ПОСЛЕ LooksUsageLimited, поэтому kimi-кейс («Failed to
     // authenticate … usage limit») здесь уже не доходит — ушёл в UsageLimit выше.
+    // P31: убраны слишком широкие «unauthorized» и «could not be refreshed». ErrorText
+    // собирается не только из is_error-текста CLI, но и из обычных ErrorMessage — ход с
+    // MCP-сервером личного реестра с протухшим OAuth давал в тексте «401 Unauthorized» чужого
+    // API → ложный AuthFailure → MarkAuthDead на здоровую подписку Claude (навсегда, до бл. 1).
+    // Оставлены только канонические формулировки: «Failed to authenticate», «OAuth session
+    // expired» (покрывает «…and could not be refreshed»), «invalid api key». Голый статус 401
+    // ловится выше по коду статуса, а не по тексту.
     private static readonly string[] AuthFailurePhrases =
     [
         "failed to authenticate",
         "authentication failed",
         "oauth session expired",
-        "could not be refreshed",
         "invalid api key",
         "invalid_api_key",
-        "unauthorized",
     ];
 
     private static bool LooksAuthFailure(string? text)

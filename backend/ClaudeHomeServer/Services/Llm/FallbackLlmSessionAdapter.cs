@@ -647,7 +647,20 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         catch (Exception ex)
         {
             LogWarn($"Сбой оркестрации ({Info.Id}): {ex.Message}");
-            try { await SettleAsync(turn); } catch { /* сессия уже закрыта */ }
+            try
+            {
+                // P31: если сбой случился после провальной попытки доставки (lastEnd есть и это
+                // отказ), завершаем ход честной ошибкой, а не SettleAsync — иначе задержанный result
+                // провальной попытки (subtype=success + is_error) уходит наружу как есть, и сессия
+                // становится Active (исходный симптом P29, редкая ветка: исключение в _downstream
+                // маркера смены провайдера / TryMigrateTranscript / ResolveRootFor). До первой
+                // попытки lastEnd=null — тогда как раньше SettleAsync (в hold'е ещё ничего).
+                if (lastEnd is { } failedEnd && IsDeliveryFailure(failedEnd))
+                    await FailClosedAsync(turn, failedEnd);
+                else
+                    await SettleAsync(turn);
+            }
+            catch { /* сессия уже закрыта */ }
         }
         finally
         {
@@ -797,6 +810,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             if (switched != currentKey
                 && !attempted.Contains((model, switched))
                 && !_pool.IsExhausted(switched)
+                && !_pool.IsAuthDead(switched)
                 && _pool.SupportsModel(switched, modelForPool))
                 return new FallbackTarget(switched, null, Label: null,
                     ProfileRoot: ResolveRootFor(switched), IsProviderSwitch: false);
@@ -954,16 +968,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     }
 
     // Кандидаты уровня 1: сначала штатный Pick (с учётом исчерпания, SupportsModel,
-    // тарифа и утилизации), затем последовательно остальные подписки пула
+    // тарифа и утилизации), затем последовательно остальные подписки пула. P31: auth-dead
+    // отсеивается явно — Pick их исключает, но перебор остальных без этого фильтра гонял бы
+    // ход на заведомо мёртвые аккаунты (запуск CLI + перенос транскрипта + отказ впустую).
     private IEnumerable<string> SubscriptionCandidates(string? model, string currentKey)
     {
         var pick = _pool.Pick(model);
-        if (pick != currentKey && !_pool.IsExhausted(pick) && _pool.SupportsModel(pick, model))
+        if (pick != currentKey && !_pool.IsExhausted(pick) && !_pool.IsAuthDead(pick) && _pool.SupportsModel(pick, model))
             yield return pick;
         foreach (var sub in _pool.All)
         {
             if (sub.Key == currentKey || sub.Key == pick) continue;
-            if (_pool.IsExhausted(sub.Key) || !_pool.SupportsModel(sub.Key, model)) continue;
+            if (_pool.IsExhausted(sub.Key) || _pool.IsAuthDead(sub.Key) || !_pool.SupportsModel(sub.Key, model)) continue;
             yield return sub.Key;
         }
     }

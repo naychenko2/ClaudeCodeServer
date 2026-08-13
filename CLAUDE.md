@@ -136,7 +136,12 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
   запуска — `ClaudeSession.EffectiveModel` и `OneShotClaudeRunner.ResolveModel`.
 - **Фолбэк хода — только по цепочке**, автоподбора нет: ротация подписок пула (тихо) → шаги
   цепочки (маркер в ленте) → честная ошибка. Классы ошибок (`TurnErrorClassifier`): RateLimit /
-  UsageLimit / ProviderError / Unreachable / ContextOverflow; прочее — fail-closed.
+  UsageLimit / ProviderError / Unreachable / ContextOverflow / **AuthFailure**; `None` —
+  неопознанная/содержательная ошибка: фолбэк НЕ запускается, но ход обязан завершиться `error`
+  (не штатным finished). AuthFailure (401/протухший OAuth/ключ) в пуле Claude триггерит тихую
+  ротацию уровня 1 (свой токен у другой подписки), у стороннего провайдера — шаг цепочки;
+  пометка `MarkAuthDead` обратима: снимается по `rate_limit_event` от подписки (доказательство
+  аутентификации) в обработчике хода и в идл-пинге warmup.
 
 Фоновые one-shot действия (теги, сводки, память, changelog…) считаются дёшево по маршруту
 `LocalActionRouter` + `CheapTextRunner`; исполнителя каждого места выбирает админ в диалоге

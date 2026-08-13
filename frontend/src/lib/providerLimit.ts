@@ -40,6 +40,7 @@ const REASON_LABEL: Record<string, string> = {
   provider_error: 'Провайдер выключен',
   unreachable: 'Эндпоинт недоступен',
   context_overflow: 'Контекст не поместился',
+  auth_failure: 'Ошибка авторизации',
 };
 
 export function providerSwitchReasonLabel(reason: string | undefined, fallback: string | undefined): string | undefined {

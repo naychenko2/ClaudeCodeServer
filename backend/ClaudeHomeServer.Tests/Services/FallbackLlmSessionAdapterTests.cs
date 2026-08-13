@@ -719,6 +719,51 @@ public class FallbackLlmSessionAdapterTests
             .Which.Reason.Should().Be("unreachable");
     }
 
+    // P31: AuthFailure на текущей подписке → MarkAuthDead. Уровень 1 не должен перебирать другие
+    // auth-dead подписки пула — каждая попытка это запуск CLI + перенос транскрипта + гарантированный
+    // отказ. Pick их исключает, но до фикса SubscriptionCandidates проверял лишь IsExhausted/
+    // SupportsModel и гонял бы ход на заведомо мёртвые аккаунты. Теперь фильтрует IsAuthDead →
+    // сразу шаг цепочки.
+    [Fact]
+    public async Task AuthFailure_Уровень1ПропускаетAuthDead_ИдётНаШагЦепочки()
+    {
+        var pool = BuildPool("acc-a", "acc-b", "acc-c");
+        // acc-b/acc-c протухли ранее — уровень 1 обязан их пропустить
+        pool.MarkAuthDead("acc-b");
+        pool.MarkAuthDead("acc-c");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("401")));   // acc-a × sonnet — auth-отказ
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // deepseek-chat (шаг 2) — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        // acc-a помечена auth-dead по 401; acc-b/acc-c уже были — мимо них, сразу deepseek.
+        inner.Attempts.Should().NotContain(p => p.Provider == "acc-b" || p.Provider == "acc-c",
+            "auth-dead подписки отфильтрованы из ротации уровня 1");
+        inner.Attempts.Should().Contain(p => p.Provider == "deepseek", "шаг цепочки вместо пустых попыток");
+        pool.IsAuthDead("acc-a").Should().BeTrue("текущая подписка помечена auth-dead по 401");
+    }
+
+    // P31: AuthFailure на стороннем провайдере (стартовая/шаг цепочки) несёт в маркер причину
+    // auth_failure — до фикса WireName возвращал null, и стартовая подмена подставляла «unreachable».
+    [Fact]
+    public async Task AuthFailure_ПричинаВМаркере_AuthFailure()
+    {
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, BuildProviders(), model: "sonnet",
+            chain: ["sonnet", "deepseek-chat"]);
+        inner.Scripts.Enqueue(() => inner.Emit(ApiError("401")));   // acc-a × sonnet — auth-отказ
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));          // deepseek-chat — успех
+
+        await sut.SendMessageAsync("сделай что-нибудь");
+        await WaitForAsync(() => Downstream().OfType<ProviderSwitchedMessage>().Any(), "маркер");
+
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle()
+            .Which.Reason.Should().Be("auth_failure");
+    }
+
     // Ротация подписок того же пула (уровень 1) — модель не меняется, адаптер не
     // шлёт ProviderSwitchedMessage c Model (Label=null), сессионный фейловер мог
     // бы прислать свой. Маркера в ленте нет — это и есть «уровень 1 без пилюли».

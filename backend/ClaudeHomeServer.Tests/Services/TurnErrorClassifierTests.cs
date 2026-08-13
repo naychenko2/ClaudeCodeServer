@@ -314,14 +314,36 @@ public class TurnErrorClassifierTests
 
     [Theory]
     [InlineData("authentication failed")]
-    [InlineData("Unauthorized")]
     [InlineData("invalid api key provided")]
     public void AuthМаркеры_ПустойСтатус_КлассAuthFailure(string text)
         => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.AuthFailure);
 
-    // Ротация пула при AuthFailure тихая (без маркера в ленте), а сторонний auth-сбой даёт error
-    // без провайдер-специфичного reason — поэтому WireName для AuthFailure не нужен (null).
+    // P31: голые «unauthorized» / «could not be refreshed» слишком широки — ErrorText собирается
+    // не только из is_error-текста CLI, но и из обычных ErrorMessage. Ход с MCP-сервером личного
+    // реестра с протухшим OAuth давал в тексте «401 Unauthorized» ЧУЖОГО API → ложный AuthFailure →
+    // MarkAuthDead на здоровую подписку Claude. Сужены до канонических формулировок провайдера;
+    // голое «unauthorized»/«401 unauthorized»/«could not be refreshed» больше не ловятся (по
+    // пустому статусу — статус 401 ловится отдельно по коду).
+    [Theory]
+    [InlineData("Unauthorized")]
+    [InlineData("401 Unauthorized")]
+    [InlineData("token could not be refreshed")]
+    public void СлишкомШирокиеАuthФразы_ПустойСтатус_НеКлассAuthFailure(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.None,
+            "голые «unauthorized»/«could not be refreshed» — цитата чужого API, не отказ подписки Claude");
+
+    // Канонические формулировки провайдера остаются AuthFailure: «oauth session expired» покрывает
+    // боевой кейс протухшего OAuth (включая хвост «…and could not be refreshed»).
     [Fact]
-    public void AuthFailure_WireNameНулевой()
-        => TurnErrorClassifier.WireName(FallbackErrorClass.AuthFailure).Should().BeNull();
+    public void OAuthSessionExpired_ПустойСтатус_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result(null, "OAuth session expired and could not be refreshed"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "каноническая формулировка протухшего OAuth — auth, «oauth session expired» её ловит");
+
+    // P31: AuthFailure несёт причину в маркер смены провайдера (раньше WireName тут возвращал null —
+    // маркер уходил с Reason: null, стартовая подмена подставляла ?? "unreachable" → «Сервис не
+    // отвечает» при протухшем ключе).
+    [Fact]
+    public void AuthFailure_WireName_AuthFailure()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.AuthFailure).Should().Be("auth_failure");
 }

@@ -39,7 +39,7 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey, ensureTasksLoaded } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
-import { useGitState, ensureGit, loadUnpushedLog } from '../lib/git';
+import { useGitState, ensureGit, loadUnpushedLog, setActiveSessionForChangedBy } from '../lib/git';
 import { plural } from '../lib/spend';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
@@ -1022,6 +1022,12 @@ const windowWidth = useWindowWidth();
     if (activeSessionId) markChatRead(activeSessionId);
   }, [activeSessionId, activeSessionUpdatedAt]);
 
+  // Активный чат — для фильтра «Также меняли»/бейджа changedBy: сам открытый чат
+  // не должен появляться в собственном списке «другие чаты» (см. lib/git.ts)
+  useEffect(() => {
+    setActiveSessionForChangedBy(project.id, activeSessionId ?? null);
+  }, [project.id, activeSessionId]);
+
   // activeSession.updatedAt при ходе агента НЕ обновляется (status_changed несёт
   // только status, user_message/exited не трогают activeSession вовсе) — поэтому
   // эффект выше не срабатывает на новом ходе, и карточка помечалась непрочитанной,
@@ -1485,7 +1491,7 @@ const windowWidth = useWindowWidth();
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа
-              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} sessionFiles={sessionPanels.changedPaths} />
+              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} sessionFiles={sessionPanels.changedPaths} changedBy={gitState.changedBy} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
               : leftTab === 'personas'
@@ -1555,7 +1561,7 @@ const windowWidth = useWindowWidth();
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} />
           </div>
         )}
         {/* Просмотр коммита из git-«Истории» */}
@@ -1640,6 +1646,7 @@ const windowWidth = useWindowWidth();
           onFileForward={handleFileForward}
           canFileBack={canFileBack}
           canFileForward={canFileForward}
+          changedBy={gitState.changedBy}
           openCommitSha={openCommitSha}
           openCommitFile={openCommitFile}
           onCloseCommit={closeCommitView}
@@ -1681,7 +1688,7 @@ const windowWidth = useWindowWidth();
             // панели (мокап требует видимый вход даже при выключенной фиче — она сама
             // показывает empty-state с кнопкой «Открыть настройки»)
             dossiers: <DossierHistoryPanel project={project} auth={auth} activeFilePath={openFile ?? openCommitFile} chatExcludedFromDossiers={!!activeSession?.excludeFromDossiers} onOpenChat={handleOpenTaskSession} onOpenTask={handleOpenDossierTask} onOpenCommit={handleOpenCommit} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} sessionFiles={sessionPanels.changedPaths} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} sessionFiles={sessionPanels.changedPaths} changedBy={gitState.changedBy} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,

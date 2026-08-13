@@ -1,6 +1,8 @@
 # .NET
 backend/**/bin/
 backend/**/obj/
+tools/**/bin/
+tools/**/obj/
 *.user
 .vs/
 data/

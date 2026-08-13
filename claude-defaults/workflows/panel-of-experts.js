@@ -157,6 +157,22 @@ const JUDGE_FINAL_SCHEMA = {
   required: ['decision', 'rationale', 'recommendation', 'residualRisks'],
 }
 
+// Подсказка агенту про обязательные поля схемы: перечисляет их поимённо и задаёт
+// пустое значение (например `proposals: []`), чтобы модель не опускала поле
+// вместо валидного «нет идей». Держим рядом со схемами — правишь `required`,
+// правится и подсказка.
+function requiredFieldsReminder(schema) {
+  const fields = (schema.required || []).map(name => {
+    const p = schema.properties && schema.properties[name]
+    if (p && p.type === 'array') return `\`${name}: []\``
+    if (p && p.type === 'string') return `\`${name}: ""\``
+    if (p && p.type === 'boolean') return `\`${name}: false\``
+    if (p && (p.type === 'number' || p.type === 'integer')) return `\`${name}: 0\``
+    return `\`${name}\``
+  })
+  return `\n\n⚠️ ОБЯЗАТЕЛЬНЫЕ ПОЛЯ ОТВЕТА: ${fields.join(', ')}. Все перечисленные поля обязательны и должны присутствовать в ответе. Если значения нет — верни пустое значение (как показано в скобках), а не опускай поле. Пропуск обязательного поля = невалидный ответ, ход упадёт.`
+}
+
 // ---- Общий контекст (транскрипт дискуссии) ----
 const transcript = []
 function render() {
@@ -198,14 +214,14 @@ while (round < maxRounds) {
 КОНТЕКСТ И ВВОДНЫЕ:
 ${brief}
 
-Предложи 2–4 содержательных варианта решения. Для каждого — суть и обоснование. Мысли как сильный архитектор/стратег, не бойся радикальных идей. Отвечай по-русски.`
+Предложи 2–4 содержательных варианта решения. Для каждого — суть и обоснование. Мысли как сильный архитектор/стратег, не бойся радикальных идей. Отвечай по-русски.${requiredFieldsReminder(PROPOSER_SCHEMA)}`
     : `Ты — ГЕНЕРАТОР в панели экспертов, идёт раунд ${round}. Модератор по итогам прошлого раунда оставил спорные/открытые вопросы:
 ${openQuestions}
 
 Вся дискуссия до этого момента:
 ${render()}
 
-Доработай идеи или предложи новые ИМЕННО по открытым вопросам — с учётом высказанной критики и защиты. Отвечай по-русски.`
+Доработай идеи или предложи новые ИМЕННО по открытым вопросам — с учётом высказанной критики и защиты. Отвечай по-русски.${requiredFieldsReminder(PROPOSER_SCHEMA)}`
   const prop = await structuredAgent(proposerPrompt, { label: `Генератор${roleTag(0)} · р${round}`, phase: ph, schema: PROPOSER_SCHEMA, ...roleOpts(0) })
   if (prop) transcript.push({ round, role: 'Генератор', content: fmtProposer(prop) })
   else lostStages.push({ phase: `Раунд ${round}`, stage: 'Генератор', reason: 'агент не вернул реплику' })
@@ -218,7 +234,7 @@ ${render()}
 Вся дискуссия:
 ${render()}
 
-Разбери последние предложения Генератора и покажи, почему они могут не сработать. Отвечай по-русски.`, { label: `Критик${roleTag(1)} · р${round}`, phase: ph, schema: CRITIC_SCHEMA, ...roleOpts(1) })
+Разбери последние предложения Генератора и покажи, почему они могут не сработать. Отвечай по-русски.${requiredFieldsReminder(CRITIC_SCHEMA)}`, { label: `Критик${roleTag(1)} · р${round}`, phase: ph, schema: CRITIC_SCHEMA, ...roleOpts(1) })
   if (crit) transcript.push({ round, role: 'Критик', content: fmtCritic(crit) })
   else lostStages.push({ phase: `Раунд ${round}`, stage: 'Критик', reason: 'агент не вернул реплику' })
 
@@ -230,7 +246,7 @@ ${render()}
 Вся дискуссия:
 ${render()}
 
-Ответь на критику по пунктам и усиль идеи. Отвечай по-русски.`, { label: `Адвокат${roleTag(2)} · р${round}`, phase: ph, schema: SUPPORTER_SCHEMA, ...roleOpts(2) })
+Ответь на критику по пунктам и усиль идеи. Отвечай по-русски.${requiredFieldsReminder(SUPPORTER_SCHEMA)}`, { label: `Адвокат${roleTag(2)} · р${round}`, phase: ph, schema: SUPPORTER_SCHEMA, ...roleOpts(2) })
   if (supp) transcript.push({ round, role: 'Адвокат', content: fmtSupporter(supp) })
   else lostStages.push({ phase: `Раунд ${round}`, stage: 'Адвокат', reason: 'агент не вернул реплику' })
 
@@ -242,7 +258,7 @@ ${render()}
 Вся дискуссия:
 ${render()}
 
-Дай ПРОМЕЖУТОЧНЫЙ синтез: какие идеи выдержали критику, что отбрасываем, какие спорные вопросы остаются нерешёнными. Если консенсус достигнут и спорных вопросов не осталось — верни ПУСТОЙ массив contestedPoints. Отвечай по-русски.`, { label: `Модератор${roleTag(3)} · р${round}`, phase: ph, schema: JUDGE_INTERIM_SCHEMA, ...roleOpts(3) })
+Дай ПРОМЕЖУТОЧНЫЙ синтез: какие идеи выдержали критику, что отбрасываем, какие спорные вопросы остаются нерешёнными. Если консенсус достигнут и спорных вопросов не осталось — верни ПУСТОЙ массив contestedPoints. Отвечай по-русски.${requiredFieldsReminder(JUDGE_INTERIM_SCHEMA)}`, { label: `Модератор${roleTag(3)} · р${round}`, phase: ph, schema: JUDGE_INTERIM_SCHEMA, ...roleOpts(3) })
   if (judge) {
     transcript.push({ round, role: 'Модератор (промежуточно)', content: fmtJudgeInterim(judge) })
     openQuestions = (judge.contestedPoints || []).map((q, i) => `${i + 1}. ${q}`).join('\n')
@@ -272,7 +288,7 @@ ${render()}
 ${lostBlock}
 ${lostStages.length ? 'Дискуссия велась с дырами: часть ролей или раундов не дала реплик. Если выпали критичные для темы роли (например, Критик без реплики — нет давления на Генератора) — повысь residualRisks и явно укажи, какие аспекты остались неоспоренными.' : ''}
 
-Взвесь плюсы (от Адвоката) и минусы (от Критика), отбрось нерабочее и синтезируй финальную позицию: решение по каждой развилке, обоснование, ключевые компромиссы, конкретные рекомендации/шаги и остаточные риски. Будь конкретным и практичным. Отвечай по-русски.`, { label: `Финальный синтез${roleTag(3)}`, phase: 'Финальный синтез', schema: JUDGE_FINAL_SCHEMA, ...roleOpts(3) })
+Взвесь плюсы (от Адвоката) и минусы (от Критика), отбрось нерабочее и синтезируй финальную позицию: решение по каждой развилке, обоснование, ключевые компромиссы, конкретные рекомендации/шаги и остаточные риски. Будь конкретным и практичным. Отвечай по-русски.${requiredFieldsReminder(JUDGE_FINAL_SCHEMA)}`, { label: `Финальный синтез${roleTag(3)}`, phase: 'Финальный синтез', schema: JUDGE_FINAL_SCHEMA, ...roleOpts(3) })
 
 if (!final) lostStages.push({ phase: 'Финальный синтез', stage: 'Модератор (финал)', reason: 'агент не вернул итоговое решение' })
 

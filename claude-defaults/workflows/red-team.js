@@ -118,6 +118,22 @@ const SYNTH_SCHEMA = {
   required: ['verdict', 'recommendation'],
 }
 
+// Подсказка агенту про обязательные поля схемы: перечисляет их поимённо и задаёт
+// пустое значение (например `vulnerabilities: []`), чтобы модель не опускала поле
+// вместо валидного «нет находок». Держим рядом со схемами — правишь `required`,
+// правится и подсказка.
+function requiredFieldsReminder(schema) {
+  const fields = (schema.required || []).map(name => {
+    const p = schema.properties && schema.properties[name]
+    if (p && p.type === 'array') return `\`${name}: []\``
+    if (p && p.type === 'string') return `\`${name}: ""\``
+    if (p && p.type === 'boolean') return `\`${name}: false\``
+    if (p && (p.type === 'number' || p.type === 'integer')) return `\`${name}: 0\``
+    return `\`${name}\``
+  })
+  return `\n\n⚠️ ОБЯЗАТЕЛЬНЫЕ ПОЛЯ ОТВЕТА: ${fields.join(', ')}. Все перечисленные поля обязательны и должны присутствовать в ответе. Если значения нет — верни пустое значение (как показано в скобках), а не опускай поле. Пропуск обязательного поля = невалидный ответ, ход упадёт.`
+}
+
 const fmtVuln = (v) => `[${v.severity}] ${v.title} — ${v.scenario}${v.fix ? '\n    как закрыть: ' + v.fix : ''}`
 
 // ---- Фаза 1: атака (все углы параллельно) ----
@@ -130,7 +146,7 @@ const attacks = await parallel(angles.map((angleKey, i) => () => {
 ЧТО АТАКУЕМ: ${target}
 
 Сначала пойми решение по фактам (прочитай затронутый код/план), затем предметно атакуй со своего угла: конкретные сценарии поломки, не общие рассуждения. Для каждого — как это воспроизвести и как закрыть.
-Если пробить с этого угла честно не удалось — так и скажи (пустой список), не выдумывай. Отвечай по-русски.`
+Если пробить с этого угла честно не удалось — так и скажи (пустой список), не выдумывай. Отвечай по-русски.${requiredFieldsReminder(ATTACK_SCHEMA)}`
   return structuredAgent(prompt, { label: `Атака: ${A.title}${angleTag(i)}`, phase: 'Атака', schema: ATTACK_SCHEMA, ...roleOpts(i) })
     .then(r => ({ angleKey, title: A.title, result: r }))
 }))
@@ -161,7 +177,7 @@ const reinforced = rawAttacks.length > 1
 Находки всей красной команды:
 ${attackDigest}
 
-Верни ТОЛЬКО новые уязвимости со своего угла (или пустой список). Отвечай по-русски.`,
+Верни ТОЛЬКО новые уязвимости со своего угла (или пустой список). Отвечай по-русски.${requiredFieldsReminder(ATTACK_SCHEMA)}`,
         { label: `Усиление: ${x.title}`, phase: 'Усиление', schema: ATTACK_SCHEMA, ...roleOpts(i) })
         .then(r => ({ angleKey: x.angleKey, title: x.title, result: r })))
     )
@@ -205,7 +221,7 @@ ${vulnBlock}
 ${lostBlock}
 ${lostStages.length ? 'Покрытие механики сузилось. Если выпали критичные для этого решения углы — понизь уверенность вердикта и явно укажи, какие риски остались непроверенными.' : ''}
 
-Дай итог: насколько решение прочно, главные риски, что обязательно закрыть до принятия, и рекомендацию. Конкретно и по делу. Отвечай по-русски.`,
+Дай итог: насколько решение прочно, главные риски, что обязательно закрыть до принятия, и рекомендацию. Конкретно и по делу. Отвечай по-русски.${requiredFieldsReminder(SYNTH_SCHEMA)}`,
   { label: 'Синтез красной команды', phase: 'Синтез', schema: SYNTH_SCHEMA })
 
 return {

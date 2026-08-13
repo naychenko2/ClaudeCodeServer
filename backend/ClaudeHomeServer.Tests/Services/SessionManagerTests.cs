@@ -7033,6 +7033,165 @@ public class SessionManagerTests : IDisposable
         AssertSweepSkipped(_sut, session.Id, entry);
     }
 
+    // --- P28: живой дочерний исполнитель (волна team-implement) держит координатора ---
+
+    // Кандидат-координатор: ход отдан (Active, LastTurnEndedAt свежий от result), собственного
+    // прогона нет (мёртвый адаптер). grace намеренно НЕ сдвигаем здесь: CreateAsync ребёнка
+    // внутри зовёт SaveSessions, и если координатор уже кандидат с истёкшим grace, sweep успеет
+    // закрыть его ДО того, как тест настроит ребёнку stub-адаптер. Сдвиг grace — на ответственности
+    // теста, ПОСЛЕ полной настройки ребёнка.
+    private async Task<(Session session, object entry)> MkStuckCoordinatorAsync(string suffix)
+    {
+        var dir = MkProjectDir("p28c-" + suffix);
+        var project = _projectManager.Create("P28C-" + suffix, dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        adapter.SetupGet(a => a.IsContinuationInFlight).Returns(false);
+        SetProcess(entry, adapter.Object);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        return (session, entry);
+    }
+
+    // Ребёнок-исполнитель: своя сессия с TaskId, заданный статус и живость процесса. alive=false
+    // изображает зависшего исполнителя (мёртвый процесс в рабочем статусе — клинч-страховка P30),
+    // true — работающего.
+    private async Task<(Session session, object entry)> MkChildAsync(
+        string suffix, SessionStatus status, bool alive)
+    {
+        var dir = MkProjectDir("p28h-" + suffix);
+        var project = _projectManager.Create("P28H-" + suffix, dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto,
+            taskExecution: true, taskId: "t-" + suffix);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(alive);
+        adapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        adapter.SetupGet(a => a.IsContinuationInFlight).Returns(false);
+        SetProcess(entry, adapter.Object);
+        session.Status = status;
+        return (session, entry);
+    }
+
+    [Fact]
+    public async Task Sweep_ЖивойДочернийИсполнитель_ДержитКоординатора()
+    {
+        // P28 (положительный, главный сценарий): исполнитель волны прямо сейчас работает —
+        // Status=Working, идёт ход, без фоновых агентов и продолжений. Координатор не должен
+        // уходить в Finished в разгар волны, даже если его собственный прогон мёртв и grace
+        // истёк. Реальный сценарий из отчёта Веры (чат 166282c7).
+        var (coordinator, coordEntry) = await MkStuckCoordinatorAsync("live-child");
+        var (child, _) = await MkChildAsync("exec", SessionStatus.Working, alive: true);
+
+        var prev = Session.TaskSourceSessionResolver;
+        Session.TaskSourceSessionResolver = id => id == child.TaskId ? coordinator.Id : null;
+        try
+        {
+            SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
+            _sut.RunStuckActiveSweepForTests();
+
+            AssertSweepSkipped(_sut, coordinator.Id, coordEntry);
+        }
+        finally { Session.TaskSourceSessionResolver = prev; }
+    }
+
+    [Fact]
+    public async Task Sweep_МёртвыйДочернийИсполнитель_НеДержитКоординатора()
+    {
+        // P28 (негативный, главный сторож клинча): потомок числится в рабочем статусе (Working),
+        // но его процесс мёртв (HasLiveTurn=false) — координатор обязан закрыться по grace, как
+        // обычная сессия без волны. Иначе вечный active обоих чатов — регресс хуже исходного
+        // дефекта (ложный Finished на минуту). Этот тест — страхует именно его.
+        var (coordinator, coordEntry) = await MkStuckCoordinatorAsync("dead-child");
+        var (child, _) = await MkChildAsync("exec", SessionStatus.Working, alive: false);
+
+        var prev = Session.TaskSourceSessionResolver;
+        Session.TaskSourceSessionResolver = id => id == child.TaskId ? coordinator.Id : null;
+        try
+        {
+            SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
+            _sut.RunStuckActiveSweepForTests();
+
+            await WaitForConditionAsync(() => _sut.GetById(coordinator.Id)!.Status == SessionStatus.Finished,
+                TimeSpan.FromSeconds(2));
+            _sut.GetById(coordinator.Id)!.Status.Should().Be(SessionStatus.Finished);
+        }
+        finally { Session.TaskSourceSessionResolver = prev; }
+    }
+
+    [Fact]
+    public async Task Sweep_ЗависшийВWaitingИсполнитель_НеДержитКоординатора()
+    {
+        // P30-страховка: исполнитель умер на permission-запросе, статус остался Waiting навсегда
+        // (открытый дефект P30, ещё не чинен). Гейт по голому статусу держал бы координатора вечно
+        // — поэтому живость процесса обязательна при ЛЮБОМ статусе. Здесь ребёнок в Waiting, но
+        // процесс мёртв → координатор закрывается по grace.
+        var (coordinator, coordEntry) = await MkStuckCoordinatorAsync("waiting-child");
+        var (child, _) = await MkChildAsync("exec", SessionStatus.Waiting, alive: false);
+
+        var prev = Session.TaskSourceSessionResolver;
+        Session.TaskSourceSessionResolver = id => id == child.TaskId ? coordinator.Id : null;
+        try
+        {
+            SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
+            _sut.RunStuckActiveSweepForTests();
+
+            await WaitForConditionAsync(() => _sut.GetById(coordinator.Id)!.Status == SessionStatus.Finished,
+                TimeSpan.FromSeconds(2));
+            _sut.GetById(coordinator.Id)!.Status.Should().Be(SessionStatus.Finished);
+        }
+        finally { Session.TaskSourceSessionResolver = prev; }
+    }
+
+    [Fact]
+    public async Task Sweep_ЖивойПотомокВГлубину_ДержитКоординатораЧерезСреднийУзел()
+    {
+        // P28 (глубина): законная цепочка делегирования координатор → исполнитель → суб-исполнитель
+        // (TaskDelegationDepth до 3). Суб-исполнитель работает (Working+alive), а исполнитель уже
+        // отдал result и сидит в Active без своих фоновых задач — сам он не жив по HasLiveWork,
+        // но под ним кипит работа. Правило по ПРЯМЫМ детям закрыло бы координатора (его ребёнок-
+        // исполнитель не жив) — рекурсивный подъём от суб-исполнителя должен пройти через средний
+        // узел и удержать корень.
+        var (coordinator, coordEntry) = await MkStuckCoordinatorAsync("deep");
+        var dir = MkProjectDir("p28h-mid");
+        var project = _projectManager.Create("P28H-MID", dir, TestUserId, TestUsername);
+        var executor = await _sut.CreateAsync(project.Id, ClaudeMode.Auto,
+            taskExecution: true, taskId: "t-exec");
+        var execEntry = GetEntry(executor.Id);
+        var execAdapter = StubAdapter(execEntry);
+        execAdapter.SetupGet(a => a.HasLiveTurn).Returns(true);  // прогон жив, но без фоновой работы
+        execAdapter.SetupGet(a => a.HasPendingBg).Returns(false);
+        execAdapter.SetupGet(a => a.IsContinuationInFlight).Returns(false);
+        SetProcess(execEntry, execAdapter.Object);
+        executor.Status = SessionStatus.Active; // ждёт потомка — сам не HasLiveWork
+
+        var (sub, _) = await MkChildAsync("sub", SessionStatus.Working, alive: true);
+
+        var parentOf = new Dictionary<string, string>
+        {
+            [executor.TaskId!] = coordinator.Id,
+            [sub.TaskId!] = executor.Id,
+        };
+        var prev = Session.TaskSourceSessionResolver;
+        Session.TaskSourceSessionResolver = id => parentOf.TryGetValue(id, out var p) ? p : null;
+        try
+        {
+            SetLastTurnEndedAt(coordEntry, DateTimeOffset.UtcNow.AddSeconds(-30)); // grace истёк
+            _sut.RunStuckActiveSweepForTests();
+
+            AssertSweepSkipped(_sut, coordinator.Id, coordEntry);
+            // Средний узел не получал result (LastTurnEndedAt нет), поэтому проверяем только статус:
+            // sweep не имел права закрыть его — он удержан живым суб-исполнителем.
+            _sut.GetById(executor.Id)!.Status.Should().Be(SessionStatus.Active,
+                "средний узел удержан живым потомком, хотя сам не HasLiveWork");
+        }
+        finally { Session.TaskSourceSessionResolver = prev; }
+    }
+
     [Fact]
     public async Task ExitedШтатно_ПереводитВFinished()
     {

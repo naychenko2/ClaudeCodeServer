@@ -722,8 +722,34 @@ public class SessionManager : IDisposable
             if (_stuckActiveGraceSeconds <= 0) return;
             if (!_sessions.Values.Any(e => e.Info.Status == SessionStatus.Active && e.LastTurnEndedAt.HasValue))
                 return;
+
+            // P28: id сессий, в поддереве которых (по иерархии делегирования) есть живой
+            // исполнитель. Корень такого поддерева не терминируется, иначе ложный Finished в
+            // разгар волны (дефект P28). Рекурсивно в ГЛУБИНУ: цепочка делегирования законна до
+            // глубины 3 (координатор → исполнитель → суб-исполнитель), и если жив только нижний
+            // узел, а средний уже отдал result и ждёт потомка — правило по прямым детям закрыло
+            // бы корень, и дефект просто уехал бы на уровень глубже.
+            //
+            // Живость узла — HasLiveWork (мёртвый процесс не жив ни при каком статусе: клинч P30,
+            // когда Waiting залипает у мёртвого исполнителя, не должен держать предков вечно).
+            // Иерархия — по TaskId → SourceSessionId (резолв lock-free через ConcurrentDictionary в
+            // TaskManager), без пятого хранилища состояния. От каждого живого узла поднимаемся к
+            // корню, отмечая всех предков. Ограничитель цикла — как в IsDescendantOf: данных из
+            // бэкапа достаточно для кольца в иерархии, и битая связь не должна завесить SaveSessions.
+            var protectedByLiveSubtree = new HashSet<string>();
+            foreach (var e in _sessions.Values)
+            {
+                if (!HasLiveWork(e)) continue;
+                var cur = ParentSourceSession(e.Info.Id);
+                for (var steps = 0; cur is not null && steps < 256; steps++)
+                {
+                    if (!protectedByLiveSubtree.Add(cur)) break; // уже отмечен — цикл или общий предок
+                    cur = ParentSourceSession(cur);
+                }
+            }
+
             foreach (var entry in _sessions.Values)
-                TrySweepStuckActive(entry);
+                TrySweepStuckActive(entry, protectedByLiveSubtree);
         }
     }
 
@@ -740,7 +766,7 @@ public class SessionManager : IDisposable
     // ApplyStatusAsync запускаем через Task.Run ВНЕ _saveLock: иначе его SaveSessions взяла бы
     // лок повторно (System.Threading.Lock не реентерабелен). Порядок локов _saveLock→PendingLock
     // консистентен, обратного нигде нет.
-    private void TrySweepStuckActive(SessionEntry entry)
+    private void TrySweepStuckActive(SessionEntry entry, HashSet<string> protectedByLiveSubtree)
     {
         if (entry.Info.Status != SessionStatus.Active) return;
         // Фоновые режимы без прогона между ходами: HasLiveTurn=false, но работа идёт, Finished был
@@ -754,19 +780,19 @@ public class SessionManager : IDisposable
         if (entry.TeamPlanningInFlight) return;
         if (entry.Info.WorkLoop is not null) return;
 
-        var adapter = entry.Process as ILlmSessionAdapter;
-        var alive = adapter is { HasLiveTurn: true };
-        var hasBg = adapter is { HasPendingBg: true };
-        var cont = adapter is { IsContinuationInFlight: true };
-        // Живой прогон с фоновой работой (панель экспертов, Workflow) ИЛИ идущим/готовым начаться
-        // ходом-продолжением (task_notification завершившегося bg-агента) — не трогаем: Finished
-        // посреди работы хуже вечного active. Сценарий продолжения: bg-агент дорабатывал минуты,
-        // LastTurnEndedAt стоит с result ПЕРВОГО хода, к старту продолжения grace давно истёк —
-        // без гейта IsContinuationInFlight sweep ставил бы Finished ровно когда CLI начинает
-        // генерировать продолжение, и text_delta летели в «завершённый» чат. Иначе terminus: процесс
-        // мёртв (!alive) либо доживает впустую без работы и без продолжения (alive && !hasBg && !cont)
-        // — после ContinuationStartGrace ридер сам убьёт такой процесс, и alive станет false.
-        if (alive && (hasBg || cont)) return;
+        // P28: в поддереве этой сессии есть живой исполнитель (прямой потомок или глубже) — sweep
+        // не имеет права мигать Finished в разгар волны. Гейт по РЕАЛЬНОЙ живости потомка (набор
+        // protectedByLiveSubtree собран в SaveSessions рекурсивно через HasLiveWork), а не по статусу
+        // задачи/сессии: зависший исполнитель (мёртвый процесс в Waiting/Working, дефект P30) в набор
+        // не попадает и предка не держит — иначе клинч хуже минутного ложного Finished.
+        if (protectedByLiveSubtree.Contains(entry.Info.Id)) return;
+
+        // Живая собственная работа (фон/продолжение) — оценка в HasLiveWork, единая точка истины
+        // о живости (тот же предикат, что отсеивает живые узлы поддерева выше). Для Active-кандидата
+        // это «процесс жив и есть фоновая работа или идёт/готово продолжение» (HasPendingBg — панель
+        // экспертов/Workflow, IsContinuationInFlight — ход-ответ на task_notification bg-агента), иначе
+        // terminus: процесс мёртв либо доживает впустую, и после ContinuationStartGrace ридер его убьёт.
+        if (HasLiveWork(entry)) return;
 
         // Захват решения под PendingLock — повторный sweep или OnMessageAsync (новый ход) увидят сброс
         // и не запустят дубль. LastTurnEndedAt читается/пишется ТОЛЬКО под PendingLock (контракт поля,
@@ -781,14 +807,51 @@ public class SessionManager : IDisposable
         }
 
         var sid = entry.Info.Id;
+        var adapter = entry.Process as ILlmSessionAdapter;
         _log.LogWarning(
             "[SessionManager] Sweep terminus: Active→Finished после result хода ({Sid}: exited прогона не было, alive={Alive}, bg={Bg}, cont={Cont})",
-            sid, alive, hasBg, cont);
+            sid, adapter is { HasLiveTurn: true }, adapter is { HasPendingBg: true }, adapter is { IsContinuationInFlight: true });
         _ = Task.Run(async () =>
         {
             try { await ApplyStatusAsync(sid, entry, SessionStatus.Finished); }
             catch (Exception ex) { _log.LogError(ex, "[SessionManager] Sweep ApplyStatus не удался ({Sid})", sid); }
         });
+    }
+
+    // «Сессия прямо сейчас ведёт живую работу» — единая оценка живости для sweep-terminus (гейт
+    // собственного хода в TrySweepStuckActive) и для гейта «в поддереве есть живой исполнитель»
+    // (P28, сбор protectedByLiveSubtree в SaveSessions). Одна точка истины — чтобы не плодить
+    // расходящиеся формулы живости (следующий фиксер не гадал, какая из них верная).
+    //
+    // Живость ПРОЦЕССА (HasLiveTurn) обязательна при ЛЮБОМ статусе: мёртвый исполнитель не
+    // считается работающим ни в Waiting (открытый дефект P30 — статус залипает у мёртвого процесса),
+    // ни в Working — иначе он держал бы предков вечно (клинч P28). Active — особый случай: ход уже
+    // отдан (result), процесс доживает, и жив лишь пока есть фоновая работа (HasPendingBg) или идёт/
+    // готово ход-продолжение (IsContinuationInFlight). Starting/Working/Waiting — ход идёт, процесс
+    // поднимается или стоит на permission-запросе: живы при живом процессе. Finished/Error/Orphaned
+    // мертвы.
+    private static bool HasLiveWork(SessionEntry entry)
+    {
+        if (entry.Process is not ILlmSessionAdapter adapter) return false;
+        if (!adapter.HasLiveTurn) return false;
+        return entry.Info.Status switch
+        {
+            SessionStatus.Active => adapter.HasPendingBg || adapter.IsContinuationInFlight,
+            SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting => true,
+            _ => false,
+        };
+    }
+
+    // Источник делегирования «порождён этим прогоном» для sweep-гейта P28: SourceSessionId задачи
+    // сессии (резолв lock-free через ConcurrentDictionary в TaskManager). null — обычный чат без
+    // задачи либо задача удалена (корень иерархии). Не ParentSessionId: тот учитывает ручную
+    // группировку (override/detach), а нас интересует именно «порождён прогоном штаба».
+    private string? ParentSourceSession(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        return entry.Info.TaskId is { } tid
+            ? Session.TaskSourceSessionResolver?.Invoke(tid)
+            : null;
     }
 
     // Только для тестов: запустить sweep-terminus (P12/P15) вне обычных триггеров SaveSessions,

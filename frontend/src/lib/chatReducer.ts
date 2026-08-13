@@ -258,6 +258,22 @@ function hasTailDuplicate(items: ChatItem[], match: (item: ChatItem) => boolean)
   return false;
 }
 
+// Помечен ли ТЕКУЩИЙ ход как законченный (result / «Стоп» / ошибка / прошлый аварийный
+// выход). Идём с конца мимо содержимого хода (текст, размышления, вызовы, правки файлов) и
+// останавливаемся на первом маркере конца либо на начале хода (сообщение пользователя).
+//
+// Смотреть только на последний элемент нельзя: после kill долетают дельты, бывшие в полёте,
+// и хвостом снова становится текст — тогда `exited` убитого хода читался бы как авария и
+// рисовал «AI завершился неожиданно» поверх честной отметки «Прервано».
+export function turnAlreadyEnded(items: ChatItem[]): boolean {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const kind = items[i].kind;
+    if (kind === 'interrupted' || kind === 'error' || kind === 'session_ended' || kind === 'result') return true;
+    if (kind === 'user_message') return false; // дошли до начала хода — маркера не было
+  }
+  return false;
+}
+
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).
 // Generic: работает и с ChatState, и с расширяющим его SessionState хука.
@@ -551,13 +567,15 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       return {
         ...prev,
         isWaiting: false,
+        // Компакция могла оборваться этой же ошибкой: её индикатор гасит только
+        // compact_status с результатом, и без сброса «Сжимаю…» висело бы до перезагрузки
+        isCompacting: false,
         items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true }],
       };
 
     case 'exited': {
       // Процесс claude завершился. Если ждали ответ и не было result/прерывания/ошибки — это аварийный выход.
-      const last = prev.items[prev.items.length - 1];
-      const abnormal = prev.isWaiting && !(last && (last.kind === 'interrupted' || last.kind === 'error' || last.kind === 'session_ended'));
+      const abnormal = prev.isWaiting && !turnAlreadyEnded(prev.items);
       // Fail-safe: ещё открытые карточки фоновых агентов закрываем «прервано» — после exited
       // финальное bg_agent_done уже не доедет, иначе спиннер висит навсегда. Уже пришедшие
       // терминальные статусы не перетираем: bgDone (успех/ошибка по bg_agent_done) и
@@ -570,7 +588,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         return { ...item, bgDone: true, bgAborted: true };
       });
       const base = bgClosed ? items : prev.items;
-      return { ...prev, isWaiting: false, items: abnormal ? [...base, { kind: 'session_ended' }] : base };
+      // Компакция, оборванная смертью процесса, результата уже не пришлёт — иначе «Сжимаю…»
+      // и заблокированная кнопка висели бы до перезагрузки страницы
+      return { ...prev, isWaiting: false, isCompacting: false, items: abnormal ? [...base, { kind: 'session_ended' }] : base };
     }
 
     case 'workflow_progress':

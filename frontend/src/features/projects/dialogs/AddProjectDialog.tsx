@@ -8,6 +8,7 @@ import { SyncToggleRow } from '../components/SyncToggleRow';
 import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/GitModeCards';
 import { ProjectIconSection, type DraftIcon } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
+import { basename } from '../../../lib/paths';
 
 interface Props {
   groups: ProjectGroup[];
@@ -32,6 +33,24 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
   const [color, setColor] = useState<string | null>(null);
   const [draftIcon, setDraftIcon] = useState<DraftIcon | null>(null);
   const [error, setError] = useState('');
+  // Имя, набранное руками: пока его нет, для существующей папки название
+  // подставляется из последнего сегмента пути (очистка поля снова включает автоподстановку).
+  const [nameTouched, setNameTouched] = useState(false);
+
+  const handleNameChange = (v: string) => {
+    setName(v);
+    setNameTouched(v.trim() !== '');
+  };
+
+  const handlePathChange = (v: string) => {
+    setPath(v);
+    if (!nameTouched) setName(basename(v.trim()));
+  };
+
+  const handleModeChange = (m: Mode) => {
+    setMode(m);
+    if (m === 'existing' && !nameTouched) setName(basename(path.trim()));
+  };
 
   const handleConfirm = async () => {
     setError('');
@@ -79,7 +98,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
 
       <SegmentedControl<Mode>
         value={mode}
-        onChange={setMode}
+        onChange={handleModeChange}
         options={[{ value: 'new', label: 'Новый' }, { value: 'existing', label: 'Существующий' }]}
       />
 
@@ -90,7 +109,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         creating
         project={{ id: '', name, rootPath: '', createdAt: '', updatedAt: '', icon: { kind: 'initials', color: color ?? undefined } }}
         name={name}
-        onNameChange={setName}
+        onNameChange={handleNameChange}
         color={color}
         onColorChange={setColor}
         onIconUpdated={() => {}}
@@ -99,7 +118,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
 
       {mode === 'existing' && (
         <Field label="Путь к папке" hint="Абсолютный путь к существующей папке проекта">
-          <TextField value={path} onChange={setPath} placeholder="C:\Sources\my-project" mono />
+          <TextField value={path} onChange={handlePathChange} placeholder="C:\Sources\my-project" mono />
         </Field>
       )}
 

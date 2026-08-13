@@ -111,7 +111,7 @@ function ValueMenu({ def, value, anchor, onClose, onSave }: {
       {(def.choices ?? []).map(choice => (
         <MenuItem
           key={choice.value}
-          icon={<Dot color={propDotColor(choice.color)} size={7} />}
+          icon={<Dot color={propDotColor(choice.color)} size={6} />}
           label={
             <span style={{ display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%' }}>
               {choice.title || choice.value}

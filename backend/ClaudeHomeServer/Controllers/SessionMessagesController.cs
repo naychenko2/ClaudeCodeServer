@@ -333,6 +333,18 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         return await sessions.CancelPendingAsync(sessionId, messageId) ? NoContent() : NotFound();
     }
 
+    // POST /api/sessions/{sid}/pending/preempt — прервать идущий ход и доставить ждущее
+    // сообщение сейчас (кнопка на карточке очереди). Обычная отправка ход не прерывает —
+    // это осознанный перебой. 409 — прерывать нечего (ход уже кончился либо очередь пуста).
+    [HttpPost("pending/preempt")]
+    public IActionResult PreemptForPending(string sessionId)
+    {
+        if (OwnedSession(sessionId) is null) return NotFound();
+        return sessions.PreemptForPending(sessionId)
+            ? NoContent()
+            : Conflict(new { error = "Прерывать нечего: ход уже завершился или очередь пуста" });
+    }
+
     // Компактное представление сообщения истории; служебные записи (thinking, file_changed,
     // стоимость, границы компакции) в выдачу не попадают
     private static object? ToItem(StoredMessage m) => m switch

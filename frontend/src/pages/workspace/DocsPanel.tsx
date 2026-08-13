@@ -374,7 +374,7 @@ function FolderSticky({ folder, title: titleProp, subtitle, collapsed, hidden, o
             <span style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: SP.xs }}>
               {statusColor && (
                 <span title={statusTitle} style={{ display: 'flex', pointerEvents: 'none' }}>
-                  <Dot color={statusColor} size={7} />
+                  <Dot color={statusColor} size={6} />
                 </span>
               )}
               {collapsed && <span style={{ fontSize: 10, color: C.textMuted }}>{hidden}</span>}
@@ -631,7 +631,7 @@ function DocRow({ doc, selected, home, pinned, indent, count, statusColor, statu
           flexShrink: 0, display: 'flex', alignItems: 'center',
           paddingRight: SP.xs, pointerEvents: 'none',
         }}>
-          <Dot color={statusColor} size={7} />
+          <Dot color={statusColor} size={6} />
         </span>
       )}
       {/* Хвост строки раздела: сколько документов внутри. С onJump — кнопка перехода

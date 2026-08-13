@@ -1009,6 +1009,10 @@ export const api = {
     cancelPending: (sessionId: string, messageId: string) =>
       request<void>(`/sessions/${encodeURIComponent(sessionId)}/pending/${encodeURIComponent(messageId)}`,
         { method: 'DELETE' }),
+    // Прервать идущий ход и доставить ждущее сообщение сейчас. Обычная отправка ход не
+    // прерывает (он доживает сам) — это явный перебой по кнопке на карточке очереди
+    preemptForPending: (sessionId: string) =>
+      request<void>(`/sessions/${encodeURIComponent(sessionId)}/pending/preempt`, { method: 'POST' }),
     // Снимок промпта хода — что ушло модели (кнопка под постом). 404 — снимок вытеснен
     // ретеншном последних 50 ходов чата
     promptSnapshot: (sessionId: string, snapshotId: string) =>

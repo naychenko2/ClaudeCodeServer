@@ -1,7 +1,16 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import babel from '@rolldown/plugin-babel';
 import { VitePWA } from 'vite-plugin-pwa';
 import { federation } from '@module-federation/vite';
+import { fileURLToPath } from 'node:url';
+
+// Плагин UI-инспектора (data-cc-src на host-элементах JSX). plugin-react v6 babel не
+// запускает (JSX-трансформ делает oxc) — официальная связка из его README: отдельный
+// @rolldown/plugin-babel; babel-трансформ идёт ДО нативного oxc, поэтому плагин видит
+// исходный JSX. Путь строкой, а не import: tsconfig.node.json без allowJs уронил бы
+// tsc -b на импорте .mjs (TS2307). Babel резолвит строку-путь сам.
+const ccSrcPlugin = fileURLToPath(new URL('./scripts/babel-cc-src.mjs', import.meta.url));
 
 // Порт бэкенда для прокси /api и /hubs (по умолчанию 5000; переопределяется BACKEND_PORT)
 const backendPort = process.env.BACKEND_PORT || '5000';
@@ -13,6 +22,9 @@ const backendUrl = `http://127.0.0.1:${backendPort}`;
 export default defineConfig({
   plugins: [
     react(),
+    // Инъекция data-cc-src всегда (dev и prod) — решение по плану UI-инспектора.
+    // include только .tsx: JSX живёт в них, остальным файлам babel-проход не нужен
+    babel({ include: /\.tsx(?:$|\?)/, plugins: [ccSrcPlugin] }),
     // Host Module Federation (контракт §7, ТЗ R5): устанавливает shared-scope с
     // singleton react/react-dom для внешних модулей. Remotes регистрируются в рантайме
     // (registerRemotes по списку GET /api/modules) — статических remotes нет.
@@ -60,8 +72,9 @@ export default defineConfig({
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
       injectManifest: {
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
-        // Основной бандл перевалил дефолтный лимит precache (2 MiB) — поднимаем до 4 MiB
-        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+        // Основной бандл перевалил дефолтный лимит precache (2 MiB); с инъекцией
+        // data-cc-src (UI-инспектор) вырос до ~4.4 MiB — держим лимит с запасом
+        maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,
       },
       manifest: {
         name: 'Home AI',

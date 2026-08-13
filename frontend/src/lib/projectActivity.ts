@@ -1,6 +1,7 @@
 import { useSyncExternalStore } from 'react';
 import type { HomeSessionInfo } from '../types';
 import { api } from './api';
+import { C } from './design';
 import { hasUnread, subscribeReadState } from './chatReadState';
 import { loadChatFilters, matchChatFilter } from './chatFilters';
 import { onMessage, onReconnected } from './signalr';
@@ -21,12 +22,42 @@ export interface ProjectActivity {
   waitingChatId?: string;
 }
 
+export type ActivityStatus = ProjectActivity['status'];
+
+// Вид точки статуса — ЕДИНЫЙ для всех рельс (док проектов, док стены): цвет и
+// мерцание значат одно и то же, где бы точка ни стояла.
+//
+// Цвет несёт смысл: waiting — медовый warning («брось дело, нужен ответ»),
+// working — контрастный accent (прямо сейчас идёт работа), unread — нейтрально-
+// серый (сюда не заходили, не событие). Медовый и accent на 8px-точке почти
+// неотличимы, поэтому waiting дополнительно выделен формой — полое колечко.
+export const STATUS_COLOR: Record<ActivityStatus, string> = {
+  waiting: C.warning,
+  working: C.accent,
+  unread: C.textMuted,
+};
+
+// Мерцание точки: waiting дышит медленно (тревожить, но не дёргать), working —
+// живее (там прямо сейчас идёт работа), unread не мерцает вовсе. cc-dot нужен
+// всем: он рисует цветную заливку (::after), ободок и непрозрачную подложку.
+// waiting вдобавок полый (cc-dot--ring) — по цвету он сливается с working
+export const STATUS_PULSE: Record<ActivityStatus, string> = {
+  waiting: ' cc-dot cc-dot--ring cc-dot-pulse cc-dot-pulse--slow',
+  working: ' cc-dot cc-dot-pulse',
+  unread: ' cc-dot',
+};
+
 const POLL_MS = 15_000;
 
 let _agg = new Map<string, ProjectActivity>();
 // Отпечаток агрегата: не эмитим (и не пересоздаем Map) когда данные не изменились,
 // иначе плашка ререндерилась бы каждый тик поллинга
 let _fingerprint = '';
+// Второй срез тех же данных — статус per-ЧАТ (для номерков дока стены). Свой
+// отпечаток: чатный агрегат меняется чаще проектного (проектный схлопывает по
+// рангу), и пересоздавать Map друг из-за друга — лишние ререндеры подписчиков
+let _chatAgg = new Map<string, ActivityStatus>();
+let _chatFingerprint = '';
 const _listeners = new Set<() => void>();
 
 let _timer: ReturnType<typeof setInterval> | null = null;
@@ -89,6 +120,20 @@ function aggregate(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<st
   return next;
 }
 
+// Статус per-чат из того же снимка: живая сессия несёт свой статус (waiting/working),
+// у остальных смотрим непрочитанность. Фильтр списка чатов тут НЕ применяется:
+// потребитель (док стены) показывает явно выбранные чаты, и прятать их точку по
+// фильтру чужого списка было бы враньём.
+function aggregateChats(active: HomeSessionInfo[], recent: HomeSessionInfo[]): Map<string, ActivityStatus> {
+  const next = new Map<string, ActivityStatus>();
+  for (const s of active) next.set(s.id, s.status === 'waiting' ? 'waiting' : 'working');
+  for (const s of [...active, ...recent]) {
+    if (next.has(s.id)) continue; // живой статус важнее непрочитанности
+    if (hasUnread(s.updatedAt, s.id, s.lastReadAt)) next.set(s.id, 'unread');
+  }
+  return next;
+}
+
 // Последний ответ сервера. Нужен, чтобы пересобрать агрегат без запроса, когда
 // изменилась только прочитанность (гибрид: локальная отметка в localStorage
 // меняется мгновенно, серверная lastReadAt приедет со следующим поллингом)
@@ -96,15 +141,28 @@ let _lastSummary: { active: HomeSessionInfo[]; recent: HomeSessionInfo[] } | nul
 
 function recompute() {
   if (!_lastSummary) return;
+  let changed = false;
+
   const next = aggregate(_lastSummary.active, _lastSummary.recent);
   const fp = [...next.entries()]
     .map(([pid, a]) => `${pid}:${a.status}:${a.waitingChatId ?? ''}`)
     .sort()
     .join('|');
-  if (fp === _fingerprint) return;
-  _fingerprint = fp;
-  _agg = next;
-  _listeners.forEach(fn => fn());
+  if (fp !== _fingerprint) {
+    _fingerprint = fp;
+    _agg = next;
+    changed = true;
+  }
+
+  const chatNext = aggregateChats(_lastSummary.active, _lastSummary.recent);
+  const chatFp = [...chatNext.entries()].map(([id, st]) => `${id}:${st}`).sort().join('|');
+  if (chatFp !== _chatFingerprint) {
+    _chatFingerprint = chatFp;
+    _chatAgg = chatNext;
+    changed = true;
+  }
+
+  if (changed) _listeners.forEach(fn => fn());
 }
 
 function fetchNow() {
@@ -150,6 +208,13 @@ function subscribe(fn: () => void): () => void {
 // Активность проектов: Map<projectId, ProjectActivity>. Проекты без live-сессий в Map отсутствуют.
 export function useProjectActivity(): Map<string, ProjectActivity> {
   return useSyncExternalStore(subscribe, () => _agg, () => _agg);
+}
+
+// Активность чатов: Map<sessionId, status>. Тихие прочитанные чаты в Map отсутствуют.
+// Ограничение источника: summary отдаёт recent с лимитом, совсем старый чат без
+// живой сессии в карту не попадёт — точки у него просто не будет (как и в доке проектов).
+export function useChatActivity(): Map<string, ActivityStatus> {
+  return useSyncExternalStore(subscribe, () => _chatAgg, () => _chatAgg);
 }
 
 // Публичный refresh для тех, кто видит проектные события, не доходящие до агрегата:

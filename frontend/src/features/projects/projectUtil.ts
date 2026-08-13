@@ -1,4 +1,15 @@
-// Утилиты отображения проектов (иконка, время, склонения)
+// Утилиты отображения проектов (иконка, цвет, время, склонения)
+import type { Project } from '../../types';
+import { agentDotColor } from '../../components/AgentSelector';
+import { projectColor } from '../../lib/tasks';
+
+// Фирменный цвет проекта: icon.color из палитры AGENT_COLORS; если не задан —
+// детерминированный projectColor(id), чтобы старые проекты без иконки не «поблели».
+// Единая точка: этим цветом красятся плашка иконки (ProjectIcon) и номерки чатов
+// в доке стены (WallDock).
+export function projectMainColor(project: Project): string {
+  return project.icon?.color ? agentDotColor(project.icon.color) : projectColor(project.id).main;
+}
 
 // Две буквы для иконки проекта: по первым буквам двух слов, иначе первые 2 буквы одного слова
 // (по образцу personaInitials). Fallback — «?».

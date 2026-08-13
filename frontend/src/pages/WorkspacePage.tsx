@@ -9,7 +9,7 @@ import { GitCommitView } from '../components/GitCommitView';
 import { GitChangesRail } from '../components/GitChangesRail';
 import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
-import { SESSION_KEYS } from './workspace/panelCatalog';
+import { SESSION_KEYS, type PanelKey, type RailBadgeInfo } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
@@ -39,7 +39,8 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey, ensureTasksLoaded } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
-import { useGitState, ensureGit } from '../lib/git';
+import { useGitState, ensureGit, loadUnpushedLog } from '../lib/git';
+import { plural } from '../lib/spend';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { useFeature, FLAGS } from '../lib/featureFlags';
@@ -55,6 +56,7 @@ import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
+import { ProjectNotesPanel } from '../features/notes/ProjectNotesPanel';
 import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
 import { wsPanels } from './workspace/panelStackState';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
@@ -517,16 +519,51 @@ const windowWidth = useWindowWidth();
   // Все источники — уже подписанные сторы/стейт; git тянем тем же глобальным стором
   // (ensureGit — идемпотентная первичная загрузка, чтобы кружок был виден до открытия панели).
   const gitState = useGitState(project.id);
-  useEffect(() => { ensureGit(project.id); }, [project.id]);
-  const railCounts = useMemo(() => ({
-    // Число изменённых файлов — дедуп по пути (файл может быть и staged, и unstaged)
-    changes: gitState.status
+  useEffect(() => {
+    ensureGit(project.id);
+    // Стек незапушенных коммитов нужен второму (серому) кружку «Изменений» ДО открытия
+    // панели: ensureGit грузит только статус. Realtime и focus-обработчик стора
+    // держат стек свежим дальше — здесь лишь первая подтяжка
+    void loadUnpushedLog(project.id);
+  }, [project.id]);
+  const railBadges = useMemo<Partial<Record<PanelKey, RailBadgeInfo>>>(() => {
+    // «Изменения»: основной кружок — незафиксированные файлы (дедуп по пути), второй
+    // (серый) — незапушенные коммиты. hint расшифровывает оба в тултипе кнопки
+    const changesFiles = gitState.status
       ? new Set([...gitState.status.staged, ...gitState.status.unstaged, ...gitState.status.untracked].map(f => f.path)).size
-      : 0,
-    tasks: allTasks.filter(t => t.projectId === project.id && t.status !== 'done').length,
-    terminal: terminals.length,
-    preview: previewServices.filter(s => s.status === 'started').length,
-  }), [gitState.status, allTasks, project.id, terminals, previewServices]);
+      : 0;
+    const unpushed = gitState.unpushed.length;
+    // Цвета инвертированы: незафиксированные файлы — серые (норма, рабочее состояние),
+    // неопубликованные коммиты — оранжевые/accent (требуют пуша, главное внимание).
+    // Порядок строк в тултипе сохранён (сначала незафиксированные, потом неопубликованные),
+    // меняется только цвет точек
+    const changesHint: { text: string; tone: 'accent' | 'muted' }[] = [];
+    if (changesFiles > 0) changesHint.push({ text: `${changesFiles} ${plural(changesFiles, 'незафиксированный', 'незафиксированных', 'незафиксированных')}`, tone: 'muted' });
+    if (unpushed > 0) changesHint.push({ text: `${unpushed} ${plural(unpushed, 'неопубликованный', 'неопубликованных', 'неопубликованных')}`, tone: 'accent' });
+    const activeTasks = allTasks.filter(t => t.projectId === project.id && t.status !== 'done').length;
+    const startedPreviews = previewServices.filter(s => s.status === 'started').length;
+    return {
+      changes: {
+        primary: changesFiles || undefined,
+        primaryTone: 'muted',
+        secondary: unpushed || undefined,
+        secondaryTone: 'accent',
+        hint: changesHint.length > 0 ? changesHint : undefined,
+      },
+      tasks: {
+        primary: activeTasks || undefined,
+        hint: activeTasks > 0 ? `${activeTasks} ${plural(activeTasks, 'активная', 'активных', 'активных')}` : undefined,
+      },
+      terminal: {
+        primary: terminals.length || undefined,
+        hint: terminals.length > 0 ? `${terminals.length} ${plural(terminals.length, 'запущенный', 'запущенных', 'запущенных')}` : undefined,
+      },
+      preview: {
+        primary: startedPreviews || undefined,
+        hint: startedPreviews > 0 ? `${startedPreviews} ${plural(startedPreviews, 'запущенный', 'запущенных', 'запущенных')}` : undefined,
+      },
+    };
+  }, [gitState.status, gitState.unpushed, allTasks, project.id, terminals, previewServices]);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
@@ -858,9 +895,10 @@ const windowWidth = useWindowWidth();
     void buildCodeGraph(project.id);
   }, [project.id]);
 
-  // Панели сессии для МОБИЛЬНОЙ ветки (десктоп собирает их в DesktopWorkspace).
-  // Раньше их строила правая зона внутри себя — теперь контент приходит снаружи.
-  const mobileSessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
+  // Панели сессии: контент — для МОБИЛЬНОЙ ветки (десктоп собирает свой в
+  // DesktopWorkspace), а changedPaths (фильтр «только файлы чата» в «Изменениях»)
+  // отсюда берут ОБЕ раскладки — хук вычисляется всегда.
+  const sessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
     setActiveSession(session);
@@ -1447,7 +1485,7 @@ const windowWidth = useWindowWidth();
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа
-              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} />
+              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} sessionFiles={sessionPanels.changedPaths} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
               : leftTab === 'personas'
@@ -1508,7 +1546,7 @@ const windowWidth = useWindowWidth();
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
                   <ChatPanel session={activeSession} project={project} onOpenFile={handleOpenFileFromChat} pendingMessage={pendingMessage} onPendingMessageSent={() => setPendingMessage(undefined)} onSessionUpdated={handleSessionUpdated} isMobile={isMobile} onBack={backFromChat} onWorkflowRunning={handleWorkflowRunning} skills={composerSkills} agents={skillsData?.agents} attachedFiles={attachedFiles} onAttachedFilesChange={setAttachedFiles} />
                 </div>
-                <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty compact panels={{}} sessionPanels={mobileSessionPanels} />
+                <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty compact panels={{}} sessionPanels={sessionPanels} />
               </div>
             )
             : NoSession
@@ -1575,7 +1613,7 @@ const windowWidth = useWindowWidth();
           project={project}
           projectForEdit={projectForEdit}
           onOpenWall={() => onSwitchHub('wall')}
-          railCounts={railCounts}
+          railBadges={railBadges}
           onOpenProjectSettings={() => setEditProjectOpen(true)}
           activeSession={activeSession}
           onSelectSession={handleSelectSession}
@@ -1636,11 +1674,14 @@ const windowWidth = useWindowWidth();
             // Документация проекта: превью и навигация — в панели, крупное чтение —
             // «развернуть» тем же путём, что открываются остальные файлы
             docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} activeFilePath={openFile} onCloseFile={backFromFile} />,
+            // Заметки ТЕКУЩЕГО проекта (notes/ репы) — клик открывает в центре тем же
+            // путём, что файлы (FileViewer для notes/**.md рендерит NoteView)
+            notes: <ProjectNotesPanel projectId={project.id} activeFilePath={openFile} onOpenFile={handleOpenFileFromTree} />,
             // «История решений» (change-dossiers, этап 1): гейт по флагу — внутри самой
             // панели (мокап требует видимый вход даже при выключенной фиче — она сама
             // показывает empty-state с кнопкой «Открыть настройки»)
             dossiers: <DossierHistoryPanel project={project} auth={auth} activeFilePath={openFile ?? openCommitFile} chatExcludedFromDossiers={!!activeSession?.excludeFromDossiers} onOpenChat={handleOpenTaskSession} onOpenTask={handleOpenDossierTask} onOpenCommit={handleOpenCommit} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} sessionFiles={sessionPanels.changedPaths} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,

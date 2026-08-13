@@ -34,7 +34,7 @@ import { IslandSplitter } from '../../components/ui/IslandSplitter';
 import { useWindowWidth } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
-  isPanelKey, type PanelKey, type Zone,
+  isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
 } from './panelCatalog';
 import { PanelFillContext, usePanelFillRequests } from './panelFill';
 import { wsPanels, homeOf, isTucked, isZoneCollapsed, placeByRail, sortRail, zoneOf, COL_CAP, PANEL_MIN_H, PANEL_SPLIT_MIN_H, type PanelZonesStore } from './panelStackState';
@@ -75,7 +75,10 @@ interface Props {
   panels: Partial<Record<PanelKey, ReactNode>>;
   // Числа-кружки на иконках рельсы (changes/tasks/terminal/preview/chats).
   // Сессионные свои числа берут из sessionPanels.
-  railCounts?: Partial<Record<PanelKey, number>>;
+  // Кружки-индикаторы на кнопках проекта в рельсе (changes/tasks/terminal/preview):
+  // primary — основной, secondary — второй (серый; незапушенные коммиты на «Изменениях»),
+  // hint — расшифровка в тултипе. sessionPanels (plan/agents) перекрывают своими.
+  railBadges?: Partial<Record<PanelKey, RailBadgeInfo>>;
   // Инстанс стора зон: каждый экран держит НЕЗАВИСИМУЮ раскладку
   panelStack?: PanelZonesStore;
   // Какие панели вообще доступны на этом экране. У воркспейса это инструменты
@@ -103,7 +106,7 @@ interface Props {
 }
 
 export function PanelZone({
-  side, panels, railCounts, panelStack,
+  side, panels, railBadges, panelStack,
   allowedKeys = WORKSPACE_KEYS, hideWhenEmpty, compact, sessionPanels,
   railFooter, floating, centerFileOpen,
 }: Props) {
@@ -708,12 +711,21 @@ export function PanelZone({
   const railGroup = (keys: readonly PanelKey[], tucked = false): RailItem[] => sortRail(
     zones.railOrder,
     keys.filter(k => tucked || (stashRevealed ? railKeyVisible(k, false) : railKeyVisible(k))),
-  ).map(k => ({
+  ).map(k => {
+    // Источник кружков: сессионные панели (plan/agents)优先, иначе проектные счётчики
+    // из railBadges (changes/tasks/terminal/preview). Из объекта — primary (основной
+    // оранжевый), secondary (серый, незапушенные) и hint (расшифровка в тултипе)
+    const bd: RailBadgeInfo | null = sessionPanels?.railBadge(k) ?? railBadges?.[k] ?? null;
+    return {
     key: k,
     title: PANEL_META[k].title,
     Icon: PANEL_META[k].Icon,
     active: openKeys.includes(k),
-    badge: sessionPanels?.railBadge(k) ?? railCounts?.[k] ?? null,
+    badge: bd?.primary ?? null,
+    badgeTone: bd?.primaryTone,
+    badgeSecondary: bd?.secondary ?? null,
+    badgeSecondaryTone: bd?.secondaryTone,
+    hint: bd?.hint,
     // Иконку можно не только нажать, но и утащить в раскладку: клик открывает
     // панель туда, куда решит зона, а перетаскивание — ровно на выбранное место.
     // В компактном режиме раскладки нет, там только клик.
@@ -779,7 +791,8 @@ export function PanelZone({
       // панель в этой зоне и просто закрывает её
       else toggle(side, k);
     },
-  }));
+  };
+  });
 
   // Карточка панели. Растягивается ли она на всю высоту, решает panelStretched:
   // одиночная панель в колонке у центра — по контенту, всё прочее (2+ в колонке,

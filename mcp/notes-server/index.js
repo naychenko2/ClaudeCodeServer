@@ -201,6 +201,7 @@ const CORE_TOOLS = [
         content: { type: 'string', description: 'Текст заметки (markdown, можно с [[wikilinks]] и frontmatter)' },
         source: { type: 'string', description: 'Куда создать: "personal" или id проекта. По умолчанию — контекст сессии' },
         expiresAfterMinutes: { type: 'number', description: 'Время жизни в минутах. Не указывать или null — бессрочно. Пример: 1440 = сутки.' },
+        file: { type: 'string', description: 'Привязать заметку к файлу проекта: путь от корня проекта-источника через /. Только для проектных заметок (при source personal игнорируется).' },
       },
     },
   },
@@ -422,6 +423,8 @@ async function callTool(name, args) {
       if (args.content !== undefined) body.content = args.content;
       body.source = args.source ?? DEFAULT_SOURCE;
       if (args.expiresAfterMinutes !== undefined) body.expiresAfterMinutes = args.expiresAfterMinutes;
+      // Привязка к файлу проекта (frontmatter file:) — сервер сам отбросит у личных
+      if (args.file !== undefined) body.file = args.file;
       // Если заметка создаётся в рамках чата — запоминаем, откуда
       if (process.env.NOTES_SESSION_ID) body.sourceSessionId = process.env.NOTES_SESSION_ID;
       return json(await api('/api/notes', { method: 'POST', body: JSON.stringify(body) }));

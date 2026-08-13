@@ -1235,7 +1235,11 @@ public class SessionManagerTests : IDisposable
 
         var outcome = await _sut.SendMessageAsync(session.Id, "подожди меня", ["a.txt", "b.txt"], mode: "plan");
 
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        // Working — ход доживает сам (Queued); Waiting — он ждёт человека и не закончится
+        // никогда, поэтому прерывается ради доставки (QueuedPreempted)
+        outcome.Should().Be(status == SessionStatus.Waiting
+            ? SessionManager.SendUserOutcome.QueuedPreempted
+            : SessionManager.SendUserOutcome.Queued);
         var queued = _sut.GetPending(session.Id).Should().ContainSingle().Subject;
         queued.Text.Should().Be("подожди меня");
         queued.Kind.Should().Be(SessionManager.PendingKind.User);
@@ -1290,14 +1294,14 @@ public class SessionManagerTests : IDisposable
         pending.Should().NotContain(p => p.Text == "user-последнее");
     }
 
-    // --- Прерывание хода входящим сообщением (enqueue + interrupt) ---
+    // --- Очередь входящих сообщений в занятом чате (enqueue, прерывание — точечное) ---
 
     [Fact]
-    public async Task SendMessage_User_ЗанятыйЧат_ПрерываетХод_ИДоставляетПоExited()
+    public async Task SendMessage_User_ЗанятыйЧат_НеПрерываетХод_ИДоставляетПоResult()
     {
-        // Сообщение пользователя в занятый чат больше не ждёт конца хода пассивно:
-        // встаёт в очередь И прерывает текущий ход. Убитый процесс не шлёт result —
-        // очередь разбирается по exited ТОГО ЖЕ прогона (SessionEntry.DrainOnExitedRun).
+        // Отправка ≠ остановка (поведение claude CLI): сообщение пользователя встаёт в
+        // очередь и ЖДЁТ штатного конца хода. Kill посреди хода выбрасывал бы сделанную
+        // работу и оплаченные токены, а в транскрипте оставлял tool_use без tool_result.
         var session = await MkBusySessionAsync("preempt", SessionStatus.Working);
         session.Name = "есть имя"; // иначе фоновый уточнятор заголовка полезет в локальную модель
         var entry = GetEntry(session.Id);
@@ -1307,17 +1311,205 @@ public class SessionManagerTests : IDisposable
         var outcome = await _sut.SendMessageAsync(session.Id, "срочное", []);
 
         outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
-        adapter.Verify(a => a.Interrupt(), Times.Once());
+        adapter.Verify(a => a.Interrupt(), Times.Never());
         _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("срочное");
 
-        // Конец прерванного хода — только exited (процесс убит): очередь разбирается сразу
+        // Ход дожил до конца сам — очередь разбирает штатный result
         await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
-            new ExitedMessage(), TestRunId);
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
         await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
 
         adapter.Verify(a => a.SendMessageAsync(It.IsAny<string>(), It.IsAny<IReadOnlyList<string>>(),
             It.IsAny<int>(), It.IsAny<bool>()), Times.Once());
+        _sut.GetPending(session.Id).Should().BeEmpty("по концу хода очередь разобрана");
+    }
+
+    [Fact]
+    public async Task SendMessage_User_ЧатЖдётЧеловека_ПрерываетХод_ИДоставляетПоExited()
+    {
+        // Waiting — ход стоит на запросе разрешения/вопросе и сам не закончится никогда:
+        // текст вместо ответа на диалог означает, что отвечать на него не будут. Здесь
+        // прерывание обязательно, иначе сообщение висело бы в очереди вечно. Убитый процесс
+        // result не шлёт — очередь разбирается по exited ТОГО ЖЕ прогона (DrainOnExitedRun).
+        var session = await MkBusySessionAsync("preempt-waiting", SessionStatus.Waiting);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        var outcome = await _sut.SendMessageAsync(session.Id, "не спрашивай, делай", []);
+
+        // Клиенту важно отличить это от аварии: убитый ход пришлёт голый exited
+        outcome.Should().Be(SessionManager.SendUserOutcome.QueuedPreempted);
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
         _sut.GetPending(session.Id).Should().BeEmpty("прерывание доставляет сообщение немедленно");
+    }
+
+    [Fact]
+    public async Task PreemptForPending_ПрерываетХодИДоставляетЖдущееПоExited()
+    {
+        // Явный перебой (кнопка «Прервать и отправить» на карточке очереди): в отличие от
+        // «Стоп» очередь НЕ морозится — прерывание здесь и есть требование доставить сейчас
+        var session = await MkBusySessionAsync("manual-preempt", SessionStatus.Working);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAsync(session.Id, "срочное", []);
+        // Предусловие: сама отправка ход не рвёт
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+
+        _sut.PreemptForPending(session.Id).Should().BeTrue();
+
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+        _sut.GetPending(session.Id).Should().BeEmpty("очередь разобрана по exited убитого хода");
+    }
+
+    [Fact]
+    public async Task Exited_БезResult_ПриНепустойОчереди_РазбираетЕё()
+    {
+        // Прогон умер без result (смерть процесса, ватчдог), а сообщение стоит в очереди.
+        // Пока каждая отправка убивала ход, дыру закрывала метка DrainOnExitedRun; теперь
+        // отправка ход не трогает, и без разбора по exited сообщение висело бы призраком
+        // при простаивающем чате — забрать его смогла бы только следующая отправка.
+        var session = await MkBusySessionAsync("dead-run-drain", SessionStatus.Working);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAsync(session.Id, "жду доставки", []);
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+
+        // Боевой порядок: ClaudeSession обнуляет прогон ДО отправки exited (HasLiveTurn=false),
+        // но обёртка FallbackLlmSessionAdapter отдаёт придержанный exited вниз из SettleAsync и
+        // снимает оркестрацию лишь в finally — то есть ПОСЛЕ нас. Стаб это воспроизводит: гейт
+        // разбора обязан смотреть на живой прогон, а не на занятость адаптера целиком.
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.OrchestrationActive).Returns(true);
+        // Процесс умер сам: exited без предшествующего result и без метки разбора
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        _sut.GetPending(session.Id).Should().BeEmpty("очередь разобрана по смерти прогона");
+    }
+
+    [Fact]
+    public async Task Стоп_ЗатемОтправка_ДоставляетПоExitedУбитогоХода()
+    {
+        // Ходовой сценарий: «Стоп» → сразу отправить исправленный текст, пока exited убитого
+        // хода ещё в пути. Статус до exited остаётся Working, метку разбора «Стоп» не ставит —
+        // без разбора по смерти прогона сообщение застряло бы навсегда.
+        var session = await MkBusySessionAsync("stop-then-send", SessionStatus.Working);
+        session.Name = "есть имя";
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.Interrupt(session.Id);                                  // «Стоп»: очередь заморожена
+        await _sut.SendMessageAsync(session.Id, "давай иначе", []);  // возобновление: разморозка + enqueue
+
+        // Прогон, убитый «Стопом», мёртв, а оркестрация фолбэка ещё не снята — тот же боевой
+        // порядок, что и в тесте выше (её снимает finally уже после доставки exited вниз)
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        adapter.SetupGet(a => a.OrchestrationActive).Returns(true);
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        _sut.GetPending(session.Id).Should().BeEmpty("сообщение ушло в работу, а не зависло");
+    }
+
+    [Fact]
+    public async Task Exited_ЗамороженнаяОчередь_НеРазбираетсяРазборомМёртвогоПрогона()
+    {
+        // Инвариант «Стоп»: заморозку снимает только возобновление пользователем. Новый
+        // разбор по смерти прогона не должен его обходить, иначе сразу после «Стоп» хлынул
+        // бы ход из очереди — ровно то, от чего заморозка и защищает.
+        var session = await MkBusySessionAsync("frozen-dead-run", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAndWaitAsync(session.Id, "агентский доклад", TimeSpan.Zero);
+        _sut.Interrupt(session.Id); // «Стоп» морозит очередь
+
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false); // прогон убит «Стопом»
+        adapter.SetupGet(a => a.OrchestrationActive).Returns(true);
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ExitedMessage(), TestRunId);
+        await Task.Delay(150);
+
+        _sut.GetPending(session.Id).Should().ContainSingle("замороженная очередь ждёт возобновления");
+    }
+
+    [Fact]
+    public async Task PreemptForPending_ЧатБезЖивогоПрогона_Отказывает()
+    {
+        // Чат числится занятым, а прогона нет (ход убил ватчдог/сбой, статус остался): убивать
+        // нечего, exited не придёт. Ответить «прервал» значило бы соврать клиенту — он нарисует
+        // «Прервано», а сообщение так и не уйдёт. Такой чат реанимирует «Стоп».
+        var session = await MkBusySessionAsync("preempt-stuck", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);
+        SetProcess(entry, adapter.Object);
+        await _sut.SendMessageAsync(session.Id, "срочное", []);
+
+        _sut.PreemptForPending(session.Id).Should().BeFalse();
+
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+        _sut.GetPending(session.Id).Should().ContainSingle("сообщение осталось ждать");
+    }
+
+    [Fact]
+    public async Task PreemptForPending_ВоВремяКомпакции_Отказывает()
+    {
+        // Компакция — обычный ход, но обёртка фолбэка его не оркеструет и exited убитой
+        // компакции ГЛОТАЕТ: до SessionManager не дошло бы ничего, чат остался бы в вечном
+        // Working с застрявшей очередью. Прерывать её нельзя — отказываем честно.
+        var session = await MkBusySessionAsync("preempt-compact", SessionStatus.Active);
+        session.ClaudeSessionId = "csid-compact"; // иначе сворачивать нечего и CompactAsync выйдет сразу
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        await _sut.CompactAsync(session.Id);
+        await _sut.SendMessageAsync(session.Id, "во время сжатия", []);
+
+        _sut.PreemptForPending(session.Id).Should().BeFalse();
+        adapter.Verify(a => a.Interrupt(), Times.Never());
+
+        // Компакция дошла до конца сама — очередь разбирается штатным путём, по её result
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ResultMessage("success", 10, 1, null, null), TestRunId);
+        await WaitForSendAsync(adapter, TimeSpan.FromSeconds(2));
+
+        _sut.GetPending(session.Id).Should().BeEmpty("очередь разобрана по result компакции");
+    }
+
+    [Fact]
+    public async Task PreemptForPending_БезОчередиИлиБезХода_НичегоНеПрерывает()
+    {
+        // Холостой перебой убил бы чужой только что стартовавший ход, ничего не доставив
+        var session = await MkBusySessionAsync("manual-preempt-noop", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+
+        _sut.PreemptForPending(session.Id).Should().BeFalse("очередь пуста — доставлять нечего");
+
+        await _sut.SendMessageAsync(session.Id, "срочное", []);
+        session.Status = SessionStatus.Active; // ход кончился сам, пока пользователь целился в кнопку
+        _sut.PreemptForPending(session.Id).Should().BeFalse("ход уже не идёт — прерывать нечего");
+        adapter.Verify(a => a.Interrupt(), Times.Never());
     }
 
     [Fact]
@@ -1335,7 +1527,7 @@ public class SessionManagerTests : IDisposable
 
         var outcome = await _sut.SendMessageAsync(session.Id, "вмешаться в цикл", []);
 
-        outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        outcome.Should().Be(SessionManager.SendUserOutcome.QueuedPreempted);
         _sut.GetById(session.Id)!.WorkLoop.Should().NotBeNull("сообщение пользователя не снимает цикл");
         Sent<WorkLoopMessage>().Should().NotContain(m => !m.Active,
             "выключение цикла не рассылается — цикл остаётся активным");
@@ -1837,12 +2029,12 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public async Task SendMessage_User_ЗанятыйШтаб_ПрерываетХодИЧиститМаркерыУбитого()
+    public async Task PreemptForPending_ЗанятыйШтаб_ПрерываетХодИЧиститМаркерыУбитого()
     {
-        // Ход штаба убит пользовательским сообщением — result по нему не придёт, а с ним
-        // не придёт и разбор конца хода, потребляющий буфер маркеров. Оставленный маркер
-        // склеился бы с текстом следующего хода и применился задним числом: фантомная
-        // эскалация и сдвиг стадии («волна-призрак»).
+        // Ход штаба убит ради очереди — result по нему не придёт, а с ним не придёт и разбор
+        // конца хода, потребляющий буфер маркеров. Оставленный маркер склеился бы с текстом
+        // следующего хода и применился задним числом: фантомная эскалация и сдвиг стадии
+        // («волна-призрак»). Сама отправка ход штаба не рвёт — рвёт только явный перебой.
         var (session, _, _) = await MakeTeamStabAsync("stab-preempt-user");
         session.Status = SessionStatus.Working;
         var entry = GetEntry(session.Id);
@@ -1856,6 +2048,11 @@ public class SessionManagerTests : IDisposable
         var outcome = await _sut.SendMessageAsync(session.Id, "как дела?", []);
 
         outcome.Should().Be(SessionManager.SendUserOutcome.Queued);
+        adapter.Verify(a => a.Interrupt(), Times.Never()); // отправка ход штаба не рушит
+        GetTeamTurnText(entry).Should().NotBeEmpty("ход жив — буфер копится дальше");
+
+        _sut.PreemptForPending(session.Id).Should().BeTrue();
+
         adapter.Verify(a => a.Interrupt(), Times.Once());
         GetTeamTurnText(entry).Should().BeEmpty("маркеры убитого хода не доживают до следующего");
     }

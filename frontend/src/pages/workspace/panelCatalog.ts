@@ -11,11 +11,12 @@
 //
 // ВНИМАНИЕ: в components/artifacts/meta.tsx живёт СВОЙ, несвязанный PanelKey —
 // категории артефактов сессии (plan/todos/notes/comments/…), которыми пользуется
-// panelBadge. Значения частично пересекаются намеренно (plan/agents/context), но
+// panelBadge. Значения частично пересекаются намеренно (plan/agents/context/notes:
+// здешний notes — панель заметок ПРОЕКТА, тамошний — заметки-артефакты хода), но
 // это разные типы: там, где импортируются оба, брать один из них под алиасом.
 import {
   BookOpen, BookOpenText, ClipboardList, FolderTree, GitCompare, ListTodo, Bot, User, Users,
-  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, Library, Puzzle,
+  SquareTerminal, MonitorPlay, Network, MessageCircle, NotebookPen, StickyNote, Library, Puzzle,
   TableOfContents, Lightbulb,
   type LucideIcon,
 } from 'lucide-react';
@@ -32,13 +33,40 @@ export const PANEL_KEYS = [
   // Порядок рельсы: сначала работа с проектом «здесь и сейчас» — дерево файлов,
   // его изменения, задачи по ним; дальше справочное (документация, знания, граф)
   // и командное
-  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context',
   'toc',
   // Панели разделов хаба
   'notesList', 'notesGraph', 'knowledgeList', 'personasList', 'projectGroups',
 ] as const;
 export type PanelKey = typeof PANEL_KEYS[number];
+
+// Данные кружков-индикаторов на кнопке панели рельсы. Источник — WorkspacePage
+// (changes/tasks/terminal/preview), useSessionPanels (plan/agents) и ChatsPage
+// (chats); собирает их PanelZone в RailItem. primary — основной кружок (оранжевый,
+// правый верхний угол), secondary — второй (серый, правый нижний; сейчас это
+// незапушенные коммиты на «Изменениях»), hint — расшифровка в тултипе-плашке.
+//
+// hint — либо строка (одно значение, рисуется с оранжевой точкой как primary),
+// либо список линий: каждая со своим тоном под соответствующий кружок на иконке
+// (accent — оранжевый/primary, muted — серый/secondary). Так в тултипе «Изменений»
+// две строки: ●(оранж) N незафиксированных и ●(сер) N неопубликованных.
+export interface HintLine {
+  text: string;
+  tone?: 'accent' | 'muted';   // дефолт 'accent'
+}
+export type RailHint = string | readonly HintLine[];
+
+export interface RailBadgeInfo {
+  primary?: number;
+  secondary?: number;
+  // Тон каждого кружка (дефолт: primary=accent/оранжевый, secondary=muted/серый).
+  // «Изменения» инвертирует: незафиксированные файлы — серые (норма, рабочее состояние),
+  // неопубликованные коммиты — оранжевые (требуют пуша)
+  primaryTone?: 'accent' | 'muted';
+  secondaryTone?: 'accent' | 'muted';
+  hint?: RailHint;
+}
 
 // Иконка и заголовок панели — общие для обеих зон.
 export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> = {
@@ -50,6 +78,10 @@ export const PANEL_META: Record<PanelKey, { title: string; Icon: LucideIcon }> =
   // «Знаниями» (панель ниже, lib/ai/actions) — здесь строки текста внутри разводят их
   // между собой; FileText отдан заметкам.
   docs:     { title: 'Документация', Icon: BookOpenText },
+  // Заметки ТЕКУЩЕГО проекта (физические .md в notes/ репы) — пара к разделу хаба
+  // notesList («Заметки» — все источники), того же рода, что knowledge/knowledgeList
+  // и team/personasList. NotebookPen занят разделом хаба — здесь StickyNote.
+  notes:    { title: 'Заметки',   Icon: StickyNote },
   // «История решений» (рабочее имя change-dossiers): «зачем менялся код, что решили,
   // что отвергли» — записи у файла, привязанные к коммитам из чата/задачи. Lightbulb
   // (идея/решение), а не History — та иконка уже занята вкладкой «История» (git-лог
@@ -99,6 +131,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
   chats: 'left',
   files: 'right',
   docs: 'right',
+  notes: 'right',
   dossiers: 'right',
   knowledge: 'right',
   changes: 'right',
@@ -122,7 +155,7 @@ export const PANEL_HOME: Record<PanelKey, Zone> = {
 
 // Наборы ключей по экранам — что вообще доступно в этой рельсе (проп allowedKeys)
 export const WORKSPACE_KEYS: readonly PanelKey[] = [
-  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'graph', 'team', 'skills', 'terminal', 'preview',
+  'chats', 'files', 'changes', 'tasks', 'docs', 'dossiers', 'knowledge', 'notes', 'graph', 'team', 'skills', 'terminal', 'preview',
   'plan', 'agents', 'context', 'toc',
 ];
 // Раздел «Чаты»: список чатов плюс панели активной сессии (проекта там нет)

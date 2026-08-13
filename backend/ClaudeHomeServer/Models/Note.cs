@@ -31,7 +31,11 @@ public record NoteSummary(
     string UpdatedAt,
     string? ExpiresAt = null,         // ISO 8601; null — бессрочно
     string? SourceSessionId = null,   // ID чата, из которого создана заметка
-    NoteAnnotationInfo? Annotation = null);  // непусто = заметка-комментарий к документу
+    NoteAnnotationInfo? Annotation = null,   // непусто = заметка-комментарий к документу
+    // Привязка к файлу проекта (frontmatter file:): путь от корня проекта-источника,
+    // forward slashes. У личных заметок всегда null (см. проекции NotesService).
+    string? File = null,
+    bool FileMissing = false);  // derived: file: указывает на несуществующий файл
 
 // Разрешённая исходящая ссылка [[...]] из заметки.
 public record NoteLinkDto(
@@ -65,7 +69,9 @@ public record NoteDetail(
     string UpdatedAt,
     string? ExpiresAt = null,       // ISO 8601; null — бессрочно
     string? SourceSessionId = null,   // ID чата, из которого создана заметка
-    NoteAnnotationInfo? Annotation = null);  // непусто = заметка-комментарий к документу
+    NoteAnnotationInfo? Annotation = null,   // непусто = заметка-комментарий к документу
+    string? File = null,        // привязка к файлу проекта (см. NoteSummary.File)
+    bool FileMissing = false);
 
 // Узел графа знаний. Ghost=true — «призрачная» заметка (на неё ссылаются, но её нет).
 // Kind: null — обычная заметка; "comment"/"reply" — комментарий к документу и ответ
@@ -104,7 +110,10 @@ public record CreateNoteRequest(
     string? TemplateId = null,      // имя шаблона из templates/ (без .md)
     string? Folder = null,          // папка внутри источника ("Идеи/Черновики"); пусто = корень
     int? ExpiresAfterMinutes = null,  // время жизни в минутах; null — без ограничения
-    string? SourceSessionId = null);  // ID чата, из которого создана заметка
+    string? SourceSessionId = null,   // ID чата, из которого создана заметка
+    // Привязка к файлу проекта (frontmatter file:) — путь от корня проекта-источника.
+    // При source=personal игнорируется (согласованно с чтением: у личных поля нет).
+    string? File = null);
 
 // Перенос заметки: в папку и/или другой источник (id меняется — источник+путь в id)
 public record MoveNoteRequest(string? Folder = null, string? TargetSource = null);

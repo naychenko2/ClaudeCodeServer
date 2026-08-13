@@ -5,17 +5,20 @@
 // Из-за этого сессионные панели были прибиты к правой рельсе: перенести их влево
 // было нечем — там просто не существовало их контента. Хук поднимает сборку на
 // уровень экрана, и обе зоны получают эти панели наравне с остальными.
+import { useMemo } from 'react';
 import type { ReactNode } from 'react';
 import type { Session } from '../../types';
 import { C, FONT } from '../../lib/design';
-import { useSessionArtifacts } from '../../hooks/useSessionArtifacts';
+import { plural } from '../../lib/spend';
+import { useSessionArtifacts, computeChangedPaths } from '../../hooks/useSessionArtifacts';
+import { useSession } from '../../hooks/useSession';
 import { PlanSection } from '../../components/artifacts/PlanSection';
 import { AgentsSection } from '../../components/artifacts/AgentsSection';
 import { ContextSection } from '../../components/artifacts/ContextSection';
 // В meta.tsx свой PanelKey (категории артефактов) — берём оттуда только panelBadge,
 // а ключи панелей остаются из реестра зон
 import { panelBadge } from '../../components/artifacts/meta';
-import type { PanelKey } from './panelCatalog';
+import type { PanelKey, RailBadgeInfo } from './panelCatalog';
 
 // Пустой стейт панельки (открыта, но контента ещё нет)
 function emptyPanel(text: string): ReactNode {
@@ -33,10 +36,16 @@ export interface SessionPanels {
   // открывать (План — если был план, Агенты — если есть контент, Персона — если
   // собеседник персона); иначе иконка скрыта целиком, а с ней и разделитель групп.
   visible: (k: PanelKey, isOpen: boolean) => boolean;
-  // Число в кружке над иконкой рельсы — «сколько требует внимания», не «всего»
-  railBadge: (k: PanelKey) => number | null;
+  // Кружки над иконкой рельсы: primary — «сколько требует внимания», secondary —
+  // второй индикатор (у сессионных не используется), hint — расшифровка в тултипе
+  railBadge: (k: PanelKey) => RailBadgeInfo | null;
   // Значок в шапке карточки
   headerBadge: (k: PanelKey) => string | null;
+  // Пути, изменённые активным чатом (для фильтра «только файлы чата» в панели
+  // «Изменения»). undefined — фильтр недоступен: нет активного чата, чат живёт
+  // в своём worktree (его правки в git status корня не попадают) либо история
+  // ещё грузится (тогл при переключении чата на миг пропадает — осознанно).
+  changedPaths: Set<string> | undefined;
 }
 
 export function useSessionPanels(session: Session | null, projectId?: string, rootPath?: string): SessionPanels {
@@ -44,6 +53,12 @@ export function useSessionPanels(session: Session | null, projectId?: string, ro
   // Артефакты сессии питают План и Агентов (бейджи + содержимое панелек).
   // Персона (context) данные тянет сама через ContextSection.
   const artifacts = useSessionArtifacts(sessionId, projectId, rootPath ?? '', null);
+  // Второй вызов useSession дёшев (стор общий, см. useSession.ts) — artifacts
+  // items наружу не отдаёт, а для множества изменённых путей нужна сама лента
+  const { items, isHistoryLoading } = useSession(sessionId, projectId);
+  const changedPaths = useMemo(
+    () => computeChangedPaths(items, rootPath ?? ''),
+    [items, rootPath]);
   const plansCount = artifacts.plans.length;
   // executingTask=false: в рельсе artifacts считаются без заголовка задачи-исполнителя
   const badgeOpts = { executingTask: false, personaId: session?.personaId ?? null, isChat: !projectId };
@@ -68,14 +83,18 @@ export function useSessionPanels(session: Session | null, projectId?: string, ro
     },
 
     // План — неодобренные (status ≠ approved), Агенты — открытые (running);
-    // у Персоны счётчика нет
+    // у Персоны счётчика нет. hint расшифровывает число в тултипе кнопки рельсы
     railBadge: k => {
-      let n: number;
-      if (k === 'plan') n = artifacts.plans.filter(p => p.status !== 'approved').length;
-      else if (k === 'agents') n = [...artifacts.agents, ...artifacts.workflows.flatMap(w => w.agents)]
-        .filter(a => a.status === 'running').length;
-      else return null;
-      return n > 0 ? n : null;
+      if (k === 'plan') {
+        const n = artifacts.plans.filter(p => p.status !== 'approved').length;
+        return n > 0 ? { primary: n, hint: `${n} ${plural(n, 'ждёт одобрения', 'ждут одобрения', 'ждут одобрения')}` } : null;
+      }
+      if (k === 'agents') {
+        const n = [...artifacts.agents, ...artifacts.workflows.flatMap(w => w.agents)]
+          .filter(a => a.status === 'running').length;
+        return n > 0 ? { primary: n, hint: `${n} ${plural(n, 'выполняется', 'выполняются', 'выполняются')}` } : null;
+      }
+      return null;
     },
 
     headerBadge: k => {
@@ -83,5 +102,9 @@ export function useSessionPanels(session: Session | null, projectId?: string, ro
       if (k === 'agents' || k === 'context') return panelBadge(k, artifacts, badgeOpts).badge;
       return null;
     },
+
+    changedPaths: sessionId && !session?.worktreePath && !isHistoryLoading
+      ? changedPaths
+      : undefined,
   };
 }

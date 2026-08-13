@@ -32,8 +32,20 @@ export interface RailItem {
   title: string;
   Icon: LucideIcon;
   active: boolean;
-  // Число в кружке над иконкой. null/0 — кружок не рисуем.
+  // Число в кружке над иконкой (правый верхний угол). null/0 — кружок не рисуем.
   badge?: number | null;
+  // Тон основного кружка (дефолт 'accent' — оранжевый). 'muted' — серый: «Изменения»
+  // так рисуют незафиксированные файлы (норма), отдавая акцент неопубликованным.
+  badgeTone?: 'accent' | 'muted';
+  // Второй индикатор — кружок в правом НИЖНЕМ углу иконки (под основным).
+  // Дефолт тона 'muted' (серый); «Изменения» делают его 'accent' для неопубликованных.
+  // В ящике «…» не рисуется и в сумму ящика не входит.
+  badgeSecondary?: number | null;
+  badgeSecondaryTone?: 'accent' | 'muted';
+  // Подзаголовок тултипа-плашки: расшифровка чисел. Строка — одна линия с оранжевой
+  // точкой (как primary); массив линий — каждая со своим тоном под кружок на иконке
+  // (accent/primary, muted/secondary). Не задан — плашка из одной строки (как раньше).
+  hint?: string | readonly { text: string; tone?: 'accent' | 'muted' }[];
   onClick: () => void;
   // Иконка — ручка перетаскивания панели: закрытую можно вытащить из рельсы
   // прямо в нужное место раскладки, не открывая её кликом наугад
@@ -134,13 +146,22 @@ interface Props {
 // у спрятанных панелей свои кружки не видны, и «…» показывает их сумму.
 // inline — кружок в строке меню ящика: там он не наездник на иконке, а обычный
 // элемент строки справа от названия.
-// muted — тихий вариант: им ящик сообщает, СКОЛЬКО кнопок в нём лежит. Это не
-// новость, а состав содержимого, и акцент тут спорил бы с настоящими бейджами
-// непрочитанного — те остаются оранжевыми.
-function RailBadge({ value, inline, muted }: { value: number; inline?: boolean; muted?: boolean }) {
+// tone: 'accent' (дефолт) — оранжевый, новость/требует внимания; 'muted' — серый,
+// тихий вариант. Им ящик сообщает, СКОЛЬКО кнопок в нём лежит (состав, а не новость),
+// и вторая точка кнопки «Изменений» — незапушенные коммиты (рядом с основным
+// оранжевым незафиксированных файлов). Акцент приберёгаем для главного.
+// bottom — кружок в правом НИЖНЕМ углу иконки (второй индикатор стопкой под основным).
+function RailBadge({ value, inline, tone = 'accent', bottom }: {
+  value: number; inline?: boolean; tone?: 'accent' | 'muted'; bottom?: boolean;
+}) {
+  const muted = tone === 'muted';
   return (
     <span style={{
-      ...(inline ? null : { position: 'absolute', top: -6, right: -7 }),
+      // Второй индикатор стоит в нижнем углу — стопка под основным (top:-6/right:-7).
+      // Оба на правом краю: это и есть «ниже серая точка» — прямо под оранжевой
+      ...(inline ? null : bottom
+        ? { position: 'absolute', bottom: -6, right: -7 }
+        : { position: 'absolute', top: -6, right: -7 }),
       minWidth: 14, height: 14, padding: '0 3px', flexShrink: 0,
       borderRadius: 7,
       background: muted ? C.bgSelected : C.accent,
@@ -150,7 +171,7 @@ function RailBadge({ value, inline, muted }: { value: number; inline?: boolean; 
       ...(muted ? { boxShadow: `0 0 0 1px ${C.border}` } : null),
       fontFamily: FONT.sans, fontSize: 9, fontWeight: muted ? 600 : 700, lineHeight: '14px', textAlign: 'center',
     }}>
-      {value}
+      {value > 99 ? '99+' : value}
     </span>
   );
 }
@@ -207,7 +228,7 @@ function RailOverflow({ side, overflow }: { side: 'left' | 'right'; overflow: No
               не считаем — многоточие и так стоит ради режима зоны. */}
           {badge
             ? <RailBadge value={badge} />
-            : items.length > 0 ? <RailBadge value={items.length} muted /> : null}
+            : items.length > 0 ? <RailBadge value={items.length} tone="muted" /> : null}
         </div>
       </RailIconButton>
 
@@ -347,6 +368,9 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
       // Подпись меняется по наведению вместе с иконкой: у открытой панели клик
       // закрывает, у закрытой с попапом — закрепляет
       label={item.active ? `Скрыть «${item.title}»` : item.title}
+      // Подзаголовок-расшифровка чисел под названием в плашке. Показываем всегда —
+      // числа на иконке видны и у открытой панели, значит и расшифровка должна быть
+      hint={item.hint}
       active={item.active}
       onClick={item.onClick}
       // Кнопка в плашке подписи — «убрать в ящик»: тот же жест, что дроп иконки на
@@ -381,7 +405,15 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
             <Icon size={17} strokeWidth={ICON_STROKE} />
             {/* Кружок с числом при закрывающей иконке прячем: рядом с «закрыть» счётчик
                 читается как часть действия, а не как содержимое панели */}
-            {item.badge && !closing && !pinning ? <RailBadge value={item.badge} /> : null}
+            {item.badge && !closing && !pinning
+              ? <RailBadge value={item.badge} tone={item.badgeTone ?? 'accent'} />
+              : null}
+            {/* Второй индикатор — в нижнем углу, под основным. Тот же регламент:
+                при закрытии/закреплении гаснет вместе с основным, чтобы у крестика/булавки
+                не висели чужие числа. Тон — из данных (дефолт muted) */}
+            {item.badgeSecondary && !closing && !pinning
+              ? <RailBadge value={item.badgeSecondary} tone={item.badgeSecondaryTone ?? 'muted'} bottom />
+              : null}
           </div>
         );
       }}

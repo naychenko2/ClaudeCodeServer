@@ -18,6 +18,7 @@ import { PanelZone } from './workspace/PanelZone';
 import { useSessionPanels } from './workspace/useSessionPanels';
 import { chatPanels } from './workspace/panelStackState';
 import { CHAT_KEYS, SESSION_KEYS } from './workspace/panelCatalog';
+import { plural } from '../lib/spend';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
 import { ensureTasksLoaded } from '../lib/tasks';
@@ -264,7 +265,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               hideWhenEmpty
               panelStack={chatPanels}
               panels={{ chats: sidebar }}
-              railCounts={{ chats: unreadCount }}
+              railBadges={{ chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined } }}
               sessionPanels={sessionPanels}
             />
           }

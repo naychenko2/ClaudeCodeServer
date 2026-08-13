@@ -1,10 +1,8 @@
 import { useEffect, useState } from 'react';
 import type { Project } from '../../types';
 import { C, FONT } from '../../lib/design';
-import { agentDotColor } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
-import { projectColor } from '../../lib/tasks';
-import { projectInitials } from './projectUtil';
+import { projectInitials, projectMainColor } from './projectUtil';
 
 // Единая иконка проекта (по образцу PersonaAvatar, но КВАДРАТНАЯ со скруглением —
 // чтобы отличаться от круглых персон). kind==='image' и есть картинка — рендерим <img>
@@ -73,7 +71,7 @@ export function ProjectIcon({ project, size = 40, radius, muted, imageUrl: image
     );
   }
 
-  const bg = project.icon?.color ? agentDotColor(project.icon.color) : projectColor(project.id).main;
+  const bg = projectMainColor(project);
   return (
     <div
       aria-hidden

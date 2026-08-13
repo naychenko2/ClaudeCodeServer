@@ -11,8 +11,8 @@ import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Folder,
-  ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare,
-  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink,
+  ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare, MessageSquareDot,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff,
 } from 'lucide-react';
 import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../types';
 import { api } from '../lib/api';
@@ -111,6 +111,10 @@ interface Props {
   activeCommitSha?: string | null; // подсветка открытого коммита в истории ветки
   onCommit?: (where: 'chat' | 'newChat') => void;  // делегировать фиксацию чату / новому чату
   onScopeChange?: () => void;  // сменили скоуп/коммит — центральную область сбросить к чату
+  // Пути, изменённые активным чатом (lowercase, прямые слэши от корня репо) — для
+  // тогла «только файлы чата». undefined — тогл скрыт (нет чата / worktree-чат /
+  // история грузится)
+  sessionFiles?: Set<string>;
 }
 
 // Строка файла активного скоупа после объединения групп статуса
@@ -174,7 +178,7 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(root.children);
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange }: Props) {
+export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, sessionFiles }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
   const hasPanelHeader = useHasPanelHeader();
@@ -192,6 +196,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // Свёрнутые дни в истории ветки (ключ — подпись группы). Не персистим: история
   // длинная, и свёрнутое вчера сегодня уже про другой день
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set());
+  const [chatOnly, setChatOnly] = useState(false);                     // тогл «только файлы текущего чата» (не персистим)
   const [selectMode, setSelectMode] = useState(false);                 // режим выбора файлов (чекбоксы)
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set()); // снятые файлы (в режиме выбора)
   const [summary, setSummary] = useState('');
@@ -406,8 +411,23 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const isWorking = activeScope === 'working';
   const isBranch = activeScope === 'branch';
   const isStash = activeScope.startsWith('stash:');
+  // Открытый скоуп-коммит (строка стека незапушенных) — для полосы состояния над
+  // списком: она поясняет, что ниже файлы коммита, а не рабочего дерева
+  const scopeCommit = useMemo(
+    () => (isWorking || isBranch || isStash) ? null : st.unpushed.find(c => c.sha === activeScope) ?? null,
+    [isWorking, isBranch, isStash, st.unpushed, activeScope]);
   const rows = isWorking ? workingFiles : commitRows;
-  const tree = useMemo(() => buildTree(rows), [rows]);
+  // Фильтр «только файлы чата» — ЧИСТО отображение: режет только видимые строки и
+  // счётчик скоупа. Стейджинг, «Отменить все», guard переключения ветки и форма
+  // фиксации работают по полному workingFiles. В форме фиксации фильтр не действует
+  // (список полный), чтобы «Зафиксировать» никогда не расходился с видимым.
+  const chatFilterOn = chatOnly && sessionFiles !== undefined && isWorking && mode !== 'commit';
+  const visibleRows = useMemo(
+    // Пути git status — от корня репо с прямыми слэшами (porcelain v2), ключи
+    // sessionFiles — lowercase в том же формате: сравнение по lowercase корректно
+    () => chatFilterOn ? rows.filter(f => sessionFiles!.has(f.path.toLowerCase())) : rows,
+    [chatFilterOn, rows, sessionFiles]);
+  const tree = useMemo(() => buildTree(visibleRows), [visibleRows]);
 
   // Глубины всех папок дерева — для кнопок «свернуть/развернуть на уровень»
   const dirDepths = useMemo(() => {
@@ -634,8 +654,20 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           color: active ? C.textHeading : C.textSecondary,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{c.subject}</span>
-        {/* Хвост строки — короткий хеш, приглушённым, как счётчик документов у раздела */}
-        <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
+        {/* Хвост строки — время коммита (HH:MM) + короткий хеш, приглушёнными.
+            Дата ясна из разделителя группы дня, поэтому только время; полный
+            relTime («2 ч назад») — в подсказке на всю мету. Хеш визуально
+            подчинён временем (чуть тусклее), чтобы глазом раньше ловить часы */}
+        {(() => {
+          const t = Date.parse(c.date);
+          const hhmm = isNaN(t) ? '' : new Date(t).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+          return (
+            <span title={relTime(c.date)} style={{ display: 'flex', gap: 6, flexShrink: 0, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>
+              {hhmm && <span>{hhmm}</span>}
+              <span style={{ opacity: 0.55 }}>{c.shortSha}</span>
+            </span>
+          );
+        })()}
       </div>
     );
   };
@@ -717,6 +749,15 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
               <UnfoldVertical size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
             </IconButton>
           </>
+        )}
+        {/* Тогл «только файлы текущего чата»: виден при активном чате в скоупе
+            «Не зафиксировано»; в форме фиксации гаснет — там фильтр не действует */}
+        {isWorking && sessionFiles !== undefined && (
+          <IconButton size="xs" active={chatOnly} disabled={mode === 'commit'}
+            title={chatOnly ? 'Показать все файлы' : 'Только файлы текущего чата'}
+            onClick={() => setChatOnly(v => !v)}>
+            <MessageSquareDot size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
         )}
         <IconSegmented<'list' | 'tree'>
           value={viewMode}
@@ -832,6 +873,48 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         </div>
       )}
 
+      {/* Полоса состояния списка — вплотную под шапкой, во всю ширину: список ниже
+          показывает НЕ полный git status, и без пометки читался бы как он.
+          Два случая, одна геометрия: включённый фильтр чата (accent) и открытый
+          неопубликованный коммит (серая). Выше не встать — на десктопе шапка панели
+          живёт снаружи (PanelHeaderSlot — портал в карточку). Крышки-закрытия нет:
+          фильтр снимается тем же тоглом в шапке, скоуп — выбором строки ниже */}
+      {(chatFilterOn || scopeCommit || isBranch) && (
+        <div style={{
+          flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, minHeight: 24,
+          padding: '0 4px 0 10px', fontSize: 11, fontFamily: FONT.sans, lineHeight: 1.35,
+          background: chatFilterOn ? C.accentLight : C.bgSelected,
+          borderBottom: `1px solid ${chatFilterOn ? C.accentMuted : C.border}`,
+          color: chatFilterOn ? C.accent : C.textSecondary,
+          whiteSpace: 'nowrap', overflow: 'hidden',
+        }}>
+          {/* Иконка та же, что у источника состояния (тогл в шапке / строка коммита /
+              строка ветки внизу) — полоса читается как его продолжение */}
+          {chatFilterOn ? <MessageSquareDot size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            : scopeCommit ? <GitCommit size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+              : <GitBranch size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+            title={scopeCommit?.subject}>
+            {chatFilterOn
+              ? `Только файлы этого чата · ${visibleRows.length} из ${workingFiles.length}`
+              : scopeCommit
+                ? `Неопубликованный коммит · ${scopeCommit.subject}`
+                : `История ветки · ${status?.branch ?? '—'}`}
+          </span>
+          {/* Закрытие просмотра — только в скоупах-«прошлом»: панель возвращается к
+              рабочему дереву. Крестик и его подсказка — тот же жест, что закрывает
+              форму фиксации ниже. У фильтра чата скоуп уже рабочий, закрывать нечего:
+              он снимается тоглом в шапке. Габарит кнопки (24) задаёт высоту полосы */}
+          {!chatFilterOn && (
+            <IconButton size="xs"
+              title={scopeCommit ? 'Закрыть просмотр коммита' : 'Закрыть историю ветки'}
+              onClick={() => selectScope('working')}>
+              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            </IconButton>
+          )}
+        </div>
+      )}
+
       {/* === Верхняя зона: файлы активного скоупа (видны всегда, даже при фиксации).
              Своей шапки у зоны нет — управление списком уехало в шапку карточки
              панели (см. headerControls выше) === */}
@@ -894,13 +977,17 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 </div>
               );
             })
-          ) : rows.length === 0 ? (
+          ) : visibleRows.length === 0 ? (
             <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
-              {isWorking ? 'Рабочее дерево чистое' : 'Нет файлов'}
+              {/* Фильтр чата спрятал все строки при непустом git status — говорим
+                  об этом явно, а не притворяемся чистым деревом */}
+              {isWorking
+                ? (chatFilterOn && rows.length > 0 ? 'Этот чат файлы не менял' : 'Рабочее дерево чистое')
+                : 'Нет файлов'}
             </div>
           ) : viewMode === 'tree'
             ? renderTree(tree, 0)
-            : rows.map(f => renderFileRow(f, 0, true))}
+            : visibleRows.map(f => renderFileRow(f, 0, true))}
         </div>
       </div>
 
@@ -1023,7 +1110,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                 {/* Счётчик файлов — всегда (при чистом дереве 0), перед кнопками:
                     сколько правок ждёт фиксации, видно и с раскрытыми действиями.
                     Ширина под compact-кнопку (24) — держит колонку правой меты */}
-                <span style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, width: 22, textAlign: 'center', flexShrink: 0 }}>{workingFiles.length}</span>
+                <span
+                  title={chatFilterOn ? `${visibleRows.length} из ${workingFiles.length}` : undefined}
+                  style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, width: 22, textAlign: 'center', flexShrink: 0 }}
+                >{chatFilterOn ? visibleRows.length : workingFiles.length}</span>
                 {/* Есть изменения и скоуп активен: отмена всех + «Зафиксировать».
                     Главное действие — крайним справа, разрушительное перед ним */}
                 {workingFiles.length > 0 && isWorking && (
@@ -1095,6 +1185,21 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
                   >
                     <GitCommit size={14} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />
                     <span title={c.subject} style={{ flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: active ? 600 : 400, color: active ? C.textHeading : C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{c.subject}</span>
+                    {/* Открыть коммит в центре — кнопкой ПЕРЕД хешом, а не кликом по
+                        строке: клик по строке выбирает скоуп (файлы коммита в верхней
+                        зоне), и второе действие ему не навесить. Видна по наведению И
+                        у выбранного коммита — иначе на тач-раскладке до неё не добраться,
+                        а после клика она исчезала бы из-под курсора. В потоке (не
+                        absolute, как у стэша): здесь она соседствует с хешом, а не
+                        замещает его, и flex:1 у заголовка абсорбирует ширину — строка
+                        не дёргается */}
+                    {(hovered || active) && (
+                      <IconButton size="xs" title="Открыть коммит"
+                        style={{ flexShrink: 0 }}
+                        onClick={e => { e.stopPropagation(); selectScope(c.sha); onOpenCommit(c.sha); }}>
+                        <FileDiff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                      </IconButton>
+                    )}
                     <span title={relTime(c.date)} style={{ fontFamily: FONT.mono, fontSize: 10, color: C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
                   </div>
                 );

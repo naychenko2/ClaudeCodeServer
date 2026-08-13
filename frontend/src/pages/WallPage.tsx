@@ -20,6 +20,8 @@ import { C, FONT, FS, ISLAND } from '../lib/design';
 import { useWindowWidth, MOBILE_MAX } from '../lib/breakpoints';
 import { setWallActive } from '../lib/wallMode';
 import { api } from '../lib/api';
+import { onMessage } from '../lib/signalr';
+import { markChatRead } from '../lib/chatReadState';
 import { HubHeader } from '../components/HubHeader';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { Button } from '../components/ui';
@@ -114,6 +116,32 @@ export function WallPage({ auth, onLogout, onHubTab, onExitWall }: Props) {
   // Смена фокуса закрывает оверлей: контент чужого проекта поверх нового фокуса — враньё
   // eslint-disable-next-line react-hooks/set-state-in-effect -- закрытие оверлея при смене фокусного чата
   useEffect(() => { setOverlay(null); }, [focused?.id]);
+
+  // Видимые колонки — на экране, значит прочитаны (как активный чат воркспейса).
+  // Без этого точка непрочитанности над номерком в доке стены не гасла: markChatRead
+  // зовётся только в WorkspacePage/ChatsPage, а стена живёт отдельным хабом. Ключ —
+  // join id: эффект срабатывает по смене СОСТАВА видимых, а не на каждый ререндер
+  // (при ходе чата chats пересоздаётся, но id те же — состав устойчив). Невлезшие
+  // (idx >= slots) чаты НЕ помечаем — их на экране нет, точка unread там уместна
+  const visibleKey = active ? visible.map(s => s.id).join('|') : '';
+  useEffect(() => {
+    if (!visibleKey) return;
+    for (const id of visibleKey.split('|')) markChatRead(id);
+  }, [visibleKey]);
+
+  // Видимый чат получает новые сообщения во время хода агента — он всё ещё на
+  // экране, копить непрочитанность не нужно. updatedAt при ходе не меняется (как в
+  // воркспейсе), поэтому гасим по событиям SignalR напрямую, а не ждём поллинга
+  useEffect(() => {
+    if (!visibleKey) return;
+    const set = new Set(visibleKey.split('|'));
+    return onMessage(msg => {
+      if (!set.has(msg.sessionId)) return;
+      if (msg.type === 'user_message' || msg.type === 'exited' || msg.type === 'status_changed') {
+        markChatRead(msg.sessionId);
+      }
+    });
+  }, [visibleKey]);
 
   // Открыть чат колонкой по id (ссылки из задач/командного центра): резолв через
   // api.chats.get (отдаёт любой чат владельца), в наборе — фокус, нет — добавление

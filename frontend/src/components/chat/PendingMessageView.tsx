@@ -12,6 +12,7 @@ import { ChevronDown, CloudOff, Inbox, User } from 'lucide-react';
 import { C, FONT, R, SP, FS } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { IconButton } from '../ui/IconButton';
+import { Button } from '../ui/Button';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { MarkdownContent } from './MarkdownContent';
 import { MessageOriginChip } from '../MessageOriginChip';
@@ -52,12 +53,14 @@ interface RowProps {
   item: PendingChatMessage;
   // Отмена доставки; undefined — нет связи, вместо крестика показываем причину
   onCancel?: (id: string) => void;
+  // Прервать идущий ход и доставить это сейчас; undefined — нет связи или ход уже кончился
+  onPreempt?: () => void;
   isMobile?: boolean;
   // Строка уходит (доставлена или отменена) — гасим её перед снятием с DOM
   leaving?: boolean;
 }
 
-function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
+function PendingMessageRow({ item, onCancel, onPreempt, isMobile, leaving }: RowProps) {
   // Лицо отправителя: в не-персон-чате стор мог быть не загружен
   useEffect(() => { void ensurePersonasLoaded(); }, []);
   const [open, setOpen] = useState(false);
@@ -183,12 +186,25 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
         </div>
       )}
       {open && isUser && (
-        // Свой ход в очереди: объясняем, почему карточка стоит, а не ушла в работу
+        // Свой ход в очереди: объясняем, почему карточка стоит, а не ушла в работу, и даём
+        // явный перебой. Отправка сама ход не прерывает (иначе сделанная им работа и токены
+        // выбрасываются) — «не жди, начинай сейчас» это отдельное осознанное действие.
         <div style={{
           padding: `0 ${SP.md}px ${SP.sm}px ${isMobile ? SP.md : 38}px`,
+          display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
           fontSize: FS.xs, color: C.textMuted,
         }}>
-          Уйдёт в работу, когда Claude закончит текущий шаг
+          <span>Уйдёт в работу, когда Claude закончит текущий шаг</span>
+          {onPreempt && (
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={e => { e.stopPropagation(); onPreempt(); }}
+              title="Оборвать текущий ход, не дожидаясь его конца, и отправить это сообщение сейчас"
+            >
+              Прервать и отправить
+            </Button>
+          )}
         </div>
       )}
       {open && !full && item.text.length > 220 && (
@@ -211,12 +227,14 @@ function PendingMessageRow({ item, onCancel, isMobile, leaving }: RowProps) {
 interface Props {
   items: PendingChatMessage[];
   onCancel?: (id: string) => void;
+  // Прервать ход ради очереди; undefined — нет связи или ход уже не идёт
+  onPreempt?: () => void;
   isMobile?: boolean;
 }
 
 // Держит ушедшие строки лишние 150мс, чтобы доставка/отмена не выглядела мгновенной
 // подменой. Сервер шлёт очередь полным снимком, поэтому «ушедшие» вычисляются здесь.
-export function PendingMessageList({ items, onCancel, isMobile }: Props) {
+export function PendingMessageList({ items, onCancel, onPreempt, isMobile }: Props) {
   const [leavingIds, setLeavingIds] = useState<string[]>([]);
   const [shown, setShown] = useState(items);
   const prevRef = useRef(items);
@@ -241,13 +259,17 @@ export function PendingMessageList({ items, onCancel, isMobile }: Props) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs, marginTop: SP.sm }}>
-      {shown.map(p => (
+      {shown.map((p, i) => (
         <PendingMessageRow
           key={p.id}
           item={p}
           isMobile={isMobile}
           leaving={leavingIds.includes(p.id)}
           onCancel={onCancel}
+          // Перебой доставляет ГОЛОВУ очереди (DrainNextPendingAsync), а не ту строку, что
+          // раскрыл пользователь — поэтому кнопка только у первой. Иначе «отправить это
+          // сейчас» на второй реплике отправляло бы первую.
+          onPreempt={i === 0 ? onPreempt : undefined}
         />
       ))}
     </div>

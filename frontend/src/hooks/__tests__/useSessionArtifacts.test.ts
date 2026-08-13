@@ -5,6 +5,7 @@ import {
   computeAgents,
   computeArtifacts,
   countFiles,
+  computeChangedPaths,
 } from '../useSessionArtifacts';
 
 // --- Фикстуры ChatItem ---
@@ -391,5 +392,37 @@ describe('countFiles', () => {
 
   it('пустая лента → 0', () => {
     expect(countFiles([], ROOT)).toBe(0);
+  });
+});
+
+describe('computeChangedPaths', () => {
+  it('file_changed попадает, включая external=true (Bash/скрипты модели)', () => {
+    const items: ChatItem[] = [
+      fileChanged('src/App.tsx'),
+      { kind: 'file_changed', path: 'scripts/gen.ps1', added: 3, removed: 0, external: true },
+    ];
+    const set = computeChangedPaths(items, ROOT);
+    expect(set.has('src/app.tsx')).toBe(true);
+    expect(set.has('scripts/gen.ps1')).toBe(true);
+  });
+
+  it('путь из Write попадает (относительным к корню)', () => {
+    const items = [tool('Write', { file_path: 'C:\\Sources\\MyProject\\src\\new.ts' })];
+    expect(computeChangedPaths(items, ROOT).has('src/new.ts')).toBe(true);
+  });
+
+  it('путь, лишь упомянутый в тексте ответа, НЕ попадает', () => {
+    const items = [text('Посмотри src/lib/api.ts — там причина')];
+    expect(computeChangedPaths(items, ROOT).size).toBe(0);
+  });
+
+  it('нормализация: регистр, обратные слэши и префикс ./ сводятся к одному ключу', () => {
+    const items: ChatItem[] = [
+      fileChanged('.\\src\\App.tsx'),
+      tool('Edit', { file_path: 'C:\\Sources\\MyProject\\SRC\\app.tsx' }),
+    ];
+    const set = computeChangedPaths(items, ROOT);
+    expect(set.size).toBe(1);
+    expect(set.has('src/app.tsx')).toBe(true);
   });
 });

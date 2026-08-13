@@ -47,6 +47,8 @@ import { WallPage } from './pages/WallPage'
 import { SpendPage } from './features/spend/SpendPage'
 import { TelemetryPage } from './features/telemetry/TelemetryPage'
 import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
+import { useUiInspector, setUiInspectorAdmin, wireUiInspectorHotkey } from './lib/uiInspector'
+import { UiInspectorOverlay } from './features/inspector/UiInspectorOverlay'
 
 const OPEN_PROJECT_KEY = 'cc_open_project'
 const HUB_TAB_KEY = 'cc_hub_tab'
@@ -372,6 +374,12 @@ export default function App() {
   }, [online])
 
   useEffect(() => { initConnectivity() }, [])
+
+  // UI-инспектор (admin-only): хоткей Ctrl+Alt+I регистрируется один раз, admin-флаг
+  // стора следует за ролью (logout гасит и флаг, и включённый режим)
+  const uiInspectorOn = useUiInspector()
+  useEffect(() => { wireUiInspectorHotkey() }, [])
+  useEffect(() => { setUiInspectorAdmin(auth?.role === 'admin') }, [auth?.role])
 
   // Ctrl+A/Ctrl+C по «активному документу» (файл, заметка, последний ответ в чате)
   useEffect(() => installSelectionScopes(), [])
@@ -1042,6 +1050,9 @@ export default function App() {
           AI-кнопка перекрывала бы его контролы в правом нижнем углу — прячем её там */}
       {auth && !authChecking && effectiveHubTab !== 'telemetry' && <AiLauncher />}
       {auth && aiSearchOpen && <GlobalSearch onClose={() => setAiSearchOpen(false)} />}
+      {/* Оверлей UI-инспектора — в общем хвосте, ПОСЛЕ ранних return'ов (#/ui-kit,
+          #/boot, #/boom, #/team-plan-sim): на dev-витринах режим осознанно не работает */}
+      {uiInspectorOn && <UiInspectorOverlay />}
     </>
   )
 }

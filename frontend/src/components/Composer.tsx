@@ -396,6 +396,12 @@ export function Composer({
   // Преднастройка из раздела «Заметки»: «Спросить Claude про это» кладёт контекст
   // заметки в sessionStorage — забираем при появлении композера и по событию
   // (на случай, если чат уже открыт и композер смонтирован).
+  // sessionId в deps: в воркспейсе смена чата НЕ ремоунтит композер (ChatPanel без key
+  // по сессии), а затравка нового чата (startChatInProject при открытом чате того же
+  // проекта) кладётся в sessionStorage до переключения — без повторного consume она бы
+  // молча терялась. Функциональный апдейтер обязателен: он применяется в очереди ПОСЛЕ
+  // плоского setText(getDraft(...)) из эффекта черновика выше и заполняет только пустое
+  // поле; проверка text из замыкания дала бы stale-значение.
   useEffect(() => {
     const consume = () => {
       const pending = sessionStorage.getItem('cc_pending_chat_prompt');
@@ -404,7 +410,7 @@ export function Composer({
     consume();
     window.addEventListener('cc-compose-prefill', consume);
     return () => window.removeEventListener('cc-compose-prefill', consume);
-  }, []);
+  }, [sessionId]);
   // Возврат прерванного сообщения по «Стоп» (фича «честная очередь», событие composer_restore).
   // Только в ПУСТОЕ поле: набранный черновик пользователя важнее серверного restore.
   // Гейт читает сохранённый черновик ЭТОГО чата — тот же источник, что и гейт режима

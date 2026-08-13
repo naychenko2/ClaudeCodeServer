@@ -3,10 +3,11 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, Palette, Activity, Plug } from 'lucide-react';
+import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, Palette, Activity, Plug, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
+import { toggleUiInspector, useUiInspector } from '../../lib/uiInspector';
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: 'Светлая' },
@@ -70,6 +71,8 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
   const themeMode = useThemeMode();
   // Флаг мог подняться, пока меню закрыто — перечитываем на каждом открытии
   const [micFallback, setMicFallback] = useState(false);
+  // Режим UI-инспектора — подсветка пункта, пока режим включён
+  const inspectorOn = useUiInspector();
 
   const toggleOpen = () => {
     setOpen(o => {
@@ -208,7 +211,19 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               style={dropdownItem}
             >
               <Palette size={ICON_SIZE.xs} strokeWidth={2} />
-              Витрина дизайн-системы (dev)
+              Витрина-дизайна
+            </button>
+          )}
+          {/* Инспектор UI (admin-only): тумблер зовёт модульный стор напрямую —
+              оверлей монтирует App, цепочка пропсов не нужна */}
+          {isAdmin && (
+            <button
+              onClick={() => { setOpen(false); toggleUiInspector(); }}
+              title="Ctrl+Alt+I"
+              style={inspectorOn ? { ...dropdownItem, color: C.accent } : dropdownItem}
+            >
+              <SquareDashedMousePointer size={ICON_SIZE.xs} strokeWidth={2} />
+              Инспектор UI
             </button>
           )}
           {onShowHistory && (

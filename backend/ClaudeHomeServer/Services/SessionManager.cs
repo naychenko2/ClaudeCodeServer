@@ -104,15 +104,24 @@ public class SessionManager : IDisposable
         // AdapterStale и создавали два адаптера → два claude --resume на один транскрипт.
         public readonly SemaphoreSlim EnsureLock = new(1, 1);
         // Сообщения (агентов — chats_send, пользователя — «честная очередь»), пришедшие в
-        // занятую сессию: постановка прерывает текущий ход (enqueue + interrupt), и сообщение
-        // доставляется по его концу; агентские ход в цикле «до готово» и в штабе не прерывают —
-        // там они ждут конца цикла и штатного конца хода соответственно.
+        // занятую сессию, и доставляемые по концу текущего хода. Пользовательские ход НЕ
+        // прерывают (отправка ≠ остановка, как в claude CLI) — кроме случаев, когда ждать
+        // нечего: ход стоит на вопросе человеку (Waiting) или идёт цикл «до готово».
+        // Агентские (chats_send) прерывают обычный ход — ждущий их агент упрётся в таймаут, —
+        // но ход в цикле «до готово» и в штабе не рушат: там они ждут конца цикла и штатного
+        // конца хода соответственно. Явный перебой по кнопке — PreemptForPending.
         // Только в памяти — при рестарте сессия и так становится Orphaned, доставлять
         // накопленное в умерший контекст незачем. QueueFrozen — «Стоп» заморозил разбор:
         // автодоставки нет до возобновления пользователем (новое сообщение).
         public readonly List<QueuedMessage> Pending = [];
         public readonly Lock PendingLock = new();
         public volatile bool QueueFrozen;
+        // Прогон, в котором идёт сворачивание контекста (/compact). Обычный ход, но обёртка
+        // фолбэка его не оркеструет, а exited убитой компакции глотает — поэтому прерывать
+        // компакцию нельзя (чат залип бы в Working навсегда). Хранится идентификатор прогона,
+        // а не флаг (та же причина, что у DrainOnExitedRun): поздний терминал ЧУЖОГО
+        // доживающего прогона иначе снял бы защиту с идущей компакции. 0 — компакции нет.
+        public long CompactRun;
         // Идентификатор текущего прогона адаптера: колбэк КАЖДОГО прогона несёт свой,
         // поэтому exited доживающего процесса отличим от exited текущего (см. LoopTurnInFlight —
         // exited опаздывает до ~30 мин). Присваивается вместе с Process.
@@ -191,8 +200,11 @@ public class SessionManager : IDisposable
     // Исход постановки пользовательского сообщения (Hub SendMessage возвращает клиенту):
     // Started — ход запущен сразу; Queued — чат занят/очередь непуста, сообщение встало в
     // серверную очередь и уйдёт по FIFO (оптимистичный баллон рисовать не надо — придёт
-    // снимок pending_messages, а доставленное вернётся событием user_message).
-    public enum SendUserOutcome { Started, Queued }
+    // снимок pending_messages, а доставленное вернётся событием user_message);
+    // QueuedPreempted — то же, но идущий ход при этом пришлось прервать (ждал человека либо
+    // шёл цикл «до готово»). Клиенту это нужно знать: убитый ход пришлёт голый exited, и без
+    // отметки о прерывании лента нарисует ложную аварию «AI завершился неожиданно».
+    public enum SendUserOutcome { Started, Queued, QueuedPreempted }
 
     // Потолок очереди на сессию: агент может ретраить, а занятый чат — стоять долго.
     // Переполнение — честный отказ вызывающему, а не молчаливая потеря.
@@ -2448,9 +2460,13 @@ public class SessionManager : IDisposable
 
     // Приём сообщения от пользователя (Hub SendMessage) и серверных отправок (авто-ходы).
     // Пользовательское сообщение в занятом чате встаёт в видимую серверную очередь
-    // (pending_messages) и тут же прерывает текущий ход — доставляется немедленно по его
-    // концу, а не после пассивного ожидания. Возвращаемый исход (Started/Queued) говорит
-    // клиенту, рисовать ли оптимистичный баллон.
+    // (pending_messages) и ЖДЁТ штатного конца хода — доставку разбирает drain по result.
+    // Идущий ход при этом НЕ убивается (поведение claude CLI: отправка ≠ остановка): kill
+    // посреди хода выбрасывал сделанную работу и оплаченные токены, оставлял tool_use без
+    // tool_result в транскрипте и рваные правки в проекте, а пользователь в 9 случаях из 10
+    // дописывает уточнение, а не просит остановиться. Для «перебить сейчас» есть явные
+    // действия: кнопка «Стоп» и PreemptForPending (кнопка на карточке очереди).
+    // Возвращаемый исход (Started/Queued) говорит клиенту, рисовать ли оптимистичный баллон.
     public async Task<SendUserOutcome> SendMessageAsync(string sessionId, string text, IReadOnlyList<string> attachedPaths, string? mode = null, bool systemDirective = false, bool auto = false, string? senderPersonaId = null, bool suppressTasksExecute = false, string? senderOrigin = null, string? staffNote = null, DeliveryCause cause = DeliveryCause.Unknown)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry))
@@ -2486,15 +2502,16 @@ public class SessionManager : IDisposable
             ResumeTeamFromDecisionOnUserInput(sessionId, entry);
 
             // Занятый чат (ход в полёте) ИЛИ активный цикл «до готово»: сообщение встаёт в
-            // видимую очередь (pending_messages). При идущем ходе — сразу его прерывает,
-            // доставка идёт по exited прерванного прогона. Цикл при этом НЕ снимается
-            // (решение владельца 2026-08-08): пользовательское сообщение само продолжит цикл
-            // как следующую итерацию (между итерациями — форсирует dispatchNow, при живом
-            // ходе — exited после прерывания). Сбрасываем LoopTurnInFlight синхронно с
-            // interrupt: прерванный ход result не пришлёт, и взведённый маркер иначе
-            // заблокировал бы разбор очереди (drain уступает, пока LoopTurnInFlight).
+            // видимую очередь (pending_messages) и ждёт конца хода — разбор по result
+            // (см. drain в OnMessageAsync). Цикл при этом НЕ снимается (решение владельца
+            // 2026-08-08): пользовательское сообщение само продолжит цикл как следующую
+            // итерацию (между итерациями — форсирует dispatchNow, при живом ходе — по
+            // прерыванию, см. ниже).
             var loopActive = entry.Info.WorkLoop is not null;
-            var turnInFlight = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting;
+            // Снимок статуса: ниже он решает, ждать ход или прерывать, а перечитывание дало бы
+            // уже статус собственной доставки (см. про Dispatched)
+            var statusSnapshot = entry.Info.Status;
+            var turnInFlight = statusSnapshot is SessionStatus.Working or SessionStatus.Waiting;
             if (loopActive || turnInFlight)
             {
                 // Потолок очереди проверяем ДО побочных эффектов: разморозка очереди на отказе
@@ -2517,36 +2534,35 @@ public class SessionManager : IDisposable
                 if (enqueued is SendAndWaitResult.QueueFull f)
                     throw new InvalidOperationException(
                         $"В очереди чата уже {f.Limit} сообщений — дождитесь, пока она разберётся");
-                // Прерываем идущий ход: убитый процесс не даёт result, поэтому очередь
-                // разберёт exited (по DrainOnExitedRun прерванного прогона). Занятость — по
-                // снимку ДО постановки: свободный между итерациями цикла чат прерывать нечего
-                // (доставку форсирует dispatchNow), а перечитывание статуса ЗДЕСЬ увидело бы
-                // Working уже своего только что доставленного dispatchNow'ом хода и убило бы
-                // его. Тот же ход мог быть доставлен и форсажем самой постановки (Dispatched):
-                // сообщение уже в работе — прерывать нечего, иначе убьём собственный ход.
-                if (turnInFlight && enqueued is not SendAndWaitResult.Queued { Dispatched: true })
+                // Ход прерываем ТОЛЬКО там, где ожидание его конца бессмысленно:
+                //  • Waiting — ход стоит на запросе разрешения/вопросе к человеку и сам не
+                //    закончится никогда; текст вместо ответа на диалог означает, что отвечать
+                //    на него не будут, и без прерывания сообщение висело бы в очереди вечно;
+                //  • активный цикл «до готово» — сообщение человека становится следующей
+                //    итерацией (решение владельца 2026-08-08), ждать конца цикла ему незачем.
+                // Обычный Working не трогаем: ход доживает сам, очередь разберёт его result.
+                // Занятость и статус — по снимку ДО постановки: свободный между итерациями
+                // цикла чат прерывать нечего (доставку форсирует dispatchNow), а перечитывание
+                // статуса ЗДЕСЬ увидело бы Working уже своего только что доставленного
+                // dispatchNow'ом хода и убило бы его. Тот же ход мог быть доставлен и форсажем
+                // самой постановки (Dispatched): сообщение уже в работе — прерывать нечего,
+                // иначе убьём собственный ход.
+                // Снимок статуса устарел, пока шла постановка: ход, стоявший на карточке
+                // разрешения, мог получить ответ из другой вкладки, дойти до result, и штатный
+                // drain уже унёс НАШЕ же сообщение в новый ход. Убивать его — потерять
+                // доставленное (метка разбора отработает по пустой очереди). Поэтому перед
+                // kill сверяемся с текущим состоянием: ждущий ход всё ещё ждёт, а очередь
+                // ещё не разобрана. Для цикла «до готово» такой сверки нет — там прерывание
+                // не привязано к Waiting и ход в любом случае продолжится нашей итерацией.
+                var stillPreemptable = loopActive
+                    || (entry.Info.Status is SessionStatus.Waiting && HasPending(entry));
+                if (turnInFlight
+                    && (loopActive || statusSnapshot is SessionStatus.Waiting)
+                    && stillPreemptable
+                    && enqueued is not SendAndWaitResult.Queued { Dispatched: true })
                 {
-                    // Ход штаба «Командной реализации» убит — result по нему не придёт, а с ним
-                    // не придёт и HandleTeamTurnEndAsync, который потребляет буфер маркеров.
-                    // Чистим синхронно: иначе маркер мёртвого хода склеился бы с текстом
-                    // следующего и применился задним числом — фантомная эскалация и сдвиг
-                    // стадии (класс «волны-призрака»).
-                    if (entry.Info.TeamImplement is not null)
-                    {
-                        lock (entry.TeamTurnLock)
-                        {
-                            entry.TeamTurnText.Clear();
-                            entry.TeamTurnShownLength = 0;
-                            entry.TeamTurnAsked = false;
-                        }
-                        entry.SkipNextTeamTurnEnd = false;
-                    }
-                    // Прерванный ход result не пришлёт — погасим маркер итерации цикла, иначе
-                    // он заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
-                    entry.LoopTurnInFlight = false;
-                    entry.DrainOnExitedRun = entry.RunId;
-                    _log.LogInformation("Interrupt адаптера {Session}: callsite=user-message (preempt хода пользователя)", sessionId);
-                    entry.Process?.Interrupt();
+                    PreemptTurnForQueue(sessionId, entry, "user-message (preempt хода пользователя)");
+                    return SendUserOutcome.QueuedPreempted;
                 }
                 return SendUserOutcome.Queued;
             }
@@ -3068,6 +3084,61 @@ public class SessionManager : IDisposable
         lock (entry.PendingLock) return entry.Pending.ToList();
     }
 
+    // Прервать идущий ход РАДИ очереди: убитый процесс result не пришлёт, поэтому доставку
+    // разберёт exited того же прогона (DrainOnExitedRun). В отличие от «Стоп» очередь НЕ
+    // морозится — прерывание здесь и есть требование доставить ждущее сообщение сейчас.
+    private void PreemptTurnForQueue(string sessionId, SessionEntry entry, string callsite)
+    {
+        // Ход штаба «Командной реализации» убит — result по нему не придёт, а с ним не придёт
+        // и HandleTeamTurnEndAsync, который потребляет буфер маркеров. Чистим синхронно: иначе
+        // маркер мёртвого хода склеился бы с текстом следующего и применился задним числом —
+        // фантомная эскалация и сдвиг стадии (класс «волны-призрака»).
+        if (entry.Info.TeamImplement is not null)
+        {
+            lock (entry.TeamTurnLock)
+            {
+                entry.TeamTurnText.Clear();
+                entry.TeamTurnShownLength = 0;
+                entry.TeamTurnAsked = false;
+            }
+            entry.SkipNextTeamTurnEnd = false;
+        }
+        // Прерванный ход result не пришлёт — погасим маркер итерации цикла, иначе он
+        // заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
+        entry.LoopTurnInFlight = false;
+        entry.DrainOnExitedRun = entry.RunId;
+        _log.LogInformation("Interrupt адаптера {Session}: callsite={Callsite}", sessionId, callsite);
+        entry.Process?.Interrupt();
+    }
+
+    // Явное «прервать ход и доставить ждущее сейчас» (кнопка на карточке очереди). Отдельно
+    // от «Стоп»: тот морозит очередь и возвращает сообщение в композер, а здесь наоборот —
+    // очередь разбирается сразу по exited. Без живого хода и без очереди делать нечего:
+    // холостой kill убил бы чужой только что стартовавший ход. false — прерывать было нечего.
+    public bool PreemptForPending(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        if (entry.Info.Status is not (SessionStatus.Working or SessionStatus.Waiting)) return false;
+        // Живого прогона нет — убивать нечего, exited не придёт, а взведённая метка разбора
+        // осталась бы висеть. Два случая, и оба должны получить честный отказ:
+        //  • чат залип в Working/Waiting (ход убил ватчдог/сбой либо статус выставил протухший
+        //    ответ на карточку) — реанимирует его «Стоп», клиенту подскажет 409;
+        //  • окно ротации фолбэка (OrchestrationActive без прогона): Interrupt внутреннего
+        //    адаптера там no-op, придержанного терминала у попытки нет (Held очищен при
+        //    SwallowCleanup), и SettleAsync вынесет наружу пустоту — ни exited, ни доставки.
+        if (entry.Process is null or { HasLiveTurn: false }) return false;
+        // Идёт сворачивание контекста: это тоже ход (CompactAsync → QueueTurnAsync), но обёртка
+        // фолбэка его не оркеструет (_turn == null), и exited убитой компакции она ГЛОТАЕТ —
+        // до SessionManager не дойдёт ничего. Перебой оставил бы чат в вечном Working с
+        // застрявшей очередью, поэтому отказываем: компакция короткая, её стоит дождаться.
+        if (entry.CompactRun != 0 && entry.CompactRun == entry.RunId) return false;
+        if (entry.QueueFrozen) return false;
+        lock (entry.PendingLock)
+            if (entry.Pending.Count == 0) return false;
+        PreemptTurnForQueue(sessionId, entry, "pending-preempt (кнопка «прервать и отправить»)");
+        return true;
+    }
+
     // Отменить ожидающее сообщение (крестик на карточке-призраке). false — уже доставлено.
     public async Task<bool> CancelPendingAsync(string sessionId, string messageId)
     {
@@ -3346,6 +3417,12 @@ public class SessionManager : IDisposable
             return entry.Pending.Any(p => p.Kind == PendingKind.User);
     }
 
+    private static bool HasPending(SessionEntry entry)
+    {
+        lock (entry.PendingLock)
+            return entry.Pending.Count > 0;
+    }
+
     // Снимок для replay при JoinSession (без служебных)
     public IReadOnlyList<PendingMessageDto> GetVisiblePending(string sessionId) =>
         _sessions.TryGetValue(sessionId, out var entry) ? VisiblePending(entry) : [];
@@ -3364,7 +3441,14 @@ public class SessionManager : IDisposable
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
-        await entry.Process!.CompactAsync();
+        // Метка «идёт компакция» — её читает PreemptForPending: прерывать компакцию нельзя,
+        // её exited глотает обёртка фолбэка. Гасится на конце хода в OnMessageAsync — но
+        // только терминалом ЭТОГО прогона, поэтому и метка хранит его идентификатор.
+        // Ход не стартовал (адаптер отвалился на запуске compact) — снимаем сразу: терминала
+        // не будет, а повисшая метка запретила бы перебой в этом чате навсегда.
+        entry.CompactRun = entry.RunId;
+        try { await entry.Process!.CompactAsync(); }
+        catch { entry.CompactRun = 0; throw; }
     }
 
     // После перезапуска сервера Process может быть null — восстанавливаем сессию
@@ -7160,14 +7244,45 @@ public class SessionManager : IDisposable
             // Привязка к прогону обязательна: exited доживающего чужого прогона приходит с
             // опозданием до ~30 мин и увёл бы сообщение в умирающий от interrupt адаптер.
             // На штатном конце хода метка гасится — иначе поздний exited этого же прогона
-            // доставил бы второе сообщение параллельно уже запущенному ходу. Аварийная смерть
-            // процесса (exited без предшествующего result и без метки) очередь не разбирает —
-            // она остаётся ждать следующего пользовательского хода. В фоне — как и work-loop,
-            // чтобы не держать read-loop адаптера.
+            // доставил бы второе сообщение параллельно уже запущенному ходу. В фоне — как и
+            // work-loop, чтобы не держать read-loop адаптера.
+            // Компакт-ход кончился (штатно или обрывом) — метка своё отработала. Гейт по
+            // прогону обязателен, как у DrainOnExitedRun ниже: exited чужого доживающего
+            // прогона (опаздывает до ~30 мин) иначе снял бы защиту с ЖИВОЙ компакции, и
+            // PreemptForPending убил бы её — ровно тот вечный Working, ради которого метка и есть.
+            if (msg is ResultMessage or ErrorMessage or ExitedMessage && runId != 0 && entry.CompactRun == runId)
+                entry.CompactRun = 0;
+
             var drainOnExited = msg is ExitedMessage && runId != 0 && entry.DrainOnExitedRun == runId;
             if (msg is ResultMessage or ErrorMessage or ExitedMessage && entry.DrainOnExitedRun == runId)
                 entry.DrainOnExitedRun = 0;
-            if (drainOnExited
+            // Прогон умер без result (кнопка «Стоп», смерть процесса, ватчдог), а очередь
+            // непуста. Раньше эту дыру закрывала метка: её ставила КАЖДАЯ постановка
+            // пользовательского сообщения, потому что она же и убивала ход. Теперь обычная
+            // отправка ход не трогает, и без разбора здесь сообщение висело бы призраком до
+            // следующей отправки (ходовой случай: «Стоп» → сразу отправить исправленный текст,
+            // пока exited убитого хода ещё в пути). Гейты: свой прогон (поздний exited чужого
+            // доживающего очередь не трогает), у адаптера нет живого прогона CLI и очередь не
+            // заморожена — заморозку «Стоп» снимает только возобновление пользователем.
+            //
+            // Смотрим ИМЕННО HasLiveTurn, не статус и не Busy — оба здесь ложны:
+            //  • статус exited уже сбросил Working→Active выше по методу (ApplyStatusAsync);
+            //  • Busy включает OrchestrationActive, а боевой адаптер — всегда обёртка
+            //    FallbackLlmSessionAdapter, которая отдаёт придержанный exited вниз из
+            //    SettleAsync и обнуляет _turn лишь в finally ПОСЛЕ нас: гейт по Busy не
+            //    срабатывал бы никогда (найдено на ревью).
+            // ClaudeSession обнуляет _run ДО отправки exited, поэтому у мёртвого прогона
+            // HasLiveTurn=false, а при уже запущенном следующем ходе — true (второй ход
+            // параллельно не уйдёт). Если разбор всё же попадёт в окно живой оркестрации,
+            // доставка не потеряется: SendMessageAsync обёртки вернёт ход в Pending через
+            // EnqueueBypass, а её finally добьёт разбор сигналом _orchestrationDone. Известное
+            // ограничение этой страховки: EnqueueBypassTurn кладёт ход обратно как агентский и
+            // теряет Mode — то есть пользовательское сообщение, попавшее в это редкое окно,
+            // доедет пузырём «Автоматически» и без своего режима.
+            // Дубль с разбором по метке безопасен: DrainInFlight пропустит второй заход.
+            var drainOnDeadRun = msg is ExitedMessage && runId != 0 && runId == entry.RunId
+                && !entry.QueueFrozen && entry.Process is not { HasLiveTurn: true } && HasPending(entry);
+            if (drainOnExited || drainOnDeadRun
                 || (msg is ResultMessage or ErrorMessage && !entry.LoopTurnInFlight
                     && (entry.Info.WorkLoop is null || HasUserPending(entry))))
             {

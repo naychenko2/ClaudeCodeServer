@@ -20,7 +20,7 @@ import { RAIL_W } from './RailCapsule';
 // узнать про палец — useCanHover: media query на планшете с клавиатурой врёт, см.
 // lib/pointer.
 export function RailIconButton({
-  side, label, action, active, disabled, variant, wrapper, hoverSuppressed, onClick, onHoverChange, children,
+  side, label, hint, action, active, disabled, variant, wrapper, hoverSuppressed, onClick, onHoverChange, children,
 }: {
   side: 'left' | 'right';
   // media — внутри картинка (иконка проекта), а не штриховой глиф; см. IconButton
@@ -28,6 +28,10 @@ export function RailIconButton({
   // Текст подписи. Он же имя кнопки для скринридера — нативный тултип не ставится,
   // иначе подсказка приезжала бы дважды.
   label: string;
+  // Подзаголовок-расшифровка под названием в плашке (что значит число-кружок).
+  // Строка или список линий с тоном; в ariaLabel сцепляем с названием — на таче плашки
+  // нет, и скринридер так дочитает.
+  hint?: string | readonly { text: string; tone?: 'accent' | 'muted' }[];
   // Кнопка внутри подписи (у иконки проекта — настройки). Не задана — подпись просто
   // называет кнопку.
   action?: RailFlyoutAction;
@@ -54,6 +58,9 @@ export function RailIconButton({
     setHover(v);
     onHoverChange?.(v);
   };
+  const ariaLabel = hint
+    ? `${label}: ${typeof hint === 'string' ? hint : hint.map(l => l.text).join(', ')}`
+    : label;
   return (
     <span
       {...wrapper}
@@ -64,11 +71,12 @@ export function RailIconButton({
       <RailFlyout
         side={side}
         label={label}
+        hint={hint}
         open={hover && !hoverSuppressed}
         action={action}
         railWidth={RAIL_W}
       >
-        <IconButton size="md" variant={variant} onClick={onClick} active={active} disabled={disabled} ariaLabel={label}>
+        <IconButton size="md" variant={variant} onClick={onClick} active={active} disabled={disabled} ariaLabel={ariaLabel}>
           {typeof children === 'function' ? children(hover) : children}
         </IconButton>
       </RailFlyout>

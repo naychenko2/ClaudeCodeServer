@@ -3,7 +3,7 @@
 // заметку через MCP или другое устройство) — стор перечитывает список и бампает
 // версию, по которой граф и открытая заметка перезапрашиваются.
 
-import { useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import type { NoteSummary, NoteFolder } from '../types';
 import { api } from './api';
 import { joinUser, onMessage, onReconnected } from './signalr';
@@ -126,6 +126,30 @@ export function useNotesVersion(): number {
 // вики-ссылок от «призрачных» при рендере markdown.
 export function existingTitleSet(notes: NoteSummary[]): Set<string> {
   return new Set(notes.map(n => n.title.trim().toLowerCase()));
+}
+
+// Группировка заметок проекта по привязанному файлу (frontmatter file:) —
+// чистая функция, покрыта notesByFile.test.ts. Ключ — путь от корня проекта
+// (forward slashes, как отдаёт бэкенд); только заметки source === projectId,
+// чтобы одинаковые пути разных проектов не склеивались.
+export function groupNotesByFile(notes: NoteSummary[], projectId: string): Map<string, NoteSummary[]> {
+  const map = new Map<string, NoteSummary[]>();
+  for (const n of notes) {
+    if (n.source !== projectId || !n.file) continue;
+    const key = n.file.replace(/\\/g, '/');
+    const arr = map.get(key);
+    if (arr) arr.push(n); else map.set(key, [n]);
+  }
+  return map;
+}
+
+// Привязки «файл проекта → заметки о нём» — обратный индикатор для дерева файлов,
+// FileViewer и панели «Заметки». ensureNotesLoaded — внутри (идемпотентный): хук
+// работает и там, где раздел заметок ещё не открывали (стена проекта, воркспейс).
+export function useNotesByFile(projectId: string): Map<string, NoteSummary[]> {
+  useEffect(() => { void ensureNotesLoaded(); }, []);
+  const notes = useNotes();
+  return useMemo(() => groupNotesByFile(notes, projectId), [notes, projectId]);
 }
 
 // Локально применить изменения после собственных мутаций (realtime продублирует).

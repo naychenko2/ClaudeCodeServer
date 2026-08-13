@@ -465,4 +465,60 @@ public class NotesServiceTests : IDisposable
         var updated = _sut.LinkMention(User, note.Id, "Гамма")!;
         updated.Content.Should().Contain("[[Гамма|гамма]]");
     }
+
+    // ─── Привязка к файлу проекта (frontmatter file:) ────────────────────────
+
+    [Fact]
+    public void ParseFrontmatter_ПолеFile_ПарситсяИНормализуетСлеши()
+    {
+        var fm = NotesService.ParseFrontmatter("---\nfile: src\\Services\\Program.cs\n---\nтело", "fallback");
+        fm.File.Should().Be("src/Services/Program.cs");
+
+        NotesService.ParseFrontmatter("---\nfile: \"docs/readme.md\"\n---\n", "x")
+            .File.Should().Be("docs/readme.md");
+        NotesService.ParseFrontmatter("без frontmatter", "x").File.Should().BeNull();
+    }
+
+    [Fact]
+    public void FileRef_ПроектнаяОтдаётПоле_ЛичнаяНет()
+    {
+        var project = _projects.Create("Привязки", Path.Combine(_dir, "fileref"), User, "u1", createDirectory: true);
+        Directory.CreateDirectory(Path.Combine(_dir, "fileref", "notes"));
+        // Настоящий файл проекта — привязка на него не считается битой
+        Directory.CreateDirectory(Path.Combine(_dir, "fileref", "src"));
+        File.WriteAllText(Path.Combine(_dir, "fileref", "src", "Program.cs"), "// код");
+
+        var body = "---\nfile: src/Program.cs\n---\nзаметка о файле";
+        File.WriteAllText(Path.Combine(_dir, "fileref", "notes", "Оживую.md"), body);
+        File.WriteAllText(Path.Combine(_dir, "fileref", "notes", "Обитую.md"), "---\nfile: src/Нет.cs\n---\nбитая привязка");
+        WriteNote("Личная", body);   // то же поле в личном vault — отбрасывается
+
+        var all = _sut.GetSummaries(User, null, null);
+        var alive = all.Single(n => n.Title == "Оживую");
+        alive.File.Should().Be("src/Program.cs");
+        alive.FileMissing.Should().BeFalse();
+
+        var broken = all.Single(n => n.Title == "Обитую");
+        broken.File.Should().Be("src/Нет.cs");
+        broken.FileMissing.Should().BeTrue();
+
+        all.Single(n => n.Title == "Личная").File.Should().BeNull();
+        _sut.GetDetail(User, all.Single(n => n.Title == "Личная").Id)!.File.Should().BeNull();
+        _sut.GetDetail(User, alive.Id)!.File.Should().Be("src/Program.cs");
+    }
+
+    [Fact]
+    public void Create_СПолемFile_ИнжектитFrontmatterТолькоУПроектной()
+    {
+        var project = _projects.Create("Инжект", Path.Combine(_dir, "inj"), User, "u1", createDirectory: true);
+
+        var proj = _sut.Create(User, new CreateNoteRequest("О файле", null, project.Id, File: "src\\App.cs"));
+        proj.File.Should().Be("src/App.cs");
+        proj.Content.Should().StartWith("---").And.Contain("file: src/App.cs");
+
+        // source=personal — поле игнорируется (согласованно с чтением)
+        var personal = _sut.Create(User, new CreateNoteRequest("Личная о файле", null, "personal", File: "src/App.cs"));
+        personal.File.Should().BeNull();
+        personal.Content.Should().NotContain("file:");
+    }
 }

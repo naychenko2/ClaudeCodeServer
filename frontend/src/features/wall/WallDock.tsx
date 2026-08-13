@@ -6,18 +6,27 @@
 //
 // При маунте лениво поднимает состав стены (initWall): addChat шлёт PUT полного
 // состава, и без загруженного снимка дроп затирал бы чужие монеты.
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Columns3, LogOut, Plus } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { showToast } from '../../lib/toast';
 import type { Session } from '../../types';
-import { useWallState, initWall, addChatSafe, swapChats, startOrderDrag, MAX_CHATS } from './wallStore';
+import { useChatActivity, STATUS_COLOR, STATUS_PULSE, type ActivityStatus } from '../../lib/projectActivity';
+import { projectMainColor } from '../projects/projectUtil';
+import { useWallState, initWall, addChatSafe, focusChat, swapChats, startOrderDrag, MAX_CHATS } from './wallStore';
 import { WallPicker } from './WallPicker';
 
 // Тип данных перетаскивания карточки чата (кладёт SessionList в плоском режиме)
 export const WALL_DRAG_TYPE = 'cc-wall-chat';
+
+// Подписи статуса — про ЧАТ (у дока проектов те же статусы говорят про проект)
+const CHAT_STATUS_TITLE: Record<ActivityStatus, string> = {
+  waiting: 'ждет ответа',
+  working: 'работает',
+  unread: 'непрочитанное',
+};
 
 export function WallDock({ onOpenWall, onExit, slots = 0 }: {
   // Вход в режим (воркспейс). Не задан — мы уже на стене
@@ -27,12 +36,17 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
   // Сколько колонок помещается на экране: чаты сверх этого числа получают кнопки
   slots?: number;
 }) {
-  const { chats } = useWallState();
+  const { chats, projects, focusId } = useWallState();
+  const activity = useChatActivity();
   // Тащат чат по экрану (мишень видна) и курсор именно над доком (мишень «горит»).
   // dragging слушаем на документе: dragover самой капсулы не срабатывает, пока
   // курсор не дойдёт до неё, а знать «сюда можно» надо заранее.
   const [dragging, setDragging] = useState(false);
   const [over, setOver] = useState(false);
+  // Курсор над капсулой — номерки просыпаются цветом (как иконки в доке проектов):
+  // в покое ряд спит, нейтральный контур кроме фокусного; навели — все встали цветом
+  // своего проекта. Фокусный ВСЕГДА цветной, как активный проект в спящей рельсе
+  const [railHover, setRailHover] = useState(false);
   // Счётчик enter/leave: переход курсора между ДОЧЕРНИМИ элементами капсулы шлёт
   // dragleave, и без счётчика мишень мигала и гасла на полпути
   const overDepth = useRef(0);
@@ -41,7 +55,7 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
     const onStart = (e: DragEvent) => {
       if (e.dataTransfer?.types.includes(WALL_DRAG_TYPE)) setDragging(true);
     };
-    const onEnd = () => { setDragging(false); setOver(false); overDepth.current = 0; };
+    const onEnd = () => { setDragging(false); setOver(false); overDepth.current = 0; setRailHover(false); };
     document.addEventListener('dragstart', onStart);
     document.addEventListener('dragend', onEnd);
     document.addEventListener('drop', onEnd);
@@ -76,15 +90,13 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
   };
 
   const onWall = !onOpenWall;
-  // Чаты, которым не хватило колонок (вместе с их позициями в наборе)
-  const hidden = onWall && slots > 0
-    ? chats.map((s, idx) => ({ s, idx })).filter(({ idx }) => idx >= slots)
-    : [];
 
   return (
     <RailCapsule
       side="left"
       style={{ marginTop: 8 }}
+      onMouseEnter={() => setRailHover(true)}
+      onMouseLeave={() => setRailHover(false)}
       // Мишень как у рельсы панелей: пока чат тащат — пунктирная обводка, под
       // курсором сплошная акцентная с подложкой (PanelRail.railBorder)
       border={dragging ? (over ? `1px solid ${C.accent}` : `1px dashed ${C.textSecondary}`) : undefined}
@@ -146,38 +158,86 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
       </RailIconButton>
       )}
 
-      {/* Кнопка режима, номера невлезших чатов и добавление — три разные по смыслу
+      {/* Кнопка режима, номера чатов и добавление — три разные по смыслу
           группы, каждая отбита чертой (как группы в рельсе панелей) */}
       <RailSep />
 
-      {/* Чаты набора, которым не хватило колонок (окно узкое): кнопки с их номерами
-          между режимом и добавлением. Клик ставит чат вместо ПРАВОЙ колонки,
-          перетаскивание на конкретную колонку — вместо неё. Только на стене:
-          в воркспейсе колонок нет и менять нечего. */}
-      {onWall && hidden.map(({ s, idx }) => (
-        <RailIconButton
-          key={s.id}
-          side="left"
-          variant="media"
-          label={`${idx + 1}. ${s.name?.trim() || 'Без названия'}`}
-          wrapper={{
-            draggable: true,
-            onDragStart: (e: React.DragEvent) => startOrderDrag(e, idx, 'swap'),
-          }}
-          onClick={() => swapChats(idx, slots - 1)}
-        >
-          <span style={{
-            width: 32, height: 32, borderRadius: R.md, boxSizing: 'border-box',
-            border: `1px solid ${C.border}`, color: C.textMuted, background: 'transparent',
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            fontFamily: FONT.sans, fontWeight: 700, fontSize: 13, lineHeight: 1,
-            flexShrink: 0, userSelect: 'none',
-          }}>
-            {idx + 1}
+      {/* ВЕСЬ набор стены номерками — карта состава в ОБОИХ режимах: цвет номерка =
+          цвет проекта (стена мульти-проектная, по цвету видно, из чего она собрана),
+          точка над номерком — статус чата, тем же знаком, что в доке проектов.
+          Главное тут невлезшие чаты: без точки ждущий за бортом чат был бы немым.
+          • На стене: видимые (idx < slots) — полной яркости, клик фокусирует их
+            колонку; невлезшие приглушены, клик ставит чат вместо ПРАВОЙ колонки,
+            перетаскивание на конкретную колонку — вместо неё.
+          • В воркспейсе: колонок нет, slots не играет — все номерки полной яркости,
+            клик ставит фокус на чат и уводит на стену (focusChat + onOpenWall).
+            Перетаскивание порядка здесь НЕ включено: бросать некуда (колонок нет),
+            и draggable номерок позволил бы начать движение, которое нечем закончить. */}
+      {chats.map((s, idx) => {
+        const proj = s.projectId ? projects.get(s.projectId) : undefined;
+        const projColor = proj ? projectMainColor(proj) : C.textMuted;
+        // Цветной номерок: курсор в рельсе (ряд проснулся) ИЛИ фокусный. В покое —
+        // нейтральный контур (текст/рамка в тон остальной рельсе), как у спящих
+        // иконок проектов; навели на капсулу — каждый встал цветом своего проекта
+        // Цветной номерок: курсор в рельсе (ряд проснулся) ИЛИ фокусный — НО фокусный
+        // цветной только на стене: в воркспейсе стена не показана, и подсвечивать
+        // «какой откроется первым» там не к чему (как и active ниже)
+        const colored = railHover || (onWall && s.id === focusId);
+        const color = colored ? projColor : C.textSecondary;
+        const borderColor = colored ? projColor : C.border;
+        const st = activity.get(s.id);
+        const visible = onWall && idx < slots;
+        return (
+          // Обёртка — якорь точки статуса: точка живёт НАД кнопкой (как в доке
+          // проектов), внутри кнопки её съедало бы приглушение невлезших
+          <span key={s.id} style={{ position: 'relative', display: 'flex', flexShrink: 0 }}>
+            <RailIconButton
+              side="left"
+              variant="media"
+              label={`${idx + 1}. ${s.name?.trim() || 'Без названия'}${st ? ` — ${CHAT_STATUS_TITLE[st]}` : ''}`}
+              active={onWall && visible && s.id === focusId}
+              wrapper={onWall ? {
+                draggable: true,
+                onDragStart: (e: React.DragEvent) => startOrderDrag(e, idx, 'swap'),
+              } : undefined}
+              onClick={() => {
+                if (onWall) {
+                  if (visible) focusChat(s.id);
+                  else swapChats(idx, Math.max(0, slots - 1));
+                } else {
+                  // Фокус в общий стор — стена при монтировании подхватит его
+                  // (focusId эфемерен, но переживает переключение хаба: initWall
+                  // уже поднят воркспейсом, refresh фокус не сбрасывает)
+                  focusChat(s.id);
+                  onOpenWall?.();
+                }
+              }}
+            >
+              <span style={{
+                width: 32, height: 32, borderRadius: R.md, boxSizing: 'border-box',
+                border: `1px solid ${borderColor}`, color, background: 'transparent',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: FONT.sans, fontWeight: 700, fontSize: 13, lineHeight: 1,
+                flexShrink: 0, userSelect: 'none',
+                opacity: onWall ? (visible ? 1 : 0.55) : 1,
+              }}>
+                {idx + 1}
+              </span>
+            </RailIconButton>
+            {st && (
+              <span className={STATUS_PULSE[st]} style={{
+                position: 'absolute', right: -2, top: -2, width: 8, height: 8, borderRadius: R.full,
+                // Подложка = цвет холста: непрозрачна, закрывает номерок под точкой.
+                // Цветная заливка — в ::after (классы cc-dot-* читают переменную)
+                background: C.bgMain, border: `2px solid ${C.bgMain}`,
+                '--cc-dot-c': STATUS_COLOR[st],
+                boxSizing: 'content-box', pointerEvents: 'none',
+              } as CSSProperties} />
+            )}
           </span>
-        </RailIconButton>
-      ))}
-      {onWall && hidden.length > 0 && <RailSep />}
+        );
+      })}
+      {chats.length > 0 && <RailSep />}
 
       {/* Добавление чата — в ОБОИХ режимах: собрать стену можно, не покидая проект */}
       <RailIconButton side="left" label="Добавить чат на стену" onClick={() => setPicker(true)}>

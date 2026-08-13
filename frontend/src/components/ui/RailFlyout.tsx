@@ -33,10 +33,14 @@ export interface RailFlyoutAction {
   onClick: () => void;
 }
 
-export function RailFlyout({ side, label, open, action, railWidth, children }: {
+export function RailFlyout({ side, label, hint, open, action, railWidth, children }: {
   // Сторона окна: у левой рельсы плашка растёт вправо, у правой — влево
   side: 'left' | 'right';
   label: string;
+  // Подзаголовок под названием (расшифровка чисел-кружков). Строка — одна линия с
+  // оранжевой точкой; массив — по линии на каждый индикатор, точка в цвет кружка на
+  // иконке (accent/primary, muted/secondary). Не задан — плашка из одной строки.
+  hint?: string | readonly { text: string; tone?: 'accent' | 'muted' }[];
   // Курсор на кнопке. Состояние держит вызывающий — он же гасит его на старте
   // перетаскивания (браузер во время drag мышиных событий не шлёт, и hover залипает).
   open: boolean;
@@ -122,7 +126,7 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
   useLayoutEffect(() => {
     if (!shown) return;
     measure();
-  }, [shown, label, measure]);
+  }, [shown, label, hint, measure]);
 
   // Окно меняет размер при живой плашке — кнопка переезжает, а плашка осталась бы
   // на прежней высоте, оторванной от своей иконки.
@@ -144,9 +148,18 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
             position: 'fixed', top, transform: 'translateY(-50%)', zIndex: Z.dropdown,
             // От внешней кромки рельсы: язычок выезжает ИЗ-ПОД панели
             ...(side === 'left' ? { left: railWidth } : { right: railWidth }),
-            height: FLYOUT_H, display: 'flex', alignItems: 'center',
-            // Поле у кнопки уже текстового: она сама держит свой бокс
-            padding: action ? (actionFirst ? '0 10px 0 3px' : '0 3px 0 10px') : '0 10px',
+            // С подзаголовком плашка двухэтажная — высота по содержимому (минимум как
+            // кнопка), без него — фиксированная FLYOUT_H (одна строка)
+            ...(hint ? {
+              height: 'auto', minHeight: FLYOUT_H,
+              padding: action ? (actionFirst ? '2px 10px 2px 3px' : '2px 3px 2px 10px') : '2px 10px',
+              flexDirection: 'column', alignItems: 'stretch', justifyContent: 'center',
+            } : {
+              height: FLYOUT_H,
+              // Поле у кнопки уже текстового: она сама держит свой бокс
+              padding: action ? (actionFirst ? '0 10px 0 3px' : '0 3px 0 10px') : '0 10px',
+            }),
+            display: 'flex', alignItems: 'center',
             maxWidth: 280, boxSizing: 'border-box',
             background: C.bgWhite,
             border: `1px solid ${C.border}`,
@@ -168,12 +181,39 @@ export function RailFlyout({ side, label, open, action, railWidth, children }: {
                 <action.Icon size={14} strokeWidth={ICON_STROKE} />
               </IconButton>
             );
-            return (
+            const titleRow = (
               <>
                 {actionFirst && btn}
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
                 {!actionFirst && btn}
               </>
+            );
+            // Подзаголовок — отдельными строками под названием, по линии на каждый
+            // индикатор. Перед текстом — мини-кружок в цвет соответствующего индикатора
+            // на иконке (accent=оранжевый/primary, muted=серый/secondary): так в тултипе
+            // видно, к какому кружку относится число. Строка-синоним — одна accent-линия.
+            if (!hint) return titleRow;
+            const lines = typeof hint === 'string' ? [{ text: hint }] : hint;
+            return (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4, minWidth: 0 }}>{titleRow}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 2 }}>
+                  {lines.map((ln, i) => (
+                    <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
+                      <span style={{
+                        width: 6, height: 6, borderRadius: '50%', flexShrink: 0,
+                        // Тон точки повторяет кружок на иконке: accent (оранжевый,
+                        // primary) или muted (серый, secondary)
+                        background: ln.tone === 'muted' ? C.textMuted : C.accent,
+                      }} />
+                      <span style={{
+                        fontSize: FS.xs, color: C.textMuted, lineHeight: 1.3,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>{ln.text}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             );
           })()}
         </div>,

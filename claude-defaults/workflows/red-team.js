@@ -42,6 +42,27 @@ const participants = Array.isArray(a.participants)
 const roleOpts = (i) => (participants[i] ? { agentType: participants[i] } : {})
 const angleTag = (i) => (participants[i] ? ` @${participants[i]}` : '')
 
+// ---- Обёртка над agent({schema}) с авто-ретраем ----
+// Движок Workflow сам нуджит агента ОДИН раз и при неудаче отдаёт null; мы добавляем ещё
+// одну попытку с усиленным требованием финального StructuredOutput, чтобы не терять находки
+// молча в `filter(Boolean)`. Если и ретрай пустой — пишем потерю в лог прогона и возвращаем null.
+async function structuredAgent(prompt, opts) {
+  const first = await agent(prompt, opts)
+  if (first !== null && first !== undefined) return first
+
+  const retryPrompt = prompt +
+    '\n\n⚠️ КРИТИЧНО: предыдущий ход завершился БЕЗ вызова инструмента StructuredOutput. ' +
+    'Сейчас ОБЯЗАТЕЛЬНО заверши работу явным вызовом StructuredOutput, вернув объект, ' +
+    'строго соответствующий заявленной схеме. Не пиши итоговый текст в ответ — ' +
+    'верни структуру через StructuredOutput.'
+  const retryOpts = { ...opts, label: opts.label ? `${opts.label} · повтор` : 'повтор' }
+  const second = await agent(retryPrompt, retryOpts)
+  if (second !== null && second !== undefined) return second
+
+  log(`⚠️ structuredAgent: «${opts.label || '(без label)'}» — агент дважды не вызвал StructuredOutput, находки утрачены`)
+  return null
+}
+
 // ---- Схемы ----
 const ATTACK_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -88,7 +109,7 @@ const attacks = await parallel(angles.map((angleKey, i) => () => {
 
 Сначала пойми решение по фактам (прочитай затронутый код/план), затем предметно атакуй со своего угла: конкретные сценарии поломки, не общие рассуждения. Для каждого — как это воспроизвести и как закрыть.
 Если пробить с этого угла честно не удалось — так и скажи (пустой список), не выдумывай. Отвечай по-русски.`
-  return agent(prompt, { label: `Атака: ${A.title}${angleTag(i)}`, phase: 'Атака', schema: ATTACK_SCHEMA, ...roleOpts(i) })
+  return structuredAgent(prompt, { label: `Атака: ${A.title}${angleTag(i)}`, phase: 'Атака', schema: ATTACK_SCHEMA, ...roleOpts(i) })
     .then(r => ({ angleKey, title: A.title, result: r }))
 }))
 
@@ -104,7 +125,7 @@ const attackDigest = rawAttacks.map(x =>
 // усиливаем только если атакующих больше одного и есть что показать соседям
 const reinforced = rawAttacks.length > 1
   ? await parallel(rawAttacks.map((x, i) => () =>
-      agent(`Ты — АТАКУЮЩИЙ красной команды, угол «${x.title}». Ты уже атаковал; теперь видишь находки коллег по другим углам. Усиль свою атаку: добавь новые сценарии поломки на стыке углов или разверни то, что коллеги задели вскользь. НЕ повторяй уже названное. Если добавить нечего — верни пустой список.
+      structuredAgent(`Ты — АТАКУЮЩИЙ красной команды, угол «${x.title}». Ты уже атаковал; теперь видишь находки коллег по другим углам. Усиль свою атаку: добавь новые сценарии поломки на стыке углов или разверни то, что коллеги задели вскользь. НЕ повторяй уже названное. Если добавить нечего — верни пустой список.
 
 ЧТО АТАКУЕМ: ${target}
 
@@ -130,7 +151,7 @@ const vulnBlock = all.length
   ? all.map((v, i) => `${i + 1}. [${v.angle}] ${fmtVuln(v)}`).join('\n')
   : '(красной команде не удалось пробить решение)'
 
-const synthesis = await agent(`Ты — капитан красной команды. Атакующие по углам (${angles.map(k => ANGLE_CATALOG[k].title).join(', ')}) пытались сломать решение. Сведи итог.
+const synthesis = await structuredAgent(`Ты — капитан красной команды. Атакующие по углам (${angles.map(k => ANGLE_CATALOG[k].title).join(', ')}) пытались сломать решение. Сведи итог.
 
 ЧТО АТАКОВАЛИ: ${target}
 

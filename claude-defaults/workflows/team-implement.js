@@ -26,6 +26,28 @@ const executors = Array.isArray(a.executors)
 const execOpts = (j) => (executors.length ? { agentType: executors[j % executors.length] } : {})
 const execTag = (j) => (executors.length ? ` @${executors[j % executors.length]}` : '')
 
+// ---- Обёртка над agent({schema}) с авто-ретраем ----
+// Движок Workflow сам нуджит агента ОДИН раз и при неудаче отдаёт null; мы добавляем ещё
+// одну попытку с усиленным требованием финального StructuredOutput, чтобы не терять отчёты
+// исполнителей и итоги верификации молча. Если и ретрай пустой — пишем потерю в лог прогона
+// и возвращаем null.
+async function structuredAgent(prompt, opts) {
+  const first = await agent(prompt, opts)
+  if (first !== null && first !== undefined) return first
+
+  const retryPrompt = prompt +
+    '\n\n⚠️ КРИТИЧНО: предыдущий ход завершился БЕЗ вызова инструмента StructuredOutput. ' +
+    'Сейчас ОБЯЗАТЕЛЬНО заверши работу явным вызовом StructuredOutput, вернув объект, ' +
+    'строго соответствующий заявленной схеме. Не пиши итоговый текст в ответ — ' +
+    'верни структуру через StructuredOutput.'
+  const retryOpts = { ...opts, label: opts.label ? `${opts.label} · повтор` : 'повтор' }
+  const second = await agent(retryPrompt, retryOpts)
+  if (second !== null && second !== undefined) return second
+
+  log(`⚠️ structuredAgent: «${opts.label || '(без label)'}» — агент дважды не вызвал StructuredOutput, результат утрачен`)
+  return null
+}
+
 // ---- Схемы ----
 const SUBTASKS_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -73,7 +95,7 @@ const VERIFY_SCHEMA = {
 
 // ---- Фаза 1: декомпозиция ----
 phase('Декомпозиция')
-const decomposition = await agent(`Ты — ПЛАНИРОВЩИК командной реализации. Разбей задачу на под-задачи для параллельной работы команды исполнителей.
+const decomposition = await structuredAgent(`Ты — ПЛАНИРОВЩИК командной реализации. Разбей задачу на под-задачи для параллельной работы команды исполнителей.
 
 ЗАДАЧА: ${task}
 
@@ -128,7 +150,7 @@ for (const wave of waves) {
     // параллельно, каждый исполнитель в своём worktree (изоляция параллельных мутаций)
     const batch = await parallel(wave.map((s) => {
       const j = globalIndex++
-      return () => agent(execPrompt(s), { label: `Исполнение: ${s.title}${execTag(j)}`, phase: 'Исполнение', schema: EXEC_SCHEMA, isolation: 'worktree', ...execOpts(j) })
+      return () => structuredAgent(execPrompt(s), { label: `Исполнение: ${s.title}${execTag(j)}`, phase: 'Исполнение', schema: EXEC_SCHEMA, isolation: 'worktree', ...execOpts(j) })
         .then(r => ({ subtask: s, result: r }))
     }))
     execResults.push(...batch.filter(Boolean))
@@ -136,7 +158,7 @@ for (const wave of waves) {
     // последовательно в общем дереве (безопасно от конфликтов)
     for (const s of wave) {
       const j = globalIndex++
-      const r = await agent(execPrompt(s), { label: `Исполнение: ${s.title}${execTag(j)}`, phase: 'Исполнение', schema: EXEC_SCHEMA, ...execOpts(j) })
+      const r = await structuredAgent(execPrompt(s), { label: `Исполнение: ${s.title}${execTag(j)}`, phase: 'Исполнение', schema: EXEC_SCHEMA, ...execOpts(j) })
       execResults.push({ subtask: s, result: r })
     }
   }
@@ -151,7 +173,7 @@ let merge = null
 const parallelHappened = useWorktree && waves.some(w => w.length > 1)
 if (parallelHappened) {
   phase('Merge')
-  merge = await agent(`Ты — ИНТЕГРАТОР командной реализации. Исполнители работали параллельно в изолированных worktree. Сведи их изменения в рабочее дерево единым согласованным состоянием.
+  merge = await structuredAgent(`Ты — ИНТЕГРАТОР командной реализации. Исполнители работали параллельно в изолированных worktree. Сведи их изменения в рабочее дерево единым согласованным состоянием.
 
 ОБЩАЯ ЗАДАЧА: ${task}
 
@@ -166,7 +188,7 @@ ${execDigest}
 let verify = null
 if (doVerify) {
   phase('Verify')
-  verify = await agent(`Ты — ВЕРИФИКАТОР командной реализации. Проверь, что суммарный результат работает.
+  verify = await structuredAgent(`Ты — ВЕРИФИКАТОР командной реализации. Проверь, что суммарный результат работает.
 
 ОБЩАЯ ЗАДАЧА: ${task}
 

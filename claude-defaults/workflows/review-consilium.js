@@ -45,6 +45,27 @@ const participants = Array.isArray(a.participants)
 const roleOpts = (i) => (participants[i] ? { agentType: participants[i] } : {})
 const lensTag = (i) => (participants[i] ? ` @${participants[i]}` : '')
 
+// ---- Обёртка над agent({schema}) с авто-ретраем ----
+// Движок Workflow сам нуджит агента ОДИН раз и при неудаче отдаёт null; мы добавляем ещё
+// одну попытку с усиленным требованием финального StructuredOutput, чтобы не терять находки
+// молча в pipeline. Если и ретрай пустой — пишем потерю в лог прогона и возвращаем null.
+async function structuredAgent(prompt, opts) {
+  const first = await agent(prompt, opts)
+  if (first !== null && first !== undefined) return first
+
+  const retryPrompt = prompt +
+    '\n\n⚠️ КРИТИЧНО: предыдущий ход завершился БЕЗ вызова инструмента StructuredOutput. ' +
+    'Сейчас ОБЯЗАТЕЛЬНО заверши работу явным вызовом StructuredOutput, вернув объект, ' +
+    'строго соответствующий заявленной схеме. Не пиши итоговый текст в ответ — ' +
+    'верни структуру через StructuredOutput.'
+  const retryOpts = { ...opts, label: opts.label ? `${opts.label} · повтор` : 'повтор' }
+  const second = await agent(retryPrompt, retryOpts)
+  if (second !== null && second !== undefined) return second
+
+  log(`⚠️ structuredAgent: «${opts.label || '(без label)'}» — агент дважды не вызвал StructuredOutput, находки утрачены`)
+  return null
+}
+
 // ---- Схемы структурированного вывода ----
 const FINDINGS_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -104,7 +125,7 @@ const perLens = await pipeline(
 Сначала собери, что именно изменилось (git diff / прочитай затронутые файлы), затем разбери это по своей оси.
 Возвращай конкретные, предметные находки с точными файлами/строками и правдоподобным сценарием сбоя.
 Если по твоей оси всё чисто — верни пустой массив находок и скажи об этом в summary. Не выдумывай проблемы ради галочки. Отвечай по-русски.`
-    return agent(prompt, { label: `Ревью: ${L.title}${lensTag(i)}`, phase: 'Ревью по осям', schema: FINDINGS_SCHEMA, ...roleOpts(i) })
+    return structuredAgent(prompt, { label: `Ревью: ${L.title}${lensTag(i)}`, phase: 'Ревью по осям', schema: FINDINGS_SCHEMA, ...roleOpts(i) })
       .then(r => ({ lensKey, title: L.title, result: r }))
   },
   // stage 2 — adversarial verify находок этой оси (each по отдельности, скептик пытается опровергнуть)
@@ -115,7 +136,7 @@ const perLens = await pipeline(
       return { ...lensOut, verified: found.map(f => ({ ...f, verdict: 'подтверждено' })) }
     }
     const checked = await parallel(found.map(f => () =>
-      agent(`Ты — придирчивый ПРОВЕРЯЮЩИЙ. Другой ревьюер заявил проблему в коде — твоя задача её ОПРОВЕРГНУТЬ, если она несостоятельна.
+      structuredAgent(`Ты — придирчивый ПРОВЕРЯЮЩИЙ. Другой ревьюер заявил проблему в коде — твоя задача её ОПРОВЕРГНУТЬ, если она несостоятельна.
 
 ОСЬ: ${lensOut.title}
 ЗАЯВЛЕННАЯ ПРОБЛЕМА: ${fmtFinding(f)}
@@ -148,7 +169,7 @@ const findingsBlock = all.length
   ? all.map((f, i) => `${i + 1}. [${f.lens}] ${fmtFinding(f)}`).join('\n')
   : '(подтверждённых проблем не найдено)'
 
-const synthesis = await agent(`Ты — ведущий консилиума. Ревьюеры по осям (${lenses.map(k => LENS_CATALOG[k].title).join(', ')}) разобрали изменения, находки прошли проверку на опровержение. Сведи итог.
+const synthesis = await structuredAgent(`Ты — ведущий консилиума. Ревьюеры по осям (${lenses.map(k => LENS_CATALOG[k].title).join(', ')}) разобрали изменения, находки прошли проверку на опровержение. Сведи итог.
 
 ЧТО РЕВЬЮИЛИ: ${target}
 

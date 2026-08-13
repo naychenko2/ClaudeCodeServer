@@ -30,6 +30,27 @@ const participants = Array.isArray(a.participants)
 const roleOpts = (i) => (participants[i] ? { agentType: participants[i] } : {})
 const roleTag = (i) => (participants[i] ? ` @${participants[i]}` : '')
 
+// ---- Обёртка над agent({schema}) с авто-ретраем ----
+// Движок Workflow сам нуджит агента ОДИН раз и при неудаче отдаёт null; мы добавляем ещё
+// одну попытку с усиленным требованием финального StructuredOutput, чтобы не терять реплики
+// молча. Если и ретрай пустой — пишем потерю в лог прогона и возвращаем null.
+async function structuredAgent(prompt, opts) {
+  const first = await agent(prompt, opts)
+  if (first !== null && first !== undefined) return first
+
+  const retryPrompt = prompt +
+    '\n\n⚠️ КРИТИЧНО: предыдущий ход завершился БЕЗ вызова инструмента StructuredOutput. ' +
+    'Сейчас ОБЯЗАТЕЛЬНО заверши работу явным вызовом StructuredOutput, вернув объект, ' +
+    'строго соответствующий заявленной схеме. Не пиши итоговый текст в ответ — ' +
+    'верни структуру через StructuredOutput.'
+  const retryOpts = { ...opts, label: opts.label ? `${opts.label} · повтор` : 'повтор' }
+  const second = await agent(retryPrompt, retryOpts)
+  if (second !== null && second !== undefined) return second
+
+  log(`⚠️ structuredAgent: «${opts.label || '(без label)'}» — агент дважды не вызвал StructuredOutput, реплика утрачена`)
+  return null
+}
+
 // ---- Схемы структурированного вывода ----
 const PROPOSER_SCHEMA = {
   type: 'object', additionalProperties: false,
@@ -161,11 +182,11 @@ ${openQuestions}
 ${render()}
 
 Доработай идеи или предложи новые ИМЕННО по открытым вопросам — с учётом высказанной критики и защиты. Отвечай по-русски.`
-  const prop = await agent(proposerPrompt, { label: `Генератор${roleTag(0)} · р${round}`, phase: ph, schema: PROPOSER_SCHEMA, ...roleOpts(0) })
+  const prop = await structuredAgent(proposerPrompt, { label: `Генератор${roleTag(0)} · р${round}`, phase: ph, schema: PROPOSER_SCHEMA, ...roleOpts(0) })
   if (prop) transcript.push({ round, role: 'Генератор', content: fmtProposer(prop) })
 
   // 2. Критик
-  const crit = await agent(`Ты — КРИТИК (Скептик) в панели экспертов. Твоя единственная задача — разрушать идеи Генератора: искать уязвимости, риски, логические нестыковки и слабые места. Ты НЕ предлагаешь своих решений. Будь жёстким, конкретным и предметным.
+  const crit = await structuredAgent(`Ты — КРИТИК (Скептик) в панели экспертов. Твоя единственная задача — разрушать идеи Генератора: искать уязвимости, риски, логические нестыковки и слабые места. Ты НЕ предлагаешь своих решений. Будь жёстким, конкретным и предметным.
 
 ТЕМА: ${topic}
 
@@ -176,7 +197,7 @@ ${render()}
   if (crit) transcript.push({ round, role: 'Критик', content: fmtCritic(crit) })
 
   // 3. Адвокат
-  const supp = await agent(`Ты — АДВОКАТ (Оптимист) в панели экспертов. Твоя задача — защищать идеи Генератора от Критика: фокусироваться на сильных сторонах, искать аргументы «за», развивать потенциал идей и придумывать, как обойти препятствия, на которые указал Критик.
+  const supp = await structuredAgent(`Ты — АДВОКАТ (Оптимист) в панели экспертов. Твоя задача — защищать идеи Генератора от Критика: фокусироваться на сильных сторонах, искать аргументы «за», развивать потенциал идей и придумывать, как обойти препятствия, на которые указал Критик.
 
 ТЕМА: ${topic}
 
@@ -187,7 +208,7 @@ ${render()}
   if (supp) transcript.push({ round, role: 'Адвокат', content: fmtSupporter(supp) })
 
   // 4. Модератор (промежуточно)
-  const judge = await agent(`Ты — МОДЕРАТОР (Синтезатор) в панели экспертов, раунд ${round} из ${maxRounds}. Ты слушаешь спор Генератора, Критика и Адвоката и беспристрастно взвешиваешь аргументы.
+  const judge = await structuredAgent(`Ты — МОДЕРАТОР (Синтезатор) в панели экспертов, раунд ${round} из ${maxRounds}. Ты слушаешь спор Генератора, Критика и Адвоката и беспристрастно взвешиваешь аргументы.
 
 ТЕМА: ${topic}
 
@@ -204,7 +225,7 @@ ${render()}
 
 // ---- Финальный синтез ----
 phase('Финальный синтез')
-const final = await agent(`Ты — МОДЕРАТОР (Синтезатор) в панели экспертов. Дискуссия завершена. Проанализируй весь спор и выдай ИТОГОВОЕ, максимально проработанное и жизнеспособное решение.
+const final = await structuredAgent(`Ты — МОДЕРАТОР (Синтезатор) в панели экспертов. Дискуссия завершена. Проанализируй весь спор и выдай ИТОГОВОЕ, максимально проработанное и жизнеспособное решение.
 
 ТЕМА: ${topic}
 

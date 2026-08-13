@@ -11,6 +11,7 @@
 //    Новый ChatPanel монтируется и потребляет затравку на маунте.
 
 import type { AiActionCtx } from './actions';
+import type { Project } from '../../types';
 import { api } from '../api';
 import { createChatWithContextPersona } from '../defaultPersona';
 import { showToast } from '../toast';
@@ -36,6 +37,43 @@ export function startChatFromPanel(text: string, opts?: { requiredTool?: string 
   return startChatWithPrompt(text, {
     nav: getNav(), online: true, flag: getFlag, caps: { semantic: false }, chat: getChatContext(),
   }, opts);
+}
+
+// Новый чат в ЯВНО выбранном проекте с затравкой в композере (UI-инспектор «элемент в чат»).
+// Рецепт — AiLauncher.openWaitingChat: ключ cc_pending_project_chat пишем ВСЕГДА до выбора
+// канала — смонтированный воркспейс того же проекта иначе восстановил бы СВОЙ прошлый чат,
+// и его композер съел бы затравку. openProject — канал открытия другого проекта/раздела:
+// вызывающий передаёт openProjectViaEvent (features-слой, из lib его не импортируем).
+// Возврат: true — чат создан и открыт; false — ошибка (тост показан, форма вызывающего
+// может остаться открытой с набранным текстом).
+export async function startChatInProject(
+  text: string, project: Project, openProject: (p: Project) => void,
+): Promise<boolean> {
+  sessionStorage.setItem(PENDING_KEY, text);
+  try {
+    // Подбор персоны под текст — best-effort, как в startChatWithPrompt
+    let personaId: string | null = null;
+    try { personaId = (await api.personas.match(text, project.id)).personaId; } catch { /* без персоны */ }
+    const s = personaId
+      ? await api.personas.createChat(personaId, { projectId: project.id })
+      : await createChatWithContextPersona(project, { mode: 'acceptEdits' });
+    sessionStorage.setItem('cc_pending_project_chat', `${project.id}|${s.id}`);
+    // Дальше — только выбор КАНАЛА открытия: проект уже на экране — cc-open-session не
+    // перемонтирует WorkspacePage (тот же key), дёргаем его слушатель напрямую; иначе
+    // открываем проект — App смонтирует воркспейс, тот подхватит pending-ключ.
+    const n = getNav();
+    if (n?.screen === 'project' && n.project?.id === project.id) {
+      window.dispatchEvent(new Event('cc-pending-project-chat'));
+    } else {
+      openProject(project);
+    }
+    return true;
+  } catch (e) {
+    // Одноразовый глобальный ключ: не убрать — выстрелит позже в другом чате
+    sessionStorage.removeItem(PENDING_KEY);
+    showToast('Не удалось открыть чат', e instanceof Error ? e.message : 'Сервер недоступен', 'info');
+    return false;
+  }
 }
 
 // requiredTool — ключ инструментов, без которого действие не выполнить (напр. notes-annotations

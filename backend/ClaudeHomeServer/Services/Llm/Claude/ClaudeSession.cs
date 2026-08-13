@@ -64,6 +64,25 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly ConcurrentDictionary<string, string> _pendingQuestions = new();
     // request_id → исходный input ожидающего согласования ExitPlanMode (режим «План»)
     private readonly ConcurrentDictionary<string, object> _pendingPlans = new();
+
+    // Прогон ждёт control_response от пользователя (permission / AskUserQuestion / план).
+    // В этом окне смерть CLI — реальный обрыв живого хода, а не same-process-гонка: ретраить
+    // ту же пару бессмысленно (ответа нет и не будет), карточка в ленте зависнет до таймаута.
+    // На этот признак опираются HandleProcessExitedAsync/FinalizeRunAsync (P30).
+    private bool HasPendingControlResponse()
+        => !_permissionWaiters.IsEmpty || !_pendingQuestions.IsEmpty || !_pendingPlans.IsEmpty;
+
+    // Отменить ожидающие control_response — вызывается при смерти процесса (P30) и в Interrupt().
+    // TrySetCanceled выводит DecidePermissionAsync из WaitAsync → возвращает "cancelled" → control_response
+    // не пошлётся, поток reader'а доедет до EOF штатно.
+    private void CancelPendingControlResponses()
+    {
+        foreach (var tcs in _permissionWaiters.Values)
+            tcs.TrySetCanceled();
+        _permissionWaiters.Clear();
+        _pendingQuestions.Clear();
+        _pendingPlans.Clear();
+    }
     // Гарантированное исполнение одобренного плана:
     // после approve ждём реализацию; если ход завершится без правок — дошлём команду.
     private volatile bool _awaitPlanExecution;
@@ -1621,11 +1640,7 @@ public class ClaudeSession : ILlmSessionAdapter
         lock (_workflowWatchers) workflowWatchers = _workflowWatchers.Where(w => !w.IsDisposed).ToList();
         foreach (var w in workflowWatchers) w.NoteOwnerProcessGone();
         // Отменяем все ожидающие permission-диалоги: процесс убит, ответа не будет
-        foreach (var tcs in _permissionWaiters.Values)
-            tcs.TrySetCanceled();
-        _permissionWaiters.Clear();
-        _pendingQuestions.Clear();
-        _pendingPlans.Clear();
+        CancelPendingControlResponses();
         _awaitPlanExecution = false;
         _forceNonPlanNextTurn = false;
     }
@@ -2622,7 +2637,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // подавил ExitedMessage → ни result, ни exited, ни ретрая: сессия навсегда залипает в
         // Working (тот же класс бага, что и реанимация зависших чатов). Решение — чистая ф-я (тест).
 
-        if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent, run.ReuseSubmit))
+        // P30: прогон в этом окне ждёт control_response (permission / AskUserQuestion / план).
+        // Даже same-process-ретрай тут ошибочен — ответа нет и не будет, карточка в ленте зависнет
+        // до таймаута. Передаём гард в HandleProcessExitedAsync: он шлёт ErrorMessage и снимает
+        // ожидание, оставляя нас с честным обрывом вместо ложного ретрая.
+        var pendingControlResponse = HasPendingControlResponse();
+        if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent, run.ReuseSubmit)
+            && !pendingControlResponse)
         {
             run.DiedEmpty = true;
             run.SuppressExited = true;
@@ -2683,13 +2704,19 @@ public class ClaudeSession : ILlmSessionAdapter
         catch (Exception) { /* процесс уже Dispose'нут в гонке с финализацией — код недоступен */ }
 
         var activeTurn = !run.TurnDone;
+        // P30: прогон ждёт control_response — shouldRetryEmptyExit даст true (gotEvent=true,
+        // reuse=true), но ретрай тут нелеп: control_response не пошлётся, карточка в ленте зависнет.
+        // Форсируем willRetry=false и шлём понятную ошибку ниже.
+        var pendingControlResponse = HasPendingControlResponse();
         var willRetry = activeTurn
+            && !pendingControlResponse
             && ShouldRetryEmptyExit(activeTurn, run.RetryOnEmptyExit, run.TurnGotEvent, run.ReuseSubmit);
 
         Console.Error.WriteLine(
             $"[ClaudeSession] Процесс CLI завершился (exit={exitCode?.ToString() ?? "?"} " +
             $"activeTurn={activeTurn} gotEvent={run.TurnGotEvent} reuse={run.ReuseSubmit} " +
             $"retryOnEmpty={run.RetryOnEmptyExit} retry={willRetry} " +
+            $"pendingControlResponse={pendingControlResponse} " +
             $"turnSeq={Interlocked.Read(ref run.LastTurnSeq)})");
 
         if (!activeTurn) return;
@@ -2701,7 +2728,13 @@ public class ClaudeSession : ILlmSessionAdapter
         // в ленту ПОСЛЕ терминала хода (3.4). Шаблон await _onMessage(ErrorMessage) — как в watchdog.
         if (!willRetry)
         {
-            try { await _onMessage(new ErrorMessage("Процесс модели завершился во время хода — ответ не был получен")); }
+            var message = pendingControlResponse
+                ? "Процесс модели завершился во время ожидания разрешения — ход прерван"
+                : "Процесс модели завершился во время хода — ответ не был получен";
+            // Отменяем ожидающие control_response: иначе DecidePermissionAsync держит граф до
+            // 60-минутного таймаута, карточка в ленте «Claude ждёт ответа» зависает навсегда (P30).
+            if (pendingControlResponse) CancelPendingControlResponses();
+            try { await _onMessage(new ErrorMessage(message)); }
             catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
         }
 
@@ -3918,11 +3951,7 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         // Ожидающие permission-диалоги: ответа не будет — отменяем, иначе
         // DecidePermissionAsync держит граф адаптера до часового таймаута
-        foreach (var tcs in _permissionWaiters.Values)
-            tcs.TrySetCanceled();
-        _permissionWaiters.Clear();
-        _pendingQuestions.Clear();
-        _pendingPlans.Clear();
+        CancelPendingControlResponses();
         _cts.Cancel();
         if (_currentProcess != null && !_currentProcess.HasExited)
         {

@@ -808,7 +808,9 @@ public class SessionManager : IDisposable
 
         var sid = entry.Info.Id;
         var adapter = entry.Process as ILlmSessionAdapter;
-        _log.LogWarning(
+        // Sweep-терминус — штатное завершение хода через grace (P28): не авария, лог не должен
+        // подсвечивать её как Warning. На Information она и остаётся в обычном прогоне.
+        _log.LogInformation(
             "[SessionManager] Sweep terminus: Active→Finished после result хода ({Sid}: exited прогона не было, alive={Alive}, bg={Bg}, cont={Cont})",
             sid, adapter is { HasLiveTurn: true }, adapter is { HasPendingBg: true }, adapter is { IsContinuationInFlight: true });
         _ = Task.Run(async () =>

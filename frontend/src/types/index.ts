@@ -1642,6 +1642,10 @@ export interface NoteSummary {
   expiresAt?: string;
   sourceSessionId?: string;
   annotation?: NoteAnnotationInfo | null;
+  // Привязка к файлу проекта (frontmatter file:): путь от корня проекта-источника,
+  // forward slashes; у личных заметок отсутствует. fileMissing — файл не найден на диске.
+  file?: string | null;
+  fileMissing?: boolean;
 }
 
 // Разрешённая исходящая ссылка [[...]]; resolved=false — «призрачная» (цели ещё нет)
@@ -1676,6 +1680,8 @@ export interface NoteDetail {
   expiresAt?: string;
   sourceSessionId?: string;
   annotation?: NoteAnnotationInfo | null;
+  file?: string | null;      // привязка к файлу проекта (см. NoteSummary.file)
+  fileMissing?: boolean;
 }
 
 // Узел графа; ghost=true — «призрачная» заметка (на неё ссылаются, но её нет)
@@ -1739,6 +1745,10 @@ export interface CreateNoteDto {
   folder?: string;   // папка внутри источника ("Идеи/Черновики"); пусто = корень
   expiresAfterMinutes?: number | null;
   sourceSessionId?: string;
+  // Привязка к файлу проекта (frontmatter file:). Поле используется MCP-сервером;
+  // UI кладёт привязку frontmatter-строкой прямо в content — тогда офлайн-создание
+  // (notesOffline) проходит тот же путь без изменений outbox.
+  file?: string;
 }
 
 export interface UpdateNoteDto {

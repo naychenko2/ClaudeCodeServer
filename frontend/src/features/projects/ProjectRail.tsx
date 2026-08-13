@@ -10,7 +10,7 @@ import { ProjectIcon } from './ProjectIcon';
 import { ProjectPalette } from './ProjectPalette';
 import { useAllProjects, openProjectViaEvent, openNewProjectFlow } from './useAllProjects';
 import { usePinnedIds, useSwitcherOrder, recordSwitcherProject, isPinned, togglePin, unpinProject, pinInsertAt, switcherInsertBefore, removeFromDock } from '../../lib/pinnedProjects';
-import { useProjectActivity, type ProjectActivity } from '../../lib/projectActivity';
+import { useProjectActivity, STATUS_COLOR, STATUS_PULSE, type ProjectActivity } from '../../lib/projectActivity';
 
 // Вертикальный док проектов — ВТОРАЯ левая рельса, под рельсой панелей. Раньше те же
 // иконки лежали горизонтальной строкой внутри панели «Проекты»: ряд в колонке шириной
@@ -40,30 +40,12 @@ const FIXED_H = 100;
 const MAX_SLOTS = 12;
 const DRAG_THRESHOLD = 5;     // порог в px: клик → перетаскивание
 
-// Цвет несёт смысл: waiting — медовый warning («брось дело, нужен ответ»),
-// working — контрастный accent (прямо сейчас идёт работа), unread — нейтрально-
-// серый (сюда не заходили, не событие). Медовый и accent на 8px-точке почти
-// неотличимы, поэтому waiting дополнительно выделен формой — полое колечко
-const STATUS_COLOR: Record<ProjectActivity['status'], string> = {
-  waiting: C.warning,
-  working: C.accent,
-  unread: C.textMuted,
-};
-
+// Вид точки (цвет + мерцание) — общий для всех рельс: STATUS_COLOR/STATUS_PULSE
+// из projectActivity. Здесь остаются только подписи — они говорят про ПРОЕКТ
 const STATUS_TITLE: Record<ProjectActivity['status'], string> = {
   waiting: 'агент ждет ответа',
   working: 'агент работает',
   unread: 'есть непрочитанные чаты',
-};
-
-// Мерцание точки: waiting дышит медленно (тревожить, но не дёргать), working —
-// живее (там прямо сейчас идёт работа), unread не мерцает вовсе. cc-dot нужен
-// всем: он рисует цветную заливку (::after), ободок и непрозрачную подложку.
-// waiting вдобавок полый (cc-dot--ring) — по цвету он сливается с working
-const STATUS_PULSE: Record<ProjectActivity['status'], string> = {
-  waiting: ' cc-dot cc-dot--ring cc-dot-pulse cc-dot-pulse--slow',
-  working: ' cc-dot cc-dot-pulse',
-  unread: ' cc-dot',
 };
 
 // Кнопка проекта в доке. Тот же примитив, что у всех кнопок рельсы (IconButton):

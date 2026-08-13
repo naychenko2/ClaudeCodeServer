@@ -137,6 +137,13 @@ const attacks = await parallel(angles.map((angleKey, i) => () => {
 
 const rawAttacks = attacks.filter(Boolean).filter(x => x.result)
 
+// ---- Потери фазы «Атака» ----
+// Пришли — углы, чьи атакующие дали результат; выпали — те, чьи атакующие
+// дважды не вернули StructuredOutput. Если углы выпали, покрытие молча сузилось,
+// и это надо объявить в синтезе и в возврате.
+const arrivedAngles = new Set(rawAttacks.map(x => x.angleKey))
+const lostAttackAngles = angles.filter(k => !arrivedAngles.has(k))
+
 // ---- Фаза 2: усиление (каждый видит находки соседей, дополняет) ----
 phase('Усиление')
 const attackDigest = rawAttacks.map(x =>
@@ -160,6 +167,10 @@ ${attackDigest}
     )
   : []
 
+// ---- Потери фазы «Усиление» ----
+const reinforcedOk = reinforced.filter(Boolean).filter(x => x.result)
+const lostReinforced = rawAttacks.filter(x => !reinforcedOk.find(y => y.angleKey === x.angleKey))
+
 // ---- Сбор уязвимостей ----
 const SEV_ORDER = { 'критичная': 0, 'серьёзная': 1, 'умеренная': 2, 'мелкая': 3 }
 const all = []
@@ -173,12 +184,26 @@ const vulnBlock = all.length
   ? all.map((v, i) => `${i + 1}. [${v.angle}] ${fmtVuln(v)}`).join('\n')
   : '(красной команде не удалось пробить решение)'
 
+// Потери: выпавшие углы в «Атаке» и в «Усилении» — капитан обязан оговорить
+// неполноту в verdict: неполный охват ≠ полный охват.
+const lostStages = [
+  ...lostAttackAngles.map(k => ({ phase: 'Атака', stage: `угол «${ANGLE_CATALOG[k].title}»`, reason: 'агент не вернул результат ни в первой, ни во второй попытке' })),
+  ...lostReinforced.map(x => ({ phase: 'Усиление', stage: `угол «${x.title}»`, reason: 'агент не вернул результат усиления' })),
+]
+const lostBlock = lostStages.length
+  ? lostStages.map(s => `  - [${s.phase}] ${s.stage} — ${s.reason}`).join('\n')
+  : '(потерь нет)'
+
 const synthesis = await structuredAgent(`Ты — капитан красной команды. Атакующие по углам (${angles.map(k => ANGLE_CATALOG[k].title).join(', ')}) пытались сломать решение. Сведи итог.
 
 ЧТО АТАКОВАЛИ: ${target}
 
 Все найденные уязвимости (по убыванию критичности):
 ${vulnBlock}
+
+⚠️ НЕПОЛНОТА ПОКРЫТИЯ — обязательно учти в verdict:
+${lostBlock}
+${lostStages.length ? 'Покрытие механики сузилось. Если выпали критичные для этого решения углы — понизь уверенность вердикта и явно укажи, какие риски остались непроверенными.' : ''}
 
 Дай итог: насколько решение прочно, главные риски, что обязательно закрыть до принятия, и рекомендацию. Конкретно и по делу. Отвечай по-русски.`,
   { label: 'Синтез красной команды', phase: 'Синтез', schema: SYNTH_SCHEMA })
@@ -189,4 +214,5 @@ return {
   totalVulnerabilities: all.length,
   vulnerabilities: all,
   synthesis,
+  lostStages,
 }

@@ -179,8 +179,14 @@ const perLens = await pipeline(
 const SEV_ORDER = { 'критичная': 0, 'серьёзная': 1, 'умеренная': 2, 'мелкая': 3 }
 const all = []
 const lensSummaries = []
+const lostStages = []
 for (const lo of perLens.filter(Boolean)) {
-  lensSummaries.push(`- **${lo.title}**: ${lo.result ? lo.result.summary : '(ось не отработала)'}`)
+  if (lo.result) {
+    lensSummaries.push(`- **${lo.title}**: ${lo.result.summary}`)
+  } else {
+    lensSummaries.push(`- **${lo.title}**: (ось не отработала — ревьюер не вернул результат)`)
+    lostStages.push({ phase: 'Ревью по осям', stage: `ось «${lo.title}»`, reason: 'ревьюер не вернул находки' })
+  }
   for (const f of (lo.verified || [])) all.push({ ...f, lens: lo.title })
 }
 all.sort((x, y) => (SEV_ORDER[x.severity] ?? 9) - (SEV_ORDER[y.severity] ?? 9))
@@ -190,6 +196,10 @@ phase('Синтез')
 const findingsBlock = all.length
   ? all.map((f, i) => `${i + 1}. [${f.lens}] ${fmtFinding(f)}`).join('\n')
   : '(подтверждённых проблем не найдено)'
+
+const lostBlock = lostStages.length
+  ? lostStages.map(s => `  - [${s.phase}] ${s.stage} — ${s.reason}`).join('\n')
+  : '(потерь нет)'
 
 const synthesis = await structuredAgent(`Ты — ведущий консилиума. Ревьюеры по осям (${lenses.map(k => LENS_CATALOG[k].title).join(', ')}) разобрали изменения, находки прошли проверку на опровержение. Сведи итог.
 
@@ -201,8 +211,14 @@ ${lensSummaries.join('\n')}
 Подтверждённые находки (по убыванию критичности):
 ${findingsBlock}
 
+⚠️ НЕПОЛНОТА ПОКРЫТИЯ — обязательно учти в verdict:
+${lostBlock}
+${lostStages.length ? 'Консилиум отработал с дырами. Если выпали оси, критичные для изменений (например, security в PR с auth-логикой) — понизь уверенность вердикта и явно укажи, какие риски остались непроверенными.' : ''}
+
 Дай итоговый вердикт: что блокирует мерж (критичные/серьёзные), что можно на потом, и рекомендацию. Будь конкретным и практичным, без воды. Отвечай по-русски.`,
   { label: 'Синтез консилиума', phase: 'Синтез', schema: SYNTH_SCHEMA })
+
+if (!synthesis) lostStages.push({ phase: 'Синтез', stage: 'Ведущий консилиума', reason: 'агент не вернул итоговый вердикт' })
 
 return {
   target,
@@ -211,4 +227,5 @@ return {
   totalFindings: all.length,
   findings: all,
   synthesis,
+  lostStages,
 }

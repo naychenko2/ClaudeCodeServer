@@ -189,6 +189,12 @@ const execDigest = execResults.map(e =>
   `- ${e.subtask.title}: ${e.result ? `${e.result.status} — ${e.result.summary}` : '(исполнитель не отчитался)'}`
 ).join('\n')
 
+// Потери фазы «Исполнение»: под-задачи, по которым исполнитель не отчитался
+// (агент не вернул результат) — должны быть видны в merge/verify и в возврате.
+const lostStages = execResults
+  .filter(e => !e.result)
+  .map(e => ({ phase: 'Исполнение', stage: `под-задача «${e.subtask.title}» (${e.subtask.id})`, reason: 'исполнитель не вернул отчёт' }))
+
 // ---- Фаза 3: merge (только для параллельного worktree-режима) ----
 let merge = null
 const parallelHappened = useWorktree && waves.some(w => w.length > 1)
@@ -203,12 +209,16 @@ ${execDigest}
 
 Проверь текущее состояние git (ветки/worktree/diff), собери изменения в рабочее дерево, разреши конфликты по смыслу общей задачи. Верни отчёт о том, что сведено и какие конфликты были. Отвечай по-русски.`,
     { label: 'Merge изменений', phase: 'Merge', schema: EXEC_SCHEMA })
+  if (!merge) lostStages.push({ phase: 'Merge', stage: 'Интегратор', reason: 'агент не вернул отчёт о сведении изменений' })
 }
 
 // ---- Фаза 4: verify ----
 let verify = null
 if (doVerify) {
   phase('Verify')
+  const verifyLostBlock = lostStages.length
+    ? lostStages.map(s => `  - [${s.phase}] ${s.stage} — ${s.reason}`).join('\n')
+    : '(потерь нет)'
   verify = await structuredAgent(`Ты — ВЕРИФИКАТОР командной реализации. Проверь, что суммарный результат работает.
 
 ОБЩАЯ ЗАДАЧА: ${task}
@@ -216,8 +226,13 @@ if (doVerify) {
 Что сделала команда:
 ${execDigest}
 
+⚠️ НЕПОЛНОТА КОМАНДЫ — обязательно учти в passed/remaining:
+${verifyLostBlock}
+${lostStages.length ? 'Часть под-задач или стадий (merge/verify) не дала результата. Перед запуском проверок выясни, какие именно куски отсутствуют — без них верификация сборки/тестов может быть зелёной только потому, что красный код просто не появился в дереве. Зафиксируй эти пробелы в remaining явно.' : ''}
+
 Запусти релевантные проверки этого репозитория (например для фронта: cd frontend && npm run build; для бэка: cd backend && dotnet build / dotnet test). Если проверка красная — почини по месту (в пределах разумного) и перезапусти. Верни: прошло ли, что чинил, что осталось красным. Отвечай по-русски.`,
     { label: 'Проверка результата', phase: 'Verify', schema: VERIFY_SCHEMA })
+  if (!verify) lostStages.push({ phase: 'Verify', stage: 'Верификатор', reason: 'агент не вернул отчёт о проверке' })
 }
 
 return {
@@ -229,4 +244,5 @@ return {
   execResults: execResults.map(e => ({ id: e.subtask.id, title: e.subtask.title, result: e.result })),
   merge,
   verify,
+  lostStages,
 }

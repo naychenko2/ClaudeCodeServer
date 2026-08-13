@@ -109,10 +109,12 @@ public class SessionManager : IDisposable
         public readonly List<QueuedMessage> Pending = [];
         public readonly Lock PendingLock = new();
         public volatile bool QueueFrozen;
-        // Идёт сворачивание контекста (/compact). Обычный ход, но обёртка фолбэка его не
-        // оркеструет, а exited убитой компакции глотает — поэтому прерывать компакцию нельзя
-        // (чат залип бы в Working навсегда). Гасится концом хода: result/error/exited.
-        public volatile bool CompactInFlight;
+        // Прогон, в котором идёт сворачивание контекста (/compact). Обычный ход, но обёртка
+        // фолбэка его не оркеструет, а exited убитой компакции глотает — поэтому прерывать
+        // компакцию нельзя (чат залип бы в Working навсегда). Хранится идентификатор прогона,
+        // а не флаг (та же причина, что у DrainOnExitedRun): поздний терминал ЧУЖОГО
+        // доживающего прогона иначе снял бы защиту с идущей компакции. 0 — компакции нет.
+        public long CompactRun;
         // Идентификатор текущего прогона адаптера: колбэк КАЖДОГО прогона несёт свой,
         // поэтому exited доживающего процесса отличим от exited текущего (см. LoopTurnInFlight —
         // exited опаздывает до ~30 мин). Присваивается вместе с Process.
@@ -2963,7 +2965,7 @@ public class SessionManager : IDisposable
         // фолбэка его не оркеструет (_turn == null), и exited убитой компакции она ГЛОТАЕТ —
         // до SessionManager не дойдёт ничего. Перебой оставил бы чат в вечном Working с
         // застрявшей очередью, поэтому отказываем: компакция короткая, её стоит дождаться.
-        if (entry.CompactInFlight) return false;
+        if (entry.CompactRun != 0 && entry.CompactRun == entry.RunId) return false;
         if (entry.QueueFrozen) return false;
         lock (entry.PendingLock)
             if (entry.Pending.Count == 0) return false;
@@ -3274,9 +3276,13 @@ public class SessionManager : IDisposable
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
         // Метка «идёт компакция» — её читает PreemptForPending: прерывать компакцию нельзя,
-        // её exited глотает обёртка фолбэка. Гасится на конце хода в OnMessageAsync.
-        entry.CompactInFlight = true;
-        await entry.Process!.CompactAsync();
+        // её exited глотает обёртка фолбэка. Гасится на конце хода в OnMessageAsync — но
+        // только терминалом ЭТОГО прогона, поэтому и метка хранит его идентификатор.
+        // Ход не стартовал (адаптер отвалился на запуске compact) — снимаем сразу: терминала
+        // не будет, а повисшая метка запретила бы перебой в этом чате навсегда.
+        entry.CompactRun = entry.RunId;
+        try { await entry.Process!.CompactAsync(); }
+        catch { entry.CompactRun = 0; throw; }
     }
 
     // После перезапуска сервера Process может быть null — восстанавливаем сессию
@@ -6878,8 +6884,12 @@ public class SessionManager : IDisposable
             // На штатном конце хода метка гасится — иначе поздний exited этого же прогона
             // доставил бы второе сообщение параллельно уже запущенному ходу. В фоне — как и
             // work-loop, чтобы не держать read-loop адаптера.
-            // Компакт-ход кончился (штатно или обрывом) — метка своё отработала
-            if (msg is ResultMessage or ErrorMessage or ExitedMessage) entry.CompactInFlight = false;
+            // Компакт-ход кончился (штатно или обрывом) — метка своё отработала. Гейт по
+            // прогону обязателен, как у DrainOnExitedRun ниже: exited чужого доживающего
+            // прогона (опаздывает до ~30 мин) иначе снял бы защиту с ЖИВОЙ компакции, и
+            // PreemptForPending убил бы её — ровно тот вечный Working, ради которого метка и есть.
+            if (msg is ResultMessage or ErrorMessage or ExitedMessage && runId != 0 && entry.CompactRun == runId)
+                entry.CompactRun = 0;
 
             var drainOnExited = msg is ExitedMessage && runId != 0 && entry.DrainOnExitedRun == runId;
             if (msg is ResultMessage or ErrorMessage or ExitedMessage && entry.DrainOnExitedRun == runId)

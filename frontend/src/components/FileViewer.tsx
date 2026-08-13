@@ -48,7 +48,7 @@ import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
 import { base64ToBytes } from '../lib/binary';
-import { C, FONT, FS, MODAL_W, SHADOW, SP, TB } from '../lib/design';
+import { C, FONT, FS, MODAL_W, R, SHADOW, SP, TB } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch } from './Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
@@ -1408,8 +1408,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       width: '100%', marginTop: 12,
       borderTop: `1px solid ${C.border}`, paddingTop: 4,
     } : {
+      // Липкая накладка: колонка плывёт справа (текст её обтекает), но при прокрутке
+      // остаётся в правом верхнем углу. Ниже зоны обтекания текст идёт во всю ширину
+      // и уходит ПОД колонку — поэтому фон непрозрачный, а рамка с тенью читаются
+      // как наложенная карточка, а не как часть документа
       float: 'right', width: 290, marginLeft: 18, marginBottom: 12,
-      borderLeft: `1px solid ${C.border}`, paddingLeft: 14,
+      position: 'sticky', top: SP.xs, zIndex: 1,
+      maxHeight: 'calc(100vh - 150px)', overflowY: 'auto',
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+      padding: '10px 12px', boxShadow: SHADOW.card,
     }}>
       <DocPropsPanel state={docProps} />
       <div ref={setSideEl} />

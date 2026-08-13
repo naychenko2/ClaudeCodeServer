@@ -12,6 +12,7 @@ import { useSessionPanels } from './workspace/useSessionPanels';
 import { SESSION_KEYS } from './workspace/panelCatalog';
 import { KnowledgePanel } from '../components/KnowledgePanel';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
+import { ProjectIntroCard } from '../features/projects/ProjectIntroCard';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { joinProject, leaveProject, onMessage, onReconnected } from '../lib/signalr';
 import { loadWorkspaceState, saveWorkspaceState, loadFileFullscreenPref, saveFileFullscreenPref, isLeftTab, type LeftTab } from '../lib/workspaceState';
@@ -1475,6 +1476,17 @@ const windowWidth = useWindowWidth();
             }
           </div>
         </div>
+        {/* Мягкое приглашение к знакомству с проектом (фича default-personas-onboarding).
+            На мобиле появляется только в режиме sidebar (как headerBar выше); не гейт —
+            workspace остаётся полностью доступным. */}
+        {!openFile && mobileView === 'sidebar' && (
+          <ProjectIntroCard
+            projectId={project.id}
+            projectOwnerId={project.ownerId}
+            defaultPersonaId={projectDefaultId}
+            isMobile={isMobile}
+          />
+        )}
         {/* Чат (или карточка задачи в режиме «Задачи») — ВСЕГДА в DOM */}
         <div style={{ flex: 1, display: !openFile && mobileView !== 'sidebar' ? 'flex' : 'none', flexDirection: 'column', overflow: 'hidden' }}>
           {leftTab === 'tools'
@@ -1539,6 +1551,16 @@ const windowWidth = useWindowWidth();
     <PageCanvas project={project}>
       {/* Единый верхний хаб-хедер на всю ширину (симметрия с разделом «Чаты») */}
       <HubHeader value="projects" onTab={onSwitchHub} auth={auth} onLogout={onLogout} project={projectForEdit} onOpenProjectSettings={() => setEditProjectOpen(true)} />
+
+      {/* Мягкое приглашение к знакомству с проектом (фича default-personas-onboarding).
+          Появляется между HubHeader и DesktopWorkspace как горизонтальная полоска,
+          DesktopWorkspace под ней получает оставшуюся высоту через flex:1. */}
+      <ProjectIntroCard
+        projectId={project.id}
+        projectOwnerId={project.ownerId}
+        defaultPersonaId={projectDefaultId}
+        isMobile={isMobile}
+      />
 
       {/* Тело: сайдбар + контент. position:relative — чтобы drawer/overlay легли под хедер.
           overflow — clip с запасом, а не hidden: тени островов и попапа-превью панели

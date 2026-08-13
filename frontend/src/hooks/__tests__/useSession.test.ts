@@ -47,7 +47,8 @@ const m = vi.hoisted(() => ({
   getHistory: vi.fn<(sid: string) => Promise<unknown[]>>(async () => []),
   joinSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   leaveSession: vi.fn<(sid: string) => Promise<void>>(async () => { }),
-  sendMessage: vi.fn<() => Promise<'started' | 'queued'>>(async () => 'started'),
+  sendMessage: vi.fn<() => Promise<'started' | 'queued' | 'queued-preempted'>>(async () => 'started'),
+  preemptForPending: vi.fn<(sid: string) => Promise<void>>(async () => { }),
   // Обработчики сообщений хаба — через них тест играет роль сервера
   messageHandlers: [] as Array<(msg: unknown) => void>,
   // Обработчики восстановления соединения — тест играет реконнект хаба
@@ -70,6 +71,7 @@ vi.mock('../../lib/api', () => ({
     sessions: {
       getHistory: (_projectId: string, sid: string) => m.getHistory(sid),
       cancelPending: vi.fn(async () => { }),
+      preemptForPending: (sid: string) => m.preemptForPending(sid),
     },
   },
 }));
@@ -434,6 +436,115 @@ describe('useSession: членство в группе', () => {
     // Окно отправки закрыто — статус снова управляет флагом
     emitStatus(sid, 'active');
     expect(chat.render().isWaiting).toBe(false);
+
+    chat.unmount();
+  });
+});
+
+describe('useSession: прерывание хода ради очереди', () => {
+  // Сервер шлёт конец прогона (процесс убит — result по такому ходу не приходит)
+  const emitExited = (sid: string) =>
+    m.messageHandlers.forEach(h => h({ type: 'exited', sessionId: sid }));
+
+  it('исход queued-preempted отмечает ход прерванным, а не аварийным', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    m.sendMessage.mockResolvedValueOnce('queued-preempted');
+    await chat.first.send('не спрашивай, делай');
+
+    // Отметка стоит ДО прихода exited — редьюсер не сочтёт смерть прогона аварией
+    expect(chat.render().items.at(-1)).toEqual({ kind: 'interrupted' });
+    emitExited(sid);
+    expect(chat.render().items.some(i => i.kind === 'session_ended')).toBe(false);
+
+    chat.unmount();
+  });
+
+  it('exited, обогнавший ответ хаба, тоже не рисует ложную аварию', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    // Гонка: сервер убил ход и разослал exited раньше, чем вернул исход отправки
+    m.sendMessage.mockImplementationOnce(async () => {
+      emitExited(sid);
+      return 'queued-preempted';
+    });
+    await chat.first.send('не спрашивай, делай');
+
+    expect(chat.render().items.some(i => i.kind === 'session_ended')).toBe(false);
+    expect(chat.render().items.filter(i => i.kind === 'interrupted')).toHaveLength(1);
+
+    chat.unmount();
+  });
+
+  it('дельты, долетевшие после отметки, не возвращают ложную аварию', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    m.sendMessage.mockResolvedValueOnce('queued-preempted');
+    await chat.first.send('не спрашивай, делай');
+
+    // Текст, бывший в полёте на момент kill, долетает уже после отметки и снова
+    // становится хвостом ленты — проверка «последний элемент interrupted» тут врала бы
+    m.messageHandlers.forEach(h => h({ type: 'text_delta', sessionId: sid, text: 'хвост убитого хода' }));
+    expect(chat.render().items.at(-1)?.kind).toBe('text');
+
+    emitExited(sid);
+    expect(chat.render().items.some(i => i.kind === 'session_ended')).toBe(false);
+
+    chat.unmount();
+  });
+
+  it('отметка переживает замену ленты историей с сервера', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    m.sendMessage.mockResolvedValueOnce('queued-preempted');
+    await chat.first.send('не спрашивай, делай');
+    expect(chat.render().items.some(i => i.kind === 'interrupted')).toBe(true);
+
+    // Блип связи внутри окна преемпта: история с сервера новее и заменяет ленту целиком,
+    // а маркер «Прервано» live-only — в history его нет, из ленты он исчезает
+    m.getHistory.mockResolvedValue([user('не спрашивай, делай'), text('хвост убитого хода')]);
+    for (const h of m.reconnectHandlers) await h();
+    await flush();
+    expect(chat.render().items.some(i => i.kind === 'interrupted')).toBe(false);
+
+    // Факт прерывания держится вне ленты — exited убитого хода не читается как авария
+    emitExited(sid);
+    expect(chat.render().items.some(i => i.kind === 'session_ended')).toBe(false);
+
+    chat.unmount();
+  });
+
+  it('аварийный exited вне окна отправки по-прежнему виден как авария', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    await chat.first.send('обычное'); // 'started' по умолчанию — ход идёт
+    emitExited(sid);
+
+    expect(chat.render().items.some(i => i.kind === 'session_ended')).toBe(true);
+
+    chat.unmount();
+  });
+
+  it('отказ перебоя снимает оптимистичную отметку', async () => {
+    const sid = nextSid();
+    const chat = openChat(sid);
+    await flush();
+
+    // 409: ход уже кончился сам либо чат залип без живого прогона — прерывания не было
+    m.preemptForPending.mockRejectedValueOnce(new Error('409'));
+    await chat.first.preemptForPending();
+
+    expect(chat.render().items.some(i => i.kind === 'interrupted')).toBe(false);
 
     chat.unmount();
   });

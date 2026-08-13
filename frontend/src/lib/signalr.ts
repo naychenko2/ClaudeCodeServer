@@ -109,10 +109,15 @@ export async function leaveSession(sessionId: string): Promise<void> {
 // Возвращает исход постановки пользовательского сообщения: 'started' — ход запущен
 // (оптимистичный баллон уместен); 'queued' — чат занят, сообщение встало в серверную
 // очередь (баллон НЕ рисуем: карточку даст снимок pending_messages, доставленное —
-// событием user_message). Контракт «честной очереди».
-export async function sendMessage(sessionId: string, text: string, attachedPaths: string[] = [], mode?: string, auto = false): Promise<'started' | 'queued'> {
+// событием user_message); 'queued-preempted' — то же, но идущий ход ради этого сообщения
+// пришлось прервать (ждал ответа человека либо шёл цикл «до готово»): убитый ход пришлёт
+// голый exited, и лента обязана отметить прерывание, иначе нарисует ложную аварию.
+// Контракт «честной очереди».
+export type SendOutcome = 'started' | 'queued' | 'queued-preempted';
+
+export async function sendMessage(sessionId: string, text: string, attachedPaths: string[] = [], mode?: string, auto = false): Promise<SendOutcome> {
   const conn = await ensureConnected();
-  return conn.invoke<'started' | 'queued'>('SendMessage', sessionId, text, attachedPaths, mode ?? null, auto);
+  return conn.invoke<SendOutcome>('SendMessage', sessionId, text, attachedPaths, mode ?? null, auto);
 }
 
 export async function respondPermission(

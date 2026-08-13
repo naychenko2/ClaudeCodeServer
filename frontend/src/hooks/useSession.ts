@@ -3,7 +3,7 @@ import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImpleme
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
 import { api } from '../lib/api';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
 // --- Модульный персистентный стор ---
 // Состояние живёт на уровне модуля и переживает переключение между сессиями.
@@ -175,6 +175,13 @@ function reconcile(sid: string) {
 // стартовал) не должен гасить оптимистичный isWaiting и дёргать reloadHistory.
 const _sending = new Set<string>();
 
+// Ход прерван сервером ради очереди (кнопка «Прервать и отправить» либо исход
+// 'queued-preempted'). Факт держим здесь, а НЕ только отметкой в ленте: лента переживает
+// замену историей с сервера (маркер 'interrupted' live-only, в history его нет), и после
+// реконнекта посреди преемпта `exited` убитого хода снова читался бы как авария. Флаг живёт
+// до ближайшего конца хода — дальше он неактуален и следующую настоящую аварию не заглушит.
+const _preempted = new Set<string>();
+
 let _pollTimer: ReturnType<typeof setInterval> | null = null;
 
 // Тик poll: переспрашиваем статус у занятых открытых сессий
@@ -276,6 +283,22 @@ function ensureHandler() {
       _reconciling.delete(sid);
       return;
     }
+
+    // Ход убит сервером ради нашего же сообщения (preempt при Waiting/цикле), но exited
+    // убитого прогона обогнал ответ хаба с исходом 'queued-preempted' — они идут разными
+    // каналами, порядок не гарантирован. Без отметки редьюсер счёл бы этот exited аварией и
+    // нарисовал «AI завершился неожиданно». Ставим её здесь, пока окно отправки открыто.
+    // Размен осознанный: настоящая смерть процесса, попавшая ровно в это окно (сотни мс),
+    // покажется как «Прервано» — обмануть мягко лучше, чем пугать регулярной ложной аварией.
+    if (msg.type === 'exited' && (_sending.has(sid) || _preempted.has(sid))) {
+      const s = getState(sid);
+      if (s.isWaiting && !turnAlreadyEnded(s.items))
+        touch(sid, { ...s, items: [...s.items, { kind: 'interrupted' }] });
+    }
+    // Ход, который прерывали, закончился — флаг отработал. Гасим и на result: если перебой
+    // не состоялся (409, гонка), ход дошёл до конца сам, и держать флаг дальше нельзя —
+    // он заглушил бы аварию следующего хода.
+    if (msg.type === 'exited' || msg.type === 'result') _preempted.delete(sid);
 
     // Чистая часть — в редьюсере (lib/chatReducer.ts). Если состояние не изменилось
     // (вернулась та же ссылка) — подписчиков не будим.
@@ -432,6 +455,34 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     catch { /* уже доставлено или сеть — снимок от сервера всё поправит */ }
   }, [sessionId]);
 
+  // Прервать идущий ход и доставить ждущее сейчас (кнопка на карточке очереди). Элемент
+  // 'interrupted' ставим оптимистично, как по «Стоп»: убитый ход пришлёт голый exited, и без
+  // этой отметки редьюсер счёл бы его аварией и нарисовал «AI завершился неожиданно».
+  // isWaiting не гасим — ждущее сообщение сейчас уйдёт в работу, ход продолжается.
+  const preemptForPending = useCallback(async () => {
+    if (!sessionId) return;
+    let added = false;
+    _preempted.add(sessionId);
+    setState(sessionId, prev => {
+      if (turnAlreadyEnded(prev.items)) return prev;
+      added = true;
+      return { ...prev, items: [...prev.items, { kind: 'interrupted' }] };
+    });
+    try { await api.sessions.preemptForPending(sessionId); }
+    catch {
+      // Запрос не удался: либо 409 (ход кончился сам, очередь пуста), либо потерянный ответ
+      // при живом перебое — общий request статус не доносит, отличить нельзя. Снимаем
+      // ОТМЕТКУ В ЛЕНТЕ (при 409 прерывания не было, и врать в ленте нельзя), но НЕ флаг: если
+      // ход всё-таки убит, его exited не должен нарисовать ложную аварию. Флаг сам погаснет
+      // на ближайшем конце хода. Отметку снимаем только если хвост всё ещё наш — за время
+      // запроса лента могла уехать вперёд.
+      if (added) setState(sessionId, prev =>
+        prev.items[prev.items.length - 1]?.kind === 'interrupted'
+          ? { ...prev, items: prev.items.slice(0, -1) }
+          : prev);
+    }
+  }, [sessionId]);
+
   // Команда composer_restore отработана (текст и вложения поставил Composer, режим — ChatPanel):
   // гасим её, чтобы возврат в чат не подставил в поле ввода уже отправленное сообщение.
   const consumeRestore = useCallback(() => {
@@ -460,6 +511,16 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
       // 'queued' — баллон не нужен: карточку даст pending_messages, isWaiting удержит ход.
       if (outcome === 'started' && !auto) {
         setState(sessionId, prev => ({ ...prev, items: [...prev.items, { kind: 'user_message', text, attachedPaths, ts: Date.now() }] }));
+      }
+      // 'queued-preempted' — ради этого сообщения сервер прервал идущий ход (тот ждал ответа
+      // человека либо шёл цикл «до готово»). Отмечаем прерывание, как по «Стоп»: убитый ход
+      // пришлёт голый exited, и без отметки редьюсер счёл бы его аварией «AI завершился
+      // неожиданно». isWaiting держим — ход продолжится доставленным сообщением.
+      if (outcome === 'queued-preempted') {
+        _preempted.add(sessionId);
+        setState(sessionId, prev => turnAlreadyEnded(prev.items)
+          ? prev
+          : { ...prev, items: [...prev.items, { kind: 'interrupted' }] });
       }
     } catch (err) {
       setState(sessionId, prev => ({
@@ -663,5 +724,5 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
     sendSetMode(sessionId, mode).catch(() => {});
   }, [sessionId]);
 
-  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, teamPlanning: state.teamPlanning, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending };
+  return { items: state.items, isWaiting: state.isWaiting, isJoined: state.isJoined, isHistoryLoading: state.isHistoryLoading, rateLimits: state.rateLimits, isCompacting: state.isCompacting, compactNote: state.compactNote, workLoop: state.workLoop, teamImplement: state.teamImplement, teamPlanning: state.teamPlanning, promptSuggestion: state.promptSuggestion, pending: state.pending, composerRestore: state.composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, changeMode, cancelPending, preemptForPending };
 }

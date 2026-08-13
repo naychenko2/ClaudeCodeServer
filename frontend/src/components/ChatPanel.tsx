@@ -170,7 +170,7 @@ function memoizedCacheEntry(
 }
 
 export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
-  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
+  const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
@@ -1677,8 +1677,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
 
         {/* Сообщения агентов, ждущие конца хода: в самом низу ленты — они придут следующими.
             Живут только в памяти сервера, в истории их нет; крестик снимает доставку. */}
+        {/* Перебой предлагаем только когда ход реально идёт: без него прерывать нечего,
+            а кнопка на стоящей очереди читалась бы как сломанная */}
         <PendingMessageList items={pending} isMobile={isMobile}
-          onCancel={online ? cancelPending : undefined} />
+          onCancel={online ? cancelPending : undefined}
+          onPreempt={online && isWaiting ? preemptForPending : undefined} />
 
         {/* Баннер прерванной сессии — в конце ленты, после истории. Возобновление — НА МЕСТЕ:
             обычный ход «Продолжи» в эту же сессию (бэкенд резюмирует транскрипт через --resume),

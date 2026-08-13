@@ -678,6 +678,13 @@ export interface GitFileChange {
   deleted?: number | null;
 }
 
+// Чат, менявший файл (POST /api/projects/{id}/files/changed-by) — панель «Изменения»:
+// бейдж в строке файла + список «Также меняли» в шапке диффа
+export interface ChangedBySession {
+  sessionId: string;
+  name: string;
+}
+
 // Статус рабочего дерева проекта (GET /api/projects/{id}/git/status)
 export interface GitStatus {
   isRepo: boolean;

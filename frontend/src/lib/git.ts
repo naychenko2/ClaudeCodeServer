@@ -3,8 +3,8 @@
 // (commit/stage/checkout/…, в т.ч. с другого устройства) — стор перечитывает статус.
 
 import { useSyncExternalStore } from 'react';
-import type { GitStatus, GitBranchInfo, GitLogEntry, GitStashEntry, GitRemoteInfo } from '../types';
-import { api } from './api';
+import type { GitStatus, GitBranchInfo, GitLogEntry, GitStashEntry, GitRemoteInfo, ChangedBySession } from '../types';
+import { api, getGitSessionContext } from './api';
 import { joinUser, onFilesChanged, onGitStatusChanged, onReconnected } from './signalr';
 
 export interface GitProjectState {
@@ -25,6 +25,10 @@ export interface GitProjectState {
   // показывает их поимённо и предлагает разобрать конфликт в чате
   conflictFiles: string[];
   busy: boolean;           // идёт сетевая git-операция (блокируем кнопки)
+  // Путь git status (как он пришёл от сервера) → чужие чаты, менявшие файл — панель
+  // «Изменения» (бейдж строки) и шапка диффа («Также меняли»). Пусто — не загружено,
+  // гейт worktree-контекста активного чата или у файлов правда нет чужих чатов.
+  changedBy: Map<string, ChangedBySession[]>;
 }
 
 const EMPTY: GitProjectState = {
@@ -32,6 +36,7 @@ const EMPTY: GitProjectState = {
   log: [], logLoaded: false,
   unpushed: [], unpushedLoaded: false,
   branches: [], stashes: [], remote: null, error: null, diverged: false, conflictFiles: [], busy: false,
+  changedBy: new Map(),
 };
 
 const _state = new Map<string, GitProjectState>();
@@ -126,9 +131,58 @@ export async function loadGitStatus(projectId: string): Promise<void> {
   try {
     const status = await api.git.status(projectId);
     patch(projectId, { status, statusLoaded: true });
+    void loadChangedBy(projectId, status);
   } catch {
     // офлайн/ошибка — считаем «не репо», сегменты git скрыты
     patch(projectId, { statusLoaded: true });
+  }
+}
+
+// Активный чат для фильтра changedBy: панель «Также меняли»/бейдж не должны включать
+// сам открытый чат в свой же список «другие чаты». Задаётся вызывающим кодом
+// (WorkspacePage) при смене активного чата — стору самому её взять неоткуда.
+const _activeSessionForChangedBy = new Map<string, string | null>();
+// Сырой (нефильтрованный по активному чату) последний ответ сервера — чтобы переключение
+// чата могло перефильтровать уже загруженные данные БЕЗ нового запроса и не оставляло в
+// сторе устаревший фильтр до следующего git status (иначе после смены чата «Также меняли»
+// на миг показывал бы сам новый активный чат и терял прежний — до следующего рефреша).
+const _rawChangedBy = new Map<string, Record<string, ChangedBySession[]>>();
+
+export function setActiveSessionForChangedBy(projectId: string, sessionId: string | null): void {
+  _activeSessionForChangedBy.set(projectId, sessionId);
+  applyChangedByFilter(projectId);
+}
+
+// Перефильтровывает и укладывает в стор последний сырой ответ по текущему активному чату.
+// Не грузило — нечего перефильтровывать (первый git status ещё не пришёл).
+function applyChangedByFilter(projectId: string): void {
+  const raw = _rawChangedBy.get(projectId);
+  if (!raw) return;
+  const activeSessionId = _activeSessionForChangedBy.get(projectId) ?? null;
+  const changedBy = new Map<string, ChangedBySession[]>();
+  for (const [path, entries] of Object.entries(raw)) {
+    const filtered = activeSessionId ? entries.filter(e => e.sessionId !== activeSessionId) : entries;
+    if (filtered.length > 0) changedBy.set(path, filtered);
+  }
+  patch(projectId, { changedBy });
+}
+
+// Догружает changedBy по путям текущего git status — общей цепочкой с loadGitStatus,
+// поэтому срабатывает после любого её вызова (realtime, focus, дебаунс file_changed).
+// Гейт: пока панель смотрит git worktree активного чата (getGitSessionContext), пути
+// status относятся к дереву чата, а не к rootPath проекта — индекс их не знает.
+async function loadChangedBy(projectId: string, status: GitStatus): Promise<void> {
+  const ctx = getGitSessionContext();
+  if (ctx?.projectId === projectId) { _rawChangedBy.delete(projectId); patch(projectId, { changedBy: new Map() }); return; }
+  const paths = [...status.staged, ...status.unstaged, ...status.untracked].map(f => f.path);
+  if (paths.length === 0) { _rawChangedBy.delete(projectId); patch(projectId, { changedBy: new Map() }); return; }
+  try {
+    const { files } = await api.files.changedBy(projectId, paths);
+    _rawChangedBy.set(projectId, files);
+    applyChangedByFilter(projectId);
+  } catch {
+    _rawChangedBy.delete(projectId);
+    patch(projectId, { changedBy: new Map() });
   }
 }
 
@@ -356,4 +410,10 @@ export function useGitState(projectId: string): GitProjectState {
     () => _state.get(projectId) ?? EMPTY,
     () => _state.get(projectId) ?? EMPTY,
   );
+}
+
+// Снимок состояния без подписки (для кода вне React-рендера — напр. тестов): та же
+// семантика, что у useGitState, без useSyncExternalStore. Аналог getNotesSnapshot (notes.ts).
+export function getGitState(projectId: string): GitProjectState {
+  return get(projectId);
 }

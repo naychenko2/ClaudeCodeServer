@@ -262,4 +262,27 @@ public class SessionsControllerTests : IClassFixture<TestWebApplicationFactory>
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
+
+    // --- POST /api/sessions/{sid}/pending/preempt (кнопка «Прервать и отправить») ---
+
+    [Fact]
+    public async Task PreemptForPending_НесуществующаяСессия_Returns404()
+    {
+        var response = await _client.PostAsync("/api/sessions/nonexistent/pending/preempt", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task PreemptForPending_СвободныйЧатБезОчереди_Returns409()
+    {
+        // Ход не идёт и доставлять нечего — прерывать нечего. Отказ должен быть явным:
+        // молчаливое 204 обмануло бы клиент, и тот нарисовал бы «Прервано» на пустом месте.
+        var projectId = await CreateProjectAsync();
+        var sessionId = await SeedHistoryAndCreateSessionAsync(projectId, messageCount: 1);
+
+        var response = await _client.PostAsync($"/api/sessions/{sessionId}/pending/preempt", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
 }

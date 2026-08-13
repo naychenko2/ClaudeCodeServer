@@ -88,11 +88,14 @@ public class SessionHub : Hub
         if (_sessions.GetPendingInteraction(sessionId) is { } pending)
             await Clients.Caller.SendAsync("message", pending with { SessionId = sessionId });
 
-        // Очередь сообщений от агентов, ждущих конца хода: живёт только в памяти сервера,
-        // в историю не пишется — без replay подключившийся клиент не увидел бы их вовсе
-        if (_sessions.GetVisiblePending(sessionId) is { Count: > 0 } queued)
-            await Clients.Caller.SendAsync("message",
-                new PendingMessagesMessage(queued) with { SessionId = sessionId });
+        // Очередь сообщений, ждущих конца хода: живёт только в памяти сервера, в историю не
+        // пишется — без replay подключившийся клиент не увидел бы их вовсе. Шлём ВСЕГДА, в том
+        // числе пустой список: снимок заменяет очередь у клиента целиком, а пропуск пустого
+        // оставлял бы призраков от сообщений, доставленных пока клиент был офлайн (событие
+        // доставки в группу он пропустил, REST-эндпоинта очереди у фронта нет). Такой призрак
+        // висел бы рядом с уже доставленным пузырём до следующего изменения очереди.
+        await Clients.Caller.SendAsync("message",
+            new PendingMessagesMessage(_sessions.GetVisiblePending(sessionId)) with { SessionId = sessionId });
     }
 
     // Уход из чата: зрителя снимаем всегда (сервер снова вправе слать push/тост о конце хода),
@@ -171,7 +174,14 @@ public class SessionHub : Hub
         // auto — сообщение опубликовано автоматически (например, «Обсудить с командой»):
         // UI покажет источник вместо пузыря пользователя
         var outcome = await _sessions.SendMessageAsync(sessionId, text, attachedPaths ?? [], mode, auto: auto);
-        return outcome == Services.SessionManager.SendUserOutcome.Started ? "started" : "queued";
+        return outcome switch
+        {
+            Services.SessionManager.SendUserOutcome.Started => "started",
+            // Ход пришлось прервать ради этого сообщения — клиент отметит это в ленте, иначе
+            // голый exited убитого хода прочитается как авария
+            Services.SessionManager.SendUserOutcome.QueuedPreempted => "queued-preempted",
+            _ => "queued",
+        };
     }
 
     public void RespondPermission(string sessionId, string requestId, string behavior)

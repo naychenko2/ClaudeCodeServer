@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Info, RotateCcw, Sparkles, UserRound } from 'lucide-react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, FS, R, SP, Z } from '../../lib/design';
+import { C, FONT, FS, ISLAND, R, SP, Z } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Modal, ModalActions, ConfirmDialog } from '../../components/ui';
 import { PageCanvas } from '../../components/ui/PageCanvas';
@@ -324,13 +324,21 @@ function IntroChatShell({ kind, title, subtitle, project, start, onDone }: {
         </Button>
       </div>
 
-      <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflowY: 'auto' }}>
+      {/* Нижний воздух под композером: в разделе чатов его даёт padding холста
+          (IslandScaffold, ISLAND.pad), здесь острова нет — задаём тем же значением */}
+      <div style={{
+        flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative', overflowY: 'auto',
+        paddingBottom: isMobile ? undefined : ISLAND.pad,
+      }}>
         {session ? (
           <ChatPanel
             key={session.id}
             session={session}
             project={project}
             isMobile={isMobile}
+            // Канонический вид чата на холсте (как в ChatsPage): hero-шапка по ширине
+            // колонки ленты вместо тулбара во всю ширину. На мобиле — как раньше
+            headerIsland={!isMobile}
             onSessionUpdated={setSession}
             attachedFiles={attachedFiles}
             onAttachedFilesChange={setAttachedFiles}

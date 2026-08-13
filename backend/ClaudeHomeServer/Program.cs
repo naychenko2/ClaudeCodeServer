@@ -321,6 +321,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
+// Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
+builder.Services.AddSingleton<ProjectFileSessionsIndex>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();

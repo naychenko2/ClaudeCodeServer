@@ -72,6 +72,28 @@ public class ClaudeSession : ILlmSessionAdapter
     private bool HasPendingControlResponse()
         => !_permissionWaiters.IsEmpty || !_pendingQuestions.IsEmpty || !_pendingPlans.IsEmpty;
 
+    // Признак ожидания control_response на момент смерти прогона — с фиксацией на прогоне (P31).
+    // Смерть детектируется двумя обработчиками: HandleProcessExitedAsync по событию ОС (обычно
+    // первым) и FinalizeRunAsync по закрытию stdout. Оба решают по pending, ретраить ли ход и
+    // слать ли ошибку. Без фиксации они читали бы живые словари — а первый же обработчик, пославший
+    // ошибку, зовёт CancelPendingControlResponses и очищает их. Итог зависел бы от порядка вызовов:
+    //   • Exited первым: FinalizeRunAsync видел бы пустые словари → ложный ретрай (дубль: ошибка
+    //     пользователю + переигранка новым процессом — двойная оплата);
+    //   • EOF первым: HandleProcessExitedAsync выходит по DeathDiagnosed до CancelPending →
+    //     pending залипал бы в сессии навсегда (каждая следующая смерть рапортовала «во время
+    //     ожидания разрешения»).
+    // Фикс: первый заметивший pending выставляет run.PendingControlAtDeath, оба читают его.
+    private bool ResolvePendingControlAtDeath(CliRun run)
+    {
+        if (run.PendingControlAtDeath) return true;
+        if (HasPendingControlResponse())
+        {
+            run.PendingControlAtDeath = true;
+            return true;
+        }
+        return false;
+    }
+
     // Отменить ожидающие control_response — вызывается при смерти процесса (P30) и в Interrupt().
     // TrySetCanceled выводит DecidePermissionAsync из WaitAsync → возвращает "cancelled" → control_response
     // не пошлётся, поток reader'а доедет до EOF штатно.
@@ -190,6 +212,14 @@ public class ClaudeSession : ILlmSessionAdapter
         // EOF-раньше-callback — ветка activeTurnDied в FinalizeRunAsync. Гарантирует ровно один
         // маркер смерти и одно сообщение об ошибке на прогон (см. P27).
         public volatile bool DeathDiagnosed;
+        // P31: прогон на момент смерти ждал control_response (permission / AskUserQuestion / план).
+        // Фиксируется на прогоне при первом обнаружении (см. ResolvePendingControlAtDeath), чтобы
+        // оба обработчика смерти (HandleProcessExitedAsync по событию ОС, FinalizeRunAsync по EOF)
+        // читали стабильное значение, а не живые мутируемые словари: первый же обработчик, шлёший
+        // ошибку, зовёт CancelPendingControlResponses и опустошает словари — без фиксации второй
+        // обработчик видел бы false и ретраил ход (дубль: ошибка + переигранка), либо pending
+        // залипал до конца сессии (блокер ревью P30).
+        public volatile bool PendingControlAtDeath;
         // Ход завершён (result без parent_tool_use_id получен); между ходами true.
         // Сбрасывает поток нового хода в TrySubmitTurn (под _stdinLock)
         public volatile bool TurnDone;
@@ -1653,6 +1683,16 @@ public class ClaudeSession : ILlmSessionAdapter
         _currentTurnAgentDepth = agentDepth;
         _currentTurnSuppressTasksExecute = suppressTasksExecute;
 
+        // P31: подстраховка от залипания pending control-состояния. К началу нового хода
+        // (предыдущий завершился result'ом) _pendingQuestions/_pendingPlans/_permissionWaiters
+        // обязаны быть пусты — ответы на control присланы. Если не пусты, это зависший мусор
+        // после смерти процесса в порядке «EOF первым» (AskUserQuestion/ExitPlanMode): тогда
+        // HandleProcessExitedAsync выходит по DeathDiagnosed, не доходя до CancelPending, и без
+        // этой чистки HasPendingControlResponse() остался бы true навсегда — каждая следующая
+        // смерть рапортовала бы «во время ожидания разрешения». TrySetCanceled на уже закрытых
+        // waiter'ах — no-op, легитимного ожидания в начале хода не бывает.
+        CancelPendingControlResponses();
+
         // Номер этого хода: садится в прогон, который его примет (CliRun.LastTurnSeq), и уходит
         // наружу в ExitedMessage. Выделяем ДО подачи — снимок SubmittedTurnSeq, снятый вызывающим
         // раньше (фолбэк на старте попытки), гарантированно меньше нашего номера.
@@ -2641,7 +2681,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // Даже same-process-ретрай тут ошибочен — ответа нет и не будет, карточка в ленте зависнет
         // до таймаута. Передаём гард в HandleProcessExitedAsync: он шлёт ErrorMessage и снимает
         // ожидание, оставляя нас с честным обрывом вместо ложного ретрая.
-        var pendingControlResponse = HasPendingControlResponse();
+        // P31: читаем фиксацию на прогоне (ResolvePendingControlAtDeath), а не живые словари —
+        // при порядке «Exited первым» HandleProcessExitedAsync уже очистил их, и без фиксации
+        // мы бы увидели false и молча ретраили ход (дубль ошибки).
+        var pendingControlResponse = ResolvePendingControlAtDeath(run);
         if (ShouldRetryEmptyExit(activeTurnDied, run.RetryOnEmptyExit, run.TurnGotEvent, run.ReuseSubmit)
             && !pendingControlResponse)
         {
@@ -2667,6 +2710,13 @@ public class ClaudeSession : ILlmSessionAdapter
                 Console.Error.WriteLine(
                     $"[ClaudeSession] Прогон умер при активном ходе (gotEvent={run.TurnGotEvent} reuse={run.ReuseSubmit} retryOnEmpty={run.RetryOnEmptyExit} exit={exitCode?.ToString() ?? "?"})");
             }
+            // P31: при порядке «EOF первым» (AskUserQuestion/ExitPlanMode — ридер не блокируется
+            // permission-waiter'ом) этот путь отрабатывает раньше HandleProcessExitedAsync, который
+            // затем выходит по DeathDiagnosed, не доходя до CancelPendingControlResponses. Чистим
+            // pending здесь же — иначе _pendingQuestions/_pendingPlans (без таймаута, в отличие от
+            // permission-waiter'ов) залипали бы в сессии навсегда. При порядке «Exited первым»
+            // словари уже пусты — повторная очистка no-op.
+            if (pendingControlResponse) CancelPendingControlResponses();
         }
 
         // Резолвим TurnTcs ПОСЛЕ выставления флагов ретрая: будим ждущий same-process путь,
@@ -2707,7 +2757,9 @@ public class ClaudeSession : ILlmSessionAdapter
         // P30: прогон ждёт control_response — shouldRetryEmptyExit даст true (gotEvent=true,
         // reuse=true), но ретрай тут нелеп: control_response не пошлётся, карточка в ленте зависнет.
         // Форсируем willRetry=false и шлём понятную ошибку ниже.
-        var pendingControlResponse = HasPendingControlResponse();
+        // P31: фиксируем pending на прогоне (ResolvePendingControlAtDeath) — тогда FinalizeRunAsync,
+        // вызванный после CancelPendingControlResponses ниже, прочитает true и не ретраил ход (дубль).
+        var pendingControlResponse = ResolvePendingControlAtDeath(run);
         var willRetry = activeTurn
             && !pendingControlResponse
             && ShouldRetryEmptyExit(activeTurn, run.RetryOnEmptyExit, run.TurnGotEvent, run.ReuseSubmit);

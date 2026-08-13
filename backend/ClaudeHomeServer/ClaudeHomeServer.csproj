@@ -25,7 +25,11 @@
        (в контейнере это делала копия в /app из Dockerfile) -->
   <ItemGroup>
     <None Include="..\..\mcp\**\*" LinkBase="mcp" CopyToPublishDirectory="PreserveNewest" />
-    <None Include="..\..\claude-defaults\**\*" LinkBase="claude-defaults" CopyToPublishDirectory="PreserveNewest" />
+    <!-- __tests__ исключаем: Node-хёрнессы не должны попадать в production-артефакт,
+         их место в репозитории для локального/CI-прогона -->
+    <!-- claude-defaults целиком, кроме Node-хёрнессов (__tests__) — они место в репозитории
+       для локального/CI-прогона, в production-артефакт не нужны -->
+    <None Include="..\..\claude-defaults\**\*" Exclude="..\..\claude-defaults\workflows\__tests__\**" LinkBase="claude-defaults" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- ConPTY-мост Windows-терминала нужен рядом с сервером как ФАЙЛ (exe+dll+runtimeconfig),

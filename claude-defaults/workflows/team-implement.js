@@ -29,22 +29,43 @@ const execTag = (j) => (executors.length ? ` @${executors[j % executors.length]}
 // ---- Обёртка над agent({schema}) с авто-ретраем ----
 // Движок Workflow сам нуджит агента ОДИН раз и при неудаче отдаёт null; мы добавляем ещё
 // одну попытку с усиленным требованием финального StructuredOutput, чтобы не терять отчёты
-// исполнителей и итоги верификации молча. Если и ретрай пустой — пишем потерю в лог прогона
-// и возвращаем null.
+// исполнителей и итоги верификации молча. Трактуем как сбой и идём в ретрай и возврат
+// null/undefined, и исключение первой попытки (parallel логирует «failed:» именно при throw).
+// Если и ретрай пустой/упавший — пишем потерю в лог прогона с раздельной формулировкой
+// причины и возвращаем null, не роняя стадию.
 async function structuredAgent(prompt, opts) {
-  const first = await agent(prompt, opts)
-  if (first !== null && first !== undefined) return first
+  const label = opts.label || '(без label)'
+
+  // Первая попытка: и null/undefined, и исключение — повод идти в ретрай
+  let firstFailedReason = null
+  let first = null
+  try {
+    first = await agent(prompt, opts)
+    if (first !== null && first !== undefined) return first
+    firstFailedReason = 'не вызвал StructuredOutput'
+  } catch (err) {
+    firstFailedReason = `упал с ошибкой: ${err && err.message ? err.message : String(err)}`
+  }
 
   const retryPrompt = prompt +
-    '\n\n⚠️ КРИТИЧНО: предыдущий ход завершился БЕЗ вызова инструмента StructuredOutput. ' +
+    `\n\n⚠️ КРИТИЧНО: предыдущий ход ${firstFailedReason}. ` +
     'Сейчас ОБЯЗАТЕЛЬНО заверши работу явным вызовом StructuredOutput, вернув объект, ' +
     'строго соответствующий заявленной схеме. Не пиши итоговый текст в ответ — ' +
     'верни структуру через StructuredOutput.'
   const retryOpts = { ...opts, label: opts.label ? `${opts.label} · повтор` : 'повтор' }
-  const second = await agent(retryPrompt, retryOpts)
-  if (second !== null && second !== undefined) return second
 
-  log(`⚠️ structuredAgent: «${opts.label || '(без label)'}» — агент дважды не вызвал StructuredOutput, результат утрачен`)
+  // Вторая попытка: исключение НЕ роняет стадию — логируем потерю и возвращаем null
+  let second = null
+  let secondFailedReason = null
+  try {
+    second = await agent(retryPrompt, retryOpts)
+    if (second !== null && second !== undefined) return second
+    secondFailedReason = 'не вызвал StructuredOutput'
+  } catch (err) {
+    secondFailedReason = `упал с ошибкой: ${err && err.message ? err.message : String(err)}`
+  }
+
+  log(`⚠️ structuredAgent: «${label}» — агент дважды не дал результат (1: ${firstFailedReason}; 2: ${secondFailedReason}), результат утрачен`)
   return null
 }
 

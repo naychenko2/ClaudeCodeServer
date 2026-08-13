@@ -65,12 +65,20 @@ function buildTree(notes: NoteSummary[], folderPaths: string[] = []): FolderNode
 
 // Список заметок: источники → дерево папок → заметки. Перенос — drag&drop
 // заметки на папку/заголовок источника (в пределах источника).
-export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted, onIdsRemapped, isMobile }: {
+export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, onCreateInFolder, onDeleted, onIdsRemapped, isMobile, sourceFilter, onOpenFileRef }: {
   notes: NoteSummary[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   // Мобайл: инлайн-иконки скрыты, действия — через long-press контекстное меню (как в файлах)
   isMobile?: boolean;
+  // Показать ТОЛЬКО один источник (панель «Заметки» воркспейса: projectId): заметки и
+  // папки режутся по нему, шапки групп-источников не рисуются. Комментарии к документам
+  // (docGroups) в этом режиме не показываются — они остаются механизмом раздела хаба,
+  // поэтому проект, где есть только комментарии, покажет пустое состояние (осознанно).
+  sourceFilter?: string;
+  // Открыть привязанный файл (frontmatter file:) — чип у заметки в панели воркспейса.
+  // Без колбэка чипы не рисуются (раздел хаба файлы проектов не открывает).
+  onOpenFileRef?: (path: string) => void;
   // Заметка перенесена (id сменился) — вызывающий обновляет выбор
   onMoved?: (oldId: string, newId: string) => void;
   // «+» на папке: создать заметку сразу в этой папке источника
@@ -81,11 +89,19 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
   onIdsRemapped?: (map: { oldId: string; newId: string }[]) => void;
 }) {
   // Физические папки (в т.ч. пустые) и лейблы источников (для источников без заметок)
-  const folders = useNoteFolders();
+  const allFolders = useNoteFolders();
+  // Фильтр по источнику: и заметки, и папки — только его; docGroups отпадают целиком
+  const notes = useMemo(
+    () => sourceFilter ? notesInput.filter(n => n.source === sourceFilter && !n.annotation) : notesInput,
+    [notesInput, sourceFilter]);
+  const folders = useMemo(
+    () => sourceFilter ? allFolders.filter(f => f.source === sourceFilter) : allFolders,
+    [allFolders, sourceFilter]);
   const [srcLabels, setSrcLabels] = useState<Record<string, string>>({});
   useEffect(() => {
+    if (sourceFilter) return;   // шапки источников скрыты — лейблы не нужны
     api.notes.sources().then(ss => setSrcLabels(Object.fromEntries(ss.map(s => [s.key, s.label])))).catch(() => {});
-  }, []);
+  }, [sourceFilter]);
 
   // Свёрнутые папки (ключ source|path); по умолчанию всё раскрыто
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -311,6 +327,17 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
             <Timer size={11} strokeWidth={2} />
             {exp.label}
           </span>
+        )}
+        {/* Привязка к файлу проекта (frontmatter file:): переход к файлу; битая — «не найден» */}
+        {onOpenFileRef && n.file && (
+          n.fileMissing
+            ? <span title={`${n.file} — файл не найден`} style={{ display: 'flex', alignItems: 'center', flexShrink: 0, marginRight: 2, color: C.warning }}>
+                <FileText size={11} strokeWidth={2.5} />
+              </span>
+            : <span title={n.file} onClick={e => { e.stopPropagation(); onOpenFileRef(n.file!); }}
+                style={{ display: 'flex', alignItems: 'center', flexShrink: 0, marginRight: 2, color: C.info, cursor: 'pointer' }}>
+                <FileText size={11} strokeWidth={2.5} />
+              </span>
         )}
         {/* Действия — только при ховере на десктопе (на мобиле — long-press меню) */}
         {!isMobile && hovered && (
@@ -553,7 +580,15 @@ export function NotesList({ notes, selectedId, onSelect, onMoved, onCreateInFold
 
   return (
     <div style={{ padding: '8px 8px 20px' }}>
-      {groups.map(g => (
+      {groups.map(g => sourceFilter ? (
+        // Режим одного источника: без шапки-группы (SourceDot) — дерево сразу
+        <div key={g.source} {...dropProps(g.source, '')}
+          style={dropTarget === `${g.source}|` ? { borderRadius: R.md, boxShadow: `inset 0 0 0 1.5px ${C.accent}` } : undefined}>
+          {g.root.children.map(c => renderFolder(g.source, c, 0))}
+          {g.root.notes.map(n => renderNote(n, 0))}
+          {creatingFolder === `${g.source}|` && renderCreateFolderInput(g.source, '', 0)}
+        </div>
+      ) : (
         <div key={g.source} {...dropProps(g.source, '')}
           style={dropTarget === `${g.source}|` ? { borderRadius: R.md, boxShadow: `inset 0 0 0 1.5px ${C.accent}` } : undefined}>
           <CollapseGroup

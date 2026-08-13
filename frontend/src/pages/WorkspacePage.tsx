@@ -55,6 +55,7 @@ import { useProjectTerminals } from '../hooks/useProjectTerminals';
 import { useProjectServices } from '../hooks/useProjectServices';
 import { TerminalPanelContent, PreviewPanelContent } from './workspace/panels';
 import { DocsPanel } from './workspace/DocsPanel';
+import { ProjectNotesPanel } from '../features/notes/ProjectNotesPanel';
 import { DossierHistoryPanel } from './workspace/DossierHistoryPanel';
 import { wsPanels } from './workspace/panelStackState';
 import { CodeGraphPanel } from '../features/codegraph/CodeGraphPanel';
@@ -1651,6 +1652,9 @@ const windowWidth = useWindowWidth();
             // Документация проекта: превью и навигация — в панели, крупное чтение —
             // «развернуть» тем же путём, что открываются остальные файлы
             docs: <DocsPanel project={project} onOpenFile={handleOpenFileFromTree} onAttachToChat={handleAttachToChat} activeFilePath={openFile} onCloseFile={backFromFile} />,
+            // Заметки ТЕКУЩЕГО проекта (notes/ репы) — клик открывает в центре тем же
+            // путём, что файлы (FileViewer для notes/**.md рендерит NoteView)
+            notes: <ProjectNotesPanel projectId={project.id} activeFilePath={openFile} onOpenFile={handleOpenFileFromTree} />,
             // «История решений» (change-dossiers, этап 1): гейт по флагу — внутри самой
             // панели (мокап требует видимый вход даже при выключенной фиче — она сама
             // показывает empty-state с кнопкой «Открыть настройки»)

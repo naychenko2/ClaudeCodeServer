@@ -489,6 +489,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSync
     sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
 // Реконсайлер error-документов Dify (Dify:Reconcile, дефолт Mode=off — dark launch):
 // singleton + hosted, чтобы снапшот состояния был доступен видимости (шаг 4)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeAlertNotifier,
+    ClaudeHomeServer.Services.Knowledge.KnowledgeAlertNotifier>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>();
 AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>());
 

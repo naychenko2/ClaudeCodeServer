@@ -1,3 +1,4 @@
+using System.Diagnostics.Metrics;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using Microsoft.Extensions.Hosting;
@@ -24,6 +25,11 @@ public sealed class GaugesRegistrarService : IHostedService
                 liveSessionsProvider: () => CountLive(sessions.GetAll()),
                 totalSessionsProvider: () => sessions.ActiveCount,
                 connectionsProvider: () => connections.ActiveCount);
+
+            var reconciler = _sp.GetRequiredService<Services.Knowledge.KnowledgeIndexReconciler>();
+            GaugeRegistrar.RegisterKnowledgeReconcile(
+                errorDocumentsProvider: () => ErrorDocuments(reconciler),
+                recoveredProvider: () => reconciler.RecoveredTotal);
         }
         catch
         {
@@ -42,6 +48,18 @@ public sealed class GaugesRegistrarService : IHostedService
     /// в UI и в метрике означали одно и то же.
     /// </summary>
     internal static int CountLive(IReadOnlyCollection<Session> all) => all.Count(s => s.IsLive());
+
+    /// <summary>
+    /// Срез error-документов Dify для многотегового гейджа. Агрегация по типу датасета
+    /// живёт в реконсайлере (<c>AggregateByType</c>): Label цели содержит id персоны и путь
+    /// проекта, в теги это отдавать нельзя.
+    /// </summary>
+    internal static IEnumerable<Measurement<long>> ErrorDocuments(
+        Services.Knowledge.KnowledgeIndexReconciler reconciler) =>
+        Services.Knowledge.KnowledgeIndexReconciler.AggregateByType(reconciler.LastCounts)
+            .Select(x => new Measurement<long>(x.Count,
+                new KeyValuePair<string, object?>("dataset_type", x.DatasetType),
+                new KeyValuePair<string, object?>("healability", x.Healable ? "healable" : "unhealable")));
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

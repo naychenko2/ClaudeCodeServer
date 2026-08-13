@@ -53,13 +53,24 @@ public sealed record ReconcileTargetStatus(string Label, int Healable, int Unhea
 //   нельзя — он меняется при каждом пересоздании). Временная ошибка (провайдер) — до
 //   MaxAttemptsPerEntry попыток, прочее (вероятно контентная) — до 2; дальше ключ
 //   отбрасывается сразу после ResolveAsync, до мутации. Карантин — до рестарта.
+// - Видимость (шаг 4): снимок LastCounts/RecoveredTotal читают гейджи телеметрии, а
+//   владельцам целей уходит уведомление, когда healable-ошибки держатся ≥2 обходов
+//   подряд — не чаще раза в сутки на владельца (дедуп in-memory: после рестарта
+//   уведомление может продублироваться, осознанный компромисс плана).
 public sealed class KnowledgeIndexReconciler : BackgroundService
 {
+    // Сколько обходов подряд ошибки должны держаться, чтобы беспокоить владельца:
+    // одиночный провал лечится сам следующим синком, сообщать о нём нечего
+    private const int RoundsBeforeNotify = 2;
+
+    private static readonly TimeSpan NotifyCooldown = TimeSpan.FromHours(24);
+
     private readonly KnowledgeService _knowledge;
     private readonly IReadOnlyList<IKnowledgeSyncParticipant> _participants;
     private readonly IConfiguration _config;
     private readonly ILogger<KnowledgeIndexReconciler> _log;
     private readonly TimeProvider _time;
+    private readonly IKnowledgeAlertNotifier? _notifier;
 
     // Личное состояние цели (ключ — Label): период, срок следующего обхода, прошлый срез
     private sealed class TargetState
@@ -68,6 +79,7 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
         public TimeSpan CurrentInterval;
         public int LastHealableCount = -1;                            // -1 — ещё не обходили
         public HashSet<string> PrevErrorKeys = new();                 // healable-ключи прошлого обхода
+        public int HealableRounds;                                    // обходов подряд с healable-ошибками
     }
 
     private readonly object _gate = new();
@@ -75,18 +87,21 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
     private readonly Dictionary<string, int> _attempts = new();       // «Label:EntryKey» → попыток
     private readonly HashSet<string> _quarantine = new();
     private readonly Dictionary<string, ReconcileTargetStatus> _lastCounts = new();
+    private readonly Dictionary<string, DateTimeOffset> _notifiedAt = new();   // userId → когда уведомляли
     private long _recovered;
     private string _lastMode = "off";
 
     public KnowledgeIndexReconciler(KnowledgeService knowledge,
         IEnumerable<IKnowledgeSyncParticipant> participants, IConfiguration config,
-        ILogger<KnowledgeIndexReconciler> log, TimeProvider? timeProvider = null)
+        ILogger<KnowledgeIndexReconciler> log, TimeProvider? timeProvider = null,
+        IKnowledgeAlertNotifier? notifier = null)
     {
         _knowledge = knowledge;
         _participants = participants.ToList();
         _config = config;
         _log = log;
         _time = timeProvider ?? TimeProvider.System;
+        _notifier = notifier;
     }
 
     // Снимок для видимости (шаг 4) и тестов
@@ -109,6 +124,23 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
             return opts.TargetInterval;
         var doubled = current * 2;
         return doubled > opts.MaxBackoff ? opts.MaxBackoff : doubled;
+    }
+
+    // Срез для гейджа: суммы по типу датасета (префикс Label — notes/persona/team/dossiers/
+    // project) и по лечимости. Именно суммы, а не по цели: Label содержит id персоны и путь
+    // проекта — как тег это и PII, и кардинальность.
+    internal static IReadOnlyList<(string DatasetType, bool Healable, long Count)> AggregateByType(
+        IReadOnlyList<ReconcileTargetStatus> counts)
+    {
+        var acc = new Dictionary<(string, bool), long>();
+        foreach (var c in counts)
+        {
+            var colon = c.Label.IndexOf(':');
+            var type = colon > 0 ? c.Label[..colon] : c.Label;
+            acc[(type, true)] = acc.GetValueOrDefault((type, true)) + c.Healable;
+            acc[(type, false)] = acc.GetValueOrDefault((type, false)) + c.Unhealable;
+        }
+        return acc.Select(kv => (kv.Key.Item1, kv.Key.Item2, kv.Value)).ToList();
     }
 
     // Временная ошибка индексации (лежит провайдер эмбеддингов) — ретраи оправданы дольше,
@@ -201,6 +233,8 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
         var unhealable = errorDocs.Count - resolved.Count;
 
         List<(string DocId, string EntryKey)> toHeal = new();
+        List<string> notifyOwners = new();
+        var healMode = opts.Mode == "heal";
         lock (_gate)
         {
             // Recovered — ключи, исчезнувшие из error-множества с прошлого обхода;
@@ -216,18 +250,30 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
             st.LastHealableCount = healableKeys.Count;
             st.PrevErrorKeys = healableKeys;
             st.NextDueAt = now + st.CurrentInterval;
+            st.HealableRounds = healableKeys.Count > 0 ? st.HealableRounds + 1 : 0;
 
             if (unhealable > 0)
                 _log.LogInformation("reconcile: {Label} — {Orphans} error-документов без записи в сторе (сироты)",
                     target.Label, unhealable);
 
-            if (opts.Mode != "heal") return budget;
+            // Владельцу сообщаем и в observe: видимость от режима лечения не зависит.
+            // Отметку времени ставим здесь же, под локом — иначе два датасета одного
+            // владельца в одном тике дали бы два уведомления.
+            if (st.HealableRounds >= RoundsBeforeNotify)
+            {
+                foreach (var userId in target.OwnerUserIds)
+                {
+                    if (_notifiedAt.TryGetValue(userId, out var last) && now - last < NotifyCooldown) continue;
+                    _notifiedAt[userId] = now;
+                    notifyOwners.Add(userId);
+                }
+            }
 
             // Карантин отбрасывается ДО мутации; классификация по тексту ошибки Dify
             var errorByDoc = errorDocs.ToDictionary(d => d.Id, d => d.Error ?? "");
             foreach (var pair in resolved)
             {
-                if (toHeal.Count >= budget) break;
+                if (!healMode || toHeal.Count >= budget) break;
                 var qk = $"{target.Label}:{pair.EntryKey}";
                 if (_quarantine.Contains(qk)) continue;
                 var attempts = _attempts.GetValueOrDefault(qk);
@@ -246,6 +292,9 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
             }
         }
 
+        // Уведомление — вне лока (и до мутаций: оно от режима не зависит)
+        if (notifyOwners.Count > 0) await NotifyOwnersAsync(notifyOwners, ct);
+
         if (toHeal.Count == 0) return budget;
         // Сброс хешей по отобранным ключам и пинок штатного синка — строго после
         // освобождения своих структур; локи участника берут его делегаты
@@ -254,5 +303,20 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
         _log.LogInformation("reconcile: {Label} — сброшено {Count} хешей, синк поставлен в очередь",
             target.Label, toHeal.Count);
         return budget - toHeal.Count;
+    }
+
+    // Текст без жаргона: владельцу важно знать, что поиск может врать, а не как
+    // называется провайдер эмбеддингов
+    private async Task NotifyOwnersAsync(IReadOnlyList<string> userIds, CancellationToken ct)
+    {
+        if (_notifier is null) return;
+        foreach (var userId in userIds)
+        {
+            await _notifier.NotifyAsync(userId,
+                "Часть знаний не проиндексирована",
+                "Некоторые записи знаний и памяти не удалось проиндексировать — поиск и recall "
+                    + "по ним могут быть неполными. Сервер повторяет попытки автоматически.",
+                ct);
+        }
     }
 }

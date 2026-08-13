@@ -68,6 +68,18 @@ public class KnowledgeIndexReconcilerTests
         public IReadOnlyList<KnowledgeSyncTarget> ListTargets() => Targets;
     }
 
+    // Фейковый канал уведомлений: доставку проверяет NotificationService, здесь важен дедуп
+    private sealed class FakeNotifier : IKnowledgeAlertNotifier
+    {
+        public readonly List<string> Sent = new();
+
+        public Task NotifyAsync(string userId, string title, string body, CancellationToken ct = default)
+        {
+            Sent.Add(userId);
+            return Task.CompletedTask;
+        }
+    }
+
     private static string Doc(string id, string status = "error", string? error = null) =>
         JsonSerializer.Serialize(new { id, name = id, indexing_status = status, error });
 
@@ -76,7 +88,7 @@ public class KnowledgeIndexReconcilerTests
     private readonly FakeParticipant _participant = new();
 
     private KnowledgeIndexReconciler Create(string mode, bool difyConfigured = true,
-        int maxPerCycle = 100, int maxAttempts = 5)
+        int maxPerCycle = 100, int maxAttempts = 5, IKnowledgeAlertNotifier? notifier = null)
     {
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
@@ -97,7 +109,7 @@ public class KnowledgeIndexReconcilerTests
             }),
             new WorkspaceKnowledgeStore(new ConfigurationBuilder().Build()));
         return new KnowledgeIndexReconciler(knowledge, [_participant], config,
-            NullLogger<KnowledgeIndexReconciler>.Instance, _time);
+            NullLogger<KnowledgeIndexReconciler>.Instance, _time, notifier);
     }
 
     [Fact]
@@ -318,6 +330,76 @@ public class KnowledgeIndexReconcilerTests
         // Вылечилось всё — сброс
         KnowledgeIndexReconciler.NextInterval(TimeSpan.FromHours(2), opts, 3, 0)
             .Should().Be(TimeSpan.FromMinutes(15));
+    }
+
+    [Fact]
+    public async Task Уведомление_Со_Второго_Обхода_И_Не_Чаще_Раза_В_Сутки()
+    {
+        var notifier = new FakeNotifier();
+        _participant.AddTarget("ds-1", "t1", new() { ["doc-1"] = "entry-1" });
+        _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-1", error: "Connection refused")}]";
+        var sut = Create("heal", maxAttempts: 100, notifier: notifier);
+
+        // Первый обход молчит: одиночный провал лечится сам следующим синком
+        await sut.TickAsync();
+        notifier.Sent.Should().BeEmpty();
+
+        // Второй обход — ошибки держатся, владельцу сообщаем
+        _time.Advance(TimeSpan.FromMinutes(16));
+        await sut.TickAsync();
+        notifier.Sent.Should().BeEquivalentTo(["owner-1"]);
+
+        // Дальше в пределах суток — тишина, сколько бы обходов ни было
+        _time.Advance(TimeSpan.FromMinutes(31));
+        await sut.TickAsync();
+        _time.Advance(TimeSpan.FromHours(3));
+        await sut.TickAsync();
+        notifier.Sent.Should().HaveCount(1);
+
+        // Сутки прошли — напоминаем ещё раз
+        _time.Advance(TimeSpan.FromHours(25));
+        await sut.TickAsync();
+        notifier.Sent.Should().BeEquivalentTo(["owner-1", "owner-1"]);
+    }
+
+    [Fact]
+    public async Task Уведомление_Работает_И_В_Observe()
+    {
+        // Видимость от режима лечения не зависит: в observe сторы не мутируются, но
+        // владелец всё равно узнаёт, что поиск неполный
+        var notifier = new FakeNotifier();
+        _participant.AddTarget("ds-1", "t1", new() { ["doc-1"] = "entry-1" });
+        _dify.DocumentsJson["ds-1"] = $"[{Doc("doc-1", error: "Connection refused")}]";
+        var sut = Create("observe", notifier: notifier);
+
+        await sut.TickAsync();
+        _time.Advance(TimeSpan.FromMinutes(16));
+        await sut.TickAsync();
+
+        notifier.Sent.Should().BeEquivalentTo(["owner-1"]);
+        _participant.Invalidations.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void AggregateByType_Суммирует_По_Типу_Датасета()
+    {
+        var counts = new List<ReconcileTargetStatus>
+        {
+            new("persona:p1", 2, 1),
+            new("persona:p2", 3, 0),
+            new("project:c__git_ccs", 1, 4),
+        };
+
+        var agg = KnowledgeIndexReconciler.AggregateByType(counts);
+
+        // Label с id персоны/путём проекта в теги не попадает — только тип датасета
+        agg.Should().BeEquivalentTo(new[]
+        {
+            ("persona", true, 5L),
+            ("persona", false, 1L),
+            ("project", true, 1L),
+            ("project", false, 4L),
+        });
     }
 
     [Fact]

@@ -45,4 +45,40 @@ public static class GaugeRegistrar
             unit: "connections",
             description: "Активные SignalR-соединения (из ConnectionDiagnostics)");
     }
+
+    private static int _reconcileRegistered;
+
+    /// <summary>
+    /// Метрики реконсайлера error-документов Dify (документы, упавшие на индексации).
+    /// Идемпотентно.
+    ///
+    /// <paramref name="errorDocumentsProvider"/> отдаёт МНОГОТЕГОВЫЙ срез: теги
+    /// <c>dataset_type</c> (notes/persona/team/dossiers/project) и <c>healability</c>
+    /// (healable — документ сопоставлен с записью в локальном сторе и будет пересоздан;
+    /// unhealable — сирота или ручной документ, у CCS нет источника контента). Без этого
+    /// разделения гейдж врал бы: неустранимый «пол» из сирот читался бы как непрекращающаяся
+    /// поломка. Датасеты без участника синка (ручные «Знания») здесь не считаются вовсе —
+    /// реконсайлер их не сканирует.
+    ///
+    /// <paramref name="recoveredProvider"/> — накопительный счётчик восстановленных записей,
+    /// поэтому ObservableCounter, а не Gauge: значение живёт в реконсайлере и только растёт
+    /// (считается по исчезновению записи из error-множества, не по попытке лечения).
+    /// </summary>
+    public static void RegisterKnowledgeReconcile(
+        Func<IEnumerable<Measurement<long>>> errorDocumentsProvider, Func<long> recoveredProvider)
+    {
+        if (Interlocked.Exchange(ref _reconcileRegistered, 1) == 1) return;
+
+        ServerMetrics.MeterInstance.CreateObservableGauge(
+            "ccs.dify.error_documents",
+            observeValues: errorDocumentsProvider,
+            unit: "{document}",
+            description: "Документы Dify в статусе error по типу датасета и лечимости");
+
+        ServerMetrics.MeterInstance.CreateObservableCounter(
+            "ccs.dify.documents_recovered",
+            observeValue: () => recoveredProvider(),
+            unit: "{document}",
+            description: "Документы, вернувшиеся из error после пересоздания реконсайлером");
+    }
 }

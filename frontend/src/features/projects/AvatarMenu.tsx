@@ -181,18 +181,6 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               Пользователи
             </button>
           )}
-          {/* Инспектор UI (admin-only): тумблер зовёт модульный стор напрямую —
-              оверлей монтирует App, цепочка пропсов не нужна */}
-          {isAdmin && (
-            <button
-              onClick={() => { setOpen(false); toggleUiInspector(); }}
-              style={inspectorOn ? { ...dropdownItem, color: C.accent } : dropdownItem}
-            >
-              <SquareDashedMousePointer size={ICON_SIZE.xs} strokeWidth={2} />
-              Инспектор UI
-              <span style={{ marginLeft: 'auto', fontSize: 11, color: C.textMuted }}>Ctrl+Alt+I</span>
-            </button>
-          )}
           {onShowMcpServers && (
             <button
               onClick={() => { setOpen(false); onShowMcpServers(); }}
@@ -223,7 +211,19 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               style={dropdownItem}
             >
               <Palette size={ICON_SIZE.xs} strokeWidth={2} />
-              Витрина дизайн-системы (dev)
+              Витрина-дизайна
+            </button>
+          )}
+          {/* Инспектор UI (admin-only): тумблер зовёт модульный стор напрямую —
+              оверлей монтирует App, цепочка пропсов не нужна */}
+          {isAdmin && (
+            <button
+              onClick={() => { setOpen(false); toggleUiInspector(); }}
+              title="Ctrl+Alt+I"
+              style={inspectorOn ? { ...dropdownItem, color: C.accent } : dropdownItem}
+            >
+              <SquareDashedMousePointer size={ICON_SIZE.xs} strokeWidth={2} />
+              Инспектор UI
             </button>
           )}
           {onShowHistory && (

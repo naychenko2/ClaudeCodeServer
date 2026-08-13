@@ -21,6 +21,8 @@ GET                 /api/projects/{id}/files          ?path=
 GET                 /api/projects/{id}/files/search   ?q=
 GET/PUT             /api/projects/{id}/files/content  ?path=  → { content, isBinary, isImage, base64?, ... }
 GET                 /api/projects/{id}/files/diff     ?path=  → { diff }
+POST                /api/projects/{id}/files/changed-by  { paths[] } → { files: { <path>: [{sessionId,name}] } }
+    для присланных путей — какие ЕЩЁ чаты проекта их меняли (панель «Изменения»); ключи ответа — ровно строки paths
 POST                /api/projects/{id}/files/revert   { path }
 POST                /api/projects/{id}/files/create   { path }
 POST                /api/projects/{id}/files/mkdir    { path }

@@ -130,9 +130,10 @@ public class TurnErrorClassifierTests
             .Should().Be(FallbackErrorClass.UsageLimit);
 
     [Fact]
-    public void InvalidKey403_ФолбэкНеЗапускает_ЭтоОшибкаКонфигурации()
+    public void InvalidKey403_КлассAuthFailure()
         => TurnErrorClassifier.Classify(Result("403", "invalid_api_key: invalid x-api-key"))
-            .Should().Be(FallbackErrorClass.None);
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "неверный ключ — AuthFailure: подписка/провайдер негоден, лечит ротация пула или шаг цепочки (P29)");
 
     // Прод-кейс 2026-08-11 (kimi, чат f9eebaaa): CLI не положил код в api_error_status —
     // 403 остался только внутри текста ошибки. Ветка пустого статуса обязана спросить про
@@ -143,17 +144,18 @@ public class TurnErrorClassifierTests
         => TurnErrorClassifier.Classify(Result(null,
                 "Failed to authenticate. API Error: 403 You've reached your usage limit for this billing cycle. Your quota will be refreshed in the next cycle..."))
             .Should().Be(FallbackErrorClass.UsageLimit,
-                "фраза «usage limit» в тексте — исчерпание квоты, фолбэк нужен");
+                "фраза «usage limit» доминирует над «Failed to authenticate» — это исчерпание квоты, не auth (LooksUsageLimited спрашивается раньше LooksAuthFailure)");
 
-    // Fail-closed: настоящая ошибка аутентификации сменой модели не лечится. «Failed to
-    // authenticate» в начале сообщения Kimi к обратному выводу приводить не должно —
-    // решает наличие фразы про usage limit, а не преамбула.
+    // Ошибка аутентификации — AuthFailure: она не лечится сменой модели, НО лечится переходом
+    // на другую подписку пула (свой токен) или шаг цепочки (свой ключ). Поэтому это отдельный
+    // класс, а не None: оркестратор по нему эскалирует, а не обрывает ход (P29, инцидент
+    // 2026-08-13). «Failed to authenticate» без «usage limit» в тексте — auth, не квота.
     [Fact]
-    public void ОшибкаКлюча_ПустойСтатус_ОстаётсяNone()
+    public void ОшибкаКлюча_ПустойСтатус_КлассAuthFailure()
         => TurnErrorClassifier.Classify(Result(null,
                 "Failed to authenticate. API Error: 401 invalid api key"))
-            .Should().Be(FallbackErrorClass.None,
-                "неверный ключ — ошибка конфигурации, фолбэк её маскировал бы");
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "неверный ключ — AuthFailure, ротация пула/шаг цепочки лечат");
 
     // «quota» + «exhausted» — исчерпание квоты (UsageLimit), не RateLimit-окно: lived раньше
     // в LooksRateLimited, но провайдер с такой формулировкой при пустом статусе уходил бы в
@@ -181,15 +183,22 @@ public class TurnErrorClassifierTests
                 "статус 429 решает по коду, текст не анализируется");
 
     [Fact]
-    public void Auth403_БезТекста_ФолбэкНеЗапускает()
-        => TurnErrorClassifier.Classify(Result("403")).Should().Be(FallbackErrorClass.None);
+    public void Auth403_БезТекста_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result("403")).Should().Be(FallbackErrorClass.AuthFailure,
+            "403 без признаков квоты — авторизационный отказ, AuthFailure");
 
+    // 401 и authentication_error — авторизация (AuthFailure: ротация пула/шаг цепочки лечат);
+    // 400/404 — содержательные ошибки запроса, auth-фон там ни при чём (None, fail-closed).
     [Theory]
     [InlineData("401")]
+    [InlineData("authentication_error")]
+    public void ОшибкиАвторизации_КлассAuthFailure(string status)
+        => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.AuthFailure);
+
+    [Theory]
     [InlineData("400")]
     [InlineData("404")]
-    [InlineData("authentication_error")]
-    public void ОшибкиАвторизацииИЗапроса_ФолбэкНеЗапускают(string status)
+    public void ОшибкиЗапроса_НеАвторизация_ОстаётсяNone(string status)
         => TurnErrorClassifier.Classify(Result(status)).Should().Be(FallbackErrorClass.None);
 
     // Переполнение контекста: «Prompt is too long» у Anthropic (видели на проде: kimi-k3 со
@@ -243,13 +252,21 @@ public class TurnErrorClassifierTests
     [Theory]
     [InlineData("418")]
     [InlineData("404")]
-    [InlineData("401")]
     [InlineData("200")]
     public void ЦитатаOverflowПриЧужомСтатусе_НеКлассифицируетсяКакOverflow(string status)
         => TurnErrorClassifier.Classify(Result(status,
                 "Разбираем ошибку «Prompt is too long: 210000 tokens > 200000 maximum.»"))
             .Should().Be(FallbackErrorClass.None,
                 "overflow-маркеры в тексте при нерелевантном статусе — это цитата, а не сама ошибка переполнения");
+
+    // 401 решает по коду раньше overflow-проверки (как 429/5xx): даже если текст цитирует
+    // «Prompt is too long», статус 401 — это auth-отказ, а не переполнение контекста.
+    [Fact]
+    public void Статус401_ДоминируетНадЦитатойOverflow_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result("401",
+                "Разбираем ошибку «Prompt is too long: 210000 tokens > 200000 maximum.»"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "статус 401 решает по коду — auth-ошибка, overflow-цитата её не перекрывает");
 
     [Fact]
     public void ContextOverflow_WireNameДляМаркера()
@@ -284,4 +301,27 @@ public class TurnErrorClassifierTests
     public void ErrorMaxTurns_СодержательнаяОшибка_ФолбэкНеЗапускает()
         => TurnErrorClassifier.Classify(Result(null, subtype: "error_max_turns"))
             .Should().Be(FallbackErrorClass.None, "это проблема содержания хода, а не доставки");
+
+    // P29, боевой инцидент 2026-08-13 (Claude OAuth): CLI отдал текст протухшего токена без кода
+    // в api_error_status — классификация только по тексту. AuthFailure запускает эскалацию по пулу
+    // и цепочке, а не обрывает ход (как делал None до правки).
+    [Fact]
+    public void OAuthExpired_ПустойСтатус_КлассAuthFailure()
+        => TurnErrorClassifier.Classify(Result(null,
+                "Failed to authenticate: OAuth session expired and could not be refreshed"))
+            .Should().Be(FallbackErrorClass.AuthFailure,
+                "протухший OAuth — AuthFailure, ход уходит на живую подписку пула");
+
+    [Theory]
+    [InlineData("authentication failed")]
+    [InlineData("Unauthorized")]
+    [InlineData("invalid api key provided")]
+    public void AuthМаркеры_ПустойСтатус_КлассAuthFailure(string text)
+        => TurnErrorClassifier.Classify(Result(null, text)).Should().Be(FallbackErrorClass.AuthFailure);
+
+    // Ротация пула при AuthFailure тихая (без маркера в ленте), а сторонний auth-сбой даёт error
+    // без провайдер-специфичного reason — поэтому WireName для AuthFailure не нужен (null).
+    [Fact]
+    public void AuthFailure_WireNameНулевой()
+        => TurnErrorClassifier.WireName(FallbackErrorClass.AuthFailure).Should().BeNull();
 }

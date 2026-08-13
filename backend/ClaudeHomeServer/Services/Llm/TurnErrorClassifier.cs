@@ -25,6 +25,13 @@ public enum FallbackErrorClass
     // (окно — свойство модели, не аккаунта), но шагать по цепочке к модели с бóльшим окном —
     // можно. Не помечает подписку исчерпанной и эндпоинт недоступным (он ответил, просто отказал).
     ContextOverflow,
+    // Ошибка авторизации/аутентификации: HTTP 401, 403-invalid-key, «Failed to authenticate»,
+    // «OAuth session expired». Смена пары по цепочке её НЕ лечит (та же модель/эндпоинт), поэтому
+    // внешний фолбэк оркестратор для этого класса не запускает. НО внутри пула подписок Claude
+    // переход на другую подписку — лечение: протухший OAuth/ключ одной закрывается живой другой
+    // (P29, инцидент 2026-08-13). Оркестратор разводит по источнику: подписка пула → тихая
+    // ротация уровня 1; сторонний провайдер или пул без живых → fail-closed error.
+    AuthFailure,
 }
 
 // Итог одной попытки хода глазами потока событий адаптера. Всё, что нужно
@@ -89,13 +96,16 @@ public static class TurnErrorClassifier
             // 403 в api_error_status, код остался только в тексте «Failed to authenticate.
             // API Error: 403 You've reached your usage limit for this billing cycle»). Раньше
             // ветка про usage limit не спрашивала — класс выходил None, и фолбэк не стартовал.
-            // ПЕРЕД лимитом запросов: «usage limit» — маркер более узкий и более длящийся
-            // (квота биллингового цикла, а не окно запросов), и он же включает кулдаун
-            // провайдера. Текст, где обе семантики сразу, разумнее считать исчерпанием квоты.
-            // Fail-closed не страдает: сама фраза «usage limit» обязательна, поэтому настоящая
-            // ошибка ключа («invalid api key») остаётся None, несмотря на «Failed to
-            // authenticate» в начале сообщения Kimi.
+            // ПЕРЕД auth и лимитом запросов: «usage limit» — маркер более узкий и более длящийся
+            // (квота биллингового цикла, а не окно запросов). Прод-кейс kimi начинается той же
+            // фразой «Failed to authenticate», но это исчерпание квоты — оно обязано остаться
+            // UsageLimit, а не уходить в AuthFailure, поэтому спрашивается ПЕРЕД LooksAuthFailure.
             if (LooksUsageLimited(outcome.ErrorText)) return FallbackErrorClass.UsageLimit;
+            // Auth-ошибка при пустом статусе (инцидент 2026-08-13, Claude OAuth: «Failed to
+            // authenticate: OAuth session expired and could not be refreshed» пришло БЕЗ кода в
+            // api_error_status). AuthFailure запускает эскалацию по пулу и цепочке (P29), а не
+            // обрывает ход. «Failed to authenticate» без «usage limit» — auth, не квота.
+            if (LooksAuthFailure(outcome.ErrorText)) return FallbackErrorClass.AuthFailure;
             // Ошибка провайдера (5xx/перегрузка) перед лимитом запросов: перегруженный эндпоинт
             // уходит в кулдаун, а не ждёт сброса секундного окна — тяжелее по последствиям.
             // Маркеры — канонические reason phrases/type 5xx, не общие слова (см. LooksProviderError):
@@ -112,10 +122,16 @@ public static class TurnErrorClassifier
         if (status == "process_exit") return FallbackErrorClass.Unreachable;
         // Перегрузка провайдера
         if (status == "overloaded_error") return FallbackErrorClass.ProviderError;
-        // 403 неоднозначен: фолбэк только при семантике «usage limit reached»;
-        // invalid key/авторизация — ошибка конфигурации, ротация её не лечит
+        // 401 — авторизация/аутентификация (P29): для подписки пула Claude переход на живую
+        // подписку лечит протухший OAuth/ключ, поэтому это отдельный класс AuthFailure —
+        // оркестратор разводит его по источнику (подписка пула → ротация, провайдер → error).
+        if (status == "401") return FallbackErrorClass.AuthFailure;
+        // 403 неоднозначен: исчерпание квоты («usage limit reached») — UsageLimit (кулдаун
+        // провайдера); invalid key/авторизация — AuthFailure (ротация подписки пула / fail-closed).
         if (status == "403")
-            return LooksUsageLimited(outcome.ErrorText) ? FallbackErrorClass.UsageLimit : FallbackErrorClass.None;
+            return LooksUsageLimited(outcome.ErrorText) ? FallbackErrorClass.UsageLimit : FallbackErrorClass.AuthFailure;
+        // authentication_error (OpenAI-совместимый skin) — та же природа, что у 401: AuthFailure.
+        if (status == "authentication_error") return FallbackErrorClass.AuthFailure;
         // Класс «5xx» целиком
         if (int.TryParse(status, out var code) && code is >= 500 and <= 599) return FallbackErrorClass.ProviderError;
         // Сетевые маркеры в статусе или тексте ошибки
@@ -160,6 +176,31 @@ public static class TurnErrorClassifier
             || text.Contains("usage_limit", StringComparison.OrdinalIgnoreCase)
             || (text.Contains("quota", StringComparison.OrdinalIgnoreCase)
                 && text.Contains("exhausted", StringComparison.OrdinalIgnoreCase)));
+
+    // Маркеры ошибки авторизации/аутентификации в тексте при пустом статусе (P29, инцидент
+    // 2026-08-13: CLI отдал «Failed to authenticate: OAuth session expired…» без кода в
+    // api_error_status). Фразы устойчивые — канонические формулировки Claude CLI и сторонних
+    // провайдеров, не общие слова: голое «oauth»/«token»/«key» слишком обычны в разборе
+    // инцидентов. Спрашивается ПОСЛЕ LooksUsageLimited, поэтому kimi-кейс («Failed to
+    // authenticate … usage limit») здесь уже не доходит — ушёл в UsageLimit выше.
+    private static readonly string[] AuthFailurePhrases =
+    [
+        "failed to authenticate",
+        "authentication failed",
+        "oauth session expired",
+        "could not be refreshed",
+        "invalid api key",
+        "invalid_api_key",
+        "unauthorized",
+    ];
+
+    private static bool LooksAuthFailure(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        foreach (var phrase in AuthFailurePhrases)
+            if (text.Contains(phrase, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
 
     // Признаки переполнения контекста. Anthropic CLI шлёт «Prompt is too long» (видели на проде:
     // kimi-k3 с заявленным окном 1M упал с этим текстом — тариф режет раньше конфига).

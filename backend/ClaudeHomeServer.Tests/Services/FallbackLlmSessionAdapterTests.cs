@@ -2404,4 +2404,118 @@ public class FallbackLlmSessionAdapterTests
         Downstream().OfType<ResultMessage>().Should().ContainSingle();
         Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
     }
+
+    // P29, боевой инцидент 2026-08-13: одна из двух подписок пула с протухшим OAuth, вторая жива.
+    // Ход обязан пройти на живой — тихо, без следа в UI (маркер только при смене ТИПА поставщика).
+    [Fact]
+    public async Task AuthFailureПодпискиПула_ТихаяРотацияНаЖивую()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, provider: "acc-a");
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage(
+                "Failed to authenticate: OAuth session expired and could not be refreshed",
+                ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // acc-b — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал хода");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[0].Provider.Should().Be("acc-a");
+        inner.Attempts[1].Provider.Should().Be("acc-b", "протухшая подписка проигнорирована, ход на живой");
+        pool.IsAuthDead("acc-a").Should().BeTrue("подписка с протухшим OAuth помечена негодной");
+        pool.IsExhausted("acc-a").Should().BeFalse("auth-dead — не квота, resetsAt не нужен");
+        // Смена подписки того же пула — ТИХО: без маркера, пользователь видит один успешный ход
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        Downstream().OfType<ResultMessage>().Should().ContainSingle().Which.Subtype.Should().Be("success");
+    }
+
+    // P29: обе подписки пула протухли — ход уходит на следующий шаг цепочки (свой ключ у другого
+    // провайдера). Переход на шаг цепочки = смена ТИПА поставщика → С МАРКЕРОМ в ленте.
+    [Fact]
+    public async Task AuthFailureВсеПодпискиПулаМертвы_УходНаШагЦепочки_СМаркером()
+    {
+        var providers = BuildProviderWithName("glm", "GLM", "glm-5.2");
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "glm-5.2"]);
+        // Обе подписки пула возвращают auth-отказ
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage("Failed to authenticate: OAuth session expired", ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage("Failed to authenticate: OAuth session expired", ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // glm-5.2 — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(r => r.Subtype == "success"),
+            "успех на шаге цепочки");
+
+        inner.Attempts.Should().HaveCount(3, "обе подписки пула + шаг цепочки");
+        inner.Attempts[2].Should().Be(("glm", "glm-5.2"), "финальный успех на шаге цепочки");
+        pool.IsAuthDead("acc-a").Should().BeTrue();
+        pool.IsAuthDead("acc-b").Should().BeTrue();
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle(
+            "переход пул → цепочка = смена типа поставщика, нужен маркер");
+        Downstream().OfType<ResultMessage>().Should().ContainSingle().Which.Subtype.Should().Be("success");
+    }
+
+    // P29: единственная подписка с протухшим OAuth, цепочки нет — честная ошибка. Статус обязан
+    // быть error, а не finished (исходная половина P29 — провал маскировался Active).
+    [Fact]
+    public async Task AuthFailureЕдинственнаяПодписка_БезЦепочки_ЧестнаяОшибка()
+    {
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, provider: "acc-a");
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage("Failed to authenticate: OAuth session expired", ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал");
+
+        inner.Attempts.Should().ContainSingle("подписка одна, цепочки нет — повторять не на чем");
+        pool.IsAuthDead("acc-a").Should().BeTrue();
+        // P29: провал НЕ маскируется finished — финальный result ошибочный, а не success
+        Downstream().OfType<ResultMessage>().Should().ContainSingle().Which.Subtype.Should().Be("error");
+    }
+
+    // P29: auth-отказ у стороннего провайдера — помечает ЭТОТ ключ негодным (_health) и уводит
+    // ход на следующий шаг цепочки (у него свой ключ). Смена модели auth не лечит, но у следующего
+    // шага свой ключ — это и есть лечение.
+    [Fact]
+    public async Task AuthFailureСтороннегоПровайдера_КулдаунИУходНаШагЦепочки()
+    {
+        var providers = BuildChainProviders(2);   // p1/m1, p2/m2
+        var pool = BuildPool();                    // без подписок пула — только цепочка
+        var health = new ProviderHealthRegistry();
+        var (sut, inner) = BuildSut(pool, providers, model: "m1", provider: "p1",
+            chain: ["m1", "m2"], health: health);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage("Unauthorized: invalid api key", ExpectResultFollows: true));
+            inner.Emit(Success());
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // m2 — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(r => r.Subtype == "success"),
+            "успех на m2");
+
+        inner.Attempts.Should().HaveCount(2);
+        inner.Attempts[1].Should().Be(("p2", "m2"), "плохой ключ p1 обойдён через шаг цепочки");
+        health.IsUnavailable("p1").Should().BeTrue("плохой ключ стороннего — кулдаун");
+        Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle();
+    }
 }

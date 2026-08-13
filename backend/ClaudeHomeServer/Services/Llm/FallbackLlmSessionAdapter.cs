@@ -510,8 +510,16 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     InterruptedByUser = _userInterrupted,
                 };
                 var cls = TurnErrorClassifier.Classify(outcome);
-                // Неизвестная/содержательная ошибка — фолбэк НЕ запускается (fail-closed)
-                if (cls == FallbackErrorClass.None) { await SettleAsync(turn); return; }
+                // Прерывание пользователем — нейтральный финал: без ошибки, без ротации (даже если
+                // обрыв успел классифицироваться как None по InterruptedByUser).
+                if (outcome.InterruptedByUser) { await SettleAsync(turn); return; }
+                // None — неопознанная/содержательная ошибка: фолбэк НЕ запускаем (ADR fail-closed —
+                // не жечь лимиты других аккаунтов о неопознанную проблему). Но «не запускаем» ≠
+                // «всё в порядке»: ход обязан завершиться error, а не штатным finished (исходная
+                // половина P29). CLI при API-ошибке отдаёт subtype=success + is_error — без замены
+                // result на error статус становился Active, и провал маскировался. AuthFailure сюда
+                // не попадает — это отдельный класс, он эскалирует по пулу и цепочке ниже.
+                if (cls == FallbackErrorClass.None) { await FailClosedAsync(turn, end); return; }
 
                 // Кулдаун недоступности (волна 2): провайдер, вернувший Unreachable/ProviderError,
                 // помечаем недоступным на TTL — следующие ходы и шаги цепочки пропустят его сразу.
@@ -532,6 +540,11 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     // поэтому память об исчерпании ведём здесь, длинным TTL (QuotaCooldownMinutes).
                     else if (cls == FallbackErrorClass.UsageLimit)
                         _health?.MarkQuotaExhausted(currentKey);
+                    // Негодный auth стороннего провайдера (401/протухший ключ, P29): помечаем ключ
+                    // длинным кулдауном и уходим на следующий шаг цепочки ниже. Смена модели auth не
+                    // лечит, но у следующего шага свой ключ — это и есть лечение.
+                    else if (cls == FallbackErrorClass.AuthFailure)
+                        _health?.MarkAuthDead(currentKey);
                 }
 
                 // ContextOverflow: модель не приняла контекст — запоминаем наблюдённый потолок
@@ -562,7 +575,20 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // kimi-k3). Запись наблюдения выше использует тот же реальный размер.
                 var ctx = ContextEstimate();
                 var next = ResolveNextTarget(cls, end, attempted, currentModel, currentKey, chain, ref chainIndex, ctx);
-                if (next is null) { await FailExhaustedAsync(turn, trace, substitutions, end); return; }
+                if (next is null)
+                {
+                    // Всё исчерпано (или запасных вариантов не было) — честная ошибка. P29: финал
+                    // обязан быть error, не finished. ContextOverflow всегда идёт в FailExhausted —
+                    // у него свой текст про контекст/compact, осмысленный даже на одной попытке.
+                    // Прочее по числу попыток: перепробовано несколько пар — FailExhausted (список
+                    // + «ни одна не ответила»); тупик сразу (нет пула и цепочки) — FailClosed:
+                    // одиночный error, причина уже в ленте от ErrorMessage(ExpectResultFollows).
+                    if (cls == FallbackErrorClass.ContextOverflow || attempted.Count > 1)
+                        await FailExhaustedAsync(turn, trace, substitutions, end);
+                    else
+                        await FailClosedAsync(turn, end);
+                    return;
+                }
 
                 // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
                 lock (turn.Sync)
@@ -737,6 +763,9 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         HashSet<(string Model, string Key)> attempted, string model, string currentKey,
         IReadOnlyList<string> chain, ref int chainIndex, int contextEstimate)
     {
+        var modelForPool = string.IsNullOrWhiteSpace(model) ? null : model;
+        var isNativeClaude = _providers?.ResolveByModel(modelForPool) is null;
+
         // Лимитные классы помечают подписку исчерпанной в пуле (существующий механизм):
         // 5xx/обрыв — НЕ помечают, это не квота аккаунта (инцидент 2026-08-02: ложные баны)
         if (cls is FallbackErrorClass.RateLimit or FallbackErrorClass.UsageLimit)
@@ -746,9 +775,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 resetsAt = dt.ToUniversalTime();
             _pool.MarkExhausted(currentKey, resetsAt);
         }
-
-        var modelForPool = string.IsNullOrWhiteSpace(model) ? null : model;
-        var isNativeClaude = _providers?.ResolveByModel(modelForPool) is null;
+        // AuthFailure подписки пула: протухший OAuth/ключ — пометить аккаунт негодным (MarkAuthDead,
+        // без TTL — токен не воскреснет сам). Сторонний провайдер (isNativeClaude=false) здесь не
+        // помечается: его auth-кулдаун ведёт ProviderHealthRegistry (выше в health-блоке), а этот
+        // метод затем уводит ход на следующий шаг цепочки.
+        else if (cls == FallbackErrorClass.AuthFailure && isNativeClaude)
+        {
+            _pool.MarkAuthDead(currentKey);
+        }
 
         // Уровень 1: ротация подписок пула (только нативные claude-модели; у сторонних пула нет —
         // шаг считается исчерпанным сразу, переходим к следующему шагу цепочки/автоподбору).
@@ -793,6 +827,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // в кулдауне пропускаем, но fail-open — если ВСЕ оставшиеся непробованные в кулдауне,
         // берём первого остывшего (кулдаун — наблюдение, а не запрет). Кулдаун проверяем ДО
         // переноса транскрипта: иначе копии плодятся по профилям пропущенных остывших кандидатов.
+        // Цепочка пресета (уровень 2): следующий шаг. AuthFailure сюда ДОЛЖЕН дойти — у следующего
+        // шага свой ключ/токен, и смена модели авторизацию как раз лечит (P29: «не смог продолжить»
+        // быть не должно, пока жив хоть один шаг). ContextOverflow сюда тоже доходит (ему нужна
+        // модель с большим окном). Каждый шаг, дойдя до своих подписок (у нативных), отработает
+        // уровень 1 на следующей итерации. Кулдаун (волна 2): шаги с провайдером в кулдауне
+        // пропускаем, но fail-open — если ВСЕ оставшиеся непробованные в кулдауне, берём первого
+        // остывшего (кулдаун — наблюдение, а не запрет). Кулдаун проверяем ДО переноса транскрипта:
+        // иначе копии плодятся по профилям пропущенных остывших кандидатов.
         if (chain.Count > 1)
         {
             var cooledIdx = -1;
@@ -1031,6 +1073,34 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         return string.IsNullOrEmpty(parent) ? null : Path.Combine(parent, folder);
     }
 
+    // Финал ошибки, когда запасных вариантов не нашлось с первой попытки (нет пула и цепочки —
+    // одиночная подписка/провайдер): задержанный result уходит как error, а не как есть. Иначе
+    // провал маскируется finished: CLI при API-ошибке отдаёт subtype=success + is_error, и
+    // SessionManager по нему ставил Active (исходная половина P29). Текст причины уже в ленте —
+    // его принёс ErrorMessage(ExpectResultFollows) при получении, здесь только терминал-статус.
+    // Используется только когда attempted.Count == 1: перепробованы несколько пар → FailExhausted
+    // (там список попыток и общий текст «ни одна не ответила»). Usage/cost сохраняем из реального
+    // result — отказный запрос мог потратить токены (биллинг).
+    private async Task FailClosedAsync(FallbackTurn turn, AttemptEnd end)
+    {
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+        var orig = held.OfType<ResultMessage>().FirstOrDefault();
+        var result = orig is { Subtype: "error" }
+            ? orig
+            : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
+                orig?.Usage, orig?.TotalCostUsd,
+                ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus);
+        await _downstream(result);
+        foreach (var m in held.Where(m => m is not ResultMessage))
+            await _downstream(m);
+    }
+
     // Финал при исчерпании цепочки: человекочитаемый текст в ленту, финальный result —
     // ошибочный (у задачи исполнителя существующий путь пометит сбой и уведомит
     // постановщика; в исходный статус задача не возвращается). Счётчик подмен, потолок,
@@ -1117,6 +1187,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         FallbackErrorClass.UsageLimit => "лимит использования",
         FallbackErrorClass.ProviderError => "ошибка провайдера",
         FallbackErrorClass.Unreachable => "эндпоинт недоступен",
+        FallbackErrorClass.AuthFailure => "ошибка авторизации",
         _ => "ошибка",
     };
 
@@ -1128,6 +1199,7 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         FallbackErrorClass.UsageLimit => "закончился лимит",
         FallbackErrorClass.ProviderError => "поставщик вернул ошибку",
         FallbackErrorClass.Unreachable => "сервис не отвечает",
+        FallbackErrorClass.AuthFailure => "не удалось авторизоваться",
         _ => "не удалось выполнить",
     };
 

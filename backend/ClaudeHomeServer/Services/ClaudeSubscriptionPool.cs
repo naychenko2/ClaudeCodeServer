@@ -55,6 +55,14 @@ public class ClaudeSubscriptionPool
     // exhaustedKey → resetsAt (UTC, null = пока не сбросится вручную / DefaultExhaustion)
     private readonly ConcurrentDictionary<string, DateTime?> _exhausted = new();
 
+    // Пометка негодного auth (протухший OAuth/ключ, P29). В отличие от исчерпания, НЕ имеет
+    // resetsAt: токен сам не воскреснет до ручного перевхода, поэтому по таймеру подписку в
+    // ротацию не возвращаем. Живёт in-memory (снимается рестартом сервера, успешным ходом на
+    // этой подписке через Reset либо ручным сбросом), в бэкап не едет. IsAuthDead исключает
+    // подписку из кандидатов Pick — пока в пуле есть живая, ход уходит на неё, а не бьётся о
+    // мёртвую (инцидент 2026-08-13: половина ходов падала на протухшей подписке при живой второй).
+    private readonly ConcurrentDictionary<string, byte> _authDead = new();
+
     public ClaudeSubscriptionPool(IConfiguration config, UsageService? usage = null)
     {
         var list = new List<ClaudeSubscriptionConfig>();
@@ -134,7 +142,7 @@ public class ClaudeSubscriptionPool
         if (_subscriptions.Count == 0)
             return PrimaryKey;
 
-        var candidates = AllKeys().Where(k => !IsExhausted(k) && SupportsModel(k, model)).ToList();
+        var candidates = AllKeys().Where(k => !IsExhausted(k) && !IsAuthDead(k) && SupportsModel(k, model)).ToList();
         if (candidates.Count > 0)
         {
             // Приоритет свободным (ниже порога) — крупный, но перегруженный тариф уступает
@@ -176,9 +184,14 @@ public class ClaudeSubscriptionPool
     }
 
     // До какого момента ключ помечен исчерпанным; не помечен — DateTime.MinValue
-    // («уже живой», такой аккаунт в fallback предпочтительнее любого помеченного).
+    // («уже живой», такой аккаунт в fallback предпочтительнее любого помеченного). auth-dead
+    // считается MaxValue: токен не воскреснет по таймеру, поэтому в fallback «кто воскреснет
+    // раньше» такой аккаунт выбирается последним (уступая любому исчерпанному с resetsAt).
     private DateTime ExhaustedUntil(string key)
-        => _exhausted.TryGetValue(key, out var until) && until is not null ? until.Value : DateTime.MinValue;
+    {
+        if (IsAuthDead(key)) return DateTime.MaxValue;
+        return _exhausted.TryGetValue(key, out var until) && until is not null ? until.Value : DateTime.MinValue;
+    }
 
     // Ранг тарифа подписки из её конфига (Tier). Ключ вне пула — 0 (не задан).
     private int TierRank(string key)
@@ -203,9 +216,10 @@ public class ClaudeSubscriptionPool
 
     /// <summary>Аккаунт «в ротации» для новых чатов.</summary>
     /// Выведен, если исчерпан (rejected/100% — жёсткое состояние, `utilization` при rejected
-    /// CLI может не прислать) ИЛИ утилизация 5h-окна выше мягкого порога. Зеркалит логику Pick,
-    /// который исключает исчерпанных до сравнения утилизаций.
-    public bool IsInRotation(string key) => !IsExhausted(key) && EffectiveUtilization(key) < _softThreshold;
+    /// CLI может не прислать), помечен негодным по auth ИЛИ утилизация 5h-окна выше мягкого порога.
+    /// Зеркалит логику Pick, который исключает таких до сравнения утилизаций.
+    public bool IsInRotation(string key)
+        => !IsExhausted(key) && !IsAuthDead(key) && EffectiveUtilization(key) < _softThreshold;
 
     /// <summary>Порог утилизации 5h-окна, выше которого аккаунт считается выведенным из ротации.</summary>
     public double SoftThreshold => _softThreshold;
@@ -281,5 +295,19 @@ public class ClaudeSubscriptionPool
     public void Reset(string key)
     {
         _exhausted.TryRemove(key, out _);
+        _authDead.TryRemove(key, out _);
     }
+
+    /// <summary>Пометить подписку как негодную по auth (протухший OAuth/ключ, P29).</summary>
+    /// В отличие от <see cref="MarkExhausted"/>, без срока: токен не воскреснет сам до ручного
+    /// перевхода. Снимается <see cref="Reset"/>, рестартом сервера или успешным ходом (в обработчике
+    /// rate_limit SessionManager при ответе подписки).
+    public void MarkAuthDead(string key)
+    {
+        if (!string.IsNullOrEmpty(key)) _authDead[key] = 1;
+    }
+
+    /// <summary>Подписка помечена негодной по auth (протухший токен/ключ)?</summary>
+    public bool IsAuthDead(string key)
+        => !string.IsNullOrEmpty(key) && _authDead.ContainsKey(key);
 }

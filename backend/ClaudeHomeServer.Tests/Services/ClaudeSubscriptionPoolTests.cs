@@ -628,4 +628,38 @@ public class ClaudeSubscriptionPoolTests : IDisposable
     {
         ClaudeHomeServer.Models.ClaudeSubscriptionTier.Rank(tier).Should().Be(expected);
     }
+
+    // P29: пометка негодного auth (протухший OAuth/ключ) — отдельная от исчерпания, без resetsAt.
+    // Токен не воскреснет сам, поэтому подписка исключена из ротации до Reset/рестарта.
+    [Fact]
+    public void MarkAuthDead_ИсключаетПодпискуИзРотации_ДоСброса()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("acc-a", "acc-b"));
+
+        pool.MarkAuthDead("acc-a");
+        pool.IsAuthDead("acc-a").Should().BeTrue();
+        pool.IsExhausted("acc-a").Should().BeFalse("auth-dead — это не квота, resetsAt ни при чём");
+        // acc-a исключена — Pick всегда возвращает живую acc-b
+        for (var i = 0; i < 20; i++)
+            pool.Pick().Should().Be("acc-b");
+        pool.IsInRotation("acc-a").Should().BeFalse();
+        pool.IsInRotation("acc-b").Should().BeTrue();
+        // Reset снимает обе пометки (исчерпание и auth-dead)
+        pool.Reset("acc-a");
+        pool.IsAuthDead("acc-a").Should().BeFalse();
+    }
+
+    // auth-dead «хуже» исчерпания: при всех мёртвых аккаунтах PickSoonestRecovery выбирает
+    // воскресающего (исчерпанного с resetsAt), а не навсегда мёртвого (auth-dead).
+    [Fact]
+    public void AuthDead_УступаетИсчерпанному_ВFallbackВыборе()
+    {
+        var pool = new ClaudeSubscriptionPool(Config("dead", "tired"));
+        pool.MarkAuthDead("dead");
+        pool.MarkExhausted("tired", DateTime.UtcNow.AddMinutes(10)); // воскреснет через 10 мин
+
+        // Оба выведены из ротации → fallback: выбираем того, кто воскреснет раньше (tired)
+        var pick = Enumerable.Range(0, 20).Select(_ => pool.Pick()).Distinct().ToList();
+        pick.Should().NotContain("dead", "auth-dead никогда не воскреснет — он хуже исчерпанного");
+    }
 }

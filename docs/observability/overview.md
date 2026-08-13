@@ -288,7 +288,7 @@ Standard OTel resource attributes на каждый экспортируемый
 
 ```
 SigNoz (правила как код: docker/observability/alerts/*.json)
-   │  GET /api/v1/alerts  ← опрос раз в 60 с
+   │  GET {SignozUrl}/api/v1/alerts  ← опрос раз в 60 с
    ▼
 AlertPollingService  →  NotificationService  →  колокол + тост + web push
                                                           ↓
@@ -366,12 +366,19 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 "Telemetry": {
   "Alerts": {
     "Enabled": true,                    // на деве обычно false
-    "SignozUrl": "http://localhost:3301",
+    "SignozUrl": "http://localhost:3301/telemetry-proxy",
     "ApiKey": "<service account key>",
     "PollSeconds": 60
   }
 }
 ```
+
+> **`SignozUrl` — с base-path.** С v0.134 SigNoz поднимает ВЕСЬ HTTP-сервер (UI и API)
+> под префиксом из `SIGNOZ_GLOBAL_EXTERNAL__URL` (у нас `/telemetry-proxy`, задаётся в
+> `docker-compose.observability.yml`). URL без префикса даёт 404 на всё, кроме
+> `/api/v1/health`, — опрос молча деградирует в warn каждые 60 с. Раньше (до v0.134)
+> префикс относился только к SPA, а API отвечал и в корне — поэтому старые конфиги
+> с `http://localhost:3301` ломаются именно при обновлении SigNoz.
 
 Выключено или без ключа — служба не поднимается вовсе. Состояние разосланного лежит
 в `data/alert-state.json` и переживает перезапуск: повторять старые тревоги после

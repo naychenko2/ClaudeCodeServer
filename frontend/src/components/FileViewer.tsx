@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents, Lightbulb } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -39,7 +39,7 @@ import { useDocProps } from '../features/docs/useDocProps';
 import { showToast } from '../lib/toast';
 import { beginAiBusy, endAiBusy } from '../lib/ai/busy';
 import { DocCommentedMarkdown } from '../features/notes/DocComments';
-import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion } from '../lib/notes';
+import { useNotes, ensureNotesLoaded, existingTitleSet, useNotesVersion, useNotesByFile } from '../lib/notes';
 import { NoteConnections } from '../features/notes/NoteConnections';
 import { NoteView } from '../features/notes/NoteView';
 import type { NoteDetail } from '../types';
@@ -340,6 +340,10 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isHostMode = /^[A-Za-z]:[\\/]|^\//.test(filePath);
   // Заметки vault (notes/*.md): рендерим [[wikilinks]] и уводим по клику в раздел «Заметки»
   const allNotes = useNotes();
+  // Заметки, привязанные к ЭТОМУ файлу (frontmatter file:) — полоса «Заметки» под
+  // тулбаром. В хост-режиме путь абсолютный и в ключи карты не попадает — пусто.
+  const notesByFile = useNotesByFile(project.id);
+  const linkedNotes = isHostMode ? [] : (notesByFile.get(filePath.replace(/\\/g, '/').replace(/^\/+/, '')) ?? []);
   // На абсолютном пути эвристика ложно срабатывает (мало ли где встретится «notes/»
   // за пределами проекта) — в хост-режиме файл заметкой не считается никогда.
   const isNotesFile = !isHostMode && /(^|\/)notes\//i.test(filePath);
@@ -1429,6 +1433,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
           onDeleted={onClose}
           isMobile={isMobile}
           onBack={isMobile ? onClose : undefined}
+          onOpenFileRef={onOpenFile}
           extraToolbar={
             <>
               {/* Тумблер режима: иконка ЦЕЛЕВОГО состояния — из полноэкранного
@@ -1653,6 +1658,36 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             onClick={() => setActionError(null)}
             style={{ background: 'none', border: 'none', cursor: 'pointer', color: C.danger, padding: 0, flexShrink: 0, display: 'flex' }}
           ><X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} /></button>
+        </div>
+      )}
+
+      {/* Заметки, привязанные к файлу (frontmatter file:) — переход к заметке в
+          центре (notes/**.md рендерится NoteView). Полоса под тулбаром: работает
+          для любого типа файла, не только markdown. */}
+      {linkedNotes.length > 0 && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap',
+          padding: `${SP.xs}px 16px`, borderBottom: `1px solid ${C.borderLight}`,
+          fontSize: FS.sm, fontFamily: FONT.sans, color: C.textMuted,
+        }}>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+            <StickyNote size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ color: C.info }} />
+            Заметки:
+          </span>
+          {linkedNotes.map(n => (
+            <button key={n.id}
+              onClick={onOpenFile ? () => onOpenFile(`notes/${n.path}`) : undefined}
+              disabled={!onOpenFile}
+              title={n.title}
+              style={{
+                background: 'none', border: `1px solid ${C.border}`, borderRadius: 11,
+                padding: '1px 9px', fontSize: FS.sm, fontFamily: FONT.sans, color: C.textSecondary,
+                cursor: onOpenFile ? 'pointer' : 'default', maxWidth: 220,
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>
+              {n.title}
+            </button>
+          ))}
         </div>
       )}
 

@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -20,7 +20,7 @@ function isKnowledgeIndexable(filename: string): boolean {
   return KB_TEXT_EXT.has(ext) || KB_FILE_EXT.has(ext);
 }
 import { toggleSyncMark, useSyncMarks, computeSyncState, isSyncing, isDownloaded, loadSyncMarks, loadDownloadedSet } from '../lib/sync';
-import { bumpNotes, getNotesSnapshot } from '../lib/notes';
+import { bumpNotes, getNotesSnapshot, useNotesByFile } from '../lib/notes';
 import { IconNotes } from '../features/notes/shared';
 import { NewNoteDialog } from '../features/notes/NewNoteDialog';
 import { onFilesChanged } from '../lib/signalr';
@@ -377,6 +377,7 @@ interface FileRowProps {
   folderSyncing: boolean;
   indexed: boolean;       // файл в базе знаний проекта
   indexing: boolean;
+  noteCount: number;      // заметки с привязкой file: к этому файлу
   canAttach: boolean;
   renameValue: string;
   onRenameChange: (v: string) => void;
@@ -599,6 +600,13 @@ const FileRow = memo(function FileRow(p: FileRowProps) {
             <BookOpen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
           </span>
         )}
+        {/* Заметки о файле (frontmatter file:) — только file:-привязки, doc-аннотации
+            не считаются. Показывается и в мобильном дереве. Переход — из FileViewer */}
+        {!entry.isDirectory && p.noteCount > 0 && (
+          <span title={`Заметки о файле: ${p.noteCount}`} style={{ padding: 2, display: 'flex', alignItems: 'center', flexShrink: 0, color: C.info }}>
+            <StickyNote size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </span>
+        )}
         {/* Прикрепить к чату — десктоп при наведении; на тач-раскладке через long-press */}
         {!entry.isDirectory && p.canAttach && p.onAttach && !touch && hover && (
           <IconButton
@@ -622,6 +630,8 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const online = useOnline();
   const hasPanelHeader = useHasPanelHeader();
   const marks = useSyncMarks(project.id);
+  // Привязки «файл → заметки» (frontmatter file:) — бейдж у файлов дерева
+  const notesByFile = useNotesByFile(project.id);
   const initial = _explorerStore.get(project.id);
   const [dirCache, setDirCache] = useState<Map<string, FileEntry[]>>(() => initial?.dirCache ?? new Map());
   const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
@@ -721,8 +731,9 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   // === Create directory state ===
   const [showCreateDir, setShowCreateDir] = useState(false);
   const [newDirName, setNewDirName] = useState('');
-  // Диалог «Новая заметка» из раздела файлов (folder — путь внутри vault)
-  const [noteDialog, setNoteDialog] = useState<{ folder: string } | null>(null);
+  // Диалог «Новая заметка» из раздела файлов (folder — путь внутри vault;
+  // file — «Заметка о файле»: привязка frontmatter file: к файлу вне vault)
+  const [noteDialog, setNoteDialog] = useState<{ folder?: string; file?: string } | null>(null);
 
   // === Drag & drop state ===
   const [dragPath, setDragPath] = useState<string | null>(null);
@@ -1299,6 +1310,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         folderSyncing={entry.isDirectory && isSyncing(project.id, entry.path)}
         indexed={!!indexedFileNames?.has(entry.path)}
         indexing={!!indexingFiles?.has(entry.path)}
+        noteCount={entry.isDirectory ? 0 : (notesByFile.get(normPath(entry.path))?.length ?? 0)}
         canAttach={!!onAttachToChat}
         renameValue={renameValue}
         onRenameChange={setRenameValue}
@@ -1836,6 +1848,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             onClick={() => { close(); toggleSyncMark(project.id, entry); }} />);
         add(!entry.isDirectory && onOpenDossiers,
           <MenuItem key="dossiers" icon={<MI_Dossiers />} label="История решений" onClick={() => { close(); onOpenDossiers!(entry.path); }} />);
+        // «Заметка о файле» — привязка frontmatter file:. Только вне vault: внутри
+        // notes/ уже есть «Новая заметка», а заметка о заметке не нужна
+        add(!entry.isDirectory && !inNotesVault(entry.path),
+          <MenuItem key="note-about" icon={<MI_NotePlus />} label="Заметка о файле" onClick={() => { close(); setNoteDialog({ file: entry.path }); }} />);
 
         // «Заметки» (vault) не переименовываем/не удаляем — сломается база знаний
         if (!isNotesRoot(entry) && online) {
@@ -1868,10 +1884,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         return <Menu anchor={anchor} minWidth={W} maxHeight={320} gap={2} onClose={close}>{items}</Menu>;
       })()}
 
-      {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект) */}
+      {/* Диалог «Новая заметка» из раздела файлов (папка vault → source=проект;
+          file — «Заметка о файле» с привязкой frontmatter file:) */}
       {noteDialog && (
         <NewNoteDialog
-          defaults={{ source: project.id, folder: noteDialog.folder }}
+          defaults={{ source: project.id, folder: noteDialog.folder, file: noteDialog.file }}
           onClose={() => setNoteDialog(null)}
           onCreated={() => {
             setNoteDialog(null);

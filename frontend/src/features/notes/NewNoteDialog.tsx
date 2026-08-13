@@ -12,7 +12,12 @@ import { EXPIRY_PRESETS, expiryOptionLabel } from '../../lib/expiry';
 // существующим — включая пустые физические папки), опционально шаблон и время жизни.
 // Вынесен из NotesPage, чтобы переиспользоваться из раздела «Файлы».
 export function NewNoteDialog({ defaults, onClose, onCreated }: {
-  defaults?: { source?: string; folder?: string };
+  // file — привязка к файлу проекта («Заметка о файле» в дереве): кладётся
+  // frontmatter-строкой прямо в content, а не DTO-полем — тогда офлайн-создание
+  // идёт тем же путём (сервер распарсит поле при синке штатно). Источник при
+  // привязке зафиксирован проектом файла. Шаблон в этом режиме скрыт: content
+  // задан явно и перекрыл бы его.
+  defaults?: { source?: string; folder?: string; file?: string };
   onClose: () => void;
   onCreated: (id: string) => void;
 }) {
@@ -48,12 +53,18 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
     return [...dirs].sort((a, b) => a.localeCompare(b, 'ru'));
   }, [notes, noteFolders, source]);
 
+  // Контент с привязкой к файлу: frontmatter file: + обычный заголовок-тело
+  const boundContent = defaults?.file
+    ? `---\nfile: ${defaults.file.replace(/\\/g, '/')}\n---\n\n# ${title.trim()}\n`
+    : undefined;
+
   const create = async () => {
     if (!title.trim()) return;
     setBusy(true);
     try {
       const note = await api.notes.create({
-        title: title.trim(), source, templateId: templateId || undefined,
+        title: title.trim(), source, templateId: boundContent ? undefined : (templateId || undefined),
+        content: boundContent,
         folder: folder.trim() || undefined,
         expiresAfterMinutes: temporary ? ttl : null,
       });
@@ -61,7 +72,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
     } catch (e) {
       // Офлайн — создаём локально (шаблоны серверные, офлайн игнорируются)
       if (e instanceof OfflineError) {
-        const localKey = await createNoteOffline({ title: title.trim(), source, folder: folder.trim() || undefined });
+        const localKey = await createNoteOffline({ title: title.trim(), source, folder: folder.trim() || undefined, content: boundContent });
         onCreated(localKey);
       } else throw e;
     } finally { setBusy(false); }
@@ -84,9 +95,16 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
             placeholder="Название заметки"
             style={fieldInput} />
         </div>
+        {defaults?.file && (
+          <div style={{ fontSize: 12, color: C.textSecondary, fontFamily: FONT.sans, background: C.bgInset, borderRadius: R.md, padding: '7px 10px' }}>
+            Заметка о файле: <span style={{ color: C.textHeading, fontWeight: 500, wordBreak: 'break-all' }}>{defaults.file}</span>
+          </div>
+        )}
         <div>
           <label style={fieldLabel}>Куда</label>
-          <select value={source} onChange={e => setSource(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>
+          {/* Привязка к файлу фиксирует источник проектом файла — выбор не даём */}
+          <select value={source} onChange={e => setSource(e.target.value)} disabled={!!defaults?.file}
+            style={{ ...fieldInput, cursor: defaults?.file ? 'default' : 'pointer' }}>
             {sources.map(s => <option key={s.key} value={s.key}>{s.label}</option>)}
           </select>
         </div>
@@ -99,7 +117,7 @@ export function NewNoteDialog({ defaults, onClose, onCreated }: {
             {folders.map(f => <option key={f} value={f} />)}
           </datalist>
         </div>
-        {templates.length > 0 && (
+        {templates.length > 0 && !defaults?.file && (
           <div>
             <label style={fieldLabel}>Шаблон</label>
             <select value={templateId} onChange={e => setTemplateId(e.target.value)} style={{ ...fieldInput, cursor: 'pointer' }}>

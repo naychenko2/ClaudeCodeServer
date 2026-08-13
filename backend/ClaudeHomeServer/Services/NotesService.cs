@@ -55,7 +55,9 @@ public sealed partial class NotesService
 
     // --- Источники владельца ---
 
-    private sealed record Source(string Key, string Label, string RootDir);
+    // ProjectRoot — корень проекта-источника (null у личного vault): по нему
+    // резолвится привязка заметки к файлу (frontmatter file:, путь от корня проекта)
+    private sealed record Source(string Key, string Label, string RootDir, string? ProjectRoot = null);
 
     private IReadOnlyList<Source> SourcesFor(string userId)
     {
@@ -65,7 +67,7 @@ public sealed partial class NotesService
         };
         foreach (var p in _projects.GetByOwner(userId))
             if (!string.IsNullOrWhiteSpace(p.RootPath))
-                list.Add(new(p.Id, p.Name, Path.Combine(p.RootPath, "notes")));
+                list.Add(new(p.Id, p.Name, Path.Combine(p.RootPath, "notes"), p.RootPath));
         return list;
     }
 
@@ -92,6 +94,8 @@ public sealed partial class NotesService
         public string? ExpiresAt;
         public string? SourceSessionId;
         public NoteAnnotationInfo? Annotation;   // непусто = заметка-комментарий к документу
+        public string? FileRef;      // frontmatter file: — привязка к файлу проекта
+        public bool FileMissing;     // derived: привязанный файл отсутствует на диске
     }
 
     private List<RawNote> Scan(string userId)
@@ -119,6 +123,16 @@ public sealed partial class NotesService
                 foreach (var it in InlineTag.Matches(text).Select(m => m.Groups[1].Value))
                     if (!tags.Contains(it, StringComparer.OrdinalIgnoreCase)) tags.Add(it);
                 var links = ParseLinks(text);
+                // Привязка к файлу проекта: у личного vault поля нет (ProjectRoot null),
+                // у проектной проверяем существование файла (аналог docMissing у комментариев).
+                // SafeJoinPublic отсекает traversal — мусорный путь считается отсутствующим.
+                var fileRef = src.ProjectRoot is null ? null : fm.File;
+                var fileMissing = false;
+                if (fileRef is not null)
+                {
+                    try { fileMissing = !File.Exists(FileService.SafeJoinPublic(src.ProjectRoot!, fileRef)); }
+                    catch { fileMissing = true; }
+                }
                 notes.Add(new RawNote
                 {
                     Id = EncodeId(src.Key, rel),
@@ -135,6 +149,8 @@ public sealed partial class NotesService
                     ExpiresAt = fm.ExpiresAt,
                     SourceSessionId = fm.SourceSessionId,
                     Annotation = fm.Annotation,
+                    FileRef = fileRef,
+                    FileMissing = fileMissing,
                 });
             }
         }
@@ -144,19 +160,23 @@ public sealed partial class NotesService
     // Результат разбора frontmatter (внутренний; Annotation собирается из annotates/anchor_*/status)
     internal sealed record NoteFm(
         string Title, List<string> Tags, string? ExpiresAt, string? SourceSessionId,
-        NoteAnnotationInfo? Annotation);
+        NoteAnnotationInfo? Annotation, string? File = null);
 
-    // Минимальный разбор YAML-frontmatter: title, tags, expires, source_session_id
-    // и поля комментария к документу (annotates/anchor_quote/anchor_heading/status) — без внешней либы.
+    // Минимальный разбор YAML-frontmatter: title, tags, expires, source_session_id,
+    // file (привязка к файлу проекта) и поля комментария к документу
+    // (annotates/anchor_quote/anchor_heading/status) — без внешней либы.
+    // file: парсится всегда (метод статический, источника не знает) — отбрасывание
+    // у личных заметок делают проекции/скан по SourceKey.
     internal static NoteFm ParseFrontmatter(string text, string fallbackTitle)
     {
         var title = fallbackTitle;
         var tags = new List<string>();
         string? expires = null;
         string? sourceSessionId = null;
+        string? fileRef = null;
         string? annotates = null, anchorQuote = null, anchorHeading = null, status = null;
         NoteFm Done() => new(title, tags.Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
-            expires, sourceSessionId, BuildAnnotation(annotates, anchorQuote, anchorHeading, status));
+            expires, sourceSessionId, BuildAnnotation(annotates, anchorQuote, anchorHeading, status), fileRef);
         if (!text.StartsWith("---")) return Done();
 
         using var reader = new StringReader(text);
@@ -183,6 +203,9 @@ public sealed partial class NotesService
             if (e.Success) { expires = e.Groups[1].Value.Trim().Trim('"', '\''); continue; }
             var s = Regex.Match(l, @"^source_session_id:\s*(.+)$", RegexOptions.IgnoreCase);
             if (s.Success) { sourceSessionId = s.Groups[1].Value.Trim().Trim('"', '\''); continue; }
+            // Привязка к файлу проекта: путь от корня проекта, нормализуем к forward slashes
+            var f = Regex.Match(l, @"^file:\s*(.+)$", RegexOptions.IgnoreCase);
+            if (f.Success) { fileRef = NormalizeRel(f.Groups[1].Value.Trim().Trim('"', '\'')); continue; }
 
             var a = Regex.Match(l, @"^annotates:\s*(.+)$", RegexOptions.IgnoreCase);
             if (a.Success) { annotates = a.Groups[1].Value.Trim().Trim('"', '\''); continue; }
@@ -647,6 +670,9 @@ public sealed partial class NotesService
         }
         if (!string.IsNullOrWhiteSpace(req.SourceSessionId))
             content = InjectSourceSessionId(content, req.SourceSessionId);
+        // Привязка к файлу проекта: у личного vault поля нет (согласованно с чтением)
+        if (!string.IsNullOrWhiteSpace(req.File) && sourceKey != PersonalKey)
+            content = InjectFileField(content, NormalizeRel(req.File!.Trim()));
         File.WriteAllText(full, content, new UTF8Encoding(false));
 
         Invalidate(userId);
@@ -1093,18 +1119,34 @@ public sealed partial class NotesService
         return $"---\nsource_session_id: {sessionId}\n---\n{content}";
     }
 
+    // Вставляет поле file (привязка к файлу проекта) в frontmatter — мерж с уже
+    // существующим frontmatter из content, как у source_session_id.
+    internal static string InjectFileField(string content, string filePath)
+    {
+        if (content.StartsWith("---"))
+        {
+            var idx = content.IndexOf('\n', 3);
+            if (idx > 0)
+                return content[..(idx + 1)] + $"file: {filePath}\n" + content[(idx + 1)..];
+        }
+        return $"---\nfile: {filePath}\n---\n{content}";
+    }
+
     // --- Проекции ---
 
+    // FileRef у личных заметок отброшен ещё при скане (ProjectRoot null) — проекции
+    // просто транслируют поле
     private NoteSummary ToSummary(RawNote n) =>
         new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Tags, n.CreatedAt, n.UpdatedAt,
-            n.ExpiresAt, n.SourceSessionId, n.Annotation);
+            n.ExpiresAt, n.SourceSessionId, n.Annotation, n.FileRef, n.FileMissing);
 
     private NoteDetail ToDetail(Model model, RawNote n) =>
         new(n.Id, n.Title, n.SourceKey, n.SourceLabel, n.RelPath, n.Content, n.Tags,
             model.OutLinks.GetValueOrDefault(n.Id) ?? new(),
             model.Backlinks.GetValueOrDefault(n.Id) ?? new(),
             model.Unlinked.GetValueOrDefault(n.Id) ?? new(),
-            n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId, n.Annotation);
+            n.CreatedAt, n.UpdatedAt, n.ExpiresAt, n.SourceSessionId, n.Annotation,
+            n.FileRef, n.FileMissing);
 
     // --- Разрешение источника и валидация владения ---
 

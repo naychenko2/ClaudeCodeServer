@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { C, FONT, FS, R, SHADOW, SP, Z } from '../../lib/design';
 import { Button } from '../../components/ui';
 import { useIsMobile } from '../../lib/breakpoints';
@@ -19,6 +19,10 @@ function isOwn(t: EventTarget | null): boolean {
   return t instanceof Element && !!t.closest('[data-cc-inspector]');
 }
 
+// Позиция пилюли после перетаскивания — переживает выключения режима в рамках вкладки;
+// null — дефолт (по центру снизу)
+let pillPos: { x: number; y: number } | null = null;
+
 // Оверлей UI-инспектора: App монтирует при включённом режиме. Перехватывает клики в
 // capture-фазе (полный набор pointerdown+mousedown+click — иначе dnd-kit/меню стартуют
 // по pointerdown раньше клика), строит цепочку исходников и открывает форму аннотации.
@@ -27,6 +31,26 @@ export function UiInspectorOverlay() {
   const [chain, setChain] = useState<ChainLevel[] | null>(null);
   const isMobile = useIsMobile();
   const formOpen = chain !== null;
+
+  // Перетаскивание пилюли: pointer-события с capture — работает и мышью, и тачем.
+  // Drag начинается с любой точки пилюли, кроме кнопки «Выключить»
+  const [pos, setPos] = useState(pillPos);
+  const drag = useRef<{ dx: number; dy: number } | null>(null);
+  const onPillDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.target instanceof Element && e.target.closest('button')) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    drag.current = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onPillMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!drag.current) return;
+    const el = e.currentTarget;
+    const x = Math.min(Math.max(e.clientX - drag.current.dx, SP.xs), window.innerWidth - el.offsetWidth - SP.xs);
+    const y = Math.min(Math.max(e.clientY - drag.current.dy, SP.xs), window.innerHeight - el.offsetHeight - SP.xs);
+    pillPos = { x, y };
+    setPos(pillPos);
+  };
+  const onPillUp = () => { drag.current = null; };
 
   // Пока открыта форма, Ctrl+Alt+I глотаем в capture-фазе: иначе глобальный хоткей
   // выключит режим, App размонтирует оверлей вместе с диалогом — и набранный
@@ -123,15 +147,23 @@ export function UiInspectorOverlay() {
           </div>
         </>
       )}
-      {/* Плавающая пилюля — единственный выход на мобиле (Esc на таче нет) */}
+      {/* Плавающая пилюля — единственный выход на мобиле (Esc на таче нет); двигается
+          перетаскиванием за любое место, кроме кнопки */}
       {!formOpen && (
-        <div data-cc-inspector="1" style={{
-          position: 'fixed', bottom: SP.lg, left: '50%', transform: 'translateX(-50%)',
-          zIndex: Z.inspector, display: 'flex', alignItems: 'center', gap: SP.sm,
-          background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.max,
-          boxShadow: SHADOW.dropdown, padding: `6px ${SP.sm}px 6px ${SP.lg}px`,
-          maxWidth: 'calc(100vw - 24px)',
-        }}>
+        <div data-cc-inspector="1"
+          onPointerDown={onPillDown} onPointerMove={onPillMove}
+          onPointerUp={onPillUp} onPointerCancel={onPillUp}
+          style={{
+            position: 'fixed',
+            ...(pos
+              ? { left: pos.x, top: pos.y }
+              : { bottom: SP.lg, left: '50%', transform: 'translateX(-50%)' }),
+            zIndex: Z.inspector, display: 'flex', alignItems: 'center', gap: SP.sm,
+            background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.max,
+            boxShadow: SHADOW.dropdown, padding: `6px ${SP.sm}px 6px ${SP.lg}px`,
+            maxWidth: 'calc(100vw - 24px)', touchAction: 'none',
+            cursor: drag.current ? 'grabbing' : 'grab', userSelect: 'none',
+          }}>
           <span style={{ fontSize: FS.sm, color: C.textSecondary, whiteSpace: 'nowrap' }}>
             {isMobile ? 'Инспектор UI: тапни элемент' : 'Инспектор UI: кликни по элементу'}
           </span>

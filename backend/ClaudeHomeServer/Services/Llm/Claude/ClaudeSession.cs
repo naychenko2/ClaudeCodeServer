@@ -119,6 +119,16 @@ public class ClaudeSession : ILlmSessionAdapter
     private volatile bool _sawToolSinceApprove;
     // Следующий ход запустить без --permission-mode plan (исполнение одобренного плана)
     private volatile bool _forceNonPlanNextTurn;
+    // Текущий (последний) ход убит по воле пользователя: кнопка «Стоп» или прерывание ради
+    // очереди (SessionManager.Interrupt / PreemptTurnForQueue). Смерть процесса в этом случае
+    // ОЖИДАЕМАЯ — HandleProcessExitedAsync не должен слать ErrorMessage «Процесс модели
+    // завершился во время хода»: маркер «Ход остановлен пользователем» уже стоит в ленте,
+    // и красная плашка рядом с ним — ложная (два элемента вместо одного).
+    // Сброс — ТОЛЬКО в начале следующего хода (RunTurnAsync), не в Interrupt и не в
+    // финализации: событие Exited приходит асинхронно ПОСЛЕ Interrupt, и ранний сброс вернул бы
+    // гонку с ложной ошибкой. Обратная сторона — залипший флаг заглушил бы настоящую смерть
+    // процесса (P27: чат висит в «ожидании» до watchdog), поэтому точка сброса ровно одна.
+    private volatile bool _interruptedByUser;
     // Глубина делегирования текущего хода: > 0 — ход инициирован агентом из другой сессии
     // (chats_send). Выставляется в начале RunTurnAsync и сбрасывается после хода;
     // при глубине >= 1 BuildTurnMcpConfig урезает инструменты делегирования (анти-рекурсия)
@@ -1670,6 +1680,9 @@ public class ClaudeSession : ILlmSessionAdapter
 
     public void Interrupt()
     {
+        // Смерть процесса ниже — ожидаемая: помечаем ход прерванным ДО Kill, чтобы обработчик
+        // Exited (он прилетает асинхронно, иногда мгновенно) уже видел флаг и не слал ошибку.
+        _interruptedByUser = true;
         if (_currentProcess is { } proc) _launcher.Kill(proc, _currentTurnId);
         // Ход убит, но Workflow-агенты — независимые процессы и не обязаны погибнуть вместе
         // с ним (см. NoteOwnerProcessGone): даём им короткое окно доказать, что работа жива,
@@ -1700,6 +1713,11 @@ public class ClaudeSession : ILlmSessionAdapter
         // смерть рапортовала бы «во время ожидания разрешения». TrySetCanceled на уже закрытых
         // waiter'ах — no-op, легитимного ожидания в начале хода не бывает.
         CancelPendingControlResponses();
+
+        // Единственная точка сброса признака пользовательского прерывания: прошлый ход отжит,
+        // его отложенное Exited уже никого не касается, а смерть процесса в ЭТОМ ходе снова
+        // обязана доехать до клиента ошибкой (P27).
+        _interruptedByUser = false;
 
         // Номер этого хода: садится в прогон, который его примет (CliRun.LastTurnSeq), и уходит
         // наружу в ExitedMessage. Выделяем ДО подачи — снимок SubmittedTurnSeq, снятый вызывающим
@@ -2776,7 +2794,7 @@ public class ClaudeSession : ILlmSessionAdapter
             $"[ClaudeSession] Процесс CLI завершился (exit={exitCode?.ToString() ?? "?"} " +
             $"activeTurn={activeTurn} gotEvent={run.TurnGotEvent} reuse={run.ReuseSubmit} " +
             $"retryOnEmpty={run.RetryOnEmptyExit} retry={willRetry} " +
-            $"pendingControlResponse={pendingControlResponse} " +
+            $"pendingControlResponse={pendingControlResponse} interruptedByUser={_interruptedByUser} " +
             $"turnSeq={Interlocked.Read(ref run.LastTurnSeq)})");
 
         if (!activeTurn) return;
@@ -2786,7 +2804,10 @@ public class ClaudeSession : ILlmSessionAdapter
         // Шлём ДО Kill дерева и с await: Kill закрывает дочерние stdout-pipe → разблокируется ридер
         // → FinalizeRunAsync пошлёт ExitedMessage. Без await (или после Kill) гонка ставила бы ошибку
         // в ленту ПОСЛЕ терминала хода (3.4). Шаблон await _onMessage(ErrorMessage) — как в watchdog.
-        if (!willRetry)
+        // Исключение — ход убит пользователем (кнопка «Стоп» / прерывание ради очереди): смерть
+        // ожидаемая, фронт уже поставил маркер «Ход остановлен пользователем», и красная плашка
+        // рядом с ним лжёт. Pending control при этом чистит сам Interrupt.
+        if (!willRetry && !_interruptedByUser)
         {
             var message = pendingControlResponse
                 ? "Процесс модели завершился во время ожидания разрешения — ход прерван"

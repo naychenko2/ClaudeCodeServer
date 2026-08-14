@@ -12,6 +12,7 @@ import {
   validateLocalActionRoute, routeCanSave, RATE_PICKER_HINT,
 } from '../lib/routeFormat';
 import { C, FONT, FS, R, SHADOW, Z, FIELD } from '../lib/design';
+import { incPopupDepth } from '../lib/popupEscape';
 import type { ModelOption } from '../lib/models';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
 
@@ -111,6 +112,8 @@ export function RoutePicker({
 
   useEffect(() => {
     if (!open) return;
+    // Регистрируем попап: пока счётчик > 0, Modal игнорирует Escape (см. lib/popupEscape).
+    const release = incPopupDepth();
     const onDown = (e: MouseEvent) => {
       // Черновик цепочки правится — не схлопывать ЭТУ панель по клику снаружи. Актуально
       // для вложенного пикера (шаг цепочки в ChainStepsEditor): его открытие/закрытие не
@@ -120,26 +123,19 @@ export function RoutePicker({
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      // Гасим Escape ВСЕГДА, пока эта панель открыта — иначе Modal (её document-listener
-      // навешен раньше, при монтировании модалки) получает необработанное событие первым
-      // и закрывает модалку целиком поверх этой панели, стирая черновик (MAJOR 3, ревью d23231bd)
-      e.preventDefault();
-      // Тот же случай, что у mousedown-гейта выше: document-level слушатель есть у ОБОИХ
-      // пикеров разом — пока presetEditing, Escape достаётся только вложенному пикеру шага,
-      // не схлопывая родительский черновик.
+      // Тот же случай, что у mousedown-гейта выше: пока presetEditing, Escape достаётся
+      // только вложенному пикеру шага, не схлопывая родительский черновик. Саму модалку
+      // теперь защищает счётчик активных попапов (см. lib/popupEscape и Modal.tsx) —
+      // пока эта панель открыта, Modal игнорирует Escape, и preventDefault() не нужен.
       if (presetEditing) return;
       setOpen(false);
     };
     document.addEventListener('mousedown', onDown);
-    // capture:true — иначе preventDefault() выше не успевает: Modal вешает свой keydown
-    // НА BUBBLE раньше (при монтировании модалки), и порядок между двумя bubble-слушателями
-    // одного document — по регистрации, а не по вложенности. Capture-фаза всегда отрабатывает
-    // ДО bubble-фазы в одном и том же событии — так preventDefault() успевает выставиться
-    // до того, как Modal дойдёт до своей проверки e.defaultPrevented (MAJOR 3, ревью d23231bd)
-    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('keydown', onKey);
     return () => {
+      release();
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('keydown', onKey);
     };
   }, [open, presetEditing]);
 

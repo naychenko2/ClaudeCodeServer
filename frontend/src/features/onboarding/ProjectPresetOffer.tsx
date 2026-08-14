@@ -172,6 +172,10 @@ export function resolvePresetCardState(
 // в своём основном состоянии (pending/applied/declined). Не путать с card-styling.
 export interface ProjectPresetOfferCardProps {
   state: PresetCardState;
+  // Ключ пресета из маркера ленты — определяет тело карточки в pending-режиме и тот
+  // ключ, который уйдёт в onApply. В applied-режиме ключ приходит и из state, но
+  // pending о нём знает только извне: state не несёт ключ (см. PresetCardState).
+  pendingKey?: string | null;
   // Свой текст итога на случай «created»/«skipped» — карточка отрисует его под заголовком
   // вместо дефолтного «Каркас создан. …». Можно не передавать (тогда общий текст).
   appliedNote?: string | null;
@@ -184,12 +188,27 @@ export interface ProjectPresetOfferCardProps {
   busy?: boolean;
 }
 
-// Тексты — дословно из заметки «Тексты — Знакомство с проектом v2». Здесь берём
-// «документный» вариант (он в плане выбран эталоном для текста «Разложить проект по
-// полочкам»); на других ключах лента просто не покажет карточку — каркас уже применён.
-const CARD_BODY = `
+// Тексты — дословно из заметки «Тексты — Знакомство с проектом v2». По ключу пресета
+// из маркера: описываем ровно тот каркас, который бэкенд применит после клика. Молча
+// падать на документный текст для dev/personal нельзя — человек согласится на состав,
+// который мы создавать не собираемся (см. инвариант «согласие подтверждается действием
+// человека»). Неизвестный ключ — нейтральная формулировка, не документная (та же причина).
+const CARD_BODIES: Record<string, string> = {
+  docs: `
 Создам папки под работу с документами: \`Исходники\` для первоисточников, \`Входящие\` для их текстовых копий, \`Встречи\`, \`Рабочие документы\` с актуальными версиями, \`Архив\` для старых. Плюс \`Статус.md\` — короткая сводка проекта, с которой открывается панель «Документы», и \`CLAUDE.md\` с правилами: первоисточник не трогаем, версия в имени файла, актуальная версия одна.
-`.trim();
+`.trim(),
+  dev: `
+Создам папки под разработку: \`docs\` для документации проекта, внутри \`docs/adr\` — записи принятых решений, и \`notes\` для рабочих заметок. Плюс \`Статус.md\` — короткая сводка, с которой открывается панель «Документы». \`CLAUDE.md\` трогать не буду: в проекте с кодом он обычно уже свой, со своими правилами.
+`.trim(),
+  personal: `
+Создам три папки: \`Материалы\` для того, что собираете, \`Заметки\` для своих записей и \`Архив\` для завершённого. Плюс \`Статус.md\` — короткая сводка, с которой открывается панель «Документы».
+`.trim(),
+};
+const CARD_BODY_NEUTRAL = 'Создам папки и файлы под тип этого проекта.';
+export function cardBodyForKey(key: string | null | undefined): string {
+  if (!key) return CARD_BODY_NEUTRAL;
+  return CARD_BODIES[key] ?? CARD_BODY_NEUTRAL;
+}
 // Поля внутри backticks сохраняем как код (раз дизайн даёт один шрифт для inline-кода,
 // нам хватает обычной строки — без тяжёлого markdown-парсера внутри карточки).
 function renderBody(body: string): React.ReactNode {
@@ -214,7 +233,7 @@ const inlineCode: React.CSSProperties = {
   padding: '0 4px', borderRadius: 4,
 };
 
-export function ProjectPresetOfferCard({ state, appliedNote, onApply, onDecline, error, busy }: ProjectPresetOfferCardProps) {
+export function ProjectPresetOfferCard({ state, pendingKey, appliedNote, onApply, onDecline, error, busy }: ProjectPresetOfferCardProps) {
   if (state.mode === 'hidden') return null;
   if (state.mode === 'applied' && error) {
     // «Уже применён, но локально поймали 409»: это не ошибка, а констатация факта —
@@ -252,13 +271,13 @@ export function ProjectPresetOfferCard({ state, appliedNote, onApply, onDecline,
     <div style={cardShell} aria-busy={busy || undefined}>
       <CardHeader icon={<AlertCircle size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent }} />}
         title="Разложить проект по полочкам" />
-      <div style={bodyText}>{renderBody(CARD_BODY)}</div>
+      <div style={bodyText}>{renderBody(cardBodyForKey(pendingKey))}</div>
       <ErrorLine message={error} />
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.sm, marginTop: SP.sm }}>
         <Button
           variant="primary" size="sm"
-          disabled={busy}
-          onClick={() => { if (!busy) onApply('docs'); }}
+          disabled={busy || !pendingKey}
+          onClick={() => { if (!busy && pendingKey) onApply(pendingKey); }}
         >{busy ? 'Применяю…' : 'Создать'}</Button>
         <Button
           variant="ghost" size="sm"

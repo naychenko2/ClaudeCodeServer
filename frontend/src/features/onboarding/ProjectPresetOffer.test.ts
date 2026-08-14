@@ -5,7 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseProjectPresetOffer, stripProjectPresetMarkers, buildProjectPresetOffer,
-  resolvePresetCardState,
+  resolvePresetCardState, cardBodyForKey,
   type PresetOfferItem,
 } from './ProjectPresetOffer';
 
@@ -165,5 +165,63 @@ describe('resolvePresetCardState — режим карточки от серве
 
   it('неизвестный ключ — карточка-итог с этим ключом в подписи', () => {
     expect(resolvePresetCardState('future-key', true)).toEqual({ mode: 'applied', key: 'future-key' });
+  });
+});
+
+describe('cardBodyForKey — тело карточки от ключа пресета', () => {
+  // Карточка в pending должна описывать ровно тот каркас, который бэкенд создаст после
+  // клика. Без ключа или с неизвестным ключом — нейтральная формулировка, а не
+  // документный текст: это и есть исходный баг п.6б (документный текст для dev).
+
+  const DOCS_MARKER = 'папки под работу с документами';
+  const DEV_MARKER = 'папки под разработку';
+  const PERSONAL_MARKER = 'три папки';
+  const NEUTRAL = 'Создам папки и файлы под тип этого проекта.';
+
+  it('docs — документный текст (как был до фикса)', () => {
+    const body = cardBodyForKey('docs');
+    expect(body).toContain(DOCS_MARKER);
+    expect(body).toContain('Исходники');
+    expect(body).toContain('CLAUDE.md');
+  });
+
+  it('dev — текст под разработку, без CLAUDE.md в составе', () => {
+    const body = cardBodyForKey('dev');
+    expect(body).toContain(DEV_MARKER);
+    expect(body).toContain('`docs`');
+    expect(body).toContain('`docs/adr`');
+    expect(body).toContain('`notes`');
+    // «CLAUDE.md трогать не буду» — гарантия согласия: для dev-пресета CLAUDE.md не создаётся.
+    expect(body).toContain('CLAUDE.md');
+  });
+
+  it('personal — текст под три личные папки', () => {
+    const body = cardBodyForKey('personal');
+    expect(body).toContain(PERSONAL_MARKER);
+    expect(body).toContain('Материалы');
+    expect(body).toContain('Заметки');
+    expect(body).toContain('Архив');
+  });
+
+  it('docs / dev / personal дают три РАЗНЫХ тела', () => {
+    // Защита от регрессии: если кто-то склеит их обратно в одну константу, тест ловит.
+    const docs = cardBodyForKey('docs');
+    const dev = cardBodyForKey('dev');
+    const personal = cardBodyForKey('personal');
+    expect(docs).not.toBe(dev);
+    expect(docs).not.toBe(personal);
+    expect(dev).not.toBe(personal);
+  });
+
+  it('неизвестный ключ — нейтральное, а не документное', () => {
+    // Исходный баг: молча падали на docs. Теперь — нейтральная формулировка.
+    expect(cardBodyForKey('future-key')).toBe(NEUTRAL);
+    expect(cardBodyForKey('future-key')).not.toContain(DOCS_MARKER);
+  });
+
+  it('null/undefined/пустая строка — нейтральное', () => {
+    expect(cardBodyForKey(null)).toBe(NEUTRAL);
+    expect(cardBodyForKey(undefined)).toBe(NEUTRAL);
+    expect(cardBodyForKey('')).toBe(NEUTRAL);
   });
 });

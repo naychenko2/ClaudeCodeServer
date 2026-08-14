@@ -1273,6 +1273,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       projectPresetOffer={item.kind === 'text' && presetOffers.has(i) && presetCardState.mode !== 'hidden'
         ? {
             state: presetCardState,
+            pendingKey: presetOffers.get(i)?.key,
             appliedNote: presetNote,
             error: presetError,
             busy: presetBusy,

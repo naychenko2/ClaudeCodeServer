@@ -646,6 +646,9 @@ interface ItemProps {
   // Маркер из текста стрижётся всегда; карточка встраивается под стриженым текстом.
   projectPresetOffer?: {
     state: PresetCardState;
+    // Ключ пресета из текущего маркера — в pending нужен карточке, чтобы вывести
+    // описание ровно того каркаса, который бэкенд применит, и передать ключ в onApply.
+    pendingKey?: string | null;
     appliedNote?: string | null;
     error?: string | null;
     busy?: boolean;
@@ -1077,6 +1080,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           {projectPresetOffer && (
             <ProjectPresetOfferCard
               state={projectPresetOffer.state}
+              pendingKey={projectPresetOffer.pendingKey}
               appliedNote={projectPresetOffer.appliedNote}
               error={projectPresetOffer.error}
               busy={projectPresetOffer.busy}

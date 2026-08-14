@@ -54,6 +54,7 @@ public class ProjectPresetsController(
         if (key == ProjectPreset.None)
         {
             projects.SetPresetKey(id, ProjectPreset.None);
+            ServerMetrics.RecordPresetApplied(ProjectPreset.None);
             return Ok(new PresetApplyResult([], []));
         }
 
@@ -62,7 +63,7 @@ public class ProjectPresetsController(
             return BadRequest(new { error = $"Неизвестный пресет: {key}" });
 
         var report = presets.Apply(project, preset);
-        ServerMetrics.RecordPresetApplied();
+        ServerMetrics.RecordPresetApplied(preset.Key);
         return Ok(report);
     }
 }

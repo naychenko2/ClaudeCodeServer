@@ -341,6 +341,10 @@ public class Session
     // ТОЛЬКО ей, а не выбранной существующей: молчаливая дозапись прав готовой персоне —
     // тихая эскалация (как и ручная смена дефолта из настроек). Персистится в sessions.json.
     public string? OnboardingCreatedPersonaId { get; set; }
+    // Онбординг этой сессии уже финализирован (make-default прошёл): повторный вызов из живой
+    // сессии — no-op, второе событие onboarding_completed в ленту не уходит (знакомство v2, п.5).
+    // Персистится в sessions.json.
+    public bool OnboardingFinalized { get; set; }
     // Origin автоматизации: null — обычный чат; иначе — id правила PersonaAutomationRule,
     // чат которого создан движком проактивности. Для фильтрации авто-чатов и трассировки.
     public string? AutomationRuleId { get; set; }

@@ -1758,6 +1758,119 @@ public class LocalActionRoutingTests
         Assert.Null(d.Source);
     }
 
+    // --- Сторож соответствия превью боевой дороге (волна настройки моделей 2026-08-14) ---
+    // Превью задачи/чата обязано совпадать с моделью боевого запуска хода: TaskExecutionService
+    // → ExecutorModel → Session.Model → ClaudeSession.EffectiveTurnChain → ResolveChain.
+    // Тесты прогоняют один и тот же вход через обе дороги и сверяют результат.
+
+    private static Persona PersonaSnapshot(Persona p, bool dropModel) => new()
+    {
+        Model = dropModel ? null : p.Model,
+        ModelTier = p.ModelTier,
+        Specialty = p.Specialty,
+        TierStrong = p.TierStrong,
+        TierMedium = p.TierMedium,
+        TierWeak = p.TierWeak,
+    };
+
+    [Fact]
+    public void Сторож_ПревьюЗадачи_СовпадаетСБоевойExecutorModel()
+    {
+        // Матрица сценариев «уровень задачи × модель персоны × матрицы»: превью контроллера
+        // (Preview с санитизацией персоны) обязано давать ту же модель, что боевой запуск.
+        // Полная боевая дорога: SessionManager.ResolveDefaultModel(TasksExecutor,
+        // ExecutorModel(task, persona)) — Resolve места добирает ответ, когда формула
+        // задачи отдала null.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus", ModelTierWeak = "slot-haiku" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus", weak: "spec-haiku") },
+        });
+
+        var personas = new (string? Model, ModelTier? Tier, string? Cell)[]
+        {
+            (null, null, "persona-opus"),                    // ячейка без уровня
+            ("persona-glm", null, null),                     // явная модель, без уровня задачи
+            (null, ModelTier.Strong, "persona-opus"),        // уровень персоны
+            ("persona-glm", ModelTier.Weak, "persona-haiku"),// модель+уровень (модель победит без уровня задачи)
+        };
+        foreach (var (model, tier, cell) in personas)
+        {
+            var persona = new Persona
+            {
+                Model = model,
+                ModelTier = tier,
+                Specialty = PersonaSpecialty.BackendExecutor,
+                TierStrong = cell,
+                TierWeak = cell is null ? null : "persona-haiku",
+            };
+            foreach (var taskTier in new ModelTier?[] { null, ModelTier.Strong, ModelTier.Weak })
+            {
+                var task = new TaskItem { Title = "t", OwnerId = u1.Id, ModelTier = taskTier };
+                var combat = resolver.Resolve(LocalActionCatalog.TasksExecutor,
+                    resolver.ExecutorModel(task, persona, u1.Id), u1.Id);
+
+                // Дорога превью: санитизация персоны при заданном уровне задачи (ModelsController.
+                // TaskPreview) + Preview(tasks-executor).
+                var effective = PersonaSnapshot(persona, dropModel: taskTier is not null);
+                var d = resolver.Preview(LocalActionCatalog.TasksExecutor, effective,
+                    effective.Specialty, u1.Id, taskTier);
+
+                d.Model.Should().Be(combat,
+                    $"превью задачи обязано совпадать с боевой моделью (persona model={model}, tier={tier}, taskTier={taskTier})");
+            }
+        }
+    }
+
+    [Fact]
+    public void Сторож_ПревьюЗадачи_БезПерсоны_СовпадаетСБоевойДорогой()
+    {
+        // Задача без персоны: бой — ExecutorModel(task, null) → null → ResolveDefaultModel
+        // берёт слот дефолта места; превью — Preview с заглушкой-персоной (ModelsController.
+        // TaskPreview) — обязано дать тот же ответ.
+        var (resolver, app, users, _, _, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus", ModelTierWeak = "slot-haiku" });
+        var u1 = users.Add("u1", "p", "user");
+
+        foreach (var taskTier in new ModelTier?[] { null, ModelTier.Strong, ModelTier.Weak })
+        {
+            var task = new TaskItem { Title = "t", OwnerId = u1.Id, ModelTier = taskTier };
+            var combat = resolver.Resolve(LocalActionCatalog.TasksExecutor,
+                resolver.ExecutorModel(task, null, u1.Id), u1.Id);
+            var d = resolver.Preview(LocalActionCatalog.TasksExecutor, new Persona(),
+                PersonaSpecialty.None, u1.Id, taskTier);
+            d.Model.Should().Be(combat, $"без персоны: taskTier={taskTier}");
+        }
+    }
+
+    [Fact]
+    public void Сторож_ПревьюЧата_СовпадаетСEffectiveTurnChain()
+    {
+        // Контекст чата: цепочка превью = боевой EffectiveTurnChain (ResolveChain места по
+        // Session.Model), модель превью = первый шаг. Сценарии: замороженная модель из
+        // пресета слота, модель вне пресетов (хвост тира), пустая модель (место решает).
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "preset:main" });
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("main", "opus", "kimi-k3", "glm-5.2") },
+        });
+        var u1 = users.Add("u1", "p", "user");
+
+        foreach (var sessionModel in new string?[] { null, "glm-5.2", "stranger-model" })
+        {
+            var combatChain = resolver.ResolveChain(LocalActionCatalog.ChatNew, sessionModel, u1.Id);
+            // Дорога превью: замороженная модель — явная для места; пустая — Preview места
+            var frozen = !string.IsNullOrWhiteSpace(sessionModel);
+            var previewModel = frozen ? sessionModel!.Trim()
+                : resolver.Preview(LocalActionCatalog.ChatNew, null, PersonaSpecialty.None, u1.Id, null).Model;
+            previewModel.Should().Be(combatChain.FirstOrDefault(),
+                $"модель превью чата = первый шаг боевой цепочки (sessionModel={sessionModel})");
+        }
+    }
+
     private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory
     {
         public HttpClient CreateClient(string name) => new(handler);

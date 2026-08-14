@@ -1,12 +1,14 @@
 import type { ProviderData, TierKey } from '../../lib/modelProvidersShared';
 import type { ModelOption } from '../../lib/models';
 import type { ResetResult, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import { ExceptionsBlock } from './ExceptionsBlock';
 
-// Заглушка под полный макет v4 (см. docs/mockups/model-settings-v4/special-rules-groups.html).
-// TODO(Kira v4): три пропорциональные «картины по уровням», группы одинаковых наборов,
-// отдельные роли, «Любая специальность», мастер «Добавить правило», «Сейчас пойдёт»,
-// admin-only «Пользователю…», бейдж = покрытие «N из M», пустой «Для всех» →
-// дефолт открытия на «Только для меня».
+// Вкладка «Особые правила для специальностей» (раздел «Модели и расход»).
+// До макета v4 здесь лежит ExceptionsBlock в нынешнем виде: рабочая дорога возвращена
+// после регрессии (29-строчная заглушка делала вкладку пустой). У не-админа
+// ExceptionsBlock сам выбирает слой «Только для меня» — это та же раскладка, что
+// была у блока в «Моделях по умолчанию» до переноса. Полный макет v4 (картина по
+// уровням + группы) — следующий шаг; до того эта вкладка обязана быть достижимой.
 
 interface SpecialRulesTabProps {
   isAdmin: boolean;
@@ -25,6 +27,21 @@ interface SpecialRulesTabProps {
   onReset: (scope: 'global' | 'owner' | 'user', key?: string) => Promise<ResetResult>;
 }
 
-export function SpecialRulesTab(_props: SpecialRulesTabProps) {
-  return null;
+export function SpecialRulesTab(props: SpecialRulesTabProps) {
+  const { isAdmin, settings, models, tierModels, ollamaModel, savingScope, onSaveLayer,
+    onReloadSettings, resettingScope, onReset } = props;
+  return (
+    <ExceptionsBlock
+      settings={settings}
+      isAdmin={isAdmin}
+      models={models}
+      tierModels={tierModels}
+      ollamaModel={ollamaModel}
+      savingScope={savingScope}
+      onSaveLayer={onSaveLayer}
+      onReloadSettings={onReloadSettings}
+      resettingScope={resettingScope}
+      onReset={onReset}
+    />
+  );
 }

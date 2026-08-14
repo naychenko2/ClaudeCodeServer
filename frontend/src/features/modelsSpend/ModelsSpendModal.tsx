@@ -146,9 +146,10 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   const tabs: { key: TabKey; label: string }[] = [
     // На мобиле полное название не влезает в полосу вкладок — короткий вариант из макета
     { key: 'slots', label: isMobile ? 'Модели' : 'Модели по умолчанию' },
-    // «Особые правила» — отдельная вкладка по решению владельца 14.08.2026; для
-    // не-админа скрываем (admin-only «Пользователю…», и смысла без него нет)
-    ...(isAdmin ? [{ key: 'specialty' as const, label: 'Особые правила' }] : []),
+    // «Особые правила» — отдельная вкладка (решение владельца 14.08.2026). Видна всем:
+    // у не-админа она открывается на слое «Только для меня» — тот же блок был раньше
+    // в «Моделях по умолчанию». Admin-only «Пользователю…» живёт уже внутри самой вкладки.
+    { key: 'specialty', label: 'Особые правила' },
     { key: 'apply', label: 'Применение моделей' },
     { key: 'chains', label: 'Цепочки' },
     { key: 'quotas', label: 'Квоты и деньги' },
@@ -203,7 +204,7 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               onPendingDraftConsumed={() => setPendingDraft(false)}
             />
           )}
-          {tab === 'specialty' && isAdmin && (
+          {tab === 'specialty' && (
             <SpecialRulesTab
               isAdmin={isAdmin}
               meUserId={me?.userId ?? null}

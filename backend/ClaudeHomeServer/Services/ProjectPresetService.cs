@@ -66,11 +66,13 @@ public sealed class ProjectPresetService(FileService files, DocsIndexService doc
             try
             {
                 // WriteFile родительских папок не создаёт (в отличие от CreateFile,
-                // который безусловно затирает файл) — создаём заранее
+                // который безусловно затирает файл) — создаём заранее. Название проекта
+                // подставляется здесь же: каталог хранит токен-подсказку, файл на диске
+                // получает реальную шапку
                 var parent = Path.GetDirectoryName(file.Path.Replace('/', Path.DirectorySeparatorChar));
                 if (!string.IsNullOrEmpty(parent))
                     files.CreateDirectory(root, parent);
-                files.WriteFile(root, file.Path, file.Content);
+                files.WriteFile(root, file.Path, PresetCatalog.Materialize(file.Content, project.Name));
                 created.Add(file.Path);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)

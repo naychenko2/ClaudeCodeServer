@@ -88,11 +88,12 @@ public class ProjectPresetServiceTests : IDisposable
         // Папки (кириллица — в Linux-CI путь от GetTempPath, без Windows-литералов)
         foreach (var folder in preset.Folders)
             Directory.Exists(InRoot(project, folder)).Should().BeTrue($"папка {folder} не создана");
-        // Файлы — ровно с содержимым каталога
+        // Файлы — с содержимым каталога, где токен названия заменён именем проекта
         foreach (var file in preset.Files)
         {
             File.Exists(InRoot(project, file.Path)).Should().BeTrue();
-            File.ReadAllText(InRoot(project, file.Path)).Should().Be(file.Content);
+            File.ReadAllText(InRoot(project, file.Path))
+                .Should().Be(PresetCatalog.Materialize(file.Content, project.Name));
         }
         report.Created.Should().Contain(new[] { "Исходники", "CLAUDE.md", "Статус.md", ".docs", "Доска задач" });
         report.Skipped.Should().BeEmpty();
@@ -125,7 +126,8 @@ public class ProjectPresetServiceTests : IDisposable
         foreach (var folder in preset.Folders)
             Directory.Exists(InRoot(project, folder)).Should().BeTrue();
         foreach (var file in preset.Files)
-            File.ReadAllText(InRoot(project, file.Path)).Should().Be(file.Content);
+            File.ReadAllText(InRoot(project, file.Path))
+                .Should().Be(PresetCatalog.Materialize(file.Content, project.Name));
 
         var (scope, docTypes) = _docs.ResolveScopeAndTypes(project);
         scope.Folders.Should().BeEquivalentTo(preset.DocsScope.Folders);
@@ -254,6 +256,40 @@ public class ProjectPresetServiceTests : IDisposable
         docsReady.Should().BeTrue(".docs записывается до коммита ключа");
         boardReady.Should().BeTrue("колонки записываются до коммита ключа");
         project.PresetKey.Should().Be("docs");
+    }
+
+    [Fact]
+    public void Apply_ИмяСПробеламиИТире_ПодставляетсяВЗаголовкиЗаготовок()
+    {
+        // Имя с пробелами и тире — как в живых проектах; оно обязано попасть в шапку
+        // CLAUDE.md (docs) и Статус.md (personal), не оставив токен-плейсхолдер
+        var project = NewProject("Документооборот - в EDMS");
+        NewSut().Apply(project, PresetCatalog.Find("docs")!);
+
+        var claude = File.ReadAllText(InRoot(project, "CLAUDE.md"));
+        claude.Should().Contain("# Документооборот - в EDMS");
+        claude.Should().NotContain(PresetCatalog.ProjectNameToken,
+            "плейсхолдер названия не должен доживать до файла на диске");
+
+        var personal = NewProject("Личное дело - переезд 2026");
+        NewSut().Apply(personal, PresetCatalog.Find("personal")!);
+        var status = File.ReadAllText(InRoot(personal, "Статус.md"));
+        status.Should().Contain("# Личное дело - переезд 2026");
+        status.Should().NotContain(PresetCatalog.ProjectNameToken);
+        // Курсивные подсказки — подсказками и остаются: сервер их не заполняет
+        status.Should().Contain("_Что это за дело");
+    }
+
+    [Fact]
+    public void Apply_ПустоеИмяПроекта_ОставляетТокенКакПодсказку()
+    {
+        // Прямой вызов API может завести проект с пустым именем: пустой заголовок хуже
+        // токена-подсказки, который человек заполнит руками или модель при первом ходе
+        var project = NewProject("");
+        NewSut().Apply(project, PresetCatalog.Find("docs")!);
+
+        File.ReadAllText(InRoot(project, "CLAUDE.md"))
+            .Should().Contain($"# {PresetCatalog.ProjectNameToken}");
     }
 
     public void Dispose()

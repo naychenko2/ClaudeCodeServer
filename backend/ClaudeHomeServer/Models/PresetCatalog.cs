@@ -34,6 +34,20 @@ public record PresetDefinition(
 
 public static class PresetCatalog
 {
+    // Место названия проекта в заготовках. В каталоге лежит токен, реальное имя
+    // подставляется при записи файла на диск (ProjectPresetService.Apply) — каталог
+    // не знает имён и остаётся одинаковым для всех проектов.
+    public const string ProjectNameToken = "<Название проекта>";
+
+    /// <summary>
+    /// Подстановка названия проекта в заготовку при материализации файла. Пустое имя
+    /// оставляет токен на месте — для человека это подсказка заполнить шапку, а не мусор.
+    /// </summary>
+    public static string Materialize(string content, string? projectName) =>
+        string.IsNullOrWhiteSpace(projectName)
+            ? content
+            : content.Replace(ProjectNameToken, projectName);
+
     // Общие куски заготовок. «Статус.md» в каждом пресете свой, но вводная строка про панель
     // «Документы» одна — с неё открывается область, и человек должен об этом знать.
     private const string StatusHint =
@@ -154,7 +168,7 @@ public static class PresetCatalog
         """;
 
     private const string PersonalStatusMd = """
-        # <Название>
+        # <Название проекта>
 
         _Что это за дело и чем оно должно закончиться._
 

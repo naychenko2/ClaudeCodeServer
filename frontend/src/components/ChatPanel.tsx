@@ -15,6 +15,9 @@ import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
 import { hasUserTurnAfter, buildMechanicOffers, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
+import {
+  buildProjectPresetOffer, type PresetCardState,
+} from '../features/onboarding/ProjectPresetOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
@@ -1141,6 +1144,83 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     }
   }, [session.id, send, chatContext, onSessionUpdated, atBottomRef]);
 
+  // === Каркас проекта (знакомство v2, п.4) ===
+  // Маркеры <project-preset key="…"/> в текстах ассистента → карточка с кнопками
+  // «Создать» / «Не нужно». Состояние кнопок берём с DTO проекта: «pending» — можно
+  // применить/отказаться; «<ключ>» — каркас уже создан; «none» — человек отказался;
+  // null — проект создан до фичи, к каркасу возвращаться не нужно. Локальный override
+  // поверх DTO нужен на случай быстрого клика — POST уходит асинхронно, а кнопка должна
+  // погаснуть/сменить подпись уже сейчас, чтобы пользователь не нажал второй раз.
+  const presetOffers = useMemo(() => buildProjectPresetOffer(items), [items]);
+  const [presetOverride, setPresetOverride] = useState<string | null>(null);
+  // Inline-ошибка последнего клика (4xx) и «занято» — отдельные флаги, чтобы кнопка
+  // не перерисовывала «Каркас создан» до того, как сервер подтвердит.
+  const [presetBusy, setPresetBusy] = useState(false);
+  const [presetError, setPresetError] = useState<string | null>(null);
+  const [presetNote, setPresetNote] = useState<string | null>(null);
+  const effectivePresetKey = presetOverride ?? project?.presetKey ?? null;
+  const applyPreset = useCallback(async (key: string) => {
+    if (!project) return;
+    if (presetBusy) return;
+    setPresetBusy(true);
+    setPresetError(null);
+    try {
+      const report = await api.projects.applyPreset(project.id, key);
+      // Сразу отражаем успех на DTO — пользователь увидит «Каркас создан» ещё до того,
+      // как WorkspacePage обновит объект проекта после рефреша
+      setPresetOverride(key);
+      // Краткий итог для подписи в карточке, если бэк что-то пропустил (например, файл занят)
+      const skipped = report.skipped?.length ?? 0;
+      const created = report.created?.length ?? 0;
+      if (skipped > 0) {
+        setPresetNote(`Каркас применён: ${created} новых, ${skipped} пропущено (уже есть в проекте).`);
+      } else {
+        setPresetNote(null);
+      }
+      // Доклад в ленту: обычный ход с текстом, НЕ systemDirective — тот уходит в обход
+      // очереди (SessionManager:2475,2595) и рвёт цикл. Берём текст кортко —
+      // детали (что создали, что пропустили) уже в карточке.
+      const reportText = skipped > 0
+        ? 'Готово: создала каркас. Часть файлов уже была в проекте — их не трогала.'
+        : 'Готово: создала каркас. Правила лежат в CLAUDE.md проекта — их потом можно поправить.';
+      atBottomRef.current = true;
+      await send(reportText, [], modeRef.current);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Не удалось применить каркас';
+      setPresetError(message);
+      // 409 — каркас уже применён/отклонён/проект до фичи: после этого DTO и так
+      // покажет финальное состояние, не блокируем
+      setPresetOverride(effectivePresetKey);
+    } finally {
+      setPresetBusy(false);
+    }
+  }, [project, presetBusy, send, atBottomRef, effectivePresetKey]);
+  const declinePreset = useCallback(async () => {
+    if (!project) return;
+    if (presetBusy) return;
+    setPresetBusy(true);
+    setPresetError(null);
+    try {
+      await api.projects.applyPreset(project.id, 'none');
+      setPresetOverride('none');
+    } catch (err) {
+      setPresetError(err instanceof Error ? err.message : 'Не удалось зафиксировать отказ');
+    } finally {
+      setPresetBusy(false);
+    }
+  }, [project, presetBusy]);
+
+  // Состояние карточки — функция от серверного `presetKey`. Прячем карточку, если
+  // на сервере ещё «pending», но в ленте нет ни одного маркера — кнопку не показываем
+  // (пользователь ещё не видел предложения). Когда сервер скажет «docs»/«none»/null,
+  // карточка показывает итог.
+  const presetCardState: PresetCardState = useMemo(() => {
+    if (!presetOffers.size) return { mode: 'hidden' };
+    if (effectivePresetKey === 'pending' || effectivePresetKey == null) return { mode: 'pending' };
+    if (effectivePresetKey === 'none') return { mode: 'declined' };
+    return { mode: 'applied', key: effectivePresetKey };
+  }, [presetOffers.size, effectivePresetKey]);
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
@@ -1183,6 +1263,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
             onRun: () => void runTeamMechanic(mechanicOffers.get(i)!),
           }
         : undefined}
+      projectPresetOffer={item.kind === 'text' && presetOffers.has(i) && presetCardState.mode !== 'hidden'
+        ? {
+            state: presetCardState,
+            appliedNote: presetNote,
+            error: presetError,
+            busy: presetBusy,
+            onApply: (key) => void applyPreset(key),
+            onDecline: () => void declinePreset(),
+          }
+        : undefined}
       promptSnapshotId={turnMeta.snapshots[i]}
       turnContextTokens={turnMeta.contextTokens[i]}
       turnCache={turnMeta.cache[i]}
@@ -1193,6 +1283,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedMechanics, declinedMechanicOffers, runTeamMechanic,
+    presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,
   ]);
 

@@ -138,4 +138,74 @@ public class PresetStoreTests
         var store = Store();
         PresetStore.Delete(store, "u1", "no-such").Should().BeNull();
     }
+
+    // --- Слой «пользователь» (B9): пресет, назначенный админом, правится в user-слое,
+    // а не в личном (дефект M1 ревью 15.08: мутация уходила в Owners и молча no-op-илась) ---
+
+    [Fact]
+    public void Rename_ПресетНазначенногоСлоя_МеняетИмяВUserСлоеНеТрогаяЛичный()
+    {
+        var store = Store();
+        store.SetUser("u1", new SpecialtySettingsLayer
+        {
+            Presets = { Preset("up1", "Назначенный", "opus"), Preset("up2", "Сосед", "glm-5.2") },
+            Specialties = { ["backendExecutor"] = new SpecialtyTemplateSettings { TierStrong = "user-spec-opus" } },
+        });
+        store.SetOwner("u1", new SpecialtySettingsLayer { Presets = { Preset("op1", "Личный", "haiku") } });
+
+        PresetStore.Rename(store, "u1", "up1", "Новое назначение").Should().BeNull();
+
+        var user = store.Snapshot.Users["u1"];
+        user.Presets.Single(p => p.Id == "up1").Name.Should().Be("Новое назначение");
+        // Сосед и специальность назначенного слоя пережили перезапись, личный слой не задет
+        user.Presets.Single(p => p.Id == "up2").Name.Should().Be("Сосед");
+        user.Specialties["backendExecutor"].TierStrong.Should().Be("user-spec-opus");
+        store.Snapshot.Owners["u1"].Presets.Single().Name.Should().Be("Личный");
+    }
+
+    [Fact]
+    public void Rename_НазначенныйБезЛичногоСлоя_МеняетИмяБезОшибки()
+    {
+        // Регрессия M1: раньше мутация User-скопа шла в Owners, личного слоя нет — «Слой
+        // пресета не найден», хотя назначенный пресет существует и виден владельцу.
+        var store = Store();
+        store.SetUser("u1", new SpecialtySettingsLayer { Presets = { Preset("up1", "Назначенный", "opus") } });
+
+        PresetStore.Rename(store, "u1", "up1", "Работает").Should().BeNull();
+        store.Snapshot.Users["u1"].Presets.Single().Name.Should().Be("Работает");
+        store.Snapshot.Owners.Should().NotContainKey("u1",
+            "личный слой не создаётся побочно правкой назначенного");
+    }
+
+    [Fact]
+    public void Delete_ПресетНазначенногоСлоя_УдаляетИзUserСлоя()
+    {
+        var store = Store();
+        store.SetUser("u1", new SpecialtySettingsLayer
+        {
+            Presets = { Preset("up1", "Удаляем", "opus"), Preset("up2", "Остаётся", "glm-5.2") },
+        });
+        store.SetOwner("u1", new SpecialtySettingsLayer { Presets = { Preset("op1", "Личный", "haiku") } });
+
+        var deleted = PresetStore.Delete(store, "u1", "up1");
+
+        deleted!.Scope.Should().Be(PresetScope.User);
+        store.Snapshot.Users["u1"].Presets.Single(p => p.Id == "up2").Name.Should().Be("Остаётся");
+        store.Snapshot.Owners["u1"].Presets.Single().Name.Should().Be("Личный",
+            "личный слой не задет удалением назначенного");
+    }
+
+    [Fact]
+    public void Delete_ПоследнийПресетНазначенногоСлоя_СнимаетНазначение()
+    {
+        // Пустой user-слой SetUser убирает — пользователь возвращается к личному поверх
+        // глобального (симметрично снятию пустого личного слоя)
+        var store = Store();
+        store.SetUser("u1", new SpecialtySettingsLayer { Presets = { Preset("up1", "Единственный", "opus") } });
+
+        PresetStore.Delete(store, "u1", "up1");
+
+        store.Snapshot.Users.Should().NotContainKey("u1",
+            "назначение без пресетов пуст — стор снимает его сам");
+    }
 }

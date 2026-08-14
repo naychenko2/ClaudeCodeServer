@@ -149,8 +149,10 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
             if (persona is null)
                 return BadRequest(new { error = "subagentChip требует существующего personaId" });
             var session = sessions.GetById(sessionId);
-            // Чужая/неизвестная сессия — 404, не раскрывая существование
-            if (session is null || (session.OwnerId is not null && session.OwnerId != ownerId))
+            // Чужая/неизвестная сессия — 404, не раскрывая существование. Проверка та же,
+            // что у ветки чата выше (ResolveOwnerId): проектная сессия принадлежит
+            // владельцу проекта и при пустом OwnerId чип недоступен посторонним.
+            if (session is null || sessions.ResolveOwnerId(session) != ownerId)
                 return NotFound(new { error = "Сессия не найдена" });
             chip = assignments.SubagentChipFor(persona, session.Model, ownerId);
         }
@@ -217,9 +219,15 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     //   kind   — instance-slot|owner-slot|specialty-cell|persona-model|persona-cell|place;
     //   label  — человекочитаемое описание места (для текста диалога);
     //   ownerId— null для общих мест (инстанс/общая специальность/место каталога), иначе id владельца.
+    // Per-owner изоляция: пресет обязан быть виден вызывающему (Find по его эффективному
+    // списку — иначе usage по угаданному id раскрывал бы чужие настройки), не-админу
+    // отдаются только его места и общие — см. PresetUsageList.
     [HttpGet("presets/{id}/usage")]
     public IActionResult PresetUsage(string id)
     {
+        var ownerId = UserId ?? "";
+        if (PresetStore.Find(specialty, ownerId, id) is null)
+            return NotFound(new { error = "Пресет не найден" });
         var usages = PresetUsageList(id);
         return Ok(new { presetId = id, count = usages.Count, usages });
     }
@@ -228,9 +236,10 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
 
     // Переименовать пресет (спец. блок 6): правится тот экземпляр, который резолвится
     // по id у вызывающего (личный раньше глобального — порядок SpecialtySettingsStore.
-    // EffectivePresets). Общий пресет переименовывает только админ: имя видно всем
-    // владельцам инстанса. Идущие ходы не роняет: цепочка разворачивается на границе
-    // запуска хода, имя в ней не участвует.
+    // EffectivePresets). Не-админ правит ТОЛЬКО свой личный пресет: общий (Global) и
+    // назначенный ему админом (User, B9) не трогает — имя видно владельцам слоя.
+    // Идущие ходы не роняет: цепочка разворачивается на границе запуска хода, имя
+    // в ней не участвует.
     [HttpPut("presets/{id}/name")]
     public IActionResult RenamePreset(string id, [FromBody] RenamePresetRequest req)
     {
@@ -242,7 +251,7 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         var located = PresetStore.Find(specialty, ownerId, id);
         if (located is null)
             return NotFound(new { error = "Пресет не найден" });
-        if (located.Scope == PresetScope.Global && !IsAdmin)
+        if (located.Scope != PresetScope.Owner && !IsAdmin)
             return Forbid();
 
         if (PresetStore.Rename(specialty, ownerId, id, name) is { } error)
@@ -250,12 +259,14 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         return Ok(new { id, name });
     }
 
-    // Удалить пресет (спец. блок 6). Перед удалением фронт показывает места использования
-    // (GET presets/{id}/usage); сам запрос — безусловный: по ADR-007 §3 ссылки не блокируют
-    // удаление, осиротевшие preset:{id} — fail-open вниз (битая ячейка = «спроси следующую
-    // матрицу», битое место = «решает CLI»), места видны в usage и до, и после удаления.
-    // Ответ отдаёт УДАЛЁННЫЙ пресет и места, где он был выбран на момент удаления, — фронт
-    // рисует итоговый диалог («Цепочка «…» удалена. Была выбрана в N местах»). Идущие ходы
+    // Удалить пресет (спец. блок 6). Как и переименование: не-админ удаляет только свой
+    // личный пресет; общий (Global) и назначенный ему админом (User, B9) — только админ.
+    // Перед удалением фронт показывает места использования (GET presets/{id}/usage);
+    // сам запрос — безусловный: по ADR-007 §3 ссылки не блокируют удаление, осиротевшие
+    // preset:{id} — fail-open вниз (битая ячейка = «спроси следующую матрицу», битое
+    // место = «решает CLI»). Ответ отдаёт УДАЛЁННЫЙ пресет и места, где он был выбран
+    // на момент удаления (по роли вызывающего — см. PresetUsageList), — фронт рисует
+    // итоговый диалог («Цепочка «…» удалена. Была выбрана в N местах»). Идущие ходы
     // не роняет: цепочка хода разворачивается при его запуске и в память процесса уже
     // материализована (FallbackLlmSessionAdapter), имя/id пресета в рантайме не читаются.
     [HttpDelete("presets/{id}")]
@@ -265,7 +276,7 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         var located = PresetStore.Find(specialty, ownerId, id);
         if (located is null)
             return NotFound(new { error = "Пресет не найден" });
-        if (located.Scope == PresetScope.Global && !IsAdmin)
+        if (located.Scope != PresetScope.Owner && !IsAdmin)
             return Forbid();
 
         // Места считаем ДО удаления: после него RefersTo уже не найдёт ссылок в этом слое
@@ -274,15 +285,27 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         return Ok(new
         {
             preset = new { id = located.Preset.Id, name = located.Preset.Name },
-            scope = located.Scope == PresetScope.Global ? "global" : "owner",
+            scope = located.Scope switch
+            {
+                PresetScope.Global => "global",
+                PresetScope.User => "user",
+                _ => "owner",
+            },
             count = usages.Count,
             usages,
         });
     }
 
-    // Список мест использования пресета — общая часть usage-эндпоинта и удаления
+    // Список мест использования пресета — общая часть usage-эндпоинта и удаления.
+    // Per-owner изоляция: не-админ получает только места СВОЕГО слоя (личные слоты,
+    // свои персоны, матрицы личного и назначенного ему user-слоя) и общие места
+    // инстанса (слоты, глобальные специальности, места каталога) — без имён и id
+    // других пользователей; полный список (все владельцы, все назначения B9, все
+    // персоны) — только админу: чьё где выбрано — админская информация.
     private List<ModelPresetUsage> PresetUsageList(string id)
     {
+        var ownerId = UserId ?? "";
+        var isAdmin = IsAdmin;
         var usages = new List<ModelPresetUsage>();
         var app = appSettings.Get();
         AddSlot(usages, app.ModelTierStrong, "Сильная", "Модели по умолчанию", null, id);
@@ -290,18 +313,34 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
         AddSlot(usages, app.ModelTierWeak, "Слабая", "Модели по умолчанию", null, id);
         foreach (var u in users.GetAll())
         {
-            var whose = string.IsNullOrEmpty(UserId) || u.Id == UserId
-                ? "Мои модели" : $"Модели · {u.DisplayName ?? u.Username}";
+            // Чужие слоты — только админу: «Модели · {имя}» раскрывает коллег и их настройки
+            if (!isAdmin && u.Id != ownerId) continue;
+            var whose = u.Id == ownerId ? "Мои модели" : $"Модели · {u.DisplayName ?? u.Username}";
             AddSlot(usages, u.ModelTierStrong, "Сильная", whose, u.Id, id);
             AddSlot(usages, u.ModelTierMedium, "Средняя", whose, u.Id, id);
             AddSlot(usages, u.ModelTierWeak, "Слабая", whose, u.Id, id);
         }
         var file = specialty.Snapshot;
         ScanSpecialtyLayer(usages, file.Global, null, id);
-        foreach (var (oid, layer) in file.Owners)
-            ScanSpecialtyLayer(usages, layer, oid, id);
+        if (isAdmin)
+        {
+            foreach (var (oid, layer) in file.Owners)
+                ScanSpecialtyLayer(usages, layer, oid, id);
+            foreach (var (uid, layer) in file.Users)
+                ScanSpecialtyLayer(usages, layer, uid, id);
+        }
+        else
+        {
+            // Свой личный слой и назначенный ему (B9) — подписи без чужих имён
+            if (file.Owners.TryGetValue(ownerId, out var own))
+                ScanSpecialtyLayer(usages, own, ownerId, id);
+            if (file.Users.TryGetValue(ownerId, out var user))
+                ScanSpecialtyLayer(usages, user, ownerId, id);
+        }
         foreach (var p in personas.GetAllInternal())
         {
+            // Чужие персоны — только админу: имена и настройки персон per-owner
+            if (!isAdmin && p.OwnerId != ownerId) continue;
             if (RefersTo(p.Model, id))
                 usages.Add(new ModelPresetUsage("persona-model", $"Персона «{p.Name}» — всегда работает", p.OwnerId));
             AddTierCells(usages, p.TierStrong, p.TierMedium, p.TierWeak,

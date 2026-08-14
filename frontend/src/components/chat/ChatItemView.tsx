@@ -598,6 +598,9 @@ interface ItemProps {
   online: boolean;
   streaming?: boolean;
   isLastResult?: boolean;
+  // Для kind='interrupted': отметка ещё хвост разговора (после неё не было сообщения
+  // пользователя) — только тогда показываем «Повторить». Считает ChatPanel
+  canRetryInterrupted?: boolean;
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
@@ -890,7 +893,7 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1530,7 +1533,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <svg width="11" height="11" viewBox="0 0 24 24" fill={C.textMuted}><rect x="5" y="5" width="14" height="14" rx="2" /></svg>
             Ход остановлен пользователем
           </span>
-          {online && (
+          {online && canRetryInterrupted && (
             <button onClick={onRetry} style={{ fontSize: 12, padding: '3px 10px', borderRadius: 6, border: `1px solid ${C.border}`, background: C.bgWhite, cursor: 'pointer', color: C.textSecondary, whiteSpace: 'nowrap' }}>Повторить</button>
           )}
         </div>

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ChatItem, ServerMessage, TeamEscalationKind, SessionTeamImplement } from '../../types';
-import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, type ChatState } from '../chatReducer';
+import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, retryableInterruptedIndex, type ChatState } from '../chatReducer';
 
 // --- Хелперы ---
 
@@ -1135,5 +1135,34 @@ describe('applyServerMessage: снимок промпта хода', () => {
     }));
 
     expect(s.items).toEqual(before.items);
+  });
+});
+
+// --- retryableInterruptedIndex: до каких пор у отметки «Стоп» жива кнопка «Повторить» ---
+
+describe('retryableInterruptedIndex', () => {
+  const u = (text: string): ChatItem => ({ kind: 'user_message', text });
+  const t = (text: string): ChatItem => ({ kind: 'text', text });
+  const stop: ChatItem = { kind: 'interrupted' };
+
+  it('отметка последняя в ленте → её индекс', () => {
+    expect(retryableInterruptedIndex([u('в'), t('пол'), stop])).toBe(2);
+  });
+
+  it('ниже только хвост прерванного хода (долетевшие дельты, result) → индекс остаётся', () => {
+    const items: ChatItem[] = [u('в'), stop, t('час'), { kind: 'result', subtype: 'success', durationMs: 1, numTurns: 1 }];
+    expect(retryableInterruptedIndex(items)).toBe(1);
+  });
+
+  it('разговор продолжился новым сообщением пользователя → -1', () => {
+    expect(retryableInterruptedIndex([u('в'), stop, u('давай иначе'), t('ответ')])).toBe(-1);
+  });
+
+  it('несколько остановок → живая только последняя', () => {
+    expect(retryableInterruptedIndex([u('в'), stop, u('ещё'), stop])).toBe(3);
+  });
+
+  it('остановок нет → -1', () => {
+    expect(retryableInterruptedIndex([u('в'), t('ответ')])).toBe(-1);
   });
 });

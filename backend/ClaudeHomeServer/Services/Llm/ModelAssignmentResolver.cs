@@ -18,7 +18,8 @@ public sealed class ModelAssignmentResolver(
     AppSettingsService appSettings,
     LocalActionOverridesStore? store = null,
     UserModelTierResolver? userTiers = null,
-    SpecialtySettingsStore? specialty = null)
+    SpecialtySettingsStore? specialty = null,
+    LlmProviderRegistry? providers = null)
 {
     /// <summary>
     /// Модель персоны как «явная» для места (ADR-007 §2): своя модель сильнее её уровня,
@@ -457,5 +458,81 @@ public sealed class ModelAssignmentResolver(
         }
         var model = preset?.Broken == true ? null : chain.FirstOrDefault();
         return new ModelSourceDetail(model, source, effTier, tierOrigin, preset, chain);
+    }
+
+    // --- Чип модели на карточке персоны-сабагента (спека «Чип модели…») ---
+    // Состояние — функция пары (персона, сессия): алиас пина из frontmatter .md-агента
+    // (та же формула, что генерит PersonaAgentFileSync) + провайдер модели самой сессии.
+    // Считается здесь же — второй точки истины нет.
+
+    /// <summary>
+    /// Модель пина сабагента персоны (frontmatter .md-агента): модель персоны/уровня →
+    /// назначение места «сабагенты-консультанты». Без ?? persona.Model — его добавляет
+    /// вызывающий, когда резолв места молчит. Общая точка с PersonaAgentFileSync.Generate.
+    /// </summary>
+    public string? PersonaSubagentPinModel(Persona persona, string? ownerId) =>
+        Resolve(LocalActionCatalog.SubagentConsultant,
+            PersonaModel(persona, ownerId, LocalActionCatalog.DefaultTierOf(LocalActionCatalog.SubagentConsultant)),
+            ownerId);
+
+    // Машинные kind чипа (wire-имена, фронт рисует по ним стиль, не пересобирая логику):
+    //   tier            — Claude-чат, у персоны есть пин (label — сам алиас opus/sonnet/haiku);
+    //   chat-model      — Claude-чат, пина нет — сабагент идёт на модели чата;
+    //   provider-main   — сторонний чат, сабагент идёт на основной модели провайдера;
+    //   provider-medium — сторонний чат, пин sonnet и у провайдера задан MediumModel;
+    //   provider-fast   — сторонний чат, пин haiku или пина нет (CLAUDE_CODE_SUBAGENT_MODEL
+    //                     = small) и у провайдера задан SmallModel.
+    public sealed record SubagentModelChip(string Kind, string Label, string Hint)
+    {
+        public const string KindTier = "tier";
+        public const string KindChatModel = "chat-model";
+        public const string KindProviderMain = "provider-main";
+        public const string KindProviderMedium = "provider-medium";
+        public const string KindProviderFast = "provider-fast";
+    }
+
+    private const string ChipHintTier = "Модель персоны · выбрана слотом «Сабагенты-консультанты»";
+    private const string ChipHintChatModel = "Своей модели у персоны нет — идёт на модели этого чата";
+    private const string ChipHintProvider =
+        "У персоны модель стороннего провайдера — в сабагенте она не применяется, ход идёт на модели этого чата";
+
+    /// <summary>
+    /// Состояние чипа для пары (персона, сессия): sessionModel — Session.Model чата
+    /// (null — родной Claude по подписке). Маппинг стороннего чата строго по BuildCliEnv:
+    /// opus→main, sonnet→medium, haiku→small, без пина→CLAUDE_CODE_SUBAGENT_MODEL=small;
+    /// незаданный MediumModel/SmallModel провайдера сворачивается в «основная» —
+    /// именно так env отображает пустой слот на main.
+    /// </summary>
+    public SubagentModelChip SubagentChipFor(Persona persona, string? sessionModel, string? ownerId)
+    {
+        var alias = providers?.ModelTierAlias(PersonaSubagentPinModel(persona, ownerId) ?? persona.Model);
+        var provider = providers?.ResolveByModel(sessionModel);
+
+        // Родной Claude: чип показывает пин персоны либо честное «модель чата»
+        if (provider is null)
+            return alias is not null
+                ? new SubagentModelChip(SubagentModelChip.KindTier, alias, ChipHintTier)
+                : new SubagentModelChip(SubagentModelChip.KindChatModel, "модель чата", ChipHintChatModel);
+
+        // Сторонний провайдер чата: своя модель персоны в сабагенте не применяется —
+        // ход идёт на модели провайдера по слоту алиаса (env-маппинг BuildCliEnv)
+        var hasMedium = !string.IsNullOrWhiteSpace(provider.MediumModel);
+        var hasSmall = !string.IsNullOrWhiteSpace(provider.SmallModel);
+        return alias switch
+        {
+            "opus" => Main(),
+            "sonnet" => hasMedium
+                ? new SubagentModelChip(SubagentModelChip.KindProviderMedium, "провайдер: средняя", ChipHintProvider)
+                : Main(),
+            "haiku" => hasSmall ? Fast() : Main(),
+            // пина нет: сабагент уходит на CLAUDE_CODE_SUBAGENT_MODEL (= small)
+            null => hasSmall ? Fast() : Main(),
+            _ => Main(),
+        };
+
+        SubagentModelChip Main() =>
+            new(SubagentModelChip.KindProviderMain, "провайдер: основная", ChipHintProvider);
+        SubagentModelChip Fast() =>
+            new(SubagentModelChip.KindProviderFast, "провайдер: быстрая", ChipHintProvider);
     }
 }

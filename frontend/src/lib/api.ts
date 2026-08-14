@@ -241,13 +241,15 @@ export const api = {
         assignments?: Record<string, string | null>;
       }>('/models'),
     // Эффективный резолв для строки «Сейчас пойдёт» (считается той же кодовой дорогой,
-    // что запуск хода — второй точки истины нет)
-    preview: (q: { place?: string; personaId?: string; specialty?: string; tier?: string }) => {
+    // что запуск хода — второй точки истины нет). sessionId вместе с personaId добавляет
+    // в ответ subagentChip — чип модели на карточке персоны-сабагента.
+    preview: (q: { place?: string; personaId?: string; specialty?: string; tier?: string; sessionId?: string }) => {
       const qs = new URLSearchParams();
       if (q.place) qs.set('place', q.place);
       if (q.personaId) qs.set('personaId', q.personaId);
       if (q.specialty) qs.set('specialty', q.specialty);
       if (q.tier) qs.set('tier', q.tier);
+      if (q.sessionId) qs.set('sessionId', q.sessionId);
       const s = qs.toString();
       return request<ModelPreviewResponse>(`/models/preview${s ? `?${s}` : ''}`);
     },

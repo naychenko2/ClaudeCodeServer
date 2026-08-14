@@ -14,7 +14,8 @@ namespace ClaudeHomeServer.Controllers;
 public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry providers,
     ModelAssignmentResolver assignments, PersonaManager personas,
     SpecialtySettingsStore specialty, UserStore users,
-    AppSettingsService appSettings, LocalActionOverridesStore localActions) : ControllerBase
+    AppSettingsService appSettings, LocalActionOverridesStore localActions,
+    SessionManager sessions) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -55,8 +56,13 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     //   personaId  — id персоны (модель/уровень/матрица персоны — самое узкое);
     //   specialty  — ключ специальности (если без персоны: матрица специальности);
     //   tier       — strong|medium|weak, уровень сверху (задача); сильнее персоны/специальности/места.
+    //   sessionId  — сессия чата: вместе с personaId добавляет в ответ subagentChip —
+    //                готовые label/hint/kind чипа модели на карточке персоны-сабагента
+    //                (считается ModelAssignmentResolver.SubagentChipFor от пары персона+сессия,
+    //                фронт логику не пересобирает).
     //
-    // Ответ: { model, source, tier, tierOrigin, preset:{id,name,steps,broken}|null, chain[] }.
+    // Ответ: { model, source, tier, tierOrigin, preset:{id,name,steps,broken}|null, chain[],
+    //          subagentChip:{kind,label,hint}|null — только при sessionId+personaId }.
     //   model       — первая модель хода (развёрнутая) либо null (пустой резолв / битый пресет);
     //   source      — persona-model|persona-cell|specialty-cell|owner-slot|instance-slot|
     //                  place-assignment|explicit (ГДЕ выбрано значение);
@@ -65,7 +71,8 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
     //   preset      — раскрытие, если значение было preset:{id}: {id,name,steps,broken};
     //   chain       — план фолбэка (развёрнутые модели) для подсказки наведения.
     [HttpGet("preview")]
-    public IActionResult Preview(string? place, string? personaId, string? specialty, string? tier)
+    public IActionResult Preview(string? place, string? personaId, string? specialty, string? tier,
+        string? sessionId)
     {
         var ownerId = UserId ?? string.Empty;
         var persona = !string.IsNullOrEmpty(personaId) ? personas.Get(personaId, ownerId) : null;
@@ -77,6 +84,21 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
 
         ModelTier? overrideTier = ModelTiers.TryParse(tier, out var ot) ? ot : null;
         var d = assignments.Preview(place, persona, spec, ownerId, overrideTier);
+
+        // Чип модели сабагента: нужна пара (персона, сессия) — по модели сессии видно,
+        // применяется ли пин персоны (Claude-чат) или ход уходит на слоты провайдера
+        ModelAssignmentResolver.SubagentModelChip? chip = null;
+        if (!string.IsNullOrEmpty(sessionId))
+        {
+            if (persona is null)
+                return BadRequest(new { error = "subagentChip требует существующего personaId" });
+            var session = sessions.GetById(sessionId);
+            // Чужая/неизвестная сессия — 404, не раскрывая существование
+            if (session is null || (session.OwnerId is not null && session.OwnerId != ownerId))
+                return NotFound(new { error = "Сессия не найдена" });
+            chip = assignments.SubagentChipFor(persona, session.Model, ownerId);
+        }
+
         return Ok(new
         {
             model = d.Model,
@@ -91,6 +113,7 @@ public class ModelsController(ModelCatalogService catalog, LlmProviderRegistry p
                 broken = d.Preset.Broken,
             },
             chain = d.Chain,
+            subagentChip = chip is null ? null : new { kind = chip.Kind, label = chip.Label, hint = chip.Hint },
         });
     }
 

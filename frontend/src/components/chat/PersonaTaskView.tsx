@@ -9,7 +9,8 @@ import { AGENT_COLORS } from '../AgentSelector';
 import { ToolUseView, toolWord } from './ToolUseView';
 import { AgentTextBlock, AgentThinkingBlock, CollapsibleMarkdownBody, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
 import { itemKey, type ActivityEntry } from './timeline';
-import { ChatProjectContext } from './contexts';
+import { ChatProjectContext, ChatSessionContext } from './contexts';
+import { useSubagentModelChip } from '../../lib/presets';
 
 type ToolUseItem = Extract<ChatItem, { kind: 'tool_use' }>;
 
@@ -70,6 +71,11 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
 }) {
   const { body: answerBody, tail } = useMemo(() => splitAgentResultTail(answer), [answer]);
 
+  // Чип модели сабагента: разрешённое состояние для пары (персона, эта сессия) —
+  // label/hint готовые с бэкенда. До загрузки не рисуем; у обычного агента чипа нет.
+  const sessionId = useContext(ChatSessionContext);
+  const modelChip = useSubagentModelChip(persona?.id, sessionId);
+
   // Длинный вопрос — свёрнут до двух строк, клик раскрывает
   const questionLong = question.length > 140;
   const [questionOpen, setQuestionOpen] = useState(false);
@@ -110,6 +116,20 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
             : agentRole
               ? <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted }}>{agentRole}</span>
               : null}
+          {/* Чип модели сабагента — показываем всегда, когда известен (даже «провайдер:
+              …» — это диагноз «модель персоны не доехала», а не шум). Приглушённый моно
+              с тонкой рамкой, без акцента: диагностика, а не действие */}
+          {persona && modelChip && (
+            <span
+              title={modelChip.hint}
+              style={{
+                fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap',
+                border: `1px solid ${C.border}`, borderRadius: 999, padding: '0 6px',
+              }}
+            >
+              {modelChip.label}
+            </span>
+          )}
           {/* Отличие от one-shot persona_ask: работает с инструментами (файлы/заметки/память) */}
           {persona && badge && (
             <span style={{

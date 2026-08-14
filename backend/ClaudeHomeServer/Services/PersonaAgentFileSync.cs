@@ -329,29 +329,16 @@ public sealed class PersonaAgentFileSync
             _bindings.BuildSubagentIndex(ownerId, persona),
             // Персона без своей модели идёт своим уровнем, без уровня — тиром назначения
             // «сабагенты-консультанты»; резолвер может вернуть и модель стороннего
-            // провайдера — ModelAliasFor отсеет её в null (пин только Claude-тиров)
+            // провайдера — ModelTierAlias отсеет её в null (пин только Claude-тиров).
+            // Формула пина — общая точка с чипом модели карточки (ModelAssignmentResolver).
             ModelAliasFor(_providers,
-                _assignments?.Resolve(Llm.LocalActionCatalog.SubagentConsultant,
-                    _assignments.PersonaModel(persona, ownerId,
-                        Llm.LocalActionCatalog.DefaultTierOf(Llm.LocalActionCatalog.SubagentConsultant)), ownerId)
-                    ?? persona.Model)));
+                _assignments?.PersonaSubagentPinModel(persona, ownerId) ?? persona.Model)));
     }
 
-    // Алиас-тир модели персоны для пина в frontmatter сабагента. Пинится только тир
-    // Claude-модели (opus/sonnet/haiku): алиас безопасен у всех провайдеров — Claude-чат
-    // резолвит его в настоящий тир, сторонние маппят env-переменными BuildCliEnv в модель
-    // сессии. ID сторонних провайдеров и незнакомые Claude-ID не пинятся (null — без пина).
-    internal static string? ModelAliasFor(LlmProviderRegistry providers, string? model)
-    {
-        if (string.IsNullOrWhiteSpace(model)) return null;
-        if (!string.Equals(providers.ProviderKey(model), "claude", StringComparison.OrdinalIgnoreCase))
-            return null;
-        var m = model.ToLowerInvariant();
-        if (m.Contains("opus")) return "opus";
-        if (m.Contains("sonnet")) return "sonnet";
-        if (m.Contains("haiku")) return "haiku";
-        return null;
-    }
+    // Алиас-тир модели персоны для пина в frontmatter сабагента. Делегат единой точки —
+    // LlmProviderRegistry.ModelTierAlias (оставлено ради существующих вызовов и тестов).
+    internal static string? ModelAliasFor(LlmProviderRegistry providers, string? model) =>
+        providers.ModelTierAlias(model);
 
     public static bool IsReserved(string handle) =>
         ReservedAgentNames.Contains(handle, StringComparer.OrdinalIgnoreCase);

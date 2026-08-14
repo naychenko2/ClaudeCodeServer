@@ -14,7 +14,7 @@ import { TIER_TITLE } from './modelTiers';
 import type { TierKey } from './modelProvidersShared';
 import { TIERS, routeTier, routeLabel } from './modelProvidersShared';
 import type { ScopedPreset, SpecialtySettingsResponse, ModelRoutePreset,
-  ModelPreviewResponse, PlacePresetRef } from '../types';
+  ModelPreviewResponse, PlacePresetRef, SubagentModelChip } from '../types';
 
 // --- Лексика preset:{id} ---
 
@@ -246,11 +246,21 @@ export interface EffectiveLineContext {
   actionKey?: string;         // место каталога («Кто что выполняет»)
 }
 
+// Query preview-эндпоинта. sessionId вместе с personaId просит у бэкенда subagentChip —
+// готовый чип модели для карточки персоны-сабагента (спека «Чип модели…»).
+export interface PreviewQuery {
+  place?: string;
+  personaId?: string;
+  specialty?: string;
+  tier?: string;
+  sessionId?: string;
+}
+
 // Контекст → query preview-эндпоинта. null — резолвить нечего (например, персона
 // ещё не создана). Персоне и специальности подставляем место chat-persona: без place
 // превью при пустых матрицах/слотах возвращало Empty и строка не рисовалась вовсе
 // (дефект приёмки №2) — место добирает ответ своим назначением.
-function toQuery(ctx: EffectiveLineContext): { place?: string; personaId?: string; specialty?: string; tier?: string } | null {
+function toQuery(ctx: EffectiveLineContext): PreviewQuery | null {
   switch (ctx.kind) {
     case 'persona':
       return ctx.personaId ? { personaId: ctx.personaId, place: USAGE.chatPersona } : null;
@@ -263,8 +273,8 @@ function toQuery(ctx: EffectiveLineContext): { place?: string; personaId?: strin
   }
 }
 
-function queryKey(q: { place?: string; personaId?: string; specialty?: string; tier?: string }): string {
-  return [q.place ?? '', q.personaId ?? '', q.specialty ?? '', q.tier ?? ''].join('|');
+function queryKey(q: PreviewQuery): string {
+  return [q.place ?? '', q.personaId ?? '', q.specialty ?? '', q.tier ?? '', q.sessionId ?? ''].join('|');
 }
 
 // Форматирование строки-итога (спека, блок 8):
@@ -311,7 +321,7 @@ function previewEmit() {
   _previewListeners.forEach(fn => fn());
 }
 
-function ensurePreview(q: NonNullable<ReturnType<typeof toQuery>>): void {
+function ensurePreview(q: PreviewQuery): void {
   const key = queryKey(q);
   if (_previewCache.has(key) || _previewInflight.has(key)) return;
   _previewInflight.add(key);
@@ -341,6 +351,24 @@ export function usePreview(ctx: EffectiveLineContext): ModelPreviewResponse | nu
   return useSyncExternalStore(
     fn => { _previewListeners.add(fn); return () => { _previewListeners.delete(fn); }; },
     () => (key ? _previewCache.get(key) ?? null : null),
+    () => null,
+  );
+}
+
+// Чип модели на карточке персоны-сабагента (спека «Чип модели…»): разрешённое
+// состояние модели для пары (персона, сессия) — label/hint считает бэкенд. Кэш общий
+// с превью «Сейчас пойдёт»: invalidateEffectiveLines сбрасывает и чипы, они зависят
+// от тех же настроек моделей (слоты, матрицы, конфиг провайдеров). Работает постфактум —
+// состояние вычисляется при открытии ленты, а не берётся из истории.
+// null — нет пары (карточка вне сессии / обычный агент) либо ответ ещё грузится.
+export function useSubagentModelChip(personaId: string | null | undefined,
+  sessionId: string | null | undefined): SubagentModelChip | null {
+  const key = personaId && sessionId ? queryKey({ personaId, sessionId }) : null;
+  useEffect(() => { if (personaId && sessionId) ensurePreview({ personaId, sessionId }); },
+    [personaId, sessionId]);
+  return useSyncExternalStore(
+    fn => { _previewListeners.add(fn); return () => { _previewListeners.delete(fn); }; },
+    () => (key ? _previewCache.get(key)?.subagentChip ?? null : null),
     () => null,
   );
 }

@@ -1915,6 +1915,16 @@ export interface ResetResult {
   personaNames: string[];
 }
 
+// Чип модели на карточке персоны-сабагента (спека «Чип модели…»): разрешённое
+// состояние модели для пары (персона, сессия). Готовые label/hint считает бэкенд
+// (ModelAssignmentResolver.SubagentChipFor) — фронт логику не пересобирает;
+// kind — машинный код состояния (tier|chat-model|provider-main|provider-medium|provider-fast).
+export interface SubagentModelChip {
+  kind: string;
+  label: string;
+  hint: string;
+}
+
 // Ответ GET /api/models/preview — эффективный резолв для строки «Сейчас пойдёт»
 // (спека, блок 4). model — первая развёрнутая модель хода (null — пустой резолв или
 // битый пресет); source — где выбрано значение; tier/tierOrigin — эффективный уровень
@@ -1927,6 +1937,8 @@ export interface ModelPreviewResponse {
   tierOrigin: 'task' | 'persona' | 'specialty' | 'place' | null;
   preset: { id: string; name: string | null; steps: string[]; broken: boolean } | null;
   chain: string[];
+  // Чип модели сабагента — присутствует только при запросе с sessionId + personaId
+  subagentChip?: SubagentModelChip | null;
 }
 
 // Ответ GET /api/models/presets/{id}/usage — места, где выбран пресет

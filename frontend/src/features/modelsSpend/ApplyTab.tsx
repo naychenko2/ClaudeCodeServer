@@ -24,8 +24,8 @@ interface ApplyTabProps {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   settings: SpecialtySettingsResponse | null;
-  savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  savingScope: 'global' | 'owner' | 'user' | null;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
 }
 
 export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingScope, onSaveLayer }: ApplyTabProps) {
@@ -40,7 +40,7 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
 
   if (!isAdmin) {
     return <div style={{ fontSize: FS.sm, color: C.textMuted, padding: '8px 0' }}>
-      Назначение мест настраивает администратор. Ваши слоты — на вкладке «Модели по умолчанию».
+      Назначение мест настраивает администратор. Ваши уровни — на вкладке «Модели по умолчанию».
     </div>;
   }
   if (info === undefined) {
@@ -65,7 +65,7 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
       // Назначения мест изменились — строки «Сейчас пойдёт» нужно пересчитать свежим
       // серверным резолвом, иначе они покажут старую модель до переоткрытия модалки
       invalidateEffectiveLines();
-    } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось применить пресет'); }
+    } catch (e) { setError(e instanceof Error ? e.message : 'Не удалось применить цепочку'); }
     finally { setPresetBusy(null); }
   }
 
@@ -117,7 +117,7 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
           active={ollamaOn} disabled={presetBusy !== null || !info.enabled} loading={presetBusy === 'tiers-local'}
           title="Бесплатно · с локальной"
           desc={info.enabled
-            ? 'Мелкие задачи — на локальной модели Ollama, сложным — облачная по слоту.'
+            ? 'Мелкие задачи — на локальной модели Ollama, сложным — облачная по уровню.'
             : 'Пометьте провайдера «бесплатным» в конфиге или настройте Ollama — и стратегия появится.'}
           onClick={() => applyPreset('tiers-local')}
         />
@@ -207,8 +207,8 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
   ollamaModel?: string;
   models: ModelOption[];
   settings: SpecialtySettingsResponse | null;
-  savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  savingScope: 'global' | 'owner' | 'user' | null;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   onPick: (route: string) => void;
   onReset: () => void;
   enabled?: boolean;
@@ -226,7 +226,7 @@ function ActionRow({ action: a, first, busy, tierModels, ollamaModel, models, se
   const globalPresetIds = presets.filter(p => p.scope === 'global').map(p => p.id);
 
   const triggerLabel = brokenPreset
-    ? 'Пресет удалён — по умолчанию'
+    ? 'Цепочка удалена — по умолчанию'
     : preset ? `${preset.name} · ${stepsWord(preset.steps.length)}` : routeLabel(route, ollamaModel, tierModels);
 
   return (

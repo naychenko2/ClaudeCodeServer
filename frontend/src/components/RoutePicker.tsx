@@ -57,16 +57,17 @@ export function RoutePicker({
   // «Модели и расход»); без него — прежнее поведение (открыть раздел через nav-событие).
   presetCreation?: {
     settings: SpecialtySettingsResponse | null;
-    savingScope: 'global' | 'owner' | null;
-    onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+    savingScope: 'global' | 'owner' | 'user' | null;
+    onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
     // См. PresetCreationCtx.onCreated — сливать сохранение пресета с ДРУГОЙ правкой того
     // же слоя в один PUT (нужно там, где onChange этого пикера тоже пишет в этот слой).
-    onCreated?: (presetId: string, scope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
+    onCreated?: (presetId: string, scope: 'global' | 'owner' | 'user', layer: SpecialtySettingsLayer) => void;
   };
   // Слой пресетов группы «Пресеты»: 'global' — место общее (список и inline-создание
-  // ограничены общими пресетами), не задан — личный контекст (создание в owner, в списке
-  // видны оба слоя). Прокидывается в PresetOptions.scope как есть.
-  presetScope?: 'global' | 'owner';
+  // ограничены общими пресетами), 'user' — админский пользовательский слой (тот же
+  // принцип), не задан — личный контекст (создание в owner, в списке видны оба слоя).
+  // Прокидывается в PresetOptions.scope как есть.
+  presetScope?: 'global' | 'owner' | 'user';
   // Блок ручного ввода id маршрута с клиентской валидацией (ADR-009). Включается только
   // для local-action-контекстов (вкладка «Применение»): карточки выбора дают значение
   // с уже корректным префиксом, а редкий ручной ввод проверяется по тому же перечню
@@ -197,7 +198,7 @@ export function RoutePicker({
       )}
       {!presetEditing && !showPresets && presets.length > 0 && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
-          Пресет в пресет не вкладывается — выпишите шаги подряд.
+          Цепочка в цепочку не вкладывается — выпишите шаги подряд.
         </div>
       )}
       {!presetEditing && <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />}

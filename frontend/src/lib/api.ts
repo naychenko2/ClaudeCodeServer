@@ -269,7 +269,8 @@ export const api = {
   },
 
   // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные
-  // шаблоны прав; настройки — глобальный слой (пишет только админ) и личный слой вызывающего.
+  // шаблоны прав; настройки — глобальный слой (пишет только админ), личный слой
+  // вызывающего и user-слой (только для admin, конкретный пользователь).
   specialties: {
     list: () => request<SpecialtyCatalogEntry[]>('/specialties'),
     getSettings: () => request<SpecialtySettingsResponse>('/specialties/settings'),
@@ -281,22 +282,44 @@ export const api = {
       request<{ global: SpecialtySettingsLayer }>('/specialties/settings/global', {
         method: 'PUT', body: JSON.stringify(layer),
       }),
+    // User-слой конкретного пользователя (только для admin). Подтягивается отдельно
+    // от getSettings — основной ответ остаётся лёгким, admin в админке догружает
+    // слой по выбранному пользователю.
+    getUserLayer: (userId: string) =>
+      request<{ user: SpecialtySettingsLayer; userId: string }>(`/specialties/settings/user/${encodeURIComponent(userId)}`),
+    saveUserLayer: (userId: string, layer: SpecialtySettingsLayer) =>
+      request<{ user: SpecialtySettingsLayer }>(`/specialties/settings/user/${encodeURIComponent(userId)}`, {
+        method: 'PUT', body: JSON.stringify(layer),
+      }),
     // Сброс исключений к наследованию (возврат = удаление записи слоя, а не обнуление
     // ячеек): preview — числа/имена ДО подтверждения, reset — фактическая запись.
     // key — точечный жест (одна специальность), без него — весь слой.
-    resetPreview: (scope: 'owner' | 'global', key?: string) =>
-      request<ResetResult>(`/specialties/settings/reset/${scope}/preview${key ? `?key=${encodeURIComponent(key)}` : ''}`),
-    reset: (scope: 'owner' | 'global', key?: string) =>
-      request<ResetResult>(`/specialties/settings/reset/${scope}`, {
-        method: 'POST', body: JSON.stringify(key ? { key } : {}),
-      }),
+    // scope='user' — только для admin, требует userId.
+    resetPreview: (scope: 'owner' | 'global' | 'user', key?: string, userId?: string) => {
+      const qs = new URLSearchParams();
+      if (key) qs.set('key', key);
+      if (scope === 'user' && userId) qs.set('userId', userId);
+      const s = qs.toString();
+      return request<ResetResult>(`/specialties/settings/reset/${scope}/preview${s ? `?${s}` : ''}`);
+    },
+    reset: (scope: 'owner' | 'global' | 'user', key?: string, userId?: string) => {
+      const body: { key?: string; userId?: string } = {};
+      if (key) body.key = key;
+      if (scope === 'user' && userId) body.userId = userId;
+      return request<ResetResult>(`/specialties/settings/reset/${scope}`, {
+        method: 'POST', body: JSON.stringify(body),
+      });
+    },
     // Лимит подмен за ход (фолбэк): `null` = снять настройку слоя (наследование).
     // Управляется через ту же дорогу, что сброс — отдельных типов в index.ts нет,
-    // описаны здесь, чтобы не разъезжаться с бэком.
-    setMaxSubstitutions: (scope: 'owner' | 'global', value: number | null) =>
-      request<{ maxSubstitutions: number }>(`/specialties/settings/fallback/${scope}`, {
-        method: 'PUT', body: JSON.stringify({ maxSubstitutions: value }),
-      }),
+    // описаны здесь, чтобы не разъезжаться с бэком. scope='user' требует userId.
+    setMaxSubstitutions: (scope: 'owner' | 'global' | 'user', value: number | null, userId?: string) => {
+      const body: { maxSubstitutions: number | null; userId?: string } = { maxSubstitutions: value };
+      if (scope === 'user' && userId) body.userId = userId;
+      return request<{ maxSubstitutions: number }>(`/specialties/settings/fallback/${scope}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      });
+    },
   },
 
   projects: {

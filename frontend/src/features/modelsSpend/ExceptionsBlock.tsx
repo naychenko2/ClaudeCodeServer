@@ -92,16 +92,16 @@ interface Props {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
-  savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  savingScope: 'global' | 'owner' | 'user' | null;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   // Перечитать настройки с сервера (getSettings + updateSpecialtySettings) — вызывается
   // после сброса, чтобы строки и подписи пресетов отражали реальное состояние слоя.
   onReloadSettings: () => Promise<void>;
   // Слой, для которого сейчас идёт reset+reload (держит busy до конца перечитывания,
   // не только до ответа POST) — тот же класс защиты от гонки, что и savingScope.
-  resettingScope: 'global' | 'owner' | null;
+  resettingScope: 'global' | 'owner' | 'user' | null;
   // Серверный сброс: без key — весь слой scope, с key — одна специальность (или "any").
-  onReset: (scope: 'global' | 'owner', key?: string) => Promise<ResetResult>;
+  onReset: (scope: 'global' | 'owner' | 'user', key?: string) => Promise<ResetResult>;
 }
 
 export function ExceptionsBlock({
@@ -188,7 +188,7 @@ export function ExceptionsBlock({
   // по одному слою: второй ответ побеждает первый и стирает только что созданный пресет
   // (CRITICAL 1, ревью 65d8df66 — «Исключения» теряли цепочку на каждый клик «Сохранить»)
   const onPresetCreated = (key: string, t: TierKey, presetId: string,
-    presetScope: 'global' | 'owner', freshLayer: SpecialtySettingsLayer) => {
+    presetScope: 'global' | 'owner' | 'user', freshLayer: SpecialtySettingsLayer) => {
     const template = rows.find(e => e.key === key)?.template ?? null;
     void onSaveLayer(presetScope, mergePresetIntoCell(freshLayer, key, t, presetId, template))
       .catch(() => {});
@@ -500,10 +500,10 @@ function ExceptionRow({ name, summary, filled, shadowed, rec, expanded, onToggle
   presets: ReturnType<typeof usePresets>;
   labelCtx: { tierModels: Record<TierKey, string>; ollamaModel?: string };
   settings: SpecialtySettingsResponse;
-  savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  savingScope: 'global' | 'owner' | 'user' | null;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   onCell: (t: TierKey, v: string) => void;
-  onPresetCreated: (t: TierKey, presetId: string, presetScope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
+  onPresetCreated: (t: TierKey, presetId: string, presetScope: 'global' | 'owner' | 'user', layer: SpecialtySettingsLayer) => void;
   onDefaultTier: (v: ModelTierValue | '') => void;
   // Готовое значение effectiveDefaultTier (resolve по обоим слоям — зеркало бэкенд
   // SpecialtySettingsStore.SpecialtyDefaultTier). Если уровень приходит из ДРУГОГО

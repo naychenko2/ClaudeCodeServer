@@ -1877,9 +1877,10 @@ export interface ModelRoutePreset {
 }
 
 // Пресет в объединённом списке GET /api/specialties/settings: личные впереди,
-// затем общие; scope — признак слоя (общий чужой читается, но не правится)
+// затем общие; scope — признак слоя (общий чужой читается, но не правится).
+// 'user' — админский user-слой для конкретного пользователя (PresetScope.User)
 export interface ScopedPreset extends ModelRoutePreset {
-  scope: 'owner' | 'global';
+  scope: 'owner' | 'global' | 'user';
 }
 
 // Настройка специальности в слое (глобальном или личном): шаблон прав + матрица
@@ -1905,7 +1906,8 @@ export interface SpecialtySettingsLayer {
 }
 
 // Ответ GET /api/specialties/settings: глобальный слой, личный слой вызывающего
-// и объединённый список пресетов с признаком слоя
+// и объединённый список пресетов с признаком слоя. user — только для admin,
+// подтягивается через getUserLayer (см. api.specialties) — здесь не обязателен.
 export interface SpecialtySettingsResponse {
   version: number;
   // Эффективный бюджет подмен цепочки хода (per-owner → global → дефолт, кламп 1..5):
@@ -1913,6 +1915,10 @@ export interface SpecialtySettingsResponse {
   maxSubstitutions?: number;
   global: SpecialtySettingsLayer;
   owner: SpecialtySettingsLayer;
+  // User-слой конкретного пользователя (только для admin; не-admin не получает)
+  user?: SpecialtySettingsLayer;
+  // Контекст user-слоя в ответе (admin): чьими настройками заполнено .user
+  userId?: string;
   presets: ScopedPreset[];
 }
 

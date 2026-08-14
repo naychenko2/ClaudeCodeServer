@@ -11,6 +11,7 @@ import { updateSpecialtySettings } from '../../lib/presets';
 import { QuotasTab } from './QuotasTab';
 import { SlotsTab } from './SlotsTab';
 import { ApplyTab } from './ApplyTab';
+import { ChainsTab } from './ChainsTab';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult } from '../../types';
 
 // Раздел «Модели и расход» (редизайн v3, макет docs/mockups/models-spend-v3.html):
@@ -19,7 +20,7 @@ import type { SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult } f
 // слоты/исключения/применение — во второй и третьей. Состояние слоёв специальностей и
 // контекст пользователя живут в модалке (как в прежней ModelProvidersTabsModal) и раздаются вкладкам.
 
-type TabKey = 'quotas' | 'slots' | 'apply';
+type TabKey = 'quotas' | 'slots' | 'apply' | 'chains';
 
 export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   const isMobile = useIsMobile();
@@ -136,7 +137,8 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   const tabs: { key: TabKey; label: string }[] = [
     // На мобиле полное название не влезает в полосу вкладок — короткий вариант из макета
     { key: 'slots', label: isMobile ? 'Модели' : 'Модели по умолчанию' },
-    { key: 'apply', label: 'Применение моделей' },
+    { key: 'apply', label: isAdmin ? 'Особые правила' : 'Применение моделей' },
+    { key: 'chains', label: 'Цепочки' },
     { key: 'quotas', label: 'Квоты и деньги' },
   ];
 
@@ -202,6 +204,18 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               settings={settings}
               savingScope={savingScope}
               onSaveLayer={handleSaveLayer}
+            />
+          )}
+          {tab === 'chains' && (
+            <ChainsTab
+              isAdmin={isAdmin}
+              settings={settings}
+              savingScope={savingScope}
+              onSaveLayer={handleSaveLayer}
+              onReloadSettings={onReloadSettings}
+              models={models}
+              tierModels={tierModels}
+              ollamaModel={ollamaModel}
             />
           )}
         </div>

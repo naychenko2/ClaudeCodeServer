@@ -50,6 +50,11 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   const presets = scope ? all.filter(p => p.scope === scope) : all;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
+  // Имя вводит пользователь — без авто-номера «Цепочка N»: подпись должна осмысленно
+  // говорить о содержимом («Экономная, но живая», «С фолбэком по уровню»). Пустая строка
+  // считается пустой формой и блокирует сохранение. Конфликт имён — бан в момент записи
+  // на бэке; UI дубликат не блокирует, чтобы не плодить «Цепочка N» в обход правила.
+  const [draftName, setDraftName] = useState('');
   // Заголовок редактора: черновик преднаполнен шагами уже выбранного пресета — честно
   // подписываем как копию, а не «Новая цепочка» (молчаливый дубль без этого)
   const [copyOf, setCopyOf] = useState<string | null>(null);
@@ -63,16 +68,16 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
     const targetScope: 'global' | 'owner' = scope ?? 'owner';
     const savePreset = () => {
       if (!creation.settings || draft.length === 0) return;
-      // Номер по своему слою, первый свободный — иначе первая ЛИЧНАЯ цепочка при уже
-      // существующих общих зовётся «Цепочка 3» (считает по объединённому списку)
-      const scopedExisting = all.filter(p => p.scope === targetScope);
-      let n = 1;
-      while (scopedExisting.some(p => p.name === `Цепочка ${n}`)) n++;
+      const name = draftName.trim();
+      // Пустое имя — отказ без записи: мини-валидация на клиенте, чтобы не получить
+      // пресет с пустым именем
+      if (name === '') return;
       const id = newPresetId();
-      const next = withNewPreset(creation.settings[targetScope], id, `Цепочка ${n}`, draft);
+      const next = withNewPreset(creation.settings[targetScope], id, name, draft);
       if (creation.onCreated) {
         creation.onCreated(id, targetScope, next);
         setEditing(false);
+        setDraftName('');
       } else {
         // Назначаем место ТОЛЬКО после того, как сервер подтвердил новый пресет — иначе
         // pick() улетает параллельно с PUT слоя и обгоняет его: бэкенд валидирует
@@ -80,11 +85,13 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
         // Редактор закрываем тоже по успеху: на отказе черновик из нескольких шагов
         // должен остаться на месте, иначе собирать цепочку заново
         creation.onSaveLayer(targetScope, next)
-          .then(() => { onPick(presetRoute(id)); setEditing(false); })
+          .then(() => { onPick(presetRoute(id)); setEditing(false); setDraftName(''); })
           .catch(() => {});
       }
     };
     const busy = creation.savingScope !== null;
+    const trimName = draftName.trim();
+    const canSave = !busy && draft.length > 0 && trimName !== '';
     return (
       <>
         <div style={{
@@ -93,6 +100,20 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
         }}>
           {copyOf ? `Копия «${copyOf}»` : 'Новая цепочка'}
         </div>
+        <input
+          type="text"
+          value={draftName}
+          onChange={e => setDraftName(e.target.value)}
+          placeholder="Например: «Экономная, но живая»"
+          disabled={busy}
+          autoFocus
+          style={{
+            font: 'inherit', fontFamily: FONT.sans, fontSize: FS.sm,
+            padding: '6px 10px', borderRadius: 6,
+            border: `1px solid ${C.border}`, background: C.bgWhite,
+            color: C.textPrimary, outline: 'none',
+          }}
+        />
         <ChainStepsEditor
           steps={draft}
           onChange={setDraft}
@@ -102,8 +123,9 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
           busy={busy}
         />
         <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>Отмена</Button>
-          <Button size="sm" variant="primary" disabled={busy || draft.length === 0} onClick={savePreset}>Сохранить</Button>
+          <Button size="sm" variant="ghost" disabled={busy}
+            onClick={() => { setEditing(false); setDraftName(''); }}>Отмена</Button>
+          <Button size="sm" variant="primary" disabled={!canSave} onClick={savePreset}>Сохранить</Button>
         </div>
       </>
     );

@@ -290,6 +290,13 @@ export const api = {
       request<ResetResult>(`/specialties/settings/reset/${scope}`, {
         method: 'POST', body: JSON.stringify(key ? { key } : {}),
       }),
+    // Лимит подмен за ход (фолбэк): `null` = снять настройку слоя (наследование).
+    // Управляется через ту же дорогу, что сброс — отдельных типов в index.ts нет,
+    // описаны здесь, чтобы не разъезжаться с бэком.
+    setMaxSubstitutions: (scope: 'owner' | 'global', value: number | null) =>
+      request<{ maxSubstitutions: number }>(`/specialties/settings/fallback/${scope}`, {
+        method: 'PUT', body: JSON.stringify({ maxSubstitutions: value }),
+      }),
   },
 
   projects: {

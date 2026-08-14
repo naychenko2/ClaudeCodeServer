@@ -193,6 +193,19 @@ public class LlmProviderRegistryTests
         env["ANTHROPIC_DEFAULT_HAIKU_MODEL"].Should().Be("glm-5.2");
     }
 
+    // Средний слот разводит strong/medium у стороннего провайдера: алиас sonnet
+    // (тир-пин персоны-сабагента) уходит в MediumModel, а не в модель сессии
+    [Fact]
+    public void BuildCliEnv_MediumModel_Задан_SonnetУходитВСреднюю()
+    {
+        var env = Create(new() { ["LlmProviders:deepseek:MediumModel"] = "deepseek-v4-flash" })
+            .BuildCliEnv("deepseek-v4-pro")!;
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL"].Should().Be("deepseek-v4-pro");
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"].Should().Be("deepseek-v4-flash");
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"].Should().Be("deepseek-v4-flash");
+        env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("deepseek-v4-flash");
+    }
+
     [Fact]
     public void BuildCliEnv_ПровайдерБезКлюча_Исключение()
     {

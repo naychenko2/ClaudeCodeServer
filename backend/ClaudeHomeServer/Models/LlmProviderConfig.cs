@@ -17,6 +17,10 @@ public class LlmProviderConfig
     // Нативный API провайдера (баланс, GET /models); пусто — эти возможности недоступны
     public string ApiBaseUrl { get; set; } = "";
     public string ApiKey { get; set; } = "";
+    // Модель для sonnet-слота (ANTHROPIC_DEFAULT_SONNET_MODEL); пусто — берётся
+    // модель сессии. Без среднего слота алиас sonnet схлопывался в модель сессии,
+    // и сильная/средняя персон у стороннего провайдера не различались
+    public string MediumModel { get; set; } = "";
     // Модель для haiku-слота и субагентов (ANTHROPIC_DEFAULT_HAIKU_MODEL,
     // CLAUDE_CODE_SUBAGENT_MODEL); пусто — берётся модель сессии
     public string SmallModel { get; set; } = "";

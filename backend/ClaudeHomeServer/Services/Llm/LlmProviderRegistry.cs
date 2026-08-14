@@ -118,6 +118,24 @@ public class LlmProviderRegistry
     // Wire-токен провайдера модели ("claude" | key) — для guard смены провайдера и фронта
     public string ProviderKey(string? model) => ResolveByModel(model)?.Key ?? "claude";
 
+    // Алиас-тир модели ("opus"|"sonnet"|"haiku") для пина сабагента в frontmatter .md
+    // и для чипа модели на карточке персоны-агента. Пинится только тир Claude-модели:
+    // алиас безопасен у всех провайдеров — Claude-чат резолвит его в настоящий тир,
+    // сторонние маппят env-переменными BuildCliEnv. ID сторонних провайдеров и
+    // незнакомые Claude-ID не пинятся (null — без пина). Единая точка — используется
+    // PersonaAgentFileSync (генерация .md) и ModelAssignmentResolver (чип карточки).
+    public string? ModelTierAlias(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model)) return null;
+        if (!string.Equals(ProviderKey(model), "claude", StringComparison.OrdinalIgnoreCase))
+            return null;
+        var m = model.ToLowerInvariant();
+        if (m.Contains("opus")) return "opus";
+        if (m.Contains("sonnet")) return "sonnet";
+        if (m.Contains("haiku")) return "haiku";
+        return null;
+    }
+
     // Канонический дефолт родного Claude (подписка) для spend-аналитики: совпадает с алиасом
     // "default" из ClaudeCatalog (ModelCatalogService.Fallback) — стабилен и узнаваем фронтом.
     public const string DefaultClaudeModel = "default";
@@ -229,6 +247,7 @@ public class LlmProviderRegistry
                 $"Провайдер «{p.DisplayName}» не настроен: задай LlmProviders:{p.Key}:ApiKey в appsettings.Local.json");
 
         var main = string.IsNullOrWhiteSpace(model) ? p.Models.FirstOrDefault()?.Id ?? "" : model!;
+        var medium = string.IsNullOrWhiteSpace(p.MediumModel) ? main : p.MediumModel;
         var small = string.IsNullOrWhiteSpace(p.SmallModel) ? main : p.SmallModel;
         var env = new Dictionary<string, string>
         {
@@ -242,7 +261,9 @@ public class LlmProviderRegistry
             ["ANTHROPIC_API_KEY"] = p.ApiKey,
             ["ANTHROPIC_MODEL"] = main,
             ["ANTHROPIC_DEFAULT_OPUS_MODEL"] = main,
-            ["ANTHROPIC_DEFAULT_SONNET_MODEL"] = main,
+            // sonnet-слот — средняя модель провайдера: без неё алиас sonnet (тир-пин
+            // персоны-сабагента) схлопывался в модель сессии, и тир strong/medium не различался
+            ["ANTHROPIC_DEFAULT_SONNET_MODEL"] = medium,
             ["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small,
             ["CLAUDE_CODE_SUBAGENT_MODEL"] = small,
         };

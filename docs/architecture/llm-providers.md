@@ -7,7 +7,8 @@
 Единственный рантайм — claude CLI (`Llm/Claude/ClaudeSession`). Сторонние провайдеры
 с Anthropic-совместимым эндпоинтом (DeepSeek, GLM) подключаются env-оверрайдами
 процесса на каждый ход: `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`,
-`ANTHROPIC_MODEL`/`ANTHROPIC_DEFAULT_OPUS|SONNET_MODEL` (= модель сессии),
+`ANTHROPIC_MODEL`/`ANTHROPIC_DEFAULT_OPUS_MODEL` (= модель сессии),
+`ANTHROPIC_DEFAULT_SONNET_MODEL` (= `MediumModel`, пусто — модель сессии),
 `ANTHROPIC_DEFAULT_HAIKU_MODEL`/`CLAUDE_CODE_SUBAGENT_MODEL` (= `SmallModel`),
 плюс `ExtraEnv` провайдера (у GLM — `API_TIMEOUT_MS`). Весь функционал CLI (скиллы,
 субагенты, workflow, план, compact, MCP, permissions, resume) работает одинаково
@@ -16,7 +17,8 @@
 - **Конфиг** — секция `LlmProviders` (словарь key → провайдер): `DisplayName`,
   `AnthropicBaseUrl` (для CLI), `ApiBaseUrl` (нативный API — баланс, GET /models),
   `ApiKey` (в appsettings.Local.json; пустой = провайдер выключен и модели скрыты),
-  `SmallModel`, `Balance` (вид источника баланса: `deepseek` = GET /user/balance;
+  `MediumModel` (соннет-слот CLI; пусто — модель сессии), `SmallModel` (haiku-слот
+  и субагенты), `Balance` (вид источника баланса: `deepseek` = GET /user/balance;
   пусто — без баланса, как у GLM), `QueryModelsApi`, `SupportsImages`, `Models`
   (Id/DisplayName/ContextWindow/цены $ за 1M — по ним считается стоимость хода).
 - **`LlmProviderRegistry`** — резолв провайдера из `Session.Model` (по каталогу

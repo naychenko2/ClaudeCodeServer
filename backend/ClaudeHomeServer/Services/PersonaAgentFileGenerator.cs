@@ -48,8 +48,9 @@ public sealed class PersonaAgentFileGenerator(PersonaPromptBuilder promptBuilder
         sb.AppendLine($"tools: {string.Join(", ", tools)}");
         // model: пинится максимум АЛИАС-ТИР (opus/sonnet/haiku) — он резолвится у любого
         // провайдера: Claude-чат даёт настоящий тир, у сторонних env-маппинг BuildCliEnv
-        // схлопывает алиас в модель сессии (haiku — в SmallModel). Конкретный ID не пинится:
-        // файл виден чатам всех провайдеров, чужой ID делает сабагента незапускаемым.
+        // схлопывает алиас в модель сессии (sonnet — в MediumModel, haiku — в SmallModel).
+        // Конкретный ID не пинится: файл виден чатам всех провайдеров, чужой ID делает
+        // сабагента незапускаемым.
         if (!string.IsNullOrWhiteSpace(context.ModelAlias))
             sb.AppendLine($"model: {context.ModelAlias.Trim()}");
         if (!string.IsNullOrWhiteSpace(persona.Effort))

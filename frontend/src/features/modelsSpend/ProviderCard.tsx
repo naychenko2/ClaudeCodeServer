@@ -12,7 +12,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { fmtReset } from '../../lib/rateLimit';
 import { QuotaWindow, CountSegments, type QuotaWindowView } from './QuotaWindow';
 
-export interface PillSpec { label: string; tone: 'plain' | 'danger' | 'free' }
+export interface PillSpec { label: string; tone: 'plain' | 'danger' | 'free' | 'warn' }
 
 // Свежесть в углу шапки. Логику (канал данных, pollStatus, возраст) считает QuotasTab —
 // здесь только размещение: точка + подпись.
@@ -67,12 +67,13 @@ const cardBase: CSSProperties = {
 
 const nameStyle: CSSProperties = { fontSize: FS.base, fontWeight: 600, color: C.textHeading };
 
-// Пилюля шапки (planLabel без «Подписка:», «бесплатный», «Предел») — один стиль
-function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain' | 'danger' | 'free' }) {
+// Пилюля шапки (planLabel, «бесплатный», «Предел», «Часть платформ недоступна») — один стиль
+function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain' | 'danger' | 'free' | 'warn' }) {
   const styles: Record<string, CSSProperties> = {
     plain:  { background: C.bgCard, border: `1px solid ${C.border}`, color: C.textSecondary },
     free:   { background: C.successBg, border: `1px solid ${C.success}`, color: C.successText },
     danger: { background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, color: C.dangerText },
+    warn:    { background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText },
   };
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, ...styles[tone] }}>
@@ -349,7 +350,9 @@ export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMob
   );
 }
 
-// Здоровье FreeLLM: платформы сегментами + сводка за 24ч
+// Здоровье FreeLLM — состояние пула на поверхности карточки: сегменты живых платформ
+// и сводка трафика за 24ч. Тексты состояний согласованы с продактом: норма — «N из M
+// живы» без алармов; деградация и «всё лежит» маркируются пилюлей в шапке (QuotasTab)
 function FreeLlmHealth({ health }: { health: HealthSpec }) {
   const alive = health.platformsAlive ?? 0;
   const total = health.platformsTotal ?? 0;
@@ -363,21 +366,14 @@ function FreeLlmHealth({ health }: { health: HealthSpec }) {
         <span style={{ width: 64, flexShrink: 0, fontSize: FS.xs, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Платформы</span>
         <CountSegments used={alive} total={total} label="Живых" />
         <span style={{ flexShrink: 0, minWidth: 34, textAlign: 'right', fontFamily: FONT.mono, fontSize: FS.xs, fontWeight: 700, color: C.textHeading }}>
-          {alive} из {total}
+          {alive} из {total} живы
         </span>
       </div>
       <div style={{ marginTop: 5, fontSize: FS.xs, color: C.textSecondary }}>
-        за 24ч: {req != null ? `${req.toLocaleString('ru-RU')} запросов` : '—'}
-        {rate != null ? ` · успех ${Math.round(rate)}%` : ''}
-        {` · обслуживает ${alive} ${pluralPlaces(alive)} мест`}
+        {req != null
+          ? <>за 24ч {req.toLocaleString('ru-RU')} запросов{rate != null ? ` · успех ${Math.round(rate)}%` : ''}</>
+          : 'Статистика за 24 часа пока не пришла'}
       </div>
     </>
   );
 }
-
-const pluralPlaces = (n: number) => {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return 'фонового';
-  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'фоновых';
-  return 'фоновых';
-};

@@ -63,9 +63,11 @@ export interface ProviderAvailabilityVerdict {
 // Окно квоты исчерпано: 'percent' — остаток 0; count/consumed («N/M», числитель =
 // занято/израсходовано) — только выбор лимита целиком (num >= den). Нуль числителя НЕ
 // исчерпание: 0/30 у Kimi — ни одной активной сессии, 0/4000 у GLM — сразу после сброса.
-// Единственный случай «ноль = беда» (FreeLLM без живых платформ) закрыт флагом available,
-// который проверяется в providerAvailabilityFromBalance раньше окон
+// 'alive' («живых платформ из всех», FreeLLM) не исчерпывается ВООБЩЕ: чем больше, тем
+// лучше, N=M — полное здоровье. Пул без живых платформ — единственный случай «ноль =
+// беда» — закрыт флагом available, который проверяется выше окон
 function quotaWindowExhausted(w: ProviderQuotaWindow): boolean {
+  if (w.unit === 'alive') return false;
   if (w.unit === 'percent') {
     const v = parseFloat(w.value);
     return !isNaN(v) && v <= 0;

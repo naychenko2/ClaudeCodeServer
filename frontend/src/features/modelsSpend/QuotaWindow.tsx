@@ -1,8 +1,11 @@
 // Окно квоты — один ряд в карточке (.wins): подпись (ширина labelWidth), индикатор,
-// значение. Три вида по ProviderQuotaWindow.unit:
+// значение. Четыре вида по ProviderQuotaWindow.unit:
 //   percent  — шкала ИЗРАСХОДОВАННОГО (в контракте value — остаток, переводим);
 //   consumed — то же, но value уже «N/M» израсходовано из лимита (растёт, сбрасывается);
-//   count    — сегменты «занято 3 из 5»: моментальный снимок, шкала расхода врёт.
+//   count    — сегменты «занято 3 из 5»: моментальный снимок, шкала расхода врёт;
+//   alive    — сегменты «живых 6 из 6»: чем больше, тем лучше (FreeLLM). Не окно
+//              расхода и не исчерпание: пул без живых платформ закрывается флагом
+//              balance.available, а не значением окна.
 // percent без доли (подписка «в пределах нормы») — без шкалы, значение sans/muted.
 import type { ProviderQuotaWindow } from '../../types';
 import { C, FONT, FS, SP } from '../../lib/design';
@@ -14,10 +17,10 @@ export const barTextTone = (used: number) =>
 
 export interface QuotaWindowView {
   label: string;
-  kind: 'percent' | 'count' | 'consumed';
+  kind: 'percent' | 'count' | 'consumed' | 'alive';
   usedPct: number | null;        // percent/consumed: израсходованная доля 0..100
-  usedCount: number | null;      // count/consumed: занятые/израсходованные единицы
-  totalCount: number | null;     // count/consumed: всего (лимит)
+  usedCount: number | null;      // count/consumed/alive: занятые/израсходованные/живые единицы
+  totalCount: number | null;     // count/consumed/alive: всего (лимит)
   valueText: string;             // «78%», «3 из 5», «101 из 4 000»
   resetsAt: string | null;
   exhausted: boolean;
@@ -28,7 +31,7 @@ const COUNT_RE = /^\s*(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)\s*$/;
 // Сырое окно из ProviderBalanceInfo → вид. Парсинг не удался — честные null,
 // рисуем значение как есть без индикатора (без выдуманных нулей).
 export function parseQuotaWindow(w: ProviderQuotaWindow): QuotaWindowView {
-  if (w.unit === 'count' || w.unit === 'consumed') {
+  if (w.unit === 'count' || w.unit === 'consumed' || w.unit === 'alive') {
     const m = COUNT_RE.exec(w.value);
     const used = m ? parseFloat(m[1].replace(',', '.')) : null;
     const total = m ? parseFloat(m[2].replace(',', '.')) : null;
@@ -48,13 +51,16 @@ export function parseQuotaWindow(w: ProviderQuotaWindow): QuotaWindowView {
         exhausted: used !== null && total !== null && total > 0 && used >= total,
       };
     }
-    // count: сегменты «занято N из M», моментальный снимок — шкала расхода врала бы
+    // count/alive: сегменты «N из M», моментальный снимок — шкала расхода врала бы.
+    // exhausted только у count (выбор лимита целиком): alive — это живые платформы из
+    // всех, чем больше, тем лучше; пул без живых закрывается флагом balance.available,
+    // а не «исчерпанием» окна
     return {
-      label: w.label, kind: 'count', usedPct: null,
+      label: w.label, kind: w.unit, usedPct: null,
       usedCount: used, totalCount: total,
       valueText: used !== null && total !== null ? `${used} из ${total}` : w.value,
       resetsAt: w.resetsAt,
-      exhausted: used !== null && total !== null && total > 0 && used >= total,
+      exhausted: w.unit === 'count' && used !== null && total !== null && total > 0 && used >= total,
     };
   }
   const remaining = parseFloat(w.value);
@@ -133,16 +139,16 @@ export function QuotaWindow({ w, dim, labelWidth = 64 }: { w: QuotaWindowView; d
   const color = w.usedPct === null ? C.textMuted : barTextTone(w.usedPct);
   // percent-окно без доли → «спокойное» sans-значение вместо моно-жирного
   const calmValue = w.kind === 'percent' && w.usedPct === null;
-  // Дорожка шкалы — percent/consumed при наличии доли; count рисует сегменты отдельно.
+  // Дорожка шкалы — percent/consumed при наличии доли; count/alive рисуют сегменты отдельно.
   // minWidth дорожки страхует от схлопывания в ноль на 320px при длинном значении
-  const hasBar = w.kind !== 'count' && w.usedPct !== null;
+  const hasBar = w.kind !== 'count' && w.kind !== 'alive' && w.usedPct !== null;
   const pct = w.usedPct;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }} title={consumedTitle(w)}>
       <span style={{ ...labelStyle, width: labelWidth }} title={w.label}>{w.label}</span>
-      {w.kind === 'count' ? (
+      {w.kind === 'count' || w.kind === 'alive' ? (
         w.usedCount !== null && w.totalCount !== null
-          ? <CountSegments used={w.usedCount} total={w.totalCount} />
+          ? <CountSegments used={w.usedCount} total={w.totalCount} label={w.kind === 'alive' ? 'Живых' : 'Занято'} />
           : <span style={{ flex: 1 }} />
       ) : hasBar && pct !== null ? (
         <span style={{

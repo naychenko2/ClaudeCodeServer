@@ -166,6 +166,29 @@ describe('providerAvailabilityFromBalance', () => {
     expect(providerAvailabilityFromBalance(full, NOW)).toEqual({ available: false, resetsAt: FUTURE });
   });
 
+  it('FreeLLM alive-окно: живые платформы — не исчерпание, здоровый пул N=M доступен', () => {
+    // Регрессия inverse-семантики: count-трактовка считала N/M «выбором лимита» и
+    // прятала здоровый FreeLLM из карточки «Продолжить на …»
+    const healthy = balance({
+      available: true, currency: 'count', totalBalance: '6/6',
+      windows: [{ label: 'Провайдеры', value: '6/6', resetsAt: null, unit: 'alive' }],
+    });
+    expect(providerAvailabilityFromBalance(healthy, NOW)).toEqual({ available: true, resetsAt: null });
+    const partial = balance({
+      available: true, currency: 'count', totalBalance: '4/6',
+      windows: [{ label: 'Провайдеры', value: '4/6', resetsAt: null, unit: 'alive' }],
+    });
+    expect(providerAvailabilityFromBalance(partial, NOW).available).toBe(true);
+  });
+
+  it('FreeLLM alive-окно: пул без живых платформ закрыт флагом available, а не окном', () => {
+    const dead = balance({
+      available: false, currency: 'count', totalBalance: '0/6',
+      windows: [{ label: 'Провайдеры', value: '0/6', resetsAt: null, unit: 'alive' }],
+    });
+    expect(providerAvailabilityFromBalance(dead, NOW)).toEqual({ available: false, resetsAt: null });
+  });
+
   it('денежный провайдер без окон: нулевой баланс — недоступен, положительный — доступен', () => {
     expect(providerAvailabilityFromBalance(balance({ totalBalance: '0', windows: null }), NOW))
       .toEqual({ available: false, resetsAt: null });

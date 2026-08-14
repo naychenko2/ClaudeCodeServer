@@ -347,12 +347,23 @@ function providerReadyCard(
 ): ProviderCardData {
   const windows = (bal.windows ?? []).map(parseQuotaWindow);
   // На поверхность — percent и consumed (со сбросом, как токен-окна); count (моментальная
-  // занятость) живёт в раскрытии со своей подписью
-  const surfaceWindows = windows.filter(w => w.kind !== 'count');
+  // занятость) живёт в раскрытии со своей подписью. alive (живые платформы FreeLLM) —
+  // состояние пула, а не квота: когда здоровье разобралось, его рисует блок FreeLlmHealth
+  // и окно дублировало бы его; без здоровья — рисуем окном на поверхности
+  const hasPlatformHealth = (bal.health?.platformsTotal ?? 0) > 0;
+  const surfaceWindows = windows.filter(w => w.kind !== 'count' && (w.kind !== 'alive' || !hasPlatformHealth));
   const countWindows = windows.filter(w => w.kind === 'count');
   const hasExhausted = windows.some(w => w.exhausted);
   const pills: PillSpec[] = [];
   if (bal.planLabel) pills.push({ label: bal.planLabel, tone: 'plain' });
+  // Состояние пула FreeLLM по живым платформам: всё лежит — danger, частичная
+  // деградация — warn; полному здоровью аларм не положен («бесплатный» уже есть)
+  const alive = bal.health?.platformsAlive;
+  const total = bal.health?.platformsTotal;
+  if (alive != null && total != null && total > 0) {
+    if (alive === 0) pills.push({ label: 'Недоступен', tone: 'danger' });
+    else if (alive < total) pills.push({ label: 'Часть платформ недоступна', tone: 'warn' });
+  }
   if (isFreeSource(key)) pills.push({ label: 'бесплатный', tone: 'free' });
   if (hasExhausted) pills.push({ label: 'Предел', tone: 'danger' });
   const trend = snapshots.length

@@ -45,8 +45,10 @@ public sealed record ProviderBalance(bool Available, string Currency, string Tot
 
 // Одно окно квоты подписки: подпись для UI, значение уже отформатированной строкой,
 // момент сброса и единица: "percent" (остаток в %, как у GLM/Kimi/MiniMax), "count" — занято
-// сейчас из лимита, моментальный снимок "120/300" (Kimi/FreeLLM), или "consumed" — израсходовано
-// из лимита, растёт монотонно и сбрасывается по ResetsAt "101/4000" (веб-вызовы GLM). Фронт по Unit
+// сейчас из лимита, моментальный снимок "120/300" (Kimi), или "consumed" — израсходовано
+// из лимита, растёт монотонно и сбрасывается по ResetsAt "101/4000" (веб-вызовы GLM), или
+// "alive" — живых платформ из всех "6/6" (FreeLLM): чем больше, тем лучше — это здоровье
+// пула, а не расход; N=M — норма, окно никогда не «исчерпано». Фронт по Unit
 // выбирает, как рисовать значение, и не пишет "токенов" там, где их нет.
 public sealed record ProviderQuotaWindow(string Label, string Value, DateTime? ResetsAt, string Unit);
 
@@ -804,7 +806,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
     // Формат FreeLLM (локальный роутер бесплатных моделей, нет квот/денег): состояние пула и
     // трафик читаются через его MCP POST {BalanceUrl} (JSON-RPC 2.0 stateless, авторизация —
     // тот же unified-ключ, что в ApiKey, Bearer). URL по умолчанию — ApiBaseUrl без хвоста /v1 + /mcp.
-    // Два вызова tools/call: provider_health → состав платформ (окно count «Провайдеры» + Health);
+    // Два вызова tools/call: provider_health → состав платформ (окно alive «Провайдеры» + Health);
     // usage_summary range=24h → трафик за 24ч (часть Health).
     // Один упал — живём на втором; оба → null. TrackHistory false: это не расход, в историю точки не идут.
     private async Task<ProviderBalance?> FetchFreeLlmAsync(LlmProviderConfig p, CancellationToken ct)
@@ -815,7 +817,7 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
         {
             var client = httpFactory.CreateClient("llm-provider");
 
-            // provider_health → состав платформ (живых/всего), флаг Available и окно «Провайдеры» (count).
+            // provider_health → состав платформ (живых/всего), флаг Available и окно «Провайдеры» (alive).
             // жива платформа с keys.healthy > 0
             (int Alive, int Total)? platforms = null;
             var available = false;
@@ -836,9 +838,12 @@ public class ProviderBalanceService(IHttpClientFactory httpFactory, LlmProviderR
             if (platforms is null && usage is null) return null;
 
             var value = platforms is { } pp ? $"{pp.Alive}/{pp.Total}" : null;
+            // Unit "alive": числитель — живые платформы из всех, а не занято из лимита.
+            // Не помечать это окно "count": фронт честно считал бы N/M выбором квоты и
+            // помечал здоровый пул «Пределом» (exhausted при N=M)
             var windows = value is null ? null : new List<ProviderQuotaWindow>
             {
-                new("Провайдеры", value, null, "count")
+                new("Провайдеры", value, null, "alive")
             };
             return new ProviderBalance(available, "count", value ?? "", ResetsAt: null,
                 Windows: windows, TrackHistory: false,

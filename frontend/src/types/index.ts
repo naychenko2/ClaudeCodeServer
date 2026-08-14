@@ -1036,8 +1036,10 @@ export interface RateLimitInfo {
 // Одно окно квоты CLI-провайдера подписки (GET /api/providers/{key}/balance|usage):
 // unit 'percent' — value остаток в процентах ("97.3"); 'count' — "120/300", занято сейчас
 // из лимита (моментальный снимок); 'consumed' — "101/4000", израсходовано из лимита (растёт
-// монотонно, сбрасывается по resetsAt). count/consumed — уже отформатированная строка «N/M»
-export type ProviderQuotaWindowUnit = 'percent' | 'count' | 'consumed';
+// монотонно, сбрасывается по resetsAt); 'alive' — "6/6", живых платформ из всех (FreeLLM),
+// чем больше, тем лучше — не расход и не исчерпание. count/consumed/alive — уже
+// отформатированная строка «N/M»
+export type ProviderQuotaWindowUnit = 'percent' | 'count' | 'consumed' | 'alive';
 export interface ProviderQuotaWindow {
   label: string;
   value: string;

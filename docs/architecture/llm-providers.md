@@ -102,7 +102,11 @@
   `deepseek`/`moonshot`/`openrouter` — деньги; `glm` — квота Coding Plan
   (%, 5-ч окно); `kimi` — квота Kimi for Coding, `GET {ApiBaseUrl}/usages`
   (недокументир.: основное — самое короткое окно из `limits[]` = 5-ч, недельное
-  `usage` уезжает в `Secondary*`-поля `ProviderBalance`; числа приходят строками).
+  `usage` уезжает в `Secondary*`-поля `ProviderBalance`; числа приходят строками);
+  `freellm` — MCP-ручка `/mcp` (tools/call `provider_health` + `usage_summary`):
+  окно юнита `alive` «N/M живых платформ» и `Health` (трафик за 24ч). Юнит `alive` — не
+  `count`: числитель — живые платформы, чем больше, тем лучше; окно никогда не считается
+  исчерпанным, пул без живых платформ закрывает флаг `Available`.
 - **Каталог моделей** — `ModelCatalogService`: записи `Models` конфига + при
   `QueryModelsApi` опрос `GET {ApiBaseUrl}/models` (новые модели с дефолтами).
 

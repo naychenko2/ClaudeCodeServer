@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/git")]
-public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, SessionManager sessions, IHubContext<SessionHub> hub) : ControllerBase
+public class GitController(GitService git, GitServerService gitServer, GitAiService gitAi, ProjectManager projects, UserStore users, SessionManager sessions, IHubContext<SessionHub> hub, CommitAttributionService commitAttribution) : ControllerBase
 {
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
 
@@ -70,7 +70,16 @@ public class GitController(GitService git, GitServerService gitServer, GitAiServ
         try
         {
             var p = GetProject(projectId);
-            return Ok(await git.StatusAsync(Owner(p), RootFor(p), ct));
+            var root = RootFor(p);
+            var status = await git.StatusAsync(Owner(p), root, ct);
+            // Детект коммита по сдвигу HEAD (атрибуция файлов чатам) — на горячем пути
+            // статуса, т.к. коммиты часто идут мимо продукта (Bash в чате, терминал).
+            // Await, а не fire-and-forget: следующий за коммитом запрос статуса обязан
+            // вернуть уже актуальную атрибуцию (за ним идёт changed-by). HeadSha — из
+            // уже полученного статуса (branch.oid), без лишнего git-запуска; ct не
+            // передаётся — детект переживает ушедшего клиента (см. OnStatusRequestAsync)
+            await commitAttribution.OnStatusRequestAsync(Owner(p), root, status.HeadSha);
+            return Ok(status);
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }

@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{projectId}/files")]
-public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, NotesService notes, DocumentAiService docAi) : ControllerBase
+public class FilesController(FileService files, ProjectManager projects, SyncService sync, IConfiguration config, JwtService jwt, ILogger<FilesController> logger, NotesService notes, DocumentAiService docAi, ProjectFileSessionsIndex fileSessions) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string? UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub);
@@ -338,6 +338,29 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
         }
         catch (KeyNotFoundException) { return NotFound(); }
     }
+
+    // Панель «Изменения»: для присланных путей — какие ЕЩЁ чаты проекта их меняли (бейдж
+    // в строке файла + список «Также меняли» в шапке диффа). Ключи ответа — РОВНО присланные
+    // строки (в исходном регистре/разделителях) — сопоставление с индексом идёт по lowercase,
+    // поэтому caller получает узнаваемые пути git status без перекодировки на фронте.
+    [HttpPost("changed-by")]
+    public async Task<IActionResult> ChangedBy(string projectId, [FromBody] ChangedByRequest req)
+    {
+        try
+        {
+            GetProject(projectId); // ownership-проверка (как у соседних экшенов)
+            var paths = req.Paths ?? [];
+            var byNormalized = await fileSessions.GetForProjectAsync(projectId, paths.Select(Normalize).ToList());
+            var response = new Dictionary<string, List<SessionRef>>();
+            foreach (var raw in paths)
+                if (byNormalized.TryGetValue(Normalize(raw), out var sessions))
+                    response[raw] = sessions;
+            return Ok(new { files = response });
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    private static string Normalize(string path) => path.Replace('\\', '/').ToLowerInvariant();
 
     [HttpPost("revert")]
     public IActionResult Revert(string projectId, [FromBody] PathRequest req)
@@ -793,6 +816,7 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     private const long MaxSaveFromUrlBytes = 200L * 1024 * 1024;
 }
 
+public record ChangedByRequest(List<string>? Paths);
 public record SaveContentRequest(string Content);
 public record PathRequest(string Path);
 public record RenameRequest(string OldPath, string NewPath);

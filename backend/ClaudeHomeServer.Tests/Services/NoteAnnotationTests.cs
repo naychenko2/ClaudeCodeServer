@@ -16,6 +16,7 @@ public class NoteAnnotationTests : IDisposable
     private readonly string _dir;
     private readonly string _vault;
     private readonly NotesService _sut;
+    private readonly ProjectManager _projects;
 
     public NoteAnnotationTests()
     {
@@ -29,8 +30,8 @@ public class NoteAnnotationTests : IDisposable
             .Build();
         var users = new UserStore(config, new ClaudeHomeServer.Tests.Helpers.FakeHostEnvironment(), NullLogger<UserStore>.Instance);
         var appSettings = new AppSettingsService(config);
-        var projects = new ProjectManager(config, users, appSettings);
-        _sut = new NotesService(projects, config, NullLogger<NotesService>.Instance);
+        _projects = new ProjectManager(config, users, appSettings);
+        _sut = new NotesService(_projects, config, NullLogger<NotesService>.Instance);
     }
 
     public void Dispose()
@@ -570,6 +571,67 @@ public class NoteAnnotationTests : IDisposable
         var a = new NoteAnnotationInfo("personal", "x.md", "open", null,
             "повторяющийся текст достаточной длины для якоря", "Нет такого раздела");
         NotesService.ResolveAnchor(doc, a).State.Should().Be("orphan");
+    }
+
+    // ─── Документ вне источников заметок (^id не пишется) ────────────────────
+
+    // Документ проекта вне notes/: ^id туда писать нельзя (чужой git-шум), поэтому
+    // весь каскад держится на цитате. Свежесозданный комментарий на НЕТРОНУТОМ
+    // документе обязан быть exact, а не «место изменилось».
+    private const string ProjDoc = """
+        # Гайд
+
+        ## Запуск
+
+        Сервис поднимается командой dotnet run из папки backend.
+        Порт по умолчанию 5000, его переопределяет "ASPNETCORE_URLS".
+
+        ## Отладка
+
+        Логи пишутся в консоль.
+        """;
+
+    private string WriteProjectDoc()
+    {
+        var root = Path.Combine(_dir, "proj");
+        var project = _projects.Create("Проект", root, User, "u1", createDirectory: true);
+        var docDir = Path.Combine(root, "docs");
+        Directory.CreateDirectory(docDir);
+        File.WriteAllText(Path.Combine(docDir, "Гайд.md"), ProjDoc);
+        return project.Id;
+    }
+
+    [Fact]
+    public void ФайлПроекта_ДлиннаяЦитата_СразуПослеСозданияТочная()
+    {
+        var pid = WriteProjectDoc();
+        _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef(pid, "docs/Гайд.md"),
+            Sel(ProjDoc, "Сервис поднимается командой dotnet run из папки backend."), "к"));
+
+        _sut.GetDocAnnotations(User, pid, "docs/Гайд.md").Single().State.Should().Be("exact");
+    }
+
+    [Fact]
+    public void ФайлПроекта_КороткоеВыделение_СразуПослеСозданияТочная()
+    {
+        var pid = WriteProjectDoc();
+        _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef(pid, "docs/Гайд.md"),
+            Sel(ProjDoc, "Логи пишутся в консоль."), "к"));
+
+        _sut.GetDocAnnotations(User, pid, "docs/Гайд.md").Single().State.Should().Be("exact");
+    }
+
+    [Fact]
+    public void ФайлПроекта_ВыделениеСКавычками_СразуПослеСозданияТочная()
+    {
+        var pid = WriteProjectDoc();
+        _sut.Annotate(User, new AnnotateRequest(
+            new AnnotateDocRef(pid, "docs/Гайд.md"),
+            Sel(ProjDoc, "Порт по умолчанию 5000, его переопределяет \"ASPNETCORE_URLS\"."), "к"));
+
+        _sut.GetDocAnnotations(User, pid, "docs/Гайд.md").Single().State.Should().Be("exact");
     }
 
     [Fact]

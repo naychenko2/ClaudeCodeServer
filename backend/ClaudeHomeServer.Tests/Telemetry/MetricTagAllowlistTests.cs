@@ -129,6 +129,9 @@ public class MetricTagAllowlistTests
             "outcome",     // success, error, timeout
             "error_type",  // rate_limit, network, auth, ...
             "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other
+            // Гейдж ccs.dify.error_documents (реконсайлер): ровно 5 × 2 комбинации
+            "dataset_type",// notes | persona | team | dossiers | project
+            "healability", // healable | unhealable
         };
 
         ServerMetrics.AllowedTags.Should().BeEquivalentTo(expected);

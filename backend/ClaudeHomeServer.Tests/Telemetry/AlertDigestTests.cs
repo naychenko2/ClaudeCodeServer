@@ -241,6 +241,19 @@ public class AlertDigestTests
     }
 
     [Fact]
+    public void RuleUrl_KeepsBasePathOfSignozUrl()
+    {
+        // С v0.134 SigNoz живёт под base-path /telemetry-proxy (SIGNOZ_GLOBAL_EXTERNAL__URL),
+        // и SignozUrl настраивается с префиксом. Ссылка обязана его сохранить —
+        // без префикса UI отвечает 404.
+        var url = AlertDigest.RuleUrl(
+            "http://localhost:3301/telemetry-proxy", AlertDigest.Parse(LiveSample)[0]);
+
+        url.Should().Be(
+            "http://localhost:3301/telemetry-proxy/alerts/overview?ruleId=019fae44-96ac-74a2-b1e1-cd24e1ea0ce2");
+    }
+
+    [Fact]
     public void RuleUrl_WithoutBaseUrl_IsNull()
     {
         AlertDigest.RuleUrl(null, Alert("f")).Should().BeNull();

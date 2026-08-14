@@ -678,6 +678,17 @@ export interface GitFileChange {
   deleted?: number | null;
 }
 
+// Чат, менявший файл (POST /api/projects/{id}/files/changed-by) — панель «Изменения»:
+// бейдж в строке файла + список «Также меняли» в шапке диффа + фильтр «только файлы чата»
+export interface ChangedBySession {
+  sessionId: string;
+  name: string;
+  // Файл менялся чатом ТОЛЬКО вне заявленного хода (Bash/скрипты модели, человек в IDE
+  // во время хода): в бейдж «Также меняли» такая запись не попадает, в фильтр
+  // «только файлы чата» активного чата — попадает (решение прошлой итерации фичи)
+  external: boolean;
+}
+
 // Статус рабочего дерева проекта (GET /api/projects/{id}/git/status)
 export interface GitStatus {
   isRepo: boolean;
@@ -1779,6 +1790,7 @@ export interface KnowledgeDocument {
   id: string;
   name: string;
   indexingStatus: string;       // completed | indexing | error и т.п. (строка Dify)
+  error?: string | null;        // текст ошибки индексации (только у статуса error)
 }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {

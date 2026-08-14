@@ -85,7 +85,8 @@ docker exec signoz-signoz-0 /root/signoz --version
 
 ### 3. Первый setup wizard
 
-Открыть http://localhost:3301 в браузере:
+Открыть http://localhost:3301/telemetry-proxy/ в браузере (с v0.134 UI и API живут
+под base-path из `SIGNOZ_GLOBAL_EXTERNAL__URL`; корень `:3301/` отдаёт 404 — это норма):
 1. Создать admin user (email + пароль)
 2. Выбрать организацию (default: `My Organization`)
 3. Готово — UI пустой, данные появятся после первого хода чата в ClaudeHomeServer
@@ -224,6 +225,8 @@ Get-Content "signoz-metastore-YYYYMMDD.sql" `
 
 ### UI SigNoz не открывается на :3301
 
+0. Открыт правильный путь? UI живёт на `http://localhost:3301/telemetry-proxy/` —
+   корень `:3301/` с v0.134 отвечает 404 (весь сервер под base-path).
 1. Overlay применился? `docker compose -f docker-compose.observability.yml ps` →
    `signoz-signoz-0` должен слушать `127.0.0.1:3301`
 2. Логи: `docker logs signoz-signoz-0`

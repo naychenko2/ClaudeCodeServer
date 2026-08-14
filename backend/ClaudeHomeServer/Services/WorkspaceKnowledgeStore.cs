@@ -29,6 +29,9 @@ public class WorkspaceKnowledgeStore
     public WorkspaceKnowledge? GetByPath(string rootPath) =>
         _store.GetValueOrDefault(NormalizePath(rootPath));
 
+    // Снимок всех записей (для реконсайлера error-документов — обход датасетов проектов)
+    public IReadOnlyList<WorkspaceKnowledge> All() => _store.Values.ToList();
+
     public WorkspaceKnowledge GetOrCreate(string rootPath)
     {
         var key = NormalizePath(rootPath);

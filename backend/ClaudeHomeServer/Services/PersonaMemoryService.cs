@@ -11,7 +11,7 @@ namespace ClaudeHomeServer.Services;
 // семантический слой дублируется в Dify-датасет per-persona для векторного retrieve.
 // Скоринг recall — relevance × recency × typeWeight (подход 2026). Без Dify —
 // graceful degradation к полнотекстовому поиску по стору.
-public sealed class PersonaMemoryService
+public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
 {
     // personaId → { datasetId, записи, рабочий фокус, entryId → { difyDocId, hash } }
     private sealed class MemState
@@ -712,6 +712,74 @@ public sealed class PersonaMemoryService
     private void Save()
     {
         lock (_saveLock) JsonFileStore.Save(_storePath, _store, JsonOpts);
+    }
+
+    // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
+    // Цель на каждую персону с созданным датасетом; ключ записи — id записи памяти.
+    // Оба примитива берутся в порядке _syncLock → _saveLock (карту Docs защищает _saveLock).
+    public IReadOnlyList<Knowledge.KnowledgeSyncTarget> ListTargets()
+    {
+        List<(string PersonaId, string DatasetId)> snapshot;
+        lock (_saveLock)
+            snapshot = _store
+                .Where(kv => !string.IsNullOrEmpty(kv.Value.DatasetId))
+                .Select(kv => (kv.Key, kv.Value.DatasetId!))
+                .ToList();
+
+        var targets = new List<Knowledge.KnowledgeSyncTarget>();
+        foreach (var (personaId, datasetId) in snapshot)
+        {
+            var persona = _personas.GetByIdInternal(personaId);
+            if (persona is null) continue;   // память осиротела — реконсайлеру тут делать нечего
+            var ownerId = persona.OwnerId;
+            targets.Add(new Knowledge.KnowledgeSyncTarget(
+                datasetId, [ownerId], $"persona:{personaId}",
+                docIds => ResolveDocsAsync(personaId, docIds),
+                keys => InvalidateDocsAsync(personaId, keys),
+                () => QueueSync(ownerId, personaId)));
+        }
+        return targets;
+    }
+
+    private async Task<IReadOnlyList<(string DocId, string EntryKey)>> ResolveDocsAsync(
+        string personaId, IReadOnlyCollection<string> docIds)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            lock (_saveLock)
+            {
+                if (!_store.TryGetValue(personaId, out var state)) return [];
+                var byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+                return docIds
+                    .Where(byDocId.ContainsKey)
+                    .Select(d => (d, byDocId[d]))
+                    .ToList();
+            }
+        }
+        finally { _syncLock.Release(); }
+    }
+
+    private async Task InvalidateDocsAsync(string personaId, IReadOnlyCollection<string> entryKeys)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            lock (_saveLock)
+            {
+                if (!_store.TryGetValue(personaId, out var state)) return;
+                var changed = false;
+                foreach (var key in entryKeys)
+                    if (state.Docs.TryGetValue(key, out var doc) && doc.Hash.Length > 0)
+                    {
+                        // Замена объекта, не правка поля: снапшот активного синка делит объекты
+                        state.Docs[key] = new MemoryDocRef { DocId = doc.DocId, Hash = "" };
+                        changed = true;
+                    }
+                if (changed) JsonFileStore.Save(_storePath, _store, JsonOpts);
+            }
+        }
+        finally { _syncLock.Release(); }
     }
 
     // Полное удаление памяти персоны — при удалении самой персоны: Dify-датасет + локальный

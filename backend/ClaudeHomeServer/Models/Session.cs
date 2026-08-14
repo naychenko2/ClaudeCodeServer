@@ -293,6 +293,14 @@ public class Session
     public bool PersonaSwitched { get; set; }
     // Заметка-итог сессии (кнопка «Итог сессии»): повторная генерация обновляет её, а не плодит дубли
     public string? SummaryNoteId { get; set; }
+    // Пути файлов, чьи правки этим чатом уже зафиксированы в git (нормализованные:
+    // прямые слэши, lowercase — как SessionChangedPaths.Normalize). Актуальная атрибуция
+    // «какие файлы менял чат» = пути из истории МИНУС это множество (вычитание —
+    // ProjectFileSessionsIndex). Пополняется детектом сдвига HEAD (CommitAttributionService),
+    // новая правка файла чатом путь отсюда убирает (UnmarkFileCommitted). Дефолт — пустой
+    // список: старые записи sessions.json читаются штатно, BackupSchema.Version не двигается
+    // (аддитивное поле с дефолтом формат не ломает).
+    public List<string> CommittedFilePaths { get; set; } = [];
     // Провайдер/подписка, обслуживающая сессию:
     // "claude" — основная подписка (дефолт, ~/.claude с OAuth);
     // для сторонних провайдеров — ключ из LlmProviders (deepseek, glm);

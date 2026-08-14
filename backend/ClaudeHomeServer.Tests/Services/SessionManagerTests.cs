@@ -382,6 +382,183 @@ public class SessionManagerTests : IDisposable
         session.LastReadAt.Should().BeAfter(first!.Value);
     }
 
+    // --- CommittedFilePaths: пометки «правки чата уже зафиксированы в git» ---
+
+    [Fact]
+    public async Task MarkFilesCommitted_ПишетПути_ПереживаетПерезагрузку_НеТрогаетUpdatedAt()
+    {
+        var dir = MkProjectDir("cfp");
+        var project = _projectManager.Create("CFP", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.UpdatedAt = DateTime.UtcNow.AddDays(-2);
+        var updatedBefore = session.UpdatedAt;
+
+        _sut.MarkFilesCommitted([(session.Id, ["src/a.ts"], ["src/a.ts", "src/b.ts"])]);
+
+        session.CommittedFilePaths.Should().BeEquivalentTo(["src/a.ts"]);
+        // Инвариант conventions.md: фиксация правок — не активность чата
+        session.UpdatedAt.Should().Be(updatedBefore, "пометка не должна двигать UpdatedAt");
+        // Значение доехало до стора (переживёт перезагрузку): sessions.json лежит рядом
+        // с projects.json (DataPath) и сериализуется сразу в MarkFilesCommitted
+        var sessionsJson = await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json"));
+        sessionsJson.Should().Contain("src/a.ts");
+    }
+
+    // Bulk на несколько чатов — один вызов, каждый получает свои пути (а SaveSessions
+    // структурно зовётся один раз на пачку — см. MarkFilesCommitted)
+    [Fact]
+    public async Task MarkFilesCommitted_Bulk_КаждыйЧатПолучаетСвоиПути()
+    {
+        var dir = MkProjectDir("cfp-bulk");
+        var project = _projectManager.Create("CFPB", dir, TestUserId, TestUsername);
+        var s1 = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        var s2 = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+
+        _sut.MarkFilesCommitted(
+        [
+            (s1.Id, ["src/a.ts"], ["src/a.ts"]),
+            (s2.Id, ["src/b.ts"], ["src/b.ts", "src/c.ts"]),
+        ]);
+
+        s1.CommittedFilePaths.Should().BeEquivalentTo(["src/a.ts"]);
+        s2.CommittedFilePaths.Should().BeEquivalentTo(["src/b.ts"]);
+    }
+
+    // Гигиена: пометки, выпавшие из сырого множества чата (история переписана),
+    // вычищаются при следующей пометке — стор не копит мусор
+    [Fact]
+    public async Task MarkFilesCommitted_ЧиститПометкиВнеСырогоМножества()
+    {
+        var dir = MkProjectDir("cfp-prune");
+        var project = _projectManager.Create("CFPP", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.MarkFilesCommitted([(session.Id, ["src/old.ts"], ["src/old.ts"])]);
+
+        // Новый коммит: src/old.ts из сырого множества выпал — пометка уходит вместе с ним
+        _sut.MarkFilesCommitted([(session.Id, ["src/new.ts"], ["src/new.ts"])]);
+
+        session.CommittedFilePaths.Should().BeEquivalentTo(["src/new.ts"]);
+    }
+
+    // Инвариант «no-op не пишет стор»: повторная пометка тех же путей не меняет
+    // sessions.json на диске (часть инварианта «один SaveSessions на пачку и ни одного
+    // при no-op»; число вызовов SaveSessions на пачку снаружи не наблюдаемо — оно
+    // обеспечено структурой MarkFilesCommitted: единственный вызов в конце)
+    [Fact]
+    public async Task MarkFilesCommitted_NoOp_НеПишетСтор()
+    {
+        var dir = MkProjectDir("cfp-noop");
+        var project = _projectManager.Create("CFPN", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.MarkFilesCommitted([(session.Id, ["src/a.ts"], ["src/a.ts"])]);
+        var storePath = Path.Combine(_tempDir, "sessions.json");
+        var before = await File.ReadAllTextAsync(storePath);
+
+        _sut.MarkFilesCommitted([(session.Id, ["src/a.ts"], ["src/a.ts"])]);
+
+        (await File.ReadAllTextAsync(storePath)).Should().Be(before, "no-op не должен переписывать стор");
+        session.CommittedFilePaths.Should().BeEquivalentTo(["src/a.ts"]);
+    }
+
+    // --- Снятие пометки на живом ходе (OnMessageAsync): обе ветки источников Extract ---
+
+    // Правка write-инструментом снимает пометку: file_changed НЕ хватает (не приходит при
+    // неизменном содержимом, отсечке watcher'а или удалении файла)
+    [Fact]
+    public async Task OnMessage_ToolUseWriteTool_СнимаетПометкуCommitted()
+    {
+        var dir = MkProjectDir("cfp-tool");
+        var project = _projectManager.Create("CFPT", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.MarkFilesCommitted([(session.Id, ["a.ts"], ["a.ts"])]);
+
+        var input = JsonDocument.Parse(
+            JsonSerializer.Serialize(new { file_path = Path.Combine(dir, "a.ts") })).RootElement;
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ToolUseMessage("t1", "Edit", input));
+
+        session.CommittedFilePaths.Should().BeEmpty("новая правка возвращает путь в атрибуцию");
+    }
+
+    // Инструмент вне белого списка правок пометку не трогает
+    [Fact]
+    public async Task OnMessage_ToolUseНеWriteTool_НеСнимаетПометку()
+    {
+        var dir = MkProjectDir("cfp-read");
+        var project = _projectManager.Create("CFPR", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.MarkFilesCommitted([(session.Id, ["a.ts"], ["a.ts"])]);
+
+        var input = JsonDocument.Parse(
+            JsonSerializer.Serialize(new { file_path = Path.Combine(dir, "a.ts") })).RootElement;
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new ToolUseMessage("t1", "Read", input));
+
+        session.CommittedFilePaths.Should().BeEquivalentTo(["a.ts"]);
+    }
+
+    // file_changed снимает пометку и для External=true: сырое множество индекса содержит
+    // внешние правки (фильтр «только файлы чата»), значит и возврат пути работает для них
+    [Fact]
+    public async Task OnMessage_FileChangedExternal_СнимаетПометку()
+    {
+        var dir = MkProjectDir("cfp-fc");
+        var project = _projectManager.Create("CFPF", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.MarkFilesCommitted([(session.Id, ["a.ts"], ["a.ts"])]);
+
+        await InvokeOnMessageAsync(session.Id, new TurnAccumulator(new List<StoredMessage>()),
+            new FileChangedMessage("a.ts", 1, 0, External: true));
+
+        session.CommittedFilePaths.Should().BeEmpty();
+    }
+
+    // Гейт worktree-хода (зеркало SessionChangedPaths.Extract): правка хода в чужом дереве
+    // пометку с путей КОРНЯ не снимает — watcher отдаёт пути относительно СВОЕГО корня,
+    // и одноимённый файл в worktree воскресил бы атрибуцию файла корня
+    [Fact]
+    public async Task OnMessage_ХодВWorktree_НеСнимаетПометку()
+    {
+        var dir = MkProjectDir("cfp-wt");
+        var project = _projectManager.Create("CFPW", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        _sut.MarkFilesCommitted([(session.Id, ["a.ts"], ["a.ts"])]);
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        await InvokeOnMessageAsync(session.Id, acc,
+            new SessionStartedMessage("cfp-wt-claude", false, "model", "auto",
+                TurnWorktree: new TurnWorktreeInfo(Path.Combine(dir, ".claude", "wt"), "wt")));
+        await InvokeOnMessageAsync(session.Id, acc, new FileChangedMessage("a.ts", 1, 0));
+        session.CommittedFilePaths.Should().BeEquivalentTo(["a.ts"], "правка в worktree корень не трогает");
+
+        // Следующий ход в основном дереве (session_started без worktree) снова снимает
+        await InvokeOnMessageAsync(session.Id, acc,
+            new SessionStartedMessage("cfp-wt-claude", false, "model", "auto"));
+        await InvokeOnMessageAsync(session.Id, acc, new FileChangedMessage("a.ts", 1, 0));
+        session.CommittedFilePaths.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task UnmarkFileCommitted_УбираетПуть_БезПометкиРаннийВыход()
+    {
+        var dir = MkProjectDir("cfp-unmark");
+        var project = _projectManager.Create("CFPU", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.UpdatedAt = DateTime.UtcNow.AddDays(-1);
+        var updatedBefore = session.UpdatedAt;
+        _sut.MarkFilesCommitted([(session.Id, ["src/a.ts", "src/b.ts"], ["src/a.ts", "src/b.ts"])]);
+
+        _sut.UnmarkFileCommitted(session.Id, "src/a.ts");
+        session.CommittedFilePaths.Should().BeEquivalentTo(["src/b.ts"]);
+
+        // Повтор без пометки — ранний выход (горячий путь): стор на диске не переписывается
+        var storePath = Path.Combine(_tempDir, "sessions.json");
+        var before = await File.ReadAllTextAsync(storePath);
+        _sut.UnmarkFileCommitted(session.Id, "src/a.ts");
+        (await File.ReadAllTextAsync(storePath)).Should().Be(before, "no-op не должен переписывать стор");
+        session.UpdatedAt.Should().Be(updatedBefore, "снятие пометки не двигает UpdatedAt");
+    }
+
     [Fact]
     public async Task MarkRead_ЧужойВладелецИлиНесуществующая_False()
     {

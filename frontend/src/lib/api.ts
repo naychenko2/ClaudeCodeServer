@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -29,6 +29,7 @@ export interface DifyDocument {
   id: string;
   name: string;
   indexingStatus: string;
+  error?: string | null;   // текст ошибки индексации (только у indexingStatus === 'error')
   tags?: string[];
 }
 
@@ -1332,6 +1333,13 @@ export const api = {
       }),
     getDiff: (projectId: string, path: string) =>
       request<{ diff: string | null }>(`/projects/${projectId}/files/diff?path=${encodeURIComponent(path)}`),
+    // Панель «Изменения»: для присланных путей — какие ЕЩЁ чаты проекта их меняли.
+    // Ключи ответа — ровно присланные строки path (см. FilesController.ChangedBy)
+    changedBy: (projectId: string, paths: string[]) =>
+      request<{ files: Record<string, ChangedBySession[]> }>(`/projects/${projectId}/files/changed-by`, {
+        method: 'POST',
+        body: JSON.stringify({ paths }),
+      }),
     revert: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files/revert`, { method: 'POST', body: JSON.stringify({ path }) }),
     createFile: (projectId: string, path: string) =>

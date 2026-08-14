@@ -109,6 +109,14 @@ public class ChatHistoryService
         await SaveAsync(claudeSessionId, messages);
     }
 
+    // Время последней записи файла истории чата (для инвалидации кешей, построенных над
+    // историей — см. ProjectFileSessionsIndex). null — истории ещё нет (файла не существует).
+    public DateTime? LastWriteUtc(string claudeSessionId)
+    {
+        var path = GetPath(claudeSessionId);
+        return File.Exists(path) ? File.GetLastWriteTimeUtc(path) : null;
+    }
+
     public Task SaveAsync(string claudeSessionId, List<StoredMessage> messages)
     {
         JsonFileStore.Save(GetPath(claudeSessionId), messages, _opts);

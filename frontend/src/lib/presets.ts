@@ -75,7 +75,7 @@ export function chainSummary(preset: ModelRoutePreset, ctx: ChainLabelContext): 
 export function presetValueLabel(route: string, presets: ScopedPreset[] | ModelRoutePreset[] | null | undefined): string {
   const id = presetIdOf(route);
   const preset = findPreset(presets, id);
-  if (!preset) return 'Пресет удалён — работает настройка по умолчанию';
+  if (!preset) return 'Цепочка удалена — работает настройка по умолчанию';
   return `${preset.name} · ${stepsWord(preset.steps.length)}`;
 }
 
@@ -125,7 +125,7 @@ export function cellPresetLabel(route: string | null | undefined,
   const id = presetIdOf(r);
   const preset = findPreset(presets, id);
   if (!preset) {
-    return { label: 'Пресет удалён', title: 'Пресет удалён — работает настройка по умолчанию' };
+    return { label: 'Цепочка удалена', title: 'Цепочка удалена — работает настройка по умолчанию' };
   }
   const steps = preset.steps.map(s => chainStepLabel(s, ctx));
   // 1–2 шага — целиком; 3+ — голова + «+N», где N = steps.length − 2
@@ -286,7 +286,7 @@ function queryKey(q: PreviewQuery): string {
 // эндпоинта), поэтому там tierOrigin не показываем.
 export function formatEffectiveLine(d: ModelPreviewResponse, opts?: { tierText?: string }): string | null {
   if (d.preset?.broken) {
-    return `Сейчас пойдёт: модель по умолчанию — пресет${d.preset.name ? ` «${d.preset.name}»` : ''} удалён`;
+    return `Сейчас пойдёт: модель по умолчанию — цепочка${d.preset.name ? ` «${d.preset.name}»` : ''} удалена`;
   }
   if (!d.model) return null;
   const parts: string[] = [];

@@ -35,7 +35,7 @@ describe('preset-лексика', () => {
   });
 
   it('битая ссылка — честная пометка, а не сырой id', () => {
-    expect(presetValueLabel('preset:gone', PRESETS)).toBe('Пресет удалён — работает настройка по умолчанию');
+    expect(presetValueLabel('preset:gone', PRESETS)).toBe('Цепочка удалена — работает настройка по умолчанию');
     expect(isBrokenPresetRoute('preset:gone', PRESETS)).toBe(true);
     expect(isBrokenPresetRoute('preset:p1', PRESETS)).toBe(false);
     expect(isBrokenPresetRoute('sonnet', PRESETS)).toBe(false);
@@ -149,10 +149,10 @@ describe('formatEffectiveLine — строка «Сейчас пойдёт»', (
   it('битый пресет — честная пометка с именем, если оно известно', () => {
     expect(formatEffectiveLine({
       ...base, preset: { id: 'p9', name: 'Рабочая', steps: [], broken: true },
-    })).toBe('Сейчас пойдёт: модель по умолчанию — пресет «Рабочая» удалён');
+    })).toBe('Сейчас пойдёт: модель по умолчанию — цепочка «Рабочая» удалена');
     expect(formatEffectiveLine({
       ...base, preset: { id: 'p9', name: null, steps: [], broken: true },
-    })).toBe('Сейчас пойдёт: модель по умолчанию — пресет удалён');
+    })).toBe('Сейчас пойдёт: модель по умолчанию — цепочка удалена');
   });
 
   it('пустой резолв — строки нет', () => {
@@ -214,8 +214,8 @@ describe('cellPresetLabel — подпись пресета в узкой яче
 
   it('битая ссылка — короткая пометка в label, полное пояснение — в title', () => {
     const r = cellPresetLabel('preset:gone', allPresets, CTX);
-    expect(r.label).toBe('Пресет удалён');
-    expect(r.title).toBe('Пресет удалён — работает настройка по умолчанию');
+    expect(r.label).toBe('Цепочка удалена');
+    expect(r.title).toBe('Цепочка удалена — работает настройка по умолчанию');
   });
 
   it('не-preset — обычная подпись маршрута, title пустой (не дублируем строку)', () => {

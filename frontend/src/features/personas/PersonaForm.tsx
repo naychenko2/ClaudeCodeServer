@@ -1022,7 +1022,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           обычным персонам он не нужен, а у «тяжёлых» ролей (пантеон) приходит из шаблона */}
       <div style={{ marginTop: 18 }}>
         {instructions.trim() || instructionsOpen ? (
-          <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных слотов">
+          <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных уровней">
             <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120} maxHeight={360}
               placeholder="Развёрнутый регламент: протоколы работы, критерии готовности, примеры…" />
           </Field>
@@ -1054,7 +1054,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   fontSize: 13, fontWeight: 600, fontFamily: FONT.sans,
                   color: brokenModelPreset ? C.textMuted : C.textHeading,
                 }}>
-                  {brokenModelPreset ? 'Пресет удалён — работает настройка по умолчанию' : modelPreset!.name}
+                  {brokenModelPreset ? 'Цепочка удалена — работает настройка по умолчанию' : modelPreset!.name}
                 </div>
                 {modelPreset && (
                   <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2, lineHeight: 1.35 }}>

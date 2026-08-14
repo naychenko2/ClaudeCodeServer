@@ -16,7 +16,7 @@ import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
 import { hasUserTurnAfter, buildMechanicOffers, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
 import {
-  buildProjectPresetOffer, type PresetCardState,
+  buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
 } from '../features/onboarding/ProjectPresetOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
@@ -1158,7 +1158,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   const [presetBusy, setPresetBusy] = useState(false);
   const [presetError, setPresetError] = useState<string | null>(null);
   const [presetNote, setPresetNote] = useState<string | null>(null);
-  const effectivePresetKey = presetOverride ?? project?.presetKey ?? null;
+  // Без `?? null`: иначе «DTO ещё не приехал» (project === undefined) и «проект до
+  // фичи» (project.presetKey === null) не различить — оба значения стянутся в null
+  // и попадут в ветку активной кнопки (старый проект → 409 на клике). Хелпер
+  // resolvePresetCardState ниже трактует и null, и undefined одинаково — `hidden`.
+  const effectivePresetKey = presetOverride ?? project?.presetKey;
   const applyPreset = useCallback(async (key: string) => {
     if (!project) return;
     if (presetBusy) return;
@@ -1190,7 +1194,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       setPresetError(message);
       // 409 — каркас уже применён/отклонён/проект до фичи: после этого DTO и так
       // покажет финальное состояние, не блокируем
-      setPresetOverride(effectivePresetKey);
+      setPresetOverride(effectivePresetKey ?? null);
     } finally {
       setPresetBusy(false);
     }
@@ -1203,23 +1207,26 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     try {
       await api.projects.applyPreset(project.id, 'none');
       setPresetOverride('none');
+      // Доклад в ленту тем же путём, что и applyPreset: обычный ход с текстом,
+      // а не systemDirective — тот рвёт цикл. Без этого хода модель не узнаёт, что
+      // человек отказался, и сценарий знакомства повиснет на ожидании команды.
+      atBottomRef.current = true;
+      await send('Каркас не нужен — папку оставляем как есть.', [], modeRef.current);
     } catch (err) {
       setPresetError(err instanceof Error ? err.message : 'Не удалось зафиксировать отказ');
     } finally {
       setPresetBusy(false);
     }
-  }, [project, presetBusy]);
+  }, [project, presetBusy, send, atBottomRef]);
 
-  // Состояние карточки — функция от серверного `presetKey`. Прячем карточку, если
-  // на сервере ещё «pending», но в ленте нет ни одного маркера — кнопку не показываем
-  // (пользователь ещё не видел предложения). Когда сервер скажет «docs»/«none»/null,
-  // карточка показывает итог.
-  const presetCardState: PresetCardState = useMemo(() => {
-    if (!presetOffers.size) return { mode: 'hidden' };
-    if (effectivePresetKey === 'pending' || effectivePresetKey == null) return { mode: 'pending' };
-    if (effectivePresetKey === 'none') return { mode: 'declined' };
-    return { mode: 'applied', key: effectivePresetKey };
-  }, [presetOffers.size, effectivePresetKey]);
+  // Состояние карточки — функция от серверного `presetKey`. Логика вынесена в
+  // `resolvePresetCardState` (чистая функция, покрыта тестом): «pending» с
+  // маркером в ленте → кнопки живые; «pending» без маркера или «null» (проект до
+  // фичи / DTO не приехал) → карточка скрыта, активной кнопки нет.
+  const presetCardState: PresetCardState = useMemo(
+    () => resolvePresetCardState(effectivePresetKey, presetOffers.size > 0),
+    [effectivePresetKey, presetOffers.size],
+  );
 
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся

@@ -150,6 +150,24 @@ export type PresetCardState =
   | { mode: 'declined' } // человек отказался
   | { mode: 'hidden' }; // карточка не нужна (null / не наш ключ / устаревший оффер)
 
+// Чистая деривация состояния карточки из серверного `presetKey`. Отдельно от
+// ChatPanel — чтобы покрыть тестом: ключевое «presetKey === null» НЕ даёт активной
+// кнопки ни при каком содержимом ленты (старые проекты, для которых каркас не
+// предлагаем, или ещё не приехавшее DTO). Если в ленте нет ни одного маркера
+// `<project-preset …/>` — карточка всё равно скрыта, чтобы пользователь не видел
+// «кнопку до предложения».
+export function resolvePresetCardState(
+  presetKey: string | null | undefined,
+  hasOffers: boolean,
+): PresetCardState {
+  if (presetKey == null) return { mode: 'hidden' };
+  if (presetKey === 'pending') {
+    return hasOffers ? { mode: 'pending' } : { mode: 'hidden' };
+  }
+  if (presetKey === 'none') return { mode: 'declined' };
+  return { mode: 'applied', key: presetKey };
+}
+
 // «Не применилось»: локальная подсветка ошибки после клика. error === null — карточка
 // в своём основном состоянии (pending/applied/declined). Не путать с card-styling.
 export interface ProjectPresetOfferCardProps {

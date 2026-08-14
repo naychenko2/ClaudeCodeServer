@@ -5,6 +5,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   parseProjectPresetOffer, stripProjectPresetMarkers, buildProjectPresetOffer,
+  resolvePresetCardState,
   type PresetOfferItem,
 } from './ProjectPresetOffer';
 
@@ -125,5 +126,44 @@ describe('buildProjectPresetOffer — карточка несёт последн
     const map = buildProjectPresetOffer(items);
     expect(map.size).toBe(1);
     expect(map.get(1)?.key).toBe('docs');
+  });
+});
+
+describe('resolvePresetCardState — режим карточки от серверного presetKey', () => {
+  // Серверный presetKey === null — проект создан до фичи, к каркасу возвращаться
+  // не нужно. Активной кнопки быть не должно ни при каком содержимом ленты:
+  // иначе клик уйдёт в 409 на бэке (см. исходный дефект п.4-доработки).
+  it('presetKey === null при наличии маркера в ленте — карточка скрыта', () => {
+    expect(resolvePresetCardState(null, true)).toEqual({ mode: 'hidden' });
+  });
+
+  it('presetKey === null без маркеров в ленте — карточка скрыта', () => {
+    expect(resolvePresetCardState(null, false)).toEqual({ mode: 'hidden' });
+  });
+
+  it('presetKey === undefined (DTO ещё не приехал) — карточка скрыта', () => {
+    expect(resolvePresetCardState(undefined, true)).toEqual({ mode: 'hidden' });
+    expect(resolvePresetCardState(undefined, false)).toEqual({ mode: 'hidden' });
+  });
+
+  it('presetKey === "pending" с маркером — активная кнопка', () => {
+    expect(resolvePresetCardState('pending', true)).toEqual({ mode: 'pending' });
+  });
+
+  it('presetKey === "pending" без маркера — карточка скрыта (предложения ещё не было)', () => {
+    expect(resolvePresetCardState('pending', false)).toEqual({ mode: 'hidden' });
+  });
+
+  it('presetKey === "none" — отказ зафиксирован', () => {
+    expect(resolvePresetCardState('none', true)).toEqual({ mode: 'declined' });
+    expect(resolvePresetCardState('none', false)).toEqual({ mode: 'declined' });
+  });
+
+  it('presetKey === "docs" — каркас применён, карточка-итог', () => {
+    expect(resolvePresetCardState('docs', true)).toEqual({ mode: 'applied', key: 'docs' });
+  });
+
+  it('неизвестный ключ — карточка-итог с этим ключом в подписи', () => {
+    expect(resolvePresetCardState('future-key', true)).toEqual({ mode: 'applied', key: 'future-key' });
   });
 });

@@ -419,13 +419,13 @@ public class ProjectManagerTests : IDisposable
         ProjectPreset.IsReserved(ProjectPreset.Pending).Should().BeTrue();
         ProjectPreset.IsReserved(ProjectPreset.None).Should().BeTrue();
 
-        // Обычные ключи (в т.ч. будущие ключи каталога пресетов) свободны. Когда каталог
-        // появится (п.2 плана, PresetCatalog), сюда добавляется проверка всех его ключей:
-        // Assert.All(PresetCatalog.All, d => Assert.False(ProjectPreset.IsReserved(d.Key))) —
-        // иначе логика 409 эндпоинта применения примет отказ/предложение за пресет
+        // Обычные ключи (в т.ч. будущие ключи каталога пресетов) свободны. Каталог (п.2 плана,
+        // PresetCatalog) не имеет права завести ключ «pending»/«none» — иначе логика 409
+        // эндпоинта применения примет отказ/предложение за пресет
         ProjectPreset.IsReserved(null).Should().BeFalse();
         ProjectPreset.IsReserved("").Should().BeFalse();
         ProjectPreset.IsReserved("docs").Should().BeFalse();
+        Assert.All(PresetCatalog.All, d => Assert.False(ProjectPreset.IsReserved(d.Key)));
     }
 
     public void Dispose()

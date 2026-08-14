@@ -115,6 +115,13 @@ public static class ServerMetrics
         unit: "{event}",
         description: "Знакомство завершено (дефолт назначен из онбординг-сессии)");
 
+    // Пресет каркаса применён к проекту (знакомство v2): без тегов — как Intro*,
+    // состав пресетов живёт в коде, разрез по ключу ничего не добавит
+    public static readonly Counter<long> IntroPresetApplied = _meter.CreateCounter<long>(
+        "ccs.intro.preset_applied",
+        unit: "{event}",
+        description: "Пресет каркаса проекта применён (эндпоинт /preset)");
+
     // ── Recording API ────────────────────────────────────────────────────────
     // Строковые параметры = теги (camelCase ↔ snake_case ↔ AllowedTags).
     // Числовой параметр (где есть) = скалярное значение метрики.
@@ -186,6 +193,7 @@ public static class ServerMetrics
     // Знакомство (план 2.10): без тегов — только счётчик события.
     public static void RecordIntroStarted() => IntroStarted.Add(1);
     public static void RecordIntroCompleted() => IntroCompleted.Add(1);
+    public static void RecordPresetApplied() => IntroPresetApplied.Add(1);
 
     // ObservableGauges (sessions.active, websocket.connections) регистрируются
     // извне в задаче T9 через _meter.CreateObservableGauge — здесь только декларация

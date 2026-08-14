@@ -2,9 +2,9 @@ import { useMemo, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { Button, Dot, InlineSegmented } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { TIERS, TIER_ORDER, type TierKey } from '../../lib/modelProvidersShared';
+import { TIERS, TIER_ORDER, routeTier, type TierKey } from '../../lib/modelProvidersShared';
 import { RoutePicker } from '../../components/RoutePicker';
-import { cellPresetLabel, routeDisplayLabel, usePresets } from '../../lib/presets';
+import { cellPresetLabel, presetIdOf, routeDisplayLabel, usePresets } from '../../lib/presets';
 import {
   ANY_SPECIALTY, effectiveDefaultTier, mergePresetIntoCell, specialtyLabel,
   useSpecialtyCatalog, withDefaultTier, withTierCell,
@@ -27,9 +27,10 @@ import { ResetConfirmDialog } from './ResetConfirmDialog';
 const specWord = (n: number) => plural(n, 'специальность', 'специальности', 'специальностей');
 const personaWord = (n: number) => plural(n, 'персона', 'персоны', 'персон');
 
-// Свёрнутый блок «Исключения» внизу вкладки «Модели по умолчанию»: бывшая вкладка
-// «Специальности», ужатая в раскрываемый блок. Свёрнуто — бейдж с числом настроенных
-// специальностей и подсказка; пусто — «Исключений нет · настроить».
+// Блок «Особые правила для специальностей» на вкладке «Модели по умолчанию»: бывшая
+// вкладка «Специальности», ужатая в раскрываемый блок (по умолчанию раскрыт, D2).
+// Свёрнуто — бейдж с числом настроенных специальностей и подсказка; пусто —
+// «Особых правил нет · настроить».
 //
 // Раскрыто — СТРОКИ-АККОРДЕОНЫ (одна специальность = одна строка), а не матрица
 // специальность × уровень. Матрица не помещалась в тело модалки: подпись значения в
@@ -110,7 +111,7 @@ export function ExceptionsBlock({
   const isMobile = useIsMobile();
   const catalog = useSpecialtyCatalog();
   const presets = usePresets();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(true);
   // «Для всех» правит только админ; обычный пользователь — только «Только для меня»
   const [scope, setScope] = useState<'global' | 'owner'>(isAdmin ? 'global' : 'owner');
   const [filter, setFilter] = useState<'all' | 'configured'>('all');
@@ -202,7 +203,7 @@ export function ExceptionsBlock({
     try {
       const res = await onReset(scope, key);
       const stillShadowed = res.shadowed.includes(key);
-      showToast('Исключения', stillShadowed
+      showToast('Особые правила', stillShadowed
         ? 'Уровни сняли, но у специальности остались свои права — она по-прежнему перекрывает общие уровни.'
         : 'Вернули к настройке по умолчанию');
       await onReloadSettings();
@@ -235,12 +236,12 @@ export function ExceptionsBlock({
       const body = res.shadowed.length === 0
         ? base
         : `${base}. Свои права сохранили: ${res.shadowed.map(k => specialtyLabel(catalog, k)).join(', ')} — они по-прежнему перекрывают общие уровни.`;
-      showToast('Исключения', body);
+      showToast('Особые правила', body);
       setBulkPreview(null);
       setExpandedKey(null);
       await onReloadSettings();
     } catch (e) {
-      setOpError(e instanceof Error ? e.message : 'Не удалось сбросить исключения');
+      setOpError(e instanceof Error ? e.message : 'Не удалось сбросить особые правила');
       setBulkPreview(null);
     } finally {
       setConfirmBusy(false);
@@ -260,12 +261,12 @@ export function ExceptionsBlock({
         ? ` и ${bulkPreview.personas} ${personaWord(bulkPreview.personas)}${namesPart}`
         : '';
       return {
-        title: 'Сбросить свои исключения?',
+        title: 'Сбросить свои особые правила?',
         body: `Свои модели потеряют ${bulkPreview.specialties} ${specWord(bulkPreview.specialties)}${personasPart}. Все они снова пойдут моделями по умолчанию.`,
       };
     }
     return {
-      title: 'Сбросить общие исключения?',
+      title: 'Сбросить общие особые правила?',
       body: `Свои модели потеряют ${bulkPreview.specialties} ${specWord(bulkPreview.specialties)}. Личные настройки персон это не затронет.`,
     };
   }, [bulkPreview, scope]);
@@ -325,7 +326,7 @@ export function ExceptionsBlock({
 
   // Подпись шапки (свёрнуто) — считается по слою текущего scope
   const headSub = scopeConfiguredCount === 0
-    ? 'Исключений нет · настроить'
+    ? 'Особых правил нет · настроить'
     : isMobile
       ? `${scopeConfiguredCount} из ${total}`
       : `свои модели у ${scopeConfiguredCount} ${specWord(scopeConfiguredCount)} из ${total}`;
@@ -345,7 +346,7 @@ export function ExceptionsBlock({
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
-            <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>Исключения</span>
+            <span style={{ fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>Особые правила для специальностей</span>
             {scopeConfiguredCount > 0 && (
               <span style={{
                 marginLeft: 6, fontSize: FS.xs, fontWeight: 700, padding: '2px 7px', borderRadius: R.max,
@@ -366,7 +367,7 @@ export function ExceptionsBlock({
               {scopeConfiguredCount === 0 && (
                 <div>Ни у одной специальности и персоны нет своих моделей — все работают моделями по умолчанию.</div>
               )}
-              <div>Исключение задаёт свои модели одной специальности. Пустое поле — «как у всех».</div>
+              <div>Особое правило задаёт свои модели одной специальности. Пустое поле — «как у всех».</div>
             </div>
 
             {/* Тулбар: слой → фильтр → сброс. На мобиле — три строки во всю ширину */}
@@ -389,10 +390,10 @@ export function ExceptionsBlock({
                 size="sm" variant="ghost" loading={previewLoading}
                 fullWidth={isMobile}
                 disabled={scopeConfiguredCount === 0 || previewLoading || opBusy}
-                title={scopeConfiguredCount === 0 ? 'Исключений нет — сбрасывать нечего.' : undefined}
+                title={scopeConfiguredCount === 0 ? 'Особых правил нет — сбрасывать нечего.' : undefined}
                 onClick={openBulkReset}
               >
-                {isMobile ? 'Сбросить все' : 'Сбросить все исключения'}
+                {isMobile ? 'Сбросить все' : 'Сбросить все особые правила'}
               </Button>
             </div>
 
@@ -580,32 +581,46 @@ function ExceptionRow({ name, summary, filled, shadowed, rec, expanded, onToggle
               // пресета — в title (тултип). Для непресетов возвращается обычная подпись
               // маршрута без title, чтобы не дублировать строку в тултипе.
               const { label, title } = cellPresetLabel(value, presets, labelCtx);
+              // Самоcсылка: цепочка пресета содержит шаг, указывающий на этот же уровень —
+              // резолвер пропустит его как петлю, цепочка фактически короче (тот же класс,
+              // что и в слотах, B8 — здесь, чтобы было видно прямо в карточке специальности).
+              const cellPresetId = presetIdOf(value);
+              const cellPreset = cellPresetId
+                ? presets.find(p => p.id.toLowerCase() === cellPresetId.toLowerCase()) ?? null
+                : null;
+              const selfRef = !!cellPreset && cellPreset.steps.some(s => routeTier(s) === t);
               return (
-                <RoutePicker
-                  key={t}
-                  route={value}
-                  label={value ? label : ''}
-                  title={value ? title : undefined}
-                  models={models}
-                  tierModels={tierModels}
-                  ollamaModel={ollamaModel}
-                  showTiers={false}
-                  showPresets
-                  // 'global' ("Для всех") — созданный пресет должен быть виден и валиден
-                  // ВСЕМ, поэтому и список, и inline-создание ограничены общим слоем; 'owner'
-                  // не передаём — личное значение резолвится и от общих пресетов тоже (MAJOR 3)
-                  presetScope={scope === 'global' ? 'global' : undefined}
-                  presetCreation={{
-                    settings, savingScope, onSaveLayer,
-                    onCreated: (id, s, l) => onPresetCreated(t, id, s, l),
-                  }}
-                  readOnly={!canEdit}
-                  busy={busy}
-                  // Слой назван сегментом сверху — в заголовке поля он был бы третьим повтором
-                  cardTitle={TIERS[t].title}
-                  placeholder="— по умолчанию —"
-                  onChange={v => onCell(t, v)}
-                />
+                <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                  <RoutePicker
+                    route={value}
+                    label={value ? label : ''}
+                    title={value ? title : undefined}
+                    models={models}
+                    tierModels={tierModels}
+                    ollamaModel={ollamaModel}
+                    showTiers={false}
+                    showPresets
+                    // 'global' ("Для всех") — созданный пресет должен быть виден и валиден
+                    // ВСЕМ, поэтому и список, и inline-создание ограничены общим слоем; 'owner'
+                    // не передаём — личное значение резолвится и от общих пресетов тоже (MAJOR 3)
+                    presetScope={scope === 'global' ? 'global' : undefined}
+                    presetCreation={{
+                      settings, savingScope, onSaveLayer,
+                      onCreated: (id, s, l) => onPresetCreated(t, id, s, l),
+                    }}
+                    readOnly={!canEdit}
+                    busy={busy}
+                    // Слой назван сегментом сверху — в заголовке поля он был бы третьим повтором
+                    cardTitle={TIERS[t].title}
+                    placeholder="— по умолчанию —"
+                    onChange={v => onCell(t, v)}
+                  />
+                  {selfRef && (
+                    <div style={{ fontSize: FS.xs, color: C.warningText, lineHeight: 1.45, padding: '0 2px' }}>
+                      Шаг «{TIERS[t].title}» внутри цепочки указывает обратно на эту же ячейку — он будет пропущен.
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>

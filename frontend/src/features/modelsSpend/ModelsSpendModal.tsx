@@ -6,7 +6,7 @@ import { useIsMobile } from '../../lib/breakpoints';
 import { api } from '../../lib/api';
 import { useModels } from '../../lib/models';
 import { useProviderData, type TierKey } from '../../lib/modelProvidersShared';
-import { consumeOpenRequest } from '../../lib/modelProvidersNav';
+import { consumeOpenRequest, consumeDraftRequest } from '../../lib/modelProvidersNav';
 import { updateSpecialtySettings } from '../../lib/presets';
 import { QuotasTab } from './QuotasTab';
 import { SlotsTab } from './SlotsTab';
@@ -23,7 +23,8 @@ type TabKey = 'quotas' | 'slots' | 'apply';
 
 export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   const isMobile = useIsMobile();
-  const [tab, setTab] = useState<TabKey>('quotas');
+  // Стартовая вкладка — «Модели по умолчанию» (D1: порядок от настройки к деньгам).
+  const [tab, setTab] = useState<TabKey>('slots');
 
   // Роль и контекст уровня «Модели по умолчанию»: null = общие (админ) или свои (не-админ)
   const [me, setMe] = useState<Awaited<ReturnType<typeof api.auth.me>> | null>(null);
@@ -32,16 +33,21 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   const data = useProviderData(isAdmin, contextUserId);
   const models = useModels();
 
+  // Флаг «надо начать черновик новой цепочки» (A2): requestNewPreset() из панели выбора
+  // модели — переключаемся на вкладку слотов и просим SlotsTab раскрыть первую карточку.
+  const [pendingDraft, setPendingDraft] = useState(false);
+
   useEffect(() => {
     let cancelled = false;
     api.auth.me().then(d => { if (!cancelled) setMe(d); }).catch(() => { if (!cancelled) setMe(null); });
     return () => { cancelled = true; };
   }, []);
 
-  // Диплинк «Собрать цепочку…» (requestNewPreset из панелей выбора модели): открываем
-  // раздел прямо на вкладке «Модели по умолчанию», где цепочки правятся в слотах
+  // Диплинк «Собрать цепочку…» (requestNewPreset из панелей выбора модели):
+  // открываем раздел прямо на вкладке «Модели по умолчанию» и просим начать черновик.
   useEffect(() => {
     if (consumeOpenRequest()) setTab('slots');
+    if (consumeDraftRequest()) { setTab('slots'); setPendingDraft(true); }
   }, []);
 
   // Настройки специальностей и пресетов: глобальный + личный слой. Нужны вкладке слотов
@@ -128,10 +134,10 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   const ollamaModel = data.info?.model ?? undefined;
 
   const tabs: { key: TabKey; label: string }[] = [
-    { key: 'quotas', label: 'Квоты и деньги' },
     // На мобиле полное название не влезает в полосу вкладок — короткий вариант из макета
     { key: 'slots', label: isMobile ? 'Модели' : 'Модели по умолчанию' },
-    { key: 'apply', label: 'Применение' },
+    { key: 'apply', label: 'Применение моделей' },
+    { key: 'quotas', label: 'Квоты и деньги' },
   ];
 
   const tabBtnStyle = (active: boolean): CSSProperties => ({
@@ -183,6 +189,8 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
               onReloadSettings={onReloadSettings}
               resettingScope={resettingScope}
               onReset={onReset}
+              pendingDraft={pendingDraft}
+              onPendingDraftConsumed={() => setPendingDraft(false)}
             />
           )}
           {tab === 'apply' && (

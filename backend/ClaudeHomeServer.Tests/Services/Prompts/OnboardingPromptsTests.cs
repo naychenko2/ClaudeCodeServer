@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Prompts;
 using FluentAssertions;
 
@@ -44,5 +45,32 @@ public class OnboardingPromptsTests
             "знакомство — необязательный шаг, а не блокирующий гейт");
         text.Should().NotContain("нельзя пропустить");
         text.Should().NotContain("обязательно ответь");
+    }
+
+    // Развод затравки (Знакомство v2, п.0): личная — интервью о пользователе, проектная —
+    // о проекте; в проектной не должно быть вопросов о самом пользователе (он уже знаком
+    // с ассистентом в личном онбординге).
+    [Fact]
+    public void KickoffDirectiveFor_ВыбираетДирективуПоТипуЗнакомства()
+    {
+        OnboardingPrompts.KickoffDirectiveFor(OnboardingKinds.User)
+            .Should().Be(OnboardingPrompts.KickoffDirectiveUser);
+        OnboardingPrompts.KickoffDirectiveFor(OnboardingKinds.Project)
+            .Should().Be(OnboardingPrompts.KickoffDirectiveProject);
+        OnboardingPrompts.KickoffDirectiveFor(null)
+            .Should().Be(OnboardingPrompts.KickoffDirectiveUser, "неизвестный тип — дефолт мастера");
+    }
+
+    [Fact]
+    public void KickoffDirectiveProject_НеСпрашиваетОПользователе()
+    {
+        var project = OnboardingPrompts.KickoffDirectiveProject;
+
+        project.Should().Contain("проект", "проектная затравка знакомится с проектом");
+        project.Should().Contain("не спрашивай",
+            "о пользователе спрашивать нельзя — он уже знаком с ассистентом");
+        project.Should().NotContain("как обращаться к пользователю",
+            "это вопрос личного знакомства — в проектном он запрещён");
+        project.Should().NotContain("чем он занимается");
     }
 }

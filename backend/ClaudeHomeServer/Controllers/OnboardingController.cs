@@ -57,8 +57,8 @@ public class OnboardingController(SessionManager sessions, UserStore users,
             var me = users.GetById(UserId);
             if (me is null)
                 earlyReturn = Unauthorized();
-            // Резюм: живая сессия возвращается как есть — kickoff не запускаем (история
-            // уже есть, повторная затравка задублировала бы первую реплику мастера)
+            // Резюм: живая сессия возвращается как есть; kickoff ниже пройдёт проверку
+            // немоты — на живом диалоге он промолчит, на «немом» чате лечит
             else if (me.OnboardingSessionId is { } sid && sessions.GetOwned(sid, UserId) is { } existing)
                 chat = existing;
             else
@@ -74,10 +74,8 @@ public class OnboardingController(SessionManager sessions, UserStore users,
 
         if (earlyReturn is not null) return earlyReturn;
         if (created)
-        {
             ServerMetrics.RecordIntroStarted();
-            await KickoffFirstTurnAsync(chat!.Id);
-        }
+        await EnsureKickoffAsync(chat!, OnboardingKinds.User);
         return Ok(chat);
     }
 
@@ -101,7 +99,8 @@ public class OnboardingController(SessionManager sessions, UserStore users,
             project = projects.GetById(projectId);
             if (project is null)
                 earlyReturn = NotFound();
-            // Резюм: живая сессия возвращается как есть — kickoff не запускаем
+            // Резюм: живая сессия возвращается как есть; kickoff ниже пройдёт проверку
+            // немоты — на живом диалоге он промолчит, на «немом» чате лечит
             else if (project.OnboardingSessionId is { } sid && sessions.GetOwned(sid, UserId) is { } existing)
                 session = existing;
             else
@@ -126,33 +125,56 @@ public class OnboardingController(SessionManager sessions, UserStore users,
 
         if (earlyReturn is not null) return earlyReturn;
         if (created)
-        {
             ServerMetrics.RecordIntroStarted();
-            await KickoffFirstTurnAsync(session!.Id);
-        }
+        await EnsureKickoffAsync(session!, OnboardingKinds.Project);
         return Ok(session);
     }
 
-    // Первый ход собеседника (Мастер настройки / дефолт-персона) для СВЕЖЕСОЗДАННОЙ
-    // онбординг-сессии — иначе гейт открывается «немым». Серверная директива (не баллон
-    // пользователя): ответ стримится в ленту. Вызывается ВНЕ per-ключевого семафора —
-    // повторный start (вторая вкладка) не ждёт старта процесса собеседника, а сразу
-    // получает уже созданную сессию. Сбой kickoff не должен рушить start: сессия уже
-    // создана и зафиксирована, при повторном открытии гейта вернётся как резюм.
-    private async Task KickoffFirstTurnAsync(string sessionId)
+    // Первый ход собеседника (Мастер настройки / дефолт-персона) — и создание, и резюм
+    // онбординг-сессии проходят через эту процедуру: без неё гейт открывается «немым».
+    // Серверная директива (не баллон пользователя): ответ стримится в ленту. Тип знакомства
+    // приходит параметром из вызывающей ветки — внутри не резолвим.
+    //
+    // Единая точка и для первого kickoff, и для лечения «немого чата» (сбой первого kickoff
+    // при уже записанном OnboardingSessionId оставлял человеку пустой чат навсегда):
+    // - Лок kickoff:{id} с try-захватом: параллельный start/резюм, пока kickoff в полёте,
+    //   уходит сразу (резюм остаётся мгновенным), второго kickoff не будет.
+    // - Семафор start-ветки (user:/project:) здесь НЕ занимается — он уже отпущен.
+    // - Проверка немоты отсекает повторную затравку на живом диалоге.
+    // Сбой kickoff не должен рушить start: сессия уже создана и зафиксирована — следующий
+    // start снова придёт сюда и повторит попытку.
+    private async Task EnsureKickoffAsync(Session session, string onboardingKind)
     {
+        var gate = LockFor("kickoff:" + session.Id);
+        if (!await gate.WaitAsync(0))
+            return; // kickoff уже в полёте (параллельный start) — второй не нужен
         try
         {
-            await sessions.SendMessageAsync(sessionId, OnboardingPrompts.KickoffDirective, [],
-                systemDirective: true);
+            // Перечитываем под локом: статус и история могли смениться с момента резолва в start
+            var fresh = sessions.GetOwned(session.Id, UserId);
+            if (fresh is null) return;
+            var history = await sessions.GetHistoryAsync(fresh.Id);
+            if (!IsMuteOnboarding(history, fresh.Status)) return;
+            await sessions.SendMessageAsync(fresh.Id, OnboardingPrompts.KickoffDirectiveFor(onboardingKind),
+                [], systemDirective: true);
         }
         catch (Exception ex)
         {
-            // Сбой kickoff не должен рушить start (сессия уже создана — резюм при повторном
-            // входе), но молчание недопустимо: в проде без лога причину не найти
-            log.LogError(ex, "Сбой kickoff онбординг-сессии {SessionId}", sessionId);
+            // Молчание недопустимо: в проде без лога причину «немого чата» не найти
+            log.LogError(ex, "Сбой kickoff онбординг-сессии {SessionId}", session.Id);
         }
+        finally { gate.Release(); }
     }
+
+    // Критерий «сессия немая» — все три условия: нет реплик собеседника; нет неслужебных
+    // сообщений пользователя (служебная директива в истории есть, но в ленте невидима);
+    // статус не Working и не Waiting. Проверка статуса обязательна: SendMessageAsync
+    // возвращается по доставке хода — лок уже отпущен, а собеседник ещё думает; без неё
+    // повторный start в это окно задублировал бы первую реплику.
+    internal static bool IsMuteOnboarding(IReadOnlyList<StoredMessage> history, SessionStatus status) =>
+        status is not (SessionStatus.Working or SessionStatus.Waiting)
+        && !history.Any(m => m is StoredTextMessage)
+        && !history.Any(m => m is StoredUserMessage { SystemDirective: not true });
 
     // Страховка «Применить итоги разговора» (план 3.2): если модель не довела интервью до
     // personas_set_default, транскрипт живой онбординг-сессии → черновик через

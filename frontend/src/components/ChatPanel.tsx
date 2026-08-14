@@ -29,6 +29,7 @@ import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { C, R, SHADOW, SP, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
 import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
+import { useIsTouch } from '../lib/breakpoints';
 import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
@@ -174,18 +175,20 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
   // только ПОСЛЕ загрузки истории: до неё items пуст у любого чата, и фокус улетал бы
-  // и в чат с перепиской. Мобилу не трогаем — фокус поднимает экранную клавиатуру
-  // поверх ленты; стену тоже (embedded): там курсор забирает только активная колонка,
-  // сигналом composerFocusSignal от WallColumn.
+  // и в чат с перепиской. Тач-устройства (pointer: coarse — телефон и планшет; планшет
+  // бывает шире порога мобильной раскладки, поэтому гейтим по типу указателя, а не по
+  // ширине) не трогаем — фокус поднимает экранную клавиатуру поверх ленты; стену тоже
+  // (embedded): там курсор забирает только активная колонка, сигналом composerFocusSignal.
+  const isTouch = useIsTouch();
   const [emptyChatFocus, setEmptyChatFocus] = useState(0);
   const focusDecidedFor = useRef<string | null>(null);
   useEffect(() => {
-    if (isMobile || embedded || isHistoryLoading) return;
+    if (isMobile || isTouch || embedded || isHistoryLoading) return;
     if (focusDecidedFor.current === session.id) return;
     focusDecidedFor.current = session.id;
     if (items.length > 0) return;
     setEmptyChatFocus(n => n + 1);
-  }, [session.id, isHistoryLoading, items.length, isMobile, embedded]);
+  }, [session.id, isHistoryLoading, items.length, isMobile, isTouch, embedded]);
 
   // Цикл «до готово» (флаг work-loop): live-состояние из событий work_loop,
   // до первого события — из Session.workLoop; null — цикл выключен

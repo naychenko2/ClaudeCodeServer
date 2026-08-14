@@ -28,6 +28,7 @@ export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle, title,
   showTiers = true, showPresets = false, presetCreation, presetScope, manual,
+  fullWidth = false, dashed = false,
 }: {
   route: string;
   label: string;
@@ -74,6 +75,13 @@ export function RoutePicker({
   // форм, что и бэкенд — сохранение заблокировано, пока значение невалидно. Не задан —
   // блок не рендерится (слоты/матрицы/исключения работают как раньше).
   manual?: { models?: ModelOption[]; presetIds?: string[] };
+  // Триггер-строка тянется на всю ширину места вместо фиксированных 230px. Нужен строкам
+  // «Особых правил» (уровень слева — значение во всю оставшуюся ширину): там имя цепочки
+  // длинное, а места в карточке хватает.
+  fullWidth?: boolean;
+  // Пунктирный контур приглушённого значения — «поле не задано, оно наследуется».
+  // Работает только на пустом значении: у заданного маршрута контур обычный.
+  dashed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
@@ -267,8 +275,12 @@ export function RoutePicker({
   }
 
   // Обычный триггер-строка
+  const inherited = dashed && !route;
   return (
-    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div ref={rootRef} style={{
+      position: 'relative', display: 'flex', alignItems: 'center', gap: 8,
+      ...(fullWidth ? { flex: '1 1 auto', minWidth: 0 } : { flexShrink: 0 }),
+    }}>
       <button
         ref={triggerRef}
         type="button"
@@ -276,12 +288,14 @@ export function RoutePicker({
         disabled={!interactive}
         title={title || undefined}
         style={{
-          display: 'flex', alignItems: 'center', gap: 6, maxWidth: 230, width: '100%',
+          display: 'flex', alignItems: 'center', gap: 6,
+          maxWidth: fullWidth ? '100%' : 230, width: '100%',
           fontFamily: FONT.sans, fontSize: FS.xs,
           padding: '4px 8px 4px 9px', borderRadius: R.md,
           cursor: interactive ? 'pointer' : 'default', opacity: busy ? 0.5 : 1,
-          color: C.textSecondary, background: C.bgWhite,
-          border: `1px solid ${open ? C.accent : C.border}`,
+          color: inherited ? C.textMuted : C.textSecondary,
+          background: inherited ? 'transparent' : C.bgWhite,
+          border: `1px ${inherited ? 'dashed' : 'solid'} ${open ? C.accent : inherited ? C.dashed : C.border}`,
           outline: 'none', transition: 'border-color 0.15s, box-shadow 0.15s',
           boxShadow: open ? SHADOW.focus : 'none',
         }}

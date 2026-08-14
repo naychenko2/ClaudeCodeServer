@@ -8,6 +8,8 @@ import { useModels } from '../../lib/models';
 import { useProviderData, type TierKey } from '../../lib/modelProvidersShared';
 import { consumeOpenRequest, consumeDraftRequest } from '../../lib/modelProvidersNav';
 import { updateSpecialtySettings } from '../../lib/presets';
+import { useSpecialtyCatalog } from '../../lib/specialties';
+import { coverageOf, pickStartScope } from './specialRules/model';
 import { QuotasTab } from './QuotasTab';
 import { SlotsTab } from './SlotsTab';
 import { SpecialRulesTab } from './SpecialRulesTab';
@@ -143,13 +145,24 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
 
   const ollamaModel = data.info?.model ?? undefined;
 
-  const tabs: { key: TabKey; label: string }[] = [
+  // Бейдж вкладки «Особые правила» — ОХВАТ слоя («9 из 14»), а не число заданных полей:
+  // при полном покрытии счётчик полей перестаёт нести сигнал (лист текстов, п. 5;
+  // решение владельца 14.08.2026). Считается по тому слою, на котором вкладка откроется.
+  const specialtyCatalog = useSpecialtyCatalog();
+  const specialtyBadge = useMemo(() => {
+    if (!settings || !specialtyCatalog) return null;
+    const startScope = pickStartScope(settings, specialtyCatalog, isAdmin);
+    const { configured, total } = coverageOf(settings[startScope], specialtyCatalog);
+    return configured > 0 ? `${configured} из ${total}` : null;
+  }, [settings, specialtyCatalog, isAdmin]);
+
+  const tabs: { key: TabKey; label: string; badge?: string | null }[] = [
     // На мобиле полное название не влезает в полосу вкладок — короткий вариант из макета
     { key: 'slots', label: isMobile ? 'Модели' : 'Модели по умолчанию' },
     // «Особые правила» — отдельная вкладка (решение владельца 14.08.2026). Видна всем:
     // у не-админа она открывается на слое «Только для меня» — тот же блок был раньше
     // в «Моделях по умолчанию». Admin-only «Пользователю…» живёт уже внутри самой вкладки.
-    { key: 'specialty', label: 'Особые правила' },
+    { key: 'specialty', label: 'Особые правила', badge: specialtyBadge },
     { key: 'apply', label: 'Применение моделей' },
     { key: 'chains', label: 'Цепочки' },
     { key: 'quotas', label: 'Квоты и деньги' },
@@ -173,6 +186,12 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
           {tabs.map(t => (
             <button key={t.key} type="button" style={tabBtnStyle(tab === t.key)} onClick={() => setTab(t.key)}>
               {t.label}
+              {t.badge && (
+                <span style={{
+                  marginLeft: 4, fontSize: FS.xs, fontWeight: 700,
+                  color: tab === t.key ? C.accent : C.textMuted,
+                }}>{t.badge}</span>
+              )}
             </button>
           ))}
         </div>

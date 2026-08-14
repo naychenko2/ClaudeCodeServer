@@ -23,7 +23,7 @@ import type {
 import { api } from '../../lib/api';
 import { useSpecialtyCatalog } from '../../lib/specialties';
 import { bumpPersonas, usePersonas } from '../../lib/personas';
-import { C, FONT, R } from '../../lib/design';
+import { C, FS, FONT, R } from '../../lib/design';
 import { Toolbar, PillSwitch } from '../../components/Toolbar';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -183,6 +183,10 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
   const caps = useModelCaps(model);
+  // Модель стороннего провайдера действует только в личном чате персоны: субагент
+  // живёт в процессе CLI чужого чата (один ANTHROPIC_BASE_URL на процесс), пин модели
+  // туда не доезжает — предупреждаем в момент выбора
+  const thirdPartyModel = !!model && modelProvider(model) !== 'claude';
   const accentColor = AGENT_COLORS[color] ?? C.accent;
 
   // FAB AI-хаба сидит в правом нижнем углу поверх всего — у мастера там же кнопка
@@ -683,7 +687,14 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
             <>
               <StepHead title="Поведение" subtitle="Модель, приветствие и роль персоны в командных сценариях." />
               <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
-                <Field label="Модель"><ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} /></Field>
+                <Field label="Модель">
+                  <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
+                  {thirdPartyModel && (
+                    <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+                      Модели сторонних провайдеров работают в личном чате персоны. Когда её зовут агентом в чужой чат, она идёт на модели того чата.
+                    </span>
+                  )}
+                </Field>
                 {caps.supportsEffort && (
                   <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
                     <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />

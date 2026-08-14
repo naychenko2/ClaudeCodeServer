@@ -22,7 +22,7 @@ import { effectiveSpecialtyRecord } from '../../lib/specialties';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FS, FONT, R, SHADOW } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -245,6 +245,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Пресет в поле «Модель»: найден — карточка с цепочкой; удалён — честная пометка
   const modelPreset = findPreset(presets, presetIdOf(model));
   const brokenModelPreset = !!presetIdOf(model) && presets.length > 0 && !modelPreset;
+  // Модель стороннего провайдера действует только в личном чате персоны: субагент
+  // живёт в процессе CLI чужого чата (один ANTHROPIC_BASE_URL на процесс), пин модели
+  // туда не доезжает — предупреждаем в момент выбора
+  const thirdPartyModel = !!model && modelProvider(model) !== 'claude';
 
   // Ячейка уровня персоны: значение и установщик по ключу уровня
   const tierCell = (t: ModelTierKey): string =>
@@ -1085,6 +1089,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
               {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
                   обязан показывать его, а не модель обычного нового чата */}
               <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
+              {thirdPartyModel && (
+                <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+                  Модели сторонних провайдеров работают в личном чате персоны. Когда её зовут агентом в чужой чат, она идёт на модели того чата.
+                </span>
+              )}
             </div>
           )}
         </Field>

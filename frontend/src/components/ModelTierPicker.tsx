@@ -2,9 +2,9 @@ import { modelLabel, useModels } from '../lib/models';
 import { TIER_ORDER, TIER_TITLE, useTierModels, type ModelTierKey } from '../lib/modelTiers';
 import { C, R, FONT } from '../lib/design';
 
-// Выбор уровня модели (слот сильная/средняя/слабая) у задачи и персоны. Строки-карточки
+// Выбор уровня модели (сильная/средняя/слабая) у задачи и персоны. Строки-карточки
 // как в ModelPicker: слева название уровня, справа — модель, которая за ним стоит сейчас
-// (личный слот пользователя поверх глобального). Пустое значение = «По умолчанию»:
+// (личный уровень пользователя поверх общего). Пустое значение = «По умолчанию»:
 // модель возьмётся от исполнителя и назначения места.
 interface Props {
   value: ModelTierKey | '';
@@ -30,7 +30,7 @@ export function ModelTierPicker({ value, onChange, defaultHint }: Props) {
         <TierRow
           key={t}
           title={TIER_TITLE[t]}
-          note={tierModels[t] ? modelLabel(tierModels[t]) : 'слот не настроен — решает CLI'}
+          note={tierModels[t] ? modelLabel(tierModels[t]) : 'не задана — выберет Claude Code сам'}
           strongNote={!!tierModels[t]}
           active={value === t}
           onClick={() => onChange(t)}
@@ -40,7 +40,7 @@ export function ModelTierPicker({ value, onChange, defaultHint }: Props) {
   );
 }
 
-// Одна строка-карточка уровня: название + модель за слотом (или пометка «слот не настроен»)
+// Одна строка-карточка уровня: название + модель за уровнем (или пометка «не задана»)
 function TierRow({ title, note, strongNote, active, onClick }: {
   title: string;
   note?: string;

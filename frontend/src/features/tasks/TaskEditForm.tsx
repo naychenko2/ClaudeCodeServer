@@ -14,8 +14,12 @@ import { NO_PROJECT_COLOR, NO_PROJECT_LABEL, PRIORITY_LABEL, PRIORITY_ORDER, REC
 import { ExtBadge, PriorityFlag, SubtaskCheck } from './bits';
 import { DueDatePicker } from './DueDatePicker';
 import { ExecutorPicker } from './ExecutorPicker';
-import { ModelTierPicker } from '../../components/ModelTierPicker';
-import { parseTier, type ModelTierKey } from '../../lib/modelTiers';
+import { parseTier, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
+import { useTaskPreview } from './useTaskPreview';
+import { formatEffectiveLine } from '../../lib/presets';
+import { USAGE } from '../../lib/models';
+import type { Persona, SpecialtyCatalogEntry } from '../../types';
+import { personaLabel } from '../../lib/personas';
 // CodeMirror тяжёлый — редактор грузим лениво, только при входе в правку. Статический
 // импорт здесь обнулял бы ленивую загрузку и в NoteView, и в FileViewer: сборщик тянет
 // модуль в основной чанк, если хоть один потребитель просит его статически.
@@ -501,21 +505,16 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           </div>
 
           {/* Уровень модели исполнителя — рядом с самим исполнителем: у задачи «Я»
-              модель не нужна, поле показываем только для Claude/персоны */}
+              модель не нужна, поле показываем только для Claude/персоны. Ветка v4:
+              сегмент По умолчанию / Сильная / Средняя / Слабая, явная подпись владельца
+              настроек и «Сейчас пойдёт» по маршруту исполнителя (ADR-007 §2). */}
           {assignee === 'claude' && (
-            <>
-              <div style={fieldLabelStyle()}>Уровень модели</div>
-              <div style={{ marginBottom: 8 }}>
-                <ModelTierPicker
-                  value={modelTier}
-                  onChange={setModelTier}
-                  defaultHint="как настроено для исполнителя задач"
-                />
-              </div>
-              <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, marginBottom: 22 }}>
-                Сложную работу — сильной модели, рутину — экономной. По умолчанию — как настроено для исполнителя задач.
-              </div>
-            </>
+            <TaskExecutorTier
+              modelTier={modelTier}
+              onChange={setModelTier}
+              personaId={personaId || null}
+              projectId={projectId}
+            />
           )}
 
           {/* Время жизни чата исполнения — только когда исполнитель не «Я» (чат вообще
@@ -885,6 +884,88 @@ export function TaskEditForm({ task, isMobile, onSave, onCancel, onDelete, pendi
           onToggle={p => setFiles(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])}
           onClose={() => setFilePickerOpen(false)}
         />
+      )}
+    </div>
+  );
+}
+
+// === Уровень модели исполнителя задачи (v4) ===
+// Сегмент «По умолчанию / Сильная / Средняя / Слабая» + подпись владельца настроек
+// (персона или сам пользователь) и «Сейчас пойдёт» по маршруту исполнителя задач
+// (USAGE.tasksExecutor). Подпись под полем и строка превью берутся из
+// docs/design/model-settings-copy.md (итерация 2). «По умолчанию» — собственный
+// дефолт места: сильная модель; без выбора задача не дешевеет молча.
+function TaskExecutorTier({
+  modelTier, onChange, personaId, projectId,
+}: {
+  modelTier: ModelTierKey | '';
+  onChange: (v: ModelTierKey | '') => void;
+  personaId: string | null;
+  projectId: string | null;
+}) {
+  // Имя персоны и её специальность — для подписи «поля моделей {исполнителя}»
+  const [persona, setPersona] = useState<Persona | null>(null);
+  const [specialties, setSpecialties] = useState<SpecialtyCatalogEntry[]>([]);
+  useEffect(() => {
+    if (!personaId) { setPersona(null); return; }
+    let alive = true;
+    api.personas.list({ scope: 'context', projectId: projectId ?? undefined })
+      .then(list => { if (alive) setPersona(list.find(p => p.id === personaId) ?? null); })
+      .catch(() => { if (alive) setPersona(null); });
+    return () => { alive = false; };
+  }, [personaId, projectId]);
+  // Каталог специальностей — нужен label ключа для подписи «его специальность — «{имя}»»
+  useEffect(() => {
+    let alive = true;
+    api.specialties.list()
+      .then(list => { if (alive) setSpecialties(list); })
+      .catch(() => { if (alive) setSpecialties([]); });
+    return () => { alive = false; };
+  }, []);
+
+  // Превью по маршруту исполнителя задач: бэкенд резолвит уровень задачи → поле персоны →
+  // специальность → «Любая специальность» → слоты владельца, и возвращает модель+источник.
+  const preview = useTaskPreview({
+    place: USAGE.tasksExecutor,
+    personaId: personaId || undefined,
+    tier: modelTier || undefined,
+  });
+  const previewText = preview ? formatEffectiveLine(preview) : null;
+
+  // Сегмент: «По умолчанию» = '' (пусто), дальше три уровня
+  const options: { value: ModelTierKey | ''; label: string }[] = [
+    { value: '', label: 'По умолчанию' },
+    ...TIER_ORDER.map(t => ({ value: t, label: TIER_TITLE[t] })),
+  ];
+
+  // Подпись владельца настроек
+  const personaName = persona ? personaLabel(persona) : '';
+  const specialtyKey = persona?.specialty;
+  const specialtyName = specialtyKey && specialtyKey !== 'none'
+    ? specialties.find(s => s.key === specialtyKey)?.label
+    : undefined;
+  const hint = persona
+    ? `Уровень развернётся по полям моделей ${personaName}${specialtyName ? ` (его специальность — «${specialtyName}»)` : ''}, а не по вашим настройкам. Без выбора уровня задача пойдёт сильной моделью — собственный дефолт места «Исполнитель задач», задача не подешевеет молча. Уровень, выбранный здесь, сильнее всего.`
+    : 'Развернётся по вашим настройкам: «Модели и расход» → «Модели по умолчанию». Без выбора уровня — сильная модель (дефолт места «Исполнитель задач»).';
+
+  return (
+    <div style={{ marginBottom: 22 }}>
+      <div style={fieldLabelStyle()}>Уровень модели</div>
+      <SegmentedControl<ModelTierKey | ''>
+        value={modelTier}
+        options={options}
+        onChange={onChange}
+      />
+      <div style={{ fontFamily: FONT.sans, fontSize: 12, color: C.textMuted, marginTop: 8, lineHeight: 1.4 }}>
+        {hint}
+      </div>
+      {previewText && (
+        <div style={{
+          fontFamily: FONT.sans, fontSize: 12, color: C.textSecondary,
+          marginTop: 6, lineHeight: 1.4,
+        }}>
+          {previewText}
+        </div>
       )}
     </div>
   );

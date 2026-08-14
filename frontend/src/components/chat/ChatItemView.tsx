@@ -1,5 +1,5 @@
 import { memo, useState, useContext, useEffect } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap, ChevronDown } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel,
@@ -869,26 +869,58 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
 
 // Разделитель «Ответила X — Y была недоступна»: автоматическая подмена МОДЕЛИ рантайм-
 // фолбэком (см. chatReducer — отдельно от provider_switched, который остаётся тихим или
-// на пилюле «Продолжено на подписке» при ротации внутри провайдера). title — одна из трёх
-// канонических формулировок причины (providerSwitchReasonLabel), либо сырой label маркера
-// (rawLabel), когда reason не пришёл или не распознан
+// на пилюле «Продолжено на подписке» при ротации внутри провайдера). По клику разворачивается
+// краткое объяснение причины и куска цепочки: «Шаги: {oldLabel} — {reason} → {newLabel}»
+// и пометка, что подмена действует только на этот ход, а не на следующие
 function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_switched' }> }) {
   const newLabel = useModelLabel(item.model);
   const oldLabel = useModelLabel(item.previousModel);
+  const [open, setOpen] = useState(false);
+  const reason = providerSwitchReasonLabel(item.reason, item.rawLabel);
+  // Кликабельная пилюля — кнопка, а не div: фокус с клавиатуры и a11y без отдельной обвязки
   return (
-    <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}
-      title={providerSwitchReasonLabel(item.reason, item.rawLabel)}>
-      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
-        fontSize: 12, color: C.warningText, whiteSpace: 'nowrap', overflow: 'hidden',
-        textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
-        background: C.warningBg, border: `1px solid ${C.warning}`,
-      }}>
-        <Zap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
-        Ответила {newLabel} — {oldLabel} была недоступна
-      </span>
-      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+    <div style={{ alignSelf: 'center', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, maxWidth: '100%', width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+        <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            fontFamily: FONT.sans, fontSize: 12, color: C.warningText,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+            background: C.warningBg, border: `1px solid ${C.warning}`,
+          }}
+          title={reason}
+        >
+          <Zap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          Ответила {newLabel} — {oldLabel} была недоступна
+          <ChevronDown
+            size={11} strokeWidth={2}
+            style={{ flexShrink: 0, transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none', color: C.warningText }}
+          />
+        </button>
+        <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+      </div>
+      {open && (
+        <div style={{
+          alignSelf: 'center', maxWidth: 520, width: '100%',
+          padding: '8px 12px', borderRadius: R.lg,
+          background: C.bgPanel, border: `1px solid ${C.border}`,
+          fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary, lineHeight: 1.5,
+          textAlign: 'left',
+        }}>
+          <div>
+            <span style={{ fontWeight: 600, color: C.textHeading }}>Шаги:</span>{' '}
+            {oldLabel} — {reason} → {newLabel} — ответила.
+          </div>
+          <div style={{ marginTop: 4, color: C.textMuted }}>
+            Подмена действует только на этот ход: следующие — снова с выбранной моделью.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

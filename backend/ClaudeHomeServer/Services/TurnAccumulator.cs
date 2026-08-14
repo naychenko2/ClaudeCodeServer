@@ -515,7 +515,10 @@ internal class TurnAccumulator
             {
                 var raw = _teamRawText.ToString() + _textBuf;
                 var safe = SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
-                if (safe.Length > _teamShownLength)
+                // Пусто после стрижки (ход отвечает одним маркером — напр. `<no-reply/>`) —
+                // поста нет: тот же гард, что в FlushBuffers, иначе снимок посреди хода
+                // записал бы в историю пузырь из одних пробелов.
+                if (safe.Length > _teamShownLength && safe.Trim().Length > 0)
                     result.Add(new StoredTextMessage(safe[_teamShownLength..], _personaId,
                         timestamp: _textBufStartedAt ?? NowMs()));
             }
@@ -561,7 +564,12 @@ internal class TurnAccumulator
             var safe = final
                 ? SessionManager.StripTeamProtocolMarkers(raw)
                 : SessionManager.TrimUnresolvedMarkerOpen(SessionManager.StripTeamProtocolMarkers(raw));
-            if (safe.Length > _teamShownLength)
+            // Гард пустого хода (B4 доклада о задаче): ответ ровно маркером (`<no-reply/>`,
+            // `<team:talk/>`) после стрижки оставляет пустую строку или один перевод строки —
+            // записи в истории быть не должно, иначе в ленте всплывёт призрачный пустой пост.
+            // Длину показанного не двигаем: придержанные пробелы уйдут вместе с первым
+            // настоящим текстом, если он всё-таки появится дальше по ходу.
+            if (safe.Length > _teamShownLength && safe.Trim().Length > 0)
             {
                 var delta = safe[_teamShownLength..];
                 _teamShownLength = safe.Length;

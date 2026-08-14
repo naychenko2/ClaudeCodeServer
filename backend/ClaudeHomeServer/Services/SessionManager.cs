@@ -29,16 +29,23 @@ public class SessionManager : IDisposable
         // из ContinueWorkLoopAsync (Task.Run) и SetWorkLoopAsync. Все доступы под LoopTurnLock.
         public System.Text.StringBuilder LoopTurnText = new();
         public readonly object LoopTurnLock = new();
-        // Текст ответа текущего хода штаба — для маркера эскалации координатора (Э4).
+        // Текст ответа текущего хода — для маркера эскалации координатора (Э4) и для стрижки
+        // маркеров протокола в живой ленте. Копится в ЛЮБОМ чате: маркер молчания
+        // `<no-reply/>` живёт вне штаба, да и сохранённая история чистится безусловно.
         // Отдельный буфер от LoopTurnText: у режимов разные потребители, и очистка одного
         // не должна съедать маркер другого (оба режима могут быть включены разом).
         public System.Text.StringBuilder TeamTurnText = new();
         public readonly object TeamTurnLock = new();
-        // Сколько символов «очищенного от маркеров» текста текущего хода штаба уже ушло
+        // Сколько символов «очищенного от маркеров» текста текущего хода уже ушло
         // в живую трансляцию (волна 6): считаем от StripTeamProtocolMarkers(TeamTurnText),
         // а не от длины самого TeamTurnText — иначе диффом в дельту попал бы вырезанный
         // маркер. Живёт рядом с TeamTurnText, сбрасывается вместе с ним под TeamTurnLock.
         public int TeamTurnShownLength;
+        // В тексте текущего хода уже встречался '<'. Пока не встречался, маркеру взяться
+        // неоткуда — дельта транслируется как есть, без склейки и разбора всего хода
+        // (стрижка идёт во всех чатах, и платить за неё на каждой дельте обычной прозы
+        // незачем). Живёт рядом с TeamTurnText и чистится вместе с ним (под TeamTurnLock).
+        public bool TurnSawAngleBracket;
         // В текущем ходу штаба координатор задал вопрос ASK-карточкой (Э8). Гард молчаливого
         // тупика по концу хода смотрит сюда: ход, закончившийся вопросами человеку, — это
         // работающее интервью, а не тупик, и карточка «вопросов не будет» там была бы враньём.
@@ -3174,20 +3181,19 @@ public class SessionManager : IDisposable
     // морозится — прерывание здесь и есть требование доставить ждущее сообщение сейчас.
     private void PreemptTurnForQueue(string sessionId, SessionEntry entry, string callsite)
     {
-        // Ход штаба «Командной реализации» убит — result по нему не придёт, а с ним не придёт
-        // и HandleTeamTurnEndAsync, который потребляет буфер маркеров. Чистим синхронно: иначе
-        // маркер мёртвого хода склеился бы с текстом следующего и применился задним числом —
-        // фантомная эскалация и сдвиг стадии (класс «волны-призрака»).
-        if (entry.Info.TeamImplement is not null)
+        // Ход убит — result по нему не придёт, а с ним не придёт и потребление буфера маркеров
+        // (конец хода в OnMessageAsync, у штаба ещё и HandleTeamTurnEndAsync). Чистим синхронно:
+        // иначе маркер мёртвого хода склеился бы с текстом следующего и применился задним
+        // числом — фантомная эскалация и сдвиг стадии (класс «волны-призрака»).
+        // Буфер копится в любом чате, поэтому и чистим без оглядки на режим штаба.
+        lock (entry.TeamTurnLock)
         {
-            lock (entry.TeamTurnLock)
-            {
-                entry.TeamTurnText.Clear();
-                entry.TeamTurnShownLength = 0;
-                entry.TeamTurnAsked = false;
-            }
-            entry.SkipNextTeamTurnEnd = false;
+            entry.TeamTurnText.Clear();
+            entry.TeamTurnShownLength = 0;
+            entry.TurnSawAngleBracket = false;
+            entry.TeamTurnAsked = false;
         }
+        entry.SkipNextTeamTurnEnd = false;
         // Прерванный ход result не пришлёт — погасим маркер итерации цикла, иначе он
         // заблокирует разбор очереди (drain уступает, пока LoopTurnInFlight).
         entry.LoopTurnInFlight = false;
@@ -4049,18 +4055,16 @@ public class SessionManager : IDisposable
                 _ = FreezePendingAsync(sessionId, entry);
             // M5: тот же сброс буфера маркеров, что при прерывании очередью (SendMessageAsync):
             // убитый ход даёт exited без result, буфер не потребляется — маркер мёртвого хода
-            // (<escalate:*>, <team:work>) доклеился бы к следующему и применился задним числом
-            // (фантомная эскалация, «волна-призрак»).
-            if (entry.Info.TeamImplement is not null)
+            // (<escalate:*>, <team:work>, <no-reply/>) доклеился бы к следующему и применился
+            // задним числом (фантомная эскалация, «волна-призрак»).
+            lock (entry.TeamTurnLock)
             {
-                lock (entry.TeamTurnLock)
-                {
-                    entry.TeamTurnText.Clear();
-                    entry.TeamTurnShownLength = 0;
-                    entry.TeamTurnAsked = false;
-                }
-                entry.SkipNextTeamTurnEnd = false;
+                entry.TeamTurnText.Clear();
+                entry.TeamTurnShownLength = 0;
+                entry.TurnSawAngleBracket = false;
+                entry.TeamTurnAsked = false;
             }
+            entry.SkipNextTeamTurnEnd = false;
             if (stuck)
                 ReviveStuckSession(sessionId, entry);
             else
@@ -5642,6 +5646,23 @@ public class SessionManager : IDisposable
         return false;
     }
 
+    // Маркер молчания (B4 «Доклада о завершении задачи»): `<no-reply/>` — ходу нечего сказать
+    // человеку. Ответ ровно этим маркером не должен оставить в ленте ни реплики, ни следа
+    // пустого хода: стрижка ниже вырезает маркер, а «после стрижки пусто» нигде не создаёт
+    // запись (ни в живой трансляции, ни в истории — TurnAccumulator.FlushBuffers).
+    // В отличие от маркеров штаба живёт в ЛЮБОМ чате: им отвечает обычная персона постановщика.
+    internal const string NoReplyMarker = "<no-reply/>";
+
+    internal static bool HasNoReplyMarker(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return false;
+        // Самодостаточный тег — как <team:talk/>: процитированный в ```-примере не считается
+        var ranges = GetCodeBlockRanges(text);
+        foreach (System.Text.RegularExpressions.Match m in NoReplyMarkerRegex.Matches(text))
+            if (IsRangeOutsideCode(ranges, m.Index, m.Index + m.Length)) return true;
+        return false;
+    }
+
     // Волна 6 (живая приёмка волны 5): маркеры протокола — внутренняя договорённость между
     // координатором и бэкендом (их же разбирают Parse*/Has* выше), в реплике, которую видит
     // человек, им не место. Модель периодически закрывает тег по имени длинного маркера
@@ -5658,6 +5679,8 @@ public class SessionManager : IDisposable
         new(@"<team:work>[\s\S]*?</team(?::work)?>", System.Text.RegularExpressions.RegexOptions.Compiled);
     private static readonly System.Text.RegularExpressions.Regex TalkMarkerRegex =
         new(@"<team:talk\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
+    private static readonly System.Text.RegularExpressions.Regex NoReplyMarkerRegex =
+        new(@"<no-reply\s*/>", System.Text.RegularExpressions.RegexOptions.Compiled);
 
     // Открывающие/закрывающие теги для РАЗБОРА маркеров вне код-блоков (Parse*/Has* выше).
     // Отдельно от WorkMarkerRegex/EscalateMarkerRegex (тем нужен весь маркер одним куском для
@@ -5704,6 +5727,7 @@ public class SessionManager : IDisposable
         text = EscalateMarkerRegex.Replace(text, "");
         text = WorkMarkerRegex.Replace(text, "");
         text = TalkMarkerRegex.Replace(text, "");
+        text = NoReplyMarkerRegex.Replace(text, "");
         text = OrphanCloserRegex.Replace(text, "");
         return text;
     }
@@ -5762,6 +5786,9 @@ public class SessionManager : IDisposable
     [
         "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
         "<team:work>",
+        // Самозакрывающийся маркер молчания целиком: любой его префикс («<n», «<no-repl»,
+        // «<no-reply/») ещё может дорасти до маркера — до этого показывать хвост нельзя
+        NoReplyMarker,
     ];
 
     internal static bool IsAmbiguousMarkerTail(string tail)
@@ -5770,9 +5797,10 @@ public class SessionManager : IDisposable
         foreach (var open in MarkerOpenTags)
             if (open.Length > tail.Length && open.StartsWith(tail, StringComparison.Ordinal))
                 return true;
-        // `<team:talk/>` пробелы перед `/>` не фиксированы регэкспом разбора — сюда попадает
-        // только незавершённый префикс (полный маркер уже вырезан StripTeamProtocolMarkers)
-        return System.Text.RegularExpressions.Regex.IsMatch(tail, @"^<team:talk\s*/?$");
+        // У `<team:talk/>` и `<no-reply/>` пробелы перед `/>` не фиксированы регэкспом разбора —
+        // сюда попадает только незавершённый префикс (полный маркер уже вырезан
+        // StripTeamProtocolMarkers)
+        return System.Text.RegularExpressions.Regex.IsMatch(tail, @"^<(?:team:talk|no-reply)\s*/?$");
     }
 
     // Обрезает с хвоста текста потенциально незавершённый маркер (см. IsAmbiguousMarkerTail).
@@ -5796,7 +5824,7 @@ public class SessionManager : IDisposable
     private static readonly string[] MarkerOpenLiterals =
     [
         "<escalate:deviation>", "<escalate:check>", "<escalate:decision>", "<escalate:clarify>",
-        "<team:work>", "<team:talk",
+        "<team:work>", "<team:talk", "<no-reply",
     ];
 
     internal static string TrimUnresolvedMarkerOpen(string strippedText)
@@ -7014,27 +7042,61 @@ public class SessionManager : IDisposable
                     // Цикл «до готово»: копим текст хода для поиска маркера завершения
                     if (entry?.Info.WorkLoop is not null)
                         lock (entry.LoopTurnLock) entry.LoopTurnText.Append(m.Text);
-                    // Режим «Командная реализация»: тем же способом ловим маркер эскалации
-                    // координатора (расхождение с планом, красная проверка, вопрос человеку) —
-                    // и заодно решаем, что из накопленного уже безопасно показать человеку
-                    // (волна 6): маркеры — внутренний протокол, в живой ленте им не место.
-                    // Целиком завершённый маркер вырезаем, незавершённый хвост придерживаем
-                    // до следующей дельты — иначе полтега мелькнёт на экране раньше, чем мы
-                    // поймём, что это протокол, а не текст координатора.
-                    if (entry?.Info.TeamImplement is not null)
+                    // Маркеры протокола в живой ленте: копим текст хода и решаем, что из
+                    // накопленного уже безопасно показать человеку (волна 6). Целиком
+                    // завершённый маркер вырезаем, незавершённый хвост придерживаем до
+                    // следующей дельты — иначе полтега мелькнёт на экране раньше, чем мы
+                    // поймём, что это протокол, а не текст персоны. Режим штаба ещё и ловит
+                    // отсюда маркер эскалации координатора (разбор — на конце хода).
+                    // Стрижка идёт в ЛЮБОМ чате, не только в штабе: сохранённая история
+                    // чистится безусловно (TurnAccumulator.FlushBuffers), и без этого маркер
+                    // (в т.ч. `<no-reply/>` постановщика) мелькал бы в стриме и пропадал
+                    // после перезагрузки страницы.
+                    if (entry is not null)
                     {
                         string? displayDelta;
                         lock (entry.TeamTurnLock)
                         {
                             entry.TeamTurnText.Append(m.Text);
-                            var safe = TrimAmbiguousMarkerTail(
-                                TrimUnresolvedMarkerOpen(StripTeamProtocolMarkers(entry.TeamTurnText.ToString())));
-                            if (safe.Length > entry.TeamTurnShownLength)
+                            if (!entry.TurnSawAngleBracket && m.Text.Contains('<'))
+                                entry.TurnSawAngleBracket = true;
+                            if (!entry.TurnSawAngleBracket)
                             {
-                                displayDelta = safe[entry.TeamTurnShownLength..];
-                                entry.TeamTurnShownLength = safe.Length;
+                                // Быстрый путь обычного чата: без '<' маркеру взяться неоткуда,
+                                // стрижка вернула бы тот же текст — не платим за ToString()
+                                // всего хода на каждой дельте.
+                                entry.TeamTurnShownLength += m.Text.Length;
+                                displayDelta = m.Text;
                             }
-                            else displayDelta = null;
+                            else
+                            {
+                                var safe = TrimAmbiguousMarkerTail(
+                                    TrimUnresolvedMarkerOpen(StripTeamProtocolMarkers(entry.TeamTurnText.ToString())));
+                                // Пока в очищенном тексте нет ни одного непробельного символа,
+                                // показывать нечего: ход, ответивший ровно маркером, не должен
+                                // родить в ленте пустой пузырь из «\n» вокруг маркера. Длину
+                                // показанного не двигаем — придержанные пробелы уйдут вместе с
+                                // первым настоящим текстом, если он появится.
+                                if (safe.Length > entry.TeamTurnShownLength && safe.Trim().Length > 0)
+                                {
+                                    displayDelta = safe[entry.TeamTurnShownLength..];
+                                    entry.TeamTurnShownLength = safe.Length;
+                                }
+                                else displayDelta = null;
+                            }
+                            // Всё накопленное показано и ничего не придержано — маркеру в
+                            // буфере взяться неоткуда. В обычном чате буфер нужен ровно для
+                            // показа, поэтому сжимаем его: иначе каждая следующая дельта
+                            // хода с кодом (там '<' на каждом шагу) пересканировала бы весь
+                            // ход целиком — квадрат по длине ответа. В штабе так нельзя:
+                            // там весь текст хода разбирается на маркеры в его конце.
+                            if (entry.Info.TeamImplement is null
+                                && entry.TeamTurnShownLength == entry.TeamTurnText.Length)
+                            {
+                                entry.TeamTurnText.Clear();
+                                entry.TeamTurnShownLength = 0;
+                                entry.TurnSawAngleBracket = false;
+                            }
                         }
                         if (string.IsNullOrEmpty(displayDelta)) sendBroadcast = false;
                         else msg = m with { Text = displayDelta };
@@ -7279,6 +7341,33 @@ public class SessionManager : IDisposable
             // (эскалация, новая работа) и переводим завершённую проверку в ожидание вводной.
             // В фоне по той же причине, что и цикл «до готово»: публикация карточки,
             // уведомление и планирование не должны держать read-loop адаптера.
+            // Буфер стрижки маркеров потребляем в ЛЮБОМ чате (он и копится везде): ход
+            // закончился — ждать больше нечего, и то, что живая трансляция придерживала как
+            // «вдруг это начало маркера» (TrimAmbiguousMarkerTail), дальше не дорастёт ни во
+            // что — довешиваем как обычный текст и обнуляем буфер под следующий ход.
+            var turnText = "";
+            var turnAsked = false;
+            if (msg is ResultMessage or ErrorMessage)
+            {
+                string? catchUpDelta;
+                lock (entry.TeamTurnLock)
+                {
+                    turnText = entry.TeamTurnText.ToString();
+                    var finalSafe = StripTeamProtocolMarkers(turnText);
+                    // Тот же гард, что в живой трансляции: ход, ответивший ровно маркером,
+                    // не должен догнать ленту пробелами вокруг вырезанного маркера.
+                    catchUpDelta = finalSafe.Length > entry.TeamTurnShownLength && finalSafe.Trim().Length > 0
+                        ? finalSafe[entry.TeamTurnShownLength..] : null;
+                    entry.TeamTurnShownLength = 0;
+                    entry.TeamTurnText.Clear();
+                    entry.TurnSawAngleBracket = false;
+                    turnAsked = entry.TeamTurnAsked;
+                    entry.TeamTurnAsked = false;
+                }
+                if (!string.IsNullOrEmpty(catchUpDelta))
+                    await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
+            }
+
             if (msg is ResultMessage or ErrorMessage && entry.Info.TeamImplement is not null)
             {
                 // Пара ErrorMessage(ExpectResultFollows)+ResultMessage одного хода (см. комментарий
@@ -7291,25 +7380,8 @@ public class SessionManager : IDisposable
                 else
                 {
                     if (msg is ErrorMessage { ExpectResultFollows: true }) entry.SkipNextTeamTurnEnd = true;
-                    string teamTurnText;
-                    bool teamTurnAsked;
-                    string? catchUpDelta;
-                    lock (entry.TeamTurnLock)
-                    {
-                        teamTurnText = entry.TeamTurnText.ToString();
-                        // Ход закончился — ждать больше нечего: то, что живая трансляция
-                        // придерживала как «вдруг это начало маркера» (TrimAmbiguousMarkerTail),
-                        // дальше не дорастёт ни во что — довешиваем как обычный текст.
-                        var finalSafe = StripTeamProtocolMarkers(teamTurnText);
-                        catchUpDelta = finalSafe.Length > entry.TeamTurnShownLength
-                            ? finalSafe[entry.TeamTurnShownLength..] : null;
-                        entry.TeamTurnShownLength = 0;
-                        entry.TeamTurnText.Clear();
-                        teamTurnAsked = entry.TeamTurnAsked;
-                        entry.TeamTurnAsked = false;
-                    }
-                    if (!string.IsNullOrEmpty(catchUpDelta))
-                        await BroadcastAsync(sessionId, new TextDeltaMessage(catchUpDelta));
+                    var teamTurnText = turnText;
+                    var teamTurnAsked = turnAsked;
                     var teamTurnFailed = msg is ErrorMessage or ResultMessage { Subtype: "error" };
                     _ = Task.Run(async () =>
                     {

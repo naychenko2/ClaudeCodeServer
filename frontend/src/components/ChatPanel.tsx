@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, Fragment, type HTMLAttributes } from 'react';
 import { ArrowDown, ArrowUp, RotateCw, CircleHelp } from 'lucide-react';
-import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
+import type { Project, Session, ChatItem, SkillInfo, AgentInfo, ClaudeBilling, Persona, Task, WorkLoopState, SessionTeamImplement, TeamPlanDecision } from '../types';
 import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
@@ -36,7 +36,7 @@ import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
@@ -67,6 +67,10 @@ interface Props {
   // Открыть URL в панели «Чтение» — из кнопки-компаньона у внешней ссылки (флаг link-reader).
   // Отсутствует — MarkdownContent не рисует кнопку вовсе, лента как без фичи
   onOpenReader?: (url: string) => void;
+  // Открыть задачу СПРАВА от ленты (split чат|задача в центре воркспейса) — из карточки
+  // доклада о выполнении. Отсутствует — рядом места нет (мобила, планшет, чат вне
+  // воркспейса), и карточка откроет детали модалкой
+  onOpenTaskAside?: (task: Task) => void;
   pendingMessage?: string;
   onPendingMessageSent?: () => void;
   onSessionUpdated?: (session: Session) => void;
@@ -171,7 +175,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -1665,7 +1669,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
           </>
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{visibleNodes}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{visibleNodes}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).

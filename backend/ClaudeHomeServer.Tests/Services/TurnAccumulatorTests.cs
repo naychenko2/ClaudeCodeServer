@@ -468,6 +468,53 @@ public class TurnAccumulatorTests : IDisposable
         string.Concat(texts).Should().Be("Собираю план, минуту <team:wo");
     }
 
+    // B4 «Доклада о завершении задачи»: постановщику нечего решать — ход отвечает ровно
+    // маркером молчания. В истории от такого хода не должно остаться ни одного поста:
+    // после стрижки текста нет, а пустой (пробельный) пост дал бы призрачный пузырь в ленте.
+    [Theory]
+    [InlineData("<no-reply/>")]
+    [InlineData("\n<no-reply/>\n")]
+    [InlineData("  <no-reply />  ")]
+    public async Task МаркерМолчания_ХодИзОдногоМаркера_НеПишетПостВИсторию(string turn)
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta(turn);
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        acc.GetAll().OfType<StoredTextMessage>().Should().BeEmpty();
+        var loaded = await _histSvc.LoadAsync(sessionId);
+        loaded.Should().ContainSingle().Which.Should().BeOfType<StoredResultMessage>(
+            "от пустого хода в истории остаётся только служебный итог хода, но не реплика");
+    }
+
+    // Снимок посреди хода (SaveSnapshotAsync после каждого tool_result) идёт тем же путём —
+    // маркер молчания не должен просочиться в историю до конца хода
+    [Fact]
+    public async Task МаркерМолчания_СнимокПосредиХода_НеПишетПостВИсторию()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta("<no-reply/>");
+        await acc.SaveSnapshotAsync(_histSvc);
+
+        acc.GetAll().OfType<StoredTextMessage>().Should().BeEmpty();
+    }
+
+    // Решение по делу есть — реплика сохраняется целиком, вырезан только маркер
+    [Fact]
+    public async Task МаркерМолчания_ПослеТекста_ТекстСохраняетсяЦеликом()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnTextDelta("Ставлю новую задачу на Дениса.");
+        acc.OnTextDelta("<no-reply/>");
+        await acc.OnResultAsync("success", 100, 1, null, null, null, null, _histSvc);
+
+        acc.GetAll().OfType<StoredTextMessage>().Select(m => m.Text)
+            .Should().ContainSingle().Which.Should().Be("Ставлю новую задачу на Дениса.");
+    }
+
     public void Dispose()
     {
         if (Directory.Exists(_tempDir))

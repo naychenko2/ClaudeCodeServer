@@ -818,11 +818,14 @@ export type ServerMessage = { sessionId: string } & (
   // null/отсутствует — ход идёт там, куда его отправил сервер
   | { type: 'session_started'; claudeSessionId: string; isResume: boolean; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   | { type: 'text_delta'; text: string }
-  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number }
+  // delegationTaskId — доклад о завершении делегированной задачи: id задачи структурным
+  // полем (см. ChatItem user_message), а не вытащенный из текста маркера
+  | { type: 'user_message'; text: string; attachedPaths?: string[]; senderPersonaId?: string; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; timestamp?: number; delegationTaskId?: string }
   // Гостевая реплика персоны без агентского хода (0 токенов) — доклад о завершении
   // делегированной задачи (модель Z); маркер доклада распознаётся на рендере (см.
   // lib/delegationReport.ts). Живой аналог StoredTextMessage.PersonaId из истории.
-  | { type: 'guest_text'; text: string; personaId: string; timestamp?: number }
+  // delegationTaskId — задача этого доклада (StoredTextMessage.DelegationTaskId)
+  | { type: 'guest_text'; text: string; personaId: string; timestamp?: number; delegationTaskId?: string }
   | { type: 'thinking_delta'; text: string }
   // Текст/thinking сабагента (Task/Agent) — целыми блоками, с привязкой к родительскому tool_use
   | { type: 'agent_text'; parentToolUseId: string; text: string }
@@ -1398,7 +1401,9 @@ export type ChatItem =
   // promptSnapshotId — снимок промпта, собранного для хода, который начался этим
   // сообщением: по нему шторка «какой промпт ушёл». Нет у истории до появления поля,
   // у ходов без нового сообщения и при сбое записи снимка
-  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string }
+  // delegationTaskId — доклад о завершении делегированной задачи: id задачи, к которой
+  // ведёт карточка доклада. Нет у обычных сообщений и у историй до появления поля
+  | { kind: 'user_message'; text: string; attachedPaths?: string[]; viaAgent?: boolean; senderPersonaId?: string; systemDirective?: boolean; auto?: boolean; senderOrigin?: string; senderChatName?: string; staffNote?: string; ts?: number; promptSnapshotId?: string; delegationTaskId?: string }
   | { kind: 'session_started'; model: string; mode: string; cwd?: string; toolCount?: number; mcpServers?: { name: string; status: string }[]; turnWorktree?: { path: string; name: string } | null }
   // personaId — авторство реплики (персона на момент хода); после смены собеседника
   // старые реплики сохраняют прежний аватар. Отсутствует у обычного ассистента.
@@ -1407,7 +1412,9 @@ export type ChatItem =
   // model — чем написан ИМЕННО этот пост: приходит из истории либо клеится на result
   // (модель хода известна только к его концу). ts — когда написан (Unix-мс UTC).
   // Оба необязательны: у старой истории их нет, у сабагентского текста модели нет
-  | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string; model?: string; ts?: number }
+  // delegationTaskId — реплика-доклад о завершении делегированной задачи (модель Z):
+  // по нему карточка доклада открывает задачу. Нет у обычных реплик и у старых историй
+  | { kind: 'text'; text: string; personaId?: string; parentToolUseId?: string; model?: string; ts?: number; delegationTaskId?: string }
   | { kind: 'thinking'; text: string; expanded: boolean; parentToolUseId?: string }
   // bgDone/bgAborted — завершение фонового агента (bg_agent_done / bgDone из истории);
   // workflowAborted — workflow восстановлен из истории прерванным (агенты уже не завершатся)

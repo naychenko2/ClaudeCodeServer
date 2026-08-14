@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { Persona, TeamPlanDecision } from '../../types';
+import type { Persona, Task, TeamPlanDecision } from '../../types';
 
 // Контекст текущего проекта — для резолва локальных путей картинок в сообщениях
 export const ChatProjectContext = createContext<{ id: string; rootPath: string } | null>(null);
@@ -20,6 +20,13 @@ export const ChatOpenFileContext = createContext<((path: string) => void) | null
 // null — фича выключена (флаг link-reader) или чат не поддерживает ридер: ссылки
 // ведут себя как раньше (новая вкладка), кнопка-компаньон не рисуется.
 export const ChatOpenReaderContext = createContext<((url: string) => void) | null>(null);
+
+// Открыть задачу РЯДОМ с лентой — правой половиной центральной зоны воркспейса, тем же
+// приёмом, что открытый файл и «Чтение» (split чат|деталь): разговор остаётся перед
+// глазами. Контекстом, а не пропом — карточка доклада сидит глубоко в ленте.
+// null — места рядом нет (мобила, планшет, чат вне воркспейса): карточка показывает
+// детали задачи модалкой поверх ленты, как раньше.
+export const ChatOpenTaskContext = createContext<((task: Task) => void) | null>(null);
 
 // Id текущей сессии — шторке «какой промпт ушёл» под постом: она грузит снимок по REST,
 // а ChatItemView сидит глубоко в ленте и id сессии пропом не получает.

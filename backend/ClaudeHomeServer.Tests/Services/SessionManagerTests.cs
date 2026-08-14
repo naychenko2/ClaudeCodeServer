@@ -73,6 +73,11 @@ public class SessionManagerTests : IDisposable
                 // Профиль CLI внутри temp — иначе уборка транскриптов при удалении чата
                 // (DeleteAsync) полезла бы в настоящий ~/.claude пользователя
                 ["ClaudeUserProfileDir"] = Path.Combine(_tempDir, "claude-profile"),
+                // Сторонний провайдер glm — для тестов пересчёта Provider по модели
+                // (инцидент 14.08.2026: пара «модель × провайдер» из разных шагов цепочки)
+                ["LlmProviders:glm:ApiKey"] = "sk-test",
+                ["LlmProviders:glm:AnthropicBaseUrl"] = "https://glm.example.com",
+                ["LlmProviders:glm:Models:0:Id"] = "glm-5.2",
                 // Сериализация отложенной доставки на смерти (Ф1) — в тестах отключена: StubAdapter
                 // держит HasLiveTurn=true вечно, без этого ключа drain-тесты ждали бы потолок.
                 ["Delivery:AwaitProcessExitSeconds"] = "0"
@@ -418,6 +423,41 @@ public class SessionManagerTests : IDisposable
         updated!.Name.Should().Be("N2");
         updated.Model.Should().Be("sonnet");
         updated.Effort.Should().Be("low");
+    }
+
+    [Fact]
+    public async Task Update_СторонняяМодельНаClaude_ПровайдерВозвращаетсяВПул()
+    {
+        // Инцидент 14.08.2026 (прод, чат c20746b9): пересчёт Provider был только «в стороннего»,
+        // и смена модели glm→opus[1m] (пилюля «Модель» в NewChatSetup до первого хода) оставляла
+        // пару (Claude-модель, ключ glm) — CLI стартовал в профиле glm с моделью Anthropic →
+        // мгновенный 401 «OAuth session expired».
+        var dir = MkProjectDir("upd4");
+        var project = _projectManager.Create("UPD4", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "glm-5.2", effort: "high");
+        session.Provider.Should().Be("glm", "сторонняя модель на создании → ключ её провайдера");
+
+        var updated = _sut.Update(session.Id, name: null, model: "opus[1m]", effort: null);
+
+        updated!.Model.Should().Be("opus[1m]");
+        updated.Provider.Should().Be("claude",
+            "родная Claude-модель → ключ из пула (пустой пул → PrimaryKey), а не застрявший glm");
+    }
+
+    [Fact]
+    public async Task Update_ClaudeМодельНаСтороннюю_ПровайдерСторонний()
+    {
+        // Обратное направление того же инварианта: модель — единственный источник правды,
+        // Provider выводится из неё в обе стороны.
+        var dir = MkProjectDir("upd5");
+        var project = _projectManager.Create("UPD5", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto, name: "N", model: "opus", effort: "high");
+        session.Provider.Should().Be("claude", "Claude-модель при пустом пуле → PrimaryKey");
+
+        var updated = _sut.Update(session.Id, name: null, model: "glm-5.2", effort: null);
+
+        updated!.Model.Should().Be("glm-5.2");
+        updated.Provider.Should().Be("glm");
     }
 
     [Fact]

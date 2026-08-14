@@ -986,12 +986,25 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 
     // Перенос транскрипта в профиль целевой пары (тот же механизм, что у ручной миграции
     // MigrateProviderAsync и автофейловера TryPoolFailover). Ход ещё не начинался —
-    // переносить нечего. Не удалось — кандидат пропускается (fail-closed)
+    // переносить нечего. Ошибка копирования — кандидат пропускается (fail-closed)
     private bool TryMigrateTranscript(string? dstRoot)
     {
         if (Info.ClaudeSessionId is null) return true;
         if (_profileRoot is null || dstRoot is null) return false;
         if (ResolveCwd() is not { } cwd) return false; // папка вне монтирований песочницы
+        // Транскрипта нет в источнике ВООБЩЕ: CLI умер до первой записи в .jsonl (мгновенная
+        // AuthFailure — основной сценарий фолбэка: 401 приходит за ~100-400мс, CLI не успевает
+        // создать файл). Переносить нечего — кандидат допустим: --resume на нём начнёт разговор
+        // так же, как начал бы его и текущая пара. Fail-closed здесь отсекал ВСЕХ кандидатов и
+        // делал AuthFailure-фолбэк структурно невозможным (инцидент 14.08.2026: ход с
+        // «OAuth session expired» не ушёл по цепочке при живых шагах). Сам
+        // TranscriptMigrator.TryMigrate остаётся fail-closed — для явной миграции (SwitchProvider)
+        // «файла нет» должно быть ошибкой; здесь меняется только интерпретация кандидата.
+        if (TranscriptMigrator.FindTranscript(_profileRoot, cwd, Info.ClaudeSessionId) is null)
+        {
+            LogInfo($"Транскрипт {Info.ClaudeSessionId} не найден в {_profileRoot} — CLI умер до первой записи, переносить нечего");
+            return true;
+        }
         if (!TranscriptMigrator.TryMigrate(_profileRoot, dstRoot, cwd, Info.ClaudeSessionId, out var error))
         {
             LogWarn($"Транскрипт {Info.Id} не перенесён {dstRoot}: {error}");

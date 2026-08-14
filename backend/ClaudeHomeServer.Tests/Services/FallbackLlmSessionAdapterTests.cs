@@ -1925,8 +1925,11 @@ public class FallbackLlmSessionAdapterTests
     }
 
     // Major, fail-open: при провале переноса транскрипта стартовая подмена НЕ применяется —
-    // остаёмся на исходной паре, и ход идёт (кулдаун — наблюдение, а не запрет). Здесь транскрипта
-    // нет нигде → TryMigrateTranscript возвращает false → подмена отменяется, попытка уходит на p-dead.
+    // остаёмся на исходной паре, и ход идёт (кулдаун — наблюдение, а не запрет). Здесь транскрипт
+    // есть в источнике, но приёмник заблокирован (по пути целевого файла лежит ДИРЕКТОРИЯ) →
+    // копия падает → TryMigrateTranscript(false) → подмена отменяется, попытка уходит на p-dead.
+    // (До фикса инцидента 14.08.2026 провалом считалось и «транскрипта нет в источнике» —
+    // теперь это «переносить нечего», поэтому ошибку копии приходится устраивать блокировкой.)
     [Fact]
     public async Task СтартоваяПодмена_ПровалПереноса_FailOpen_ОстаётсяНаИсходнойПаре()
     {
@@ -1951,8 +1954,15 @@ public class FallbackLlmSessionAdapterTests
             health.MarkUnavailable("p-dead");
             var rootPath = Path.Combine(baseDir, "workdir");
             Directory.CreateDirectory(rootPath);
-            // ClaudeSessionId задан, но транскрипта НЕТ нигде → TryMigrateTranscript(false).
-            var session = new Session { Model = "m-dead", Provider = "p-dead", ClaudeSessionId = "csid-open" };
+            // Транскрипт ЕСТЬ в источнике, но в приёмнике по пути целевого файла создана
+            // ДИРЕКТОРИЯ {csid}.jsonl — копия упадёт на любой ОС → TryMigrateTranscript(false).
+            const string csid = "csid-open";
+            var flat = TranscriptMigrator.FlattenCwd(rootPath);
+            var deadDir = Path.Combine(baseDir, "claude-profiles", "p-dead", "projects", flat);
+            Directory.CreateDirectory(deadDir);
+            File.WriteAllText(Path.Combine(deadDir, csid + ".jsonl"), "HISTORY");
+            Directory.CreateDirectory(Path.Combine(baseDir, "claude-profiles", "p-alive", "projects", flat, csid + ".jsonl"));
+            var session = new Session { Model = "m-dead", Provider = "p-dead", ClaudeSessionId = csid };
             var inner = new FakeInnerAdapter(session);
             var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
                 msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
@@ -2562,5 +2572,67 @@ public class FallbackLlmSessionAdapterTests
         inner.Attempts[1].Should().Be(("p2", "m2"), "плохой ключ p1 обойдён через шаг цепочки");
         health.IsUnavailable("p1").Should().BeTrue("плохой ключ стороннего — кулдаун");
         Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle();
+    }
+
+    // Регрессия инцидента 14.08.2026 (прод, чат c20746b9): мгновенная AuthFailure (CLI умер за
+    // секунды, не успев создать .jsonl) при живых шагах цепочки НЕ уходила на следующий шаг —
+    // TryMigrateTranscript был fail-closed при отсутствии транскрипта и отсекал ВСЕХ кандидатов.
+    // Теперь «транскрипта нет в источнике» = переносить нечего → кандидат допустим. Текст ошибки
+    // — дословно продовый, apiErrorStatus пуст (классификация по тексту, TurnErrorClassifier).
+    [Fact]
+    public async Task AuthFailureМгновенная_ТранскриптНеСоздан_УходНаШагЦепочки()
+    {
+        var baseDir = Path.Combine(Path.GetTempPath(), "ccs_fb_auth_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(baseDir);
+        try
+        {
+            var dict = new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(baseDir, "projects.json"),
+                ["ClaudeUserProfileDir"] = Path.Combine(baseDir, "user-claude"),
+                ["LlmProviders:p-dead:ApiKey"] = "sk-d",
+                ["LlmProviders:p-dead:AnthropicBaseUrl"] = "https://d.example.com",
+                ["LlmProviders:p-dead:Models:0:Id"] = "m-dead",
+                ["LlmProviders:p-alive:ApiKey"] = "sk-a",
+                ["LlmProviders:p-alive:AnthropicBaseUrl"] = "https://a.example.com",
+                ["LlmProviders:p-alive:Models:0:Id"] = "m-alive",
+            };
+            var providers = new LlmProviderRegistry(new ConfigurationBuilder().AddInMemoryCollection(dict).Build());
+            var pool = BuildPool();                    // без подписок пула — только цепочка
+            var health = new ProviderHealthRegistry();
+            var rootPath = Path.Combine(baseDir, "workdir");
+            Directory.CreateDirectory(rootPath);
+            // ClaudeSessionId уже назначен (session_started пришёл), но файла транскрипта НЕТ
+            // нигде — CLI умер от 401 до первой записи в .jsonl.
+            var session = new Session { Model = "m-dead", Provider = "p-dead", ClaudeSessionId = "csid-auth" };
+            var inner = new FakeInnerAdapter(session);
+            var sut = new FallbackLlmSessionAdapter(inner, () => session.Model,
+                msg => { lock (_downstream) _downstream.Add(msg); return Task.CompletedTask; },
+                pool, providers, rootPath, launcher: null, initialProfileRoot: null,
+                effectiveChain: () => new[] { "m-dead", "m-alive" }, health: health);
+            inner.Sink = sut.HandleMessageAsync;
+            inner.Scripts.Enqueue(() =>
+            {
+                inner.Emit(new ErrorMessage(
+                    "Failed to authenticate: OAuth session expired and could not be refreshed",
+                    ExpectResultFollows: true));
+                inner.Emit(Success());   // apiErrorStatus пуст — как на проде
+            });
+            inner.Scripts.Enqueue(() => inner.Emit(Success()));   // m-alive — успех
+
+            await sut.SendMessageAsync("сделай");
+            await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(r => r.Subtype == "success"),
+                "успех на m-alive");
+            await WaitForAsync(() => !sut.FallbackTurnActive, "restore");
+
+            inner.Attempts.Should().HaveCount(2, "первый шаг + переход на живой шаг цепочки");
+            inner.Attempts[1].Should().Be(("p-alive", "m-alive"),
+                "AuthFailure уводит ход на следующий шаг цепочки — отсутствие транскрипта не блокирует");
+            Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle(
+                "шаг цепочки = смена поставщика, маркер обязателен");
+            Downstream().OfType<ResultMessage>().Should().ContainSingle()
+                .Which.Subtype.Should().Be("success");
+        }
+        finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
     }
 }

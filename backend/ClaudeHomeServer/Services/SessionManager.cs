@@ -3869,14 +3869,21 @@ public class SessionManager : IDisposable
             // В Info.Model кладём именно то, что выбрали: null = «следовать настройке»
             // (резолвится на каждом ходу, смена настройки подхватывается сама)
             entry.Info.Model = newModel;
-            // При смене модели на стороннего провайдера — обновляем Provider
+            // Провайдер ВСЕГДА выводится из модели (комментарий LlmProviderRegistry: модель —
+            // единственный источник правды, Provider не персистится как самостоятельное значение).
+            // Инцидент 14.08.2026: пересчёт был только «в стороннего», и смена glm→opus[1m]
+            // (пилюля модели в NewChatSetup до первого хода) оставляла пару (Claude-модель, ключ
+            // glm) — CLI стартовал в профиле glm с моделью Anthropic → мгновенный 401.
             if (effectiveNew is not null && _llmProviders.ResolveByModel(effectiveNew) is { } newProv)
                 entry.Info.Provider = newProv.Key;
-            // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): модель меняем на
-            // лету у живого хода — применится к его последующим round-trip'ам. У сторонних
-            // провайдеров модель зашита в env процесса, там смена только со следующего хода.
+            // Родной Claude (ResolveByModel == null, в т.ч. пул подписок): ключ — из пула
+            // (Pick сам отфильтрует исчерпанные/auth-dead, при пустом пуле — PrimaryKey),
+            // модель меняем на лету у живого хода — применится к его последующим round-trip'ам.
             else if (effectiveNew is not null)
+            {
+                entry.Info.Provider = _subscriptionPool.Pick(effectiveNew);
                 entry.Process?.TrySetModelLive(effectiveNew);
+            }
         }
 
         if (name is not null)

@@ -28,25 +28,60 @@ public class SessionChangedPathsTests
     {
         var messages = new List<StoredMessage> { new StoredFileChangedMessage("Src\\App.CS", 1, 0) };
 
-        SessionChangedPaths.Extract(messages, Root).Should().BeEquivalentTo(["src/app.cs"]);
+        SessionChangedPaths.Extract(messages, Root).Keys.Should().BeEquivalentTo(["src/app.cs"]);
     }
 
-    // Ведущий "./" срезается — как фронтовый computeChangedPaths (path.replace(/^\.\//, ''))
+    // Ведущий "./" срезается — как фронтовый экстрактор (path.replace(/^\.\//, ''))
     [Fact]
     public void Extract_FileChanged_СрезаетВедущуюТочкуСлэш()
     {
         var messages = new List<StoredMessage> { new StoredFileChangedMessage("./src/app.ts", 1, 0) };
 
-        SessionChangedPaths.Extract(messages, Root).Should().BeEquivalentTo(["src/app.ts"]);
+        SessionChangedPaths.Extract(messages, Root).Keys.Should().BeEquivalentTo(["src/app.ts"]);
     }
 
-    // [намеренное расхождение] External=true — правка вне хода, фронт её включает (computeChangedPaths), индекс — нет
+    // External=true (правка вне заявленного хода — Bash/скрипты модели, человек в IDE)
+    // ВКЛЮЧАЕТСЯ со значением true: фильтру «только файлы чата» она нужна, бейдж
+    // «Также меняли» отсекает её на стороне потребителя (SessionRef.External)
     [Fact]
-    public void Extract_FileChangedExternal_Исключается()
+    public void Extract_FileChangedExternal_ВключаетсяСоЗначениемTrue()
     {
         var messages = new List<StoredMessage> { new StoredFileChangedMessage("src/app.cs", 1, 0, external: true) };
 
-        SessionChangedPaths.Extract(messages, Root).Should().BeEmpty();
+        SessionChangedPaths.Extract(messages, Root)
+            .Should().BeEquivalentTo(new Dictionary<string, bool> { ["src/app.cs"] = true });
+    }
+
+    // Слияние по пути: false побеждает — чат правил файл и Edit-ом, и Bash-ом
+    // в разных ходах → запись «сильная» (не external), порядок сообщений не важен
+    [Fact]
+    public void Extract_СлияниеExternal_FalseПобеждает()
+    {
+        var externalThenDirect = new List<StoredMessage>
+        {
+            new StoredFileChangedMessage("src/app.cs", 1, 0, external: true),
+            new StoredFileChangedMessage("src/app.cs", 1, 0),
+        };
+        var directThenExternal = new List<StoredMessage>
+        {
+            new StoredFileChangedMessage("src/app.cs", 1, 0),
+            new StoredFileChangedMessage("src/app.cs", 1, 0, external: true),
+        };
+
+        SessionChangedPaths.Extract(externalThenDirect, Root)
+            .Should().BeEquivalentTo(new Dictionary<string, bool> { ["src/app.cs"] = false });
+        SessionChangedPaths.Extract(directThenExternal, Root)
+            .Should().BeEquivalentTo(new Dictionary<string, bool> { ["src/app.cs"] = false });
+    }
+
+    // tool_use из WriteTools — заявленная правка хода: external=false
+    [Fact]
+    public void Extract_ToolUse_ДаётExternalFalse()
+    {
+        var tool = new StoredToolUseMessage { Name = "Edit", Input = ToolInput(new { file_path = $"{Root}/src/a.ts" }) };
+
+        SessionChangedPaths.Extract([tool], Root)
+            .Should().BeEquivalentTo(new Dictionary<string, bool> { ["src/a.ts"] = false });
     }
 
     [Theory]
@@ -60,7 +95,7 @@ public class SessionChangedPathsTests
     {
         var tool = new StoredToolUseMessage { Name = toolName, Input = ToolInput(new { file_path = $"{Root}/src/a.ts" }) };
 
-        SessionChangedPaths.Extract([tool], Root).Should().BeEquivalentTo(["src/a.ts"]);
+        SessionChangedPaths.Extract([tool], Root).Keys.Should().BeEquivalentTo(["src/a.ts"]);
     }
 
     // Инструмент вне белого списка (например Read/Bash) — не источник правки
@@ -77,7 +112,7 @@ public class SessionChangedPathsTests
     {
         var tool = new StoredToolUseMessage { Name = "NotebookEdit", Input = ToolInput(new { notebook_path = $"{Root}/nb.ipynb" }) };
 
-        SessionChangedPaths.Extract([tool], Root).Should().BeEquivalentTo(["nb.ipynb"]);
+        SessionChangedPaths.Extract([tool], Root).Keys.Should().BeEquivalentTo(["nb.ipynb"]);
     }
 
     [Fact]
@@ -85,7 +120,7 @@ public class SessionChangedPathsTests
     {
         var tool = new StoredToolUseMessage { Name = "write_file", Input = ToolInput(new { path = $"{Root}/legacy.txt" }) };
 
-        SessionChangedPaths.Extract([tool], Root).Should().BeEquivalentTo(["legacy.txt"]);
+        SessionChangedPaths.Extract([tool], Root).Keys.Should().BeEquivalentTo(["legacy.txt"]);
     }
 
     // Абсолютный путь ВНЕ rootPath — не файл проекта, отбрасывается
@@ -152,7 +187,7 @@ public class SessionChangedPathsTests
             new StoredFileChangedMessage("src/back-in-root.ts", 1, 0),
         };
 
-        SessionChangedPaths.Extract(messages, Root).Should().BeEquivalentTo(["src/back-in-root.ts"]);
+        SessionChangedPaths.Extract(messages, Root).Keys.Should().BeEquivalentTo(["src/back-in-root.ts"]);
     }
 
     // Сброс пропуска сообщением пользователя (начало нового хода в основном дереве)
@@ -167,7 +202,7 @@ public class SessionChangedPathsTests
             new StoredFileChangedMessage("src/after-user.ts", 1, 0),
         };
 
-        SessionChangedPaths.Extract(messages, Root).Should().BeEquivalentTo(["src/after-user.ts"]);
+        SessionChangedPaths.Extract(messages, Root).Keys.Should().BeEquivalentTo(["src/after-user.ts"]);
     }
 
     // Дедуп: один и тот же файл разным регистром из разных источников — одна запись (lowercase)
@@ -180,6 +215,6 @@ public class SessionChangedPathsTests
             new StoredToolUseMessage { Name = "Edit", Input = ToolInput(new { file_path = $"{Root}/src/app.ts" }) },
         };
 
-        SessionChangedPaths.Extract(messages, Root).Should().BeEquivalentTo(["src/app.ts"]);
+        SessionChangedPaths.Extract(messages, Root).Keys.Should().BeEquivalentTo(["src/app.ts"]);
     }
 }

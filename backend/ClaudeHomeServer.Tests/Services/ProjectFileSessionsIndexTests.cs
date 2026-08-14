@@ -208,6 +208,79 @@ public class ProjectFileSessionsIndexTests : IClassFixture<TestWebApplicationFac
         });
     }
 
+    // --- Вычитание CommittedFilePaths: атрибуция = сырое множество МИНУС зафиксированное ---
+
+    // Пометка «правки уже в git» исключает путь из ответа; новая правка (UnmarkFileCommitted)
+    // возвращает его. Вычитание — ПОСЛЕ кеша: пометка меняется без сдвига LastWriteUtc истории
+    [Fact]
+    public async Task GetForProjectAsync_ЗафиксированныйПуть_ВычитаетсяИВозвращаетсяПослеUnmark()
+    {
+        var project = MakeProject("committed");
+        var s = await MakeSessionAsync(project.Id, "pfsi-comm-1");
+        await _history.SaveAsync(s.ClaudeSessionId!,
+            [new StoredFileChangedMessage("src/a.ts", 1, 0), new StoredFileChangedMessage("src/b.ts", 1, 0)]);
+
+        _sessions.MarkFilesCommitted([(s.Id, ["src/a.ts"], ["src/a.ts", "src/b.ts"])]);
+
+        var afterCommit = await _sut.GetForProjectAsync(project.Id, ["src/a.ts", "src/b.ts"]);
+        afterCommit.Should().NotContainKey("src/a.ts", "правки по пути зафиксированы — чат больше не числится");
+        afterCommit.Should().ContainKey("src/b.ts", "частичный коммит не трогает остальные пути чата");
+
+        _sessions.UnmarkFileCommitted(s.Id, "src/a.ts");
+
+        var afterEdit = await _sut.GetForProjectAsync(project.Id, ["src/a.ts", "src/b.ts"]);
+        afterEdit.Should().ContainKey("src/a.ts", "новая правка возвращает путь в атрибуцию");
+    }
+
+    // External проезжает в SessionRef: правка вне заявленного хода — запись External=true,
+    // правка write-инструментом — false (фронт по этому режет бейдж, но не фильтр)
+    [Fact]
+    public async Task GetForProjectAsync_External_ПробрасываетсяВSessionRef()
+    {
+        var project = MakeProject("external");
+        var s = await MakeSessionAsync(project.Id, "pfsi-ext-1");
+        await _history.SaveAsync(s.ClaudeSessionId!,
+        [
+            new StoredFileChangedMessage("src/ext.ts", 1, 0, external: true),
+            new StoredFileChangedMessage("src/mine.ts", 1, 0),
+        ]);
+
+        var result = await _sut.GetForProjectAsync(project.Id, ["src/ext.ts", "src/mine.ts"]);
+
+        result["src/ext.ts"].Single().External.Should().BeTrue();
+        result["src/mine.ts"].Single().External.Should().BeFalse();
+    }
+
+    // Сырые множества для детекта коммита (CommitAttributionService): вычитание НЕ применяется —
+    // пересечение путей коммита должно считаться от полного множества чата
+    [Fact]
+    public async Task GetSessionPathsAsync_ОтдаётСырыеМножества_БезВычитания()
+    {
+        var project = MakeProject("raw");
+        var s = await MakeSessionAsync(project.Id, "pfsi-raw-1");
+        await _history.SaveAsync(s.ClaudeSessionId!, [new StoredFileChangedMessage("src/a.ts", 1, 0)]);
+        _sessions.MarkFilesCommitted([(s.Id, ["src/a.ts"], ["src/a.ts"])]);
+
+        var result = await _sut.GetSessionPathsAsync(project.Id);
+
+        result.Single(x => x.Session.Id == s.Id).Paths.Keys.Should().Contain("src/a.ts");
+    }
+
+    // Протухшая пометка (пути нет в сыром множестве — история переписана) на чтении просто
+    // игнорируется, не мешая остальной атрибуции
+    [Fact]
+    public async Task GetForProjectAsync_ПометкаВнеСырогоМножества_Игнорируется()
+    {
+        var project = MakeProject("stale-mark");
+        var s = await MakeSessionAsync(project.Id, "pfsi-stale-mark-1");
+        await _history.SaveAsync(s.ClaudeSessionId!, [new StoredFileChangedMessage("src/live.ts", 1, 0)]);
+        _sessions.GetById(s.Id)!.CommittedFilePaths = ["src/gone.ts"];
+
+        var result = await _sut.GetForProjectAsync(project.Id, ["src/live.ts", "src/gone.ts"]);
+
+        result.Should().ContainKey("src/live.ts");
+    }
+
     private string HistoryPath(string claudeSessionId) =>
         Path.Combine(_historiesDir, claudeSessionId, "history.json");
 }

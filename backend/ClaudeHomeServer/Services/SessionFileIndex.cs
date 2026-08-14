@@ -17,22 +17,28 @@ public static class SessionChangedPaths
         "Write", "Edit", "MultiEdit", "NotebookEdit", "write_file", "edit_file",
     };
 
+    // Инструмент из белого списка прямой правки — общая точка для Extract и снятия
+    // пометки CommittedFilePaths (SessionManager.OnMessageAsync).
+    public static bool IsWriteTool(string name) => WriteTools.Contains(name);
+
     // Относительные пути (прямые слэши, lowercase), изменённые чатом, — по его истории.
+    // Значение — External: true, если файл менялся ТОЛЬКО вне заявленного хода (Bash/скрипты
+    // модели либо человек в IDE во время хода); правка через Edit/Write или file_changed
+    // с External=false побеждает (false сильнее true при слиянии). Потребители:
+    // бейдж «Также меняли» берёт лишь External=false (внешняя правка к чату не привязана),
+    // фильтр «только файлы чата» — все записи активного чата.
     //
     // [общий с фронтом] StoredFileChangedMessage / StoredToolUseMessage из WriteTools —
-    // то же множество источников, что computeChangedPaths (frontend/src/hooks/useSessionArtifacts.ts).
-    // [намеренное расхождение] External=true (правка вне заявленного хода — Bash/скрипты
-    // модели либо человек в IDE во время хода) здесь ИСКЛЮЧАЕТСЯ, фронт её включает: индекс
-    // отвечает на вопрос «что менял именно этот ЧАТ своим ходом», внешняя правка к чату не привязана.
+    // то же множество источников, что у фронтового фильтра (ранее computeChangedPaths).
     // [намеренное расхождение] пути хода, ушедшего в чужое git worktree (TurnWorktree != null),
-    // тоже исключаются — они относятся к другому дереву, а не к rootPath проекта, и
+    // исключаются — они относятся к другому дереву, а не к rootPath проекта, и
     // отношения к «этот файл в ЭТОМ проекте менял чат X» не имеют.
     //
     // Зеркало значимого подмножества кейсов во фронтовом тесте —
     // frontend/src/lib/__tests__/git.changedBy.test.ts (там же обратная ссылка сюда).
-    public static HashSet<string> Extract(IReadOnlyList<StoredMessage> messages, string rootPath)
+    public static Dictionary<string, bool> Extract(IReadOnlyList<StoredMessage> messages, string rootPath)
     {
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         // Пропуск хода в чужом worktree: включается session_started с TurnWorktree,
         // сбрасывается либо следующим session_started БЕЗ TurnWorktree, либо любым
         // сообщением пользователя (начало нового хода в основном дереве)
@@ -47,26 +53,35 @@ public static class SessionChangedPaths
                 case StoredUserMessage:
                     skippingWorktreeTurn = false;
                     break;
-                case StoredFileChangedMessage { External: false } fc when !skippingWorktreeTurn:
-                    result.Add(Normalize(fc.Path));
+                case StoredFileChangedMessage fc when !skippingWorktreeTurn:
+                    Add(result, Normalize(fc.Path), fc.External);
                     break;
                 case StoredToolUseMessage tu when !skippingWorktreeTurn && WriteTools.Contains(tu.Name):
-                    if (ExtractToolPath(tu.Input) is { } raw && ToRelative(raw, rootPath) is { } rel)
-                        result.Add(Normalize(rel));
+                    if (NormalizedToolPath(tu.Input, rootPath) is { } rel)
+                        Add(result, rel, external: false);
                     break;
             }
         }
         return result;
     }
 
-    // Прямые слэши, срез ведущего "./" (как фронтовый computeChangedPaths — см.
+    // Слияние по пути: false (правка своим ходом) побеждает true (только внешняя)
+    private static void Add(Dictionary<string, bool> result, string path, bool external) =>
+        result[path] = result.TryGetValue(path, out var wasExternal) ? wasExternal && external : external;
+
+    // Прямые слэши, срез ведущего "./" (как фронтовый экстрактор — см.
     // path.replace(/^\.\//, '') в useSessionArtifacts.ts) и lowercase
-    private static string Normalize(string path)
+    public static string Normalize(string path)
     {
         var p = path.Replace('\\', '/');
         if (p.StartsWith("./", StringComparison.Ordinal)) p = p[2..];
         return p.ToLowerInvariant();
     }
+
+    // Путь write-инструмента → нормализованный относительный путь проекта (null — вне
+    // корня / не извлекается). Общая точка для Extract и снятия пометки CommittedFilePaths.
+    public static string? NormalizedToolPath(object? input, string rootPath) =>
+        ExtractToolPath(input) is { } raw && ToRelative(raw, rootPath) is { } rel ? Normalize(rel) : null;
 
     // file_path ?? notebook_path ?? path — как extractToolPath на фронте. Input после
     // десериализации истории — JsonElement; null/другой тип/без нужных свойств — тихо null.

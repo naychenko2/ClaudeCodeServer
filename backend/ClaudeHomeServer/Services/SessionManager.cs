@@ -94,6 +94,12 @@ public class SessionManager : IDisposable
         // Контекст адаптера устарел (смена собеседника / правка персоны) — убирается
         // ЛЕНИВО перед следующим ходом, чтобы не рвать активный ход и доживающих агентов
         public volatile bool AdapterStale;
+        // Текущий ход идёт в чужом git worktree (session_started с TurnWorktree): правки
+        // такого хода живут в другом дереве и пометку «зафиксировано в git»
+        // (CommittedFilePaths) с путей КОРНЯ не снимают — зеркало гейта
+        // SessionChangedPaths.Extract. Взводится/сбрасывается session_started,
+        // сбрасывается сообщением пользователя (начало нового хода в основном дереве).
+        public volatile bool TurnInWorktree;
         // Одиночный per-turn ожидатель хода (SendMessageAndWaitAsync): резолвится в
         // OnMessageAsync на result/error/exited и безусловно обнуляется (Interlocked)
         public TaskCompletionSource<TurnResult>? TurnWaiter;
@@ -775,9 +781,11 @@ public class SessionManager : IDisposable
     // работе хуже вечного active — синтез панели прилетел бы в «завершённый» чат. Планировщик
     // штаба (TeamPlanningInFlight, до 300 с без CLI-прогона) и активная итерация цикла
     // (LoopTurnInFlight) гейтятся отдельно — фоновые режимы между ходами, не держащие прогон.
-    // ApplyStatusAsync запускаем через Task.Run ВНЕ _saveLock: иначе его SaveSessions взяла бы
-    // лок повторно (System.Threading.Lock не реентерабелен). Порядок локов _saveLock→PendingLock
-    // консистентен, обратного нигде нет.
+    // ApplyStatusAsync запускаем через Task.Run ВНЕ _saveLock: это асинхронный бродкаст с
+    // повторной записью стора — держать его под локом пути сохранения незачем (сам
+    // System.Threading.Lock реентерабелен, вложенный SaveSessions не клинил бы, но await
+    // под локом невозможен, а удлинять критическую секцию sweep'а нет смысла). Порядок
+    // локов _saveLock→PendingLock консистентен, обратного нигде нет.
     private void TrySweepStuckActive(SessionEntry entry, HashSet<string> protectedByLiveSubtree)
     {
         if (entry.Info.Status != SessionStatus.Active) return;
@@ -1395,6 +1403,79 @@ public class SessionManager : IDisposable
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         entry.Info.SummaryNoteId = noteId;
         SaveSessions();
+    }
+
+    // Пометить пути чатов «правки зафиксированы в git» (детект сдвига HEAD —
+    // CommitAttributionService). Bulk: ОДИН SaveSessions на весь коммит — SaveSessions
+    // перезаписывает весь sessions.json, звать его в цикле по чатам недопустимо.
+    // Paths — пути коммита, пересечённые с сырым множеством чата (считает вызывающий);
+    // RawPaths — само сырое множество: пометки, выпавшие из него (история переписана),
+    // вычищаются здесь же — на чтении индекс их только игнорирует, стор не переписывая.
+    // Инвариант: UpdatedAt не двигаем (по нему сортировка и непрочитанность,
+    // а фиксация правок — не активность чата). Пути — нормализованные (lowercase,
+    // прямые слэши); список подменяется целиком, а не мутируется на месте, чтобы
+    // конкурентная сериализация SaveSessions не увидела список в полразборе.
+    public void MarkFilesCommitted(
+        IReadOnlyList<(string SessionId, IReadOnlyCollection<string> Paths, IReadOnlyCollection<string> RawPaths)> batch)
+    {
+        // Общий лок с UnmarkFileCommitted: пометка (поток статуса) и снятие (петля сообщений
+        // хода) делают read-modify-write одного списка — без лока коммит ровно в момент
+        // правки того же файла терял бы обновление. _saveLock (System.Threading.Lock)
+        // реентерабелен (подсчёт рекурсии): вложенный SaveSessions берёт его повторно без клинча.
+        lock (_saveLock)
+        {
+            var changed = false;
+            foreach (var (sessionId, paths, rawPaths) in batch)
+            {
+                if (!_sessions.TryGetValue(sessionId, out var entry)) continue;
+                var current = new HashSet<string>(entry.Info.CommittedFilePaths, StringComparer.Ordinal);
+                var next = new HashSet<string>(current, StringComparer.Ordinal);
+                next.UnionWith(paths);
+                next.IntersectWith(rawPaths is HashSet<string> h ? h : [.. rawPaths]);
+                if (next.SetEquals(current)) continue;
+                entry.Info.CommittedFilePaths = [.. next.Order()];
+                changed = true;
+            }
+            if (changed) SaveSessions();
+        }
+    }
+
+    // Вернуть путь в учёт атрибуции: чат снова правит файл после фиксации. Сидит на
+    // ГОРЯЧЕМ пути (каждое write-сообщение хода) — ранний выход без записи, когда
+    // пометки нет. path — уже нормализованный (SessionChangedPaths.Normalize).
+    // UpdatedAt не двигаем (см. MarkFilesCommitted).
+    public void UnmarkFileCommitted(string sessionId, string path)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        // Быстрая проверка ДО лока — горячий путь (каждое write-сообщение хода) не должен
+        // толкаться с пометкой коммита; под локом перепроверяется (см. MarkFilesCommitted)
+        if (!entry.Info.CommittedFilePaths.Contains(path, StringComparer.Ordinal)) return;
+        lock (_saveLock)
+        {
+            if (!entry.Info.CommittedFilePaths.Contains(path, StringComparer.Ordinal)) return;
+            entry.Info.CommittedFilePaths = [.. entry.Info.CommittedFilePaths.Where(p => p != path)];
+            SaveSessions();
+        }
+    }
+
+    // Ветка tool_use снятия пометки: file_changed НЕ хватает — событие не приходит, когда
+    // содержимое не изменилось, путь отсечён TurnFileWatcher.ShouldIgnore или файл удалён;
+    // такой файл после коммита выпал бы из атрибуции навсегда. Гейт worktree-хода зеркалит
+    // SessionChangedPaths.Extract (TurnFileWatcher отдаёт пути относительно СВОЕГО корня —
+    // правка в worktree не должна воскрешать атрибуцию одноимённого файла в корне).
+    // Известное ограничение (принято): снятие идёт по ЗАЯВКЕ tool_use, а не по успешному
+    // tool_result — отклонённый permission или упавший Edit вернут атрибуцию файлу,
+    // которого чат фактически не менял (то же множество источников, что у Extract).
+    private void TryUnmarkCommittedOnToolUse(string sessionId, SessionEntry? entry, string toolName, object? input)
+    {
+        if (entry is null || entry.TurnInWorktree) return;
+        if (!SessionChangedPaths.IsWriteTool(toolName)) return;
+        // Ранний выход до резолва проекта: у чата без пометок здесь горячий no-op
+        if (entry.Info.CommittedFilePaths.Count == 0) return;
+        var root = entry.Info.ProjectId is { } pid ? _projects.GetById(pid)?.RootPath : null;
+        if (root is null) return;
+        if (SessionChangedPaths.NormalizedToolPath(input, root) is { } rel)
+            UnmarkFileCommitted(sessionId, rel);
     }
 
     public async Task<Session> CreateAsync(string projectId, ClaudeMode mode,
@@ -2688,6 +2769,9 @@ public class SessionManager : IDisposable
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
 
         entry.Accumulator?.OnUserMessage(text, attachedPaths, systemDirective: systemDirective, auto: auto, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin, staffNote: staffNote);
+        // Сообщение пользователя = начало нового хода в основном дереве (зеркало
+        // сброса skippingWorktreeTurn в SessionChangedPaths.Extract)
+        entry.TurnInWorktree = false;
 
         // Push-источники автоматизаций: @упоминание персоны в тексте пользователя.
         // Fire-and-forget — обработчик не должен тормозить ход (он лишь детектит и ставит в очередь).
@@ -2832,6 +2916,7 @@ public class SessionManager : IDisposable
 
         await ApplyStatusAsync(sessionId, entry, SessionStatus.Working);
         entry.Accumulator?.OnUserMessage(text, [], viaAgent: agentDepth >= 1, senderPersonaId: senderPersonaId, senderOrigin: senderOrigin);
+        entry.TurnInWorktree = false; // сообщение = новый ход в основном дереве (зеркало Extract)
         entry.CurrentTurnSnapshot = null; // ход агента — по «Стоп» в композер не возвращается
         entry.TeamTurnFromHuman = false; // ход поднят агентом (chats_send), не человеком (M7)
         await entry.Process!.SendMessageAsync(text, null, agentDepth);
@@ -6914,6 +6999,7 @@ public class SessionManager : IDisposable
                 case SessionStartedMessage m:
                     acc.SetSaveKey(m.ClaudeSessionId);
                     acc.OnSessionStarted(m.Model, m.Mode, m.TurnWorktree);
+                    if (entry is not null) entry.TurnInWorktree = m.TurnWorktree != null;
                     SaveSessions();
                     break;
                 case TextDeltaMessage m:
@@ -6953,7 +7039,10 @@ public class SessionManager : IDisposable
                     await acc.SaveSnapshotAsync(_history); // reload посреди долгого сабагента видит уже написанное
                     break;
                 case AgentThinkingMessage m: acc.OnAgentThinking(m.ParentToolUseId, m.Text); break;
-                case ToolUseMessage m:      acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId); break;
+                case ToolUseMessage m:
+                    acc.OnToolUse(m.Id, m.Name, m.Input, m.ParentToolUseId);
+                    TryUnmarkCommittedOnToolUse(sessionId, entry, m.Name, m.Input);
+                    break;
                 case ToolResultMessage m:
                     acc.OnToolResult(m.ToolUseId, m.Content, m.IsError);
                     await acc.SaveSnapshotAsync(_history); // промежуточное сохранение после каждого tool call
@@ -6980,7 +7069,13 @@ public class SessionManager : IDisposable
                     acc.OnBgAgentsDone(m.ToolUseIds);
                     await acc.SaveSnapshotAsync(_history);
                     break;
-                case FileChangedMessage m:  acc.OnFileChanged(m.Path, m.Added, m.Removed, m.External); break;
+                case FileChangedMessage m:
+                    acc.OnFileChanged(m.Path, m.Added, m.Removed, m.External);
+                    // External не гейтим: сырое множество индекса содержит и внешние правки
+                    // (фильтр «только файлы чата») — пометка снимается любой из них
+                    if (entry is { TurnInWorktree: false })
+                        UnmarkFileCommitted(sessionId, SessionChangedPaths.Normalize(m.Path));
+                    break;
                 case CompactBoundaryMessage m:
                     acc.OnCompactBoundary(m.Trigger, m.PreTokens, m.PostTokens);
                     await acc.SaveSnapshotAsync(_history); // авто-компакт бывает посреди хода — фиксируем сразу

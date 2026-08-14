@@ -456,9 +456,9 @@ public sealed class DossierCaptureService : BackgroundService
     {
         try
         {
-            var r = await _git.RunAsync(ownerId, root, ["show", "--name-only", "--pretty=format:", sha]);
-            if (r.Ok)
-                return [.. r.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+            // Общий приём git show --name-only живёт в GitService (им же пользуется
+            // детект коммита для атрибуции файлов чатам — CommitAttributionService)
+            return [.. await _git.ChangedFilePathsAsync(ownerId, root, sha)];
         }
         catch (Exception ex) { _log.LogDebug(ex, "dossiers: git show --name-only {Sha}", sha); }
         return [];

@@ -323,6 +323,9 @@ builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
 // Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
 builder.Services.AddSingleton<ProjectFileSessionsIndex>();
+// Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути (Session.CommittedFilePaths),
+// чтобы атрибуция файлов чатам не врала после коммита — см. CommitAttributionService
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.CommitAttributionService>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();

@@ -111,10 +111,6 @@ interface Props {
   activeCommitSha?: string | null; // подсветка открытого коммита в истории ветки
   onCommit?: (where: 'chat' | 'newChat') => void;  // делегировать фиксацию чату / новому чату
   onScopeChange?: () => void;  // сменили скоуп/коммит — центральную область сбросить к чату
-  // Пути, изменённые активным чатом (lowercase, прямые слэши от корня репо) — для
-  // тогла «только файлы чата». undefined — тогл скрыт (нет чата / worktree-чат /
-  // история грузится)
-  sessionFiles?: Set<string>;
   // Путь git status → чужие чаты, менявшие файл (тем же ключом, что RowFile.path) —
   // тихий бейдж в строке файла. undefined/нет записи — бейдж не рисуется
   changedBy?: Map<string, ChangedBySession[]>;
@@ -181,9 +177,14 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(root.children);
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, sessionFiles, changedBy }: Props) {
+export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, changedBy }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
+  // Пути активного чата (lowercase) — тогл «только файлы чата» и признак mine у бейджа.
+  // Серверный источник (changed-by: история чата минус зафиксированное в git) — фронтовый
+  // дубль по живой ленте снесён. undefined — тогл скрыт (нет чата / worktree-контекст /
+  // changed-by не загрузился); worktree-гейт уже отработал в loadChangedBy (lib/git.ts)
+  const sessionFiles = st.myChangedPaths;
   const hasPanelHeader = useHasPanelHeader();
   // Тач-раскладка: действия строки — долгим нажатием. Все быстрые действия панели
   // (откат правок, возврат и удаление отложенного) жили под наведением мыши, то есть

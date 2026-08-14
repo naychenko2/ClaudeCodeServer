@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type { ChangedBySession } from '../../types';
 import { fileChatBadge } from '../gitFormat';
 
-const entry = (sessionId: string, name: string): ChangedBySession => ({ sessionId, name });
+// external=false: в changedBy (стор lib/git) внешние правки не попадают вовсе
+const entry = (sessionId: string, name: string): ChangedBySession => ({ sessionId, name, external: false });
 
 describe('fileChatBadge — бейдж «кто менял файл» в строке файла панели «Изменения»', () => {
   // --- один чат (single / MessageSquare, без цифры) ---

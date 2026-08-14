@@ -896,8 +896,8 @@ const windowWidth = useWindowWidth();
   }, [project.id]);
 
   // Панели сессии: контент — для МОБИЛЬНОЙ ветки (десктоп собирает свой в
-  // DesktopWorkspace), а changedPaths (фильтр «только файлы чата» в «Изменениях»)
-  // отсюда берут ОБЕ раскладки — хук вычисляется всегда.
+  // DesktopWorkspace). Фильтр «только файлы чата» панели «Изменений» сюда больше
+  // не ходит — GitChangesRail берёт myChangedPaths из git-стора сам.
   const sessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
@@ -1023,10 +1023,16 @@ const windowWidth = useWindowWidth();
   }, [activeSessionId, activeSessionUpdatedAt]);
 
   // Активный чат — для фильтра «Также меняли»/бейджа changedBy: сам открытый чат
-  // не должен появляться в собственном списке «другие чаты» (см. lib/git.ts)
+  // не должен появляться в собственном списке «другие чаты» (см. lib/git.ts).
+  // Worktree-чат передаём как null: его правки индекс пропускает, и с id активного
+  // чата myChangedPaths стал бы пустым Set → тумблер «только файлы чата» виден и
+  // прячет ВСЕ строки. Гейт по getGitSessionContext здесь не спасает — контекст
+  // выставляет только смонтированный не-embedded ChatPanel, а в центре может быть
+  // открыт файл или дифф.
+  const activeSessionWorktree = activeSession?.worktreePath ?? null;
   useEffect(() => {
-    setActiveSessionForChangedBy(project.id, activeSessionId ?? null);
-  }, [project.id, activeSessionId]);
+    setActiveSessionForChangedBy(project.id, activeSessionWorktree ? null : activeSessionId ?? null);
+  }, [project.id, activeSessionId, activeSessionWorktree]);
 
   // activeSession.updatedAt при ходе агента НЕ обновляется (status_changed несёт
   // только status, user_message/exited не трогают activeSession вовсе) — поэтому
@@ -1491,7 +1497,7 @@ const windowWidth = useWindowWidth();
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа
-              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} sessionFiles={sessionPanels.changedPaths} changedBy={gitState.changedBy} />
+              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} changedBy={gitState.changedBy} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
               : leftTab === 'personas'
@@ -1688,7 +1694,7 @@ const windowWidth = useWindowWidth();
             // панели (мокап требует видимый вход даже при выключенной фиче — она сама
             // показывает empty-state с кнопкой «Открыть настройки»)
             dossiers: <DossierHistoryPanel project={project} auth={auth} activeFilePath={openFile ?? openCommitFile} chatExcludedFromDossiers={!!activeSession?.excludeFromDossiers} onOpenChat={handleOpenTaskSession} onOpenTask={handleOpenDossierTask} onOpenCommit={handleOpenCommit} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} sessionFiles={sessionPanels.changedPaths} changedBy={gitState.changedBy} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} changedBy={gitState.changedBy} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,

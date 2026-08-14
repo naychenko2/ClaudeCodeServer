@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { GitStatus, ChangedBySession, ChatItem } from '../../types';
-import { computeChangedPaths } from '../../hooks/useSessionArtifacts';
+import type { GitStatus, ChangedBySession } from '../../types';
 
 // lib/git тянет realtime-обвязку (api, signalr) — глушим тяжёлые модули заглушками,
 // как в notesByFile.test.ts. getGitSessionContext — отдельный именованный экспорт api.ts
@@ -27,7 +26,8 @@ function status(paths: string[]): GitStatus {
   };
 }
 
-const entry = (sessionId: string, name: string): ChangedBySession => ({ sessionId, name });
+const entry = (sessionId: string, name: string, external = false): ChangedBySession =>
+  ({ sessionId, name, external });
 
 let seq = 0;
 const freshProjectId = () => `proj-${++seq}`;
@@ -152,34 +152,143 @@ describe('lib/git — changedBy (панель «Изменения»: чужие
   });
 });
 
-// --- Зеркало кейсов извлечения путей из истории чата ---
-// Индекс «файл → другие чаты» (backend/…/SessionFileIndex.cs, SessionChangedPaths.Extract)
-// и фронтовый computeChangedPaths (hooks/useSessionArtifacts.ts — считает файлы АКТИВНОГО
-// чата для тогла «только файлы чата») решают ту же по сути задачу — обход истории,
-// file_changed + tool_use из WRITE_TOOLS — но с НАМЕРЕННЫМИ расхождениями. Полные наборы
-// нормализации/извлечения — в своих тестах (useSessionArtifacts.test.ts describe
-// 'computeChangedPaths' и backend/ClaudeHomeServer.Tests/Services/SessionChangedPathsTests.cs,
-// [общий с фронтом]/[намеренное расхождение]); здесь — только сами расхождения,
-// зафиксированные вместе, чтобы будущая правка одной стороны не потеряла контраст с другой.
-const ROOT = 'C:\\Sources\\MyProject';
-const fileChangedItem = (path: string, external = false): ChatItem =>
-  ({ kind: 'file_changed', path, added: 1, removed: 0, external });
-
-describe('computeChangedPaths — намеренные расхождения с SessionChangedPaths.Extract (backend)', () => {
-  // [намеренное расхождение] backend SessionChangedPaths.Extract исключает External=true
-  // (см. Extract_FileChangedExternal_Исключается) — фронт включает: тогл «файлы чата»
-  // должен показывать и вненовые правки Bash/скриптов модели за время хода
-  it('external=true ВКЛЮЧАЕТСЯ (в отличие от серверного индекса)', () => {
-    const set = computeChangedPaths([fileChangedItem('src/external.ts', true)], ROOT);
-    expect(set.has('src/external.ts')).toBe(true);
+// --- myChangedPaths: пути активного чата для фильтра «только файлы чата» ---
+// Источник — тот же серверный changed-by (SessionChangedPaths.Extract: история чата
+// МИНУС зафиксированное в git, Session.CommittedFilePaths); фронтовый дубль по живой
+// ленте (computeChangedPaths) снесён. Расхождение поверхностей фиксируется здесь:
+// - changedBy (бейдж/«Также меняли») — только external=false и без активного чата;
+// - myChangedPaths — все записи активного чата, ВКЛЮЧАЯ external=true
+//   (Bash/скрипты модели за время хода — решение прошлой итерации фичи).
+// Backend-зеркало значений External — SessionChangedPathsTests (Extract_*External*).
+describe('lib/git — myChangedPaths (фильтр «только файлы чата»)', () => {
+  beforeEach(() => {
+    statusMock.mockReset();
+    changedByMock.mockReset();
+    gitSessionCtxMock.mockReset();
+    gitSessionCtxMock.mockReturnValue(null);
   });
 
-  // [намеренное расхождение] backend исключает пути хода в чужом worktree
-  // (см. Extract_ХодВЧужомWorktree_ПутиИсключены) — у фронтовой ленты этого понятия нет:
-  // computeChangedPaths видит только file_changed/tool_use текущего чата без разбора,
-  // в каком дереве шёл конкретный ход
-  it('file_changed из любого хода (в т.ч. worktree) учитывается — фронт не различает деревья', () => {
-    const set = computeChangedPaths([fileChangedItem('src/in-worktree.ts')], ROOT);
-    expect(set.has('src/in-worktree.ts')).toBe(true);
+  it('пути активного чата попадают в myChangedPaths (lowercase), включая external=true', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    statusMock.mockResolvedValue(status(['SRC/A.ts', 'src/b.ts']));
+    changedByMock.mockResolvedValue({
+      files: {
+        'SRC/A.ts': [entry('active-chat', 'Этот чат')],
+        'src/b.ts': [entry('active-chat', 'Этот чат', true)], // правка Bash за время хода
+      },
+    });
+
+    await loadGitStatus(projectId);
+
+    const my = getGitState(projectId).myChangedPaths;
+    expect(my).toEqual(new Set(['src/a.ts', 'src/b.ts']));
+  });
+
+  it('external=true НЕ попадает в changedBy (бейдж), но попадает в myChangedPaths активного чата', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockResolvedValue({
+      files: { 'src/a.ts': [entry('other-chat', 'Чужой чат', true), entry('active-chat', 'Этот чат', true)] },
+    });
+
+    await loadGitStatus(projectId);
+
+    const st = getGitState(projectId);
+    expect(st.changedBy.has('src/a.ts')).toBe(false);
+    expect(st.myChangedPaths?.has('src/a.ts')).toBe(true);
+  });
+
+  it('чат правил файл и Edit-ом, и Bash-ом (external=false после слияния) — бейдж чужого чата остаётся', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockResolvedValue({
+      files: { 'src/a.ts': [entry('other-chat', 'Чужой чат', false)] },
+    });
+
+    await loadGitStatus(projectId);
+
+    const st = getGitState(projectId);
+    expect(st.changedBy.get('src/a.ts')).toEqual([entry('other-chat', 'Чужой чат')]);
+    expect(st.myChangedPaths?.has('src/a.ts')).toBe(false);
+  });
+
+  it('без активного чата myChangedPaths === undefined (фильтр недоступен, тумблер скрыт)', async () => {
+    const projectId = freshProjectId();
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockResolvedValue({ files: { 'src/a.ts': [entry('s1', 'Чат 1')] } });
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).myChangedPaths).toBeUndefined();
+  });
+
+  it('активный чат есть, но файлов чата в статусе нет — пустой Set (чат ничего не менял)', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockResolvedValue({ files: { 'src/a.ts': [entry('other-chat', 'Чужой чат')] } });
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).myChangedPaths).toEqual(new Set());
+  });
+
+  it('пустой git status при активном чате — пустой Set, без чата — undefined', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    statusMock.mockResolvedValue(status([]));
+    await loadGitStatus(projectId);
+    expect(getGitState(projectId).myChangedPaths).toEqual(new Set());
+
+    const projectId2 = freshProjectId();
+    statusMock.mockResolvedValue(status([]));
+    await loadGitStatus(projectId2);
+    expect(getGitState(projectId2).myChangedPaths).toBeUndefined();
+  });
+
+  it('worktree-контекст панели — undefined (пути статуса из чужого дерева)', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    gitSessionCtxMock.mockReturnValue({ projectId, sessionId: 'active-chat' });
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).myChangedPaths).toBeUndefined();
+  });
+
+  it('ошибка запроса changed-by — undefined (фильтр недоступен, а не пустой)', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'active-chat');
+    statusMock.mockResolvedValue(status(['src/a.ts']));
+    changedByMock.mockRejectedValue(new Error('network'));
+
+    await loadGitStatus(projectId);
+
+    expect(getGitState(projectId).myChangedPaths).toBeUndefined();
+  });
+
+  it('переключение активного чата перефильтровывает myChangedPaths без нового запроса', async () => {
+    const projectId = freshProjectId();
+    setActiveSessionForChangedBy(projectId, 'chat-a');
+    statusMock.mockResolvedValue(status(['src/a.ts', 'src/b.ts']));
+    changedByMock.mockResolvedValue({
+      files: {
+        'src/a.ts': [entry('chat-a', 'Чат A')],
+        'src/b.ts': [entry('chat-b', 'Чат B')],
+      },
+    });
+
+    await loadGitStatus(projectId);
+    expect(getGitState(projectId).myChangedPaths).toEqual(new Set(['src/a.ts']));
+
+    changedByMock.mockClear();
+    setActiveSessionForChangedBy(projectId, 'chat-b');
+
+    expect(changedByMock).not.toHaveBeenCalled();
+    expect(getGitState(projectId).myChangedPaths).toEqual(new Set(['src/b.ts']));
   });
 });

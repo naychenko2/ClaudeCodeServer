@@ -33,10 +33,12 @@ export function relTime(iso: string): string {
 // - multi  (MessagesSquare) — файл меняли 2+ чатов. mine=true → «+N» контраст (ты и чужие,
 //                              N=число чужих); mine=false → «N» без плюса, бледно (только
 //                              чужие, тебя нет).
-// - outside (User)          — файл не менял НИ ОДИН чат: правка мимо чатов (руками/Bash).
-// - null — sessionFiles === undefined (нет чата / worktree-чат / история грузится) И чужих
-//   нет: «мой» от «ничей» не отличить. Если чужие есть — состояние определимо (как single/
-//   multi с mine=false: не претендуем на знание своего вклада, показываем бледно).
+// - outside (User)          — файл не менял НИ ОДИН чат: правка мимо чатов (руками/Bash),
+//                              либо правки всех чатов уже зафиксированы в git.
+// - null — sessionFiles === undefined (нет чата / worktree-контекст / changed-by не
+//   загрузился) И чужих нет: «мой» от «ничей» не отличить. Если чужие есть — состояние
+//   определимо (как single/multi с mine=false: не претендуем на знание своего вклада,
+//   показываем бледно). sessionFiles = myChangedPaths из git-стора (lib/git.ts).
 export type FileChatBadge =
   | { kind: 'single'; mine: boolean; name?: string }
   | { kind: 'multi'; mine: boolean; count: number; names: string[] }

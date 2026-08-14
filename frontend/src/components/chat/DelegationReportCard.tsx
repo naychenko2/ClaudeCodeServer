@@ -14,7 +14,7 @@
 // карточка остаётся, но действий не предлагает.
 
 import { useContext, useEffect, useState } from 'react';
-import { Bot, CheckCircle2, MessageCircle, Paperclip } from 'lucide-react';
+import { Bot, CheckCircle2, ClipboardList, MessageCircle, Paperclip } from 'lucide-react';
 import type { Persona, Project, Task } from '../../types';
 import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
@@ -171,7 +171,10 @@ export function DelegationReportCard({ report, taskId, persona, neutralTitle, or
       </div>
 
       {/* Действия: путь к результату прямо из ленты. Ряд есть всегда — и пока задача
-          грузится, и когда её уже нет: карточка не меняет высоту под ногами */}
+          грузится, и когда её уже нет: карточка не меняет высоту под ногами.
+          Подложка утоплена (C.bgInset — «футеры панелей», как ISLAND.headerBg):
+          на ней белая заливка ghostFilled снова приподнята, а прозрачный ghost
+          уходит в тон. Нижние скругления не нужны — карточка с overflow: hidden */}
       <div style={{
         display: 'flex', flexDirection: isMobile ? 'column' : 'row',
         alignItems: isMobile ? 'stretch' : 'center', gap: SP.sm, flexWrap: 'wrap',
@@ -179,6 +182,7 @@ export function DelegationReportCard({ report, taskId, persona, neutralTitle, or
         // пока стор задач грузится, кнопок нет, и без резерва лента прыгнет
         minHeight: isMobile ? 40 : 32,
         padding: `${SP.sm}px ${SP.md}px`, borderTop: `1px solid ${C.divider}`,
+        background: C.bgInset,
       }}>
         {gone ? (
           <span style={{ fontSize: FS.sm, color: C.textMuted }}>
@@ -189,12 +193,15 @@ export function DelegationReportCard({ report, taskId, persona, neutralTitle, or
         ) : (
           <>
             {/* Не accent: главное действие чата — композер, а докладов в ленте много
-                (accent-дисциплина гайда). Первичность внутри карточки держит белая
-                заливка ghostFilled против прозрачного ghost у второго действия —
-                форма читается в обеих темах */}
+                (accent-дисциплина гайда). Первичность внутри карточки держит заливка
+                ghostFilled на утопленной подложке ряда против прозрачного ghost у
+                второго действия — форма читается в обеих темах.
+                Иконка есть у обоих действий: у одного главного её отсутствие
+                перевешивало вес в пользу второстепенного */}
             <Button size={isMobile ? 'md' : 'sm'} variant="ghostFilled" fullWidth={isMobile}
               disabled={loading} title={loading ? 'Загружаем задачу…' : undefined}
-              onClick={() => { if (task) openTask(task); }}>
+              onClick={() => { if (task) openTask(task); }}
+              leftIcon={<ClipboardList size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
               Открыть задачу
             </Button>
             {task?.linkedSessionId && (

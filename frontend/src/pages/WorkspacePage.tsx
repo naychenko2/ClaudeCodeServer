@@ -1090,6 +1090,41 @@ const windowWidth = useWindowWidth();
     saveWorkspaceState(project.id, { activeSession, openFile, leftTab });
   }, [project.id, activeSession, openFile, leftTab]);
 
+  // Чат-призрак: localStorage хранит id чата, который удалён на сервере (например,
+  // авто-чистка временных чатов). Без проверки UI показывает пустой заголовок/ленту,
+  // а JoinSession падает с «Доступ запрещён». Валидируем восстановленный activeSession
+  // один раз на маунт проекта; если id нет в списке — сбрасываем в null, saveWorkspaceState
+  // сверху сам зачистит запись в localStorage.
+  //
+  // Не валидируем активную сессию из sessionStorage (cc_pending_session) — она пришла
+  // из только что выбранного/созданного чата, гонок там нет: сравнение restored.id ===
+  // activeSession?.id различает источники.
+  //
+  // ВАЖНО — гонка: сбрасываем ТОЛЬКО после успешно полученного списка. Если сбрасывать
+  // по факту «списка ещё нет» или по любой ошибке загрузки, офлайн и медленная сеть
+  // начнут молча терять открытый чат — это хуже исходного бага. Поэтому catch здесь
+  // молчит, а reset идёт только в .then по факту «id нет в ответе».
+  useEffect(() => {
+    const stored = loadWorkspaceState(project.id);
+    const restored = stored?.activeSession;
+    if (!restored || restored.id !== activeSession?.id) return;
+    let cancelled = false;
+    api.sessions.list(project.id).then(sessions => {
+      if (cancelled) return;
+      // Пока запрос летал, пользователь мог переключиться на другой чат —
+      // тогда трогать активную сессию нельзя.
+      if (activeSessionRef.current?.id !== restored.id) return;
+      if (!sessions.some(s => s.id === restored.id)) {
+        setActiveSession(null);
+      }
+    }).catch(() => { /* офлайн / ошибка сети — оставляем как есть */ });
+    return () => { cancelled = true; };
+    // Намеренно один раз на маунт проекта: это валидация localStorage, не реакция на
+    // каждую смену activeSession. Перезапускать на каждый клик по чату бессмысленно —
+    // пользовательский выбор идёт через handleSelectSession с уже валидным объектом.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
+
   // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
   useEffect(() => {

@@ -112,11 +112,14 @@ public class SessionHubTests : IClassFixture<TestWebApplicationFactory>, IAsyncL
     [Fact]
     public async Task JoinSession_НесуществующаяСессия_Отказ()
     {
+        // Отдельно от JoinSession_ЧужаяСессия_Отказ: на «Чат не найден» фронт
+        // сбрасывает activeSession из localStorage, на «Доступ запрещён» — нет.
         var conn = await ConnectAsync(TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
 
         var act = () => conn.InvokeAsync("JoinSession", "ghost-session");
 
-        await act.Should().ThrowAsync<HubException>();
+        (await act.Should().ThrowAsync<HubException>())
+            .WithMessage("*Чат не найден*");
     }
 
     // ─── JoinSession: реплей статуса ─────────────────────────────────────────

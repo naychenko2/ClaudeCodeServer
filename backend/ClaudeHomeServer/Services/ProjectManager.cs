@@ -135,6 +135,9 @@ public class ProjectManager
             OwnerId = userId,
             GroupId = string.IsNullOrEmpty(groupId) ? null : groupId,
             Icon = new ProjectIcon { Color = string.IsNullOrEmpty(color) ? null : color },
+            // Новый проект — кандидат на предложение каркаса (знакомство v2); созданные
+            // до фичи проекты остаются с null и предложение не получают никогда
+            PresetKey = ProjectPreset.Pending,
         };
         _projects[project.Id] = project;
         Save();

@@ -1,4 +1,7 @@
-﻿using ClaudeHomeServer.Services;
+﻿using System.Text.Json;
+using System.Text.Json.Serialization;
+using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -343,6 +346,86 @@ public class ProjectManagerTests : IDisposable
 
         WorkspaceKnowledgeStore.NormalizePath(doubled)
             .Should().Be(WorkspaceKnowledgeStore.NormalizePath(single));
+    }
+
+    // === Знакомство v2: дискриминатор нового проекта (Project.PresetKey) ===
+
+    // Записать projects.json напрямую, минуя менеджер: presetKey = null пишется ОТСУТСТВИЕМ
+    // поля — так выглядит стор проектов, созданных до фичи
+    private void WriteStoreRaw(params (string Id, string RootPath, string? PresetKey)[] projects)
+    {
+        var path = Path.Combine(_tempDir, "data", "projects.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var json = JsonSerializer.Serialize(
+            projects.Select(p => new
+            {
+                p.Id,
+                Name = "P" + p.Id,
+                p.RootPath,
+                p.PresetKey,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            }),
+            new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull });
+        File.WriteAllText(path, json);
+    }
+
+    [Fact]
+    public void Create_ПроставляетPresetKeyPending()
+    {
+        var p = _sut.Create("Fresh", MkDir("preset-new"), TestUserId, TestUsername);
+
+        p.PresetKey.Should().Be(ProjectPreset.Pending);
+    }
+
+    [Fact]
+    public void Create_PendingПереживаетПерезагрузкуСтора()
+    {
+        var p = _sut.Create("Keep", MkDir("preset-persist"), TestUserId, TestUsername);
+
+        CreateManager().GetById(p.Id)!.PresetKey.Should().Be(ProjectPreset.Pending);
+    }
+
+    [Fact]
+    public void Load_ПроектДоФичи_БезPresetKey_ОстаётсяNull()
+    {
+        // Миграции «всем null → none» нет и не должно быть: она неидемпотентна — первый же
+        // рестарт погасил бы предложение у нового проекта, созданного перед выкаткой
+        WriteStoreRaw(("legacy", MkDir("preset-legacy"), null));
+
+        CreateManager().GetById("legacy")!.PresetKey.Should().BeNull();
+    }
+
+    [Fact]
+    public void Load_PresetKeyЧитаетсяКакЗаписан_БезПреобразований()
+    {
+        var root = MkDir("preset-keep");
+        WriteStoreRaw(
+            ("refused", root, ProjectPreset.None),
+            ("fresh", root, ProjectPreset.Pending),
+            ("scaffolded", root, "docs"));
+
+        var manager = CreateManager();
+        manager.GetById("refused")!.PresetKey.Should().Be(ProjectPreset.None);
+        manager.GetById("fresh")!.PresetKey.Should().Be(ProjectPreset.Pending);
+        manager.GetById("scaffolded")!.PresetKey.Should().Be("docs");
+    }
+
+    [Fact]
+    public void PresetKey_ЗарезервированныеЗначения_НеПересекаютсяСКлючамиКаталога()
+    {
+        // Контракт резервирования: ровно два служебных значения, оба узнаваемы
+        ProjectPreset.ReservedKeys.Should().BeEquivalentTo([ProjectPreset.Pending, ProjectPreset.None]);
+        ProjectPreset.IsReserved(ProjectPreset.Pending).Should().BeTrue();
+        ProjectPreset.IsReserved(ProjectPreset.None).Should().BeTrue();
+
+        // Обычные ключи (в т.ч. будущие ключи каталога пресетов) свободны. Когда каталог
+        // появится (п.2 плана, PresetCatalog), сюда добавляется проверка всех его ключей:
+        // Assert.All(PresetCatalog.All, d => Assert.False(ProjectPreset.IsReserved(d.Key))) —
+        // иначе логика 409 эндпоинта применения примет отказ/предложение за пресет
+        ProjectPreset.IsReserved(null).Should().BeFalse();
+        ProjectPreset.IsReserved("").Should().BeFalse();
+        ProjectPreset.IsReserved("docs").Should().BeFalse();
     }
 
     public void Dispose()

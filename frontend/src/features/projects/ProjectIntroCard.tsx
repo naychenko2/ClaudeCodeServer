@@ -65,8 +65,9 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
   const showIntro = onboardingOn && isOwner && !hasLead && !introDismissed;
   // Вариант 2: руководитель есть, но каркас не разложен (и не закрыли «Позже» в этом виде)
   const showScaffold = onboardingOn && isOwner && hasLead && scaffoldPending && !scaffoldDismissed;
-  if (!showIntro && !showScaffold) return null;
 
+  // Хуки должны быть выше любого условного return — иначе React считает разное
+  // число хуков между рендерами и падает на «Rendered more hooks than during the previous render».
   const handleMeet = () => {
     window.dispatchEvent(new CustomEvent(OPEN_INTRO_EVENT, { detail: { projectId } }));
   };
@@ -78,6 +79,8 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
     try { localStorage.setItem(dismissedScaffoldKey(projectId), '1'); } catch { /* см. выше */ }
     setScaffoldDismissed(true);
   }, [projectId]);
+
+  if (!showIntro && !showScaffold) return null;
 
   // Тексты — для каждого варианта свои. Кнопка действия открывает тот же онбординг:
   // во 2-м варианте она не «продолжить знакомство с лидером», а возобновляет знакомство

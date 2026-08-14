@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Link2, RotateCcw } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -17,8 +17,8 @@ import { cloneLayer, newPresetId } from '../../lib/specialties';
 import { loadModels, modelLabel, providerLabel, modelProvider, type ModelOption } from '../../lib/models';
 import { C, FS, R, SP } from '../../lib/design';
 import { showToast } from '../../lib/toast';
-import type { AppSettings, ResetResult, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
-import { ExceptionsBlock } from './ExceptionsBlock';
+import type { AppSettings, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import { EffectiveLine } from '../../components/EffectiveLine';
 import { ResetConfirmDialog } from './ResetConfirmDialog';
 
 // Вкладка «Модели по умолчанию» (макет models-spend-v3.html §2). Три слота strong/medium/weak:
@@ -36,13 +36,9 @@ interface SlotsTabProps {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
-  savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
-  onGoApply: () => void;
+  savingScope: 'global' | 'owner' | 'user' | null;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   meUserId: string | null;
-  onReloadSettings: () => Promise<void>;
-  resettingScope: 'global' | 'owner' | null;
-  onReset: (scope: 'global' | 'owner', key?: string) => Promise<ResetResult>;
   // A2: запрос на запуск черновика новой цепочки (от requestNewPreset() из RoutePicker).
   // Раскрываем первую карточку, чтобы человек сразу увидел редактор.
   pendingDraft?: boolean;
@@ -50,8 +46,8 @@ interface SlotsTabProps {
 }
 
 export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settings, models,
-  tierModels, ollamaModel, savingScope, onSaveLayer, onGoApply, meUserId,
-  onReloadSettings, resettingScope, onReset, pendingDraft, onPendingDraftConsumed }: SlotsTabProps) {
+  tierModels, ollamaModel, savingScope, onSaveLayer, meUserId,
+  pendingDraft, onPendingDraftConsumed }: SlotsTabProps) {
   const presets = usePresets();
   const { selectedTiers, globalTiers, globalSettings, setGlobalSettings, setOwnTiers, setUserTiers } = data;
 
@@ -63,6 +59,19 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
   // а tierBusy типизирован как TierKey | null и жест на три слота не выражает
   const [resetBusy, setResetBusy] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  // A4: ref вместо state — нам не нужно ререндерить SlotCard на каждый чих черновика,
+  // нужно только прочитать значение в requestToggle. SlotCard держит свой dirty локально
+  // и публикует через onDirtyChange.
+  const editorDirtyRef = useRef<Record<TierKey, boolean>>({ strong: false, medium: false, weak: false });
+  const [confirmCollapseOf, setConfirmCollapseOf] = useState<TierKey | null>(null);
+  const requestToggle = (t: TierKey) => {
+    if (expanded === t && editorDirtyRef.current[t]) {
+      // Свернуть пытаемся, пока редактор грязный — спросить подтверждение вместо тихой потери
+      setConfirmCollapseOf(t);
+      return;
+    }
+    setExpanded(expanded === t ? null : t);
+  };
 
   const tierModel = (t: TierKey): string => selectedTiers?.[t] ?? '';
   const globalTierModel = (t: TierKey): string => globalTiers?.[t] ?? '';
@@ -266,9 +275,9 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
             savingScope={savingScope}
             isAdmin={isAdmin}
             onSaveLayer={onSaveLayer}
-            onToggle={() => setExpanded(expanded === t ? null : t)}
+            onToggle={() => requestToggle(t)}
             onPickRoute={v => saveTier(t, v)}
-            onGoApply={onGoApply}
+            onDirtyChange={d => { editorDirtyRef.current[t] = d; }}
           />
         ))}
       </div>
@@ -280,18 +289,20 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
         </div>
       )}
 
-      {/* Блок «Особые правила для специальностей» (по умолчанию раскрыт) */}
-      <ExceptionsBlock
-        settings={settings}
-        isAdmin={isAdmin}
-        models={models}
-        tierModels={tierModels}
-        ollamaModel={ollamaModel}
-        savingScope={savingScope}
-        onSaveLayer={onSaveLayer}
-        onReloadSettings={onReloadSettings}
-        resettingScope={resettingScope}
-        onReset={onReset}
+      {/* A4: при сворачивании карточки с несохранённой правкой черновика цепочки —
+          подтверждаем потерю. Иначе один клик по заголовку уносит несохранённые шаги. */}
+      <ResetConfirmDialog
+        open={confirmCollapseOf !== null}
+        title="В черновике остались шаги"
+        body="Если свернуть карточку, изменения пропадут. Сохраните или отмените правки, прежде чем закрывать."
+        confirmLabel="Свернуть без сохранения"
+        variant="danger"
+        onCancel={() => setConfirmCollapseOf(null)}
+        onConfirm={() => {
+          const t = confirmCollapseOf;
+          setConfirmCollapseOf(null);
+          if (t !== null) setExpanded(null);
+        }}
       />
     </div>
   );
@@ -355,17 +366,19 @@ interface SlotCardProps {
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   settings: SpecialtySettingsResponse | null;
-  savingScope: 'global' | 'owner' | null;
+  savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   onToggle: () => void;
   onPickRoute: (v: string) => void;
-  onGoApply: () => void;
+  // A4: редактор цепочки публикует наружу «грязный» флаг, чтобы родитель мог
+  // спросить подтверждение перед сворачиванием
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, totalActions,
   presets, models, tierModels, ollamaModel, settings, savingScope, isAdmin, onSaveLayer,
-  onToggle, onPickRoute, onGoApply }: SlotCardProps) {
+  onToggle, onPickRoute, onDirtyChange }: SlotCardProps) {
   const presetId = presetIdOf(model);
   const scoped = presetId ? presets.find(p => p.id.toLowerCase() === presetId.toLowerCase()) ?? null : null;
   const preset = scoped;
@@ -454,12 +467,10 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, total
         )}
       </div>
 
-      {/* Подсказка-переход для пустого слота: не должен читаться как поломка */}
-      {usage && empty && (
-        <div style={{ margin: '-2px 2px 0' }}>
-          <button type="button" onClick={onGoApply} style={linkBtnStyle}>Назначьте её исполнителю задач или сложным местам →</button>
-        </div>
-      )}
+      {/* B7: «Сейчас пойдёт» — что реально поедет на этом уровне, если специальность не
+          переопределяет. Эндпоинт GET /api/models/preview?kind=specialty&tier=...&specialtyKey=any
+          считается той же дорогой, что и запуск хода — второй точки истины нет. */}
+      <EffectiveLine ctx={{ kind: 'specialty', tier: t, specialtyKey: 'any' }} />
 
       {/* Раскрытый редактор: цепочка шагов (если пресет) + смена маршрута слота */}
       {expanded && (
@@ -477,6 +488,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, total
           isAdmin={isAdmin}
           onSaveLayer={onSaveLayer}
           onPickRoute={onPickRoute}
+          onDirtyChange={onDirtyChange}
         />
       )}
     </div>
@@ -485,7 +497,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, total
 
 // === Редактор цепочки внутри слота ===
 function ChainEditor({ tier: t, model, preset, broken, presets, models, tierModels, ollamaModel,
-  settings, savingScope, isAdmin, onSaveLayer, onPickRoute }: {
+  settings, savingScope, isAdmin, onSaveLayer, onPickRoute, onDirtyChange }: {
   tier: TierKey;
   model: string;
   preset: ReturnType<typeof usePresets>[number] | null;
@@ -495,16 +507,20 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   settings: SpecialtySettingsResponse | null;
-  savingScope: 'global' | 'owner' | null;
+  savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   onPickRoute: (v: string) => void;
+  // A4: редактор шлёт «грязный» флаг наверх, чтобы SlotCard не дал свернуть молча
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   // Черновик шагов: правится локально, пока не «Сохранить». Инициализируем шагами пресета.
   const presetSteps = preset?.steps ?? [];
   const [draft, setDraft] = useState<string[]>(presetSteps);
   const dirty = preset != null && (draft.length !== preset.steps.length ||
     draft.some((s, i) => s !== preset.steps[i]));
+  // A4: публикуем dirty наверх, чтобы SlotCard не схлопнул карточку молча
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
   // Самоссылка: шаг «уровень T» внутри пресета, разворачивающегося из этого же слота
   const selfRef = preset ? preset.steps.some(s => routeTier(s) === t) : false;
@@ -518,7 +534,9 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
     if (!preset || !settings) return;
     if (draft.length === 0) return; // пустую цепочку бэкенд отклонит
     const scope = preset.scope;
-    const next = cloneLayer(settings[scope]);
+    const baseLayer = settings[scope];
+    if (!baseLayer) return;
+    const next = cloneLayer(baseLayer);
     const p = next.presets.find(x => x.id === preset.id);
     if (p) p.steps = draft;
     // catch пустой намеренно: отказ уже показан баннером в ModelsSpendModal, здесь он нужен
@@ -542,7 +560,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   // общем слоте, ни тем более в слоте другого пользователя (MAJOR 2, ревью d23231bd)
   const saveAsPreset = () => {
     if (!settings || draft.length === 0) return;
-    const targetScope: 'global' | 'owner' = isAdmin ? 'global' : 'owner';
+    const targetScope: 'global' | 'owner' | 'user' = isAdmin ? 'global' : 'owner';
     const copy = { id: newPresetId(), name: `${preset?.name ?? 'Цепочка'} (копия)`,
       description: preset?.description ?? null, steps: draft };
     const next = cloneLayer(settings[targetScope]);
@@ -589,8 +607,8 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           {canSavePreset && preset && (
             <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', borderTop: `1px dashed ${C.border}`, paddingTop: SP.md }}>
               {dirty
-                ? <span style={{ fontSize: FS.xs, color: C.warningText, fontWeight: 600 }}>Цепочка изменена · не совпадает с пресетом</span>
-                : <span style={{ fontSize: FS.xs, color: C.textMuted }}>Цепочка совпадает с пресетом</span>}
+                ? <span style={{ fontSize: FS.xs, color: C.warningText, fontWeight: 600 }}>Цепочка изменена · не совпадает с цепочкой</span>
+                : <span style={{ fontSize: FS.xs, color: C.textMuted }}>Цепочка совпадает с цепочкой</span>}
               <span style={{ flex: 1 }} />
               {dirty && <Button size="sm" variant="ghost" disabled={savingScope !== null} onClick={() => setDraft(preset.steps)}>Отменить</Button>}
               {dirty && <Button size="sm" variant="primary" disabled={savingScope !== null || draft.length === 0} onClick={savePreset}>Сохранить</Button>}
@@ -635,8 +653,3 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
     </div>
   );
 }
-
-const linkBtnStyle = {
-  font: 'inherit', fontSize: FS.xs, fontWeight: 600, color: C.accent, background: 'none',
-  border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'none',
-} as const;

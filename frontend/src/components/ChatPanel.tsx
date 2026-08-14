@@ -14,7 +14,7 @@ import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
-import { parseTeamMechanicOffer, hasUserTurnAfter, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
+import { hasUserTurnAfter, buildMechanicOffers, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
@@ -1088,21 +1088,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
 
   // === Мост в командные механики (фича default-personas-onboarding) ===
   // Маркеры <team-mechanic/> в текстах ассистента → карточки предложений. Дедуп «одна
-  // механика — одна карточка на чат»: карточку несёт ПЕРВЫЙ текст ленты с маркером
-  // этой механики, повторные предложения той же механики карточек не плодят.
-  const mechanicOffers = useMemo(() => {
-    const map = new Map<number, TeamMechanicOffer>();
-    const seen = new Set<TeamMechanicId>();
-    items.forEach((it, i) => {
-      if (it.kind !== 'text' || it.parentToolUseId) return;
-      if (!it.text.includes('<team-mechanic')) return;
-      const offer = parseTeamMechanicOffer(it.text);
-      if (!offer || seen.has(offer.id)) return;
-      seen.add(offer.id);
-      map.set(i, offer);
-    });
-    return map;
-  }, [items]);
+  // механика — одна карточка на чат» сохраняется, но карточку несёт ПОСЛЕДНЕЕ
+  // предложение каждой механики, а не первое: при повторном маркере карточка
+  // «переезжает» к актуальной реплике и берёт свежий topic. Это чинит сценарий, где
+  // после уточнений пользователя модель повторяет предложение — раньше дедуп
+  // закреплял карточку у самого старого маркера, который к тому моменту был погашен
+  // ходом пользователя, и запустить механику становилось невозможно.
+  const mechanicOffers = useMemo(() => buildMechanicOffers(items), [items]);
   // «Запущено»: механика уже уходила ходом этого чата (детект по ленте — переживает F5)
   // либо кнопка нажата только что (локальная пометка до появления user_message). Это же
   // компенсирует потерю промпт-инструкции «не навязывать после отказа» при компакции.

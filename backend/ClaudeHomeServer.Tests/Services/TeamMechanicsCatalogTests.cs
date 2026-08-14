@@ -56,6 +56,10 @@ public class TeamMechanicsCatalogTests
         none.Should().NotContain("- panel —").And.NotContain("- qa —");
         none.Should().Contain("<team-mechanic id=");
 
+        // Протокол повторного предложения: можно при изменении темы, нельзя после отказа
+        none.Should().Contain("Повторное предложение той же механики");
+        none.Should().Contain("не предлагай вновь");
+
         // Установленный скилл добавляет свою механику
         var withPanel = TeamMechanicsPromptCatalog.BuildPromptBlock(
             new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "panel-of-experts" });

@@ -31,6 +31,7 @@ GET                 /api/projects/{id}/docs/doc       ?path=  → { content, lin
 GET                 /api/projects/{id}/docs/search    ?q=     → совпадения с фрагментами
 GET                 /api/projects/{id}/docs/scope             → { selected{folders,rootFiles,types}, folderCandidates[], rootFileCandidates[], typeGroups[], defaults{} }
 PUT                 /api/projects/{id}/docs/scope     { folders, rootFiles, types } → та же форма (у каждой оси null — дефолт, [] — «ничего отсюда»)
+POST                /api/projects/{id}/preset         { presetKey } → { created[], skipped[{path,reason}] } | 400 | 404 | 409  (каркас знакомства v2: ключ каталога или "none"=отказ; 400 — пустой/неизвестный ключ, 404 — чужой проект или флаг выключен, 409 — уже применён/отклонён/проект до фичи)
 GET                 /api/home/summary                 ?recent=    → { active[], recent[] }  (дашборд «Домой»: сессии по всем проектам + чаты, с именами проектов)
 GET                 /api/history/days                 ?sinceDays= → [{ date, commitCount, cached }]  (по всем проектам, без LLM)
 GET                 /api/history/day/{date}                       → { date, items[] }  (продуктовая AI-сводка дня, кеш)

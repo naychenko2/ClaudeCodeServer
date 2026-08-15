@@ -1,5 +1,6 @@
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Prompts;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -210,5 +211,32 @@ public class PersonaPromptBuilderTests
         var persona = new Persona { Name = "Ада" };
 
         Build(persona).Should().StartWith("Ты — Ада.");
+    }
+
+    // --- Голосовой режим (voiceMode) ---
+
+    [Fact]
+    public void VoiceMode_ОговоркаПоследнимБлокомСлоя()
+    {
+        var persona = MakePersona(contract: new PersonaContract
+        {
+            Character = "Ты дотошный.",
+            OutputFormat = "Вердикт, затем до трёх замечаний.",
+        });
+
+        var prompt = PersonaPromptBuilder.BuildCore(persona, "claude",
+            switched: false, greeted: false, voiceMode: true);
+
+        // Оговорка обязана стоять ПОСЛЕДНЕЙ: ниже «Формата ответов» и блока personaId,
+        // иначе формат персоны перебьёт голосовое правило
+        prompt.Should().EndWith(VoicePrompts.PersonaOverride);
+        prompt.IndexOf(VoicePrompts.PersonaOverride)
+            .Should().BeGreaterThan(prompt.IndexOf("## Формат ответов"));
+    }
+
+    [Fact]
+    public void БезVoiceMode_ОговоркиНет()
+    {
+        Build(MakePersona()).Should().NotContain(VoicePrompts.PersonaOverride);
     }
 }

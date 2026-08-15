@@ -324,6 +324,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // но чат при нём уже Active, так что реанимации мёртвого Working это не мешает.
     public bool HasLiveTurn => _run is not null;
 
+    // Ход принят, но прогона ещё нет: стоит на _turnLock либо поднимает процесс CLI.
+    // Счётчик держит QueueTurnAsync — от постановки до выхода из RunTurnAsync.
+    public bool HasQueuedTurn => Volatile.Read(ref _queuedTurns) > 0;
+
     // ClaudeSession сам по себе не ведёт отдельной «оркестрации поверх хода» — это фолбэк-адаптер
     // (FallbackLlmSessionAdapter) делает. Здесь всегда false: форсированный drain серверной
     // очереди не гейтится. См. ILlmSessionAdapter.OrchestrationActive (инцидент 2026-08-10 П3).
@@ -1307,10 +1311,15 @@ public class ClaudeSession : ILlmSessionAdapter
                 await _turnLock.WaitAsync(_cts.Token);
                 try { await RunTurnAsync(fullText, imagePaths, agentDepth, suppressTasksExecute, _cts.Token); }
                 catch (OperationCanceledException) { /* остановка сессии — штатно */ }
+                // Адаптер снесли из-под хода (закрытие сессии, реанимация чата) — это остановка,
+                // а не сбой модели: показывать человеку «Cannot access a disposed object» нельзя
+                catch (ObjectDisposedException) { /* штатная остановка */ }
                 catch (Exception ex)
                 {
-                    // Ошибка хода обязана попадать и в лог сервера, а не только в чат
-                    // (инцидент 16.08.2026: ObjectDisposedException в ленте, в логе пусто)
+                    // Ошибка хода обязана попадать и в лог сервера с идентификатором сессии
+                    // и стектрейсом (инцидент 16.08.2026: ObjectDisposedException в ленте,
+                    // в логе пусто; наружу уходит только ex.Message — системные падения
+                    // по нему неотличимы друг от друга)
                     Console.Error.WriteLine($"[ClaudeSession] Ход упал с исключением (session {Info.Id}): {ex}");
                     // Статус Error выставит SessionManager по ErrorMessage
                     await _onMessage(new ErrorMessage(ex.Message));
@@ -1321,7 +1330,8 @@ public class ClaudeSession : ILlmSessionAdapter
                     // набором инструментов; действует ровно на ход внутри _turnLock
                     _currentTurnAgentDepth = 0;
                     _currentTurnSuppressTasksExecute = false;
-                    _turnLock.Release();
+                    // Семафор мог уйти вместе с адаптером — Release тогда некому и незачем
+                    try { _turnLock.Release(); } catch (ObjectDisposedException) { /* адаптер уже снесён */ }
                 }
             }
             catch (Exception ex)
@@ -1706,6 +1716,7 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         // Смерть процесса ниже — ожидаемая: помечаем ход прерванным ДО Kill, чтобы обработчик
         // Exited (он прилетает асинхронно, иногда мгновенно) уже видел флаг и не слал ошибку.
+        // Флаг снимается в начале следующего хода (RunTurnAsync).
         _interruptedByUser = true;
         if (_currentProcess is { } proc) _launcher.Kill(proc, _currentTurnId);
         // Ход убит, но Workflow-агенты — независимые процессы и не обязаны погибнуть вместе
@@ -1933,6 +1944,12 @@ public class ClaudeSession : ILlmSessionAdapter
                     "он покажет пользователю кнопки для выбора. Открытый вопрос без осмысленных вариантов — как обычно, текстом.";
                 Add("ask-question", "Как задавать вопросы кнопками", askHint);
             }
+
+            // Голосовой режим чата: ответ слушают, а не читают — коротко и без таблиц/кода/схем.
+            // Вторая половина правила — оговорка в конце слоя персоны (PersonaPromptBuilder):
+            // слой персоны клеится ПОСЛЕ секций и без неё перебил бы этот формат своим.
+            if (Info.VoiceMode)
+                Add("voice-mode", "Формат для голосового режима", Prompts.VoicePrompts.SectionText);
 
             // Подсказка про систему задач — только когда tasks-server подключён
             if (_tasksMcp is not null)
@@ -4119,6 +4136,10 @@ public class ClaudeSession : ILlmSessionAdapter
 
     public async ValueTask DisposeAsync()
     {
+        // Ход в полёте на момент уборки адаптера — ненормально: он упадёт на диспознутых
+        // семафорах (гасится в QueueTurnAsync). Строка в логе — след для разбора
+        if (_run is not null || Volatile.Read(ref _queuedTurns) > 0)
+            Console.Error.WriteLine($"[ClaudeSession] DisposeAsync под живым ходом (session {Info.Id}, run={_run is not null}, queued={Volatile.Read(ref _queuedTurns)})");
         _fileWatcher.Dispose();
         _subagentWatcher?.Dispose();
         _subagentWatcher = null;

@@ -14,9 +14,12 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
     // teamMechanicsBlock — блок «Командные механики» руководителя проекта (мост в механики,
     // фича default-personas-onboarding): собирает SessionManager.BuildTeamMechanicsBlock,
     // null — персона не руководитель или предложить нечего.
+    // voiceMode — голосовой режим чата: в конец слоя дописывается оговорка, что голосовой
+    // формат сильнее слота «Формат ответов» персоны (сам слой клеится ПОСЛЕ секций промпта
+    // и без неё перебил бы секцию voice-mode).
     public string Build(Persona persona, string? model, bool switched = false, bool greeted = false,
-        string? teamMechanicsBlock = null) =>
-        BuildCore(persona, providers.ProviderKey(model), switched, greeted, teamMechanicsBlock);
+        string? teamMechanicsBlock = null, bool voiceMode = false) =>
+        BuildCore(persona, providers.ProviderKey(model), switched, greeted, teamMechanicsBlock, voiceMode);
 
     // Промпт файлового сабагента: модель исполнения неизвестна на этапе генерации
     // (.md общий для чатов всех провайдеров, сабагент бежит на модели сессии) —
@@ -27,7 +30,7 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
     internal const string SubagentProviderKey = "subagent";
 
     internal static string BuildCore(Persona persona, string providerKey, bool switched, bool greeted,
-        string? teamMechanicsBlock = null)
+        string? teamMechanicsBlock = null, bool voiceMode = false)
     {
         var sb = new StringBuilder();
 
@@ -82,6 +85,11 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
         sb.Append($"\n\nТвой идентификатор персоны (personaId) — `{persona.Id}`. Когда инструмент " +
                   "просит ID персоны-исполнителя (например, tasks_create/tasks_update при постановке " +
                   "задачи на себя), подставляй его напрямую, не разыскивая себя через personas_list.");
+
+        // Голосовой режим — последним блоком слоя: оговорка обязана стоять НИЖЕ слота
+        // «Формат ответов» и примеров речи, иначе они перебьют голосовое правило
+        if (voiceMode)
+            sb.Append("\n\n").Append(Prompts.VoicePrompts.PersonaOverride);
 
         return sb.ToString();
     }

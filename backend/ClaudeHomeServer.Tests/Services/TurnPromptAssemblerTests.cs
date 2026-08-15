@@ -1,6 +1,7 @@
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm.Claude;
 using FluentAssertions;
+using VoicePrompts = ClaudeHomeServer.Services.Prompts.VoicePrompts;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -63,5 +64,20 @@ public class TurnPromptAssemblerTests
     public void ПустойНабор_ДаётПустуюСтроку()
     {
         TurnPromptAssembler.Combine([], null).Should().BeEmpty();
+    }
+
+    [Fact]
+    public void ГолосовойРежим_СлойПерсоныИдётПослеСекцииVoiceMode()
+    {
+        // Порядок — фундамент фичи голосового режима: слой персоны (с оговоркой
+        // VoicePrompts.PersonaOverride в конце) обязан клеиться ПОСЛЕ секции voice-mode,
+        // иначе оговорка теряет смысл «последнего слова»
+        var personaLayer = "Ты — Дмитрий\n\n" + VoicePrompts.PersonaOverride;
+        var text = TurnPromptAssembler.Combine(
+            [S("voice-mode", VoicePrompts.SectionText)], personaLayer);
+
+        text.IndexOf(VoicePrompts.PersonaOverride)
+            .Should().BeGreaterThan(text.IndexOf(VoicePrompts.SectionText));
+        text.Should().EndWith(VoicePrompts.PersonaOverride);
     }
 }

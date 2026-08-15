@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import { Modal } from '../../components/ui';
 import { C, FONT, FS, MODAL_W } from '../../lib/design';
-import { useIsMobile } from '../../lib/breakpoints';
 import { api } from '../../lib/api';
 import { useModels } from '../../lib/models';
 import { useProviderData, type TierKey } from '../../lib/modelProvidersShared';
@@ -17,9 +16,10 @@ import { ApplyTab } from './ApplyTab';
 import { ChainsTab } from './ChainsTab';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult } from '../../types';
 
-// Раздел «Модели и расход» (редизайн v4): одна модалка с пятью вкладками в порядке
-// «от настройки к деньгам» — Модели по умолчанию / Особые правила / Применение моделей /
-// Цепочки / Квоты и деньги. Решение владельца 14.08.2026: «Особые правила» стали
+// Раздел «Модели и расход» (редизайн v4): одна модалка с пятью вкладками —
+// Расход / Модели / Правила / Применение / Цепочки. Названия короткие: полоса вкладок
+// обязана влезать в ширину модалки без горизонтального скролла. Первым идёт «Расход»:
+// раздел открывают чаще всего ради денег. Решение владельца 14.08.2026: «Особые правила» стали
 // самостоятельной вкладкой (переехали из ExceptionsBlock в SlotsTab), отдельный
 // третий слой «Пользователю…» — admin-only на «Особых правилах» и «Цепочках».
 // Прежние «Использование» и «Поставщики моделей» растворены здесь: квоты — в пятой
@@ -30,9 +30,9 @@ type TabKey = 'quotas' | 'slots' | 'specialty' | 'apply' | 'chains';
 type Scope = 'global' | 'owner' | 'user';
 
 export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
-  const isMobile = useIsMobile();
-  // Стартовая вкладка — «Модели по умолчанию» (D1: порядок от настройки к деньгам).
-  const [tab, setTab] = useState<TabKey>('slots');
+  // Стартовая вкладка — «Расход»: с ним приходят чаще, чем с настройкой моделей.
+  // Диплинки (эффект ниже) перекрывают этот дефолт после маунта.
+  const [tab, setTab] = useState<TabKey>('quotas');
 
   // Роль и контекст уровня «Модели по умолчанию»: null = общие (админ) или свои (не-админ)
   const [me, setMe] = useState<Awaited<ReturnType<typeof api.auth.me>> | null>(null);
@@ -52,7 +52,8 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   }, []);
 
   // Диплинк «Собрать цепочку…» (requestNewPreset из панелей выбора модели):
-  // открываем раздел прямо на вкладке «Модели по умолчанию» и просим начать черновик.
+  // открываем раздел прямо на вкладке «Модели» (перекрывая стартовый «Расход»)
+  // и просим начать черновик.
   useEffect(() => {
     if (consumeOpenRequest()) setTab('slots');
     if (consumeDraftRequest()) { setTab('slots'); setPendingDraft(true); }
@@ -157,15 +158,14 @@ export function ModelsSpendModal({ onClose }: { onClose: () => void }) {
   }, [settings, specialtyCatalog, isAdmin]);
 
   const tabs: { key: TabKey; label: string; badge?: string | null }[] = [
-    // На мобиле полное название не влезает в полосу вкладок — короткий вариант из макета
-    { key: 'slots', label: isMobile ? 'Модели' : 'Модели по умолчанию' },
-    // «Особые правила» — отдельная вкладка (решение владельца 14.08.2026). Видна всем:
+    { key: 'quotas', label: 'Расход' },
+    { key: 'slots', label: 'Модели' },
+    // «Правила» — отдельная вкладка (решение владельца 14.08.2026). Видна всем:
     // у не-админа она открывается на слое «Только для меня» — тот же блок был раньше
-    // в «Моделях по умолчанию». Admin-only «Пользователю…» живёт уже внутри самой вкладки.
-    { key: 'specialty', label: 'Особые правила', badge: specialtyBadge },
-    { key: 'apply', label: 'Применение моделей' },
+    // в «Моделях». Admin-only «Пользователю…» живёт уже внутри самой вкладки.
+    { key: 'specialty', label: 'Правила', badge: specialtyBadge },
+    { key: 'apply', label: 'Применение' },
     { key: 'chains', label: 'Цепочки' },
-    { key: 'quotas', label: 'Квоты и деньги' },
   ];
 
   const tabBtnStyle = (active: boolean): CSSProperties => ({

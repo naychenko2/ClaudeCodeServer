@@ -7,13 +7,11 @@ import { useSpecialtyCatalog } from '../../lib/specialties';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
-import { ModelPicker } from '../../components/ModelPicker';
-import { PresetOptions } from '../../components/PresetOptions';
 import { RoutePicker } from '../../components/RoutePicker';
 import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
 import { parseTier, useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import {
-  chainSummary, findPreset, formatEffectiveLine, invalidateEffectiveLines, presetIdOf, routeDisplayLabel,
+  formatEffectiveLine, invalidateEffectiveLines, routeDisplayLabel,
   usePresets, usePreview, useSpecialtySettings, type EffectiveLineContext,
 } from '../../lib/presets';
 import { useTaskPreview } from '../tasks/useTaskPreview';
@@ -21,7 +19,7 @@ import { effectiveSpecialtyRecord } from '../../lib/specialties';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { bumpPersonas } from '../../lib/personas';
-import { C, FS, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, R, SHADOW } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { SectionLabel } from '../tasks/bits';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -121,7 +119,10 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     persona ? (persona.contract?.instructions ?? '') : (initial?.contract?.instructions ?? ''));
   // Пустая инструкция свёрнута в кнопку «+ инструкция» — раскрытие по клику
   const [instructionsOpen, setInstructionsOpen] = useState(false);
-  const [model, setModel] = useState(persona?.model ?? initial?.model ?? '');
+  // Явная модель персоны: поля в форме больше нет (модель задаётся ячейками уровней),
+  // но значение по-прежнему возит форма — сохраняется как есть, а старые значения
+  // переносит в ячейки уровней миграция стора персон
+  const [model] = useState(persona?.model ?? initial?.model ?? '');
   // Уровень модели ('' — не задан): слот, которым персона работает, когда явной модели нет.
   // В UI выбора уровня больше нет — задача и оркестратор смотрят в ячейки tierStrong/Medium/Weak,
   // а это поле осталось в формате персоны для совместимости со старыми сессиями и read-API
@@ -237,18 +238,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Возможности провайдера выбранной модели — показываем «Усилие рассуждения» только если поддерживается
   const caps = useModelCaps(model);
 
-  // Пресеты и модели слотов — для группы «Пресеты» в выборе модели и ячеек уровней
+  // Пресеты и модели слотов — для подписей ячеек уровней
   const presets = usePresets();
   const tierModels = useTierModels();
   const specSettings = useSpecialtySettings();
   const chainCtx = { tierModels, ollamaModel: undefined };
-  // Пресет в поле «Модель»: найден — карточка с цепочкой; удалён — честная пометка
-  const modelPreset = findPreset(presets, presetIdOf(model));
-  const brokenModelPreset = !!presetIdOf(model) && presets.length > 0 && !modelPreset;
-  // Модель стороннего провайдера действует только в личном чате персоны: субагент
-  // живёт в процессе CLI чужого чата (один ANTHROPIC_BASE_URL на процесс), пин модели
-  // туда не доезжает — предупреждаем в момент выбора
-  const thirdPartyModel = !!model && modelProvider(model) !== 'claude';
 
   // Ячейка уровня персоны: значение и установщик по ключу уровня
   const tierCell = (t: ModelTierKey): string =>
@@ -1040,58 +1034,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     <div style={section}>
       <SectionLabel style={{ marginBottom: 14 }}>Поведение и контекст</SectionLabel>
       <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
-        <Field label="Модель">
-          {modelPreset || brokenModelPreset ? (
-            // Выбран пресет: карточка с именем и порядком шагов (битая ссылка — приглушённо,
-            // место ведёт себя как пустое); «Сменить» возвращает к выбору модели
-            <div style={{ display: 'flex', alignItems: 'stretch', gap: 8 }}>
-              <div style={{
-                flex: 1, minWidth: 0, padding: '8px 10px', borderRadius: R.md,
-                border: `1px solid ${brokenModelPreset ? C.border : C.accent}`,
-                background: brokenModelPreset ? C.bgWhite : C.accentLight,
-              }}>
-                <div style={{
-                  fontSize: 13, fontWeight: 600, fontFamily: FONT.sans,
-                  color: brokenModelPreset ? C.textMuted : C.textHeading,
-                }}>
-                  {brokenModelPreset ? 'Цепочка удалена — работает настройка по умолчанию' : modelPreset!.name}
-                </div>
-                {modelPreset && (
-                  <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2, lineHeight: 1.35 }}>
-                    {chainSummary(modelPreset, chainCtx)}
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                onClick={() => setModel('')}
-                style={{
-                  flexShrink: 0, display: 'flex', alignItems: 'center', padding: '0 12px',
-                  borderRadius: R.md, cursor: 'pointer', border: `1px solid ${C.border}`,
-                  background: C.bgWhite, fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600,
-                  color: C.accent,
-                }}
-              >
-                Сменить
-              </button>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-              {/* Пресет — третий вариант в том же выборе (спека, блок 2); пустая группа
-                  не показывается вовсе */}
-              <PresetOptions value={model} onPick={setModel} ctx={chainCtx} />
-              {/* usage: у чатов персон своё назначение модели — пункт «По умолчанию»
-                  обязан показывать его, а не модель обычного нового чата */}
-              <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
-              {thirdPartyModel && (
-                <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.45 }}>
-                  Модели сторонних провайдеров работают в личном чате персоны. Когда её зовут агентом в чужой чат, она идёт на модели того чата.
-                </span>
-              )}
-            </div>
-          )}
-        </Field>
-
         {/* Модели по уровням (спека, блок 4): три ячейки Сильная/Средняя/Слабая — модель
             или цепочка; пустая ячейка наследуется (специальность → «Модели по умолчанию»).
             Блок всегда раскрыт — это основной рабочий экран уровня, сворачивать нечего.

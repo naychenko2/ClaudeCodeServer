@@ -56,6 +56,9 @@ public class PersonaManager
         // Разовая миграция уровней персон в среднюю ячейку — после перевода пинов, чтобы
         // свежепоставленный уровень пантеона тоже был развёрнут, а не завис мёртвым полем
         MigratePersonaModelTiers();
+        // Разовый перенос явной модели персоны в ячейку её рабочего уровня — строго ПОСЛЕ
+        // миграции уровней: та перезаписывает TierMedium безусловно и затёрла бы перенос
+        MigratePersonaModelToTierCell();
     }
 
     // Папка с ассетами персон (аватары): data/personas/
@@ -462,6 +465,63 @@ public class PersonaManager
         {
             Save();
             Console.WriteLine($"[PersonaManager] Миграция: уровень модели перенесён в среднюю ячейку у {migrated} персон(ы)");
+        }
+    }
+
+    // Разовая миграция «явная модель персоны → ячейка её рабочего уровня» (15.08.2026):
+    // поле «Модель» убрано из формы персоны, настройка модели осталась только в трёх ячейках
+    // Сильная/Средняя/Слабая. Persona.Model по приоритету резолва (ModelAssignmentResolver
+    // .PersonaModelDetailed, шаг 1) сильнее любых уровней, так что оставленное значение стало бы
+    // невидимой из интерфейса настройкой: персона молча ходила бы старой моделью.
+    // Уровень-получатель — тот, которым персона фактически работает в своём чате: её ModelTier
+    // (если ещё жив — после MigratePersonaModelTiers он пуст), иначе уровень специальности,
+    // иначе дефолт места «Чат с персоной» (chat-persona → Strong). Значение переносится КАК
+    // ЕСТЬ (id модели или "preset:{id}") — разворачивать нечего, шаг 1 резолва брал его дословно.
+    // Пишем ТОЛЬКО в пустую ячейку: заданная руками ячейка — осознанный выбор человека, её не
+    // перетираем. Model при этом всё равно очищается: держать невидимое поле, которое перебивает
+    // видимую ячейку, хуже, чем один раз отдать управление ячейке.
+    // Идемпотентно: после миграции Model пуст, повторный запуск ничего не находит.
+    // UpdatedAt НЕ бампаем — иначе миграция перетасовала бы список персон (как соседние).
+    private void MigratePersonaModelToTierCell()
+    {
+        var migrated = 0;
+        foreach (var persona in _personas.Values)
+        {
+            if (string.IsNullOrWhiteSpace(persona.Model)) continue;
+            var value = persona.Model.Trim();
+            var tier = persona.ModelTier
+                ?? (persona.Specialty != PersonaSpecialty.None
+                    ? _specialty?.SpecialtyDefaultTier(persona.OwnerId, persona.Specialty)
+                    : null)
+                ?? LocalActionCatalog.DefaultTierOf(LocalActionCatalog.ChatPersona)
+                ?? ModelTier.Medium;
+
+            var busy = tier switch
+            {
+                ModelTier.Strong => !string.IsNullOrWhiteSpace(persona.TierStrong),
+                ModelTier.Weak => !string.IsNullOrWhiteSpace(persona.TierWeak),
+                _ => !string.IsNullOrWhiteSpace(persona.TierMedium),
+            };
+            if (!busy)
+            {
+                switch (tier)
+                {
+                    case ModelTier.Strong: persona.TierStrong = value; break;
+                    case ModelTier.Weak: persona.TierWeak = value; break;
+                    default: persona.TierMedium = value; break;
+                }
+            }
+            persona.Model = null;
+            migrated++;
+            _log?.LogInformation(
+                "Миграция модели персоны: «{Name}» (owner={Owner}) {Value} → ячейка {Tier}{Skipped}",
+                persona.Name, persona.OwnerId, value, tier,
+                busy ? " (ячейка занята — значение отброшено)" : "");
+        }
+        if (migrated > 0)
+        {
+            Save();
+            Console.WriteLine($"[PersonaManager] Миграция: явная модель перенесена в ячейку уровня у {migrated} персон(ы)");
         }
     }
 

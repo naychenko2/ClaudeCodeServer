@@ -3,8 +3,7 @@ import { useModels, modelProvider, providerLabel, modelLabel, useDefaultModelOpt
   USAGE, type UsageKey } from '../lib/models';
 import { WindowBadge } from './ModelPicker';
 import { ComposerMenu, type ComposerMenuGroup } from './ComposerMenu';
-import { useEffectiveLine } from '../lib/presets';
-import { C, FONT } from '../lib/design';
+import { C } from '../lib/design';
 
 // Выбор модели в полосе контролов композера. Вся механика меню — в ComposerMenu
 // (общая с пикером усилия и визуально одинаковая с меню режимов прав); здесь только
@@ -28,9 +27,6 @@ interface Props {
   // Место применения: подпись пункта «По умолчанию» — от назначения ЭТОГО места
   // (чат персоны и обычный чат могут быть назначены на разные модели)
   usage?: UsageKey;
-  // Показывать строку «Сейчас пойдёт» под плашкой. По умолчанию — да, в компактной
-  // полосе контролов строка не влезает и зрительно спорит с плашкой усилия.
-  showPreview?: boolean;
   // Показывать пометку о заморозке модели у НАЧАТОГО чата. По умолчанию — да, когда started.
   showFreezeNote?: boolean;
 }
@@ -50,7 +46,7 @@ export function ModelIcon({ value, size = 14 }: { value?: string | null; size?: 
 }
 
 export function ComposerModelPicker({ value, onChange, started, isMobile, compact,
-  usage = USAGE.chatNew, showPreview = !compact, showFreezeNote }: Props) {
+  usage = USAGE.chatNew, showFreezeNote }: Props) {
   const models = useModels();
   const defaultOption = useDefaultModelOption(usage);
 
@@ -114,7 +110,7 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
   }));
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
       <ComposerMenu
         value={current}
         groups={[...defaultGroup, ...groups]}
@@ -127,47 +123,22 @@ export function ComposerModelPicker({ value, onChange, started, isMobile, compac
         isMobile={isMobile}
         compact={compact}
       />
-      {showPreview && <ComposerModelCaption value={value ?? ''} usage={usage} compact={!!compact} />}
       {started && (showFreezeNote ?? true) && <ComposerFreezeNote />}
     </div>
   );
 }
 
-// Строка «Сейчас пойдёт» под плашкой модели: при явном выборе — просто подпись
-// модели, на дефолте — резолв места по матрице персоны/слота/назначения.
-function ComposerModelCaption({ value, usage, compact }: { value: string; usage: UsageKey; compact: boolean }) {
-  const effective = useEffectiveLine({ kind: 'action', actionKey: usage });
-  // На явной модели показываем её саму — резолв превью не имеет смысла, бэкенд
-  // уже выбрал эту модель, никакого наследования тут нет
-  const text = value
-    ? `Сейчас пойдёт: ${modelLabel(value)}`
-    : (effective ?? 'Сейчас пойдёт: выбираем…');
-  return (
-    <div style={{
-      fontFamily: FONT.sans, fontSize: compact ? 10.5 : 11, color: C.textMuted,
-      lineHeight: 1.35, paddingInline: 2,
-      // Без обёртки «caption» (нет смысла дублировать стили) — просто muted-строка
-    }}>
-      {text}
-    </div>
-  );
-}
-
 // Пометка о заморозке модели у начатого чата: чат держит выбранную модель до конца,
-// правки цепочки и уровней действуют на новые чаты. Краткая версия для композера
-// (полная — в NewChatSetup, чтобы пользователь увидел её ещё ДО первого хода).
+// правки цепочки и уровней действуют на новые чаты. В композере места на текст нет —
+// одна иконка замка рядом с плашкой, объяснение в тултипе (полная пометка — в
+// NewChatSetup, чтобы пользователь увидел её ещё ДО первого хода).
 function ComposerFreezeNote() {
   return (
-    <div style={{
-      display: 'flex', alignItems: 'flex-start', gap: 5,
-      fontFamily: FONT.sans, fontSize: 11, color: C.textMuted,
-      lineHeight: 1.4, paddingInline: 2,
-    }}>
-      <Lock size={11} strokeWidth={2} style={{ flexShrink: 0, marginTop: 2 }} />
-      <span>
-        Модель этого разговора зафиксирована при создании. Правки цепочки и уровней
-        действуют на новые чаты, этот — продолжит на старой модели.
-      </span>
-    </div>
+    <span
+      title="Модель этого чата зафиксирована при создании. Правки цепочек и уровней подействуют на новые чаты."
+      style={{ display: 'inline-flex', flexShrink: 0, color: C.textMuted, cursor: 'help' }}
+    >
+      <Lock size={12} strokeWidth={2} />
+    </span>
   );
 }

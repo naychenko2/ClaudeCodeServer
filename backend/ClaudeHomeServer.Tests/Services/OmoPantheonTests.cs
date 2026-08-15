@@ -97,8 +97,11 @@ public class OmoPantheonTests : IDisposable
         var migrated = reloaded.Get(sisyphus.Id, OwnerId)!;
         migrated.Model.Should().BeNull();
         migrated.ModelTier.Should().Be(ModelTier.Strong);
-        reloaded.Get(custom.Id, OwnerId)!.Model.Should().Be("haiku",
-            "персону вне каталога не трогаем — это выбор человека");
+        var outside = reloaded.Get(custom.Id, OwnerId)!;
+        outside.ModelTier.Should().BeNull(
+            "персону вне каталога миграция пинов не трогает — уровень ей не назначаем");
+        outside.TierStrong.Should().Be("haiku",
+            "её выбор сохраняется как есть — миграция модели кладёт его в ячейку рабочего уровня");
     }
 
     [Fact]

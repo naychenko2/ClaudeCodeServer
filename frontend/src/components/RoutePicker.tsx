@@ -12,6 +12,7 @@ import {
   validateLocalActionRoute, routeCanSave, RATE_PICKER_HINT,
 } from '../lib/routeFormat';
 import { C, FONT, FS, R, SHADOW, Z, FIELD } from '../lib/design';
+import { incPopupDepth } from '../lib/popupEscape';
 import type { ModelOption } from '../lib/models';
 import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types';
 
@@ -27,6 +28,7 @@ export function RoutePicker({
   route, label, models, tierModels, ollamaModel, allowLocal = false, busy = false,
   readOnly = false, onChange, placeholder = 'не задан', cardTitle, title,
   showTiers = true, showPresets = false, presetCreation, presetScope, manual,
+  fullWidth = false, dashed = false,
 }: {
   route: string;
   label: string;
@@ -56,22 +58,30 @@ export function RoutePicker({
   // «Модели и расход»); без него — прежнее поведение (открыть раздел через nav-событие).
   presetCreation?: {
     settings: SpecialtySettingsResponse | null;
-    savingScope: 'global' | 'owner' | null;
-    onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+    savingScope: 'global' | 'owner' | 'user' | null;
+    onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
     // См. PresetCreationCtx.onCreated — сливать сохранение пресета с ДРУГОЙ правкой того
     // же слоя в один PUT (нужно там, где onChange этого пикера тоже пишет в этот слой).
-    onCreated?: (presetId: string, scope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
+    onCreated?: (presetId: string, scope: 'global' | 'owner' | 'user', layer: SpecialtySettingsLayer) => void;
   };
   // Слой пресетов группы «Пресеты»: 'global' — место общее (список и inline-создание
-  // ограничены общими пресетами), не задан — личный контекст (создание в owner, в списке
-  // видны оба слоя). Прокидывается в PresetOptions.scope как есть.
-  presetScope?: 'global' | 'owner';
+  // ограничены общими пресетами), 'user' — админский пользовательский слой (тот же
+  // принцип), не задан — личный контекст (создание в owner, в списке видны оба слоя).
+  // Прокидывается в PresetOptions.scope как есть.
+  presetScope?: 'global' | 'owner' | 'user';
   // Блок ручного ввода id маршрута с клиентской валидацией (ADR-009). Включается только
   // для local-action-контекстов (вкладка «Применение»): карточки выбора дают значение
   // с уже корректным префиксом, а редкий ручной ввод проверяется по тому же перечню
   // форм, что и бэкенд — сохранение заблокировано, пока значение невалидно. Не задан —
   // блок не рендерится (слоты/матрицы/исключения работают как раньше).
   manual?: { models?: ModelOption[]; presetIds?: string[] };
+  // Триггер-строка тянется на всю ширину места вместо фиксированных 230px. Нужен строкам
+  // «Особых правил» (уровень слева — значение во всю оставшуюся ширину): там имя цепочки
+  // длинное, а места в карточке хватает.
+  fullWidth?: boolean;
+  // Пунктирный контур приглушённого значения — «поле не задано, оно наследуется».
+  // Работает только на пустом значении: у заданного маршрута контур обычный.
+  dashed?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [pos, setPos] = useState<{ top: number; left: number; maxHeight: number } | null>(null);
@@ -111,6 +121,8 @@ export function RoutePicker({
 
   useEffect(() => {
     if (!open) return;
+    // Регистрируем попап: пока счётчик > 0, Modal игнорирует Escape (см. lib/popupEscape).
+    const release = incPopupDepth();
     const onDown = (e: MouseEvent) => {
       // Черновик цепочки правится — не схлопывать ЭТУ панель по клику снаружи. Актуально
       // для вложенного пикера (шаг цепочки в ChainStepsEditor): его открытие/закрытие не
@@ -120,26 +132,19 @@ export function RoutePicker({
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
-      // Гасим Escape ВСЕГДА, пока эта панель открыта — иначе Modal (её document-listener
-      // навешен раньше, при монтировании модалки) получает необработанное событие первым
-      // и закрывает модалку целиком поверх этой панели, стирая черновик (MAJOR 3, ревью d23231bd)
-      e.preventDefault();
-      // Тот же случай, что у mousedown-гейта выше: document-level слушатель есть у ОБОИХ
-      // пикеров разом — пока presetEditing, Escape достаётся только вложенному пикеру шага,
-      // не схлопывая родительский черновик.
+      // Тот же случай, что у mousedown-гейта выше: пока presetEditing, Escape достаётся
+      // только вложенному пикеру шага, не схлопывая родительский черновик. Саму модалку
+      // теперь защищает счётчик активных попапов (см. lib/popupEscape и Modal.tsx) —
+      // пока эта панель открыта, Modal игнорирует Escape, и preventDefault() не нужен.
       if (presetEditing) return;
       setOpen(false);
     };
     document.addEventListener('mousedown', onDown);
-    // capture:true — иначе preventDefault() выше не успевает: Modal вешает свой keydown
-    // НА BUBBLE раньше (при монтировании модалки), и порядок между двумя bubble-слушателями
-    // одного document — по регистрации, а не по вложенности. Capture-фаза всегда отрабатывает
-    // ДО bubble-фазы в одном и том же событии — так preventDefault() успевает выставиться
-    // до того, как Modal дойдёт до своей проверки e.defaultPrevented (MAJOR 3, ревью d23231bd)
-    document.addEventListener('keydown', onKey, true);
+    document.addEventListener('keydown', onKey);
     return () => {
+      release();
       document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey, true);
+      document.removeEventListener('keydown', onKey);
     };
   }, [open, presetEditing]);
 
@@ -201,7 +206,7 @@ export function RoutePicker({
       )}
       {!presetEditing && !showPresets && presets.length > 0 && (
         <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
-          Пресет в пресет не вкладывается — выпишите шаги подряд.
+          Цепочка в цепочку не вкладывается — выпишите шаги подряд.
         </div>
       )}
       {!presetEditing && <div style={{ borderTop: `1px solid ${C.borderLight}`, margin: '2px 0' }} />}
@@ -270,8 +275,12 @@ export function RoutePicker({
   }
 
   // Обычный триггер-строка
+  const inherited = dashed && !route;
   return (
-    <div ref={rootRef} style={{ position: 'relative', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div ref={rootRef} style={{
+      position: 'relative', display: 'flex', alignItems: 'center', gap: 8,
+      ...(fullWidth ? { flex: '1 1 auto', minWidth: 0 } : { flexShrink: 0 }),
+    }}>
       <button
         ref={triggerRef}
         type="button"
@@ -279,12 +288,14 @@ export function RoutePicker({
         disabled={!interactive}
         title={title || undefined}
         style={{
-          display: 'flex', alignItems: 'center', gap: 6, maxWidth: 230, width: '100%',
+          display: 'flex', alignItems: 'center', gap: 6,
+          maxWidth: fullWidth ? '100%' : 230, width: '100%',
           fontFamily: FONT.sans, fontSize: FS.xs,
           padding: '4px 8px 4px 9px', borderRadius: R.md,
           cursor: interactive ? 'pointer' : 'default', opacity: busy ? 0.5 : 1,
-          color: C.textSecondary, background: C.bgWhite,
-          border: `1px solid ${open ? C.accent : C.border}`,
+          color: inherited ? C.textMuted : C.textSecondary,
+          background: inherited ? 'transparent' : C.bgWhite,
+          border: `1px ${inherited ? 'dashed' : 'solid'} ${open ? C.accent : inherited ? C.dashed : C.border}`,
           outline: 'none', transition: 'border-color 0.15s, box-shadow 0.15s',
           boxShadow: open ? SHADOW.focus : 'none',
         }}

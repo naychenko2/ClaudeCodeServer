@@ -7,6 +7,9 @@ interface ResetConfirmDialogProps {
   body: string;
   confirmLabel?: string;
   busy?: boolean;
+  // 'danger' — для необратимого сброса; 'primary' — для согласия на общее действие
+  // (правка общей цепочки админом и т. п.). По умолчанию 'danger'.
+  variant?: 'danger' | 'primary';
   onCancel: () => void;
   onConfirm: () => void;
 }
@@ -15,7 +18,8 @@ interface ResetConfirmDialogProps {
 // переиспользуемая обёртка над Modal (образец — deleteConfirmModal в TaskDetailsPane).
 // Тексты и числа собирает вызывающий: диалог сам ничего не считает и не запрашивает.
 export function ResetConfirmDialog({
-  open, title, body, confirmLabel = 'Сбросить', busy = false, onCancel, onConfirm,
+  open, title, body, confirmLabel = 'Сбросить', busy = false,
+  variant = 'danger', onCancel, onConfirm,
 }: ResetConfirmDialogProps) {
   if (!open) return null;
   return (
@@ -27,7 +31,7 @@ export function ResetConfirmDialog({
       footer={
         <>
           <Button variant="ghost" disabled={busy} onClick={onCancel}>Отмена</Button>
-          <Button variant="danger" loading={busy} disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
+          <Button variant={variant} loading={busy} disabled={busy} onClick={onConfirm}>{confirmLabel}</Button>
         </>
       }
     />

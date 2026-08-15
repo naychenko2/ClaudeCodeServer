@@ -36,9 +36,16 @@
 [mcp-servers.md](architecture/mcp-servers.md),
 [knowledge.md](architecture/knowledge.md) (заметки и Dify),
 [personas.md](architecture/personas.md),
-[onboarding-intro.md](architecture/onboarding-intro.md) (первый вход и знакомство с ассистентом),
+[onboarding-intro.md](architecture/onboarding-intro.md) (знакомство: личное и проектное v2),
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
+
+**features/** — [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
+[model-providers-rework.md](features/model-providers-rework.md),
+[model-route-format-validation.md](features/model-route-format-validation.md),
+[project-backgrounds.md](features/project-backgrounds.md),
+[project-onboarding-v2.md](features/project-onboarding-v2.md) (критерии снятия флага
+знакомства v2).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md) и

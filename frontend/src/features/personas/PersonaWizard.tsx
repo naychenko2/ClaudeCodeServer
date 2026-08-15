@@ -703,7 +703,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 <Field label="Приветствие" hint="С чего персона начинает разговор">
                   <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
                 </Field>
-                <Field label="Специальность" hint="Функциональная роль для оркестрации: конвейер, брифинг, статус команды. У «Исполнителя» и «Тестировщика» с полным профилем доступа в сабагентах есть право на правки файлов и команды — остальные специальности там только консультируют.">
+                <Field label="Специальность" hint="Необязательно. От специальности поля моделей наследуют значения — выбрать можно и позже.">
                   <select value={specialty} onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
                     <option value="none">Не задана</option>
                     {specialtyCatalog
@@ -916,6 +916,11 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
             <Button variant="ghost" size="sm" onClick={handleCancel} disabled={busy}>Отмена</Button>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {step > 1 && <Button variant="ghost" size="sm" onClick={goBack} disabled={busy}>Назад</Button>}
+              {/* Шаг 4 (поведение): можно завершить без выбора специальности —
+                  поля моделей наследуют её и так, а тонкая настройка — потом */}
+              {step === 4 && specialty === 'none' && (
+                <Button variant="ghost" size="sm" onClick={() => void goNext()} disabled={busy}>Пропустить</Button>
+              )}
               <Button variant="primary" size="sm" loading={busy} disabled={!canProceed || busy} onClick={() => void goNext()}>
                 {step === 1 && method === 'ai' ? (busy ? 'Генерирую…' : '✨ Сгенерировать и продолжить') : (busy ? 'Сохраняю…' : 'Далее')}
               </Button>

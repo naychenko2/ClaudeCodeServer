@@ -303,7 +303,10 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
 (2026-08); в каталоге три флага: `workspace-destructive` (постоянный
 предохранитель от необратимого удаления), `default-personas-onboarding` (ассистент по
 умолчанию заводится автоматически при первом входе, знакомство — по приглашению, а не
-обязательный экран; детали — [docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md))
+обязательный экран; проектное знакомство v2 дополнительно раскладывает каркас папок
+и правил по подтверждению карточкой в ленте — детали
+[docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md),
+критерии снятия — [docs/features/project-onboarding-v2.md](docs/features/project-onboarding-v2.md))
 и `project-backgrounds` (рисунок и цвет фона подбираются моделью по смыслу проекта;
 контракт генерации без разметки, серверная сборка тайла и форма хранения —
 [ADR-008](docs/adr/ADR-008-project-background-generation.md), тексты интерфейса и критерии

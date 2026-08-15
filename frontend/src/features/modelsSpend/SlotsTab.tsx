@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, Link2, RotateCcw } from 'lucide-react';
 import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
@@ -17,8 +17,8 @@ import { cloneLayer, newPresetId } from '../../lib/specialties';
 import { loadModels, modelLabel, providerLabel, modelProvider, type ModelOption } from '../../lib/models';
 import { C, FS, R, SP } from '../../lib/design';
 import { showToast } from '../../lib/toast';
-import type { AppSettings, ResetResult, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
-import { ExceptionsBlock } from './ExceptionsBlock';
+import type { AppSettings, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
+import { EffectiveLine } from '../../components/EffectiveLine';
 import { ResetConfirmDialog } from './ResetConfirmDialog';
 
 // Вкладка «Модели по умолчанию» (макет models-spend-v3.html §2). Три слота strong/medium/weak:
@@ -36,18 +36,18 @@ interface SlotsTabProps {
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
-  savingScope: 'global' | 'owner' | null;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
-  onGoApply: () => void;
+  savingScope: 'global' | 'owner' | 'user' | null;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   meUserId: string | null;
-  onReloadSettings: () => Promise<void>;
-  resettingScope: 'global' | 'owner' | null;
-  onReset: (scope: 'global' | 'owner', key?: string) => Promise<ResetResult>;
+  // A2: запрос на запуск черновика новой цепочки (от requestNewPreset() из RoutePicker).
+  // Раскрываем первую карточку, чтобы человек сразу увидел редактор.
+  pendingDraft?: boolean;
+  onPendingDraftConsumed?: () => void;
 }
 
 export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settings, models,
-  tierModels, ollamaModel, savingScope, onSaveLayer, onGoApply, meUserId,
-  onReloadSettings, resettingScope, onReset }: SlotsTabProps) {
+  tierModels, ollamaModel, savingScope, onSaveLayer, meUserId,
+  pendingDraft, onPendingDraftConsumed }: SlotsTabProps) {
   const presets = usePresets();
   const { selectedTiers, globalTiers, globalSettings, setGlobalSettings, setOwnTiers, setUserTiers } = data;
 
@@ -59,12 +59,28 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
   // а tierBusy типизирован как TierKey | null и жест на три слота не выражает
   const [resetBusy, setResetBusy] = useState(false);
   const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  // A4: ref вместо state — нам не нужно ререндерить SlotCard на каждый чих черновика,
+  // нужно только прочитать значение в requestToggle. SlotCard держит свой dirty локально
+  // и публикует через onDirtyChange.
+  const editorDirtyRef = useRef<Record<TierKey, boolean>>({ strong: false, medium: false, weak: false });
+  const [confirmCollapseOf, setConfirmCollapseOf] = useState<TierKey | null>(null);
+  const requestToggle = (t: TierKey) => {
+    if (expanded === t && editorDirtyRef.current[t]) {
+      // Свернуть пытаемся, пока редактор грязный — спросить подтверждение вместо тихой потери
+      setConfirmCollapseOf(t);
+      return;
+    }
+    setExpanded(expanded === t ? null : t);
+  };
 
   const tierModel = (t: TierKey): string => selectedTiers?.[t] ?? '';
   const globalTierModel = (t: TierKey): string => globalTiers?.[t] ?? '';
 
   // Счётчик мест по слоту: реально из каталога действий (api.usage → data.info.actions),
-  // не хардкод. Считаем действия, чей маршрут адресован этому слоту.
+  // не хардкод. Считаем действия, чей маршрут адресован этому слоту (tier:*). Действия без
+  // явного route или с route ≠ tier:* НЕ приписываем к слоту на фронте — дефолтный уровень
+  // места знает только бэкенд (LocalActionCatalog.EffectiveDefaultTier). totalActions —
+  // размер всего каталога, чтобы подпись была честной «X из M».
   const usageByTier = useMemo(() => {
     const actions = data.info?.actions ?? [];
     const out: Record<TierKey, { count: number; titles: string[] }> = {
@@ -78,6 +94,18 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
     }
     return out;
   }, [data.info]);
+
+  const totalActions = data.info?.actions.length ?? 0;
+
+  // A2: запрос на черновик цепочки — открываем первую (Сильную) карточку, чтобы человек
+  // сразу попал в редактор. Разовая реакция: после первого маунта флаг сбрасываем.
+  useEffect(() => {
+    if (pendingDraft) {
+      setExpanded(TIER_ORDER[0]);
+      onPendingDraftConsumed?.();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingDraft]);
 
   // Сохранение слота: личный/пользовательский — через свои эндпоинты, общий — через /api/settings.
   function saveTier(t: TierKey, model: string) {
@@ -205,7 +233,7 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
         <span style={{ flex: 1 }} />
         {isAdmin && (
           <span style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, maxWidth: 340 }}>
-            Личная цепочка перекрывает общую, пустая — «как у всех». Пресеты остаются в списках выбора модели — и здесь, и в исключениях.
+            Личная цепочка перекрывает общую, пустая — «как у всех». Цепочки остаются в списках выбора модели — и здесь, и в особых правилах.
           </span>
         )}
         <Button variant="ghost" size="sm" disabled={resetAllEmpty || resetBusy}
@@ -238,6 +266,7 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
             expanded={expanded === t}
             busy={tierBusy === t}
             usage={data.info ? usageByTier[t] : null}
+            totalActions={totalActions}
             presets={presets}
             models={models}
             tierModels={tierModels}
@@ -246,9 +275,9 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
             savingScope={savingScope}
             isAdmin={isAdmin}
             onSaveLayer={onSaveLayer}
-            onToggle={() => setExpanded(expanded === t ? null : t)}
+            onToggle={() => requestToggle(t)}
             onPickRoute={v => saveTier(t, v)}
-            onGoApply={onGoApply}
+            onDirtyChange={d => { editorDirtyRef.current[t] = d; }}
           />
         ))}
       </div>
@@ -260,18 +289,20 @@ export function SlotsTab({ isAdmin, data, contextUserId, onContextUserId, settin
         </div>
       )}
 
-      {/* Свёрнутый блок «Исключения» (бывш. вкладка «Специальности») */}
-      <ExceptionsBlock
-        settings={settings}
-        isAdmin={isAdmin}
-        models={models}
-        tierModels={tierModels}
-        ollamaModel={ollamaModel}
-        savingScope={savingScope}
-        onSaveLayer={onSaveLayer}
-        onReloadSettings={onReloadSettings}
-        resettingScope={resettingScope}
-        onReset={onReset}
+      {/* A4: при сворачивании карточки с несохранённой правкой черновика цепочки —
+          подтверждаем потерю. Иначе один клик по заголовку уносит несохранённые шаги. */}
+      <ResetConfirmDialog
+        open={confirmCollapseOf !== null}
+        title="В черновике остались шаги"
+        body="Если свернуть карточку, изменения пропадут. Сохраните или отмените правки, прежде чем закрывать."
+        confirmLabel="Свернуть без сохранения"
+        variant="danger"
+        onCancel={() => setConfirmCollapseOf(null)}
+        onConfirm={() => {
+          const t = confirmCollapseOf;
+          setConfirmCollapseOf(null);
+          if (t !== null) setExpanded(null);
+        }}
       />
     </div>
   );
@@ -291,7 +322,7 @@ function CtxMenu({ users, contextUserId, onPick, onClose }: {
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
       boxShadow: 'var(--shadow-dropdown)', padding: 4,
     }}>
-      <MenuBtn active={contextUserId === null} label="Общие (все пользователи)" onClick={() => onPick(null)} />
+      <MenuBtn active={contextUserId === null} label="Для всех" onClick={() => onPick(null)} />
       {users.map(u => (
         <MenuBtn key={u.id} active={contextUserId === u.id}
           label={u.displayName?.trim() || u.username} onClick={() => onPick(u.id)} />
@@ -329,21 +360,25 @@ interface SlotCardProps {
   expanded: boolean;
   busy: boolean;
   usage: { count: number; titles: string[] } | null;
+  totalActions: number;
   presets: ReturnType<typeof usePresets>;
   models: ModelOption[];
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   settings: SpecialtySettingsResponse | null;
-  savingScope: 'global' | 'owner' | null;
+  savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   onToggle: () => void;
   onPickRoute: (v: string) => void;
-  onGoApply: () => void;
+  // A4: редактор цепочки публикует наружу «грязный» флаг, чтобы родитель мог
+  // спросить подтверждение перед сворачиванием
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
-function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, presets, models,
-  tierModels, ollamaModel, settings, savingScope, isAdmin, onSaveLayer, onToggle, onPickRoute, onGoApply }: SlotCardProps) {
+function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, totalActions,
+  presets, models, tierModels, ollamaModel, settings, savingScope, isAdmin, onSaveLayer,
+  onToggle, onPickRoute, onDirtyChange }: SlotCardProps) {
   const presetId = presetIdOf(model);
   const scoped = presetId ? presets.find(p => p.id.toLowerCase() === presetId.toLowerCase()) ?? null : null;
   const preset = scoped;
@@ -355,7 +390,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, prese
   let chipTitle: string;
   let chipSub: string;
   if (broken) {
-    chipTitle = 'Пресет удалён';
+    chipTitle = 'Цепочка удалена';
     chipSub = 'работает настройка по умолчанию';
   } else if (preset) {
     chipTitle = `${preset.name}`;
@@ -365,7 +400,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, prese
     const prov = providerLabel(modelProvider(model));
     chipSub = prov || '';
   } else {
-    chipTitle = inheritedModel ? `Как у всех · ${modelLabel(inheritedModel)}` : 'не задана — решает CLI';
+    chipTitle = inheritedModel ? `Как у всех · ${modelLabel(inheritedModel)}` : 'не задана — выберет Claude Code сам';
     chipSub = inheritedModel ? 'личная цепочка не задана' : (TIERS[t].hint);
   }
 
@@ -385,9 +420,15 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, prese
           <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2, lineHeight: 1.35 }}>{TIERS[t].hint}</div>
         </div>
         <span style={{ color: C.textMuted, flexShrink: 0 }}>→</span>
-        {/* Чип выбранной модели/пресета — клик раскрывает редактор цепочки */}
+        {/* Чип выбранной модели/цепочки — клик раскрывает редактор уровня: цепочка + смена.
+            Тултип соответствует содержимому, которое человек увидит после клика. */}
         <button type="button" onClick={onToggle} disabled={busy}
-          title={preset ? `Сейчас пойдёт: ${chainSummary(preset, labelCtx)}` : 'Нажмите, чтобы сменить модель'}
+          title={
+            broken ? 'Цепочка удалена · нажмите, чтобы выбрать другую или задать модель'
+            : preset ? `Откроется: цепочка «${preset.name}» и смена уровня`
+            : model ? `Откроется: «${modelLabel(model)}» и смена уровня`
+            : 'Нажмите, чтобы выбрать модель или собрать цепочку'
+          }
           style={{
             flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 9, textAlign: 'left',
             padding: '8px 11px', borderRadius: R.lg, cursor: busy ? 'default' : 'pointer',
@@ -411,24 +452,25 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, prese
           <ChevronDown size={ICON_SIZE.sm} strokeWidth={ICON_STROKE}
             style={{ marginLeft: 'auto', flexShrink: 0, color: C.textMuted, transform: expanded ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s' }} />
         </button>
-        {/* Счётчик мест — только когда каталог загружен (админ) */}
+        {/* Счётчик мест — только когда каталог загружен (админ). «X из M» — где M весь каталог,
+            показывает, сколько мест вообще ездит через этот уровень и сколько идёт мимо (другие
+            маршруты / дефолт). */}
         {usage && (
           <div style={{ width: 150, flexShrink: 0, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
             {empty ? (
-              <><b style={{ color: C.textSecondary }}>0 мест</b><br />только через уровень у персон и задач</>
+              <><b style={{ color: C.textSecondary }}>0 из {totalActions}</b><br />через уровень не поедет никто
+              {totalActions > 0 && ', только через персон и задачи'}</>
             ) : (
-              <><b style={{ color: C.textSecondary }}>{used} {pluralPlaces(used)}</b><br />{usage.titles.join(', ')}{used > usage.titles.length ? '…' : ''}</>
+              <><b style={{ color: C.textSecondary }}>{used} из {totalActions}</b><br />{usage.titles.join(', ')}{used > usage.titles.length ? '…' : ''}</>
             )}
           </div>
         )}
       </div>
 
-      {/* Подсказка-переход для пустого слота: не должен читаться как поломка */}
-      {usage && empty && (
-        <div style={{ margin: '-2px 2px 0' }}>
-          <button type="button" onClick={onGoApply} style={linkBtnStyle}>Назначьте её исполнителю задач или сложным местам →</button>
-        </div>
-      )}
+      {/* B7: «Сейчас пойдёт» — что реально поедет на этом уровне, если специальность не
+          переопределяет. Эндпоинт GET /api/models/preview?kind=specialty&tier=...&specialtyKey=any
+          считается той же дорогой, что и запуск хода — второй точки истины нет. */}
+      <EffectiveLine ctx={{ kind: 'specialty', tier: t, specialtyKey: 'any' }} />
 
       {/* Раскрытый редактор: цепочка шагов (если пресет) + смена маршрута слота */}
       {expanded && (
@@ -446,6 +488,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, prese
           isAdmin={isAdmin}
           onSaveLayer={onSaveLayer}
           onPickRoute={onPickRoute}
+          onDirtyChange={onDirtyChange}
         />
       )}
     </div>
@@ -454,7 +497,7 @@ function SlotCard({ tier: t, model, inheritedModel, expanded, busy, usage, prese
 
 // === Редактор цепочки внутри слота ===
 function ChainEditor({ tier: t, model, preset, broken, presets, models, tierModels, ollamaModel,
-  settings, savingScope, isAdmin, onSaveLayer, onPickRoute }: {
+  settings, savingScope, isAdmin, onSaveLayer, onPickRoute, onDirtyChange }: {
   tier: TierKey;
   model: string;
   preset: ReturnType<typeof usePresets>[number] | null;
@@ -464,32 +507,51 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   tierModels: Record<TierKey, string>;
   ollamaModel?: string;
   settings: SpecialtySettingsResponse | null;
-  savingScope: 'global' | 'owner' | null;
+  savingScope: 'global' | 'owner' | 'user' | null;
   isAdmin: boolean;
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   onPickRoute: (v: string) => void;
+  // A4: редактор шлёт «грязный» флаг наверх, чтобы SlotCard не дал свернуть молча
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   // Черновик шагов: правится локально, пока не «Сохранить». Инициализируем шагами пресета.
   const presetSteps = preset?.steps ?? [];
   const [draft, setDraft] = useState<string[]>(presetSteps);
   const dirty = preset != null && (draft.length !== preset.steps.length ||
     draft.some((s, i) => s !== preset.steps[i]));
+  // A4: публикуем dirty наверх, чтобы SlotCard не схлопнул карточку молча
+  useEffect(() => { onDirtyChange?.(dirty); }, [dirty, onDirtyChange]);
 
   // Самоссылка: шаг «уровень T» внутри пресета, разворачивающегося из этого же слота
   const selfRef = preset ? preset.steps.some(s => routeTier(s) === t) : false;
 
   // Сохранить: записать обновлённые шаги в пресет (если он свой/админ правит общий)
   const canSavePreset = preset != null && (preset.scope === 'owner' || isAdmin);
-  const savePreset = () => {
-    if (!preset || !dirty || !canSavePreset || !settings) return;
+  // Правка общей цепочки админом — с подтверждением: изменение увидят все пользователи
+  const [confirmSharedEdit, setConfirmSharedEdit] = useState(false);
+  // Собственно запись шагов в слой — вынесено, чтобы диалог подтверждения мог его вызвать
+  const commitSavePreset = () => {
+    if (!preset || !settings) return;
     if (draft.length === 0) return; // пустую цепочку бэкенд отклонит
     const scope = preset.scope;
-    const next = cloneLayer(settings[scope]);
+    const baseLayer = settings[scope];
+    if (!baseLayer) return;
+    const next = cloneLayer(baseLayer);
     const p = next.presets.find(x => x.id === preset.id);
     if (p) p.steps = draft;
     // catch пустой намеренно: отказ уже показан баннером в ModelsSpendModal, здесь он нужен
     // только чтобы отклонённый промис не всплыл как «Uncaught (in promise)»
     void onSaveLayer(scope, next).catch(() => {});
+  };
+  const savePreset = () => {
+    if (!preset || !dirty || !canSavePreset || !settings) return;
+    if (draft.length === 0) return;
+    // Админ и общая цепочка — сначала диалог «Сохранить для всех», иначе сразу запись
+    if (isAdmin && preset.scope === 'global') {
+      setConfirmSharedEdit(true);
+      return;
+    }
+    commitSavePreset();
   };
 
   // Сохранить как пресет: новый пресет из черновика + перепривязка слота на него. Слой —
@@ -498,7 +560,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
   // общем слоте, ни тем более в слоте другого пользователя (MAJOR 2, ревью d23231bd)
   const saveAsPreset = () => {
     if (!settings || draft.length === 0) return;
-    const targetScope: 'global' | 'owner' = isAdmin ? 'global' : 'owner';
+    const targetScope: 'global' | 'owner' | 'user' = isAdmin ? 'global' : 'owner';
     const copy = { id: newPresetId(), name: `${preset?.name ?? 'Цепочка'} (копия)`,
       description: preset?.description ?? null, steps: draft };
     const next = cloneLayer(settings[targetScope]);
@@ -519,8 +581,8 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
         <>
           <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.45 }}>
             {preset
-              ? <>Цепочка из пресета «{preset.name}». Правьте прямо здесь: сам пресет не меняется, пока вы не сохраните цепочку под своим именем.</>
-              : 'Пресет удалён — выберите другую цепочку или модель ниже.'}
+              ? <>Цепочка «{preset.name}». Правьте прямо здесь: цепочка не сохранится, пока вы не запишете её отдельной цепочкой.</>
+              : 'Цепочка удалена — выберите другую цепочку или модель ниже.'}
           </div>
 
           {preset && preset.steps.length > 0 && (
@@ -537,7 +599,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
 
           {selfRef && (
             <div style={{ fontSize: FS.xs, color: C.warningText, lineHeight: 1.45 }}>
-              Шаг «{TIERS[t].title}» внутри пресета указывает обратно на эту же настройку — он будет пропущен.
+              Шаг «{TIERS[t].title}» внутри цепочки указывает обратно на эту же настройку — он будет пропущен.
             </div>
           )}
 
@@ -545,12 +607,12 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           {canSavePreset && preset && (
             <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap', borderTop: `1px dashed ${C.border}`, paddingTop: SP.md }}>
               {dirty
-                ? <span style={{ fontSize: FS.xs, color: C.warningText, fontWeight: 600 }}>Цепочка изменена · не совпадает с пресетом</span>
-                : <span style={{ fontSize: FS.xs, color: C.textMuted }}>Цепочка совпадает с пресетом</span>}
+                ? <span style={{ fontSize: FS.xs, color: C.warningText, fontWeight: 600 }}>Цепочка изменена · не совпадает с цепочкой</span>
+                : <span style={{ fontSize: FS.xs, color: C.textMuted }}>Цепочка совпадает с цепочкой</span>}
               <span style={{ flex: 1 }} />
               {dirty && <Button size="sm" variant="ghost" disabled={savingScope !== null} onClick={() => setDraft(preset.steps)}>Отменить</Button>}
               {dirty && <Button size="sm" variant="primary" disabled={savingScope !== null || draft.length === 0} onClick={savePreset}>Сохранить</Button>}
-              {dirty && <Button size="sm" variant="ghost" disabled={savingScope !== null} onClick={saveAsPreset}>Сохранить как пресет…</Button>}
+              {dirty && <Button size="sm" variant="ghost" disabled={savingScope !== null} onClick={saveAsPreset}>Сохранить как цепочку…</Button>}
             </div>
           )}
         </>
@@ -558,7 +620,7 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
 
       {/* Смена маршрута слота целиком (другая модель / другой пресет) */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderTop: showChain ? `1px dashed ${C.border}` : 'none', paddingTop: showChain ? SP.md : 0 }}>
-        <span style={{ fontSize: FS.xs, color: C.textMuted }}>Сменить модель или пресет слота:</span>
+        <span style={{ fontSize: FS.xs, color: C.textMuted }}>Сменить модель или цепочку уровня:</span>
         <RoutePicker
           route={model}
           label={model ? (isPresetRoute(model) ? presetValueLabel(model, presets) : routeLabel(model, ollamaModel, tierModels)) : ''}
@@ -573,22 +635,21 @@ function ChainEditor({ tier: t, model, preset, broken, presets, models, tierMode
           presetScope={isAdmin ? 'global' : undefined}
           presetCreation={{ settings, savingScope, onSaveLayer }}
           busy={savingScope !== null}
-          placeholder="не задана — решает CLI"
+          placeholder="не задана — выберет Claude Code сам"
           onChange={onPickRoute}
         />
       </div>
+
+      <ResetConfirmDialog
+        open={confirmSharedEdit}
+        title="Сохранить цепочку для всех?"
+        body="Цепочка общая. Изменение увидят все пользователи."
+        confirmLabel="Сохранить для всех"
+        variant="primary"
+        busy={savingScope !== null}
+        onCancel={() => setConfirmSharedEdit(false)}
+        onConfirm={() => { setConfirmSharedEdit(false); commitSavePreset(); }}
+      />
     </div>
   );
-}
-
-const linkBtnStyle = {
-  font: 'inherit', fontSize: FS.xs, fontWeight: 600, color: C.accent, background: 'none',
-  border: 'none', padding: 0, cursor: 'pointer', textDecoration: 'none',
-} as const;
-
-function pluralPlaces(n: number): string {
-  const m10 = n % 10, m100 = n % 100;
-  if (m10 === 1 && m100 !== 11) return 'место';
-  if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'места';
-  return 'мест';
 }

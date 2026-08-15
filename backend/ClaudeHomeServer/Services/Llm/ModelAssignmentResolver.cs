@@ -22,16 +22,18 @@ public sealed class ModelAssignmentResolver(
     LlmProviderRegistry? providers = null)
 {
     /// <summary>
-    /// Модель персоны как «явная» для места (ADR-007 §2): своя модель сильнее её уровня,
-    /// уровень — сильнее специальности, та — сильнее назначения места. Уровень разворачивается
-    /// по самым узким матрицам (персона → специальность → слоты владельца). Ячейка матрицы
-    /// или явная модель может быть preset:{id} — разворачивается в первый пригодный шаг.
-    /// null — ни один шаг не сработал: решает место. Разворачивается при создании чата
-    /// (SessionManager) и замораживается в Session.Model (§5.2).
+    /// Модель персоны как «явная» для места (ADR-007 §2): своя модель сильнее уровня,
+    /// уровень (задача → специальность → дефолт места) разворачивается по самым узким
+    /// матрицам (персона → специальность → слоты владельца). Своего уровня у персоны
+    /// больше нет: Persona.ModelTier выведен из цепочки (15.08.2026, упрощение модели —
+    /// вместо него ячейки Tier*, заданные значения мигрированы в TierMedium). Ячейка
+    /// матрицы или явная модель может быть preset:{id} — разворачивается в первый
+    /// пригодный шаг. null — ни один шаг не сработал: решает место. Разворачивается при
+    /// создании чата (SessionManager) и замораживается в Session.Model (§5.2).
     ///
     /// placeDefaultTier — дефолтный уровень места (LocalActionCatalog.DefaultTierOf), последний
-    /// резерв уровня, когда ни Persona.ModelTier, ни Specialty.DefaultTier не заданы. Без него
-    /// персона с заполненной ячейкой, но без явного уровня, свою ячейку не задействовала —
+    /// резерв уровня, когда ни Specialty.DefaultTier, ни уровень задачи не заданы. Без него
+    /// персона с заполненной ячейкой, но без уровня, свою ячейку не задействовала —
     /// настройка сохранялась и молча не работала (дефект 2-й итерации). Этим уровнем матрица
     /// разворачивается всё в той же точке — UserModelTierResolver.ModelFor.
     /// </summary>
@@ -43,7 +45,7 @@ public sealed class ModelAssignmentResolver(
 
     /// <summary>
     /// Модель исполнителя задачи (ADR-007 §5.3): уровень задачи (постановщик) сильнее
-    /// персоны, далее — PersonaModel (модель персоны → её уровень с матрицами). Уровень
+    /// всего, далее — PersonaModel (модель персоны → уровень с матрицами). Уровень
     /// задачи тоже разворачивается по матрицам персоны (если исполнитель — персона).
     /// null — ни один шаг не сработал: сессия возьмёт модель по назначению места.
     /// </summary>
@@ -364,11 +366,12 @@ public sealed class ModelAssignmentResolver(
         if (!string.IsNullOrWhiteSpace(persona.Model))
             return PrimaryDetailed(persona.Model.Trim(), ownerId, ModelSource.PersonaModel, null, null);
 
-        // 2. Уровень: задача → персона → специальность → дефолт места
+        // 2. Уровень: задача → специальность → дефолт места. Persona.ModelTier выведен
+        // из цепочки (15.08.2026, упрощение модели): уровень персоны заменён ячейками
+        // Tier*, заданные при выкате значения мигрированы в TierMedium (PersonaManager).
         ModelTier level;
         string origin;
         if (overrideTier is { } ot) { level = ot; origin = "task"; }
-        else if (persona.ModelTier is { } pmt) { level = pmt; origin = "persona"; }
         else if (personaSpecialty != PersonaSpecialty.None && specialty is not null
             && specialty.SpecialtyDefaultTier(ownerId ?? "", personaSpecialty) is { } sdt)
         { level = sdt; origin = "specialty"; }

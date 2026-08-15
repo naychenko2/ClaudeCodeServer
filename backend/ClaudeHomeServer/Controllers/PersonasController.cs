@@ -513,9 +513,18 @@ public class PersonasController : ControllerBase
     // Финализация онбординга (make-default пришёл из онбординг-сессии): досев профиля
     // дефолт-персоны, у пользовательского — «просыпание» персоны в этом же чате
     // (SetPersona: адаптер лениво пересоберётся, активный ход не рвётся) и очистка
-    // User.OnboardingSessionId; у проектного — очистка Project.OnboardingSessionId.
+    // User.OnboardingSessionId; у проектного — очистка Project.OnboardingSessionId,
+    // но только когда каркас больше не предлагают (знакомство v2, п.5): пока
+    // PresetKey == "pending", точка входа обязана возвращать ту же сессию — иначе повторный
+    // start завёл бы вторую сессию «Знакомство с проектом» с новым kickoff поверх живой.
     private async Task FinalizeOnboardingAsync(Session onboarding, Persona persona)
     {
+        // Повторная финализация из живой сессии — no-op: событие onboarding_completed и
+        // телеметрия уже ушли, досев идемпотентен, но второй карточки в ленте быть не должно
+        // (критерий приёмки п.5). Флаг ставится здесь первым и переживает рестарт (sessions.json).
+        if (onboarding.OnboardingFinalized) return;
+        _sessions.SetOnboardingFinalized(onboarding.Id, UserId);
+
         // Досев профиля дефолта (Coordinator+Full+manage) — ТОЛЬКО персоне, созданной в этом
         // онбординге (через personas_create). Выбранная существующая персона прав НЕ получает:
         // молчаливая дозапись Access=Full+manage была бы тихой эскалацией (как и ручная смена
@@ -537,7 +546,11 @@ public class PersonasController : ControllerBase
         }
         else if (onboarding.OnboardingKind == OnboardingKinds.Project && onboarding.ProjectId is { } pid)
         {
-            _projects.SetOnboardingSession(pid, null);
+            var project = _projects.GetById(pid);
+            // PresetKey == "pending" → сессию не чистим: надстройка сценария живёт до
+            // применения/отказа каркаса, и точка входа должна резюмить именно её
+            if (project?.PresetKey != ProjectPreset.Pending)
+                _projects.SetOnboardingSession(pid, null);
         }
         // Гейт на фронте снимается не по этому событию mid-turn, а по концу хода (result)
         // или кнопке «Перейти в систему» — событие лишь помечает завершение

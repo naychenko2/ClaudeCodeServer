@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Prompts;
 
 namespace ClaudeHomeServer.Services;
@@ -27,11 +28,19 @@ public class PersonaManager
     private readonly Lock _connectLock = new();
     private readonly ILogger<PersonaManager>? _log;
     private readonly ProjectEventLogService? _events;
+    // Разворот уровня → значение ячейки для миграции MigratePersonaModelTiers; в DI всегда
+    // передаются (Program), опциональность — ради юнит-тестов, создающих стор без них.
+    private readonly UserModelTierResolver? _userTiers;
+    private readonly SpecialtySettingsStore? _specialty;
 
-    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null, ProjectEventLogService? events = null)
+    public PersonaManager(IConfiguration config, ILogger<PersonaManager>? log = null,
+        ProjectEventLogService? events = null, UserModelTierResolver? userTiers = null,
+        SpecialtySettingsStore? specialty = null)
     {
         _log = log;
         _events = events;
+        _userTiers = userTiers;
+        _specialty = specialty;
         // Стор — в каталоге DataPath (как у всех сервисов): в контейнере это /data (volume).
         // Прежний фолбэк AppContext.BaseDirectory/data жил ВНУТРИ контейнера, и персоны
         // с аватарами пропадали при каждом его пересоздании (деплое).
@@ -44,6 +53,9 @@ public class PersonaManager
         RefreshPantheonInstructions();
         // Разовый перенос зашитых Claude-пинов пантеона на уровни (B3 приёмки «Командной реализации»)
         MigratePantheonModelPins();
+        // Разовая миграция уровней персон в среднюю ячейку — после перевода пинов, чтобы
+        // свежепоставленный уровень пантеона тоже был развёрнут, а не завис мёртвым полем
+        MigratePersonaModelTiers();
     }
 
     // Папка с ассетами персон (аватары): data/personas/
@@ -416,6 +428,55 @@ public class PersonaManager
             Save();
             Console.WriteLine($"[PersonaManager] Пантеон: пины моделей переведены на уровни у {migrated} персон(ы)");
         }
+    }
+
+    // Разовая миграция «уровень персоны → средняя ячейка» (упрощение модели, ADR-007 §2,
+    // 15.08.2026): поле «Уровень модели» убрано из формы персоны, ModelAssignmentResolver
+    // ModelTier больше не читает. Чтобы заданный уровень не остался невидимой настройкой,
+    // его текущий разворот по действующей цепочке (матрица персоны → специальность → слоты
+    // владельца/инстанса) фиксируется в СРЕДНЕЙ ячейке: после миграции персона работает
+    // уровнем дефолта места (у чата персоны — средним), и записанное значение сохраняет
+    // прежнее поведение. Значение переносится КАК ЕСТЬ (id модели или "preset:{id}").
+    // Пустой разворот (ни матриц, ни слотов) — ячейку не пишем, уровень просто снимается.
+    // Осознанная плата: значение фиксируется — если оно пришло из слота владельца, персона
+    // перестаёт следовать за сменой слота (решение владельца 14.08.2026).
+    // Идемпотентно: после миграции ModelTier пуст, повторный запуск ничего не находит.
+    // TierMedium перезаписывается безусловно (уровень персоны и так перекрывал её);
+    // UpdatedAt НЕ бампаем — иначе миграция перетасовала бы список персон (как ResetTierMatrices).
+    private void MigratePersonaModelTiers()
+    {
+        // Без зависимостей разворота (юнит-тесты без них) миграцию не выполняем
+        if (_userTiers is null || _specialty is null) return;
+        var migrated = 0;
+        foreach (var persona in _personas.Values)
+        {
+            if (persona.ModelTier is not { } tier) continue;
+            persona.TierMedium = _userTiers.ModelFor(tier, persona.OwnerId, TierMatricesOf(persona));
+            persona.ModelTier = null;
+            migrated++;
+            _log?.LogInformation(
+                "Миграция уровня персоны: «{Name}» (owner={Owner}) {Tier} → TierMedium={Value}",
+                persona.Name, persona.OwnerId, tier, persona.TierMedium ?? "«пусто»");
+        }
+        if (migrated > 0)
+        {
+            Save();
+            Console.WriteLine($"[PersonaManager] Миграция: уровень модели перенесён в среднюю ячейку у {migrated} персон(ы)");
+        }
+    }
+
+    // Узкие матрицы для разворота уровня персоны — та же сборка, что у боевого резолва
+    // (ModelAssignmentResolver.PersonaMatrices): матрица персоны, затем матрицы её
+    // специальности. Дублируется сознательно: резолвер собирает их у себя из своих данных,
+    // вторая точка — только у разовой миграции.
+    private List<TierMatrix> TierMatricesOf(Persona persona)
+    {
+        var matrices = new List<TierMatrix>();
+        var pm = new TierMatrix(persona.TierStrong, persona.TierMedium, persona.TierWeak);
+        if (!pm.IsEmpty) matrices.Add(pm);
+        if (persona.Specialty != PersonaSpecialty.None)
+            matrices.AddRange(_specialty!.SpecialtyMatrices(persona.OwnerId, persona.Specialty));
+        return matrices;
     }
 
     internal static string HashInstructions(string? instructions) =>

@@ -4,13 +4,14 @@ namespace ClaudeHomeServer.Services.Llm;
 // SpecialtySettingsStore: переименование и удаление одного пресета без замены слоя
 // целиком — прямого API точечного изменения у стора нет (слой-структуру правит другой
 // исполнитель волны), поэтому read-modify-write от снимка: клон слоя → мутация →
-// SetGlobal/SetOwner (обе записи идут под write-локом стора и нормализуют слой,
-// объекты входа не мутируются). Права слоя (глобальный — только админ) проверяет
-// вызывающий контроллер: стор о ролях не знает.
+// SetGlobal/SetOwner/SetUser (все записи идут под write-локом стора и нормализуют
+// слой, объекты входа не мутируются). Права слоёв (глобальный и назначенный
+// пользователю — только админ) проверяет вызывающий контроллер: стор о ролях не знает.
 public static class PresetStore
 {
-    // Найденный пресет и слой, где он живёт: Global — общий пресет инстанса,
-    // Owner — личный пресет владельца (ownerId того, кто звал Find).
+    // Найденный пресет и слой, где он живёт: Global — общий пресет инстанса, User —
+    // назначенный пользователю (B9; ключ — тот же ownerId, что у Find, — EffectivePresets
+    // WithScope читает Users[ownerId] вызывающего), Owner — личный пресет владельца.
     public sealed record LocatedPreset(ModelRoutePreset Preset, PresetScope Scope);
 
     // Поиск среди эффективных пресетов владельца (личные раньше глобальных — тот же
@@ -63,13 +64,26 @@ public static class PresetStore
         Action<SpecialtySettingsLayer> mutate)
     {
         var file = store.Snapshot;
-        var layer = scope == PresetScope.Global ? file.Global : file.Owners.GetValueOrDefault(ownerId);
+        // Слой по скоупу найденного пресета: User — назначенный пользователю (B9),
+        // ключ — ownerId вызывающего (Find нашёл пресет именно в его Users-слое),
+        // Owner — личный. Писать не в тот слой — тихий no-op: пресет «не удалится».
+        var layer = scope switch
+        {
+            PresetScope.Global => file.Global,
+            PresetScope.User => file.Users.GetValueOrDefault(ownerId),
+            _ => file.Owners.GetValueOrDefault(ownerId),
+        };
         if (layer is null) return "Слой пресета не найден";
         var copy = CloneLayer(layer);
         mutate(copy);
-        // Пустой личный слой после удаления последнего пресета снимается самим стором
-        // (SetOwner удаляет запись — владелец возвращается к глобальным значениям).
-        return scope == PresetScope.Global ? store.SetGlobal(copy) : store.SetOwner(ownerId, copy);
+        // Пустой слой после удаления последнего пресета снимается самим стором
+        // (SetOwner/SetUser удаляют запись — владелец возвращается к нижнему слою).
+        return scope switch
+        {
+            PresetScope.Global => store.SetGlobal(copy),
+            PresetScope.User => store.SetUser(ownerId, copy),
+            _ => store.SetOwner(ownerId, copy),
+        };
     }
 
     // Копия слоя: словарь и список пересоздаются, записи — те же объекты (SetGlobal/

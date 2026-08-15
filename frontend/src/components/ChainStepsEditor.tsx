@@ -82,6 +82,11 @@ export function ChainStepsEditor({ steps, onChange, models, tierModels, ollamaMo
           {steps.length === 0 ? (addLabel ?? 'Добавьте первый шаг →') : 'Добавить модель'}
         </button>
       )}
+      {steps.length >= maxSteps && (
+        <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+          В цепочке не больше пяти моделей
+        </div>
+      )}
     </div>
   );
 }

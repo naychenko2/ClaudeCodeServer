@@ -135,6 +135,9 @@ public class ProjectManager
             OwnerId = userId,
             GroupId = string.IsNullOrEmpty(groupId) ? null : groupId,
             Icon = new ProjectIcon { Color = string.IsNullOrEmpty(color) ? null : color },
+            // Новый проект — кандидат на предложение каркаса (знакомство v2); созданные
+            // до фичи проекты остаются с null и предложение не получают никогда
+            PresetKey = ProjectPreset.Pending,
         };
         _projects[project.Id] = project;
         Save();
@@ -417,6 +420,19 @@ public class ProjectManager
         if (autoPush is not null) project.GitAutoPush = autoPush.Value;
         if (commitPromptOverride is not null)
             project.CommitPromptOverride = commitPromptOverride.Length == 0 ? null : commitPromptOverride;
+        project.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return project;
+    }
+
+    // Зафиксировать исход каркаса знакомства v2: ключ применённого пресета или отказ
+    // (ProjectPreset.None). Валидацию ключа делает вызывающий код (эндпоинт резолвит
+    // его по каталогу) — здесь сеттер, как у остальных точечных обновлений.
+    public Project SetPresetKey(string id, string key)
+    {
+        var project = _projects.GetValueOrDefault(id)
+            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
+        project.PresetKey = key;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;

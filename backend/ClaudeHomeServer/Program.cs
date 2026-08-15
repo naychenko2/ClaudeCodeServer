@@ -208,6 +208,9 @@ builder.Services.AddSingleton<FileService>();
 // Документация проекта (README + docs/) для панели «Доки»: индекс, связи, поиск.
 // Кеш живёт внутри сервиса и ключуется корнем папки, поэтому singleton.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Docs.DocsIndexService>();
+// Применение пресета каркаса знакомства v2: только добавляет поверх живой папки,
+// отчёт по каждому шагу; зависимости-синглтоны, сам тоже stateless-синглтон
+builder.Services.AddSingleton<ProjectPresetService>();
 // Документы: конвертация в Markdown (markitdown) + ИИ-помощь (суммари/выжимка/теги) на локальной модели
 builder.Services.AddSingleton<MarkitdownService>();
 builder.Services.AddSingleton<DocumentAiService>();

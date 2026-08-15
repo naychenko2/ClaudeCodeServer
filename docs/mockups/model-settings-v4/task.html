@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Задача: уровень и «Сейчас пойдёт» — v4</title>
+<style>
+  :root {
+    --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+    --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+    --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+    --c-on-accent:#FBF8F2;
+    --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+    --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+    --c-success-text:#3F7A4F; --c-success-bg:#E9F1E8;
+    --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+    --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+    --c-overlay:rgba(23,19,15,.42);
+    --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+    --shadow-card:0 2px 8px rgba(60,50,35,.05);
+    --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+    --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+    --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+    --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+    --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+    --c-on-accent:#201C18;
+    --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+    --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-track:#453F37;
+    --c-success-text:#8FCB79; --c-success-bg:#232E20;
+    --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+    --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+    --c-overlay:rgba(0,0,0,.62);
+    --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+    --shadow-card:0 2px 10px rgba(0,0,0,.35);
+    --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+    --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+    --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px 64px; background:var(--c-bg-main); color:var(--c-text-primary);
+    font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:13px; }
+  .page { max-width:1240px; margin:0 auto; }
+  h1.doc { font-family:'PT Serif',Georgia,serif; font-size:28px; color:var(--c-text-heading); margin:0 0 6px; }
+  p.lead, p.note { color:var(--c-text-secondary); max-width:900px; line-height:1.6; }
+  p.lead { margin:0 0 20px; } p.note { margin:0 0 16px; }
+  h2.sec { font-family:'PT Serif',Georgia,serif; font-size:22px; color:var(--c-text-heading); margin:44px 0 6px; padding-top:20px; border-top:1px solid var(--c-border); }
+
+  .themebar { position:sticky; top:0; z-index:30; display:flex; gap:8px; align-items:center; background:var(--c-bg-main); padding:8px 0 14px; }
+  .tbtn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; padding:6px 12px; border-radius:999px;
+    border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-secondary); }
+  .tbtn.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+
+  .scene { background:var(--c-overlay); border-radius:24px; padding:40px 24px; display:flex; justify-content:center; gap:24px; flex-wrap:wrap; }
+  .modal { width:560px; max-width:100%; background:var(--c-bg-main); border-radius:20px; box-shadow:var(--shadow-modal); overflow:hidden; }
+  .m-head { padding:26px 28px 0; }
+  .m-title { font-family:'PT Serif',Georgia,serif; font-size:22px; font-weight:500; color:var(--c-text-heading); }
+  .m-close { float:right; width:32px; height:32px; border-radius:8px; border:none; cursor:pointer; background:transparent; color:var(--c-text-muted); font-size:16px; }
+  .m-body { padding:14px 28px 26px; }
+  .m-foot { display:flex; justify-content:flex-end; gap:8px; padding:0 28px 24px; }
+
+  .lvl { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.07em; margin:16px 2px 8px; }
+  .hint { font-size:11px; color:var(--c-text-muted); line-height:1.45; }
+  .btn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; border-radius:12px; padding:7px 12px;
+    border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary); }
+  .btn.primary { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+  .tf { width:100%; font:inherit; font-size:13px; padding:8px 11px; border-radius:10px; border:1px solid var(--c-border);
+    background:var(--c-bg-white); color:var(--c-text-primary); outline:none; }
+  .tf:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+  .seg { display:inline-flex; gap:2px; background:var(--c-bg-selected); border-radius:9px; padding:2px; }
+  .seg button { font:inherit; font-size:12px; font-weight:600; cursor:pointer; border:none; border-radius:8px;
+    padding:5px 11px; background:transparent; color:var(--c-text-secondary); white-space:nowrap; }
+  .seg button.on { background:var(--c-bg-white); color:var(--c-text-heading); box-shadow:var(--shadow-card); }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  .pick { font:inherit; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; max-width:100%;
+    padding:5px 9px; border-radius:8px; color:var(--c-text-secondary); background:var(--c-bg-card); border:1px solid var(--c-border); }
+  .pick:hover { border-color:var(--c-accent-muted); }
+  .pick .car { color:var(--c-text-muted); font-size:11px; }
+  .willgo { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--c-text-muted); }
+  .willgo .mono { font-size:11px; font-weight:700; color:var(--c-text-heading); background:var(--c-bg-selected); border-radius:6px; padding:1px 6px; }
+  .willgo .ok { color:var(--c-success-text); }
+  .badge { font-size:11px; font-weight:700; padding:2px 7px; border-radius:999px; white-space:nowrap; }
+  .badge.info { background:var(--c-info-bg); color:var(--c-info); }
+
+  /* Блок исполнителя в форме задачи */
+  .exec { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; padding:12px 14px; }
+  .exec .erow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .avatar { width:24px; height:24px; border-radius:50%; background:var(--c-accent-light); color:var(--c-accent);
+    font-size:11px; font-weight:700; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+
+  .phone { width:375px; background:var(--c-bg-panel); border:1px solid var(--c-border); border-radius:28px; overflow:hidden; box-shadow:var(--shadow-island); }
+  .sheet { background:var(--c-bg-main); border-radius:22px 22px 0 0; margin-top:40px; box-shadow:var(--shadow-sheet); min-height:420px; }
+  .sheet .grab { width:38px; height:4px; border-radius:2px; background:var(--c-track); margin:10px auto 0; }
+  .sheet .s-head { padding:12px 16px 0; }
+  .sheet .s-title { font-family:'PT Serif',Georgia,serif; font-size:18px; color:var(--c-text-heading); }
+  .sheet .s-body { padding:12px 16px 20px; }
+
+  .cmp { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  @media (max-width:1100px){ .cmp { grid-template-columns:1fr; } }
+  .tag { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); margin-bottom:6px; }
+  .rows { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+  .rows .row { padding:8px 12px; border-top:1px solid var(--c-border-light); font-size:12px; }
+  .rows .row:first-child { border-top:none; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <strong style="font-size:12px; color:var(--c-text-muted)">Тема:</strong>
+    <button class="tbtn on" data-theme-btn="light">Светлая</button>
+    <button class="tbtn" data-theme-btn="dark">Тёмная</button>
+  </div>
+
+  <h1 class="doc">Задача: уровень исполнения и «Сейчас пойдёт» — v4</h1>
+  <p class="lead">
+    Сегодня уровень у задачи подписан моделью вашего уровня, хотя исполнитель развернёт его по СВОИМ
+    настройкам (A1) — настройка выглядит заданной, а работает иначе. Теперь подпись говорит, чьими
+    полями моделей развернётся уровень, а серверное превью «Сейчас пойдёт» показывает реальную стартовую
+    модель исполнителя до запуска. <b>Итерация 2 (14.08):</b> в сегменте появился явный вариант
+    «По умолчанию» — он означает собственный дефолт места «Исполнитель задач»: сильная модель.
+    Задача без выбора не дешевеет молча.
+  </p>
+
+  <h2 class="sec">1. Форма задачи: исполнитель — персона со своими полями моделей</h2>
+  <p class="note">
+    Задачу выполнит Глеб. Уровень развернётся по полям моделей Глеба (его специальность — «Ревьюер»),
+    а не по вашим — подпись это честно называет, превью показывает результат. По умолчанию уровень
+    не выбран: место «Исполнитель задач» имеет собственный дефолт — сильную модель.
+  </p>
+
+  <div class="scene">
+    <div class="modal">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Ревью миграции биллинга</div>
+      </div>
+      <div class="m-body">
+        <div class="lvl" style="margin-top:2px">Исполнитель</div>
+        <div class="exec">
+          <div class="erow">
+            <span class="avatar">Г</span>
+            <span style="font-weight:600; color:var(--c-text-heading)">Глеб · Код-ревьюер</span>
+            <span class="badge info">Claude</span>
+          </div>
+          <div class="lvl" style="margin:12px 2px 6px">Уровень</div>
+          <div class="seg" id="tierSeg">
+            <button class="on">По умолчанию</button>
+            <button>Сильная</button>
+            <button>Средняя</button>
+            <button>Слабая</button>
+          </div>
+          <p class="hint" style="margin:8px 0 0">
+            Уровень развернётся по полям моделей <b>Глеба</b> (его специальность — «Ревьюер»),
+            а не по вашим настройкам. Без выбора уровня задача пойдёт сильной моделью —
+            собственный дефолт места «Исполнитель задач», задача не подешевеет молча.
+            Уровень, выбранный здесь, сильнее всего.
+          </p>
+          <div class="willgo" style="margin-top:10px" id="willgo">
+            Сейчас пойдёт: <span class="mono">Claude Opus 5</span>
+            <span class="ok">· у Глеба поле «Сильная» наследуется от «Моделей по умолчанию»</span>
+          </div>
+        </div>
+
+        <div class="lvl">Срок</div>
+        <input class="tf" value="2026-08-15 12:00" style="max-width:220px"/>
+      </div>
+      <div class="m-foot">
+        <button class="btn">Отмена</button>
+        <button class="btn primary">Сохранить задачу</button>
+      </div>
+    </div>
+
+    <!-- Вариант: исполнитель — сам пользователь -->
+    <div class="modal">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Разобрать входящие заметки</div>
+      </div>
+      <div class="m-body">
+        <div class="lvl" style="margin-top:2px">Исполнитель</div>
+        <div class="exec">
+          <div class="erow">
+            <span class="avatar">Я</span>
+            <span style="font-weight:600; color:var(--c-text-heading)">Я сам</span>
+          </div>
+          <div class="lvl" style="margin:12px 2px 6px">Уровень</div>
+          <div class="seg">
+            <button>По умолчанию</button>
+            <button>Сильная</button>
+            <button>Средняя</button>
+            <button class="on">Слабая</button>
+          </div>
+          <p class="hint" style="margin:8px 0 0">
+            Развернётся по вашим настройкам: «Модели и расход» → «Модели по умолчанию».
+            Без выбора уровня — сильная модель (дефолт места «Исполнитель задач»).
+          </p>
+          <div class="willgo" style="margin-top:10px">
+            Сейчас пойдёт: <span class="mono">выберет Claude Code</span>
+            <span>· уровень «Слабая» у вас не задан</span>
+          </div>
+        </div>
+      </div>
+      <div class="m-foot">
+        <button class="btn">Отмена</button>
+        <button class="btn primary">Сохранить задачу</button>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">2. Мобила: форма задачи шторкой</h2>
+  <div class="scene" style="justify-content:flex-start">
+    <div class="phone">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="s-head"><div class="s-title">Ревью миграции биллинга</div></div>
+        <div class="s-body">
+          <div class="exec">
+            <div class="erow"><span class="avatar">Г</span><span style="font-weight:600; color:var(--c-text-heading)">Глеб · Код-ревьюер</span></div>
+            <div class="lvl" style="margin:12px 2px 6px">Уровень</div>
+            <div class="seg"><button class="on">По умолч…</button><button>Сильная</button><button>Средняя</button><button>Слабая</button></div>
+            <p class="hint" style="margin:8px 0 0">Развернётся по полям моделей Глеба, не вашим. Без выбора — сильная.</p>
+            <div class="willgo" style="margin-top:10px">Сейчас пойдёт: <span class="mono">Claude Opus 5</span></div>
+          </div>
+          <div style="display:flex; gap:8px; margin-top:14px">
+            <button class="btn" style="flex:1">Отмена</button>
+            <button class="btn primary" style="flex:1">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Что изменилось</h2>
+  <div class="cmp">
+    <div>
+      <div class="tag">Было</div>
+      <div class="rows">
+        <div class="row">Уровень подписан моделью слота владельца — вводит в заблуждение (A1)</div>
+        <div class="row">«Сейчас пойдёт» у задачи нет — модель исполнителя видна только постфактум (B7)</div>
+        <div class="row">Без выбранного уровня задача молча дешевеет до средней модели</div>
+      </div>
+    </div>
+    <div>
+      <div class="tag">Стало</div>
+      <div class="rows">
+        <div class="row">Подпись называет владельца настроек: «развернётся по полям моделей Глеба»</div>
+        <div class="row">Превью по серверному маршруту исполнителя — до сохранения задачи</div>
+        <div class="row">Вариант «По умолчанию» = сильная: дефолт места «Исполнитель задач» назван явно</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+  document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.themeBtn === 'dark' ? 'dark' : '';
+    document.querySelectorAll('[data-theme-btn]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  // Превью меняется вслед за уровнем (демонстрация связи)
+  const preview = {
+    'По умолчанию': ['Claude Opus 5', '· дефолт места — сильная; поле «Сильная» у Глеба наследуется от «Моделей по умолчанию»'],
+    'Сильная': ['Claude Opus 5', '· поле «Сильная» у Глеба наследуется от «Моделей по умолчанию»'],
+    'Средняя': ['Claude Sonnet 5', '· задана в поле «Средняя» специальности «Ревьюер»'],
+    'Слабая': ['Kimi K3', '· задана в строке «Любая специальность»']
+  };
+  document.getElementById('tierSeg').addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#tierSeg button').forEach(x => x.classList.toggle('on', x === b));
+    const w = document.getElementById('willgo');
+    const p = preview[b.textContent]; if (!p) return;
+    w.querySelector('.mono').textContent = p[0];
+    w.querySelector('.ok').textContent = p[1];
+  });
+</script>
+</body>
+</html>

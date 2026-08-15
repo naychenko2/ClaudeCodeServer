@@ -1,5 +1,5 @@
 import { memo, useState, useContext, useEffect } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap, ChevronDown } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
   splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel,
@@ -18,6 +18,9 @@ import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
 import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
 import { stripTeamMechanicMarkers, TeamMechanicOfferCard, type TeamMechanicOffer } from '../../features/team/TeamMechanicOffer';
+import {
+  stripProjectPresetMarkers, ProjectPresetOfferCard, type PresetCardState,
+} from '../../features/onboarding/ProjectPresetOffer';
 import { useContextPersona } from '../../lib/contextPersona';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
@@ -642,6 +645,21 @@ interface ItemProps {
   // default-personas-onboarding): карточка с кнопкой запуска. Дедуп «одна механика —
   // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда
   teamMechanicOffer?: { offer: TeamMechanicOffer; launched: boolean; declined?: boolean; onRun: () => void };
+  // Предложение каркаса (маркер <project-preset key="…"/>; знакомство v2, п.4): карточка
+  // с кнопками «Создать» / «Не нужно». Внутри решает, что рисовать — pending/применён/
+  // отклонён/null — по переданному состоянию (берётся с DTO проекта, не из ленты).
+  // Маркер из текста стрижётся всегда; карточка встраивается под стриженым текстом.
+  projectPresetOffer?: {
+    state: PresetCardState;
+    // Ключ пресета из текущего маркера — в pending нужен карточке, чтобы вывести
+    // описание ровно того каркаса, который бэкенд применит, и передать ключ в onApply.
+    pendingKey?: string | null;
+    appliedNote?: string | null;
+    error?: string | null;
+    busy?: boolean;
+    onApply: (key: string) => void;
+    onDecline: () => void;
+  };
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
@@ -871,31 +889,63 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
 
 // Разделитель «Ответила X — Y была недоступна»: автоматическая подмена МОДЕЛИ рантайм-
 // фолбэком (см. chatReducer — отдельно от provider_switched, который остаётся тихим или
-// на пилюле «Продолжено на подписке» при ротации внутри провайдера). title — одна из трёх
-// канонических формулировок причины (providerSwitchReasonLabel), либо сырой label маркера
-// (rawLabel), когда reason не пришёл или не распознан
+// на пилюле «Продолжено на подписке» при ротации внутри провайдера). По клику разворачивается
+// краткое объяснение причины и куска цепочки: «Шаги: {oldLabel} — {reason} → {newLabel}»
+// и пометка, что подмена действует только на этот ход, а не на следующие
 function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_switched' }> }) {
   const newLabel = useModelLabel(item.model);
   const oldLabel = useModelLabel(item.previousModel);
+  const [open, setOpen] = useState(false);
+  const reason = providerSwitchReasonLabel(item.reason, item.rawLabel);
+  // Кликабельная пилюля — кнопка, а не div: фокус с клавиатуры и a11y без отдельной обвязки
   return (
-    <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}
-      title={providerSwitchReasonLabel(item.reason, item.rawLabel)}>
-      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
-      <span style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5,
-        fontSize: 12, color: C.warningText, whiteSpace: 'nowrap', overflow: 'hidden',
-        textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
-        background: C.warningBg, border: `1px solid ${C.warning}`,
-      }}>
-        <Zap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
-        Ответила {newLabel} — {oldLabel} была недоступна
-      </span>
-      <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+    <div style={{ alignSelf: 'center', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, maxWidth: '100%', width: '100%' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+        <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          aria-expanded={open}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            fontFamily: FONT.sans, fontSize: 12, color: C.warningText,
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
+            background: C.warningBg, border: `1px solid ${C.warning}`,
+          }}
+          title={reason}
+        >
+          <Zap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          Ответила {newLabel} — {oldLabel} была недоступна
+          <ChevronDown
+            size={11} strokeWidth={2}
+            style={{ flexShrink: 0, transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none', color: C.warningText }}
+          />
+        </button>
+        <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+      </div>
+      {open && (
+        <div style={{
+          alignSelf: 'center', maxWidth: 520, width: '100%',
+          padding: '8px 12px', borderRadius: R.lg,
+          background: C.bgPanel, border: `1px solid ${C.border}`,
+          fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary, lineHeight: 1.5,
+          textAlign: 'left',
+        }}>
+          <div>
+            <span style={{ fontWeight: 600, color: C.textHeading }}>Шаги:</span>{' '}
+            {oldLabel} — {reason} → {newLabel} — ответила.
+          </div>
+          <div style={{ marginTop: 4, color: C.textMuted }}>
+            Подмена действует только на этот ход: следующие — снова с выбранной моделью.
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1061,7 +1111,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const report = parseDelegationReport(item.text);
       // Маркер предложения механики <team-mechanic/> из отображаемого текста стрижём всегда
       // (вместе с незакрытым префиксом в хвосте стрима); карточку рендерит проп ниже
-      const bodyText = stripTeamMechanicMarkers(report ? report.body : item.text, streaming);
+      const bodyText = stripProjectPresetMarkers(
+        stripTeamMechanicMarkers(report ? report.body : item.text, streaming),
+        streaming,
+      );
       // Пост сабагента кнопки «какой промпт ушёл» не получает: его промпт собирал CLI,
       // а наш снимок описывает ход основного агента
       const msg = (
@@ -1078,6 +1131,18 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               launched={teamMechanicOffer.launched}
               declined={teamMechanicOffer.declined}
               onRun={teamMechanicOffer.onRun}
+            />
+          )}
+          {/* Карточка предложения каркаса проекта — «Создать» / «Не нужно» */}
+          {projectPresetOffer && (
+            <ProjectPresetOfferCard
+              state={projectPresetOffer.state}
+              pendingKey={projectPresetOffer.pendingKey}
+              appliedNote={projectPresetOffer.appliedNote}
+              error={projectPresetOffer.error}
+              busy={projectPresetOffer.busy}
+              onApply={projectPresetOffer.onApply}
+              onDecline={projectPresetOffer.onDecline}
             />
           )}
         </div>

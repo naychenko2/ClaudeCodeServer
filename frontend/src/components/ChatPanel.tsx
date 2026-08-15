@@ -14,7 +14,10 @@ import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
-import { parseTeamMechanicOffer, hasUserTurnAfter, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
+import { hasUserTurnAfter, buildMechanicOffers, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
+import {
+  buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
+} from '../features/onboarding/ProjectPresetOffer';
 import { teamPlanningIndicatorVisible } from '../lib/teamImplement';
 import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
@@ -1097,21 +1100,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
 
   // === Мост в командные механики (фича default-personas-onboarding) ===
   // Маркеры <team-mechanic/> в текстах ассистента → карточки предложений. Дедуп «одна
-  // механика — одна карточка на чат»: карточку несёт ПЕРВЫЙ текст ленты с маркером
-  // этой механики, повторные предложения той же механики карточек не плодят.
-  const mechanicOffers = useMemo(() => {
-    const map = new Map<number, TeamMechanicOffer>();
-    const seen = new Set<TeamMechanicId>();
-    items.forEach((it, i) => {
-      if (it.kind !== 'text' || it.parentToolUseId) return;
-      if (!it.text.includes('<team-mechanic')) return;
-      const offer = parseTeamMechanicOffer(it.text);
-      if (!offer || seen.has(offer.id)) return;
-      seen.add(offer.id);
-      map.set(i, offer);
-    });
-    return map;
-  }, [items]);
+  // механика — одна карточка на чат» сохраняется, но карточку несёт ПОСЛЕДНЕЕ
+  // предложение каждой механики, а не первое: при повторном маркере карточка
+  // «переезжает» к актуальной реплике и берёт свежий topic. Это чинит сценарий, где
+  // после уточнений пользователя модель повторяет предложение — раньше дедуп
+  // закреплял карточку у самого старого маркера, который к тому моменту был погашен
+  // ходом пользователя, и запустить механику становилось невозможно.
+  const mechanicOffers = useMemo(() => buildMechanicOffers(items), [items]);
   // «Запущено»: механика уже уходила ходом этого чата (детект по ленте — переживает F5)
   // либо кнопка нажата только что (локальная пометка до появления user_message). Это же
   // компенсирует потерю промпт-инструкции «не навязывать после отказа» при компакции.
@@ -1158,6 +1153,90 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
   }, [session.id, send, chatContext, onSessionUpdated, atBottomRef]);
 
+  // === Каркас проекта (знакомство v2, п.4) ===
+  // Маркеры <project-preset key="…"/> в текстах ассистента → карточка с кнопками
+  // «Создать» / «Не нужно». Состояние кнопок берём с DTO проекта: «pending» — можно
+  // применить/отказаться; «<ключ>» — каркас уже создан; «none» — человек отказался;
+  // null — проект создан до фичи, к каркасу возвращаться не нужно. Локальный override
+  // поверх DTO нужен на случай быстрого клика — POST уходит асинхронно, а кнопка должна
+  // погаснуть/сменить подпись уже сейчас, чтобы пользователь не нажал второй раз.
+  const presetOffers = useMemo(() => buildProjectPresetOffer(items), [items]);
+  const [presetOverride, setPresetOverride] = useState<string | null>(null);
+  // Inline-ошибка последнего клика (4xx) и «занято» — отдельные флаги, чтобы кнопка
+  // не перерисовывала «Каркас создан» до того, как сервер подтвердит.
+  const [presetBusy, setPresetBusy] = useState(false);
+  const [presetError, setPresetError] = useState<string | null>(null);
+  const [presetNote, setPresetNote] = useState<string | null>(null);
+  // Без `?? null`: иначе «DTO ещё не приехал» (project === undefined) и «проект до
+  // фичи» (project.presetKey === null) не различить — оба значения стянутся в null
+  // и попадут в ветку активной кнопки (старый проект → 409 на клике). Хелпер
+  // resolvePresetCardState ниже трактует и null, и undefined одинаково — `hidden`.
+  const effectivePresetKey = presetOverride ?? project?.presetKey;
+  const applyPreset = useCallback(async (key: string) => {
+    if (!project) return;
+    if (presetBusy) return;
+    setPresetBusy(true);
+    setPresetError(null);
+    try {
+      const report = await api.projects.applyPreset(project.id, key);
+      // Сразу отражаем успех на DTO — пользователь увидит «Каркас создан» ещё до того,
+      // как WorkspacePage обновит объект проекта после рефреша
+      setPresetOverride(key);
+      // Краткий итог для подписи в карточке, если бэк что-то пропустил (например, файл занят)
+      const skipped = report.skipped?.length ?? 0;
+      const created = report.created?.length ?? 0;
+      if (skipped > 0) {
+        setPresetNote(`Каркас применён: ${created} новых, ${skipped} пропущено (уже есть в проекте).`);
+      } else {
+        setPresetNote(null);
+      }
+      // Доклад в ленту: обычный ход с текстом, НЕ systemDirective — тот уходит в обход
+      // очереди (SessionManager:2475,2595) и рвёт цикл. Берём текст кортко —
+      // детали (что создали, что пропустили) уже в карточке.
+      const reportText = skipped > 0
+        ? 'Готово: создала каркас. Часть файлов уже была в проекте — их не трогала.'
+        : 'Готово: создала каркас. Правила лежат в CLAUDE.md проекта — их потом можно поправить.';
+      atBottomRef.current = true;
+      await send(reportText, [], modeRef.current);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Не удалось применить каркас';
+      setPresetError(message);
+      // 409 — каркас уже применён/отклонён/проект до фичи: после этого DTO и так
+      // покажет финальное состояние, не блокируем
+      setPresetOverride(effectivePresetKey ?? null);
+    } finally {
+      setPresetBusy(false);
+    }
+  }, [project, presetBusy, send, atBottomRef, effectivePresetKey]);
+  const declinePreset = useCallback(async () => {
+    if (!project) return;
+    if (presetBusy) return;
+    setPresetBusy(true);
+    setPresetError(null);
+    try {
+      await api.projects.applyPreset(project.id, 'none');
+      setPresetOverride('none');
+      // Доклад в ленту тем же путём, что и applyPreset: обычный ход с текстом,
+      // а не systemDirective — тот рвёт цикл. Без этого хода модель не узнаёт, что
+      // человек отказался, и сценарий знакомства повиснет на ожидании команды.
+      atBottomRef.current = true;
+      await send('Каркас не нужен — папку оставляем как есть.', [], modeRef.current);
+    } catch (err) {
+      setPresetError(err instanceof Error ? err.message : 'Не удалось зафиксировать отказ');
+    } finally {
+      setPresetBusy(false);
+    }
+  }, [project, presetBusy, send, atBottomRef]);
+
+  // Состояние карточки — функция от серверного `presetKey`. Логика вынесена в
+  // `resolvePresetCardState` (чистая функция, покрыта тестом): «pending» с
+  // маркером в ленте → кнопки живые; «pending» без маркера или «null» (проект до
+  // фичи / DTO не приехал) → карточка скрыта, активной кнопки нет.
+  const presetCardState: PresetCardState = useMemo(
+    () => resolvePresetCardState(effectivePresetKey, presetOffers.size > 0),
+    [effectivePresetKey, presetOffers.size],
+  );
+
   // Единый рендер одного элемента ленты (используется в основном рендере и в доке).
   // useCallback + React.memo на ChatItemView: при дописывании ленты неизменившиеся
   // элементы не перерендериваются (все пропсы-функции стабильны).
@@ -1201,6 +1280,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             onRun: () => void runTeamMechanic(mechanicOffers.get(i)!),
           }
         : undefined}
+      projectPresetOffer={item.kind === 'text' && presetOffers.has(i) && presetCardState.mode !== 'hidden'
+        ? {
+            state: presetCardState,
+            pendingKey: presetOffers.get(i)?.key,
+            appliedNote: presetNote,
+            error: presetError,
+            busy: presetBusy,
+            onApply: (key) => void applyPreset(key),
+            onDecline: () => void declinePreset(),
+          }
+        : undefined}
       promptSnapshotId={turnMeta.snapshots[i]}
       turnContextTokens={turnMeta.contextTokens[i]}
       turnCache={turnMeta.cache[i]}
@@ -1211,6 +1301,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedMechanics, declinedMechanicOffers, runTeamMechanic,
+    presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,
   ]);
 

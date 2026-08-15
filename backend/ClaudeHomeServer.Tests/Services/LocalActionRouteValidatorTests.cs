@@ -60,7 +60,7 @@ public class LocalActionRouteValidatorTests
         verdict.Should().NotBeNull();
         verdict.Should().Contain("«MiniMax-M3»");
         verdict.Should().Contain("без поставщика");
-        verdict.Should().Contain("«Поставщики моделей»");
+        verdict.Should().Contain("«Модели и расход»");
     }
 
     [Fact]
@@ -82,7 +82,7 @@ public class LocalActionRouteValidatorTests
         verdict.Should().NotBeNull();
         verdict.Should().Contain("«нет-такой-модели»");
         verdict.Should().Contain("не найдена среди доступных");
-        verdict.Should().Contain("«Поставщики моделей»");
+        verdict.Should().Contain("«Модели и расход»");
     }
 
     [Fact]

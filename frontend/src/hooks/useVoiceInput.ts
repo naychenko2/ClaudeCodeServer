@@ -43,6 +43,16 @@ export interface VoiceInputOptions {
   // Движок распознавания недоступен: диктовать нужно системным голосовым вводом
   // клавиатуры, поэтому просто ставим фокус в поле
   onKeyboardFallback: () => void;
+  // Цикл распознавания закончился (движок сам остановился). Нужен режиму разговора:
+  // по нему открывается следующий круг слушания
+  onEnd?: () => void;
+  // Код ошибки движка (SpeechRecognitionErrorEvent.error) плюс синтетический
+  // 'mic-dead' от watchdog. Режим разговора считает по ним бесплодные циклы
+  onError?: (code: string) => void;
+  // Тосты об ошибках берёт на себя вызывающий (в петле разговора они демпфируются,
+  // а 'no-speech' там вообще норма — просто тишина). Функция, а не флаг: вызывающий
+  // читает своё состояние в момент события, не в рендере
+  quiet?: () => boolean;
 }
 
 export interface VoiceInput {
@@ -55,27 +65,46 @@ export interface VoiceInput {
   stopMic: (confirm: boolean) => void;
 }
 
+function detectSpeechSupport(): boolean {
+  return typeof window !== 'undefined' &&
+    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+}
+
 // Голосовой ввод. На устройствах с рабочим Web Speech (телефоны) распознаём сами.
 // Где движок «мёртвый» (например, Huawei без Google-сервисов) — отдаём управление
 // вызывающему через onKeyboardFallback, чтобы надиктовать клавиатурой.
-export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOptions): VoiceInput {
+export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, quiet }: VoiceInputOptions): VoiceInput {
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const recCancelRef = useRef(false);
   const micWatchdogRef = useRef<number | null>(null); // детект «мёртвого» Web Speech (нет признаков жизни)
+  // Зеркало isListening в ref: startMic обязан быть СТАБИЛЬНЫМ колбэком, иначе режим
+  // разговора не сможет перезапустить распознавание из onEnd — в замкнутой там версии
+  // startMic ещё стоит isListening = true, и гвард `if (isListening) return` молча съедал
+  // бы весь цикл. Ref пишется вместе с состоянием, поэтому виден уже в том же обработчике
+  const listeningRef = useRef(false);
+  const setListening = useCallback((v: boolean) => {
+    listeningRef.current = v;
+    setIsListening(v);
+  }, []);
 
   // Колбэки держим в ref: пересоздание обработчиков движка на каждый рендер
   // роняло бы активное распознавание
   const onResultRef = useRef(onResult);
   const onFallbackRef = useRef(onKeyboardFallback);
+  const onEndRef = useRef(onEnd);
+  const onErrorRef = useRef(onError);
+  const quietRef = useRef(quiet);
   useEffect(() => {
     onResultRef.current = onResult;
     onFallbackRef.current = onKeyboardFallback;
+    onEndRef.current = onEnd;
+    onErrorRef.current = onError;
+    quietRef.current = quiet;
   });
 
-  const hasSpeech = typeof window !== 'undefined' &&
-    ('SpeechRecognition' in window || 'webkitSpeechRecognition' in window);
+  const hasSpeech = detectSpeechSupport();
 
   // При размонтировании гасим watchdog вместе с распознаванием, иначе таймер
   // дёрнет состояние уже после ухода компонента
@@ -94,10 +123,15 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
   }, [isListening]);
 
   const startMic = useCallback(() => {
-    if (isListening) return;
+    // Гвард от второго движка поверх живого — но только пока движок ДЕЙСТВИТЕЛЬНО жив.
+    // Один флаг залипал: если распознаватель закончился, не позвав onend/onerror (петля
+    // разговора гасит его своими эффектами, мобильные движки — при потере фокуса),
+    // кнопка микрофона переставала работать до перезагрузки страницы
+    if (listeningRef.current && recognitionRef.current) return;
+    listeningRef.current = false;
 
     // Web Speech отсутствует или ранее выяснили, что он не работает → сразу клавиатура.
-    if (!hasSpeech || isMicKeyboardFallback()) {
+    if (!detectSpeechSupport() || isMicKeyboardFallback()) {
       onFallbackRef.current();
       return;
     }
@@ -143,20 +177,29 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
       if (last) onResultRef.current(last);
     };
 
-    rec.onend = () => { clearWatchdog(); setIsListening(false); };
+    rec.onend = () => {
+      clearWatchdog();
+      // Движок отработал — ссылку гасим: по ней startMic отличает живое распознавание
+      // от залипшего флага
+      if (recognitionRef.current === rec) recognitionRef.current = null;
+      setListening(false);
+      onEndRef.current?.();
+    };
     rec.onerror = (e: { error?: string }) => {
       clearWatchdog();
-      setIsListening(false);
-      // Причина сбоя — прямо в тост: без неё на устройстве не понять, что именно не так
+      setListening(false);
       const code = String(e?.error ?? 'unknown');
-      if (isSilentSpeechError(code)) return;
+      onErrorRef.current?.(code);
+      // Причина сбоя — прямо в тост: без неё на устройстве не понять, что именно не так.
+      // В quiet-режиме тосты ведёт вызывающий (петля разговора их демпфирует)
+      if (quietRef.current?.() || isSilentSpeechError(code)) return;
       showToast('Голосовой ввод', `Не удалось: ${describeSpeechError(code)}`);
     };
 
     recognitionRef.current = rec;
     try {
       rec.start();
-      setIsListening(true);
+      setListening(true);
       // Детектор «мёртвого» движка: если за MIC_WATCHDOG_MS не пришёл audiostart —
       // распознавания в браузере нет (нет Google-сервисов). Переходим на клавиатурный
       // ввод и запоминаем выбор, чтобы впредь сразу открывать клавиатуру.
@@ -164,24 +207,31 @@ export function useVoiceInput({ onResult, onKeyboardFallback }: VoiceInputOption
         if (gotAudio) return;
         micWatchdogRef.current = null;
         try { rec.abort(); } catch { /* noop */ }
-        setIsListening(false);
+        setListening(false);
         setMicKeyboardFallback();
-        showToast('Голосовой ввод', MIC_FALLBACK_TEXT);
+        // Синтетический код: режиму разговора мёртвый движок — повод немедленно выйти
+        // из петли с сообщением, а не молча уехать в клавиатурный фолбэк
+        onErrorRef.current?.('mic-dead');
+        if (!quietRef.current?.()) showToast('Голосовой ввод', MIC_FALLBACK_TEXT);
       }, MIC_WATCHDOG_MS);
     } catch {
-      setIsListening(false);
+      setListening(false);
     }
-  }, [isListening, hasSpeech]);
+  }, [setListening]);
 
   const stopMic = useCallback((confirm: boolean) => {
     recCancelRef.current = !confirm;
     if (micWatchdogRef.current !== null) { clearTimeout(micWatchdogRef.current); micWatchdogRef.current = null; }
-    setIsListening(false); // фикс: закрываем режим записи сразу, не дожидаясь onend (его может не быть)
+    setListening(false); // фикс: закрываем режим записи сразу, не дожидаясь onend (его может не быть)
+    const rec = recognitionRef.current;
+    // Ссылку снимаем здесь же: onend может не прийти вовсе, а по ней startMic решает,
+    // живое ли распознавание — иначе следующий тап по микрофону упрётся в гвард
+    recognitionRef.current = null;
     try {
-      if (confirm) recognitionRef.current?.stop();
-      else recognitionRef.current?.abort();
+      if (confirm) rec?.stop();
+      else rec?.abort();
     } catch { /* noop */ }
-  }, []);
+  }, [setListening]);
 
   return { hasSpeech, isListening, recSeconds, startMic, stopMic };
 }

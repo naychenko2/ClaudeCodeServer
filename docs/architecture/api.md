@@ -53,7 +53,26 @@ GET/POST            /api/personas/{id}/chats          POST body { mode?, resumeS
 GET/POST            /api/personas/{id}/memory         ?type=  / body { type, text, tags? } → записи памяти
 GET                 /api/personas/{id}/memory/search  ?q=&topK=  → hits (relevance×recency×type)
 DELETE              /api/personas/{id}/memory/{entryId}
-POST                /api/personas/{id}/avatar/generate { prompt? } → Persona  (AI-аватар через fal)
+GET                 /api/image-generation              → { providers[], places[] }
+    настройка генератора картинок инстанса ПО МЕСТАМ; читает любой авторизованный.
+    providers[] = { key, displayName, enabled, models[{id,displayName,description}] }
+    places[] = { key (project-icon|persona-avatar), title, provider (режим auto|fal|glif),
+                 activeProvider (кто пойдёт следующим запросом; null — генерация недоступна),
+                 enabled, model (эффективная у активного), models{ключ провайдера: эффективная модель} }
+PUT                 /api/image-generation              { places: {"<место>": { provider?, models? }} } → та же форма | 400 | 403 (не admin)
+    патч-семантика: поле не прислали — оставить, "" — сброс к слою ниже; места вне places не трогаются.
+    Валидация всех мест до применения (иначе запрос сохранился бы наполовину). 400 — пустой places,
+    неизвестное место, неизвестный провайдер, ненастроенный провайдер при ЯВНОМ выборе
+    (фолбэка у него нет), неизвестная модель провайдера
+GET                 /api/projects/icon/caps            → { generate, provider, providerName, model }  (доступна ли генерация и чем нарисуют)
+POST                /api/projects/{id}/icon/generate   { prompt?, count? } → { candidates: [файл…] } | 400 | 404 | 502
+POST                /api/projects/icon/generate-preview { name?, prompt?, count? } → { candidates: [{ dataUrl }] } | 400 | 502
+    кандидаты до создания проекта — инлайн data-url, на диск ничего не пишется (заявку ставить не на что)
+GET                 /api/personas/avatar/caps          → { generate, provider, providerName, model }
+POST                /api/personas/{id}/avatar/generate { prompt?, count? } → { candidates: [файл…] } | 400 | 404 | 502
+    count 1..4 (дефолт 4); 400 — генерация не настроена (у {id}-ручек заодно ставится заявка догоняющей
+    генерации), 502 — провайдер не вернул картинок. Провайдера и модель выбирает роутер по настройке
+    /api/image-generation; аватар/иконка НЕ меняются до выбора кандидата (…/select)
 GET                 /api/personas/{id}/avatar          → картинка (access_token в query для <img>)
 POST                /api/personas/ask                  { handle, question, context? } → { handle, name, role, answer }
                                                        (one-shot ответ персоны от её лица; флаг persona-mentions; дёргается MCP personas-server)

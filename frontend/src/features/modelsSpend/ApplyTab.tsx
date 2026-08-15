@@ -7,6 +7,7 @@ import { RoutePicker } from '../../components/RoutePicker';
 import { EffectiveLine } from '../../components/EffectiveLine';
 import { invalidateEffectiveLines, resolvePlacePreset, stepsWord, usePresets, useSpecialtySettings } from '../../lib/presets';
 import { C, FS, R } from '../../lib/design';
+import { ImageGenSection } from './ImageGenSection';
 import { api } from '../../lib/api';
 import { loadModels, type ModelOption } from '../../lib/models';
 import type { AppSettings, OllamaActionInfo, SpecialtySettingsLayer, SpecialtySettingsResponse } from '../../types';
@@ -39,8 +40,13 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
   const ollamaOn = info?.enabled ?? false;
 
   if (!isAdmin) {
-    return <div style={{ fontSize: FS.sm, color: C.textMuted, padding: '8px 0' }}>
-      Назначение мест настраивает администратор. Ваши уровни — на вкладке «Модели по умолчанию».
+    // Не-админу назначение мест недоступно, но чем рисуются иконки и аватары —
+    // показываем: диалоги генерации подписывают провайдера, и вопрос «кто рисует» общий.
+    return <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+      <div style={{ fontSize: FS.sm, color: C.textMuted, padding: '8px 0' }}>
+        Назначение мест настраивает администратор. Ваши уровни — на вкладке «Модели по умолчанию».
+      </div>
+      <ImageGenSection isAdmin={false} titleStyle={lvlStyle} />
     </div>;
   }
   if (info === undefined) {
@@ -125,6 +131,9 @@ export function ApplyTab({ isAdmin, data, models, tierModels, settings, savingSc
       <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
         Стратегия применяется разом ко всем местам ниже. {ollamaOn ? 'Локальная модель включена.' : 'Локальная модель не настроена.'}
       </div>
+
+      {/* Картинки — отдельная настройка: генератор и модель для иконок и аватаров */}
+      <ImageGenSection isAdmin titleStyle={lvlStyle} />
 
       {/* Группы мест */}
       {groups.map(g => (

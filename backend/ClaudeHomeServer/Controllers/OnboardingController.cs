@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
@@ -26,7 +26,8 @@ namespace ClaudeHomeServer.Controllers;
 public class OnboardingController(SessionManager sessions, UserStore users,
     ProjectManager projects, PersonaManager personas,
     PersonaDraftService drafts, ICheapTextRunner cheap, IConfiguration config,
-    FalImageService falImage, IHubContext<SessionHub> hub, ILogger<OnboardingController> log)
+    Services.Images.ImageGenerationService imageGen, Services.Images.ImageBackfillService imageBackfill,
+    IHubContext<SessionHub> hub, ILogger<OnboardingController> log)
     : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -326,18 +327,20 @@ public class OnboardingController(SessionManager sessions, UserStore users,
                "high detail, sharp focus, square crop.";
     }
 
-    // Фото-аватар автоматически, best-effort (не критично: при сбое или невключённом fal
-    // персона остаётся с инициалами). Зеркалит PersonasController.TryAutoGenerateAvatarAsync.
+    // Фото-аватар автоматически, best-effort (не критично: персона остаётся с инициалами,
+    // а аватар догонит её из очереди, когда генерация заработает).
+    // Зеркалит PersonasController.TryAutoGenerateAvatarAsync.
     private async Task<Persona> TryAutoGenerateAvatarAsync(Persona persona, string? avatarPrompt)
     {
-        if (!falImage.Enabled) return persona;
+        var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
+            ? BuildAvatarPrompt(persona)
+            : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
+
+        if (!imageGen.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(persona, prompt);
         try
         {
-            var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
-                ? BuildAvatarPrompt(persona)
-                : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
-            var images = await falImage.GenerateManyAsync(prompt, 1);
-            if (images.Count == 0) return persona;
+            var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
+            if (images.Count == 0) return EnqueueAvatarBackfill(persona, prompt);
             var dir = Path.Combine(personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);
             var fileName = $"avatar-{Guid.NewGuid():N}{ImageAssetHelper.ExtFor(images[0].ContentType)}";
@@ -346,8 +349,15 @@ public class OnboardingController(SessionManager sessions, UserStore users,
         }
         catch
         {
-            return persona;
+            return EnqueueAvatarBackfill(persona, prompt);
         }
+    }
+
+    private Persona EnqueueAvatarBackfill(Persona persona, string prompt)
+    {
+        imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
+            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId, prompt);
+        return persona;
     }
 
     private static bool ValidColor(string? c) =>

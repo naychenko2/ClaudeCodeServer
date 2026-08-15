@@ -7,6 +7,7 @@ using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
+using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Services.Mcp;
 using ClaudeHomeServer.Services.Reader;
 using ClaudeHomeServer.Services.TriggerSources;
@@ -195,7 +196,10 @@ builder.Services.AddSingleton<SubscriptionOAuthUsageService>();
 AddHostedFrom(sp => sp.GetRequiredService<SubscriptionOAuthUsageService>());
 builder.Services.AddSingleton<PersonaAgentFileGenerator>();
 builder.Services.AddSingleton<PersonaAgentFileSync>();
-builder.Services.AddSingleton<FalImageService>();
+// Генерация картинок (иконка проекта, аватар персоны): драйверы fal/glif, настройка по
+// местам, роутер и догоняющая генерация. FalImageService регистрируется внутри как драйвер —
+// отдельный AddSingleton дал бы второй экземпляр того же типа.
+builder.Services.AddImageGeneration();
 // Консолидация памяти — singleton + hosted: autolearn ставит заявки через RequestConsolidation
 builder.Services.AddSingleton<PersonaMemoryConsolidationService>();
 AddHostedFrom(sp => sp.GetRequiredService<PersonaMemoryConsolidationService>());

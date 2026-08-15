@@ -2,11 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import { Pencil } from 'lucide-react';
 import type { Project, ProjectIcon as ProjectIconType } from '../../types';
 import { api } from '../../lib/api';
-import { C, R, FONT, SHADOW } from '../../lib/design';
+import { C, R, FONT, SHADOW, SP } from '../../lib/design';
 import { Button } from '../../components/ui';
+import { ImageGenNote } from '../../components/ImageGenNote';
 import { Menu, MenuItem } from '../../components/ui/Menu';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { ProjectIcon } from './ProjectIcon';
+import { onProjectIconBackfilled } from './useAllProjects';
 import { AvatarCropDialog, type AvatarCropResult } from '../personas/AvatarCropDialog';
 
 // Ожидающая картинка при создании проекта (проекта ещё нет — держим blob в памяти вкладки
@@ -48,9 +50,26 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
   const [prompt, setPrompt] = useState('');
   const [crop, setCrop] = useState<{ src: string; initial: AvatarCropResult['crop'] | null; mode: 'upload' | 'recrop'; file?: File } | null>(null);
   const [err, setErr] = useState('');
+  // Отказ генерации держим отдельно от err: он живёт в блоке генерации рядом с «Попробовать снова»
+  const [genErr, setGenErr] = useState('');
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { api.projects.iconCaps().then(r => setCanGenerate(r.generate)).catch(() => {}); }, []);
+
+  // Иконку дорисовала догоняющая генерация, пока диалог открыт: показываем её и снимаем
+  // ожидание/отказ — обещание «появится сама» должно сбываться без перезагрузки.
+  // Колбэк наверх зовём через ref: его новая функция на каждый рендер иначе переподписывала бы.
+  const iconUpdatedRef = useRef(onIconUpdated);
+  useEffect(() => { iconUpdatedRef.current = onIconUpdated; });
+  useEffect(() => {
+    if (creating) return;
+    return onProjectIconBackfilled(fresh => {
+      if (fresh.id !== project.id) return;
+      setDraftIcon(fresh.icon);
+      setGenErr('');
+      iconUpdatedRef.current(fresh);
+    });
+  }, [creating, project.id]);
 
   // Отзыв objectURL превью при замене/размонтировании (иначе течёт память вкладки; data-url не трогаем)
   useEffect(() => {
@@ -71,7 +90,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
   const applyUpdated = (updated: Project) => { setDraftIcon(updated.icon); onIconUpdated(updated); };
 
   const generate = async () => {
-    setGenerating(true); setErr(''); setCandidates(null);
+    setGenerating(true); setErr(''); setGenErr(''); setCandidates(null);
     try {
       if (creating) {
         const r = await api.projects.generateIconPreview({ name, prompt });
@@ -80,7 +99,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
         const r = await api.projects.generateIcon(project.id, { prompt, count: 4 });
         setCandidates(r.candidates);
       }
-    } catch (e: unknown) { setErr(e instanceof Error ? e.message : 'Не удалось сгенерировать'); }
+    } catch (e: unknown) { setGenErr(e instanceof Error ? e.message : 'Не удалось сгенерировать'); }
     finally { setGenerating(false); }
   };
 
@@ -228,22 +247,31 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
 
       {/* Форма генерации — раскрывается по «Сгенерировать» из меню */}
       {canGenerate && showGen && (
-        <div style={{ marginTop: 10, display: 'flex', gap: 6 }}>
-          <input
-            value={prompt}
-            onChange={e => setPrompt(e.target.value)}
-            placeholder="Опишите иконку (необязательно)…"
-            onKeyDown={e => { if (e.key === 'Enter' && !generating) { e.preventDefault(); void generate(); } }}
-            disabled={generating}
-            style={{
-              flex: 1, minWidth: 0, boxSizing: 'border-box', height: 32, padding: '0 10px',
-              borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite,
-              fontSize: 12.5, color: C.textPrimary, outline: 'none', fontFamily: FONT.sans,
-            }}
+        <div style={{ marginTop: SP.sm, display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={prompt}
+              onChange={e => setPrompt(e.target.value)}
+              placeholder="Опишите иконку (необязательно)…"
+              onKeyDown={e => { if (e.key === 'Enter' && !generating) { e.preventDefault(); void generate(); } }}
+              disabled={generating}
+              style={{
+                flex: 1, minWidth: 0, boxSizing: 'border-box', height: 32, padding: '0 10px',
+                borderRadius: R.md, border: `1px solid ${C.border}`, background: C.bgWhite,
+                fontSize: 12.5, color: C.textPrimary, outline: 'none', fontFamily: FONT.sans,
+              }}
+            />
+            <Button variant="secondary" size="sm" onClick={generate} loading={generating} disabled={generating} style={{ flexShrink: 0 }}>
+              {generating ? 'Генерирую…' : 'Создать 4 варианта'}
+            </Button>
+          </div>
+          {/* Кто рисует + ожидание/отказ; повтор — той же кнопкой генерации */}
+          <ImageGenNote
+            kind="icon"
+            status={generating ? 'running' : genErr ? 'error' : 'idle'}
+            error={genErr}
+            onRetry={() => void generate()}
           />
-          <Button variant="secondary" size="sm" onClick={generate} loading={generating} disabled={generating} style={{ flexShrink: 0 }}>
-            {generating ? 'Генерирую…' : 'Создать 4 варианта'}
-          </Button>
         </div>
       )}
 

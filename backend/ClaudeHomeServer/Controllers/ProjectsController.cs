@@ -1,4 +1,4 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
@@ -13,10 +13,14 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, FalImageService falImage, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, Services.Images.ImageGenerationService imageGen, Services.Images.ImageBackfillService imageBackfill, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
+    private const string ImageGenerationOffError =
+        "Генерация изображений не настроена: ни один провайдер (fal.ai, glif) не подключён";
 
     private Task BroadcastTeamMemory(string action, string projectId, string? entryId = null) =>
         hub.Clients.Group("user_" + UserId).SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
@@ -358,18 +362,30 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
     // --- Иконка проекта (по образцу аватара персоны) ---
 
-    // Доступна ли AI-генерация иконки (настроен ли fal)
+    // Доступна ли AI-генерация иконки и чем именно её сделают (провайдер + модель).
+    // Поле generate НЕ переименовывать: на него завязана секция иконки на фронте.
     [HttpGet("icon/caps")]
-    public ActionResult IconCaps() => Ok(new { generate = falImage.Enabled });
+    public ActionResult IconCaps()
+    {
+        var provider = imageGen.ActiveProviderFor(Services.Images.ImagePlaces.ProjectIcon);
+        return Ok(new
+        {
+            generate = provider is not null,
+            provider = provider?.Key,
+            providerName = provider?.DisplayName,
+            // Эффективная модель настройки; null — дефолт самого драйвера
+            model = provider is null ? null : imageGen.ModelFor(Services.Images.ImagePlaces.ProjectIcon, provider.Key),
+        });
+    }
 
-    // Сгенерировать НЕСКОЛЬКО вариантов иконки через fal по описанию (для выбора).
-    // Кандидаты сохраняются во временную папку, иконка проекта НЕ меняется до выбора.
+    // Сгенерировать НЕСКОЛЬКО вариантов иконки по описанию (для выбора); провайдера и
+    // модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
+    // папку, иконка проекта НЕ меняется до выбора.
     [HttpPost("{id}/icon/generate")]
     public async Task<ActionResult> GenerateIcon(string id, [FromBody] GenerateIconRequest req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        if (!falImage.Enabled) return BadRequest(new { error = "Генерация изображений не настроена (нет Fal:ApiKey)" });
 
         var prompt = string.IsNullOrWhiteSpace(req.Prompt)
             ? BuildIconPrompt(p)
@@ -378,7 +394,15 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
               + $"no border, no drop shadow, no 3D, no gloss, no padding, no text. {req.Prompt.Trim()}";
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
-        var images = await falImage.GenerateManyAsync(prompt, count);
+        // Провайдера нет — отвечаем отказом, но иконку не теряем: заявка догонит проект,
+        // как только генерацию настроят
+        if (!imageGen.EnabledFor(Services.Images.ImagePlaces.ProjectIcon))
+        {
+            imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.ProjectIcon, id, UserId, prompt);
+            return BadRequest(new { error = ImageGenerationOffError });
+        }
+
+        var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.ProjectIcon, prompt, count);
         if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
 
         // Свежая папка кандидатов (перезатираем прошлую генерацию)
@@ -403,7 +427,9 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
     [HttpPost("icon/generate-preview")]
     public async Task<ActionResult> GenerateIconPreview([FromBody] GenerateIconPreviewRequest req)
     {
-        if (!falImage.Enabled) return BadRequest(new { error = "Генерация изображений не настроена (нет Fal:ApiKey)" });
+        // Проекта ещё нет — ставить заявку в очередь не на что, только честный отказ
+        if (!imageGen.EnabledFor(Services.Images.ImagePlaces.ProjectIcon))
+            return BadRequest(new { error = ImageGenerationOffError });
 
         var prompt = string.IsNullOrWhiteSpace(req.Prompt)
             ? BuildIconPrompt(req.Name ?? "")
@@ -412,7 +438,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
               + $"no border, no drop shadow, no 3D, no gloss, no padding, no text. {req.Prompt.Trim()}";
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
-        var images = await falImage.GenerateManyAsync(prompt, count);
+        var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.ProjectIcon, prompt, count);
         if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
 
         var candidates = images

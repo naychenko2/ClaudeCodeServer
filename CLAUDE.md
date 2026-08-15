@@ -152,6 +152,20 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
 назначений — [model-presets-and-tiers.md](docs/features/model-presets-and-tiers.md), цепочки
 фолбэка и ёмкость контекста — [ADR-007](docs/adr/ADR-007-model-preset-chains.md) §4.
 
+## Генератор картинок (Services/Images)
+
+Иконку проекта и аватар персоны рисует слой драйверов `IImageGenerator` (fal.ai — синхронный,
+glif — `compose_project` + опрос джобы) за роутером `ImageGenerationService`. Провайдера
+(Автоматически | fal.ai | glif) и модель выбирает админ **отдельно для каждого места**
+(`ImagePlaces`: `project-icon`, `persona-avatar`) — секция «Картинки» вкладки «Применение»
+(`GET/PUT /api/image-generation`, стор `data/image-generation.json` поверх секции конфига
+`Images`). Модель выбирается только у fal; в «Автоматически» (порядок `glif` → `fal`) и у glif
+её подбирает сам генератор. Инвариант тот же, что у моделей:
+**явно выбранного провайдера не подменяем**, переход на другого — только в «Автоматически».
+Не нарисовалось (сервис не настроен, отказ) — сущность живёт на инициалах, а картинку догоняет
+очередь `ImageBackfillService` (`data/image-backfill.json`, событие `image_backfilled`).
+Детали — [docs/features/image-generation.md](docs/features/image-generation.md).
+
 ## Claude Code CLI subprocess
 
 `ClaudeSession` запускает: `claude --print --output-format stream-json --input-format stream-json --include-partial-messages --permission-prompt-tool stdio [--resume <id>]`

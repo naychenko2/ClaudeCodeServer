@@ -25,6 +25,7 @@ import { useOnline } from './hooks/useOnline'
 import { showToast } from './lib/toast'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged, onMessage } from './lib/signalr'
+import { onProjectIconBackfilled } from './features/projects/useAllProjects'
 import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
@@ -356,6 +357,14 @@ export default function App() {
         setProject(fresh)
       })
       .catch(() => { /* офлайн — доосвежится эффектом сверки по project.id */ })
+  }), [])
+
+  // Догоняющая генерация дорисовала иконку открытого проекта — подменяем DTO, иначе
+  // рабочее пространство держит инициалы до перезагрузки (в списке это делает ProjectListPage)
+  useEffect(() => onProjectIconBackfilled(fresh => {
+    if (fresh.id !== projectIdRef.current) return
+    localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(fresh))
+    setProject(fresh)
   }), [])
 
   // Toast «Связь восстановлена» — только на переходе offline → online (старт офлайн

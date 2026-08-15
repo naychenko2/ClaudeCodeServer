@@ -26,6 +26,7 @@ import { EditDialog } from '../features/projects/dialogs/EditDialog';
 import { DeleteDialog } from '../features/projects/dialogs/DeleteDialog';
 import { MoveToGroupDialog } from '../features/projects/dialogs/MoveToGroupDialog';
 import { GroupManagerDialog } from '../features/projects/dialogs/GroupManagerDialog';
+import { onProjectIconBackfilled } from '../features/projects/useAllProjects';
 
 type ActiveDialog =
   | { type: 'add' }
@@ -124,6 +125,11 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
       })
       .catch(e => setLoadState(e instanceof OfflineError ? 'offline' : 'error'));
   }, [online, retryKey]);
+
+  // Догоняющая генерация дорисовала иконку — подменяем проект в списке (карточка возьмёт
+  // новый URL: он бустится именем файла иконки)
+  useEffect(() => onProjectIconBackfilled(fresh =>
+    setProjects(prev => prev.map(p => p.id === fresh.id ? fresh : p))), []);
 
   const filtered = projects.filter(p =>
     p.name.toLowerCase().includes(search.toLowerCase()) ||

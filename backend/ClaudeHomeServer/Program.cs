@@ -57,6 +57,12 @@ var inspectionMode = builder.Configuration.GetValue<bool>("InspectionMode");
 // Пусто — без обёртки.
 TimestampedConsoleWriter.Enable(builder.Configuration["Diagnostics:ConsoleTimestampFormat"]);
 
+// Файловый лог инстанса (data/logs/server-YYYYMMDD.log, stderr-зеркало, дневная ротация):
+// вне Development/Testing включён по умолчанию — боевой инстанс обязан оставлять след
+// обрывов ходов и смертей процессов CLI независимо от способа запуска (трей/Runner/консоль).
+// Выключается Logging:File:Enabled=false (см. Services/Diagnostics/FileLog.cs).
+ClaudeHomeServer.Services.Diagnostics.FileLog.Attach(builder.Configuration, builder.Environment);
+
 // Зачистка процессов-сирот от предыдущего запуска сервера (краш/форс-килл):
 // на Windows дочерние node-процессы MCP-серверов не умирают при смерти родителя —
 // без этого они копятся и съедают гигабайты памяти. Должно быть ДО первого Process.Start.

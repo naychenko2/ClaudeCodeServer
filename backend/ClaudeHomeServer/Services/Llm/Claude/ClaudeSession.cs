@@ -2558,7 +2558,7 @@ public class ClaudeSession : ILlmSessionAdapter
         {
             // Полный стек — иначе не видно, ГДЕ упал разбор (напр. небезопасное чтение числа
             // из stream-json стороннего провайдера). Message в одиночку тут бесполезен.
-            Console.Error.WriteLine($"[ClaudeSession] Цикл чтения прогона упал: {ex}");
+            Console.Error.WriteLine($"[ClaudeSession] Цикл чтения прогона упал (session={Info.Id} cli={Info.ClaudeSessionId ?? "-"}): {ex}");
             // Активный ход из-за краха цикла не дождётся result — без явной ошибки клиенту
             // UI навсегда завис бы на «Размышление…» (ExitedMessage из finally не гасит плашку
             // размышления). Шлём ошибку, чтобы ход честно завершился. DeathDiagnosed — ДО сообщения:
@@ -2721,7 +2721,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // reuse=true — гонка same-process (фильтр SkipResults неприменим), это ожидаемо.
             Console.WriteLine(
                 $"[ClaudeSession] Same-process ход умер без result — перезапуск новым процессом на той же паре " +
-                $"(reuse={run.ReuseSubmit} gotEvent={run.TurnGotEvent} exit={exitCode?.ToString() ?? "?"})");
+                $"(session={Info.Id} cli={Info.ClaudeSessionId ?? "-"} reuse={run.ReuseSubmit} gotEvent={run.TurnGotEvent} exit={exitCode?.ToString() ?? "?"})");
         }
         else if (activeTurnDied)
         {
@@ -2734,7 +2734,22 @@ public class ClaudeSession : ILlmSessionAdapter
             {
                 run.DeathDiagnosed = true;
                 Console.Error.WriteLine(
-                    $"[ClaudeSession] Прогон умер при активном ходе (gotEvent={run.TurnGotEvent} reuse={run.ReuseSubmit} retryOnEmpty={run.RetryOnEmptyExit} exit={exitCode?.ToString() ?? "?"})");
+                    $"[ClaudeSession] Прогон умер при активном ходе (session={Info.Id} cli={Info.ClaudeSessionId ?? "-"} gotEvent={run.TurnGotEvent} reuse={run.ReuseSubmit} retryOnEmpty={run.RetryOnEmptyExit} exit={exitCode?.ToString() ?? "?"})");
+                // EOF-путь (stdout закрылся раньше события ОС Exited) обязан сам донести ошибку
+                // до клиента: после DeathDiagnosed HandleProcessExitedAsync молча выйдет, и без
+                // ErrorMessage здесь ход закончился бы «никак» — тишина в ленте при живом статусе
+                // Working (инцидент 15.08.2026). Тот же текст и гейты, что там: ход убит
+                // пользователем — не дублируем его маркер остановки.
+                if (!_interruptedByUser)
+                {
+                    // P30: pending control_response завис бы карточкой до 60-минутного таймаута
+                    if (pendingControlResponse) CancelPendingControlResponses();
+                    var message = pendingControlResponse
+                        ? "Процесс модели завершился во время ожидания разрешения — ход прерван"
+                        : "Процесс модели завершился во время хода — ответ не был получен";
+                    try { await _onMessage(new ErrorMessage(message)); }
+                    catch (Exception ex) { Console.Error.WriteLine($"[ClaudeSession] ErrorMessage о смерти хода не отправлен: {ex.Message}"); }
+                }
             }
             // P31: при порядке «EOF первым» (AskUserQuestion/ExitPlanMode — ридер не блокируется
             // permission-waiter'ом) этот путь отрабатывает раньше HandleProcessExitedAsync, который
@@ -2791,7 +2806,7 @@ public class ClaudeSession : ILlmSessionAdapter
             && ShouldRetryEmptyExit(activeTurn, run.RetryOnEmptyExit, run.TurnGotEvent, run.ReuseSubmit);
 
         Console.Error.WriteLine(
-            $"[ClaudeSession] Процесс CLI завершился (exit={exitCode?.ToString() ?? "?"} " +
+            $"[ClaudeSession] Процесс CLI завершился (session={Info.Id} cli={Info.ClaudeSessionId ?? "-"} exit={exitCode?.ToString() ?? "?"} " +
             $"activeTurn={activeTurn} gotEvent={run.TurnGotEvent} reuse={run.ReuseSubmit} " +
             $"retryOnEmpty={run.RetryOnEmptyExit} retry={willRetry} " +
             $"pendingControlResponse={pendingControlResponse} interruptedByUser={_interruptedByUser} " +

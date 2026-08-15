@@ -1,5 +1,7 @@
 import { useState } from 'react';
+import { ChevronsLeft, ChevronsRight } from 'lucide-react';
 import { C, FONT } from '../../lib/design';
+import { ICON_STROKE } from './icons';
 import { RailFlyout } from './RailFlyout';
 import { RAIL_W } from './RailCapsule';
 
@@ -36,7 +38,7 @@ function HatRule() {
   return <div style={{ alignSelf: 'stretch', height: 1, background: C.border, flexShrink: 0 }} />;
 }
 
-export function RailHat({ side, label, title }: {
+export function RailHat({ side, label, title, collapse, railHover }: {
   // Сторона окна: в неё же выезжает плашка с полным названием
   side: 'left' | 'right';
   // Подпись в самой шляпке — капс до семи символов (см. замер выше)
@@ -45,30 +47,68 @@ export function RailHat({ side, label, title }: {
   // объяснение не хватает, а плашка — та же, что подписывает кнопки рельсы, и
   // места в ней сколько угодно. Не задано — плашки нет вовсе.
   title?: string;
+  // Шляпка работает тумблером «свернуть все панели» / «вернуть их как было».
+  // Раньше на это стояла ОТДЕЛЬНАЯ кнопка первой в столбце: 36px 40-пиксельной
+  // полосы, причём мёртвая, когда сворачивать нечего. Ярлык рельсы для этой роли
+  // подходит лучше некуда — заголовок сворачивает своё содержимое, а места он уже
+  // занимает ровно столько же. Не задан — шляпка остаётся просто подписью.
+  collapse?: { collapsed: boolean; onToggle: () => void };
+  // Курсор где-то на рельсе (не обязательно на самой шляпке). Стрелки сворачивания
+  // вылезают уже на подходе к рельсе, а не только когда попал в 7px-подпись: жест
+  // должен быть виден, пока человек только тянется к нему мышью. Плашки это не
+  // касается — она по-прежнему открывается лишь наведением на саму шляпку, иначе
+  // висела бы над каждой кнопкой рельсы.
+  railHover?: boolean;
 }) {
   const [hover, setHover] = useState(false);
+
+  // Стрелки всегда указывают К краю окна при сворачивании и от него — при
+  // разворачивании (тот же знак, что стоял на бывшей кнопке столбца).
+  const isLeft = side === 'left';
+  const CollapseIcon = collapse?.collapsed
+    ? (isLeft ? ChevronsRight : ChevronsLeft)
+    : (isLeft ? ChevronsLeft : ChevronsRight);
+  // Под курсором подпись подменяется стрелками: без этого «капс, который зачем-то
+  // нажимается» ничем не отличается от обычного ярлыка. Знак тот же, что был на
+  // кнопке, — жест узнаётся сразу. Порог — наведение на РЕЛЬСУ целиком: пока мышь
+  // идёт к шляпке, стрелки уже на месте.
+  const near = hover || !!railHover;
+  const showIcon = !!collapse && near;
 
   const hat = (
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
+      {...(collapse ? {
+        role: 'button',
+        'aria-label': collapse.collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели',
+        onClick: collapse.onToggle,
+      } : null)}
       style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
         // Ширина именно 100%, а не alignSelf: stretch: с плашкой шляпка живёт внутри
         // якоря RailFlyout (строчный flex), и растягиваться ей надо по нему
         width: '100%', flexShrink: 0, userSelect: 'none',
+        ...(collapse ? { cursor: 'pointer' } : null),
       }}
     >
+      {/* Высота строки фиксирована: подпись и стрелки сменяют друг друга под
+          курсором, и «дышать» на этом шляпка не должна — за ней сразу столбец
+          кнопок. Иконка чуть выше семи пикселей и вылезает за строку на пиксель с
+          каждой стороны: сверху там поле капсулы, снизу — зазор до черты. */}
       <div style={{
+        height: 7, display: 'flex', alignItems: 'center', justifyContent: 'center',
         fontFamily: FONT.sans, fontSize: 6, fontWeight: 700, lineHeight: '7px',
         letterSpacing: '0.03em', textTransform: 'uppercase',
         // Под курсором ярлык оживает: в покое он почти растворён (smoke), и без
         // отклика непонятно, что на него вообще можно навести
-        color: hover ? C.textMuted : C.smoke,
+        color: near ? C.textMuted : C.smoke,
         transition: 'color 0.12s',
         whiteSpace: 'nowrap',
       }}>
-        {label}
+        {showIcon
+          ? <CollapseIcon size={9} strokeWidth={ICON_STROKE} style={{ display: 'block' }} />
+          : label}
       </div>
       <HatRule />
     </div>
@@ -82,6 +122,12 @@ export function RailHat({ side, label, title }: {
     <RailFlyout
       side={side}
       label={title}
+      // Что делает клик — второй строкой плашки: в самой шляпке на объяснение нет
+      // ни пикселя, а без подписи жест остался бы тайным знанием. Тон тихий (серая
+      // точка) — это подсказка, а не число-индикатор.
+      hint={collapse
+        ? [{ text: collapse.collapsed ? 'Нажмите, чтобы вернуть панели' : 'Нажмите, чтобы свернуть все', tone: 'muted' as const }]
+        : undefined}
       open={hover}
       railWidth={RAIL_W}
       hostStyle={{ alignSelf: 'stretch' }}

@@ -16,6 +16,7 @@ export type { RailFlyoutAction } from './RailFlyout';
 export { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
 export { RailIconButton } from './RailIconButton';
 export { RailSep } from './RailSep';
+export { RailHat, RAIL_HAT_H } from './RailHat';
 export { PanelRail } from './PanelRail';
 export type { RailItem } from './PanelRail';
 export { PanelDropGuide } from './PanelDropGuide';

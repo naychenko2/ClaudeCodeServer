@@ -32,6 +32,14 @@ public sealed class GitConflictException(string message, IReadOnlyList<string> f
 // Креды HTTP-remote (Forgejo): логин + персональный токен пользователя
 public sealed record GitCredentials(string Username, string Token);
 
+// Файл экспорта в ветку паспортов: путь внутри ветки + текстовое содержимое (паспорта —
+// markdown). При дубле пути в наборе побеждает последняя запись (update-index перезапишет).
+public sealed record GitDossierFile(string Path, string Content);
+
+// Итог записи ветки паспортов: Created=false — дерево снапшота совпало с последним
+// коммитом ветки и новый коммит не создавался; CommitSha — tip ветки в обоих случаях.
+public sealed record GitDossiersWriteResult(bool Created, string CommitSha);
+
 // Единая точка ЛОКАЛЬНЫХ git-операций над рабочим деревом проекта.
 // Запуск — через слой Execution (ILauncherFactory.ForOwner): для container-пользователей
 // git исполняется внутри песочницы cc-sandbox с маппингом путей, для local — на хосте.
@@ -117,9 +125,10 @@ public sealed class GitService(ILauncherFactory launchers)
     // Бросает GitCommandException, если git завершился с ошибкой.
     private async Task<GitResult> RunOkAsync(
         string? ownerId, string root, IReadOnlyList<string> args,
-        string? stdin = null, int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default)
+        string? stdin = null, IReadOnlyDictionary<string, string>? env = null,
+        int timeoutMs = DefaultTimeoutMs, CancellationToken ct = default)
     {
-        var r = await RunAsync(ownerId, root, args, stdin, timeoutMs: timeoutMs, ct: ct);
+        var r = await RunAsync(ownerId, root, args, stdin, env: env, timeoutMs: timeoutMs, ct: ct);
         if (!r.Ok)
             throw new GitCommandException(FirstLine(r.Stderr) ?? "git завершился с ошибкой");
         return r;
@@ -624,6 +633,121 @@ public sealed class GitService(ILauncherFactory launchers)
 
     public Task CheckoutAsync(string? ownerId, string root, string branch, CancellationToken ct = default) =>
         WriteOp(ownerId, root, ["checkout", branch], ct: ct);
+
+    // ---------- Ветка паспортов ccs/dossiers/v1 (экспорт «Историй решений») ----------
+
+    // Полный ref ветки экспорта паспортов изменений
+    public const string DossiersRef = "refs/heads/ccs/dossiers/v1";
+
+    // Фиксированная идентичность коммитов ветки: commit-tree берёт автора из env/конфига,
+    // а user.name на сервере может быть не задан («empty ident name not allowed»)
+    private static readonly Dictionary<string, string> DossiersIdentity = new()
+    {
+        ["GIT_AUTHOR_NAME"] = "AI Home",
+        ["GIT_AUTHOR_EMAIL"] = "dossiers@ai-home.local",
+        ["GIT_COMMITTER_NAME"] = "AI Home",
+        ["GIT_COMMITTER_EMAIL"] = "dossiers@ai-home.local",
+    };
+
+    // Записать ПОЛНЫЙ снапшот файлов в ветку паспортов строго через плюминг:
+    // hash-object -w → временный индекс (GIT_INDEX_FILE) → write-tree → commit-tree
+    // → update-ref. Рабочее дерево, индекс и HEAD пользователя не затрагиваются:
+    // ни переключения веток, ни временного worktree — цепочка идёт в том репозитории,
+    // откуда вызвали (main или linked worktree). Первый коммит ветки — без родителя.
+    public async Task<GitDossiersWriteResult> WriteDossiersBranchAsync(
+        string? ownerId, string root, IReadOnlyList<GitDossierFile> files, string message,
+        CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) throw new GitCommandException("Каталог не является git-репозиторием");
+
+        var sem = LockFor(root);
+        await sem.WaitAsync(ct);
+        try
+        {
+            // Tip ветки и его дерево. Отсутствующая ветка (--quiet, exit 1) — норма, это
+            // первый экспорт. sha валидируем: rev-parse превращает опечатку в refname
+            // в свободный аргумент и может «резолвнуть» её во что-то неожиданное.
+            var tipRes = await RunAsync(ownerId, root, ["rev-parse", "--quiet", DossiersRef], ct: ct);
+            var tipSha = tipRes.Stdout.Trim();
+            string? tip = tipRes.Ok && IsValidSha(tipSha) ? tipSha : null;
+            string? tipTree = null;
+            if (tip is not null)
+            {
+                var treeRes = await RunAsync(ownerId, root,
+                    ["rev-parse", "--quiet", $"{DossiersRef}^{{tree}}"], ct: ct);
+                if (treeRes.Ok) tipTree = treeRes.Stdout.Trim();
+            }
+
+            // Временный индекс — в git-dir. --git-path возвращает путь в среде исполнения
+            // git, поэтому его же отдаём в GIT_INDEX_FILE без транляций (для container-
+            // пользователей это контейнерный путь, и он же валиден для контейнерного git).
+            // Уникальное имя не нужно: лок per-root сериализует экспорты одного дерева,
+            // а git-path разносит main и worktree в разные файлы. Перед цепочкой сносим
+            // огрызок незавершённого запуска: update-index добавляет к существующему
+            // индексу, и stale-записи утащили бы в дерево чужие файлы.
+            var idxPath = (await RunOkAsync(ownerId, root,
+                ["rev-parse", "--git-path", "index.dossiers-tmp"], ct: ct)).Stdout.Trim();
+            var hostIdx = HostGitPath(ownerId, root, idxPath);
+            try { File.Delete(hostIdx); } catch { /* файла нет — норма */ }
+            var idxEnv = new Dictionary<string, string> { ["GIT_INDEX_FILE"] = idxPath };
+
+            try
+            {
+                foreach (var f in files)
+                {
+                    var rel = ValidateRel(root, f.Path).Replace('\\', '/');
+                    var blob = await RunOkAsync(ownerId, root, ["hash-object", "-w", "--stdin"],
+                        stdin: f.Content, ct: ct);
+                    await RunOkAsync(ownerId, root,
+                        ["update-index", "--add", "--cacheinfo", "100644", blob.Stdout.Trim(), rel],
+                        env: idxEnv, ct: ct);
+                }
+                var tree = (await RunOkAsync(ownerId, root, ["write-tree"], env: idxEnv, ct: ct))
+                    .Stdout.Trim();
+
+                // Снапшот не изменился — новый коммит не создаём
+                if (tip is not null && tree == tipTree)
+                    return new GitDossiersWriteResult(false, tip);
+
+                var commitArgs = new List<string> { "commit-tree", tree };
+                if (tip is not null) commitArgs.AddRange(["-p", tip]);
+                var commit = await RunOkAsync(ownerId, root, commitArgs,
+                    stdin: message, env: DossiersIdentity, ct: ct);
+                var sha = commit.Stdout.Trim();
+
+                // Старое значение передаём (tip или нулевой sha для создания) — это CAS:
+                // параллельный экспорт из другого дерева того же репо не будет молча
+                // перезаписан; проигравший получит ошибку git и повторит вызов.
+                await RunOkAsync(ownerId, root,
+                    ["update-ref", DossiersRef, sha, tip ?? new string('0', 40)], ct: ct);
+                return new GitDossiersWriteResult(true, sha);
+            }
+            finally
+            {
+                // Чистим за собой; неудача удаления не критична: файл в git-dir (не мусорит
+                // статус рабочего дерева), следующий запуск сносит его перед собой
+                try { File.Delete(hostIdx); } catch { }
+            }
+        }
+        finally { sem.Release(); }
+    }
+
+    // Путь из вывода git (--git-path) в хостовый: относительный резолвим от корня репо,
+    // абсолютный живёт в среде исполнения (у container-пользователей — контейнерный) —
+    // переводим через IPathMapper, чтобы File.Delete достал до файла на хосте.
+    private string HostGitPath(string? ownerId, string root, string gitPath)
+    {
+        if (!Path.IsPathRooted(gitPath)) return Path.Combine(root, gitPath);
+        try { return launchers.ForOwner(ownerId).Paths.ToHost(gitPath); }
+        catch { return gitPath; /* вне маппинга — удалим best effort по сырому пути */ }
+    }
+
+    // Ручная публикация ветки паспортов в origin — только по явной команде пользователя.
+    // Полный ref (а не короткое имя ветки): уезжает ровно эта ветка, upstream текущей
+    // ветки рабочего дерева не трогаем.
+    public Task PushDossiersBranchAsync(
+        string? ownerId, string root, GitCredentials? creds = null, CancellationToken ct = default) =>
+        NetworkOp(ownerId, root, ["push", "origin", DossiersRef], creds, ct);
 
     // ---------- Сетевые операции (remote; таймаут длиннее) ----------
 

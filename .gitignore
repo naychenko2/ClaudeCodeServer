@@ -45,8 +45,10 @@ mcp/tasks-server/dist/
 .env.prod
 *.env
 
-# Локальный override-конфиг (машинно-специфичные пути/секреты), у каждого свой
-backend/ClaudeHomeServer/appsettings.Local.json
+# Локальный override-конфиг (машинно-специфичные пути/секреты), у каждого свой.
+# Со звёздочкой: ручные бэкапы вида appsettings.Local.json.bak-* несут те же секреты,
+# а точное имя их не закрывало — git add -A утащил бы ключи в репозиторий
+backend/ClaudeHomeServer/appsettings.Local.json*
 # Локальные docker-compose оверрайды (машинно-специфичные, не для git)
 docker-compose.*.local.yml
 # Боевой сетевой конфиг деплоя (домен/серт grisha, порт 80) — не светим в git

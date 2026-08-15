@@ -4,9 +4,10 @@ import type { ChatItem, TeamEscalationAction, TeamEscalationKind } from '../../t
 import { C, FS, FONT, R, SHADOW, SP } from '../../lib/design';
 import {
   teamEscalationTone, teamEscalationNeedsComment, teamEscalationInformational,
-  teamEscalationDetailsLines,
+  teamEscalationDetailsMarkdown,
   TEAM_ESCALATION_REPLY_PLACEHOLDER, TEAM_ESCALATION_REPLY_HINT_DECISION,
 } from '../../lib/teamImplement';
+import { MarkdownContent } from './MarkdownContent';
 import { ensurePersonasLoaded, getPersonaById, usePersonasVersion } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { Button } from '../ui/Button';
@@ -39,24 +40,15 @@ function actionVariant(index: number, informational: boolean): 'primary' | 'ghos
   return 'ghost';
 }
 
-// Многострочный details: состав под-задач («— Заголовок (волна N)») рисуем списком,
-// остальные строки — абзацами. Простынёй pre-wrap состав сливался в одно полотно
+// Многострочный details — markdown (состав под-задач, выделения, код): рисуем им же,
+// иначе в ленте видны ** и маркеры. Нижний отступ последнего абзаца гасим, чтобы
+// не разъехался паддинг карточки
 function Details({ text }: { text: string }) {
-  const lines = teamEscalationDetailsLines(text);
-  if (lines.length === 0) return null;
+  const md = teamEscalationDetailsMarkdown(text);
+  if (!md) return null;
   return (
-    <div style={{
-      fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45,
-      display: 'flex', flexDirection: 'column', gap: 4,
-    }}>
-      {lines.map((line, i) => line.kind === 'item' ? (
-        <div key={i} style={{ display: 'flex', gap: 7, paddingLeft: 2 }}>
-          <span style={{ color: C.textMuted, flexShrink: 0 }}>•</span>
-          <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{line.text}</span>
-        </div>
-      ) : (
-        <div key={i} style={{ whiteSpace: 'pre-wrap' }}>{line.text}</div>
-      ))}
+    <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: -8, minWidth: 0, wordBreak: 'break-word' }}>
+      <MarkdownContent text={md} />
     </div>
   );
 }

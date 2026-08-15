@@ -189,22 +189,26 @@ export function teamEscalationInformational(kind: TeamEscalationKind): boolean {
   return kind === 'waveAdded';
 }
 
-// Строка details карточки: бэкенд шлёт многострочный текст, где состав под-задач идёт
-// строками «— Заголовок (волна N)». Одной простынёй такой состав не читается, поэтому
-// режем на абзацы и пункты — рендер рисует пункты списком
-export interface TeamEscalationDetailsLine {
-  kind: 'text' | 'item';
-  text: string;
-}
+// Details карточки — markdown (его пишет модель), рендерится MarkdownContent. Правим
+// только состав под-задач: бэкенд шлёт его строками «— Заголовок (волна N)», а длинное
+// тире markdown маркером списка не считает — приводим ведущие «—»/«–» к «- ». Блок
+// списка отбиваем пустыми строками: без них строка под последним пунктом становится
+// его ленивым продолжением (CommonMark) и уезжает внутрь пункта. Остальной текст —
+// как есть, тире внутри строки не трогаем
+const DETAILS_ITEM = /^[ \t]*[-*+][ \t]+/;
 
-export function teamEscalationDetailsLines(details: string): TeamEscalationDetailsLine[] {
-  return details
-    .split('\n')
-    .map(line => line.trim())
-    .filter(line => line.length > 0)
-    .map(line => /^[—–-]\s+/.test(line)
-      ? { kind: 'item' as const, text: line.replace(/^[—–-]\s+/, '') }
-      : { kind: 'text' as const, text: line });
+export function teamEscalationDetailsMarkdown(details: string): string {
+  if (!details) return '';
+  const lines = details.split('\n').map(line => line.replace(/^([ \t]*)[—–][ \t]+/, '$1- '));
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const prev = lines[i - 1];
+    const blank = (s: string) => s.trim().length === 0;
+    if (prev !== undefined && !blank(prev) && !blank(lines[i])
+      && DETAILS_ITEM.test(prev) !== DETAILS_ITEM.test(lines[i])) out.push('');
+    out.push(lines[i]);
+  }
+  return out.join('\n').trim();
 }
 
 // Комментарий к решению нужен там, где кнопки не заменяют слов человека:

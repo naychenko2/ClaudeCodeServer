@@ -42,8 +42,10 @@ describe('TeamEscalationView', () => {
     expect(html).toContain('Новая вводная в работе: экспорт трат');
     expect(html).toContain('Экспорт в XLSX (волна 1)');
     expect(html).toContain('Кнопка выгрузки (волна 1)');
-    // Пункты состава — отдельные строки с маркером, а не одна простыня
-    expect(html.match(/•/g)?.length).toBe(2);
+    // Пункты состава — настоящий markdown-список, а не одна простыня
+    expect(html.match(/<li/g)?.length).toBe(2);
+    // Абзац под составом остался абзацем, а не уехал ленивым продолжением в последний пункт
+    expect(html.split('</ul>')[1]).toContain('Работа уже идёт');
     expect(html.match(/<button/g)?.length).toBe(1);
     expect(html).toContain('Остановить');
     // Информационная карточка не зовёт нажимать: accent-кнопки главного действия нет

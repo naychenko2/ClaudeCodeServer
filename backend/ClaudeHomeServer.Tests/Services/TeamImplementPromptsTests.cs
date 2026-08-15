@@ -130,4 +130,56 @@ public class TeamImplementPromptsTests
             "координатор в Confirming обязан знать путь пересборки плана маркером");
         turn.Should().Contain("ЗАПРЕЩЕНО");
     }
+
+    // Заголовок карточки остановки, push (TeamWaveService, Body: escalation.Title) и цитаты
+    // в ходах координатора берут первую строку текста модели — а модель пишет markdown,
+    // и в заголовке были видны сырые «##», «**», бэктики и «- ». FirstLine приватный,
+    // проверяем через EscalationTitle с видом WaveGate: он отдаёт результат один в один.
+    [Theory]
+    [InlineData("## Волна 2 готова", "Волна 2 готова")]
+    [InlineData("**Сборка упала** в `backend`", "Сборка упала в backend")]
+    [InlineData("- пункт состава", "пункт состава")]
+    [InlineData("1. первый шаг", "первый шаг")]
+    [InlineData("> цитата исполнителя", "цитата исполнителя")]
+    [InlineData("см. [документацию](docs/a.md)", "см. документацию")]
+    [InlineData("![схема](shots/a.png) готова", "схема готова")]
+    [InlineData("__итог__ и ~~старое~~", "итог и старое")]
+    [InlineData("правим *ядро* режима", "правим ядро режима")]
+    [InlineData("падает team_wave_service после правки", "падает team_wave_service после правки")]
+    [InlineData("```\nсборка упала\n```", "сборка упала")]
+    [InlineData("---\nВолна закрыта", "Волна закрыта")]
+    [InlineData("", "")]
+    [InlineData("   \n \t ", "")]
+    public void EscalationTitle_СнимаетMarkdownРазметку(string details, string expected)
+    {
+        TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveGate, details)
+            .Should().Be(expected);
+    }
+
+    [Fact]
+    public void EscalationTitle_Обрезает120_УжеПоОчищеннойСтроке()
+    {
+        // Разметка не должна съедать полезный хвост: 120 символов считаем после чистки.
+        var body = new string('я', 130);
+
+        var title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveGate, $"**{body}**");
+
+        title.Should().Be(new string('я', 120) + "…");
+    }
+
+    [Fact]
+    public void EscalationTitle_РовноГраница_БезМноготочия()
+    {
+        var body = new string('я', 120);
+
+        TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveGate, $"## {body}")
+            .Should().Be(body);
+    }
+
+    [Fact]
+    public void EscalationTitle_ВидСоШаблоном_ПодставляетОчищеннуюСтроку()
+    {
+        TeamImplementPrompts.EscalationTitle(TeamEscalationKind.Blocker, "## Не хватает **прав** на `data/`")
+            .Should().Be("Исполнитель застрял: Не хватает прав на data/");
+    }
 }

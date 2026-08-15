@@ -5,6 +5,7 @@ import { C, FONT, SHADOW } from '../../lib/design';
 import { dueLabel, isDueUrgent, openTaskInSection, PRIORITY_LABEL } from '../../lib/tasks';
 import { PriorityFlag, MeBadge, ClaudeBadge, LabelChip, SubtaskCheck, CalendarIcon } from '../../features/tasks/bits';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { ToolUseView } from './ToolUseView';
 import { ChatProjectContext } from './contexts';
@@ -79,7 +80,8 @@ export const TaskCreatedView = memo(function TaskCreatedView({ item, online, onO
   const subtasks = task?.subtasks ?? [];
   const subtasksDone = subtasks.filter(s => s.isDone).length;
   const labels = task?.labels ?? [];
-  const description = task?.description?.trim() ?? '';
+  // Описание клампится в 2 строки — блочный markdown ломает кламп, показываем плоский текст
+  const description = markdownToPlain(task?.description ?? '');
   const dueUrgent = task ? isDueUrgent(task) : false;
 
   return (

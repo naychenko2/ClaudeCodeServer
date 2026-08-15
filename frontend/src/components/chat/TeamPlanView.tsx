@@ -11,7 +11,8 @@ import { teamPlanRunLabel } from '../../lib/teamImplement';
 import { Button } from '../ui/Button';
 import { Dot } from '../ui/Dot';
 import { Menu } from '../ui/Menu';
-import { FileLink } from './MarkdownContent';
+import { FileLink, MarkdownContent } from './MarkdownContent';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { ChatProjectContext, ChatOpenFileContext, TeamPlanContext } from './contexts';
 
 // Склонение числительного (ру): 1 под-задача, 2 под-задачи, 5 под-задач
@@ -57,13 +58,15 @@ function AnnotationBlock({ label, items, note }: { label: string; items: string[
       }}>
         {label}
       </div>
+      {/* Пункт — строчный контекст (flex-строка с ручной точкой-маркером), поэтому текст
+          модели чистим до плоского: блочный markdown разъехался бы с маркером */}
       {items.map((text, i) => (
         <div key={i} style={{
           display: 'flex', alignItems: 'flex-start', gap: 8, padding: '3px 2px',
           fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45,
         }}>
           <span style={{ width: 4, height: 4, borderRadius: '50%', background: C.textMuted, flexShrink: 0, marginTop: 7 }} />
-          <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{text}</span>
+          <span style={{ minWidth: 0, wordBreak: 'break-word' }}>{markdownToPlain(text)}</span>
         </div>
       ))}
       {note && (
@@ -99,9 +102,11 @@ function IntentBlock({ text }: { text: string }) {
       </div>
       <div ref={bodyRef} style={{
         fontSize: FS.base, color: C.textSecondary, lineHeight: 1.5,
-        whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
+        wordBreak: 'break-word', maxHeight: 180, overflow: 'auto',
       }}>
-        {trimmed}
+        {/* Тело читают целиком — рендерим markdown. Нижний отступ последнего абзаца
+            гасим, иначе блок разъезжается с остальными отступами карточки */}
+        <div style={{ marginBottom: -8 }}><MarkdownContent text={trimmed} /></div>
       </div>
       {overflowing && (
         <div style={{
@@ -242,7 +247,11 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
   rootPath?: string | null;
 }) {
   const files = filesLine(subtask.files, rootPath);
-  const warn = isCheckMe(subtask.executorRationale);
+  // Название и обоснование от модели приходят markdown-ом, а живут в однострочных
+  // контекстах (ellipsis, тултип, строка с иконкой) — чистим до плоского текста
+  const title = markdownToPlain(subtask.title);
+  const rationale = markdownToPlain(subtask.executorRationale);
+  const warn = isCheckMe(rationale);
   return (
     <div style={{ padding: '7px 2px', borderTop: `1px solid ${C.borderLight}` }}>
       <div style={{
@@ -251,13 +260,13 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
         flexDirection: isMobile ? 'column' : 'row',
       }}>
         <span
-          title={subtask.title}
+          title={title}
           style={{
             fontSize: FS.base, fontWeight: 600, color: C.textHeading, flex: 1, minWidth: 0, maxWidth: '100%',
             overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
           }}
         >
-          {subtask.title}
+          {title}
         </span>
         <ExecutorChip personaId={subtask.executorPersonaId} candidates={candidates}
           disabled={readOnly} onPick={id => onReassign(subtask.id, id)} />
@@ -270,7 +279,7 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
           {files.text}
         </div>
       )}
-      {subtask.executorRationale && (
+      {rationale && (
         <div style={{
           display: 'flex', alignItems: 'flex-start', gap: 5, marginTop: 3,
           fontSize: FS.xs, lineHeight: 1.4,
@@ -278,7 +287,7 @@ function SubtaskRow({ subtask, candidates, onReassign, readOnly, isMobile, rootP
           fontWeight: warn ? 600 : 400,
         }}>
           {warn && <AlertTriangle size={11} strokeWidth={2.2} style={{ flexShrink: 0, marginTop: 1 }} />}
-          <span>{subtask.executorRationale}</span>
+          <span>{rationale}</span>
         </div>
       )}
     </div>
@@ -561,8 +570,12 @@ export function TeamPlanView({ item, online }: {
         </span>
       </div>
 
+      {/* Сводку читают целиком — markdown-ом; нижний отступ последнего абзаца гасим,
+          иначе разъедутся отступы до «Замысла» */}
       {plan.summary && (
-        <div style={{ fontSize: FS.base, color: C.textSecondary, lineHeight: 1.45 }}>{plan.summary}</div>
+        <div style={{ fontSize: FS.base, color: C.textSecondary, lineHeight: 1.45, marginBottom: -8 }}>
+          <MarkdownContent text={plan.summary} />
+        </div>
       )}
 
       {/* «Замысел» (решение 2026-08-02): 3–5 строк от планировщика — над списком под-задач,

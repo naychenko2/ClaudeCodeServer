@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -108,10 +109,22 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
         second.GetProperty("onboardingKind").GetString().Should().Be("user");
     }
 
+    // Сброс онбординга дефолтного пользователя: удаляем живую сессию знакомства, если осталась
+    // от соседних тестов класса (фабрика общая), — иначе start становится резюмом чужой
+    // сессии, и счётчик ходов фейк-адаптера зависит от порядка тестов
+    private async Task ResetOnboardingAsync()
+    {
+        var me = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
+        if (me.TryGetProperty("onboardingSessionId", out var sid) && sid.ValueKind == JsonValueKind.String)
+            (await _client.DeleteAsync($"/api/chats/{sid.GetString()}")).EnsureSuccessStatusCode();
+    }
+
     [Fact]
     public async Task StartUser_ЗапускаетПервыйХодМастера()
     {
         await EnsureHomeConfiguredAsync();
+        await ResetOnboardingAsync();
 
         var onboarding = await PostJsonAsync("/api/onboarding/user/start");
         var sessionId = onboarding.GetProperty("id").GetString()!;
@@ -128,18 +141,64 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
     public async Task StartUser_ДвойнойStart_НеДублируетХодМастера()
     {
         await EnsureHomeConfiguredAsync();
+        await ResetOnboardingAsync();
 
         var first = await PostJsonAsync("/api/onboarding/user/start");
         var sessionId = first.GetProperty("id").GetString()!;
 
-        // Резюм: второй start (вторая вкладка, повторный логин) возвращает существующую
-        // сессию — повторный kickoff НЕ запускается, иначе первая реплика мастера
-        // задублировалась бы и сбила интервью
+        // Kickoff «в полёте»: фейк-адаптер принял ход, но завершения не эмитит — статус
+        // сессии Working. Второй start (вторая вкладка, повторный логин) возвращает
+        // существующую сессию, а повторный kickoff отсекает проверка немоты по статусу —
+        // иначе первая реплика мастера задублировалась бы и сбила интервью
         var second = await PostJsonAsync("/api/onboarding/user/start");
         second.GetProperty("id").GetString().Should().Be(sessionId);
 
         var adapter = _factory.LlmAdapters.Adapters[sessionId];
-        adapter.SentMessages.Should().ContainSingle("резюм не запускает второй kickoff");
+        adapter.SentMessages.Should().ContainSingle("kickoff в полёте — второй не уходит");
+    }
+
+    [Fact]
+    public async Task StartUser_НемойЧат_ПовторныйStartЛечитKickoff()
+    {
+        await EnsureHomeConfiguredAsync();
+        await ResetOnboardingAsync();
+
+        var onboarding = await PostJsonAsync("/api/onboarding/user/start");
+        var sessionId = onboarding.GetProperty("id").GetString()!;
+        var adapter = _factory.LlmAdapters.Adapters[sessionId];
+        adapter.SentMessages.Should().ContainSingle("первый kickoff ушёл при создании");
+
+        // Имитация сбоя первого хода: директива в истории есть, а ответа собеседника нет.
+        // Фейк-адаптер не завершает ход (статус Working навсегда) и живого прогона у него
+        // нет (HasLiveTurn=false) — «Стоп» реанимирует такой чат: статус Active плюс
+        // служебная плашка в истории. Получаем в точности «немой чат»: человек видит пустую
+        // ленту, а OnboardingSessionId уже записан.
+        (await _client.PostAsync($"/api/board/agents/{sessionId}/interrupt", null)).EnsureSuccessStatusCode();
+        await WaitChatStatusAsync(sessionId, "active");
+
+        // Повторный start (человек вернулся в пустой чат) обязан заново запустить собеседника:
+        // реплик нет, неслужебных сообщений нет (плашка stuck_reset и kickoff-директива —
+        // служебные), статус не Working/Waiting — все три условия немоты
+        var resumed = await PostJsonAsync("/api/onboarding/user/start");
+        resumed.GetProperty("id").GetString().Should().Be(sessionId);
+        adapter.SentMessages.Should().HaveCount(2, "немой чат лечится повторным kickoff");
+        adapter.SentMessages[1].Should().Be(adapter.SentMessages[0],
+            "лечение шлёт ту же затравку личного знакомства");
+    }
+
+    // Реанимация зависшего чата асинхронна (ReviveStuckSessionAsync в фоне) — ждём смену
+    // статуса опросом с дедлайном, а не фиксированной задержкой
+    private async Task WaitChatStatusAsync(string sessionId, string expected)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (DateTime.UtcNow < deadline)
+        {
+            var chat = JsonSerializer.Deserialize<JsonElement>(
+                await (await _client.GetAsync($"/api/chats/{sessionId}")).Content.ReadAsStringAsync());
+            if (chat.GetProperty("status").GetString() == expected) return;
+            await Task.Delay(50);
+        }
+        throw new TimeoutException($"Сессия {sessionId} не перешла в статус {expected}");
     }
 
     [Fact]
@@ -195,6 +254,12 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
         // тот же паттерн, что у личного онбординга, но ведёт персона, а не системный мастер
         var adapter = _factory.LlmAdapters.Adapters[sessionId];
         adapter.SentMessages.Should().ContainSingle("старт проектного онбординга запускает один ход дефолт-персоны");
+
+        // Затравка выбрана по типу знакомства: проектная знакомит с проектом и не спрашивает
+        // о пользователе — он уже знаком с ассистентом (Знакомство v2, п.0)
+        adapter.SentMessages[0].Should().Contain("знакомство с проектом");
+        adapter.SentMessages[0].Should().NotContain("как обращаться к пользователю",
+            "вопросы о пользователе — из личной затравки, в проектной их быть не должно");
     }
 
     [Fact]
@@ -302,5 +367,107 @@ public class OnboardingControllerTests : IClassFixture<TestWebApplicationFactory
         var response = await MakeDefaultFromSessionAsync(personaId, chatId);
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         (await response.Content.ReadAsStringAsync()).Should().Contain("онбординга");
+    }
+
+    // --- Знакомство v2, п.5: сценарий проектного знакомства и шаг команды ---
+
+    private async Task<JsonElement> GetAsync(string url) =>
+        JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync(url)).Content.ReadAsStringAsync());
+
+    // Создать проектную персону (scope=project) из онбординг-сессии — путь MCP personas_create
+    private async Task<string> CreateProjectPersonaFromSessionAsync(string name, string projectId, string sessionId)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/personas");
+        request.Headers.Add("X-Caller-Session-Id", sessionId);
+        request.Content = JsonContent.Create(new { name, scope = "project", projectId });
+        var response = await _client.SendAsync(request);
+        response.EnsureSuccessStatusCode();
+        return JsonSerializer.Deserialize<JsonElement>(
+            await response.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+    }
+
+    // Назначение руководителя в первом же ходе НЕ гасит остаток сценария: пока каркас
+    // не применён (presetKey == "pending"), точка входа возвращает ту же сессию, а не
+    // заводит вторую с новым kickoff
+    [Fact]
+    public async Task StartProject_ПослеНазначенияРуководителя_ПриPendingКаркасеВозвращаетТуЖеСессию()
+    {
+        await EnsureHomeConfiguredAsync();
+        var personaId = await CreateGlobalPersonaAsync("Проводница");
+        (await _client.PostAsync($"/api/personas/{personaId}/make-default", null)).EnsureSuccessStatusCode();
+        var projectId = await CreateProjectAsync();
+
+        var onboarding = await PostJsonAsync($"/api/onboarding/project/{projectId}/start");
+        var sessionId = onboarding.GetProperty("id").GetString()!;
+
+        // Руководитель выбран в первом же ходе (make-default из онбординг-сессии)
+        var leaderId = await CreateProjectPersonaFromSessionAsync("Руководитель", projectId, sessionId);
+        (await MakeDefaultFromSessionAsync(leaderId, sessionId)).EnsureSuccessStatusCode();
+
+        // Каркас ещё pending → повторный start — резюм той же сессии, а не вторая с kickoff
+        var resumed = await PostJsonAsync($"/api/onboarding/project/{projectId}/start");
+        resumed.GetProperty("id").GetString().Should().Be(sessionId,
+            "пока PresetKey == pending, OnboardingSessionId не чистится — вторая сессия не заводится");
+        _factory.LlmAdapters.Adapters[sessionId].SentMessages.Should().ContainSingle(
+            "повторный start живой сессии не шлёт второй kickoff");
+    }
+
+    // После решения по каркасу (отказ) повторный start всё равно не заводит вторую сессию —
+    // OnboardingSessionId, не очищенный при pending-финализации, резюмит ту же. Инвариант
+    // п.5 — «точка входа не создаёт вторую сессию с новым kickoff», а не «поле обязано
+    // опустеть»: живой чат знакомства остаётся точкой входа навсегда.
+    [Fact]
+    public async Task StartProject_ПослеОтказаОтКаркаса_НеЗаводитВторуюСессию()
+    {
+        await EnsureHomeConfiguredAsync();
+        // Эндпоинт /preset гейтится фич-флагом (404 без него) — включаем, как в соседних тестах
+        (await _client.PutAsJsonAsync(
+            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = true }))
+            .EnsureSuccessStatusCode();
+        var personaId = await CreateGlobalPersonaAsync("Проводница");
+        (await _client.PostAsync($"/api/personas/{personaId}/make-default", null)).EnsureSuccessStatusCode();
+        var projectId = await CreateProjectAsync();
+
+        var onboarding = await PostJsonAsync($"/api/onboarding/project/{projectId}/start");
+        var sessionId = onboarding.GetProperty("id").GetString()!;
+        var leaderId = await CreateProjectPersonaFromSessionAsync("Руководитель", projectId, sessionId);
+        (await MakeDefaultFromSessionAsync(leaderId, sessionId)).EnsureSuccessStatusCode();
+
+        // Отказ от каркаса (кнопка «Не нужно» — POST /preset с none)
+        (await _client.PostAsJsonAsync($"/api/projects/{projectId}/preset", new { presetKey = "none" }))
+            .EnsureSuccessStatusCode();
+
+        var resumed = await PostJsonAsync($"/api/onboarding/project/{projectId}/start");
+        resumed.GetProperty("id").GetString().Should().Be(sessionId,
+            "точка входа возвращает живую сессию знакомства, а не создаёт новую с kickoff");
+        _factory.LlmAdapters.Adapters[sessionId].SentMessages.Should().ContainSingle(
+            "второго kickoff после решения по каркасу не уходит");
+    }
+
+    // Повторный make-default из живой сессии не шлёт второе onboarding_completed
+    [Fact]
+    public async Task MakeDefault_ПовторныйИзОнбордингСессии_НеШлётВтороеСобытие()
+    {
+        await EnsureHomeConfiguredAsync();
+        var personaId = await CreateGlobalPersonaAsync("Проводница");
+        (await _client.PostAsync($"/api/personas/{personaId}/make-default", null)).EnsureSuccessStatusCode();
+        var projectId = await CreateProjectAsync();
+
+        var onboarding = await PostJsonAsync($"/api/onboarding/project/{projectId}/start");
+        var sessionId = onboarding.GetProperty("id").GetString()!;
+        var leaderId = await CreateProjectPersonaFromSessionAsync("Руководитель", projectId, sessionId);
+
+        (await MakeDefaultFromSessionAsync(leaderId, sessionId)).EnsureSuccessStatusCode();
+        // Повторное назначение той же персоны из той же живой сессии — не вторая финализация
+        (await MakeDefaultFromSessionAsync(leaderId, sessionId)).EnsureSuccessStatusCode();
+
+        var chat = await GetAsync($"/api/chats/{sessionId}");
+        chat.GetProperty("id").GetString().Should().Be(sessionId);
+        // Флаг финализации персистится: сессия помнит, что onboarding уже завершён
+        // (проверяем отсутствием побочных эффектов — вторая доза досева и событий не ушла)
+        var leader = await GetAsync($"/api/personas/{leaderId}");
+        leader.GetProperty("specialty").GetString().Should().Be("coordinator",
+            "досев прошёл ровно один раз");
     }
 }

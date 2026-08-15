@@ -64,6 +64,9 @@ export interface Project {
   defaultPersonaId?: string | null;
   // Живая сессия онбординга проекта — для резюма прерванного интервью
   onboardingSessionId?: string | null;
+  // Каркас знакомства v2: null/отсутствует — проект создан до фичи (не предлагаем),
+  // "pending" — новый (можно предложить), "none" — человек отказался, иначе — ключ пресета
+  presetKey?: string | null;
   // Фон рабочего пространства (фича project-backgrounds): null/отсутствует — генерацию
   // не пробовали (стандартный фон). Гейтом по флагу + владение (только владелец меняет)
   background?: ProjectBackground | null;

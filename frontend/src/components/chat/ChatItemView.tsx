@@ -18,6 +18,9 @@ import { hasUltraworkKeyword } from '../../lib/ultrawork';
 import { detectTeamMechanic, describeTeamTurn } from '../../features/team/teamMechanics';
 import { TeamTurnRequest } from '../../features/team/TeamTurnCard';
 import { stripTeamMechanicMarkers, TeamMechanicOfferCard, type TeamMechanicOffer } from '../../features/team/TeamMechanicOffer';
+import {
+  stripProjectPresetMarkers, ProjectPresetOfferCard, type PresetCardState,
+} from '../../features/onboarding/ProjectPresetOffer';
 import { useContextPersona } from '../../lib/contextPersona';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
@@ -640,6 +643,21 @@ interface ItemProps {
   // default-personas-onboarding): карточка с кнопкой запуска. Дедуп «одна механика —
   // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда
   teamMechanicOffer?: { offer: TeamMechanicOffer; launched: boolean; declined?: boolean; onRun: () => void };
+  // Предложение каркаса (маркер <project-preset key="…"/>; знакомство v2, п.4): карточка
+  // с кнопками «Создать» / «Не нужно». Внутри решает, что рисовать — pending/применён/
+  // отклонён/null — по переданному состоянию (берётся с DTO проекта, не из ленты).
+  // Маркер из текста стрижётся всегда; карточка встраивается под стриженым текстом.
+  projectPresetOffer?: {
+    state: PresetCardState;
+    // Ключ пресета из текущего маркера — в pending нужен карточке, чтобы вывести
+    // описание ровно того каркаса, который бэкенд применит, и передать ключ в onApply.
+    pendingKey?: string | null;
+    appliedNote?: string | null;
+    error?: string | null;
+    busy?: boolean;
+    onApply: (key: string) => void;
+    onDecline: () => void;
+  };
 }
 
 // React.memo: переключатель по kind — самый массовый компонент ленты. Элементы ChatItem
@@ -925,7 +943,7 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1071,7 +1089,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const report = parseDelegationReport(item.text);
       // Маркер предложения механики <team-mechanic/> из отображаемого текста стрижём всегда
       // (вместе с незакрытым префиксом в хвосте стрима); карточку рендерит проп ниже
-      const bodyText = stripTeamMechanicMarkers(report ? report.body : item.text, streaming);
+      const bodyText = stripProjectPresetMarkers(
+        stripTeamMechanicMarkers(report ? report.body : item.text, streaming),
+        streaming,
+      );
       // Пост сабагента кнопки «какой промпт ушёл» не получает: его промпт собирал CLI,
       // а наш снимок описывает ход основного агента
       const msg = (
@@ -1088,6 +1109,18 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
               launched={teamMechanicOffer.launched}
               declined={teamMechanicOffer.declined}
               onRun={teamMechanicOffer.onRun}
+            />
+          )}
+          {/* Карточка предложения каркаса проекта — «Создать» / «Не нужно» */}
+          {projectPresetOffer && (
+            <ProjectPresetOfferCard
+              state={projectPresetOffer.state}
+              pendingKey={projectPresetOffer.pendingKey}
+              appliedNote={projectPresetOffer.appliedNote}
+              error={projectPresetOffer.error}
+              busy={projectPresetOffer.busy}
+              onApply={projectPresetOffer.onApply}
+              onDecline={projectPresetOffer.onDecline}
             />
           )}
         </div>

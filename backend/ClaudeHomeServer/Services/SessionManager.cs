@@ -1760,11 +1760,15 @@ public class SessionManager : IDisposable
                 if (members.Count > 1) built += "\n\n" + BuildGroupChatHint(p, members);
             }
             // Онбординг проекта: надстройка наставника поверх слоя личной дефолт-персоны.
-            // После финализации (назначен Project.DefaultPersonaId) исчезает сама —
-            // промпт пересобирается каждый ход
+            // Живёт, пока нет руководителя ИЛИ пока каркас не развёрнут (PresetKey == "pending"):
+            // назначение руководителя в первом же ходе не должно гасить остаток сценария
+            // (знакомство v2, п.5) — иначе шаги каркаса и команды исчезали бы до их прохождения.
+            // Исчезает сама после применения/отказа каркаса — промпт пересобирается каждый ход.
             if (session.OnboardingKind == OnboardingKinds.Project && session.ProjectId is { } prjId
-                && _projects.GetById(prjId) is { } prj && string.IsNullOrEmpty(prj.DefaultPersonaId))
-                built += "\n\n" + Prompts.OnboardingPrompts.ProjectOnboardingOverlay(prj.Name);
+                && _projects.GetById(prjId) is { } prj
+                && Prompts.OnboardingPrompts.ProjectOverlayActive(prj))
+                built += "\n\n" + Prompts.OnboardingPrompts.ProjectOnboardingOverlay(
+                    prj.Name, prj.PresetKey, PersonasEnabled(ownerId, session, persona));
             return built;
         };
         // Долгая память — только если включена у персоны
@@ -2093,7 +2097,15 @@ public class SessionManager : IDisposable
         // Модули сервера персон: manage (CRUD персон) и automation (правила проактивности) —
         // за своими tool-ключами с дефолтом по роли (SectionEnabled → SpecialtySections).
         // Ядро (personas_list/get, привязки, persona_ask) остаётся у всех, у кого сервер включён.
-        var manage = _bindings.SectionEnabled(ownerId, persona, "personas-manage");
+        // Проектный онбординг (знакомство v2, п.5) форсирует manage: шаг команды зовёт
+        // personas_ai_team/personas_create, а ведёт сессию скромная личная дефолт-персона,
+        // у которой по роли этих инструментов нет. Решение — по СВОЙСТВУ сессии
+        // (OnboardingKind пишется при создании и не мутирует), не по ходу: состав tools/list
+        // стабилен. Форс не сужается состоянием PresetKey по той же причине. Работает только
+        // при включённом сервере персон: Off-привязка tool:personas снимает его целиком,
+        // и шаг команды честно проговаривается оверлеем как ограничение.
+        var manage = session.OnboardingKind == OnboardingKinds.Project
+            || _bindings.SectionEnabled(ownerId, persona, "personas-manage");
         var automation = _bindings.SectionEnabled(ownerId, persona, "personas-automation");
 
         var token = GetServiceToken(ownerId);
@@ -2376,6 +2388,17 @@ public class SessionManager : IDisposable
         if (ResolveOwnerId(entry.Info) != ownerId) return;
         if (entry.Info.OnboardingCreatedPersonaId == personaId) return;
         entry.Info.OnboardingCreatedPersonaId = personaId;
+        SaveSessions();
+    }
+
+    // Пометить онбординг-сессию финализированной (PersonasController.FinalizeOnboardingAsync):
+    // повторный make-default из живой сессии после этого — no-op без второго события в ленте.
+    public void SetOnboardingFinalized(string sessionId, string ownerId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+        if (ResolveOwnerId(entry.Info) != ownerId) return;
+        if (entry.Info.OnboardingFinalized) return;
+        entry.Info.OnboardingFinalized = true;
         SaveSessions();
     }
 

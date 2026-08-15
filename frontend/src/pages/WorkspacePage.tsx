@@ -1569,6 +1569,7 @@ const windowWidth = useWindowWidth();
             projectId={project.id}
             projectOwnerId={project.ownerId}
             defaultPersonaId={projectDefaultId}
+            presetKey={project.presetKey}
             isMobile={isMobile}
           />
         )}
@@ -1644,6 +1645,7 @@ const windowWidth = useWindowWidth();
         projectId={project.id}
         projectOwnerId={project.ownerId}
         defaultPersonaId={projectDefaultId}
+        presetKey={project.presetKey}
         isMobile={isMobile}
       />
 

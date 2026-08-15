@@ -475,6 +475,15 @@ export const api = {
     // Кастомные колонки Kanban-доски проекта (пустой массив → дефолтные 3)
     updateBoardColumns: (id: string, columns: BoardColumn[]) =>
       request<Project>(`/projects/${id}/board-columns`, { method: 'PUT', body: JSON.stringify({ columns }) }),
+    // Применить пресет каркаса (знакомство v2, п.4): "docs" / "dev" / "personal" — создать;
+    // "none" — зафиксировать отказ. 409 → "Каркас уже применён"; 400 → неверный ключ.
+    // 404 → чужой проект или флаг выключен. Ответ — отчёт { created, skipped } (на "none" —
+    // пустые массивы). На ошибке `err.status` покажет код, `err.body.error` — текст с бэка.
+    applyPreset: (id: string, presetKey: string) =>
+      request<{ created: string[]; skipped: { path: string; reason: string }[] }>(
+        `/projects/${encodeURIComponent(id)}/preset`,
+        { method: 'POST', body: JSON.stringify({ presetKey }) },
+      ),
     // Code Graph: карта типов и связей проекта. 404 (граф не построен) и 403
     // (чужой проект) уходят в статус-коде ошибки — потребитель (lib/codeGraph.ts)
     // отличает их от сетевого сбоя по err.status (см. request в offline.ts).

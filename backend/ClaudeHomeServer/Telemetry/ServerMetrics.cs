@@ -117,6 +117,15 @@ public static class ServerMetrics
         unit: "{event}",
         description: "Знакомство завершено (дефолт назначен из онбординг-сессии)");
 
+    // Решение по каркасу проекта (знакомство v2): применение или отказ. Тег reason —
+    // ключ пресета либо "none" (отказ): без разбивки не посчитать долю принявших каркас
+    // и не решить про снятие флага. Значения из кода (каталог + зарезервированное "none"),
+    // не снаружи — ограничитель кардинальности не нужен, но форму держим через MetricTagGuard.
+    public static readonly Counter<long> IntroPresetApplied = _meter.CreateCounter<long>(
+        "ccs.intro.preset_applied",
+        unit: "{event}",
+        description: "Решение по каркасу проекта: применён (reason=ключ пресета) или отклонён (reason=none)");
+
     // ── Recording API ────────────────────────────────────────────────────────
     // Строковые параметры = теги (camelCase ↔ snake_case ↔ AllowedTags).
     // Числовой параметр (где есть) = скалярное значение метрики.
@@ -188,6 +197,19 @@ public static class ServerMetrics
     // Знакомство (план 2.10): без тегов — только счётчик события.
     public static void RecordIntroStarted() => IntroStarted.Add(1);
     public static void RecordIntroCompleted() => IntroCompleted.Add(1);
+
+    /// <summary>
+    /// Решение по каркасу проекта. <paramref name="reason"/> — ключ пресета ("docs" / "dev" /
+    /// "personal") или "none" при отказе: значения из кода, поэтому без MetricTagGuard —
+    /// но форма всё равно проверяется, чтобы случайный путь/свободный текст не завёл ряд.
+    /// </summary>
+    public static void RecordPresetApplied(string reason)
+    {
+        var tag = reason is not null && reason.Length <= 16
+                  && reason.All(c => char.IsAsciiLetterOrDigit(c))
+            ? reason : MetricTagGuard.Overflow;
+        IntroPresetApplied.Add(1, new KeyValuePair<string, object?>("reason", tag));
+    }
 
     // ObservableGauges (sessions.active, websocket.connections) регистрируются
     // извне в задаче T9 через _meter.CreateObservableGauge — здесь только декларация

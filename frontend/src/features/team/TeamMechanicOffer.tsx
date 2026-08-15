@@ -108,10 +108,51 @@ export interface FeedTurnLike {
   auto?: boolean;
 }
 
+// Минимальный срез text-элемента для сборщика карточек предложений: parentToolUseId
+// отличает top-level текст от реплик сабагентов, а text — тело для парсера маркера.
+// kind и text — необязательные поля, чтобы сюда прошёл ChatItem[] (там есть
+// варианты без text, например session_started) без приведения типов; фильтры остаются
+// внутри buildMechanicOffers.
+export interface MechanicOfferItem extends FeedTurnLike {
+  kind: string;
+  text?: string;
+  parentToolUseId?: string;
+}
+
+// Карточку несёт ПОСЛЕДНЕЕ предложение каждой механики в чате. Дедуп по id сохраняется
+// (одна механика — одна карточка), но при повторном маркере карточка «переезжает» к
+// актуальной реплике и берёт свежий topic — пользователь видит предложение там, где
+// сейчас читает, и запускает актуальную формулировку. Старый маркер остаётся в ленте,
+// но карточка на нём не рисуется — её место ниже (а если declined переехал вместе
+// с карточкой, новая реплика снимает declined, см. hasUserTurnAfter ниже).
+export function buildMechanicOffers(items: readonly MechanicOfferItem[]): Map<number, TeamMechanicOffer> {
+  // Ключ сборки — id механики, иначе map.set(i, offer) оставит в карте по записи на
+  // КАЖДЫЙ маркер одной механики (ключ-то индекс). Идём в порядке возрастания i, поэтому
+  // последний set для каждого id — это и есть последнее предложение в ленте.
+  const lastById = new Map<TeamMechanicId, { index: number; offer: TeamMechanicOffer }>();
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    if (it.kind !== 'text' || it.parentToolUseId) continue;
+    const text = it.text;
+    if (!text || !text.includes('<te')) continue;
+    const offer = parseTeamMechanicOffer(text);
+    if (!offer) continue;
+    lastById.set(offer.id, { index: i, offer });
+  }
+  const map = new Map<number, TeamMechanicOffer>();
+  for (const { index, offer } of lastById.values()) map.set(index, offer);
+  return map;
+}
+
 // «Отказались от механики»: после карточки в ленте появился новый живой ход пользователя
 // (не служебная директива цикла, не заметка штаба, не авто-продолжение work-loop) —
 // диалог пошёл дальше, а механику так и не запустили. Сам запуск — не отказ: он ловится
 // launched (детект хода механики) и у этого признака приоритет.
+//
+// NB: поверх buildMechanicOffers declined считается по ИНДЕКСУ ПОСЛЕДНЕГО предложения
+// каждой механики — если модель после user_message выдала новый маркер той же механики,
+// «отказ» относится к старой карточке (которая уже не рендерится), а новая карточка
+// стартует заново. Именно это снимает «Вы отказались» при повторном предложении.
 export function hasUserTurnAfter(items: readonly FeedTurnLike[], index: number): boolean {
   for (let j = index + 1; j < items.length; j++) {
     const it = items[j];

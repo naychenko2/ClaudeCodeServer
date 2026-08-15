@@ -1,10 +1,11 @@
 import { memo, useContext, useEffect, useState } from 'react';
 import type { ChatItem } from '../../types';
-import { C, FONT, SHADOW } from '../../lib/design';
+import { C, FONT, FS, SHADOW, SP } from '../../lib/design';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { MarkdownContent } from './MarkdownContent';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { findPersonaByAgentType } from './PersonaTaskView';
 import { ChatProjectContext } from './contexts';
 
@@ -118,8 +119,22 @@ export const PersonaAskView = memo(function PersonaAskView({ item }: { item: Ext
             }),
           }}
         >
-          <span style={{ fontWeight: 600, color: C.textMuted }}>Вопрос: </span>
-          {question}
+          {questionOpen ? (
+            // Раскрыто — подпись отдельной строкой мини-заголовком секции, под ней вопрос
+            // markdown-разметкой (как ответ). Нижний отступ последнего абзаца гасим,
+            // чтобы не разъехался паддинг блока
+            <>
+              <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, marginBottom: SP.xs }}>Вопрос</div>
+              <div style={{ marginBottom: -8 }}><MarkdownContent text={question} /></div>
+            </>
+          ) : (
+            // Свёрнуто — инлайн-подпись и плоское превью: -webkit-line-clamp клампит
+            // только строчный текст, отдельная строка подписи съела бы половину превью
+            <>
+              <span style={{ fontWeight: 600, color: C.textMuted }}>Вопрос: </span>
+              {markdownToPlain(question)}
+            </>
+          )}
         </div>
       )}
 

@@ -1,13 +1,15 @@
 import { memo, useContext, useEffect, useMemo, useState } from 'react';
 import { Bot } from 'lucide-react';
 import type { ChatItem, Persona } from '../../types';
-import { C, FONT, SHADOW } from '../../lib/design';
+import { C, FONT, FS, SHADOW, SP } from '../../lib/design';
 import { usePersonas, ensurePersonasLoaded, personaLabel } from '../../lib/personas';
 import { splitAgentResultTail, formatTailTokens, formatTailDuration, isAsyncLaunchAck, bgEmptyAnswerNote } from '../../lib/agentTail';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
 import { ToolUseView, toolWord } from './ToolUseView';
 import { AgentTextBlock, AgentThinkingBlock, CollapsibleMarkdownBody, NEUTRAL_AGENT_ACCENT } from './AgentContentBlocks';
+import { MarkdownContent } from './MarkdownContent';
+import { markdownToPlain } from '../../lib/markdownPlain';
 import { itemKey, type ActivityEntry } from './timeline';
 import { ChatProjectContext, ChatSessionContext } from './contexts';
 import { useSubagentModelChip } from '../../lib/presets';
@@ -170,8 +172,22 @@ export function PersonaConsultCard({ persona, agentRole, question, summary, runn
             }),
           }}
         >
-          <span style={{ fontWeight: 600, color: C.textMuted }}>Вопрос: </span>
-          {questionOpen ? question || summary : summary || question}
+          {questionOpen ? (
+            // Раскрыто — подпись отдельной строкой мини-заголовком секции, под ней вопрос
+            // markdown-разметкой (как ответ). Нижний отступ последнего абзаца гасим,
+            // чтобы не разъехался паддинг блока
+            <>
+              <div style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, marginBottom: SP.xs }}>Вопрос</div>
+              <div style={{ marginBottom: -8 }}><MarkdownContent text={question || summary || ''} /></div>
+            </>
+          ) : (
+            // Свёрнуто — инлайн-подпись и плоское превью: -webkit-line-clamp клампит
+            // только строчный текст, отдельная строка подписи съела бы половину превью
+            <>
+              <span style={{ fontWeight: 600, color: C.textMuted }}>Вопрос: </span>
+              {markdownToPlain(summary || question)}
+            </>
+          )}
         </div>
       )}
 

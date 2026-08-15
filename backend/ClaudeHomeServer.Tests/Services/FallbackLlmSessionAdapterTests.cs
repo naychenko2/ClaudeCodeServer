@@ -31,6 +31,7 @@ public class FallbackLlmSessionAdapterTests
         public int CurrentTurnAgentDepth => 0;
         public bool CurrentTurnSuppressTasksExecute => false;
         public bool HasLiveTurn => false;
+        public bool HasQueuedTurn => false;
         public bool OrchestrationActive => false;
         public bool HasPendingBg => false;
         public bool IsContinuationInFlight => false;

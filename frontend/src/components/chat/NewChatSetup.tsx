@@ -59,7 +59,7 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
   useEffect(() => { setRegistryOverride(null); }, [project?.id, project?.tagRegistry]);
   const registry = registryOverride ?? project?.tagRegistry ?? [];
 
-  // Полная замена полей на бэке и выбор эндпоинта по projectId — в updateChatFields
+  // Частичное обновление полей и выбор эндпоинта по projectId — в updateChatFields
   const persist = async (next: ChatFieldsPatch) => {
     setSaving(true);
     try {

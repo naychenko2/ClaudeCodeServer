@@ -3,14 +3,14 @@ import { api } from './api';
 
 // Единая точка обновления полей чата.
 //
-// Две тонкости, из-за которых это не однострочник у каждого вызывающего:
-//  1) эндпоинты разные — у проектной сессии /projects/{id}/sessions, у чата вне
-//     проекта /chats;
-//  2) update на бэке — ПОЛНАЯ замена: name/model/effort перезаписываются целиком,
-//     и отсутствующее поле обнуляется. Поэтому недостающие подмешиваем из текущей
-//     сессии, иначе смена одного срока жизни стирала бы имя и модель чата.
-// Время жизни, теги, opt-out истории и тумблер уведомлений живут по sentinel-семантике
-// (нет поля = не менять) — их подставляем только когда их реально просили изменить.
+// Тонкость, из-за которой это не однострочник у каждого вызывающего: эндпоинты разные —
+// у проектной сессии /projects/{id}/sessions, у чата вне проекта /chats.
+//
+// Все поля идут по sentinel-семантике (нет поля = не менять), поэтому подставляем только
+// то, что реально просили изменить: у name/model/effort на бэке «не менять» — это null,
+// а очистка значения — пустая строка (SessionManager.Update). Подмешивать их из текущей
+// сессии нельзя: непустое name поднимает UpdatedAt, и чат прыгал бы наверх списка
+// непрочитанным от любой смены настройки (тумблер голосового режима, срок жизни, мьют).
 export interface ChatFieldsPatch {
   name?: string | null;
   model?: string | null;
@@ -20,17 +20,20 @@ export interface ChatFieldsPatch {
   // Opt-out «не сохранять решения из этого чата» (ADR-004 §6). Только у проектных сессий
   excludeFromDossiers?: boolean | null;
   notificationsMuted?: boolean;
+  // Голосовой режим чата: ответ приходит коротким и озвучивается (POST /api/tts)
+  voiceMode?: boolean;
 }
 
 export function updateChatFields(session: Session, patch: ChatFieldsPatch): Promise<Session> {
   const data = {
-    name: patch.name !== undefined ? patch.name : (session.name ?? null),
-    model: patch.model !== undefined ? patch.model : (session.model ?? null),
-    effort: patch.effort !== undefined ? patch.effort : (session.effort ?? null),
+    ...(patch.name !== undefined && { name: patch.name }),
+    ...(patch.model !== undefined && { model: patch.model }),
+    ...(patch.effort !== undefined && { effort: patch.effort }),
     ...(patch.expiresAfterMinutes !== undefined && { expiresAfterMinutes: patch.expiresAfterMinutes }),
     ...(patch.tags !== undefined && { tags: patch.tags }),
     ...(patch.excludeFromDossiers !== undefined && { excludeFromDossiers: patch.excludeFromDossiers }),
     ...(patch.notificationsMuted !== undefined && { notificationsMuted: patch.notificationsMuted }),
+    ...(patch.voiceMode !== undefined && { voiceMode: patch.voiceMode }),
   };
   return session.projectId
     ? api.sessions.update(session.projectId, session.id, data)

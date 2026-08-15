@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { ArrowDownToLine, Pin, Plus, Search } from 'lucide-react';
 import { C, R, FS, FONT, Z, SHADOW } from '../../lib/design';
 import type { Project } from '../../types';
-import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
+import { RailCapsule, RailHat, RailIconButton, RailSep, RAIL_HAT_H } from '../../components/ui';
 import { PanelDropLine } from '../../components/ui/PanelDropGuide';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { ProjectIcon } from './ProjectIcon';
@@ -32,8 +32,9 @@ const ICON_BOX = 32;          // бокс кнопки проекта — как
 const CAP_GAP = 6;            // зазор между элементами капсулы (как в PanelRail)
 const STEP = ICON_BOX + CAP_GAP;
 // Высота несменяемой части капсулы: паддинги, «+», два сепаратора и лупа с их
-// зазорами. По ней из свободной высоты считается число слотов под иконки.
-const FIXED_H = 100;
+// зазорами, плюс шляпка с её чертой. По ней из свободной высоты считается число
+// слотов под иконки.
+const FIXED_H = 100 + RAIL_HAT_H;
 // Потолок значков. Не про место (по высоте влезло бы вдвое больше), а про то, что
 // док ищут глазами: два десятка одинаковых квадратов читаются медленнее, чем поиск
 // по имени в палитре, и съедают экран. Что не влезло — «+N» на лупе.
@@ -379,6 +380,8 @@ export function ProjectRail({ project, onOpenSettings, side = 'left' }: {
         // куда человек целится.
         style={dragView ? { pointerEvents: 'none' } : undefined}
       >
+        <RailHat side={side} label="Проекты" title="Переключение проектов" />
+
         {/* Поиск по всем проектам: палитра умеет и переход, и создание, и «Все проекты».
             Кружок — сколько проектов не поместилось в док. */}
         <RailIconButton

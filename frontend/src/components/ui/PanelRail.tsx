@@ -5,13 +5,14 @@ import { ICON_STROKE } from './icons';
 import { Menu, MenuItem } from './Menu';
 import { PanelDropLine } from './PanelDropGuide';
 import { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
+import { RailHat, RAIL_HAT_H } from './RailHat';
 import { RailIconButton } from './RailIconButton';
 import { RailSep } from './RailSep';
 
-// Высота капсулы с ОДНОЙ кнопкой: паддинги 4+4, бокс кнопки 32, рамка 1+1.
-// Столько места держим за схлопнутой рельсой, чтобы соседние капсулы (док
-// проектов) не подпрыгивали, когда панелей на экране не осталось.
-const RAIL_MIN_H = 42;
+// Высота капсулы с ОДНОЙ кнопкой: паддинги 4+4, бокс кнопки 32, рамка 1+1, плюс
+// шляпка с её чертой. Столько места держим за схлопнутой рельсой, чтобы соседние
+// капсулы (док проектов) не подпрыгивали, когда панелей на экране не осталось.
+const RAIL_MIN_H = 42 + RAIL_HAT_H;
 
 // Вертикальная рельса иконок у края окна — полукапсула-остров, из которой
 // открываются панели-карточки. Общая для ОБЕИХ зон: RightPanelStack (инструменты
@@ -66,6 +67,13 @@ export interface RailItem {
 interface Props {
   // Сторона окна. Разворачивает капсулу и стрелки сворачивания.
   side: 'left' | 'right';
+  // Микро-подпись у верхней кромки: чья это рельсина. У края окна капсул стоит
+  // стопка с общей оправой (под рельсой — док проектов, под ним док «Стены»), и
+  // без ярлыка они различались только столбиком иконок. Не задана — шляпки нет.
+  hat?: string;
+  // Полное название рельсы — плашка по наведению на шляпку (в капс-ярлык оно не
+  // влезает). Не задано — плашки нет.
+  hatTitle?: string;
   // Группы иконок сверху вниз; между НЕПУСТЫМИ группами — сепаратор. Пустые
   // отбрасываются: так разделитель сам исчезает, когда группа скрыта целиком
   // (напр. сессионные кнопки без плана и агентов).
@@ -421,7 +429,7 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
   );
 }
 
-export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer }: Props) {
+export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer }: Props) {
   const isLeft = side === 'left';
   const dropping = !!drop?.active;
 
@@ -570,6 +578,10 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overf
       gapToCenter={gapToCenter}
       border={railBorder}
     >
+      {/* Шляпка — ВНЕ столбца кнопок: она не участвует ни в дропе, ни в расчёте
+          места вставки (там перебираются только узлы с data-rail-item). */}
+      {hat && <RailHat side={side} label={hat} title={hatTitle} />}
+
       {/* Столбец кнопок панелей вместе со «свернуть все». Отдельным блоком он стоит
           ради дропа: панель принимает ИМЕННО он (в нём есть места вставки), а кнопка
           ящика внизу остаётся собственной мишенью («спрятать кнопку»). Пустая полоса

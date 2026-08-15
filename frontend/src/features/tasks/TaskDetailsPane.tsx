@@ -1,14 +1,15 @@
 // Детали задачи: центральная колонка (чипы, markdown-описание, подзадачи,
-// метки, связанная сессия, файлы) + колонка «Статус» справа (десктоп/планшет)
-// или закреплённый сегмент статуса снизу (мобила). Режим редактирования —
-// инлайн, вместо деталей (TaskEditForm).
+// метки, связанная сессия, файлы) + колонка «Статус» справа (широкий контейнер),
+// сегмент статуса под шапкой (узкий контейнер) или закреплённый сегмент снизу
+// (мобила). Режим редактирования — инлайн, вместо деталей (TaskEditForm).
 
 import { useEffect, useMemo, useState } from 'react';
 import { Bell, ChevronRight, Check, MessageCircle, Repeat, SquarePen, Trash2, X } from 'lucide-react';
 import type { Project, Session, Task, TaskStatus, TaskPriority, UpdateTaskDto } from '../../types';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, R, SHADOW, SP } from '../../lib/design';
 import { Button, IconButton, Modal, BackButton } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { useNarrowContainer } from '../../hooks/useContainerWidth';
 import { Toolbar } from '../../components/Toolbar';
 import { MarkdownViewer } from '../../components/MarkdownViewer';
 import { api } from '../../lib/api';
@@ -42,6 +43,42 @@ interface Props {
 
 const STATUS_SEQUENCE: TaskStatus[] = ['todo', 'inProgress', 'done'];
 
+// Ниже этой ширины КОНТЕЙНЕРА правый рельс «Статус» не помещается: 264px рельса плюс
+// читаемая колонка текста. Панель живёт и в модалке 680px, и в боковой зоне воркспейса —
+// там рельс съедал больше трети ширины, поэтому статус уезжает сегментом под шапку.
+const STATUS_RAIL_MIN_WIDTH = 720;
+
+// Сегментированный переключатель статуса: мобила (закреплён снизу) и узкий
+// десктопный контейнер (полоса под шапкой) — одна и та же разметка
+function StatusSegment({ status, onSelect }: { status: TaskStatus; onSelect: (s: TaskStatus) => void }) {
+  return (
+    <div style={{ display: 'flex', gap: 3, background: C.bgSelected, borderRadius: R.lg, padding: 3 }}>
+      {STATUS_SEQUENCE.map(s => {
+        const active = status === s;
+        return (
+          <button
+            key={s}
+            onClick={() => onSelect(s)}
+            style={{
+              flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+              padding: '9px 4px', border: 'none', borderRadius: R.lg - 2, cursor: 'pointer',
+              background: active ? C.accent : 'transparent',
+              color: active ? C.onAccent : C.textSecondary,
+              fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap',
+              transition: 'background 0.15s, color 0.15s',
+            }}
+          >
+            {s === 'done' && (
+              <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            )}
+            {STATUS_LABEL[s]}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 // Чип в ряду под заголовком (белая пилюля с рамкой)
 function HeaderChip({ children, urgent }: { children: React.ReactNode; urgent?: boolean }) {
   return (
@@ -67,6 +104,8 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
   const [execError, setExecError] = useState<string | null>(null);
   // AI-хаб: отложенное AI-действие, которое форма правки выполнит при монтировании
   const [pendingAi, setPendingAi] = useState<'task.description' | 'task.subtasks' | null>(null);
+  // Где рисовать статус на десктопе — решает ширина самой панели, а не окна
+  const [paneRef, narrowPane] = useNarrowContainer<HTMLDivElement>(STATUS_RAIL_MIN_WIDTH);
 
   // Связанная сессия (чат Claude-исполнителя): для проектных — из списка сессий проекта,
   // для личных задач — прямая загрузка по ID
@@ -526,30 +565,7 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
           borderTop: `1px solid ${C.divider}`, background: C.bgMain,
         }}>
           <SectionLabel style={{ marginBottom: 8 }}>Статус задачи</SectionLabel>
-          <div style={{ display: 'flex', gap: 3, background: C.bgSelected, borderRadius: R.lg, padding: 3 }}>
-            {STATUS_SEQUENCE.map(s => {
-              const active = task.status === s;
-              return (
-                <button
-                  key={s}
-                  onClick={() => setStatus(s)}
-                  style={{
-                    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
-                    padding: '9px 4px', border: 'none', borderRadius: R.lg - 2, cursor: 'pointer',
-                    background: active ? C.accent : 'transparent',
-                    color: active ? C.onAccent : C.textSecondary,
-                    fontFamily: FONT.sans, fontSize: 12.5, fontWeight: 600, whiteSpace: 'nowrap',
-                    transition: 'background 0.15s, color 0.15s',
-                  }}
-                >
-                  {s === 'done' && (
-                    <Check size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-                  )}
-                  {STATUS_LABEL[s]}
-                </button>
-              );
-            })}
-          </div>
+          <StatusSegment status={task.status} onSelect={setStatus} />
         </div>
 
         {deleteConfirmModal}
@@ -557,9 +573,10 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
     );
   }
 
-  // === Десктоп/планшет: шапка-тулбар (как в чате) + центр + правая колонка «Статус» ===
+  // === Десктоп/планшет: шапка-тулбар (как в чате) + центр + «Статус» ===
+  // Широкая панель — рельс справа, узкая (модалка, боковая зона) — сегмент под шапкой.
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: C.bgMain }}>
+    <div ref={paneRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden', background: C.bgMain }}>
       {/* Шапка — как тулбар чата: название/мета слева, действия справа */}
       <Toolbar>
         {headerTitleBlock}
@@ -575,21 +592,33 @@ export function TaskDetailsPane({ task, project, isMobile, startInEdit, onBack, 
         )}
       </Toolbar>
 
+      {/* Узкая панель: статус полосой под шапкой — рельс здесь съел бы треть ширины */}
+      {narrowPane && (
+        <div style={{
+          flexShrink: 0, padding: `${SP.sm}px ${SP.lg}px`,
+          borderBottom: `1px solid ${C.divider}`, background: C.bgMain,
+        }}>
+          <StatusSegment status={task.status} onSelect={setStatus} />
+        </div>
+      )}
+
       <div style={{ flex: 1, minHeight: 0, display: 'flex' }}>
         {/* Центральная колонка */}
         <div style={{ flex: 1, minWidth: 0, overflowY: 'auto' }}>{content}</div>
 
-        {/* Правая колонка «Статус» */}
-        <div style={{
-          width: 264, flexShrink: 0, boxSizing: 'border-box',
-          borderLeft: `1px solid ${C.borderLight}`,
-          padding: '20px 22px', overflowY: 'auto',
-        }}>
-          <SectionLabel style={{ marginBottom: 12 }}>Статус</SectionLabel>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
-            {STATUS_SEQUENCE.map(statusRailButton)}
+        {/* Правая колонка «Статус» — только на широкой панели */}
+        {!narrowPane && (
+          <div style={{
+            width: 264, flexShrink: 0, boxSizing: 'border-box',
+            borderLeft: `1px solid ${C.borderLight}`,
+            padding: '20px 22px', overflowY: 'auto',
+          }}>
+            <SectionLabel style={{ marginBottom: 12 }}>Статус</SectionLabel>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 9 }}>
+              {STATUS_SEQUENCE.map(statusRailButton)}
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {deleteConfirmModal}

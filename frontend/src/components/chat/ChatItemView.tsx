@@ -33,6 +33,8 @@ import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { MarkdownContent } from './MarkdownContent';
 import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
+import { DelegationReportCard } from './DelegationReportCard';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
@@ -950,6 +952,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
+  // Карточка доклада о завершении задачи (task-report-card): выключен флаг — прежний
+  // бейдж/пузырь, включён — карточка с действиями «Открыть задачу»/«Чат исполнителя»
+  const reportCard = useFeature(FLAGS.taskReportCard);
   switch (item.kind) {
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
@@ -1003,11 +1008,28 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         const sender = item.senderPersonaId ? (getPersonaById(item.senderPersonaId) ?? null) : null;
         // Без персоны заголовком идёт имя чата-отправителя («Задача: починить билд») —
         // безликие «Агент»/«Автоматически» не отвечали на вопрос «кто пишет»
-        return item.viaAgent
+        const agentView = item.viaAgent
           ? <AgentMessageView text={item.text} persona={sender} note="прислал(а) в чат"
               origin={item.senderOrigin} neutralTitle={item.senderChatName ?? 'Агент'} />
           : <AgentMessageView text={item.text} persona={sender}
               origin={item.senderOrigin} neutralTitle={item.senderChatName ?? 'Автоматически'} />;
+        // Второй путь доклада: исполнитель без персоны — доклад приезжает user_message'ом
+        // (viaAgent + имя чата-исполнителя). Тот же id задачи структурным полем, значит и
+        // здесь карточка с действиями, а не безымянная реплика с маркером в тексте
+        const umReport = reportCard && item.delegationTaskId ? parseDelegationReport(item.text) : null;
+        if (umReport && item.delegationTaskId) {
+          return (
+            <DelegationReportCard
+              report={umReport}
+              taskId={item.delegationTaskId}
+              persona={sender}
+              neutralTitle={item.senderChatName}
+              origin={item.senderOrigin}
+              onOpenFile={onOpenFile}
+            />
+          );
+        }
+        return agentView;
       }
       return (
         <div style={{ alignSelf: 'flex-end', maxWidth: '80%', display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3 }}>
@@ -1129,15 +1151,26 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Авторство реплики (personaId из истории) главнее текущей персоны чата: после
       // смены собеседника старые реплики сохраняют аватар прежней персоны.
       const author = item.personaId ? (getPersonaById(item.personaId) ?? persona) : persona;
-      if (author) {
+      const rendered = author ? (
+        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+          <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={author} size={28} /></div>
+          <div style={{ flex: 1, minWidth: 0 }}>{msg}</div>
+        </div>
+      ) : msg;
+      // F1/F2: доклад с id задачи под флагом — карточка с путём к результату. Лицом идёт
+      // персона-исполнитель (автор реплики), а не персона чата: доклад пишет она.
+      // Нет id (старая история, F5) — прежний рендер бейджем.
+      if (reportCard && report && item.delegationTaskId) {
         return (
-          <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-            <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={author} size={28} /></div>
-            <div style={{ flex: 1, minWidth: 0 }}>{msg}</div>
-          </div>
+          <DelegationReportCard
+            report={report}
+            taskId={item.delegationTaskId}
+            persona={item.personaId ? (getPersonaById(item.personaId) ?? null) : null}
+            onOpenFile={onOpenFile}
+          />
         );
       }
-      return msg;
+      return rendered;
     }
 
     case 'thinking': {

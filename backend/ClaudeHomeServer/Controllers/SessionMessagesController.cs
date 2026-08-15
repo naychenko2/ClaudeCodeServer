@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/sessions/{sessionId}")]
 public class SessionMessagesController(SessionManager sessions, ProjectManager projects,
-    PromptSnapshotStore promptSnapshots, PromptAuditService promptAudit) : ControllerBase
+    PromptSnapshotStore promptSnapshots, PromptAuditService promptAudit, TaskManager tasks) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -281,6 +281,17 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
         if (string.IsNullOrEmpty(text))
             return BadRequest(new { error = "Текст отчёта пуст" });
 
+        // Финальный доклад по задаче постановщику уже доставил сервер (TaskExecutionService):
+        // второе сообщение об одном факте гасим — именно оно и делало ленту дублирующей.
+        // Ownership проверяем сами: ниже её делает SessionManager, а гейт стоит перед ним.
+        if (OwnedSession(sessionId) is not null
+            && IsCompletionAlreadyReported(tasks.GetBySession(sessionId), req.Blocker))
+            return Ok(new
+            {
+                status = "already_reported",
+                hint = "доклад о завершении этой задачи постановщик уже получил — повторять не нужно",
+            });
+
         // Блокер будит постановщика ходом (Э4): в режиме «Командная реализация» доклад
         // «я застрял» иначе пролежал бы в ленте штаба до конца волны, а координатор ждал
         // бы докладов о завершении, которых не будет. Обычный промежуточный отчёт по-прежнему
@@ -304,6 +315,19 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
             _ => Ok(new { status = "delivered", hint = "отчёт лёг в ленту родительского чата" }),
         };
     }
+
+    // Гейт B5: сессия — чат-исполнитель задачи (TaskManager.GetBySession), по которой доклад
+    // о завершении уже доставлен (CAS-флаг CompletionDelivered). null — сессия не привязана
+    // к задаче, отчёт идёт обычным путём. Вынесен статикой, чтобы проверяться юнит-тестом
+    // без поднятия приложения.
+    //
+    // Гейт закрывает ТОЛЬКО финальный доклад (спека B5). CompletionDelivered необратим, и на
+    // блокеры он не распространяется: человек продолжает работу в том же чате-исполнителе,
+    // персона упирается в блокер и зовёт chats_report_up(blocker: true) — молча съеденный
+    // вызов оставил бы координатора без единственного сигнала «встал», а модель получила бы Ok
+    // и считала, что доложила.
+    internal static bool IsCompletionAlreadyReported(Models.TaskItem? task, bool blocker) =>
+        !blocker && task is { CompletionDelivered: true };
 
     // GET /api/sessions/{sid}/pending — сообщения, ждущие конца текущего хода
     [HttpGet("pending")]

@@ -26,7 +26,7 @@ public abstract class StoredMessage { }
 public class StoredUserMessage(string text, string[]? attachedPaths = null, bool? viaAgent = null,
     string? senderPersonaId = null, bool? systemDirective = null, bool? auto = null,
     string? senderOrigin = null, string? senderChatName = null, string? staffNote = null,
-    long? timestamp = null) : StoredMessage
+    long? timestamp = null, string? delegationTaskId = null) : StoredMessage
 {
     // Когда отправлено сообщение (Unix-мс UTC) — см. StoredTextMessage.Timestamp
     public long? Timestamp { get; init; } = timestamp;
@@ -62,6 +62,10 @@ public class StoredUserMessage(string text, string[]? attachedPaths = null, bool
     // Сообщение опубликовано автоматически (не человеком), например промпт задачи.
     // UI показывает источник (персона или стандартный значок)
     public bool? Auto { get; init; } = auto;
+    // Задача, о завершении которой докладывает это сообщение — см.
+    // StoredTextMessage.DelegationTaskId (доклад из чата-исполнителя без персоны
+    // приходит пользовательским сообщением)
+    public string? DelegationTaskId { get; init; } = delegationTaskId;
 }
 
 public class StoredSessionStartedMessage(string model, string mode, TurnWorktreeInfo? turnWorktree = null) : StoredMessage
@@ -74,9 +78,13 @@ public class StoredSessionStartedMessage(string model, string mode, TurnWorktree
 }
 
 public class StoredTextMessage(string text, string? personaId = null, string? parentToolUseId = null,
-    long? timestamp = null) : StoredMessage
+    long? timestamp = null, string? delegationTaskId = null) : StoredMessage
 {
     public string Text { get; init; } = text;
+    // Задача, о завершении которой докладывает эта реплика (доклад по делегированной
+    // задаче, модель Z): связь структурная, а не вытащенная из текста маркера — карточка
+    // доклада по ней открывает задачу. null — обычная реплика либо история до этого поля.
+    public string? DelegationTaskId { get; init; } = delegationTaskId;
     // Персона, от лица которой написан ответ (на момент хода) — чтобы после смены
     // собеседника у старых реплик оставался прежний аватар. null — обычный ассистент.
     public string? PersonaId { get; init; } = personaId;

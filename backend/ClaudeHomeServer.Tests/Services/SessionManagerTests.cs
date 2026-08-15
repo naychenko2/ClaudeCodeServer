@@ -4688,6 +4688,11 @@ public class SessionManagerTests : IDisposable
     [InlineData("<escalate:deviation>нужен доступ вне владения</escalate>", "")]
     [InlineData("Понял, вопросов нет.<team:talk/>", "Понял, вопросов нет.")]
     [InlineData("Понял, вопросов нет.<team:talk   />", "Понял, вопросов нет.")]
+    // Маркер молчания (B4): ход, которому нечего решать, отвечает ровно им — после стрижки
+    // от такого хода не остаётся ни символа, и ниже по течению записи в ленте не будет
+    [InlineData("<no-reply/>", "")]
+    [InlineData("\n<no-reply />\n", "\n\n")]
+    [InlineData("Ставлю новую задачу на Дениса.<no-reply/>", "Ставлю новую задачу на Дениса.")]
     [InlineData("обычный текст без маркеров", "обычный текст без маркеров")]
     public void StripTeamProtocolMarkers_ВырезаетЦеликомЗавершённыйМаркер(string input, string expected)
     {
@@ -4721,6 +4726,12 @@ public class SessionManagerTests : IDisposable
     [InlineData("текст <escalate:che", "текст ")]
     [InlineData("текст <team:talk", "текст ")]
     [InlineData("текст <team:talk ", "текст ")]
+    // Маркер молчания приходит по кускам, как и любой другой: ни один его префикс
+    // не должен мелькнуть в стриме до того, как мы поймём, что это протокол
+    [InlineData("текст <no", "текст ")]
+    [InlineData("текст <no-repl", "текст ")]
+    [InlineData("текст <no-reply", "текст ")]
+    [InlineData("текст <no-reply/", "текст ")]
     [InlineData("текст <", "текст ")]
     public void TrimAmbiguousMarkerTail_ПридерживаетНезавершённыйПрефиксМаркера(string input, string expected)
     {
@@ -4746,6 +4757,7 @@ public class SessionManagerTests : IDisposable
     [InlineData("Готовлю план. <team:work>постановка ещё пишется", "Готовлю план. ")]
     [InlineData("Нашёл проблему: <escalate:check>", "Нашёл проблему: ")]
     [InlineData("Понял. <team:talk", "Понял. ")]
+    [InlineData("Решать нечего. <no-reply", "Решать нечего. ")]
     [InlineData("обычный текст без маркеров", "обычный текст без маркеров")]
     public void TrimUnresolvedMarkerOpen_ПрячетТелоЕщёНеЗакрытогоМаркера(string input, string expected)
     {
@@ -4805,6 +4817,94 @@ public class SessionManagerTests : IDisposable
         var all = Sent<TextDeltaMessage>().Select(m => m.Text).ToList();
         string.Concat(all).Should().Be("Собираю план, минуту <team:wo",
             "придержанный хвост дальше ничем не резолвится — конец хода обязан довесить его как есть");
+    }
+
+    // --- Маркер молчания <no-reply/> (B4 доклада о завершении задачи) ---
+
+    // Обычный чат — БЕЗ режима штаба: маркером молчания отвечает персона постановщика в своём
+    // личном чате, и стрижка обязана работать там же, а не только в «Командной реализации».
+    private async Task<Session> MkPlainChatAsync(string suffix)
+    {
+        var dir = MkProjectDir("noreply_" + suffix);
+        var project = _projectManager.Create("NR-" + suffix, dir, TestUserId, TestUsername);
+        return await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+    }
+
+    [Fact]
+    public async Task МаркерМолчания_ОбычныйЧат_НеПротекаетНиВОднойДельтеИНеДогоняетНаКонцеХода()
+    {
+        var session = await MkPlainChatAsync("stream");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        // CLI стримит маркер кусками — ни один префикс не должен мелькнуть на экране
+        string[] chunks = ["<no", "-rep", "ly", "/>"];
+
+        foreach (var chunk in chunks)
+            await InvokeOnMessageAsync(session.Id, acc, new TextDeltaMessage(chunk), TestRunId);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ResultMessage("success", 100, 1, null, null), TestRunId);
+
+        Sent<TextDeltaMessage>().Should().BeEmpty(
+            "ход, ответивший ровно маркером, не показывает человеку ничего — ни по дельтам, ни догоняющим текстом на конце хода");
+    }
+
+    // Маркер после решения по делу: сам ответ доходит целиком, вырезан только маркер.
+    [Fact]
+    public async Task МаркерМолчания_ПослеТекста_ТекстДоходитЦеликом()
+    {
+        var session = await MkPlainChatAsync("tail");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        foreach (var chunk in new[] { "Ставлю новую задачу ", "на Дениса.", "<no-reply/>" })
+            await InvokeOnMessageAsync(session.Id, acc, new TextDeltaMessage(chunk), TestRunId);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ResultMessage("success", 100, 1, null, null), TestRunId);
+
+        string.Concat(Sent<TextDeltaMessage>().Select(m => m.Text))
+            .Should().Be("Ставлю новую задачу на Дениса.");
+    }
+
+    // Обычный чат без всякого протокола: стрижка не должна ни задерживать, ни менять прозу
+    // (быстрый путь дельт — текст уходит как есть, символ в символ).
+    [Fact]
+    public async Task ОбычныйЧат_ТекстБезМаркеров_ДоходитБезИзменений()
+    {
+        var session = await MkPlainChatAsync("plain");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+        string[] chunks = ["Сравнил 5 < 10 ", "и <div> в примере — ", "всё на месте."];
+
+        foreach (var chunk in chunks)
+            await InvokeOnMessageAsync(session.Id, acc, new TextDeltaMessage(chunk), TestRunId);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ResultMessage("success", 100, 1, null, null), TestRunId);
+
+        string.Concat(Sent<TextDeltaMessage>().Select(m => m.Text)).Should().Be(string.Concat(chunks));
+    }
+
+    // Буфер стрижки в обычном чате сжимается, как только всё показано (иначе ход с кодом
+    // пересканировался бы целиком на каждой дельте). Сжатие не должно ломать разбор маркера,
+    // пришедшего ПОСЛЕ такого текста: угловые скобки прозы буфер не удерживают.
+    [Fact]
+    public async Task МаркерМолчания_ПослеТекстаСУгловымиСкобками_ВырезаетсяВсёРавно()
+    {
+        var session = await MkPlainChatAsync("angles");
+        var acc = new TurnAccumulator(new List<StoredMessage>());
+
+        foreach (var chunk in new[] { "Смотри <Button>", " и <div>.", "<no-", "reply/>" })
+            await InvokeOnMessageAsync(session.Id, acc, new TextDeltaMessage(chunk), TestRunId);
+        await InvokeOnMessageAsync(session.Id, acc,
+            new ResultMessage("success", 100, 1, null, null), TestRunId);
+
+        string.Concat(Sent<TextDeltaMessage>().Select(m => m.Text))
+            .Should().Be("Смотри <Button> и <div>.");
+    }
+
+    // Цитата протокола в код-блоке — не активный вызов (симметрично HasTalkMarker)
+    [Fact]
+    public void HasNoReplyMarker_ЦитатаВКодБлоке_НеСчитается_НастоящийСрабатывает()
+    {
+        SessionManager.HasNoReplyMarker("Отвечай так:\n```\n<no-reply/>\n```\nи всё").Should().BeFalse();
+        SessionManager.HasNoReplyMarker("<no-reply/>").Should().BeTrue();
+        SessionManager.HasNoReplyMarker("Решать нечего.").Should().BeFalse();
     }
 
     [Fact]

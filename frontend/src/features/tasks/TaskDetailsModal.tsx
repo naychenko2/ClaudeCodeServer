@@ -4,7 +4,7 @@
 
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import type { Task } from '../../types';
+import type { Project, Task } from '../../types';
 import { C, R, SHADOW, Z } from '../../lib/design';
 import { api } from '../../lib/api';
 import { TaskDetailsPane } from './TaskDetailsPane';
@@ -12,12 +12,17 @@ import { TaskDetailsPane } from './TaskDetailsPane';
 interface Props {
   task: Task;
   isMobile?: boolean;
+  // Проект задачи: без него панель показывает её как личную (без названия проекта и
+  // секции файлов). Календарь проекта не знает и не передаёт — карточка доклада в чате
+  // (DelegationReportCard) передаёт, там файлы задачи и нужны
+  project?: Project | null;
+  onOpenFile?: (path: string) => void;
   // Открыть сразу в редактировании (свежесозданная личная задача)
   startInEdit?: boolean;
   onClose: () => void;
 }
 
-export function TaskDetailsModal({ task, isMobile, startInEdit, onClose }: Props) {
+export function TaskDetailsModal({ task, isMobile, project = null, onOpenFile, startInEdit, onClose }: Props) {
   const handleOpenSession = async (sessionId: string) => {
     try {
       const chat = await api.chats.get(sessionId);
@@ -58,12 +63,13 @@ export function TaskDetailsModal({ task, isMobile, startInEdit, onClose }: Props
         <TaskDetailsPane
           key={task.id}
           task={task}
-          project={null}
+          project={project}
           isMobile={isMobile}
           startInEdit={startInEdit}
           onBack={onClose}
           onClose={onClose}
           onOpenSession={handleOpenSession}
+          onOpenFile={onOpenFile}
           onDeleted={onClose}
         />
       </div>

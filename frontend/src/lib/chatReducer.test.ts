@@ -181,3 +181,37 @@ describe('applyServerMessage: дедуп эха «доклада» о делег
     expect(state.items).toHaveLength(2);
   });
 });
+
+// Связь доклада с задачей — структурное поле сообщения, а не id, выковыренный из текста
+// маркера. Ломается в двух местах: живое событие (редьюсер) и снимок истории
+// (normalizeHistory). Старые записи поля не несут — карточка обязана деградировать.
+describe('доклад о задаче: delegationTaskId доезжает до ленты', () => {
+  it('guest_text несёт delegationTaskId в text-элемент', () => {
+    const state = feed(initialChatState(),
+      { type: 'guest_text', text: 'Отчёт готов', personaId: 'p1', timestamp: 1000, delegationTaskId: 't-42' });
+    expect(state.items[0]).toMatchObject({ kind: 'text', delegationTaskId: 't-42' });
+  });
+
+  it('user_message несёт delegationTaskId (доклад из чата без персоны)', () => {
+    const state = feed(initialChatState(),
+      { type: 'user_message', text: 'Отчёт готов', senderChatName: 'Задача: починить билд', auto: true, timestamp: 2000, delegationTaskId: 't-43' });
+    expect(state.items[0]).toMatchObject({ kind: 'user_message', delegationTaskId: 't-43' });
+  });
+
+  it('история: поле переживает нормализацию для text и user_message', () => {
+    const items = snapshot(
+      { kind: 'text', text: 'Отчёт готов', personaId: 'p1', timestamp: 1000, delegationTaskId: 't-42' },
+      { kind: 'user_message', text: 'Отчёт готов', senderChatName: 'Задача', timestamp: 2000, delegationTaskId: 't-43' },
+    );
+    expect(items[0]).toMatchObject({ kind: 'text', ts: 1000, delegationTaskId: 't-42' });
+    expect(items[1]).toMatchObject({ kind: 'user_message', ts: 2000, delegationTaskId: 't-43' });
+  });
+
+  it('совместимость: у старых записей поля нет — undefined, а не мусор', () => {
+    const items = snapshot({ kind: 'text', text: 'старая реплика', personaId: 'p1' });
+    expect((items[0] as { delegationTaskId?: string }).delegationTaskId).toBeUndefined();
+
+    const live = feed(initialChatState(), { type: 'guest_text', text: 'Отчёт готов', personaId: 'p1' });
+    expect((live.items[0] as { delegationTaskId?: string }).delegationTaskId).toBeUndefined();
+  });
+});

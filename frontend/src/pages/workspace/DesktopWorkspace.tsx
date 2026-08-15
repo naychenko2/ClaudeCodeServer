@@ -78,6 +78,11 @@ interface Props {
   readerState: ReaderPanelState;
   readerActions: ReaderPanelActions;
   selectedTask: Task | null;
+  // Задача открыта ИЗ ЛЕНТЫ чата (карточка доклада о выполнении): она встаёт не на всю
+  // центральную зону, а split'ом СПРАВА от чата — разговор остаётся перед глазами.
+  // Владелец состояния — WorkspacePage (asideTaskId), сюда приходит готовым признаком.
+  taskAside?: boolean;
+  onOpenTaskAside?: (task: Task) => void;
   autoEditTaskId: string | null;
   onOpenTaskSession: (sessionId: string) => void;
   onOpenFileFromTree: (path: string, line?: number) => void;
@@ -189,6 +194,11 @@ export function DesktopWorkspace(p: Props) {
 
   const personaOpen = !!p.selectedPersonaId || p.personaCreating;
 
+  // Задача рядом с чатом: тот же split, что у файла и «Чтения». На планшете сплита нет —
+  // там задача, как и раньше, занимает центр целиком.
+  const taskSplit = !!p.selectedTask && !!p.taskAside && !p.isTablet
+    && !p.openFile && !p.readerState.open && !p.openCommitSha;
+
   // «Стена»: док и пункт меню карточек чата. Планшету она доступна (колонок туда
   // влезает одна-две), отсекается только телефон — но мобильной ветки тут и нет
   const wallOn = !!p.onOpenWall;
@@ -225,6 +235,9 @@ export function DesktopWorkspace(p: Props) {
   const chatPanel = (headerIsland: boolean) => p.activeSession ? (
     <ChatPanel
       session={p.activeSession} project={p.project} onOpenFile={p.onOpenFileFromChat} onOpenReader={p.onOpenReader}
+      // Задача рядом с лентой — только там, где для split'а есть ширина: на планшете
+      // центр отдан одному режиму целиком, и карточка доклада откроет детали модалкой
+      onOpenTaskAside={p.isTablet ? undefined : p.onOpenTaskAside}
       pendingMessage={p.pendingMessage} onPendingMessageSent={p.onPendingMessageSent}
       onSessionUpdated={p.onSessionUpdated} isMobile={false} onWorkflowRunning={p.onWorkflowRunning}
       skills={p.skills} agents={p.agents}
@@ -319,9 +332,27 @@ export function DesktopWorkspace(p: Props) {
         </div>
       )}
 
-      {!p.openFile && !p.readerState.open && !p.openCommitSha && p.selectedTask && centerIsland(
+      {!p.openFile && !p.readerState.open && !p.openCommitSha && p.selectedTask && !taskSplit && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           <TaskDetailsPane key={p.selectedTask.id} task={p.selectedTask} project={p.project} startInEdit={p.selectedTask.id === p.autoEditTaskId} onOpenSession={p.onOpenTaskSession} onOpenFile={p.onOpenFileFromTree} onClose={p.onCloseTask} onDeleted={p.onCloseTask} />
+        </div>
+      )}
+
+      {/* Split чат|задача — задача открыта из карточки доклада в ленте: разговор остаётся
+          слева, детали встают справа (тот же приём и тот же сплиттер, что у файла и ридера) */}
+      {taskSplit && (
+        <div ref={splitContainerRef} style={{ flex: 1, display: 'flex', overflow: 'hidden', minWidth: 0, margin: `0 ${ISLAND.centerGap}px` }}>
+          <Island bg={C.bgMain} style={{ flex: chatFlex, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              {chatPanel(false)}
+            </div>
+          </Island>
+          <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
+          <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
+            <div style={{ flex: 1, overflow: 'hidden' }}>
+              <TaskDetailsPane key={p.selectedTask!.id} task={p.selectedTask!} project={p.project} onOpenSession={p.onOpenTaskSession} onOpenFile={p.onOpenFileFromTree} onClose={p.onCloseTask} onDeleted={p.onCloseTask} />
+            </div>
+          </Island>
         </div>
       )}
 

@@ -336,6 +336,7 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         ...(msg.senderChatName ? { senderChatName: msg.senderChatName } : {}),
         ...(msg.staffNote ? { staffNote: msg.staffNote } : {}),
         ...(msg.auto ? { auto: true } : {}),
+        ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
       }]);
     }
 
@@ -368,7 +369,10 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         && hasTailDuplicate(prev.items, it =>
           it.kind === 'text' && it.ts === ts && it.text === msg.text && it.personaId === msg.personaId))
         return prev;
-      return withItems([...prev.items, { kind: 'text', text: msg.text, personaId: msg.personaId, ts }]);
+      return withItems([...prev.items, {
+        kind: 'text', text: msg.text, personaId: msg.personaId, ts,
+        ...(msg.delegationTaskId ? { delegationTaskId: msg.delegationTaskId } : {}),
+      }]);
     }
 
     case 'thinking_delta': {

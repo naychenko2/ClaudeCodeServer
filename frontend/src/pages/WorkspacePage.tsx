@@ -567,10 +567,16 @@ const windowWidth = useWindowWidth();
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   // Свежесозданная задача — её карточка открывается сразу в режиме редактирования
   const [autoEditTaskId, setAutoEditTaskId] = useState<string | null>(null);
+  // Задача, открытая ИЗ ЛЕНТЫ чата (карточка доклада о выполнении): она встаёт справа от
+  // чата, а не на всю центральную зону. Хранится ИМЕННО id, а не флаг: любой другой путь
+  // выбора задачи (панель, доска, диплинк, история) меняет selectedTaskId — и признак
+  // гаснет сам, без синхронизации двух состояний.
+  const [asideTaskId, setAsideTaskId] = useState<string | null>(null);
   const tasksMode = leftTab === 'tasks';
   const selectedTask = selectedTaskId
     ? allTasks.find(t => t.id === selectedTaskId && t.projectId === project.id) ?? null
     : null;
+  const taskAside = !!selectedTask && selectedTask.id === asideTaskId;
 
   // Режим доски задач проекта: доска рендерится в основной области.
   const [projectBoard, setProjectBoard] = useState<boolean>(() => {
@@ -642,6 +648,14 @@ const windowWidth = useWindowWidth();
     } else {
       navPush({ screen: 'project', project, view: mobileView, file: null, task: task.id });
     }
+  };
+
+  // «Открыть задачу» из карточки доклада в ленте: тот же выбор задачи, что из панели,
+  // но карточка встаёт СПРАВА от чата — результат смотрят, не теряя разговор из виду
+  // (критерий 4 docs/features/task-completion-report.md).
+  const handleOpenTaskAside = (task: Task) => {
+    setAsideTaskId(task.id);
+    handleSelectTask(task);
   };
 
   // «Открыть задачу» из записи истории решений: панель знает только id, карточка
@@ -1698,6 +1712,8 @@ const windowWidth = useWindowWidth();
           readerState={reader.state}
           readerActions={reader.actions}
           selectedTask={selectedTask}
+          taskAside={taskAside}
+          onOpenTaskAside={handleOpenTaskAside}
           autoEditTaskId={autoEditTaskId}
           onOpenTaskSession={handleOpenTaskSession}
           onOpenFileFromTree={handleOpenFileFromTree}

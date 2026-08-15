@@ -11,6 +11,7 @@ export const FLAGS = {
   workspaceDestructive: 'workspace-destructive',
   defaultPersonasOnboarding: 'default-personas-onboarding',
   projectBackgrounds: 'project-backgrounds',
+  taskReportCard: 'task-report-card',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

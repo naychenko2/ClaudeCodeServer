@@ -518,6 +518,18 @@ public class TaskExecutionServiceTests
         text.Should().Contain("(итог не указан)");
     }
 
+    // B3: под флагом карточки пустой итог объясняется человеку, а не скобочной пометкой
+    [Fact]
+    public void BuildDelegationReportText_БезИтога_ПодФлагом_ЧеловеческийТекст()
+    {
+        var task = new TaskItem { Title = "Задача без итога", ResultMarkdown = "   " };
+
+        var text = TaskExecutionService.BuildDelegationReportText(task, reportCard: true);
+
+        text.Should().Contain(TaskExecutionService.DelegationReportNoResult);
+        text.Should().NotContain("(итог не указан)");
+    }
+
     // Экономия на докладе: длинный итог не копируется в ленту постановщика целиком —
     // он уже лежит в задаче и читается через tasks_get, а копия оплачивается на каждом
     // последующем ходу чата постановщика
@@ -539,13 +551,38 @@ public class TaskExecutionServiceTests
         text.Length.Should().BeLessThan(task.ResultMarkdown!.Length);
     }
 
+    // B2: под флагом хвост обрезки — подпись для человека («открыть задачу» есть действием
+    // на карточке), а не инструкция модели дёрнуть tasks_get по id. Лимит и резка по границе
+    // строки те же: тело реплики оплачивается на каждом следующем ходу чата постановщика.
     [Fact]
-    public void BuildDelegationReportText_КороткийИтог_НеРежется()
+    public void BuildDelegationReportText_ДлинныйИтог_ПодФлагом_ЧеловеческийХвостБезId()
+    {
+        var task = new TaskItem
+        {
+            Title = "Крупная задача",
+            ResultMarkdown = string.Join("\n", Enumerable.Range(1, 60)
+                .Select(i => $"- пункт отчёта номер {i} с некоторым пояснением")),
+        };
+
+        var text = TaskExecutionService.BuildDelegationReportText(task, reportCard: true);
+
+        text.Should().Contain("пункт отчёта номер 1", "начало итога остаётся видимым");
+        text.Should().NotContain("пункт отчёта номер 60", "хвост длинного итога в ленту не идёт");
+        text.Should().EndWith(TaskExecutionService.DelegationReportTruncatedTail);
+        text.Should().NotContain("tasks_get", "инструкции для модели в тексте для человека не место");
+        text.Should().NotContain(task.Id, "id задачи едет структурным полем сообщения, а не текстом");
+        text.Length.Should().BeLessThan(task.ResultMarkdown!.Length);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BuildDelegationReportText_КороткийИтог_НеРежется(bool reportCard)
     {
         // Резать короткий итог смысла нет: экономии ноль, а читаемость страдает
         var task = new TaskItem { Title = "Мелочь", ResultMarkdown = "Готово, тесты зелёные." };
 
-        TaskExecutionService.BuildDelegationReportText(task)
+        TaskExecutionService.BuildDelegationReportText(task, reportCard)
             .Should().EndWith("Готово, тесты зелёные.");
     }
 
@@ -580,6 +617,38 @@ public class TaskExecutionServiceTests
         prompt.Should().Contain("Починить сборку");
         prompt.Should().Contain(task.Id);
         prompt.Should().Contain("Отреагируй");
+    }
+
+    // B4: под флагом постановщик не пересказывает отчёт, а решает «что дальше» — и если
+    // решать нечего, отвечает ровно маркером молчания (ход не оставляет реплики в ленте)
+    [Fact]
+    public void BuildDelegatorReactionPrompt_ПодФлагом_ПроситРешениеИМаркерМолчания()
+    {
+        var task = new TaskItem { Title = "Починить сборку", ResultMarkdown = "Готово, собрал и прогнал тесты." };
+        var executor = new Persona { Name = "Вера", Role = "Тестировщик" };
+
+        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor, reportCard: true);
+
+        prompt.Should().Contain("Тестировщик (Вера)");
+        prompt.Should().Contain(task.Id);
+        prompt.Should().Contain("Реши, что дальше", "просим решение, а не реакцию на отчёт");
+        prompt.Should().NotContain("Отреагируй", "пересказ отчёта был вторым сообщением об одном факте");
+        prompt.Should().NotContain("Готово, собрал и прогнал тесты.");
+    }
+
+    // Маркер в промпте — та же константа, что гасит ход, и без обратных кавычек: в код-блоке
+    // (в т.ч. инлайн-`…`) он не считается активным ни стрижкой, ни HasNoReplyMarker
+    [Fact]
+    public void BuildDelegatorReactionPrompt_ПодФлагом_МаркерМолчанияАктивен()
+    {
+        var task = new TaskItem { Title = "Починить сборку" };
+
+        var prompt = TaskExecutionService.BuildDelegatorReactionPrompt(task, executor: null, reportCard: true);
+
+        prompt.Should().Contain(SessionManager.NoReplyMarker);
+        prompt.Should().NotContain("`" + SessionManager.NoReplyMarker + "`");
+        SessionManager.HasNoReplyMarker(prompt).Should().BeTrue(
+            "маркер в промпте должен распознаваться теми же правилами, что и в ответе модели");
     }
 
     // ─── MAJOR 1: гейт запуска исполнителя — на бэкенде, а не в составе инструментов ──

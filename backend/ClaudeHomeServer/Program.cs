@@ -425,6 +425,16 @@ builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
     Category: "ClaudeHomeServer.Media.Fal",
     Subject: "сервисом fal.ai",
     Consequence: "Генерация изображений и учёт расхода недоступны."));
+// Синтез речи голосового режима чата — тоже опциональная внешняя зависимость: без ключа или
+// при недоступном Яндексе фронт уходит на голос браузера. Внешний сервис — БЕЗ WithoutEgressProxy
+// (как fal/glif): ходит через egress-прокси.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Tts.YandexTtsService>();
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Tts.YandexTtsService.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Tts.Yandex",
+        Subject: "синтезом речи Yandex SpeechKit",
+        Consequence: "Озвучка ответов переключится на голос браузера."));
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Controllers.FilesController.OnlyOfficeCommandClient,
     new QuietHttpClientProfile(

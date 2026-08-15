@@ -27,7 +27,11 @@ public record NotesMcpContext(string ApiUrl, string Token, string? ProjectId,
 // проектного чата — пишет ли персона в команду, решает бэкенд (ProjectsController.
 // TeamMemoryWriteAllowed: Persona.Scope==Project && Persona.ProjectId==id проекта памяти),
 // состав MCP-инструментов от этого не зависит (диета памяти команды, ч.3).
-public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId, string? ProjectId = null);
+// DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): включается
+// по флагу ВЛАДЕЛЬЦА change-dossiers-recall (не по свойствам хода — инвариант стабильности
+// состава tools/list); сама секция требует ещё и проектный чат (MEMORY_PROJECT_ID).
+public record MemoryMcpContext(string ApiUrl, string Token, string PersonaId, string? ProjectId = null,
+    bool DossierToolsEnabled = false);
 
 // Контекст MCP-сервера рабочего пространства: доступ сессии ко всем проектам владельца
 // (список, файлы, базы знаний, единый поиск). Sections — включённые секции инструментов
@@ -60,8 +64,9 @@ public record PersonasMcpContext(string ApiUrl, string Token, string? ProjectId,
     bool ManageEnabled = true, bool AutomationEnabled = true);
 
 // Элемент манифеста recall — что персона подтянула в ход (память/заметка/база/команда) для
-// атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team
-// (team — память команды проекта, ③-3.4); Ref — id/ссылка.
+// атрибуции «опирается на…» / «использовано сейчас» (F3). Kind ∈ memory|note|knowledge|team|
+// dossier (team — память команды проекта, ③-3.4; dossier — паспорт изменения, ADR-004 §5);
+// Ref — id/ссылка.
 public sealed record RecallItem(string Kind, string? Ref, string Title, string? Snippet);
 
 // Результат recall-провайдера: текст для системного промпта + айтемы манифеста (F3).

@@ -395,4 +395,111 @@ public class McpToolsetStabilityTests
 
         tools.Should().Contain("personas_set_default").And.Contain("personas_create");
     }
+
+    // --- memory-server: секция dossier_lookup/dossier_get (этап 2, ADR-004 §5) ---
+
+    // tools/list живого memory-server с заданными env. Бэкенд не нужен: состав считается из
+    // env, в сеть сервер не ходит. null — node недоступен (тест скипается).
+    private static IReadOnlyList<string>? ListMemoryTools(params (string Key, string Value)[] env)
+    {
+        var serverPath = FindMcpServer("memory-server");
+        Skip.If(serverPath is null, "mcp/memory-server/index.js не найден");
+
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = "node",
+            ArgumentList = { serverPath },
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.Environment["MEMORY_API_URL"] = "http://127.0.0.1:1";
+        psi.Environment["MEMORY_API_TOKEN"] = "test";
+        foreach (var (key, value) in env) psi.Environment[key] = value;
+
+        System.Diagnostics.Process? proc;
+        try { proc = System.Diagnostics.Process.Start(psi); }
+        catch (Exception ex) { Skip.If(true, $"node недоступен: {ex.Message}"); return null; }
+        Skip.If(proc is null, "не удалось запустить node");
+
+        using (proc!)
+        {
+            proc.StandardInput.WriteLine("""{"jsonrpc":"2.0","id":1,"method":"tools/list"}""");
+            proc.StandardInput.Flush();
+
+            var line = proc.StandardOutput.ReadLine();
+            proc.StandardInput.Close();
+            if (!proc.WaitForExit(10_000)) proc.Kill(entireProcessTree: true);
+
+            line.Should().NotBeNullOrWhiteSpace("сервер обязан ответить на tools/list");
+            using var doc = System.Text.Json.JsonDocument.Parse(line!);
+            return doc.RootElement.GetProperty("result").GetProperty("tools")
+                .EnumerateArray()
+                .Select(t => t.GetProperty("name").GetString()!)
+                .ToList();
+        }
+    }
+
+    /// <summary>
+    /// Секция dossier_* включается ТОЛЬКО связкой «проект чата + флаг владельца
+    /// change-dossiers-recall» — оба входа решаются на старте сессии (env) и от свойств
+    /// хода не зависят. Тест держит саму связку: выпадение любой оси (секция в чате вне
+    /// проекта, секция без флага) молча меняло бы состав tools/list между «одинаковыми»
+    /// ходами — грабли, ради которых существует этот сторож.
+    /// </summary>
+    [SkippableFact]
+    public void MemoryDossierСекция_ВключаетсяПроектомИФлагомВладельца()
+    {
+        var tools = ListMemoryTools(
+            ("MEMORY_PERSONA_ID", "p1"), ("MEMORY_PROJECT_ID", "proj1"), ("MEMORY_DOSSIER_TOOLS", "1"));
+        if (tools is null) return;
+
+        tools.Should().Contain("dossier_lookup").And.Contain("dossier_get");
+        // Ядро сервера на месте — команда и личная память не задеты
+        tools.Should().Contain("memory_remember").And.Contain("team_memory_list");
+    }
+
+    [SkippableFact]
+    public void MemoryDossierСекция_БезФлагаВладельца_СекцииНет()
+    {
+        var tools = ListMemoryTools(
+            ("MEMORY_PERSONA_ID", "p1"), ("MEMORY_PROJECT_ID", "proj1"), ("MEMORY_DOSSIER_TOOLS", "0"));
+        if (tools is null) return;
+
+        tools.Should().NotContain("dossier_lookup").And.NotContain("dossier_get",
+            "флаг владельца change-dossiers-recall выключен — секции быть не должно");
+        tools.Should().Contain("memory_remember", "остальной состав не пострадал");
+    }
+
+    [SkippableFact]
+    public void MemoryDossierСекция_ВнепроектныйЧат_СекцииНет()
+    {
+        var tools = ListMemoryTools(("MEMORY_PERSONA_ID", "p1"), ("MEMORY_DOSSIER_TOOLS", "1"));
+        if (tools is null) return;
+
+        tools.Should().NotContain("dossier_lookup",
+            "паспорта — данные проекта: в чате вне проекта секции нет, даже с флагом владельца");
+    }
+
+    /// <summary>
+    /// Флаг секции dossier_* решается в BuildMemoryContext по ВЛАДЕЛЬЦУ (FeatureFlagService),
+    /// а не по свойствам хода — значение уезжает в env MEMORY_DOSSIER_TOOLS и входит в
+    /// отпечаток состава (shapes memory), значит мерцание между ходами убивало бы процесс CLI.
+    /// </summary>
+    [SkippableFact]
+    public void MemoryDossierГейт_РешаетсяФлагомВладельцаАНеХодом()
+    {
+        var path = FindSource("Services", "SessionManager.cs");
+        Skip.If(path is null, "SessionManager.cs не найден (сборка вне дерева репозитория)");
+
+        var body = MethodBody(File.ReadAllText(path!), "private MemoryMcpContext BuildMemoryContext");
+
+        body.Should().Contain("ChangeDossiersRecall",
+            "секция dossier_* гейтится флагом владельца change-dossiers-recall");
+        body.Should().Contain("IsEnabled(",
+            "решение принимает FeatureFlagService.IsEnabled по владельцу сессии");
+        body.Should().NotContain("_currentTurn",
+            "состояние хода не должно влиять на состав инструментов памяти");
+    }
 }

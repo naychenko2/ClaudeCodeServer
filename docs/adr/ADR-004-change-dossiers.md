@@ -634,9 +634,9 @@ per-коммит — второй обычный коммит той же сес
 9. [ ] Флаг `change-dossiers` в каталоге и в `FLAGS`.
 
 ### Этап 2 — recall (флаг `change-dossiers-recall`)
-10. [ ] Секция паспортов в `PersonaMemoryService.BuildRecallAsync` (бюджет 3 × 300 симв.).
-11. [ ] Ранжирование со статусами `active/degraded/archived` (ленивый пересчёт + кеш).
-12. [ ] MCP-секция `dossier_lookup` / `dossier_get` (гейт по флагу владельца, проверка
+10. [x] Секция паспортов в `PersonaMemoryService.BuildRecallAsync` (бюджет 3 × 300 симв.).
+11. [x] Ранжирование со статусами `active/degraded/archived` (ленивый пересчёт + кеш).
+12. [x] MCP-секция `dossier_lookup` / `dossier_get` (гейт по флагу владельца, проверка
         `McpToolsetStabilityTests`).
 
 ### Этап 3 — git-экспорт (по отдельному решению)

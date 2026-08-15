@@ -853,6 +853,11 @@ public class ClaudeSession : ILlmSessionAdapter
 
             if (hasMemory)
             {
+                // Секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): гейт по флагу
+                // ВЛАДЕЛЬЦА change-dossiers-recall — стабилен в рамках сессии (меняется
+                // человеком из меню редко), от свойств хода не зависит. Флаг входит в
+                // отпечаток состава: переключение корректно перезапустит процесс CLI.
+                var memoryDossierTools = _memoryMcp!.DossierToolsEnabled ? "1" : "0";
                 servers["memory"] = new System.Text.Json.Nodes.JsonObject
                 {
                     ["command"] = "node",
@@ -863,13 +868,16 @@ public class ClaudeSession : ILlmSessionAdapter
                     ["alwaysLoad"] = true,
                     ["env"] = new System.Text.Json.Nodes.JsonObject
                     {
-                        ["MEMORY_API_URL"] = _memoryMcp!.ApiUrl,
+                        ["MEMORY_API_URL"] = _memoryMcp.ApiUrl,
                         ["MEMORY_API_TOKEN"] = _memoryMcp.Token,
                         ["MEMORY_PERSONA_ID"] = _memoryMcp.PersonaId,
                         // ③-3.4: проектная персона получает team_memory_* — общая память команды
                         ["MEMORY_PROJECT_ID"] = _memoryMcp.ProjectId ?? "",
+                        ["MEMORY_DOSSIER_TOOLS"] = memoryDossierTools,
                     },
                 };
+                // Состав инструментов памяти зависит от секции паспортов — в сигнатуру запуска
+                shapes["memory"] = $"d{memoryDossierTools}";
             }
 
             // Проверка _personasMcp избыточна по смыслу (hasPersonas истинен только когда контекст

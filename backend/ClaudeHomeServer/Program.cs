@@ -155,10 +155,12 @@ builder.Services.AddSingleton<PersonaManager>();
 builder.Services.AddSingleton<PersonaPromptBuilder>();
 builder.Services.AddSingleton<PersonaMemoryService>();
 builder.Services.AddSingleton<TeamMemoryService>();
-// Паспорта изменений (ADR-004, этап 1): редактор секретов + стор + hosted-захват коммитов
+// Паспорта изменений (ADR-004): этап 1 — редактор секретов + стор + hosted-захват коммитов;
+// этап 2 — recall в промпт персон и поиск для MCP dossier_lookup
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.InstanceSecretsProvider>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierStore>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierCaptureState>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Dossiers.DossierRecallService>();
 AddHosted<ClaudeHomeServer.Services.Dossiers.DossierCaptureService>();
 builder.Services.AddSingleton<PersonaBindingsService>();
 // Черновик персоны по промпту (one-shot LLM → JSON): переиспользуется ai/quick-create

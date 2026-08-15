@@ -355,6 +355,11 @@ public class SessionManager : IDisposable
     private readonly Mcp.McpStatusStore? _mcpStatus;
     // OAuth внешних серверов: обновление протухшего токена перед сборкой конфига хода; null — в тестах
     private readonly Mcp.McpOAuthService? _mcpOAuth;
+    // Recall паспортов изменений (этап 2, ADR-004 §5); null — в тестах, секции паспортов нет
+    private readonly Dossiers.DossierRecallService? _dossierRecall;
+    // Кеш якорей «файлы предыдущего хода» для recall паспортов: sessionId → (отпечаток истории,
+    // файлы). Пересбор — только когда файл истории сменился (LastWriteUtc), не на каждый ход.
+    private readonly Dictionary<string, (DateTime? Stamp, List<string> Files)> _dossierAnchorCache = new();
 
     public SessionManager(ProjectManager projects, IHubContext<Hubs.SessionHub> hub,
         ChatHistoryService history, IConfiguration config, ILlmSessionAdapterFactory adapters,
@@ -413,13 +418,17 @@ public class SessionManager : IDisposable
         Mcp.McpStatusStore? mcpStatus = null,
         // Опционально (в тестах не передаётся): OAuth внешних серверов — обновление
         // истекающего токена перед ходом, иначе инструменты сервера получали бы 401
-        Mcp.McpOAuthService? mcpOAuth = null)
+        Mcp.McpOAuthService? mcpOAuth = null,
+        // Опционально (в тестах не передаётся): recall паспортов изменений (этап 2,
+        // ADR-004 §5) — пассивная секция промпта персоны; без него ходы идут как раньше
+        Dossiers.DossierRecallService? dossierRecall = null)
     {
         _skills = skills;
         _mcpRegistry = mcpRegistry;
         _mcpSecrets = mcpSecrets;
         _mcpStatus = mcpStatus;
         _mcpOAuth = mcpOAuth;
+        _dossierRecall = dossierRecall;
         _promptSnapshots = promptSnapshots;
         _teamPlanning = teamPlanning;
         _activity = activity;
@@ -596,10 +605,15 @@ public class SessionManager : IDisposable
     // projectId — проект ТЕКУЩЕГО чата (③-3.4: даёт доступ к team_memory_* команды), не scope
     // персоны — см. BuildPersonaLayer: любая персона в проектном чате получает эти инструменты,
     // пишет ли она в команду реально — решает бэкенд-гейт (ProjectsController.TeamMemoryWriteAllowed).
+    // DossierToolsEnabled — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5): гейт по
+    // флагу ВЛАДЕЛЬЦА change-dossiers-recall. Решение стабильно в рамках сессии (флаг меняется
+    // человеком из меню редко) и входит в отпечаток состава сервера (shapes memory) — от
+    // СВОЙСТВ ХОДА состав tools/list не зависит (инвариант McpToolsetStabilityTests).
     private MemoryMcpContext BuildMemoryContext(string ownerId, string personaId, string? projectId)
     {
         var token = GetServiceToken(ownerId);
-        return new MemoryMcpContext(ResolveTasksApiUrl(ownerId), token, personaId, projectId);
+        return new MemoryMcpContext(ResolveTasksApiUrl(ownerId), token, personaId, projectId,
+            DossierToolsEnabled: _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall));
     }
 
     // Контекст memory-server для проектной сессии БЕЗ персоны: только team_memory_* (③-3.4) —
@@ -614,7 +628,10 @@ public class SessionManager : IDisposable
     // записей (взвешенная сумма PersonaMemoryScorer) + рабочий фокус первым блоком, а вдобавок —
     // айтемы манифеста (что реально подтянулось) для «использовано сейчас» (F3).
     // Failsafe-таймаут; ошибки → null (ход без recall).
-    private Func<string, Task<RecallBlock?>> BuildPersonaRecallProvider(string ownerId, string personaId)
+    // session — для контекста паспортов изменений (этап 2, ADR-004 §5): проект/дерево чата,
+    // задача и якоря «файлы предыдущего хода». Гейт флага change-dossiers-recall — на каждый
+    // ход внутри (переключение действует сразу, как у заметок).
+    private Func<string, Task<RecallBlock?>> BuildPersonaRecallProvider(string ownerId, Session session, string personaId)
     {
         var topK = int.TryParse(_config["Persona:RecallTopK"], out var k) ? k : 5;
         // Шкала скоринга — взвешенная сумма (PersonaMemoryScorer), порог ~0.30;
@@ -629,14 +646,33 @@ public class SessionManager : IDisposable
             if (query.Length == 0) return null;
             try
             {
-                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore);
+                // Паспорта изменений: контекст проекта чата (не scope персоны — как team-memory),
+                // гейт по флагу владельца на каждый ход
+                Dossiers.DossierRecallRequest? dossier = null;
+                if (_dossierRecall is not null && session.ProjectId is { } dossierProjectId
+                    && _flags.IsEnabled(ownerId, FeatureFlagKeys.ChangeDossiersRecall))
+                {
+                    var prevTurnFiles = await LastTurnChangedFiles(session);
+                    dossier = new Dossiers.DossierRecallRequest(
+                        dossierProjectId,
+                        EffectiveRootOf(session),
+                        session.TaskId,
+                        [.. Dossiers.DossierRecallService.ExtractPathsFromText(text), .. prevTurnFiles],
+                        text);
+                }
+
+                var recallTask = _personaMemory.BuildRecallAsync(ownerId, personaId, query, topK, minScore, dossier);
                 var completed = await Task.WhenAny(recallTask, Task.Delay(timeoutMs));
                 if (completed != recallTask) return null;   // таймаут — ход без recall
                 var recall = await recallTask;
                 if (recall?.Text is null) return null;
-                // Манифест: hits личной памяти + команды проекта → айтемы (F3)
+                // Манифест: hits личной памяти + команды проекта + паспорта → айтемы (F3).
+                // Паспорта — видимость для человека: видно, какие записи истории решений
+                // реально учтены персоной в этом ходу.
                 var items = recall.Hits.Select(h => new RecallItem("memory", h.Id, h.Text, null))
                     .Concat(recall.TeamHits.Select(e => new RecallItem("team", e.Id, e.Text, null)))
+                    .Concat(recall.DossierHits.Select(d => new RecallItem("dossier", d.Id,
+                        $"Паспорт {d.CommitSha[..Math.Min(7, d.CommitSha.Length)]}: {d.CommitSubject}", null)))
                     .ToList();
                 return new RecallBlock(recall.Text, items);
             }
@@ -646,6 +682,53 @@ public class SessionManager : IDisposable
                 return null;
             }
         };
+    }
+
+    // Рабочее дерево сессии (ADR-003): у чата с worktree своё дерево — паспорта и их статусы
+    // считаются по нему (HEAD и снимок графа у деревьев разные).
+    private string? EffectiveRootOf(Session session)
+    {
+        if (session.WorktreePath is { } wt) return wt;
+        return session.ProjectId is { } pid ? _projects.GetById(pid)?.RootPath : null;
+    }
+
+    // Якоря «файлы предыдущего хода этой сессии» (ADR-004 §5): write-инструменты последнего
+    // завершённого хода из истории. Перечитываем историю только когда её файл сменился
+    // (LastWriteUtc) — кеш не гоняет повторное чтение на каждом ходу персоны.
+    private async Task<IReadOnlyList<string>> LastTurnChangedFiles(Session session)
+    {
+        try
+        {
+            var stamp = session.ClaudeSessionId is null ? null : _history.LastWriteUtc(session.ClaudeSessionId);
+            lock (_saveLock)
+            {
+                if (_dossierAnchorCache.TryGetValue(session.Id, out var cached) && cached.Stamp == stamp)
+                    return cached.Files;
+            }
+            if (session.ClaudeSessionId is null) return [];
+
+            var history = await _history.LoadAsync(session.ClaudeSessionId);
+
+            // Хвост от предпоследнего сообщения пользователя: последнее — текущий ход (уже
+            // дописан к моменту сборки промпта) либо прошлый ход (если текущее ещё не в
+            // истории); в обоих случаях последний ЗАВЕРШЁННЫЙ ход попадает в диапазон.
+            var userIdx = new List<int>();
+            for (var i = 0; i < history.Count; i++)
+                if (history[i] is StoredUserMessage) userIdx.Add(i);
+            var start = userIdx.Count >= 2 ? userIdx[^2] : 0;
+            var root = EffectiveRootOf(session) ?? "";
+            List<string> files = root.Length == 0
+                ? []
+                : [.. SessionChangedPaths.Extract(history.Skip(start).ToList(), root).Keys];
+
+            lock (_saveLock) _dossierAnchorCache[session.Id] = (stamp, files);
+            return files;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "dossiers: якоря прошлого хода {Session}", session.Id);
+            return [];
+        }
     }
 
     // Провайдер auto-recall для сессии: по тексту хода ищет релевантные заметки и
@@ -1789,7 +1872,7 @@ public class SessionManager : IDisposable
             // проектном чате получает team_memory_list/search (read-only), персона другого проекта —
             // так же; вне проектного чата (session.ProjectId пуст) команды памяти нет вообще.
             return (prompt, BuildMemoryContext(ownerId, persona.Id, session.ProjectId),
-                BuildPersonaRecallProvider(ownerId, persona.Id), persona);
+                BuildPersonaRecallProvider(ownerId, session, persona.Id), persona);
         }
         return (prompt, null, null, persona);
     }

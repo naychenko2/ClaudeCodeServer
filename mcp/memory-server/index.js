@@ -2,11 +2,14 @@
 // без внешних зависимостей — деплой не требует npm install.
 //
 // Окружение (задаёт ClaudeSession при запуске claude для персонной сессии):
-//   MEMORY_API_URL     — базовый URL бэкенда (http://127.0.0.1:5000)
-//   MEMORY_API_TOKEN   — сервисный JWT владельца сессии
-//   MEMORY_PERSONA_ID  — id персоны, чья личная память доступна (personal memory_*); пусто —
-//                        обычный проектный чат без персоны: personal-инструменты не регистрируются
-//   MEMORY_PROJECT_ID  — id проекта (③-3.4) для team_memory_*; пусто — памяти команды нет
+//   MEMORY_API_URL       — базовый URL бэкенда (http://127.0.0.1:5000)
+//   MEMORY_API_TOKEN     — сервисный JWT владельца сессии
+//   MEMORY_PERSONA_ID    — id персоны, чья личная память доступна (personal memory_*); пусто —
+//                          обычный проектный чат без персоны: personal-инструменты не регистрируются
+//   MEMORY_PROJECT_ID    — id проекта (③-3.4) для team_memory_*; пусто — памяти команды нет
+//   MEMORY_DOSSIER_TOOLS — "1" — секция dossier_lookup/dossier_get (этап 2, ADR-004 §5):
+//                          включается по флагу ВЛАДЕЛЬЦА change-dossiers-recall, значение
+//                          стабильно в рамках сессии (состав tools/list от хода не зависит)
 //
 // Память типизирована: semantic (устойчивые факты/предпочтения), episodic (что произошло
 // в прошлых разговорах), procedural (выученные приёмы/правила поведения). Изоляция —
@@ -53,6 +56,9 @@ const API_URL = (process.env.MEMORY_API_URL ?? 'http://localhost:5000').replace(
 const API_TOKEN = process.env.MEMORY_API_TOKEN ?? '';
 const PERSONA_ID = process.env.MEMORY_PERSONA_ID ?? '';
 const PROJECT_ID = process.env.MEMORY_PROJECT_ID ?? '';
+// Секция «История решений» (этап 2, ADR-004 §5): флаг владельца change-dossiers-recall,
+// решён бэкендом на старте сессии — от хода не зависит (инвариант стабильности tools/list)
+const DOSSIER_TOOLS = process.env.MEMORY_DOSSIER_TOOLS === '1';
 
 // Секундная недоступность бэкенда (рестарт, деплой, перезапуск прокси) превращалась в серию
 // красных карточек: ретраев не было ни одного. Паузы короткие — вызов инструмента не должен
@@ -147,6 +153,8 @@ const base = `/api/personas/${encodeURIComponent(PERSONA_ID)}/memory`;
 // Рабочий фокус — на уровне персоны (не под /memory): /api/personas/{id}/focus
 const focusPath = `/api/personas/${encodeURIComponent(PERSONA_ID)}/focus`;
 const teamBase = `/api/projects/${encodeURIComponent(PROJECT_ID)}/team-memory`;
+// Паспорта изменений — данные проекта (этап 2, ADR-004 §5)
+const dossierBase = `/api/projects/${encodeURIComponent(PROJECT_ID)}/dossiers`;
 
 const TOOLS = [
   {
@@ -345,6 +353,40 @@ const TEAM_TOOLS = [
   },
 ];
 
+// Паспорта изменений (этап 2, ADR-004 §5): активный канал истории решений проекта. Доступны
+// в любом проектном чате (PROJECT_ID задан) при включённом флаге владельца: что уже решали и
+// отвергали по коду, который персона правит. Поиск охватывает и устаревшие (archived) записи;
+// изменять паспорта отсюда нельзя — они рождаются автоматически при коммите.
+const DOSSIER_TOOL_DEFS = [
+  {
+    name: 'dossier_lookup',
+    description: 'Найти паспорта изменений («зачем, что решили, что отвергли, какие грабли») по ' +
+      'коду проекта: по пути файла, символу (FQN типа) или свободному тексту. Вызывай ПЕРЕД тем, ' +
+      'как предлагать архитектурное решение по файлу, — возможно, это уже обсуждали и отвергли. ' +
+      'В выдаче попадаются и устаревшие записи (символ удалён из кода). Вернёт до 20 кратких записей; ' +
+      'подробности — dossier_get(id).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Путь файла от корня проекта (например backend/ClaudeHomeServer/Services/Foo.cs)' },
+        symbol: { type: 'string', description: 'Полное имя типа (FQN), например ClaudeHomeServer.Services.Foo' },
+        query: { type: 'string', description: 'Свободный текст: слова из «зачем»/решений/отказов' },
+      },
+    },
+  },
+  {
+    name: 'dossier_get',
+    description: 'Прочитать паспорт изменения целиком по id (полные «зачем», решения, отказы, ' +
+      'грабли, инварианты, якоря и коммит). id приходит из dossier_lookup или пассивной подсказки ' +
+      'истории решений в промпте.',
+    inputSchema: {
+      type: 'object',
+      required: ['id'],
+      properties: { id: { type: 'string', description: 'ID паспорта из dossier_lookup' } },
+    },
+  },
+];
+
 function json(data) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
 }
@@ -458,6 +500,51 @@ async function callTool(name, args) {
         body: JSON.stringify({ text: args.text }),
       }));
 
+    case 'dossier_lookup': {
+      // Паспорта изменений (этап 2, ADR-004 §5): path|symbol|query — что задано, тем и ищем
+      const params = new URLSearchParams();
+      if (args.path) params.set('path', String(args.path));
+      if (args.symbol) params.set('symbol', String(args.symbol));
+      if (args.query) params.set('query', String(args.query));
+      const qs = params.toString();
+      const list = await api(`${dossierBase}/lookup${qs ? '?' + qs : ''}`);
+      if (!Array.isArray(list) || list.length === 0)
+        return { content: [{ type: 'text', text: 'Паспортов по этому запросу не нашлось.' }] };
+      const lines = list.map(d =>
+        `${d.id} · ${String(d.commitSha ?? '').slice(0, 7)} · ${d.commitSubject ?? ''}` +
+        (d.status === 'degraded' ? ' [код с тех пор менялся]' : d.status === 'archived' ? ' [устарело: символа в коде больше нет]' : '') +
+        (d.why ? `\n  Зачем: ${d.why}` : ''));
+      return {
+        content: [{
+          type: 'text',
+          text: `Найдено паспортов: ${list.length}. Подробности — dossier_get(id).\n\n` + lines.join('\n\n'),
+        }],
+      };
+    }
+
+    case 'dossier_get': {
+      const dossier = await api(`${dossierBase}/${encodeURIComponent(args.id)}`);
+      if (!dossier) return { content: [{ type: 'text', text: `Паспорт ${args.id} не найден.` }], isError: true };
+      const section = (title, items) =>
+        Array.isArray(items) && items.length ? `\n${title}:\n` + items.map(s => `- ${s}`).join('\n') : '';
+      return {
+        content: [{
+          type: 'text',
+          text: `Паспорт ${String(dossier.commitSha ?? '').slice(0, 7)} «${dossier.commitSubject ?? ''}»` +
+            (dossier.status === 'degraded' ? ' [код с тех пор менялся]' : '') +
+            (dossier.status === 'archived' ? ' [устарело: символа в коде больше нет]' : '') +
+            `\nКоммит: ${dossier.commitSha ?? ''}, ${dossier.committedAt ?? ''}` +
+            `\nФайлы: ${(dossier.files ?? []).join(', ') || '—'}` +
+            `\nСимволы: ${(dossier.symbols ?? []).join(', ') || '—'}` +
+            (dossier.why ? `\nЗачем: ${dossier.why}` : '') +
+            section('Решения', dossier.decisions) +
+            section('Отвергнуто', dossier.rejected) +
+            section('Грабли', dossier.pitfalls) +
+            section('Инварианты', dossier.invariants),
+        }],
+      };
+    }
+
     default:
       throw new Error(`Неизвестный инструмент: ${name}`);
   }
@@ -500,9 +587,11 @@ async function handleMessage(msg) {
       case 'tools/list': {
         // personal memory_* — только при заданной персоне; team_memory_* — при заданном проекте.
         // Обычный проектный чат без персоны получает лишь командные инструменты.
+        // dossier_* — при заданном проекте И флаге владельца (стабилен в рамках сессии).
         const tools = [];
         if (PERSONA_ID) tools.push(...TOOLS);
         if (PROJECT_ID) tools.push(...TEAM_TOOLS);
+        if (PROJECT_ID && DOSSIER_TOOLS) tools.push(...DOSSIER_TOOL_DEFS);
         reply(id, { tools });
         break;
       }

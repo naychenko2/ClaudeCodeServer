@@ -1087,6 +1087,16 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
+    // Включить/выключить голосовой режим чата (короткий формат ответа + озвучка на фронте).
+    // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
+    public Session? SetVoiceMode(string sessionId, bool on)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        entry.Info.VoiceMode = on;
+        SaveSessions();
+        return entry.Info;
+    }
+
     // Отметить чат прочитанным (синк непрочитанности между устройствами).
     // UpdatedAt намеренно не трогаем (как в SetExpiry): прочтение — не активность чата.
     // false — сессии нет или она не принадлежит owner'у (контроллер отдаёт 404).
@@ -1841,7 +1851,8 @@ public class SessionManager : IDisposable
             if (p is null) return null;
             var built = _promptBuilder.Build(p, session.Model, session.PersonaSwitched,
                 greeted: !string.IsNullOrWhiteSpace(p.Greeting),
-                teamMechanicsBlock: BuildTeamMechanicsBlock(session, p));
+                teamMechanicsBlock: BuildTeamMechanicsBlock(session, p),
+                voiceMode: session.VoiceMode);
             // Групповой чат: надстройка со списком участников и правилом «говори только за себя»
             if (session.Participants is { Count: > 1 } memberIds)
             {
@@ -4155,8 +4166,12 @@ public class SessionManager : IDisposable
             // сообщения уходят в Pending, разбор которой ждёт конца несуществующего хода.
             // «Стоп» — единственная кнопка пользователя в этом состоянии, поэтому вместо
             // прежнего no-op реанимируем чат (ниже, после общей уборки состояния хода).
+            // HasQueuedTurn обязателен наравне с HasLiveTurn: прогон появляется только после
+            // старта процесса CLI (секунды), и «Стоп», нажатый сразу после отправки, попадал
+            // ровно в это окно — чат объявлялся зависшим, адаптер выбрасывался из-под живого
+            // хода, и тот падал ObjectDisposedException'ом в ленту (диагноз 2026-08-15).
             var stuck = entry.Info.Status is SessionStatus.Working or SessionStatus.Waiting
-                && entry.Process is null or { HasLiveTurn: false };
+                && entry.Process is null or { HasLiveTurn: false, HasQueuedTurn: false };
             // «Стоп» замораживает очередь (не чистит): сообщения остаются ждать возобновления,
             // а последнее пользовательское возвращается в композер (composer_restore).
             // При реанимации не замораживаем: размораживающего конца хода уже не будет,

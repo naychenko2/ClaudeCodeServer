@@ -1132,6 +1132,25 @@ public class SessionManagerTests : IDisposable
         _sut.SetNotificationsMuted("nonexistent", true).Should().BeNull();
     }
 
+    // --- SetVoiceMode ---
+
+    [Fact]
+    public async Task SetVoiceMode_МеняетФлагИНеТрогаетUpdatedAt()
+    {
+        var dir = MkProjectDir("voice");
+        var project = _projectManager.Create("VOICE", dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.UpdatedAt = DateTime.UtcNow.AddDays(-2);
+        var before = session.UpdatedAt;
+
+        var updated = _sut.SetVoiceMode(session.Id, true);
+        updated!.VoiceMode.Should().BeTrue();
+        updated.UpdatedAt.Should().Be(before, "тумблер голосового режима не активность чата");
+
+        _sut.SetVoiceMode(session.Id, false)!.VoiceMode.Should().BeFalse();
+        _sut.SetVoiceMode("nonexistent", true).Should().BeNull();
+    }
+
     [Fact]
     public async Task Update_БезПолей_НеТрогаетUpdatedAt()
     {
@@ -1382,6 +1401,29 @@ public class SessionManagerTests : IDisposable
             TimeSpan.FromSeconds(2));
         entry.GetType().GetField("QueueFrozen")!.GetValue(entry).Should().Be(false);
         _sut.GetPending(session.Id).Should().ContainSingle().Which.Text.Should().Be("от агента");
+    }
+
+    [Fact]
+    public async Task Interrupt_ХодВОчередиБезПрогона_АдаптерНеВыбрасывается()
+    {
+        // Прогон появляется только после старта процесса CLI (это секунды), и «Стоп»,
+        // нажатый сразу после отправки, попадал ровно в это окно: чат объявлялся зависшим,
+        // адаптер выбрасывался из-под живого хода, и тот падал ObjectDisposedException'ом
+        // прямо в ленту («Cannot access a disposed object: SemaphoreSlim», 2026-08-15)
+        var session = await MkBusySessionAsync("queued-turn", SessionStatus.Working);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(false);   // прогон ещё не создан
+        adapter.SetupGet(a => a.HasQueuedTurn).Returns(true);  // но ход уже принят и поднимает CLI
+        SetProcess(entry, adapter.Object);
+
+        _sut.Interrupt(session.Id);
+
+        await Task.Delay(100);
+        adapter.Verify(a => a.Interrupt(), Times.Once());
+        adapter.Verify(a => a.DisposeAsync(), Times.Never());
+        GetProcess(entry).Should().NotBeNull("ход в полёте — адаптер убирать нельзя");
+        _sentMessages.OfType<WorkLoopStoppedMessage>().Should().BeEmpty("это не реанимация зависшего чата");
     }
 
     [Fact]

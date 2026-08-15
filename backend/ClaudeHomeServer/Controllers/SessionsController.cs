@@ -77,6 +77,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
+        if (req.VoiceMode is bool voice) sessions.SetVoiceMode(sessionId, voice);
         if (req.ExpiresAfterMinutes is not -1)
         {
             if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
@@ -175,4 +176,5 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 // ExcludeFromDossiers: null (поле не прислано) — не менять; иначе — признак opt-out
 // «Истории решений» (ADR-004 §6, тумблер «Не сохранять решения из этого чата»)
 // NotificationsMuted: null — не менять; true — заглушить уведомления чата
-public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null, bool? NotificationsMuted = null);
+// VoiceMode: null — не менять; иначе — голосовой режим (короткий формат ответа + озвучка)
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null, bool? NotificationsMuted = null, bool? VoiceMode = null);

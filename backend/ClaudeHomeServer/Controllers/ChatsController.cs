@@ -105,6 +105,7 @@ public class ChatsController(SessionManager sessions, FileService files, Feature
         if (OwnedChat(id) is null) return NotFound();
         if (req.Pinned is bool pinned) sessions.SetPinned(id, pinned);
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(id, muted);
+        if (req.VoiceMode is bool voice) sessions.SetVoiceMode(id, voice);
         if (req.ExpiresAfterMinutes is not -1)
         {
             if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
@@ -355,7 +356,8 @@ public record CreateChatRequest(string Mode = "auto", string? ResumeSessionId = 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать чат постоянным;
 // N > 0 — временный, авто-удаление через N минут после последней активности.
 // NotificationsMuted: null — не менять; true — заглушить уведомления чата
-public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null, int? ExpiresAfterMinutes = -1, bool? NotificationsMuted = null);
+// VoiceMode: null — не менять; иначе — голосовой режим (короткий формат ответа + озвучка)
+public record UpdateChatRequest(string? Name = null, string? Model = null, string? Effort = null, bool? Pinned = null, int? ExpiresAfterMinutes = -1, bool? NotificationsMuted = null, bool? VoiceMode = null);
 
 // ParentId: null — вынести чат в корень списка; иначе id чата-родителя
 public record SetParentRequest(string? ParentId = null);

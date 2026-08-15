@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sanitizeForSpeech, splitSentences } from '../tts';
+import { sanitizeForSpeech, splitSentences, verbalizeIdentifiers } from '../tts';
 
 // Запрос синтеза подменяем на управляемый: тесты промиса озвучки должны уметь и отдать
 // «озвучено», и подвесить запрос навсегда (проверка немедленного резолва stopSpeaking)
@@ -63,6 +63,37 @@ describe('sanitizeForSpeech', () => {
   it('пустой ввод даёт пустую строку', () => {
     expect(sanitizeForSpeech('')).toBe('');
     expect(sanitizeForSpeech('   \n  ')).toBe('');
+  });
+
+  it('имена файлов из backtick-кода расшифровываются на слух', () => {
+    const out = sanitizeForSpeech('Правлю `SessionManager.cs`, потом `useHandsFree.ts`.');
+    expect(out).not.toContain('SessionManager.cs');
+    expect(out).not.toContain('useHandsFree.ts');
+    expect(out).toContain('Session Manager це шарп');
+    expect(out).toContain('use Hands Free тайпскрипт');
+  });
+
+  it('пути режутся на сегменты вместо слитной каши', () => {
+    const out = sanitizeForSpeech('Смотри frontend/src/lib/tts.ts целиком.');
+    expect(out).toContain('frontend src lib tts тайпскрипт');
+  });
+
+  it('незнакомое расширение отбрасывается, файл не теряется', () => {
+    expect(verbalizeIdentifiers('config.xyzabc')).toBe('config');
+  });
+
+  it('версия не разваливается на буквы', () => {
+    expect(verbalizeIdentifiers('обновил до v1.2.3')).toBe('обновил до v1 2 3');
+  });
+
+  it('известные акронимы читаются по-русски, а не «мкп»', () => {
+    expect(verbalizeIdentifiers('подключи MCP сервер')).toBe('подключи эм си пи сервер');
+    expect(verbalizeIdentifiers('чиню API')).toBe('чиню апи');
+  });
+
+  it('русская речь не трогается', () => {
+    expect(verbalizeIdentifiers('Обычный текст без идентификаторов.'))
+      .toBe('Обычный текст без идентификаторов.');
   });
 });
 

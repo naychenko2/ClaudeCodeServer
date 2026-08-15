@@ -31,6 +31,56 @@ function watchConnection() {
 
 // --- Санитайзер: убираем из markdown всё, что нельзя прочитать вслух ---
 
+// Расширения файлов — по-русски: «tts.ts» превращается в «tts тайпскрипт», а не «тстс».
+// Незнакомые расширения отбрасываем: на слух они смысла не несут
+const FILE_EXTENSIONS: Record<string, string> = {
+  cs: 'це шарп', csproj: 'це шарп проект', sln: 'солюшн',
+  ts: 'тайпскрипт', tsx: 'ти эс икс', js: 'джей эс', jsx: 'джей эс икс',
+  json: 'джейсон', yml: 'яэмэл', yaml: 'яэмэл', xml: 'эм эл',
+  py: 'пайтон', md: 'маркдаун', html: 'эйч ти эм эл', css: 'си эс эс',
+  sql: 'эс ку эл', sh: 'шелл', ps1: 'поуэршелл', go: 'гоу', rs: 'раст',
+  java: 'джава', php: 'пэха пэ', cshtml: 'се шарп эйч ти эм эл',
+};
+
+// Акронимы, которые синтезатор читает слитно («мкп») вместо побуквенно
+const ACRONYMS: Record<string, string> = {
+  MCP: 'эм си пи', API: 'апи', TTS: 'ти ти эс', STT: 'эс ти ти',
+  CI: 'си ай', CD: 'си ди', UI: 'ю ай', UX: 'ю икс', PR: 'пи ар',
+  HTTP: 'эйч ти ти пи', HTTPS: 'эйч ти ти пи эс', URL: 'у эр эл',
+  JSON: 'джейсон', XML: 'эм эл', SQL: 'эс ку эл', CSS: 'си эс эс',
+  JWT: 'джей ти', SDK: 'эс ди кей', LLM: 'эл эл эм', AI: 'а и',
+};
+
+// Расшифровка имён файлов и идентификаторов для синтеза речи. Слитная латиница
+// («SessionManager.cs», «use-hands-free») один путь до ушей: неразборчивым словом-кашей.
+// Чистая функция без состояния — под юнит-тестом.
+export function verbalizeIdentifiers(text: string): string {
+  // Токен с расширением файла: «SessionManager.cs» → «Session Manager» + «це шарп»
+  text = text.replace(
+    /([A-Za-z][\w.+-]*?)\.([A-Za-z]\w{0,6})\b/g,
+    (_whole, base: string, ext: string) => {
+      const spoken = FILE_EXTENSIONS[ext.toLowerCase()];
+      return spoken ? `${base} ${spoken}` : base;
+    },
+  );
+
+  // Разделители внутри идентификатора и сегменты пути → пробел: snake_case, kebab-case,
+  // точки, слэши. Lookaround вместо захвата соседа: захват съедает символ, и в цепочке
+  // «v1.2.3» резалась бы каждая вторая точка
+  text = text.replace(/(?<=[A-Za-z\d])[-_.\/](?=[A-Za-z\d])/g, ' ');
+
+  // CamelCase → пробел между словами («SessionManager» → «Session Manager»).
+  // Версия «3.14» уже защищена порядком: точка между цифрами разрезана правилом выше,
+  // а тут цифры не трогаем
+  text = text.replace(/([a-z])([A-Z])/g, '$1 $2');
+
+  // Известные акронимы — побуквенно/по-русски, иначе «MCP» читается «мкп»
+  for (const [abbr, spoken] of Object.entries(ACRONYMS)) {
+    text = text.replace(new RegExp(`\\b${abbr}\\b`, 'g'), spoken);
+  }
+  return text;
+}
+
 export function sanitizeForSpeech(md: string): string {
   if (!md) return '';
   let text = md;
@@ -72,6 +122,10 @@ export function sanitizeForSpeech(md: string): string {
 
   // Эмодзи и прочие пиктограммы: синтезатор читает их названиями или спотыкается
   text = text.replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}\u{FE0F}\u{2190}-\u{21FF}]/gu, ' ');
+
+  // Латиница-каша из имён файлов и идентификаторов — по словам: расшифровка после
+  // всех markdown-правил, чтобы backtick-код успел развернуться в содержимое
+  text = verbalizeIdentifiers(text);
 
   // Схлопываем пробелы и пустые строки
   text = text.replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n').trim();

@@ -23,13 +23,14 @@ import type {
 import { api } from '../../lib/api';
 import { useSpecialtyCatalog } from '../../lib/specialties';
 import { bumpPersonas, usePersonas } from '../../lib/personas';
-import { C, FS, FONT, R } from '../../lib/design';
+import { C, FONT, R } from '../../lib/design';
 import { Toolbar, PillSwitch } from '../../components/Toolbar';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { ModelPicker } from '../../components/ModelPicker';
-import { useModels, useModelCaps, modelProvider, USAGE } from '../../lib/models';
-import { effortsForProvider } from '../../lib/effort';
+import { RoutePicker } from '../../components/RoutePicker';
+import { useModels } from '../../lib/models';
+import { useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
+import { routeDisplayLabel, usePresets } from '../../lib/presets';
 import { setFabObstacle } from '../../lib/ai/fabObstacle';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -115,8 +116,12 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const [speechExamples, setSpeechExamples] = useState<string[]>([]);
   const [instructions, setInstructions] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [model, setModel] = useState('');
-  const [effort, setEffort] = useState('');
+  // Ячейки уровней модели (Сильная/Средняя/Слабая). Поле «Модель» убрано из формы —
+  // модель и цепочка задаются только здесь. Слот пустой — наследование от специальности,
+  // затем от слотов владельца
+  const [tierStrong, setTierStrong] = useState('');
+  const [tierMedium, setTierMedium] = useState('');
+  const [tierWeak, setTierWeak] = useState('');
   const [specialty, setSpecialty] = useState<PersonaSpecialty>('none');
   const [greeting, setGreeting] = useState('');
   const [tools, setTools] = useState<string[]>(ALL_TOOL_KEYS);
@@ -182,11 +187,17 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const [error, setError] = useState<string | null>(null);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
 
-  const caps = useModelCaps(model);
-  // Модель стороннего провайдера действует только в личном чате персоны: субагент
-  // живёт в процессе CLI чужого чата (один ANTHROPIC_BASE_URL на процесс), пин модели
-  // туда не доезжает — предупреждаем в момент выбора
-  const thirdPartyModel = !!model && modelProvider(model) !== 'claude';
+  const tierModels = useTierModels();
+  const presets = usePresets();
+  const chainCtx = { tierModels, ollamaModel: undefined };
+  // Ячейка уровня: значение и установщик по ключу уровня (как в PersonaForm)
+  const tierCell = (t: ModelTierKey): string =>
+    t === 'strong' ? tierStrong : t === 'medium' ? tierMedium : tierWeak;
+  const setTierCell = (t: ModelTierKey, v: string) => {
+    if (t === 'strong') setTierStrong(v);
+    else if (t === 'medium') setTierMedium(v);
+    else setTierWeak(v);
+  };
   const accentColor = AGENT_COLORS[color] ?? C.accent;
 
   // FAB AI-хаба сидит в правом нижнем углу поверх всего — у мастера там же кнопка
@@ -221,8 +232,6 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
       description: description.trim() || undefined,
       contract: buildContract(),
       systemPrompt: '',
-      model: model || undefined,
-      effort: effort || undefined,
       scope: wizScope,
       projectId: wizScope === 'project' ? effProjectId : undefined,
       color,
@@ -232,6 +241,10 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
       access,
       specialty,
       disallowedTools: access === 'custom' ? parseDisallowed(disallowedText) : [],
+      // Ячейки уровней (модель и цепочка). Пустая строка — сброс на наследование
+      tierStrong: tierStrong || undefined,
+      tierMedium: tierMedium || undefined,
+      tierWeak: tierWeak || undefined,
     };
   }
 
@@ -247,8 +260,9 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     setOutputFormat(p.contract?.outputFormat ?? '');
     setSpeechExamples(p.contract?.speechExamples ?? []);
     setInstructions(p.contract?.instructions ?? '');
-    setModel(p.model ?? '');
-    setEffort(p.effort ?? '');
+    setTierStrong(p.tierStrong ?? '');
+    setTierMedium(p.tierMedium ?? '');
+    setTierWeak(p.tierWeak ?? '');
     setSpecialty(p.specialty ?? 'none');
     setGreeting(p.greeting ?? '');
     setColor(p.avatar?.color ?? 'orange');
@@ -275,8 +289,10 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     setColor(t.avatarColor ?? 'orange');
     setTools(t.tools ?? ALL_TOOL_KEYS);
     setAccess(t.access ?? 'full');
-    setModel(t.model ?? '');
-    setEffort(t.effort ?? '');
+    // Шаблон задаёт одну модель — кладём её в среднюю ячейку (рабочий уровень по умолчанию)
+    setTierStrong('');
+    setTierMedium(t.model ?? '');
+    setTierWeak('');
     setSpecialty(t.specialty ?? 'none');
     setRightsTouched(false);
     setTemplateNote(null);
@@ -685,50 +701,84 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
           {/* === Шаг 4 — Поведение === */}
           {step === 4 && (
             <>
-              <StepHead title="Поведение" subtitle="Модель, приветствие и роль персоны в командных сценариях." />
-              <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
-                <Field label="Модель">
-                  <ModelPicker value={model} options={models} onChange={setModel} usage={USAGE.chatPersona} />
-                  {thirdPartyModel && (
-                    <span style={{ fontSize: FS.sm, color: C.textMuted, fontFamily: FONT.sans, lineHeight: 1.45 }}>
-                      Модели сторонних провайдеров работают в личном чате персоны. Когда её зовут агентом в чужой чат, она идёт на модели того чата.
-                    </span>
-                  )}
+              <StepHead title="Поведение" subtitle="Модели по уровням, приветствие и специальность персоны." />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                {/* Модели по уровням: три ячейки Сильная/Средняя/Слабая — тот же набор,
+                    что в PersonaForm, без превью под каждой ячейкой (резолв покажется
+                    в студии после создания) */}
+                <Field label="Модели" hint="Пустая ячейка наследуется от специальности, затем от ваших слотов по умолчанию.">
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {TIER_ORDER.map(t => {
+                      const cell = tierCell(t);
+                      return (
+                        <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width: 72, flexShrink: 0, fontSize: 12.5, color: C.textSecondary }}>
+                            {TIER_TITLE[t]}
+                          </span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <RoutePicker
+                              route={cell}
+                              label={cell ? routeDisplayLabel(cell, presets, chainCtx) : ''}
+                              models={models}
+                              tierModels={tierModels}
+                              placeholder={tierModels[t] ? `Как у всех · ${tierModels[t]}` : 'не задана'}
+                              showTiers={false}
+                              showPresets
+                              onChange={v => setTierCell(t, v)}
+                            />
+                          </div>
+                          {cell && (
+                            <button
+                              type="button"
+                              onClick={() => setTierCell(t, '')}
+                              title="Вернуть наследование"
+                              style={{
+                                flexShrink: 0, font: 'inherit', fontSize: 11.5, color: C.accent,
+                                background: 'transparent', border: 'none', padding: 0,
+                                cursor: 'pointer', textDecoration: 'underline',
+                              }}
+                            >
+                              Сбросить
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
                 </Field>
-                {caps.supportsEffort && (
-                  <Field label="Усилие рассуждения" hint="Выше — глубже размышляет, но дольше и дороже.">
-                    <SegmentedControl value={effort} options={effortsForProvider(modelProvider(model))} onChange={setEffort} columns={3} />
+
+                <div style={{ display: 'grid', gridTemplateColumns: isMobile ? '1fr' : '1fr 1fr', gap: 18 }}>
+                  <Field label="Приветствие" hint="С чего персона начинает разговор">
+                    <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
                   </Field>
-                )}
-                <Field label="Приветствие" hint="С чего персона начинает разговор">
-                  <TextField value={greeting} onChange={setGreeting} placeholder="Привет! Чем помочь?" />
-                </Field>
-                <Field label="Специальность" hint="Необязательно. От специальности поля моделей наследуют значения — выбрать можно и позже.">
-                  <select value={specialty} onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
-                    <option value="none">Не задана</option>
-                    {specialtyCatalog
-                      ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
-                        <option key={e.key} value={e.key}>{e.label}</option>
-                      ))
-                      : (<>
-                        <option value="analyst">Аналитик</option>
-                        <option value="planner">Планировщик</option>
-                        <option value="reviewer">Ревьюер</option>
-                        <option value="executor">Исполнитель</option>
-                        <option value="secretary">Секретарь</option>
-                        <option value="coordinator">Координатор</option>
-                        <option value="mentor">Ментор</option>
-                        <option value="designer">Дизайнер</option>
-                        <option value="consultant">Консультант</option>
-                        <option value="librarian">Библиотекарь</option>
-                      </>)}
-                  </select>
-                  {templateNote && (
-                    <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>
-                      {templateNote}
-                    </span>
-                  )}
-                </Field>
+                  <Field label="Специальность" hint="Необязательно. От специальности поля моделей наследуют значения — выбрать можно и позже.">
+                    <select value={specialty} onChange={e => changeSpecialty(e.target.value as PersonaSpecialty)} style={selectStyle} aria-label="Специальность">
+                      <option value="none">Не задана</option>
+                      {specialtyCatalog
+                        ? specialtyCatalog.filter(e => e.key !== 'none').map(e => (
+                          <option key={e.key} value={e.key}>{e.label}</option>
+                        ))
+                        : (<>
+                          <option value="analyst">Аналитик</option>
+                          <option value="planner">Планировщик</option>
+                          <option value="reviewer">Ревьюер</option>
+                          <option value="executor">Исполнитель</option>
+                          <option value="secretary">Секретарь</option>
+                          <option value="coordinator">Координатор</option>
+                          <option value="mentor">Ментор</option>
+                          <option value="designer">Дизайнер</option>
+                          <option value="consultant">Консультант</option>
+                          <option value="librarian">Библиотекарь</option>
+                        </>)}
+                    </select>
+                    {templateNote && (
+                      <span style={{ display: 'block', marginTop: 6, fontSize: 12.5, color: C.info, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+                        {templateNote}
+                      </span>
+                    )}
+                  </Field>
+                </div>
+
                 {pendingSpecialty && (
                   <ConfirmDialog
                     title="Заменить права и инструменты?"
@@ -888,7 +938,6 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 12 }}>
-                    <Tag>{model ? model : 'модель по умолчанию'}{caps.supportsEffort && effort ? ` · ${effort}` : ''}</Tag>
                     <Tag>{wizScope === 'project' ? (projects.find(p => p.id === effProjectId)?.name ?? 'Проект') : 'Глобальная'}</Tag>
                     <Tag>{access === 'full' ? 'Полный доступ' : access === 'readOnly' ? 'Только чтение' : 'Свой доступ'}</Tag>
                     <Tag>{memoryEnabled ? 'Память включена' : 'Память выключена'}</Tag>

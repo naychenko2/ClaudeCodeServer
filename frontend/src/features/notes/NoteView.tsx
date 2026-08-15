@@ -22,6 +22,7 @@ import { OfflineError } from '../../lib/offline';
 import { useNow } from '../../lib/useNow';
 import { getNoteForView, saveNoteOffline, deleteNoteOffline, offlineResolve } from '../../lib/notesOffline';
 import { showToast } from '../../lib/toast';
+import { openChatById } from '../../lib/openChat';
 import { beginAiBusy, endAiBusy } from '../../lib/ai/busy';
 import { registerCopyDoc, copyMarkdown, copyRenderedHtml } from '../../lib/selectionScope';
 import { ensurePersonasLoaded, personaLabel, usePersonas } from '../../lib/personas';
@@ -118,15 +119,10 @@ export function NoteView({ noteId, existingTitles, onWikilink, onAskClaude, onSe
 
   const startEdit = () => { if (note) { setDraftTitle(note.title); setDraftBody(note.content); setEditing(true); } };
 
-  // Открыть чат, из которого создана заметка
-  const openSession = async (sessionId: string) => {
-    try {
-      const chat = await api.chats.get(sessionId);
-      if (chat) {
-        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
-      }
-    } catch { /* чат не найден — возможно удалён */ }
-  };
+  // Открыть чат, из которого создана заметка: проектный уедет в воркспейс своего
+  // проекта, чат вне проектов — в раздел «Чаты» (решает общий хелпер)
+  const openSession = (sessionId: string) =>
+    openChatById(sessionId, { missingTitle: 'Чат заметки', missingBody: 'Чат не найден — возможно, он удалён' });
 
   // Резолв вики-имени для hover-preview и embed ![[…]] (фрагмент по якорю приоритетен)
   const resolveNote = async (name: string, anchor?: string) => {

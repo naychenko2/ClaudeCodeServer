@@ -6,7 +6,7 @@ import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { Project, Task } from '../../types';
 import { C, R, SHADOW, Z } from '../../lib/design';
-import { api } from '../../lib/api';
+import { openChatById } from '../../lib/openChat';
 import { TaskDetailsPane } from './TaskDetailsPane';
 
 interface Props {
@@ -23,13 +23,12 @@ interface Props {
 }
 
 export function TaskDetailsModal({ task, isMobile, project = null, onOpenFile, startInEdit, onClose }: Props) {
+  // Чат-исполнитель проектной задачи — сессия проекта, вне раздела «Чаты» её нет:
+  // куда открывать, решает общий хелпер. Модалка лежит поверх всего, поэтому после
+  // состоявшегося перехода закрываем её — иначе открытый чат остался бы под ней
   const handleOpenSession = async (sessionId: string) => {
-    try {
-      const chat = await api.chats.get(sessionId);
-      if (chat) {
-        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
-      }
-    } catch { /* не удалось открыть чат */ }
+    const opened = await openChatById(sessionId, { missingTitle: 'Чат задачи', missingBody: 'Чат не найден — возможно, он удалён' });
+    if (opened) onClose();
   };
 
   useEffect(() => {

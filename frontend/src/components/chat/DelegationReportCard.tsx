@@ -20,7 +20,7 @@ import { C, FONT, FS, R, SHADOW, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { Button } from '../ui/Button';
 import { api } from '../../lib/api';
-import { showToast } from '../../lib/toast';
+import { openChatById } from '../../lib/openChat';
 import { useIsMobile } from '../../lib/breakpoints';
 import { ensureTasksLoaded, tasksLoaded, useTasks } from '../../lib/tasks';
 import { ensurePersonasLoaded, personaLabel } from '../../lib/personas';
@@ -78,14 +78,14 @@ export function DelegationReportCard({ report, taskId, persona, neutralTitle, or
     else setDetailsOpen(true);
   };
 
-  const openExecutorChat = async () => {
+  // Чат исполнителя проектной задачи живёт в её проекте, а не в разделе «Чаты» —
+  // куда открывать, решает общий хелпер; он же отвечает тостом на удалённый чат
+  const openExecutorChat = () => {
     if (!task?.linkedSessionId) return;
-    try {
-      const chat = await api.chats.get(task.linkedSessionId);
-      if (chat) window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
-      // Чат исполнителя удалён: без отклика человек жмёт кнопку ещё и ещё
-      else showToast('Чат исполнителя', 'Чат исполнителя удалён', 'info');
-    } catch { showToast('Чат исполнителя', 'Чат исполнителя удалён', 'info'); }
+    void openChatById(task.linkedSessionId, {
+      missingTitle: 'Чат исполнителя',
+      missingBody: 'Чат исполнителя удалён',
+    });
   };
 
   const files = task?.linkedFiles?.length ?? 0;

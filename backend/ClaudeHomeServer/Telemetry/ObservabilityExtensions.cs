@@ -231,7 +231,15 @@ public static class ObservabilityExtensions
         services.AddSingleton(options);
         services.AddSingleton<Alerts.AlertStateStore>();
         services.AddSingleton<Alerts.SignozAlertsClient>();
-        services.AddHttpClient("signoz-alerts", c => c.Timeout = TimeSpan.FromSeconds(15))
+        // Тихий клиент, как у экспортёров выше: SigNoz опрашивается раз в минуту и лежит
+        // штатно (не поднят, перезапускается), а дефолтные логгеры печатали на КАЖДЫЙ опрос
+        // четыре строки Info и полный стектрейс Error на отказ — за сутки боевой лог
+        // превращался в ленту, где не найти настоящих ошибок (см. QuietHttpLogger).
+        services.AddQuietHttpClient("signoz-alerts", new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Telemetry.AlertsPoll",
+                Subject: "сервером алертов SigNoz",
+                Consequence: "Алерты не доедут в уведомления."))
+            .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(15))
             .WithoutEgressProxy();
         services.AddHostedService<Alerts.AlertPollingService>();
     }

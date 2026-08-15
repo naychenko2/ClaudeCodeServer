@@ -9,7 +9,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { Columns3, LogOut, Plus } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
-import { RailCapsule, RailIconButton, RailSep } from '../../components/ui';
+import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { showToast } from '../../lib/toast';
 import type { Session } from '../../types';
@@ -124,6 +124,10 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
         </span>
       ) : (
       <>
+      {/* Шляпка — только в покое: пока чат тащат, капсула ужимается до одной
+          мишени, и ярлык рос бы ровно там, куда человек целится */}
+      <RailHat side="left" label="Стена" title="Стена чатов" />
+
       {/* Выход из режима — ПЕРВЫМ в капсуле: возврат к проектам ищут у верхней
           кромки, как «назад» в шапке */}
       {onWall && onExit && (

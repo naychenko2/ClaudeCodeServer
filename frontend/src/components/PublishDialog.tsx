@@ -8,21 +8,52 @@
 // свежим данным решает, что предлагать: обычную публикацию или «Подтянуть и опубликовать»
 // (rebase на origin + push одним действием, эндпоинт /git/sync).
 import { useEffect, useState } from 'react';
-import { C, FONT, MODAL_W, R, SP } from '../lib/design';
-import { useGitState, gitFetch, gitPush, gitSync } from '../lib/git';
+import { C, FONT, FS, MODAL_W, R, SP } from '../lib/design';
+import { useGitState, gitFetch, gitPush, gitSync, loadUnpushedLog } from '../lib/git';
+import { relTime } from '../lib/gitFormat';
 import { prefillComposer } from '../lib/ai/startChat';
-import { Modal, ModalActions } from './ui';
+import { Modal, ModalActions, useIsMobileModal } from './ui';
+
+// Высота тела диалога фиксирована: содержимое меняется на лету (проверка → список
+// коммитов → текст расхождения → ошибка с файлами конфликта), и без фиксации окно
+// прыгало бы по высоте прямо под курсором. Всё лишнее скроллится внутри.
+const BODY_H = 300;
+const BODY_H_MOBILE = 240;
+
+// Дата коммита в строке списка: коротко, но с временем — соседние коммиты одного дня
+// различаются только им
+const fmtWhen = (iso: string): string => {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return '';
+  return new Date(t).toLocaleString('ru-RU', {
+    day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+};
+
+// Тултип строки: то, что не влезло в неё саму — автор, полная дата и полный хеш
+const commitTitle = (c: { subject: string; author: string; date: string; sha: string }): string => {
+  const t = Date.parse(c.date);
+  const full = Number.isNaN(t)
+    ? c.date
+    : new Date(t).toLocaleString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return `${c.subject}\n${c.author} · ${full}${relTime(c.date) ? ` (${relTime(c.date)})` : ''}\n${c.sha}`;
+};
 
 export function PublishDialog({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const st = useGitState(projectId);
   const status = st.status;
+  const isMobile = useIsMobileModal();
   const [checking, setChecking] = useState(true);
 
   // Тихая сверка с сервером при открытии. Ошибку fetch не прячем: если до origin не
   // достучались, публиковать всё равно некуда — честнее показать причину сразу.
+  // Список неопубликованных перечитываем ПОСЛЕ fetch: до него он считается от
+  // устаревшей локальной копии origin/<branch>.
   useEffect(() => {
     let alive = true;
-    void gitFetch(projectId).finally(() => { if (alive) setChecking(false); });
+    void gitFetch(projectId)
+      .then(() => loadUnpushedLog(projectId))
+      .finally(() => { if (alive) setChecking(false); });
     return () => { alive = false; };
   }, [projectId]);
 
@@ -62,7 +93,7 @@ export function PublishDialog({ projectId, onClose }: { projectId: string; onClo
 
   return (
     <Modal
-      width={MODAL_W.form}
+      width={MODAL_W.wide}
       onClose={onClose}
       title={hasConflict ? 'Изменения конфликтуют' : needSync ? 'Ветка разошлась с сервером' : 'Опубликовать изменения'}
       subtitle={<span>Отправить {publishN} коммит(ов) на сервер</span>}
@@ -76,48 +107,88 @@ export function PublishDialog({ projectId, onClose }: { projectId: string; onClo
         />
       }
     >
-      <div style={{ fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-        {checking ? (
-          'Проверяю, нет ли новых коммитов на сервере…'
-        ) : hasConflict ? (
-          <>
-            Твои правки и пришедшие с сервера меняют одни и те же места — сами git их не сведёт.
-            Ничего не потеряно: подтягивание откачено, репозиторий в исходном состоянии.
-            Задачу на разбор можно отдать в чат — агент подтянет изменения и сведёт правки.
-          </>
-        ) : needSync ? (
-          <>
-            На сервере есть коммиты, которых нет локально
-            {behind > 0 && <> (<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{behind}</span>)</>}.
-            Твои коммиты будут перенесены поверх них (rebase) и отправлены одним действием.
-          </>
-        ) : (
-          <>
-            Локальные коммиты ветки <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{status?.branch}</span> будут
-            отправлены в удалённый репозиторий (git push).
-          </>
-        )}
-      </div>
+      {/* Тело постоянной высоты: пояснение закреплено сверху, всё остальное
+          (список коммитов, ошибка) скроллится — окно не меняет размер */}
+      <div style={{
+        height: isMobile ? BODY_H_MOBILE : BODY_H, minHeight: 0, flexShrink: 0,
+        display: 'flex', flexDirection: 'column', gap: SP.md,
+      }}>
+        <div style={{ flexShrink: 0, fontSize: 13, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
+          {checking ? (
+            'Проверяю, нет ли новых коммитов на сервере…'
+          ) : hasConflict ? (
+            <>
+              Твои правки и пришедшие с сервера меняют одни и те же места — сами git их не сведёт.
+              Ничего не потеряно: подтягивание откачено, репозиторий в исходном состоянии.
+              Задачу на разбор можно отдать в чат — агент подтянет изменения и сведёт правки.
+            </>
+          ) : needSync ? (
+            <>
+              На сервере есть коммиты, которых нет локально
+              {behind > 0 && <> (<span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{behind}</span>)</>}.
+              Твои коммиты будут перенесены поверх них (rebase) и отправлены одним действием.
+            </>
+          ) : (
+            <>
+              Локальные коммиты ветки <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{status?.branch}</span> будут
+              отправлены в удалённый репозиторий (git push).
+            </>
+          )}
+        </div>
 
-      {/* Ошибка операции — прямо в диалоге: закрывать его ради текста ошибки не надо,
-          а при расхождении действие выше уже сменилось на «Подтянуть и опубликовать» */}
-      {st.error && (
-        <div style={{
-          marginTop: SP.md, padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
-          background: C.bgInset, fontSize: 12.5, color: C.dangerText,
-          fontFamily: FONT.sans, lineHeight: 1.45,
-        }}>
-          {st.error}
-          {/* Поимённо: без этого «не удалось слить» не говорит, куда смотреть */}
-          {hasConflict && (
-            <div style={{ marginTop: SP.sm, display: 'flex', flexDirection: 'column', gap: 2 }}>
-              {conflicts.map(f => (
-                <span key={f} style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary }}>{f}</span>
-              ))}
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          {/* Что именно уйдёт: перед публикацией видно поимённо, а не только счётчик.
+              Заголовки не режем многоточием — длинную строку видно целиком по
+              горизонтальному скроллу (minWidth: max-content тянет ВСЕ строки до самой
+              широкой, поэтому колонка даты остаётся выровненной) */}
+          {st.unpushed.length > 0 && (
+            <div style={{ overflowX: 'auto' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 'max-content' }}>
+                {st.unpushed.map((c, i) => (
+                  <div
+                    key={c.sha}
+                    title={commitTitle(c)}
+                    style={{
+                      display: 'flex', alignItems: 'baseline', gap: SP.md,
+                      padding: '6px 0', whiteSpace: 'nowrap',
+                      borderTop: i === 0 ? 'none' : `1px solid ${C.borderLight}`,
+                    }}
+                  >
+                    <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>{c.shortSha}</span>
+                    <span style={{ flex: 1, fontFamily: FONT.sans, fontSize: FS.sm, color: C.textPrimary }}>
+                      {c.subject}
+                    </span>
+                    <span style={{ fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, flexShrink: 0 }}>
+                      {fmtWhen(c.date)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Ошибка операции — прямо в диалоге: закрывать его ради текста ошибки не надо,
+              а при расхождении действие выше уже сменилось на «Подтянуть и опубликовать» */}
+          {st.error && (
+            <div style={{
+              marginTop: st.unpushed.length > 0 ? SP.md : 0,
+              padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
+              background: C.bgInset, fontSize: 12.5, color: C.dangerText,
+              fontFamily: FONT.sans, lineHeight: 1.45,
+            }}>
+              {st.error}
+              {/* Поимённо: без этого «не удалось слить» не говорит, куда смотреть */}
+              {hasConflict && (
+                <div style={{ marginTop: SP.sm, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  {conflicts.map(f => (
+                    <span key={f} style={{ fontFamily: FONT.mono, fontSize: 12, color: C.textPrimary }}>{f}</span>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
+      </div>
     </Modal>
   );
 }

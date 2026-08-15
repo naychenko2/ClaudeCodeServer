@@ -32,7 +32,7 @@ import { useModelCaps, assistantName, planModelChange } from '../lib/models';
 import { Composer } from './Composer';
 import { ProjectGitBar } from './ProjectGitBar';
 import { C, R, SHADOW, SP, CHAT_MAX_W, CHAT_GUTTER_L } from '../lib/design';
-import { VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
+import { VAR_PAD_R, VAR_SHIFT, VAR_W, useChatGutter } from '../lib/chatGutter';
 import { useIsTouch } from '../lib/breakpoints';
 import { projectTopWash } from '../lib/projectTone';
 import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
@@ -59,7 +59,9 @@ import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
 // индикатора ожидания не резались клипом области прокрутки (overflow-x: hidden).
 // Лента, композер и кнопка «вниз» держат ОДНО значение — иначе их левые края
-// разъедутся. Десктоп пользуется жёлобом CHAT_GUTTER_L, этот отступ — только мобила.
+// разъедутся. Десктоп пользуется полем CHAT_GUTTER_L, этот отступ — только мобила.
+// Значения сейчас совпадают, но роли разные: мобильное поле держит ширину экрана,
+// десктопное — размах колец индикатора. Сливать в одно не надо.
 const CHAT_GUTTER_MOBILE = 16;
 
 interface Props {
@@ -536,11 +538,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     bottomRef, scrollRef, contentRef, composerWrapRef, composerH,
     showScrollDown, atBottomRef, handleMessagesScroll, scrollToBottom,
   } = useChatScroll(session.id, items, isHistoryLoading, online);
-  // Жёлоб под значок ожидания слева от ленты (на мобиле его роль играет обычный
-  // боковой отступ) — см. lib/chatGutter
-  // На стене жёлоб не считаем: там лента прокручивается во всю ширину колонки
-  // (полоса у её правого края), и компенсировать перекос нечему
-  useChatGutter(scrollRef, CHAT_MAX_W, !isMobile && !embedded);
+  // Компенсация перекоса «боковое поле слева против полосы прокрутки справа» — см.
+  // lib/chatGutter. В обычном чате она держит колонку сообщений по центру окна; на
+  // стене центрировать нечего (лента идёт во всю ширину колонки), там хук только
+  // добирает правый паддинг до ширины левого поля. На мобиле поля задаёт разметка.
+  useChatGutter(scrollRef, CHAT_MAX_W, isMobile ? 'off' : embedded ? 'pad' : 'center');
   // Композер — нижнее препятствие для круглешка AI: тот остаётся в углу, но ужимается,
   // когда композер доходит до него (замер пересечения — в AiLauncher). Публикуем узел
   // САМОГО композера, а не растянутую обёртку: та шириной во всю область чата, и по ней
@@ -1696,7 +1698,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           только центрирует колонку и сама не скроллится. */}
       <div style={{ flex: 1, minHeight: 0, display: 'flex', justifyContent: 'center' }}>
       <div ref={scrollRef} onScroll={handleMessagesScroll} data-selection-scope="chat" data-selection-target="[data-selection-doc]" data-selection-priority="1" style={{ flex: 1, minWidth: 0,
-        // Область прокрутки = жёлоб под значок ожидания слева + колонка сообщений +
+        // Область прокрутки = боковое поле слева + колонка сообщений +
         // место под полосу справа. Полоса идёт вплотную к правому краю сообщений (не
         // по краю широкого центра), а сама колонка остаётся по центру окна — иначе она
         // разошлась бы с композером, который центрируется отдельно. Ширину коробки и
@@ -1709,7 +1711,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         marginRight: isMobile || embedded ? undefined : `var(${VAR_SHIFT}, 0px)`,
         paddingLeft: isMobile ? CHAT_GUTTER_MOBILE : CHAT_GUTTER_L,
         scrollbarGutter: isMobile ? undefined : 'stable',
-        overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20, paddingRight: isMobile ? CHAT_GUTTER_MOBILE : 0, paddingBottom: 8,
+        // Справа: в обычном чате поле даёт зарезервированное место под полосу плюс
+        // внешний отступ-компенсация (колонка остаётся по центру окна). На стене
+        // компенсировать некуда, поэтому остаток до CHAT_GUTTER_L добирается
+        // паддингом — величину считает useChatGutter замером полосы.
+        overflowY: 'auto', overflowX: 'hidden', position: 'relative', paddingTop: isMobile ? 16 : 20,
+        paddingRight: isMobile ? CHAT_GUTTER_MOBILE : embedded ? `var(${VAR_PAD_R}, 0px)` : 0, paddingBottom: 8,
         // Лента заканчивается НАД композером, а не подлезает под него: раньше это был
         // paddingBottom, и контент прокручивался в прозрачных промежутках композера
         // (между карточкой ввода и полосой кнопок). marginBottom ужимает саму область
@@ -1768,13 +1775,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         {showTeamPlanningIndicator && <TeamPlanningIndicator startedAt={liveTeamPlanning?.startedAt} />}
 
         {online && showWaiting && (
-          // Текст индикатора — по левому краю чата (как пузыри), аватар уезжает в жёлоб
-          // перед ним: аватар 28px + зазор 10px = 38px сдвига (десктоп). Кольца «Эхо»
-          // расходятся в жёлоб и влево под пузыри; над ними и слева пузырей нет — кольца
-          // уходят в пустоту и не перекрывают текст. Жёлоба (CHAT_GUTTER_L) хватает,
-          // чтобы кольца не резались клипом области прокрутки (overflow-x: hidden). На
-          // мобиле жёлоб у́же (CHAT_GUTTER_MOBILE) + меньший размах колец (media query в index.css).
-          <div style={{ marginLeft: isMobile ? -12 : -38, marginTop: 5 }}>
+          // Индикатор стоит В ПОТОКЕ, по левому краю сообщений — как аватар обычной
+          // строки. Раньше его выносили наружу отрицательным отступом (-38), и под это
+          // держали жёлоб 52px слева от ленты: в узкой колонке стены домик лез на рамку,
+          // а текст ленты уезжал вправо. Кольца «Эхо» выступают за аватар примерно на
+          // 12px (scale 1.85 от 28) — бокового поля ленты (CHAT_GUTTER_L / на мобиле
+          // CHAT_GUTTER_MOBILE + мельче размах, media query в index.css) на них хватает,
+          // клип области прокрутки (overflow-x: hidden) пульс не режет.
+          <div style={{ marginTop: 5 }}>
             <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
           </div>
         )}
@@ -1856,7 +1864,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       {showScrollDown && (
         <div style={{
           position: 'absolute', left: 0, right: 0, bottom: composerH + 14,
-          padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px` : '0 24px',
+          padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px` : `0 ${CHAT_GUTTER_L}px`,
           pointerEvents: 'none', zIndex: 15, transition: 'bottom 0.3s ease',
         }}>
           <div style={{ maxWidth: CHAT_MAX_W, margin: '0 auto', display: 'flex', justifyContent: 'flex-end' }}>
@@ -1887,7 +1895,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // даёт padding холста (ISLAND.pad), и губа композера встаёт на одну линию
         // с нижней кромкой соседних островов. Внутри острова (split чат|файл)
         // отступ нужен — у Island своего padding нет, композер лёг бы на рамку.
-        padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px 12px` : `0 24px ${headerIsland ? 0 : 18}px`,
+        padding: isMobile ? `0 ${CHAT_GUTTER_MOBILE}px 12px` : `0 ${CHAT_GUTTER_L}px ${headerIsland ? 0 : 18}px`,
         pointerEvents: 'none',
       }}>
         {/* Именно этот узел — препятствие для круглешка AI: у него РЕАЛЬНАЯ геометрия

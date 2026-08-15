@@ -5,13 +5,14 @@ import { ICON_STROKE } from './icons';
 import { Menu, MenuItem } from './Menu';
 import { PanelDropLine } from './PanelDropGuide';
 import { RailCapsule, RAIL_W, RAIL_GAP, RAIL_ITEM_GAP } from './RailCapsule';
+import { RailHat, RAIL_HAT_H } from './RailHat';
 import { RailIconButton } from './RailIconButton';
 import { RailSep } from './RailSep';
 
-// Высота капсулы с ОДНОЙ кнопкой: паддинги 4+4, бокс кнопки 32, рамка 1+1.
-// Столько места держим за схлопнутой рельсой, чтобы соседние капсулы (док
-// проектов) не подпрыгивали, когда панелей на экране не осталось.
-const RAIL_MIN_H = 42;
+// Высота капсулы с ОДНОЙ кнопкой: паддинги 4+4, бокс кнопки 32, рамка 1+1, плюс
+// шляпка с её чертой. Столько места держим за схлопнутой рельсой, чтобы соседние
+// капсулы (док проектов) не подпрыгивали, когда панелей на экране не осталось.
+const RAIL_MIN_H = 42 + RAIL_HAT_H;
 
 // Вертикальная рельса иконок у края окна — полукапсула-остров, из которой
 // открываются панели-карточки. Общая для ОБЕИХ зон: RightPanelStack (инструменты
@@ -66,6 +67,13 @@ export interface RailItem {
 interface Props {
   // Сторона окна. Разворачивает капсулу и стрелки сворачивания.
   side: 'left' | 'right';
+  // Микро-подпись у верхней кромки: чья это рельсина. У края окна капсул стоит
+  // стопка с общей оправой (под рельсой — док проектов, под ним док «Стены»), и
+  // без ярлыка они различались только столбиком иконок. Не задана — шляпки нет.
+  hat?: string;
+  // Полное название рельсы — плашка по наведению на шляпку (в капс-ярлык оно не
+  // влезает). Не задано — плашки нет.
+  hatTitle?: string;
   // Группы иконок сверху вниз; между НЕПУСТЫМИ группами — сепаратор. Пустые
   // отбрасываются: так разделитель сам исчезает, когда группа скрыта целиком
   // (напр. сессионные кнопки без плана и агентов).
@@ -183,7 +191,15 @@ function RailBadge({ value, inline, tone = 'accent', bottom }: {
 // Кнопка САМА принимает дроп: пока панель тащат, вокруг неё стоит пунктирная
 // мишень, под курсором — акцентная. Мишень капсулы («убрать панель с глаз») её не
 // накрывает — оверлей дропа рисуется только над столбцом иконок.
-function RailOverflow({ side, overflow }: { side: 'left' | 'right'; overflow: NonNullable<Props['overflow']> }) {
+function RailOverflow({ side, overflow, collapse }: {
+  side: 'left' | 'right';
+  overflow: NonNullable<Props['overflow']>;
+  // Сворачивание зоны — вторым местом, рядом с режимом раскладки: обе строки об
+  // одном (как разложены панели), и обе живут здесь, а не кнопкой в столбце.
+  // Главный путь — клик по шляпке рельсы; эта строка называет жест словами, чтобы
+  // его вообще можно было найти.
+  collapse?: { collapsed: boolean; onToggle: () => void };
+}) {
   const { items, modeToggle, badge, dragActive, drop, onRestore } = overflow;
   // Стрелка возврата смотрит В СТОРОНУ своей рельсы (она у края окна, меню — от неё
   // внутрь экрана): «кнопка уедет обратно туда»
@@ -298,20 +314,37 @@ function RailOverflow({ side, overflow }: { side: 'left' | 'right'; overflow: No
               полосу до кромок карточки — иначе фон висел бы островком в её паддинге.
               Пункт называет ДЕЙСТВИЕ, а не текущее состояние: тумблером, как в
               рельсе, строка меню быть не умеет. */}
-          {modeToggle && (
+          {(modeToggle || collapse) && (
             <div style={{
               margin: '5px -5px -5px', padding: 4,
               background: C.bgMain, borderTop: `1px solid ${C.borderLight}`,
               borderBottomLeftRadius: R.lg, borderBottomRightRadius: R.lg,
               flexShrink: 0,
             }}>
-              <MenuItem
-                icon={modeToggle.soloMode
-                  ? <Columns2 size={15} strokeWidth={ICON_STROKE} />
-                  : <Square size={15} strokeWidth={ICON_STROKE} />}
-                label={modeToggle.soloMode ? 'Колонки' : 'Одна панель'}
-                onClick={() => { modeToggle.onToggle(); close(); }}
-              />
+              {/* Сворачивание — первым: им пользуются чаще, чем сменой режима.
+                  Стрелки те же, что в шляпке: к краю окна — свернуть, от него —
+                  вернуть. */}
+              {collapse && (
+                <MenuItem
+                  icon={(() => {
+                    const Icon = collapse.collapsed
+                      ? (side === 'left' ? ChevronsRight : ChevronsLeft)
+                      : (side === 'left' ? ChevronsLeft : ChevronsRight);
+                    return <Icon size={15} strokeWidth={ICON_STROKE} />;
+                  })()}
+                  label={collapse.collapsed ? 'Вернуть панели' : 'Свернуть все панели'}
+                  onClick={() => { collapse.onToggle(); close(); }}
+                />
+              )}
+              {modeToggle && (
+                <MenuItem
+                  icon={modeToggle.soloMode
+                    ? <Columns2 size={15} strokeWidth={ICON_STROKE} />
+                    : <Square size={15} strokeWidth={ICON_STROKE} />}
+                  label={modeToggle.soloMode ? 'Колонки' : 'Одна панель'}
+                  onClick={() => { modeToggle.onToggle(); close(); }}
+                />
+              )}
             </div>
           )}
         </Menu>
@@ -421,7 +454,7 @@ function RailButton({ item, side }: { item: RailItem; side: 'left' | 'right' }) 
   );
 }
 
-export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer }: Props) {
+export function PanelRail({ side, hat, hatTitle, groups, visible = true, gapToCenter = 0, overflow, collapse, peek, drop, footer }: Props) {
   const isLeft = side === 'left';
   const dropping = !!drop?.active;
 
@@ -432,19 +465,33 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overf
 
   const columnCount = shownGroups.reduce((n, g) => n + g.length, 0);
 
-  // При единственной иконке отдельной кнопки «свернуть все» быть не должно: её
-  // роль забирает сама иконка панели (клик по ней закрывает), а две кнопки рядом
-  // делали бы одно и то же. Пустой столбец (все кнопки уехали в ящик) её тоже не
-  // показывает: сворачивать там нечего — открытая панель всегда держит свою кнопку
-  // в столбце. Решается здесь, а не у вызывающего: сколько иконок реально осталось
-  // в столбце, знает только рельса.
-  const showCollapse = collapse && columnCount > 1;
+  // Сворачивание живёт в ДВУХ местах — на шляпке рельсы (клик по ярлыку) и строкой
+  // в ящике «…». Своей кнопки в столбце у него больше нет: в 40px-полосе она стоила
+  // 36px и вдобавок висела мёртвой, когда сворачивать было нечего.
+  //
+  // При единственной иконке жеста нет вовсе: её роль забирает сама иконка панели
+  // (клик по ней закрывает). Пустой столбец (все кнопки уехали в ящик) — тоже:
+  // сворачивать там нечего, открытая панель всегда держит свою кнопку в столбце.
+  // Решается здесь, а не у вызывающего: сколько иконок реально осталось в столбце,
+  // знает только рельса. disabled («ни открытых панелей, ни свёрнутого набора»)
+  // теперь просто снимает жест — серых заглушек в рельсе не остаётся.
+  const collapseToggle = collapse && !collapse.disabled && columnCount > 1
+    ? { collapsed: collapse.collapsed, onToggle: collapse.onToggle }
+    : undefined;
 
   // Ящик показываем, только когда ему есть что предложить: при ЕДИНСТВЕННОЙ кнопке
   // в столбце и пустом ящике прятать нечего (спрятав её, человек остался бы с
   // пустой рельсой), а режим зоны из одной панели ничего не решает. Как только в
   // ящике что-то лежит, кнопка обязана быть — иначе спрятанное не достать.
   const showOverflow = overflow && (columnCount > 1 || overflow.items.length > 0);
+
+  // Курсор на рельсе — по нему шляпка показывает стрелки сворачивания. Ловим на
+  // ВСЕЙ капсуле, а не на самой шляпке: 7px-подпись слишком мелкая мишень, чтобы
+  // жест открывался только попаданием в неё.
+  const [railHover, setRailHover] = useState(false);
+  // Схлопнутая рельса hover не держит (событий она не получает вовсе, а залипшее
+  // состояние всплыло бы стрелками при следующем появлении).
+  useEffect(() => { if (!visible) setRailHover(false); }, [visible]);
 
   // Столбец иконок: по его узлам считается место вставки, поэтому нужна ссылка.
   const colRef = useRef<HTMLDivElement>(null);
@@ -520,39 +567,12 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overf
   // линия вставки, а не подсвеченная полоса во всю высоту окна.
   const railBorder = !visible ? '0 none transparent' : `1px solid ${C.border}`;
 
-  // Секции столбца сверху вниз: служебная кнопка сворачивания и группы кнопок
-  // панелей. Разделители расставляются МЕЖДУ фактическими секциями — так две черты
-  // не встают рядом, когда соседняя секция схлопнулась (все кнопки уехали в ящик,
-  // группа скрыта целиком, «свернуть все» уступила место единственной иконке).
+  // Секции столбца сверху вниз: группы кнопок панелей. Разделители расставляются
+  // МЕЖДУ фактическими секциями — так две черты не встают рядом, когда соседняя
+  // секция схлопнулась (все кнопки уехали в ящик, группа скрыта целиком).
   // inner — граница ПОДГРУППЫ (пунктир между группами кнопок панелей); остальные
   // границы служебные, сплошные.
   const columnSections: { key: string; inner?: boolean; node: ReactNode }[] = [];
-
-  if (showCollapse) {
-    // Свернуть все панели / вернуть спрятанный набор как был — ПЕРВАЯ кнопка
-    // столбца. Стрелки всегда указывают К краю окна при сворачивании и от него —
-    // при разворачивании.
-    const CollapseIcon = collapse.collapsed
-      ? (isLeft ? ChevronsRight : ChevronsLeft)
-      : (isLeft ? ChevronsLeft : ChevronsRight);
-    columnSections.push({
-      key: 'collapse',
-      node: (
-        <div style={{ opacity: collapse.disabled ? 0.3 : 1 }}>
-          <RailIconButton
-            side={side}
-            label={collapse.collapsed ? 'Открыть свёрнутые панели' : 'Свернуть все панели'}
-            onClick={collapse.onToggle}
-            disabled={collapse.disabled}
-          >
-            <div style={{ display: 'flex', color: collapse.disabled ? C.textMuted : undefined }}>
-              <CollapseIcon size={16} strokeWidth={ICON_STROKE} />
-            </div>
-          </RailIconButton>
-        </div>
-      ),
-    });
-  }
 
   shownGroups.forEach((group, gi) => columnSections.push({
     key: `group-${gi}`,
@@ -569,8 +589,14 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overf
       visible={visible}
       gapToCenter={gapToCenter}
       border={railBorder}
+      onMouseEnter={() => setRailHover(true)}
+      onMouseLeave={() => setRailHover(false)}
     >
-      {/* Столбец кнопок панелей вместе со «свернуть все». Отдельным блоком он стоит
+      {/* Шляпка — ВНЕ столбца кнопок: она не участвует ни в дропе, ни в расчёте
+          места вставки (там перебираются только узлы с data-rail-item). */}
+      {hat && <RailHat side={side} label={hat} title={hatTitle} collapse={collapseToggle} railHover={railHover} />}
+
+      {/* Столбец кнопок панелей. Отдельным блоком он стоит
           ради дропа: панель принимает ИМЕННО он (в нём есть места вставки), а кнопка
           ящика внизу остаётся собственной мишенью («спрятать кнопку»). Пустая полоса
           капсулы вокруг них не принимает ничего: дроп мимо кнопок — это промах, а не
@@ -625,7 +651,7 @@ export function PanelRail({ side, groups, visible = true, gapToCenter = 0, overf
       {showOverflow && (
         <>
           {columnSections.length > 0 && <RailSep margin="2px 0 1px" />}
-          <RailOverflow side={side} overflow={overflow} />
+          <RailOverflow side={side} overflow={overflow} collapse={collapseToggle} />
         </>
       )}
     </RailCapsule>

@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Telemetry;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -116,6 +117,30 @@ public class ObservabilityRegistrationTests
         // activity может быть null если sampler решил не sampled — это норм для 0.10 ratio
         // Главное — не падает
         activity?.Dispose();
+    }
+
+    [Fact]
+    public void КлиентОпросаАлертов_ЗарегистрированТихим()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        var dict = new Dictionary<string, string?>
+        {
+            ["Telemetry:Mode"] = "production",
+            ["Telemetry:Alerts:Enabled"] = "true",
+            ["Telemetry:Alerts:ApiKey"] = "ключ",
+        };
+        var config = new ConfigurationBuilder().AddInMemoryCollection(dict).Build();
+
+        services.AddObservability(config);
+
+        // AddQuietHttpClient кладёт логгер keyed-синглтоном по категории профиля. Его наличие —
+        // и есть признак, что клиент заведён тихим: обычный AddHttpClient печатает на каждый
+        // опрос четыре строки Info и стектрейс Error на отказ, а SigNoz опрашивается раз
+        // в минуту круглые сутки и лежит штатно.
+        using var provider = services.BuildServiceProvider();
+        provider.GetKeyedService<QuietHttpLogger>("ClaudeHomeServer.Telemetry.AlertsPoll")
+            .Should().NotBeNull();
     }
 
     [Fact]

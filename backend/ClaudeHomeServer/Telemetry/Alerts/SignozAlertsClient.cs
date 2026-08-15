@@ -53,12 +53,26 @@ public sealed class SignozAlertsClient(
             var json = await response.Content.ReadAsStringAsync(ct);
             return AlertDigest.Parse(json);
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             throw;   // остановка приложения — не ошибка опроса
         }
+        catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
+        {
+            // Недоступный или подвисший SigNoz — штатный отказ опциональной зависимости:
+            // о нём одной строкой отчитывается QuietHttpLogger клиента «signoz-alerts»,
+            // дублировать его здесь стектрейсом незачем.
+            //
+            // Оговорка `when (ct.IsCancellationRequested)` выше принципиальна: таймаут
+            // HttpClient прилетает тем же OperationCanceledException, и без неё он уходил
+            // наружу как «приложение останавливается» — а там `catch { break; }` цикла
+            // AlertPollingService, то есть один подвисший опрос убивал доставку алертов
+            // насовсем, до рестарта сервера.
+            return null;
+        }
         catch (Exception ex)
         {
+            // Неожиданное (битый JSON, смена формата ответа) — вот здесь стектрейс нужен
             log.LogWarning(ex, "Не удалось опросить алерты SigNoz");
             return null;
         }

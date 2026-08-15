@@ -274,6 +274,20 @@ export function turnAlreadyEnded(items: ChatItem[]): boolean {
   return false;
 }
 
+// Индекс отметки «Ход остановлен пользователем», у которой кнопка «Повторить» ещё
+// осмысленна (или -1). Кнопка перезапускает последний запрос, поэтому живёт только пока
+// разговор не продолжился: первое же сообщение пользователя ниже отметки её гасит.
+// Хвост самого прерванного хода (долетевшие дельты, result, exited) продолжением не
+// считается — идём с конца и останавливаемся на первом из двух маркеров.
+export function retryableInterruptedIndex(items: ChatItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const kind = items[i].kind;
+    if (kind === 'user_message') return -1;
+    if (kind === 'interrupted') return i;
+  }
+  return -1;
+}
+
 // Применяет сообщение сервера к состоянию. Возвращает prev той же ссылкой,
 // если сообщение состояние не меняет (подписчиков можно не будить).
 // Generic: работает и с ChatState, и с расширяющим его SessionState хука.

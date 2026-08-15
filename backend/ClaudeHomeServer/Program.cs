@@ -324,6 +324,11 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpOAuthService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpProbeService>();
 builder.Services.AddSingleton<BoardService>();
 builder.Services.AddSingleton<SessionManager>();
+// Обратный индекс «файл → какие ещё чаты его меняли» (панель «Изменения») — см. GetForProjectAsync
+builder.Services.AddSingleton<ProjectFileSessionsIndex>();
+// Детект коммита по сдвигу HEAD: помечает чатам зафиксированные пути (Session.CommittedFilePaths),
+// чтобы атрибуция файлов чатам не врала после коммита — см. CommitAttributionService
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Git.CommitAttributionService>();
 builder.Services.AddSingleton<ModelCatalogService>();
 builder.Services.AddSingleton<NotificationStore>();
 builder.Services.AddSingleton<NotificationService>();
@@ -476,6 +481,24 @@ builder.Services.AddSingleton<ProjectKnowledgeSyncService>();
 AddHosted<ProjectKnowledgeTurnSync>();
 // Каскадная уборка знаний при удалении пользователя (UsersController)
 builder.Services.AddSingleton<UserKnowledgeCascade>();
+// Участники реконсайлера error-документов Dify: пять владельцев локальных сторов
+// «запись → {DocId, Hash}» (форвард на существующие singleton'ы, не новые экземпляры)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<PersonaMemoryService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<TeamMemoryService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Dossiers.DossierStore>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<NotesKnowledgeService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeSyncParticipant>(
+    sp => sp.GetRequiredService<ProjectKnowledgeSyncService>());
+// Реконсайлер error-документов Dify (Dify:Reconcile, дефолт Mode=off — dark launch):
+// singleton + hosted, чтобы снапшот состояния был доступен видимости (шаг 4)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeAlertNotifier,
+    ClaudeHomeServer.Services.Knowledge.KnowledgeAlertNotifier>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>();
+AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>());
 
 // JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)

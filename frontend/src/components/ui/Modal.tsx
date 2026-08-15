@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ReactNode, CSSProperties } from 'react';
 import { C, R, FONT, SHADOW, Z } from '../../lib/design';
 import { MOBILE_MAX } from '../../lib/breakpoints';
+import { getPopupDepth } from '../../lib/popupEscape';
 
 interface ModalProps {
   width?: number;
@@ -54,9 +55,13 @@ export function Modal({
 
   useEffect(() => {
     // preventDefault — сигнал нижележащим слоям (оверлей «Стены» и любой будущий),
-    // что Escape уже обработан: без него одно нажатие закрывало и модалку, и слой под ней
+    // что Escape уже обработан: без него одно нажатие закрывало и модалку, и слой под ней.
+    // Дополнительно — пока над модалкой открыт попап (RoutePicker и т. п.), Escape
+    // адресуется ему: иначе первый же Escape в открытой панели закрывал бы модалку
+    // целиком и стирал её черновик.
     const handler = (e: KeyboardEvent) => {
       if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (getPopupDepth() > 0) return;
       e.preventDefault();
       onClose();
     };

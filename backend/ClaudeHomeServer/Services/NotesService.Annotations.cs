@@ -15,7 +15,11 @@ public sealed class AnnotationConflictException(string message) : InvalidOperati
 public sealed partial class NotesService
 {
     private const string AnnotationsFolder = "Комментарии";
-    private const int MinQuoteAnchor = 24;      // короче — цитата не годится в якорь
+    // Нижняя граница цитаты-якоря. Держится низкой намеренно: от ложной привязки
+    // защищает не длина, а требование единственного вхождения (см. ResolveAnchor).
+    // При пороге 24 короткое выделение («Логи пишутся в консоль.») оставалось вовсе
+    // без цитатного якоря и на нетронутом документе сразу показывало «место изменилось».
+    private const int MinQuoteAnchor = 8;
     private const int MaxQuoteStored = 300;
 
     private static readonly Regex BlockIdAtEol = new(@"[ \t]\^([A-Za-z0-9-]+)\s*$", RegexOptions.Compiled);
@@ -199,6 +203,11 @@ public sealed partial class NotesService
     // Кавычки внутри значений frontmatter ломают наш простой парсер — заменяем
     private static string Escape(string s) => s.Replace('"', '\'').Replace("\n", " ");
 
+    // Сохранённая цитата прошла через Escape, документ — нет. Сверять их надо в
+    // одной нормализации, иначе выделение с двойными кавычками не находится
+    // никогда. Замена посимвольная — карта офсетов документа не съезжает.
+    private static string FoldQuotes(string s) => s.Replace('"', '\'');
+
     // Derived-поля комментариев при построении модели (не персистятся):
     // IsReply — annotates указывает на другую заметку-комментарий (тред);
     // DocMissing — документ-цель удалён (для ghost-узла в дереве).
@@ -381,8 +390,9 @@ public sealed partial class NotesService
         // 2) Дословная цитата (нормализованный whitespace, единственное вхождение)
         if (!string.IsNullOrEmpty(a.AnchorQuote) && a.AnchorQuote!.Length >= MinQuoteAnchor)
         {
-            var (norm, map) = NormalizeWithMap(doc);
-            var q = NormalizeWs(a.AnchorQuote!);
+            var (rawNorm, map) = NormalizeWithMap(doc);
+            var norm = FoldQuotes(rawNorm);
+            var q = FoldQuotes(NormalizeWs(a.AnchorQuote!));
             var first = norm.IndexOf(q, StringComparison.OrdinalIgnoreCase);
             if (first >= 0 && norm.IndexOf(q, first + 1, StringComparison.OrdinalIgnoreCase) < 0)
             {

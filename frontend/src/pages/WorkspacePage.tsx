@@ -39,7 +39,7 @@ import { BoardColumnsDialog } from '../features/tasks/board/BoardColumnsDialog';
 import { resolveColumns, taskColumnKey, ensureTasksLoaded } from '../lib/tasks';
 import type { BoardColumn } from '../types';
 import { useTasks } from '../lib/tasks';
-import { useGitState, ensureGit, loadUnpushedLog } from '../lib/git';
+import { useGitState, ensureGit, loadUnpushedLog, setActiveSessionForChangedBy } from '../lib/git';
 import { plural } from '../lib/spend';
 import { ensurePersonasLoaded } from '../lib/personas';
 import { createChatWithContextPersona } from '../lib/defaultPersona';
@@ -896,8 +896,8 @@ const windowWidth = useWindowWidth();
   }, [project.id]);
 
   // Панели сессии: контент — для МОБИЛЬНОЙ ветки (десктоп собирает свой в
-  // DesktopWorkspace), а changedPaths (фильтр «только файлы чата» в «Изменениях»)
-  // отсюда берут ОБЕ раскладки — хук вычисляется всегда.
+  // DesktopWorkspace). Фильтр «только файлы чата» панели «Изменений» сюда больше
+  // не ходит — GitChangesRail берёт myChangedPaths из git-стора сам.
   const sessionPanels = useSessionPanels(activeSession, project.id, project.rootPath);
 
   const handleSelectSession = (session: Session, firstMessage?: string, autoSelect?: boolean) => {
@@ -1022,6 +1022,18 @@ const windowWidth = useWindowWidth();
     if (activeSessionId) markChatRead(activeSessionId);
   }, [activeSessionId, activeSessionUpdatedAt]);
 
+  // Активный чат — для фильтра «Также меняли»/бейджа changedBy: сам открытый чат
+  // не должен появляться в собственном списке «другие чаты» (см. lib/git.ts).
+  // Worktree-чат передаём как null: его правки индекс пропускает, и с id активного
+  // чата myChangedPaths стал бы пустым Set → тумблер «только файлы чата» виден и
+  // прячет ВСЕ строки. Гейт по getGitSessionContext здесь не спасает — контекст
+  // выставляет только смонтированный не-embedded ChatPanel, а в центре может быть
+  // открыт файл или дифф.
+  const activeSessionWorktree = activeSession?.worktreePath ?? null;
+  useEffect(() => {
+    setActiveSessionForChangedBy(project.id, activeSessionWorktree ? null : activeSessionId ?? null);
+  }, [project.id, activeSessionId, activeSessionWorktree]);
+
   // activeSession.updatedAt при ходе агента НЕ обновляется (status_changed несёт
   // только status, user_message/exited не трогают activeSession вовсе) — поэтому
   // эффект выше не срабатывает на новом ходе, и карточка помечалась непрочитанной,
@@ -1089,6 +1101,41 @@ const windowWidth = useWindowWidth();
   useEffect(() => {
     saveWorkspaceState(project.id, { activeSession, openFile, leftTab });
   }, [project.id, activeSession, openFile, leftTab]);
+
+  // Чат-призрак: localStorage хранит id чата, который удалён на сервере (например,
+  // авто-чистка временных чатов). Без проверки UI показывает пустой заголовок/ленту,
+  // а JoinSession падает с «Доступ запрещён». Валидируем восстановленный activeSession
+  // один раз на маунт проекта; если id нет в списке — сбрасываем в null, saveWorkspaceState
+  // сверху сам зачистит запись в localStorage.
+  //
+  // Не валидируем активную сессию из sessionStorage (cc_pending_session) — она пришла
+  // из только что выбранного/созданного чата, гонок там нет: сравнение restored.id ===
+  // activeSession?.id различает источники.
+  //
+  // ВАЖНО — гонка: сбрасываем ТОЛЬКО после успешно полученного списка. Если сбрасывать
+  // по факту «списка ещё нет» или по любой ошибке загрузки, офлайн и медленная сеть
+  // начнут молча терять открытый чат — это хуже исходного бага. Поэтому catch здесь
+  // молчит, а reset идёт только в .then по факту «id нет в ответе».
+  useEffect(() => {
+    const stored = loadWorkspaceState(project.id);
+    const restored = stored?.activeSession;
+    if (!restored || restored.id !== activeSession?.id) return;
+    let cancelled = false;
+    api.sessions.list(project.id).then(sessions => {
+      if (cancelled) return;
+      // Пока запрос летал, пользователь мог переключиться на другой чат —
+      // тогда трогать активную сессию нельзя.
+      if (activeSessionRef.current?.id !== restored.id) return;
+      if (!sessions.some(s => s.id === restored.id)) {
+        setActiveSession(null);
+      }
+    }).catch(() => { /* офлайн / ошибка сети — оставляем как есть */ });
+    return () => { cancelled = true; };
+    // Намеренно один раз на маунт проекта: это валидация localStorage, не реакция на
+    // каждую смену activeSession. Перезапускать на каждый клик по чату бессмысленно —
+    // пользовательский выбор идёт через handleSelectSession с уже валидным объектом.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project.id]);
 
   // Членство в project-группе на всё время открытия проекта (для статусов и watcher'а файлов).
   // Владелец — WorkspacePage (не SessionList, который размонтируется при переходе на «Файлы»).
@@ -1485,7 +1532,7 @@ const windowWidth = useWindowWidth();
               : leftTab === 'changes'
               // onScopeChange не передаём: в одноколоночной раскладке он уводил бы
               // экран в чат на каждую смену скоупа
-              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} sessionFiles={sessionPanels.changedPaths} />
+              ? <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} changedBy={gitState.changedBy} />
               : leftTab === 'tasks'
               ? <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={isMobile} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />
               : leftTab === 'personas'
@@ -1556,7 +1603,7 @@ const windowWidth = useWindowWidth();
         {/* Просмотр файла — FileViewer имеет свою шапку */}
         {openFile && (
           <div style={{ flex: 1, overflow: 'hidden' }}>
-            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} />
+            <FileViewer project={project} filePath={openFile} isMobile onClose={backFromFile} initialTab={openFileDiffMode ? 'diff' : undefined} gitStagePath={gitStagePath ?? undefined} scrollToLine={scrollToLine} onOpenFile={handleOpenDocLink} scrollToAnchor={scrollToAnchor} onFileBack={handleFileBack} onFileForward={handleFileForward} canFileBack={canFileBack} canFileForward={canFileForward} changedBy={gitState.changedBy.get(openFile ?? '')} onOpenChat={handleOpenTaskSession} />
           </div>
         )}
         {/* Просмотр коммита из git-«Истории» */}
@@ -1642,6 +1689,7 @@ const windowWidth = useWindowWidth();
           onFileForward={handleFileForward}
           canFileBack={canFileBack}
           canFileForward={canFileForward}
+          changedBy={gitState.changedBy}
           openCommitSha={openCommitSha}
           openCommitFile={openCommitFile}
           onCloseCommit={closeCommitView}
@@ -1683,7 +1731,7 @@ const windowWidth = useWindowWidth();
             // панели (мокап требует видимый вход даже при выключенной фиче — она сама
             // показывает empty-state с кнопкой «Открыть настройки»)
             dossiers: <DossierHistoryPanel project={project} auth={auth} activeFilePath={openFile ?? openCommitFile} chatExcludedFromDossiers={!!activeSession?.excludeFromDossiers} onOpenChat={handleOpenTaskSession} onOpenTask={handleOpenDossierTask} onOpenCommit={handleOpenCommit} />,
-            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} sessionFiles={sessionPanels.changedPaths} />,
+            changes: <GitChangesRail project={project} onOpenDiff={handleOpenGitDiff} onOpenFile={handleOpenFileFromTree} onOpenCommit={handleOpenCommit} activeFilePath={openFile ?? openCommitFile} activeCommitSha={openCommitSha} onCommit={handleCommitVia} onScopeChange={clearCenterToChat} changedBy={gitState.changedBy} />,
             tasks: <TasksPanel project={project} selectedTaskId={selectedTaskId} onSelect={handleSelectTask} isMobile={false} boardMode={projectBoard} onBoardMode={handleProjectBoard} onEditColumns={openColumnsEditor} groupTab={projectGroupTab} onGroupTab={setProjectGroupTab} filters={taskListFilters} onFilters={setTaskListFilters} />,
             team: <ProjectPersonasPanel project={project} selectedId={personaCreating ? null : selectedPersonaId} onSelect={handlePersonaSelect} onNew={handlePersonaNew} onShowTeam={() => { handlePersonaCleared(); setTeamCenterOpen(true); }} teamActive={teamCenterOpen && !selectedPersonaId && !personaCreating} />,
             graph: <CodeGraphPanel projectId={project.id} graphOpen={graphOpen} onEnsureGraphOpen={ensureGraphOpen} onCollapseGraph={handleGraphClose} onOpenFile={handleOpenFileFromTree} onBuild={handleGraphBuild} />,

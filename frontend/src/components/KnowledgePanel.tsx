@@ -304,7 +304,14 @@ function DocumentRow({ doc, deleting, retrying, isMobile, alwaysShowIcons, onDel
             {displayName}
           </div>
           {isError ? (
-            <div style={{ fontSize: 11, color: C.accent, marginTop: 1 }}>Ошибка индексирования</div>
+            // Текст ошибки от Dify — единственная подсказка, почему документ выпал из поиска;
+            // полный текст в тултипе, в строке — усечённый
+            <div
+              title={doc.error || 'Ошибка индексирования'}
+              style={{ fontSize: 11, color: C.accent, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+            >
+              Ошибка индексирования{doc.error ? ` · ${doc.error}` : ''}
+            </div>
           ) : !TERMINAL_STATUSES.includes(doc.indexingStatus) && (
             <div style={{ fontSize: 11, color: C.textMuted, marginTop: 1 }}>Индексируется…</div>
           )}

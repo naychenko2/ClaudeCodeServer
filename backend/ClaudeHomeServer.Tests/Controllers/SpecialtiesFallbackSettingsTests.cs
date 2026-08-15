@@ -93,12 +93,81 @@ public class SpecialtiesFallbackSettingsTests : IClassFixture<TestWebApplication
         settings.GetProperty("version").GetInt32().Should().Be(SpecialtySettingsStore.FormatVersion);
         settings.GetProperty("global").ValueKind.Should().Be(JsonValueKind.Object);
         settings.GetProperty("owner").ValueKind.Should().Be(JsonValueKind.Object);
+        settings.GetProperty("user").ValueKind.Should().Be(JsonValueKind.Object);
         settings.GetProperty("presets").ValueKind.Should().Be(JsonValueKind.Array);
 
         // Новое поле присутствует и клампится в жёсткий диапазон 1..HardMaxSubstitutions
         var max = settings.GetProperty("maxSubstitutions").GetInt32();
         max.Should().BeInRange(1, FallbackSettingsStore.HardMaxSubstitutions);
 
+        ResetStore();
+    }
+
+    // --- Запись бюджета подмен (PUT settings/fallback/*) ---
+
+    // Запись глобального и личного потолка через API: сохраняется, отдаётся в ответе
+    // и читается эффективным значением; снятие возвращает наследование.
+    [Fact]
+    public async Task MaxSubstitutions_ЗаписьГлобальныйИЛичный_ЧерезApi()
+    {
+        ResetStore();
+
+        // Глобальный: пишет только админ (проверим и это)
+        var forbidden = await _user.PutAsJsonAsync("/api/specialties/settings/fallback/global",
+            new { maxSubstitutions = 3 });
+        forbidden.StatusCode.Should().Be(System.Net.HttpStatusCode.Forbidden,
+            "глобальный бюджет подмен — только admin");
+
+        using var admin = _factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.TestUsername, TestWebApplicationFactory.TestPassword);
+        var putGlobal = await admin.PutAsJsonAsync("/api/specialties/settings/fallback/global",
+            new { maxSubstitutions = 3 });
+        putGlobal.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        (await putGlobal.Content.ReadFromJsonAsync<JsonElement>())
+            .GetProperty("maxSubstitutions").GetInt32().Should().Be(3);
+        (await GetMaxSubstitutionsAsync()).Should().Be(3, "global применился к пользователю");
+
+        // Личный: пользователь пишет свой сам
+        var putOwner = await _user.PutAsJsonAsync("/api/specialties/settings/fallback/owner",
+            new { maxSubstitutions = 5 });
+        putOwner.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        (await GetMaxSubstitutionsAsync()).Should().Be(5, "личный потолок сильнее глобального");
+
+        // Снятие личного (null) возвращает глобальный
+        await _user.PutAsJsonAsync("/api/specialties/settings/fallback/owner",
+            new { maxSubstitutions = (int?)null });
+        (await GetMaxSubstitutionsAsync()).Should().Be(3);
+
+        // Снятие глобального возвращает дефолт
+        await admin.PutAsJsonAsync("/api/specialties/settings/fallback/global",
+            new { maxSubstitutions = (int?)null });
+        (await GetMaxSubstitutionsAsync()).Should().Be(FallbackSettingsStore.DefaultMaxSubstitutions);
+
+        ResetStore();
+    }
+
+    // Дефолт остаётся 4 — поле нет ни в global, ни в owner (контракт задачи).
+    [Fact]
+    public async Task MaxSubstitutions_ДефолтБезНастроек_РавенЧетырём()
+    {
+        ResetStore();
+        (await GetMaxSubstitutionsAsync()).Should().Be(4);
+        ResetStore();
+    }
+
+    // Вне диапазона 1..HardMaxSubstitutions — 400 (кламп на записи, не тихий).
+    [Theory]
+    [InlineData(0)]
+    [InlineData(6)]
+    [InlineData(-1)]
+    public async Task MaxSubstitutions_ВнеДиапазона_400(int value)
+    {
+        ResetStore();
+        var put = await _user.PutAsJsonAsync("/api/specialties/settings/fallback/owner",
+            new { maxSubstitutions = value });
+        put.StatusCode.Should().Be(System.Net.HttpStatusCode.BadRequest);
+        // Слой не записался — дефолт
+        (await GetMaxSubstitutionsAsync()).Should().Be(FallbackSettingsStore.DefaultMaxSubstitutions);
         ResetStore();
     }
 }

@@ -23,6 +23,7 @@ import { setLastMechanic } from '../lib/lastMechanic';
 import { toRateWindows, worstWindow } from '../lib/rateLimit';
 import { estimateContext } from '../lib/context';
 import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
+import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
@@ -846,6 +847,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
     [items]
   );
 
+  // Отметка «Ход остановлен пользователем», у которой ещё показываем «Повторить»
+  // (см. retryableInterruptedIndex): ниже неё разговор не продолжился
+  const retryInterruptedIdx = useMemo(() => retryableInterruptedIndex(items), [items]);
+
   // Есть ли в чате переписка — по загруженной ленте (надёжнее session.messageCount, который
   // у активной проектной сессии не синхронизируется по realtime). Управляет показом кнопок
   // «Итог сессии» и «Задачи из чата» в шапке.
@@ -1243,6 +1248,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       online={online}
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
+      canRetryInterrupted={i === retryInterruptedIdx}
       onToggleThinking={toggleThinking}
       onAllowPermission={allowPermission}
       onDenyPermission={denyPermission}
@@ -1286,7 +1292,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, pendingM
       turnCache={turnMeta.cache[i]}
     />
   ), [
-    online, isWaiting, items.length, lastResultIndex, toggleThinking, allowPermission,
+    online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,

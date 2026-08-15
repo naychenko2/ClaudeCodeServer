@@ -39,6 +39,8 @@ public static class ServerMetrics
         "outcome",     // success, error, timeout
         "error_type",  // rate_limit, network, auth, ...
         "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other
+        "dataset_type",// тип датасета Dify: notes | persona | team | dossiers | project
+        "healability", // healable | unhealable — сопоставим ли error-документ с записью стора
     };
 
     private static readonly Meter _meter = new(MeterName, MeterVersion);

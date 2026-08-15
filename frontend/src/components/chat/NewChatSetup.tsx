@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Cpu, Zap, Hourglass, History, Tag as TagIcon, ChevronDown } from 'lucide-react';
+import { Cpu, Zap, Hourglass, History, Lock, Tag as TagIcon, ChevronDown } from 'lucide-react';
 import type { Session, Project, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
-import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, USAGE } from '../../lib/models';
+import { useModels, useModelCaps, modelCaps, modelProvider, useModelLabel, modelLabel, USAGE } from '../../lib/models';
 import { effortsForProvider, effortLabel } from '../../lib/effort';
 import { expiryOptionLabel } from '../../lib/expiry';
 import { updateChatFields, type ChatFieldsPatch } from '../../lib/chatUpdate';
@@ -11,6 +11,7 @@ import { DossierOptOutRow } from './DossierOptOutRow';
 import { ModelPicker } from '../ModelPicker';
 import { SegmentedControl } from '../ui';
 import { TagPickerBody } from '../TagChip';
+import { useEffectiveLine } from '../../lib/presets';
 import { C, R, FONT, SHADOW, GROUP_COLORS } from '../../lib/design';
 
 // Настройка будущего чата в пустом состоянии (до первого сообщения): выбор модели,
@@ -142,8 +143,33 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
     );
   };
 
+  // «Сейчас пойдёт» для превью под пилюлями: на явной модели показываем её саму,
+  // на дефолте — резолв места по матрице персоны/слота/назначения
+  const explicitModel = (session.model ?? '').trim();
+  const previewLine = explicitModel
+    ? `Сейчас пойдёт: ${modelLabel(explicitModel)}`
+    : (useEffectiveLine({
+        kind: 'action',
+        actionKey: session.personaId ? USAGE.chatPersona : USAGE.chatNew,
+      }) ?? 'Сейчас пойдёт: выбираем…');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, marginTop: 20, width: '100%' }}>
+      {/* Плашка-сделка о заморозке модели: пользователь выбирает модель ДО первого хода,
+          дальше правки цепочки и уровней действуют на новые чаты, этот — не изменят.
+          Видна всегда, не под панелью — её главное прочитать до клика по пилюле. */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', gap: 7,
+        width: isMobile ? '100%' : 380, maxWidth: '100%',
+        padding: '8px 12px', borderRadius: R.lg,
+        background: C.bgPanel, border: `1px solid ${C.border}`,
+        fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary, lineHeight: 1.4,
+        textAlign: 'left',
+      }}>
+        <Lock size={12} strokeWidth={2} style={{ flexShrink: 0, marginTop: 2, color: C.textMuted }} />
+        <span>Разговор держит выбранную модель до конца: правки цепочки и уровней действуют на новые чаты, этот — не изменят.</span>
+      </div>
+
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
         {pill('model', IconModel, 'Модель', modelName)}
         {caps.supportsEffort && pill('effort', IconEffort, 'Усилие', effortLabel(session.effort))}
@@ -188,6 +214,18 @@ export function NewChatSetup({ session, project, onSessionUpdated, isMobile }: {
           ) : (
             <ExpiryPicker value={session.expiresAfterMinutes} onChange={pickExpiry} />
           )}
+        </div>
+      )}
+
+      {/* «Сейчас пойдёт» под пилюлями — виден всегда, кроме случая, когда модель
+          сейчас правят в раскрытой панели: внутри неё уже видно своё «Сейчас пойдёт».
+          Дубль здесь не нужен. */}
+      {!panel && (
+        <div style={{
+          fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.4,
+          textAlign: 'center',
+        }}>
+          {previewLine}
         </div>
       )}
     </div>

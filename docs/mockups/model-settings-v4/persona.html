@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Персона: три поля моделей с наследованием — v4</title>
+<style>
+  :root {
+    --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+    --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+    --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+    --c-on-accent:#FBF8F2;
+    --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+    --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+    --c-success-text:#3F7A4F; --c-success-bg:#E9F1E8;
+    --c-warning:#C9923E; --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+    --c-danger-bg:#FBF1EC; --c-danger-text:#B4452F;
+    --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+    --c-overlay:rgba(23,19,15,.42);
+    --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+    --shadow-card:0 2px 8px rgba(60,50,35,.05);
+    --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+    --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+    --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+    --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+    --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+    --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+    --c-on-accent:#201C18;
+    --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+    --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-track:#453F37;
+    --c-success-text:#8FCB79; --c-success-bg:#232E20;
+    --c-warning:#E0AC5A; --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+    --c-danger-bg:#331F1B; --c-danger-text:#EE8A72;
+    --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+    --c-overlay:rgba(0,0,0,.62);
+    --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+    --shadow-card:0 2px 10px rgba(0,0,0,.35);
+    --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+    --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+    --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+    --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px 64px; background:var(--c-bg-main); color:var(--c-text-primary);
+    font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:13px; }
+  .page { max-width:1240px; margin:0 auto; }
+  h1.doc { font-family:'PT Serif',Georgia,serif; font-size:28px; color:var(--c-text-heading); margin:0 0 6px; }
+  p.lead, p.note { color:var(--c-text-secondary); max-width:900px; line-height:1.6; }
+  p.lead { margin:0 0 20px; } p.note { margin:0 0 16px; }
+  h2.sec { font-family:'PT Serif',Georgia,serif; font-size:22px; color:var(--c-text-heading); margin:44px 0 6px; padding-top:20px; border-top:1px solid var(--c-border); }
+  code.tok { font-family:'JetBrains Mono',monospace; font-size:12px; background:var(--c-bg-selected); padding:1px 5px; border-radius:6px; color:var(--c-text-heading); }
+
+  .themebar { position:sticky; top:0; z-index:30; display:flex; gap:8px; align-items:center; background:var(--c-bg-main); padding:8px 0 14px; }
+  .tbtn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; padding:6px 12px; border-radius:999px;
+    border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-secondary); }
+  .tbtn.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+
+  .scene { background:var(--c-overlay); border-radius:24px; padding:40px 24px; display:flex; justify-content:center; gap:24px; flex-wrap:wrap; }
+  .modal { width:480px; max-width:100%; background:var(--c-bg-main); border-radius:20px; box-shadow:var(--shadow-modal);
+    overflow:hidden; display:flex; flex-direction:column; max-height:88vh; }
+  .m-head { padding:26px 28px 0; }
+  .m-title { font-family:'PT Serif',Georgia,serif; font-size:22px; font-weight:500; color:var(--c-text-heading); }
+  .m-close { float:right; width:32px; height:32px; border-radius:8px; border:none; cursor:pointer; background:transparent; color:var(--c-text-muted); font-size:16px; }
+  .m-close:hover { background:var(--c-bg-selected); color:var(--c-text-primary); }
+  .m-body { padding:14px 28px 26px; overflow-y:auto; }
+  .m-foot { display:flex; justify-content:flex-end; gap:8px; padding:0 28px 24px; }
+
+  .lvl { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.07em; margin:16px 2px 8px; }
+  .hint { font-size:11px; color:var(--c-text-muted); line-height:1.5; }
+  .btn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; border-radius:12px; padding:7px 12px;
+    border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary); }
+  .btn:hover { background:var(--c-bg-selected); }
+  .btn.primary { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+  .btn.sm { font-size:12px; padding:5px 10px; }
+  .tf { width:100%; font:inherit; font-size:13px; padding:8px 11px; border-radius:10px; border:1px solid var(--c-border);
+    background:var(--c-bg-white); color:var(--c-text-primary); outline:none; }
+  .tf:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+  .badge { font-size:11px; font-weight:700; padding:2px 7px; border-radius:999px; white-space:nowrap; }
+  .badge.all { background:var(--c-info-bg); color:var(--c-info); }
+  .badge.mine { background:var(--c-bg-selected); color:var(--c-text-secondary); }
+  a.lnk { color:var(--c-accent); font-size:11px; font-weight:600; text-decoration:none; cursor:pointer; background:none; border:none; font-family:inherit; padding:0; }
+  a.lnk:hover { text-decoration:underline; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  .pick { font:inherit; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; max-width:100%;
+    padding:5px 9px; border-radius:8px; color:var(--c-text-secondary); background:var(--c-bg-card); border:1px solid var(--c-border); }
+  .pick:hover { border-color:var(--c-accent-muted); }
+  .pick .car { color:var(--c-text-muted); font-size:11px; }
+  .willgo { display:flex; align-items:center; gap:6px; flex-wrap:wrap; font-size:11px; color:var(--c-text-muted); }
+  .willgo .mono { font-size:11px; font-weight:700; color:var(--c-text-heading); background:var(--c-bg-selected); border-radius:6px; padding:1px 6px; }
+  .warnline { display:flex; gap:8px; align-items:flex-start; background:var(--c-warning-bg); color:var(--c-warning-text);
+    border-radius:10px; padding:9px 12px; font-size:12px; line-height:1.45; margin-top:10px; }
+
+  /* Три поля персоны: уровень | модель | источник значения (наследование видно всегда) */
+  .fields { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:12px; overflow:hidden; }
+  .frow { display:flex; gap:12px; align-items:flex-start; padding:10px 12px; border-top:1px solid var(--c-border-light); }
+  .frow:first-child { border-top:none; }
+  .frow .ftier { width:88px; flex-shrink:0; padding-top:5px; }
+  .frow .ftier .n { font-size:13px; font-weight:700; color:var(--c-text-heading); }
+  .frow .ftier .h { font-size:11px; color:var(--c-text-muted); margin-top:1px; line-height:1.3; }
+  .frow .fmain { flex:1; min-width:0; }
+  .fsrc { font-size:11px; color:var(--c-text-muted); margin-top:5px; line-height:1.45; }
+  .fsrc.own { color:var(--c-text-secondary); }
+  .fsrc b { color:var(--c-text-secondary); font-weight:600; }
+
+  .steps { display:flex; gap:5px; margin:10px 0 14px; }
+  .steps i { flex:1; height:3px; border-radius:2px; background:var(--c-track); }
+  .steps i.done { background:var(--c-accent); }
+
+  .phone { width:375px; background:var(--c-bg-panel); border:1px solid var(--c-border); border-radius:28px; overflow:hidden; box-shadow:var(--shadow-island); }
+  .sheet { background:var(--c-bg-main); border-radius:22px 22px 0 0; margin-top:40px; box-shadow:var(--shadow-sheet); min-height:480px; }
+  .sheet .grab { width:38px; height:4px; border-radius:2px; background:var(--c-track); margin:10px auto 0; }
+  .sheet .s-head { padding:12px 16px 0; }
+  .sheet .s-title { font-family:'PT Serif',Georgia,serif; font-size:18px; color:var(--c-text-heading); }
+  .sheet .s-body { padding:12px 16px 20px; }
+
+  .cmp { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  @media (max-width:1100px){ .cmp { grid-template-columns:1fr; } }
+  .tag { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); margin-bottom:6px; }
+  .rows { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+  .rows .row { padding:8px 12px; border-top:1px solid var(--c-border-light); font-size:12px; }
+  .rows .row:first-child { border-top:none; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <strong style="font-size:12px; color:var(--c-text-muted)">Тема:</strong>
+    <button class="tbtn on" data-theme-btn="light">Светлая</button>
+    <button class="tbtn" data-theme-btn="dark">Тёмная</button>
+  </div>
+
+  <h1 class="doc">Персона: три поля моделей с наследованием — v4</h1>
+  <p class="lead">
+    Решение человека от 14.08: у персоны больше нет ни «Модели» («всегда работает моделью»), ни
+    «Уровня модели» — этими настройками не пользовался никто (0 из 175 персон). Вместо трёх разрозненных
+    контролов — один блок из трёх полей: «Сильная», «Средняя», «Слабая». В каждом по умолчанию стоит
+    унаследованное значение, и поле честно показывает, что сработает и откуда оно приехало.
+    Переопределить любое поле можно своей моделью или цепочкой. Специальность остаётся необязательной:
+    без неё персона читает строку «Любая специальность», а если и там пусто — «Модели по умолчанию».
+  </p>
+
+  <h2 class="sec">1. Форма персоны: один блок «Модели» вместо трёх контролов</h2>
+  <p class="note">
+    Персона «Александр» со специальностью «Тимлид»: поле «Сильная» переопределено общей цепочкой,
+    «Средняя» наследуется от специальности, «Слабая» доехала дальше — специальность её не задала,
+    сработала строка «Любая специальность». Строка «Сейчас пойдёт» относится к блоку целиком и
+    показывает все три итоговые модели.
+  </p>
+
+  <div class="scene">
+    <div class="modal">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Александр — Тимлид / Архитектор</div>
+      </div>
+      <div class="m-body">
+        <div class="lvl" style="margin-top:2px">Имя и роль</div>
+        <input class="tf" value="Александр" style="margin-bottom:8px"/>
+        <input class="tf" value="Тимлид / Архитектор"/>
+
+        <div class="lvl">Модели</div>
+        <div class="fields">
+          <div class="frow">
+            <div class="ftier"><div class="n">Сильная</div><div class="h">сложные ходы</div></div>
+            <div class="fmain">
+              <button class="pick">🔗 Основной — Сильная <span class="badge all">Для всех</span><span class="car">▾</span></button>
+              <div class="fsrc own"><b>Своё значение</b> · <a class="lnk">вернуть наследование</a></div>
+            </div>
+          </div>
+          <div class="frow">
+            <div class="ftier"><div class="n">Средняя</div><div class="h">рабочие ходы</div></div>
+            <div class="fmain">
+              <button class="pick">🔗 Основной — Средняя <span class="badge all">Для всех</span><span class="car">▾</span></button>
+              <div class="fsrc">Наследуется от специальности «Тимлид»</div>
+            </div>
+          </div>
+          <div class="frow">
+            <div class="ftier"><div class="n">Слабая</div><div class="h">мелкий фон</div></div>
+            <div class="fmain">
+              <button class="pick">Kimi K3<span class="car">▾</span></button>
+              <div class="fsrc">Наследуется: «Тимлид» слабую не задала → «Любая специальность»</div>
+            </div>
+          </div>
+        </div>
+        <div class="willgo" style="margin-top:10px">
+          Сейчас пойдёт: Сильная — <span class="mono">Claude Opus 5</span> ·
+          Средняя — <span class="mono">GLM 5.2</span> · Слабая — <span class="mono">Kimi K3</span>
+        </div>
+        <p class="hint" style="margin:10px 0 0">
+          Нужна одна модель на все случаи — поставьте её во все три поля.<br/>
+          Порядок: поле персоны → специальность → «Любая специальность» → «Модели по умолчанию».
+        </p>
+        <div class="warnline">
+          ⚠ Когда эту персону зовут сабагентом в чужой чат, эти три поля не применяются — там
+          работает модель, закреплённая за вызовом. Это ожидаемо: чужой чат платит своим маршрутом.
+        </div>
+      </div>
+      <div class="m-foot">
+        <button class="btn">Отмена</button>
+        <button class="btn primary">Сохранить</button>
+      </div>
+    </div>
+
+    <!-- Персона без специальности + самоссылка шага (B8) -->
+    <div class="modal">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Света — Секретарь</div>
+      </div>
+      <div class="m-body">
+        <div class="lvl" style="margin-top:2px">Модели</div>
+        <div class="fields">
+          <div class="frow">
+            <div class="ftier"><div class="n">Сильная</div><div class="h">сложные ходы</div></div>
+            <div class="fmain">
+              <button class="pick">Claude Opus 5<span class="car">▾</span></button>
+              <div class="fsrc">Наследуется от «Моделей по умолчанию» — «Любая специальность» не задала</div>
+            </div>
+          </div>
+          <div class="frow">
+            <div class="ftier"><div class="n">Средняя</div><div class="h">рабочие ходы</div></div>
+            <div class="fmain">
+              <button class="pick">🔗 Основной — Средняя <span class="badge all">Для всех</span><span class="car">▾</span></button>
+              <div class="fsrc">Наследуется от «Моделей по умолчанию» — «Любая специальность» не задала</div>
+            </div>
+          </div>
+          <div class="frow">
+            <div class="ftier"><div class="n">Слабая</div><div class="h">мелкий фон</div></div>
+            <div class="fmain">
+              <button class="pick">🔗 Бесплатные <span class="badge mine">Только для меня</span><span class="car">▾</span></button>
+              <div class="fsrc own"><b>Своё значение</b> · <a class="lnk">вернуть наследование</a></div>
+            </div>
+          </div>
+        </div>
+        <p class="hint" style="margin:10px 0 0">
+          Специальность не задана — поля читают строку «Любая специальность», а где и там пусто —
+          «Модели по умолчанию».
+        </p>
+        <div class="warnline">
+          ⚠ Шаг 2 цепочки «Бесплатные» — «Уровень: Слабая» — развернётся по настройкам того, чей ход
+          идёт, а не этой персоны. Если у владельца хода слабый уровень не задан, ход честно завершится
+          ошибкой — подмены дальше не будет.
+        </div>
+      </div>
+      <div class="m-foot">
+        <button class="btn">Отмена</button>
+        <button class="btn primary">Сохранить</button>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">2. Мастер создания: специальность необязательна, поля предзаполнены наследованием</h2>
+  <p class="note">
+    Слева — шаг «Специальность»: предлагается, но не требуется, есть честный «Пропустить».
+    Справа — шаг «Модели»: те же три поля, что в форме, уже заполненные унаследованными значениями.
+    Менять ничего не нужно — наследование продолжит следить за настройками после создания.
+  </p>
+
+  <div class="scene">
+    <div class="modal">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Новая персона</div>
+        <div class="steps"><i class="done"></i><i class="done"></i><i></i><i></i><i></i></div>
+      </div>
+      <div class="m-body">
+        <div class="lvl" style="margin-top:0">Специальность</div>
+        <button class="pick" style="width:100%; justify-content:flex-start; padding:8px 11px">
+          <span>Тимлид / Архитектор</span><span class="car" style="margin-left:auto">▾</span>
+        </button>
+        <p class="hint" style="margin:10px 0 0">
+          Необязательно. Со специальностью персона наследует её модели из «Особых правил»; без неё —
+          строку «Любая специальность», затем «Модели по умолчанию». Выбрать можно и позже, в форме персоны.
+        </p>
+      </div>
+      <div class="m-foot">
+        <button class="btn">Назад</button>
+        <button class="btn">Пропустить</button>
+        <button class="btn primary">Дальше</button>
+      </div>
+    </div>
+
+    <div class="modal">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Новая персона</div>
+        <div class="steps"><i class="done"></i><i class="done"></i><i class="done"></i><i></i><i></i></div>
+      </div>
+      <div class="m-body">
+        <div class="lvl" style="margin-top:0">Модели</div>
+        <p class="hint" style="margin:0 0 10px">
+          Поля заполнены унаследованными значениями — менять ничего не нужно, если они устраивают:
+          наследование продолжит следить за настройками. Переопределите поле, только если у этой
+          персоны своя модель.
+        </p>
+        <div class="fields">
+          <div class="frow">
+            <div class="ftier"><div class="n">Сильная</div></div>
+            <div class="fmain">
+              <button class="pick">Claude Opus 5<span class="car">▾</span></button>
+              <div class="fsrc">Наследуется от «Моделей по умолчанию»</div>
+            </div>
+          </div>
+          <div class="frow">
+            <div class="ftier"><div class="n">Средняя</div></div>
+            <div class="fmain">
+              <button class="pick">🔗 Основной — Средняя<span class="car">▾</span></button>
+              <div class="fsrc">Наследуется от специальности «Тимлид»</div>
+            </div>
+          </div>
+          <div class="frow">
+            <div class="ftier"><div class="n">Слабая</div></div>
+            <div class="fmain">
+              <button class="pick">Kimi K3<span class="car">▾</span></button>
+              <div class="fsrc">Наследуется от «Любой специальности»</div>
+            </div>
+          </div>
+        </div>
+        <div class="willgo" style="margin-top:10px">
+          Сейчас пойдёт: Сильная — <span class="mono">Claude Opus 5</span> ·
+          Средняя — <span class="mono">GLM 5.2</span> · Слабая — <span class="mono">Kimi K3</span>
+        </div>
+        <p class="hint" style="margin:10px 0 0">
+          Нужна одна модель на все случаи — поставьте её во все три поля.
+        </p>
+      </div>
+      <div class="m-foot">
+        <button class="btn">Назад</button>
+        <button class="btn primary">Дальше</button>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">3. Мобила: три поля в шторке</h2>
+  <p class="note">
+    На телефоне форма персоны — шторка; поля идут друг под другом во всю ширину, источник наследования
+    остаётся под каждым полем — на touch нет hover, поэтому «откуда приехало значение» читается сразу,
+    без всплывающих подсказок.
+  </p>
+
+  <div class="scene" style="justify-content:flex-start">
+    <div class="phone">
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="s-head"><div class="s-title">Александр — модели</div></div>
+        <div class="s-body">
+          <div class="fields">
+            <div class="frow">
+              <div class="ftier"><div class="n">Сильная</div></div>
+              <div class="fmain">
+                <button class="pick" style="max-width:100%">🔗 Основной — Сильная<span class="car">▾</span></button>
+                <div class="fsrc own"><b>Своё значение</b> · <a class="lnk">вернуть наследование</a></div>
+              </div>
+            </div>
+            <div class="frow">
+              <div class="ftier"><div class="n">Средняя</div></div>
+              <div class="fmain">
+                <button class="pick" style="max-width:100%">🔗 Основной — Средняя<span class="car">▾</span></button>
+                <div class="fsrc">Наследуется от «Тимлид»</div>
+              </div>
+            </div>
+            <div class="frow">
+              <div class="ftier"><div class="n">Слабая</div></div>
+              <div class="fmain">
+                <button class="pick" style="max-width:100%">Kimi K3<span class="car">▾</span></button>
+                <div class="fsrc">Наследуется от «Любой специальности»</div>
+              </div>
+            </div>
+          </div>
+          <div class="willgo" style="margin-top:10px">Сейчас пойдёт: <span class="mono">Opus 5</span> · <span class="mono">GLM 5.2</span> · <span class="mono">Kimi K3</span></div>
+          <div class="warnline">⚠ В чужом чате сабагентом идёт моделью вызова, а не своими полями.</div>
+          <div style="display:flex; gap:8px; margin-top:14px">
+            <button class="btn" style="flex:1">Отмена</button>
+            <button class="btn primary" style="flex:1">Сохранить</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Что изменилось</h2>
+  <div class="cmp">
+    <div>
+      <div class="tag">Было</div>
+      <div class="rows">
+        <div class="row">Три разрозненных контрола: «Модель» (всегда работает ей), «Уровень модели», свёрнутые ячейки уровней</div>
+        <div class="row">Приоритет осей объяснялся мелким хинтом (E5), мастер давал один селект модели (B6)</div>
+        <div class="row">«Всегда работает моделью» и «Уровень персоны» не использовал никто — 0 из 175 персон на проде</div>
+      </div>
+    </div>
+    <div>
+      <div class="tag">Стало</div>
+      <div class="rows">
+        <div class="row">Один блок «Модели»: три поля по уровням, наследование видно в каждом — что сработает и откуда</div>
+        <div class="row">«Сейчас пойдёт» на блок целиком; подсказка «одна модель на все случаи — во все три поля»</div>
+        <div class="row">Мастер: специальность с «Пропустить», поля предзаполнены наследованием — можно ничего не менять</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+  document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.themeBtn === 'dark' ? 'dark' : '';
+    document.querySelectorAll('[data-theme-btn]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+</script>
+</body>
+</html>

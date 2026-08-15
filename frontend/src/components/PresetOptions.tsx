@@ -16,15 +16,15 @@ import type { SpecialtySettingsLayer, SpecialtySettingsResponse } from '../types
 export interface PresetCreationCtx {
   models: ModelOption[];
   settings: SpecialtySettingsResponse | null;
-  savingScope: 'global' | 'owner' | null;
+  savingScope: 'global' | 'owner' | 'user' | null;
   // Промис — вызывающий (PresetOptions.savePreset) ждёт резолва PUT слоя, прежде чем
   // назначать место на новый пресет (гонка «создать → назначить», MAJOR 1, ревью d23231bd)
-  onSaveLayer: (scope: 'global' | 'owner', next: SpecialtySettingsLayer) => Promise<void>;
+  onSaveLayer: (scope: 'global' | 'owner' | 'user', next: SpecialtySettingsLayer) => Promise<void>;
   // Когда сборка цепочки — не единственная правка слоя (матрица «Исключений»: тут же
   // пишется ячейка тем же PUT) — потребитель подключает onCreated и сам ОДНИМ onSaveLayer
   // фиксирует и пресет, и свою правку на том же клоне layer. Без onCreated — старое
   // поведение (savePreset сам шлёт onSaveLayer пресета, отдельным вызовом от onPick).
-  onCreated?: (presetId: string, scope: 'global' | 'owner', layer: SpecialtySettingsLayer) => void;
+  onCreated?: (presetId: string, scope: 'global' | 'owner' | 'user', layer: SpecialtySettingsLayer) => void;
 }
 
 // Группа «Пресеты» в панелях выбора модели (спека, блок 2): между карточками уровней
@@ -40,7 +40,7 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   value: string;
   onPick: (route: string) => void;
   ctx: ChainLabelContext;
-  scope?: 'global' | 'owner';
+  scope?: 'global' | 'owner' | 'user';
   creation?: PresetCreationCtx;
   // Родитель (RoutePicker) должен на время inline-редактирования прятать соседние блоки
   // своей панели — иначе случайный клик по ним схлопывает панель и стирает черновик
@@ -50,6 +50,11 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   const presets = scope ? all.filter(p => p.scope === scope) : all;
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<string[]>([]);
+  // Имя вводит пользователь — без авто-номера «Цепочка N»: подпись должна осмысленно
+  // говорить о содержимом («Экономная, но живая», «С фолбэком по уровню»). Пустая строка
+  // считается пустой формой и блокирует сохранение. Конфликт имён — бан в момент записи
+  // на бэке; UI дубликат не блокирует, чтобы не плодить «Цепочка N» в обход правила.
+  const [draftName, setDraftName] = useState('');
   // Заголовок редактора: черновик преднаполнен шагами уже выбранного пресета — честно
   // подписываем как копию, а не «Новая цепочка» (молчаливый дубль без этого)
   const [copyOf, setCopyOf] = useState<string | null>(null);
@@ -60,19 +65,23 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   // на месте, а не открывает раздел заново). Проверяем editing первым, чтобы состояние
   // не зависело от гонки с presets.length (см. ниже)
   if (editing && creation) {
-    const targetScope: 'global' | 'owner' = scope ?? 'owner';
+    const targetScope: 'global' | 'owner' | 'user' = scope ?? 'owner';
     const savePreset = () => {
       if (!creation.settings || draft.length === 0) return;
-      // Номер по своему слою, первый свободный — иначе первая ЛИЧНАЯ цепочка при уже
-      // существующих общих зовётся «Цепочка 3» (считает по объединённому списку)
-      const scopedExisting = all.filter(p => p.scope === targetScope);
-      let n = 1;
-      while (scopedExisting.some(p => p.name === `Цепочка ${n}`)) n++;
+      const name = draftName.trim();
+      // Пустое имя — отказ без записи: мини-валидация на клиенте, чтобы не получить
+      // пресет с пустым именем
+      if (name === '') return;
+      // user-слой может быть ещё не загружен (админ открыл редактор раньше вкладки
+      // «Особые правила»); без базы положить пресет некуда — отказ без записи
+      const base = creation.settings[targetScope];
+      if (!base) return;
       const id = newPresetId();
-      const next = withNewPreset(creation.settings[targetScope], id, `Цепочка ${n}`, draft);
+      const next = withNewPreset(base, id, name, draft);
       if (creation.onCreated) {
         creation.onCreated(id, targetScope, next);
         setEditing(false);
+        setDraftName('');
       } else {
         // Назначаем место ТОЛЬКО после того, как сервер подтвердил новый пресет — иначе
         // pick() улетает параллельно с PUT слоя и обгоняет его: бэкенд валидирует
@@ -80,11 +89,13 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
         // Редактор закрываем тоже по успеху: на отказе черновик из нескольких шагов
         // должен остаться на месте, иначе собирать цепочку заново
         creation.onSaveLayer(targetScope, next)
-          .then(() => { onPick(presetRoute(id)); setEditing(false); })
+          .then(() => { onPick(presetRoute(id)); setEditing(false); setDraftName(''); })
           .catch(() => {});
       }
     };
     const busy = creation.savingScope !== null;
+    const trimName = draftName.trim();
+    const canSave = !busy && draft.length > 0 && trimName !== '';
     return (
       <>
         <div style={{
@@ -93,6 +104,20 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
         }}>
           {copyOf ? `Копия «${copyOf}»` : 'Новая цепочка'}
         </div>
+        <input
+          type="text"
+          value={draftName}
+          onChange={e => setDraftName(e.target.value)}
+          placeholder="Например: «Экономная, но живая»"
+          disabled={busy}
+          autoFocus
+          style={{
+            font: 'inherit', fontFamily: FONT.sans, fontSize: FS.sm,
+            padding: '6px 10px', borderRadius: 6,
+            border: `1px solid ${C.border}`, background: C.bgWhite,
+            color: C.textPrimary, outline: 'none',
+          }}
+        />
         <ChainStepsEditor
           steps={draft}
           onChange={setDraft}
@@ -102,8 +127,9 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
           busy={busy}
         />
         <div style={{ display: 'flex', gap: 8, marginTop: 2 }}>
-          <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>Отмена</Button>
-          <Button size="sm" variant="primary" disabled={busy || draft.length === 0} onClick={savePreset}>Сохранить</Button>
+          <Button size="sm" variant="ghost" disabled={busy}
+            onClick={() => { setEditing(false); setDraftName(''); }}>Отмена</Button>
+          <Button size="sm" variant="primary" disabled={!canSave} onClick={savePreset}>Сохранить</Button>
         </div>
       </>
     );
@@ -114,7 +140,7 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
   const hiddenByScope = scope === 'global' && all.length > presets.length;
   const scopeNote = (
     <div style={{ fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4, padding: '0 2px' }}>
-      Месту доступны только общие пресеты — личные здесь не показываются.
+      Месту доступны только общие цепочки — личные здесь не показываются.
     </div>
   );
   // «Собрать цепочку…» обязана остаться видна и при нуле пресетов, когда есть creation —
@@ -138,7 +164,7 @@ export function PresetOptions({ value, onPick, ctx, scope, creation, onEditingCh
             fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
             textTransform: 'uppercase', letterSpacing: '0.4px', margin: '2px 0 0',
           }}>
-            Пресеты
+            Цепочки
           </div>
           {presets.map(p => (
             <div key={p.id} style={{ position: 'relative' }}>

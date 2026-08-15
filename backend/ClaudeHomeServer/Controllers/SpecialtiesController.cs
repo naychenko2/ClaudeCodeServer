@@ -9,15 +9,17 @@ using Microsoft.AspNetCore.Mvc;
 namespace ClaudeHomeServer.Controllers;
 
 // Специальности персон и настройки к ним: каталог специальностей с подписями
-// и эффективными шаблонами прав, стор настроек (глобальные значения + per-owner
-// переопределение) и именованные пресеты правил выбора модели.
+// и эффективными шаблонами прав, стор настроек (глобальные значения, назначения
+// пользователям B9 и per-owner переопределение) и именованные пресеты правил
+// выбора модели.
 [ApiController]
 [Authorize]
 [Route("api/specialties")]
 public class SpecialtiesController(
     SpecialtySettingsStore settings,
     FallbackSettingsStore fallback,
-    PersonaManager personas) : ControllerBase
+    PersonaManager personas,
+    UserStore users) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -39,10 +41,11 @@ public class SpecialtiesController(
         }));
     }
 
-    // Настройки специальностей и пресетов-цепочек: глобальный слой и личный слой
-    // вызывающего (фронт рендерит оба уровня; эффективное значение — см. List/шаблоны)
-    // плюс объединённый список пресетов с признаком слоя: набор один, различие между
-    // «общий» и «мой» — в поле scope (личные впереди, в порядке резолва).
+    // Настройки специальностей и пресетов-цепочек: глобальный слой, назначенный
+    // вызывающему слой «пользователь» (B9) и личный слой вызывающего (фронт рендерит
+    // уровни; эффективное значение — см. List/шаблоны) плюс объединённый список пресетов
+    // с признаком слоя: набор один, различие — в поле scope (личные впереди, в порядке
+    // резолва: owner → user → global).
     //
     // Контракт v2 (ADR-007): пресет хранит упорядоченную цепочку steps (не rules);
     // у специальности — матрица моделей по уровням (tierStrong/Medium/Weak) + defaultTier;
@@ -61,6 +64,7 @@ public class SpecialtiesController(
             // без этого числа UI хардкодил дефолт и считал приглушение от неверного потолка.
             maxSubstitutions = fallback.ResolveMaxSubstitutions(UserId),
             global = file.Global,
+            user = file.Users.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer(),
             owner = file.Owners.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer(),
             presets = settings.EffectivePresetsWithScope(UserId).Select(e => new
             {
@@ -99,6 +103,65 @@ public class SpecialtiesController(
         if (layer is null) return BadRequest(new { error = "Не задан слой настроек" });
         if (settings.SetOwner(UserId, layer) is { } error) return BadRequest(new { error });
         return Ok(new { owner = settings.Snapshot.Owners.GetValueOrDefault(UserId) ?? new SpecialtySettingsLayer() });
+    }
+
+    // --- Слой «пользователь» (B9): назначение настроек конкретному пользователю ---
+    //
+    // Между глобальным и личным: админ задаёт специальности модель конкретному
+    // пользователю. Приоритет слоёв зафиксирован: личный (owner) → пользовательский
+    // (user) → глобальный (global). Только админ: назначение влияет на чужие ходы.
+
+    // Слой, назначенный пользователю. user = вызов от себя даёт своё назначение;
+    // админ читает любой userId (проверка по UserStore).
+    [HttpGet("settings/user/{userId}")]
+    public IActionResult GetUserLayer(string userId)
+    {
+        if (users.GetById(userId) is null) return NotFound(new { error = "Пользователь не найден" });
+        if (!User.IsInRole("admin") && userId != UserId)
+            return Forbid();
+        return Ok(new { user = settings.Snapshot.Users.GetValueOrDefault(userId) ?? new SpecialtySettingsLayer() });
+    }
+
+    // Замена назначенного пользователю слоя. Пустой слой снимает назначение
+    // (пользователь возвращается к личным значениям поверх глобальных).
+    [HttpPut("settings/user/{userId}")]
+    [Authorize(Roles = "admin")]
+    public IActionResult SetUserLayer(string userId, [FromBody] SpecialtySettingsLayer layer)
+    {
+        if (layer is null) return BadRequest(new { error = "Не задан слой настроек" });
+        if (users.GetById(userId) is null) return NotFound(new { error = "Пользователь не найден" });
+        if (settings.SetUser(userId, layer) is { } error) return BadRequest(new { error });
+        return Ok(new { user = settings.Snapshot.Users.GetValueOrDefault(userId) ?? new SpecialtySettingsLayer() });
+    }
+
+    // --- Бюджет подмен цепочки хода (MaxSubstitutions) ---
+    //
+    // Раньше был только GET (поле maxSubstitutions в settings) — теперь и запись.
+    // Scope в пути, не в теле: атрибут роли на значение тела не повесить (тот же
+    // приём, что у reset). Значение клампится в 1..HardMaxSubstitutions стором;
+    // null = снять настройку слоя (наследование нижнего).
+
+    public class FallbackMaxRequest
+    {
+        public int? MaxSubstitutions { get; set; }
+    }
+
+    // Глобальный бюджет подмен — только админ (общее значение инстанса).
+    [HttpPut("settings/fallback/global")]
+    [Authorize(Roles = "admin")]
+    public IActionResult SetGlobalMaxSubstitutions([FromBody] FallbackMaxRequest? body)
+    {
+        if (fallback.SetGlobal(body?.MaxSubstitutions) is { } error) return BadRequest(new { error });
+        return Ok(new { maxSubstitutions = fallback.Snapshot.Global.MaxSubstitutions });
+    }
+
+    // Личный бюджет подмен вызывающего. Per-owner изоляция: UserId из JWT, чужой
+    // слой не доступен. null — снять личный потолок (наследование глобального).
+    [HttpPut("settings/fallback/owner")]
+    public IActionResult SetOwnerMaxSubstitutions([FromBody] FallbackMaxRequest? body)
+    {
+        if (fallback.SetOwner(UserId, body?.MaxSubstitutions) is { } error) return BadRequest(new { error });
+        return Ok(new { maxSubstitutions = fallback.Snapshot.Owners.GetValueOrDefault(UserId)?.MaxSubstitutions });
     }
 
     // --- Сброс настроек моделей к наследованию (scope — в ПУТИ) ---

@@ -681,6 +681,17 @@ export interface GitFileChange {
   deleted?: number | null;
 }
 
+// Чат, менявший файл (POST /api/projects/{id}/files/changed-by) — панель «Изменения»:
+// бейдж в строке файла + список «Также меняли» в шапке диффа + фильтр «только файлы чата»
+export interface ChangedBySession {
+  sessionId: string;
+  name: string;
+  // Файл менялся чатом ТОЛЬКО вне заявленного хода (Bash/скрипты модели, человек в IDE
+  // во время хода): в бейдж «Также меняли» такая запись не попадает, в фильтр
+  // «только файлы чата» активного чата — попадает (решение прошлой итерации фичи)
+  external: boolean;
+}
+
 // Статус рабочего дерева проекта (GET /api/projects/{id}/git/status)
 export interface GitStatus {
   isRepo: boolean;
@@ -1782,6 +1793,7 @@ export interface KnowledgeDocument {
   id: string;
   name: string;
   indexingStatus: string;       // completed | indexing | error и т.п. (строка Dify)
+  error?: string | null;        // текст ошибки индексации (только у статуса error)
 }
 
 export interface KnowledgeBaseDetail extends KnowledgeBaseSummary {
@@ -1868,9 +1880,10 @@ export interface ModelRoutePreset {
 }
 
 // Пресет в объединённом списке GET /api/specialties/settings: личные впереди,
-// затем общие; scope — признак слоя (общий чужой читается, но не правится)
+// затем общие; scope — признак слоя (общий чужой читается, но не правится).
+// 'user' — админский user-слой для конкретного пользователя (PresetScope.User)
 export interface ScopedPreset extends ModelRoutePreset {
-  scope: 'owner' | 'global';
+  scope: 'owner' | 'global' | 'user';
 }
 
 // Настройка специальности в слое (глобальном или личном): шаблон прав + матрица
@@ -1896,7 +1909,8 @@ export interface SpecialtySettingsLayer {
 }
 
 // Ответ GET /api/specialties/settings: глобальный слой, личный слой вызывающего
-// и объединённый список пресетов с признаком слоя
+// и объединённый список пресетов с признаком слоя. user — только для admin,
+// подтягивается через getUserLayer (см. api.specialties) — здесь не обязателен.
 export interface SpecialtySettingsResponse {
   version: number;
   // Эффективный бюджет подмен цепочки хода (per-owner → global → дефолт, кламп 1..5):
@@ -1904,6 +1918,10 @@ export interface SpecialtySettingsResponse {
   maxSubstitutions?: number;
   global: SpecialtySettingsLayer;
   owner: SpecialtySettingsLayer;
+  // User-слой конкретного пользователя (только для admin; не-admin не получает)
+  user?: SpecialtySettingsLayer;
+  // Контекст user-слоя в ответе (admin): чьими настройками заполнено .user
+  userId?: string;
   presets: ScopedPreset[];
 }
 

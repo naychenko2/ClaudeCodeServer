@@ -11,10 +11,10 @@ import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
   Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Folder,
-  ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare, MessageSquareDot,
-  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff,
+  ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare, MessageSquareDot, MessagesSquare,
+  Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff, User,
 } from 'lucide-react';
-import type { Project, GitFileChange, GitLogEntry, GitStashEntry } from '../types';
+import type { Project, GitFileChange, GitLogEntry, GitStashEntry, ChangedBySession } from '../types';
 import { api } from '../lib/api';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
 import {
@@ -22,7 +22,7 @@ import {
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
   gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow, gitInit,
 } from '../lib/git';
-import { splitPath, relTime } from '../lib/gitFormat';
+import { splitPath, relTime, fileChatBadge } from '../lib/gitFormat';
 import { useIsTouch } from '../lib/breakpoints';
 import { useLongPress } from '../hooks/useLongPress';
 import { PublishDialog } from './PublishDialog';
@@ -111,10 +111,9 @@ interface Props {
   activeCommitSha?: string | null; // подсветка открытого коммита в истории ветки
   onCommit?: (where: 'chat' | 'newChat') => void;  // делегировать фиксацию чату / новому чату
   onScopeChange?: () => void;  // сменили скоуп/коммит — центральную область сбросить к чату
-  // Пути, изменённые активным чатом (lowercase, прямые слэши от корня репо) — для
-  // тогла «только файлы чата». undefined — тогл скрыт (нет чата / worktree-чат /
-  // история грузится)
-  sessionFiles?: Set<string>;
+  // Путь git status → чужие чаты, менявшие файл (тем же ключом, что RowFile.path) —
+  // тихий бейдж в строке файла. undefined/нет записи — бейдж не рисуется
+  changedBy?: Map<string, ChangedBySession[]>;
 }
 
 // Строка файла активного скоупа после объединения групп статуса
@@ -178,9 +177,14 @@ function buildTree(files: RowFile[]): TreeNode[] {
   return sortRec(root.children);
 }
 
-export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, sessionFiles }: Props) {
+export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, activeFilePath, activeCommitSha, onCommit, onScopeChange, changedBy }: Props) {
   const st = useGitState(project.id);
   const status = st.status;
+  // Пути активного чата (lowercase) — тогл «только файлы чата» и признак mine у бейджа.
+  // Серверный источник (changed-by: история чата минус зафиксированное в git) — фронтовый
+  // дубль по живой ленте снесён. undefined — тогл скрыт (нет чата / worktree-контекст /
+  // changed-by не загрузился); worktree-гейт уже отработал в loadChangedBy (lib/git.ts)
+  const sessionFiles = st.myChangedPaths;
   const hasPanelHeader = useHasPanelHeader();
   // Тач-раскладка: действия строки — долгим нажатием. Все быстрые действия панели
   // (откат правок, возврат и удаление отложенного) жили под наведением мыши, то есть
@@ -606,11 +610,68 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             {f.deleted != null && f.deleted > 0 && <span style={{ color: C.diffRemText }}>−{f.deleted}</span>}
           </span>
         )}
-        {/* Состояние файла — крайним справа: бросается в глаза и не путается с
-            плиткой типа (та слева). Тот же значок, что в дереве «Файлов». В рабочем
-            скоупе по наведению уступает место кнопке отката целиком: flex:1 у имени
-            забирает освободившееся, и кнопка встаёт у самого правого края */}
+        {/* Состояние файла (A/M/D): тот же значок, что в дереве «Файлов», не путается с
+            плиткой типа (та слева). В рабочем скоупе по наведению уступает место кнопке
+            отката. Не крайний справа — за ним ещё бейдж авторства */}
         {!(isWorking && hovered && !st.busy) && <FileStatusBadge status={f.status} />}
+        {/* Бейдж «кто менял файл» — КРАЙНИМ справа, после статуса. Только у файлов рабочего
+            дерева. Иконка кодирует КОЛИЧЕСТВО чатов, бледность и цифра — участие активного:
+            - single mine  (MessageSquareDot) — только активный чат: та же иконка, что у тогла
+              «Только файлы текущего чата» в шапке панели, контраст, без цифры.
+            - single !mine (MessageSquare) — один чужой чат: бледно, без цифры.
+            - multi  (MessagesSquare) — 2+ чатов: mine → «+N» контраст (пересечение, ты и чужие);
+              только чужие → без цифры, бледно (число убрано — бледная группа и так читается).
+            - outside (User)          — правка мимо чатов (руками/Bash), бледно.
+            Бледность: участвую (mine=true) → контраст (C.textSecondary); только чужие или
+            outside (mine=false / правка руками) → ещё сильнее приглушённо (C.textMuted + opacity).
+            Неопределённый случай (sessionFiles undefined и чужих нет) — бейджа нет: «мой» от
+            «ничей» не отличить. Акцентный C.accent НЕ берём (гайд — за главное действие).
+            Halo под цифрой (text-shadow цветом фона) отрывает её от значка на любом фоне.
+            Тултип — только на десктопе (title не срабатывает по тапу). При hover бейдж
+            остаётся (должен быть всегда), кнопка отката встаёт левее бейджа — осознанный обмен. */}
+        {isWorking && (() => {
+          const badge = fileChatBadge(f.path, changedBy, sessionFiles);
+          if (!badge) return null;
+          const title =
+            badge.kind === 'multi'
+              ? (badge.mine ? `Также меняли: ${badge.names.map(n => `«${n}»`).join(', ')}`
+                            : `Меняли: ${badge.names.map(n => `«${n}»`).join(', ')}`)
+            : badge.kind === 'single'
+              ? (badge.mine ? 'Файл менял только этот чат' : `Менял: «${badge.name ?? ''}»`)
+            : 'Правка вне чатов — файл не менял ни один чат';
+          // Яркость: мой вклад → контраст; только чужие или outside (правка руками) → самая бледная группа
+          const vivid = badge.kind !== 'outside' && badge.mine;
+          const contrast = vivid ? C.textSecondary : C.textMuted;
+          const icon =
+            badge.kind === 'outside' ? <User size={12} strokeWidth={ICON_STROKE} />
+            : badge.kind === 'multi' ? <MessagesSquare size={12} strokeWidth={ICON_STROKE} />
+            : badge.mine ? <MessageSquareDot size={12} strokeWidth={ICON_STROKE} />
+            : <MessageSquare size={12} strokeWidth={ICON_STROKE} />;
+          // Цифра — только для пересечения (multi mine): «+N», ты и чужие. Для «только чужие»
+          // число не рисуем: бледная группа и так читается как «не твоё», цифра лишняя
+          const count = badge.kind === 'multi' && badge.mine ? `+${badge.count}` : null;
+          return (
+            <span
+              title={title}
+              style={{
+                position: 'relative', display: 'inline-flex', alignItems: 'center',
+                justifyContent: 'center', flexShrink: 0, marginLeft: 2, color: contrast,
+                opacity: vivid ? 1 : 0.5,
+              }}
+            >
+              {icon}
+              {count && (
+                <span style={{
+                  position: 'absolute', top: -6, right: -8,
+                  fontFamily: FONT.mono, fontSize: 8.5, fontWeight: 700, lineHeight: 1,
+                  color: contrast,
+                  // Halo цветом фона панели — отрывает цифру от значка на любом фоне строки
+                  textShadow: `0 0 2px ${C.bgPanel}, 0 0 2px ${C.bgPanel}, 0 0 2px ${C.bgPanel}`,
+                }}>{count}</span>
+              )}
+            </span>
+          );
+        })()}
       </div>
     );
   };

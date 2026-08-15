@@ -1,0 +1,44 @@
+{
+  "alert": "Медиана ходов поползла",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Медиана (p50) длительности хода выше 5 минут. В отличие от правила 03 (p99, info), это про массовость: если половина ходов встала на 5+ минут — деградация налицо, а не один тяжёлый ход. Норма p50 — 100–175 с (агентный ход с tool-use), порог 300 000 мс взят с большим запасом, чтобы ложных срабатываний не было в принципе: одиночного превышения достаточно, ведь такая медиана сама по себе — авария. warning (не info): это надо разбирать, а не просто принять к сведению.",
+  "evalWindow": "15m",
+  "frequency": "5m",
+  "labels": { "severity": "warning" },
+  "annotations": {
+    "description": "Медиана длительности хода перевалила за 5 минут. Половина ходов встала — ищи причину: деградация провайдера, истощение контекста, контейнер песочницы на CPU. Это warning, а не info — деградация массовая.",
+    "summary": "Деградация по медиане ходов"
+  },
+  "preferredChannels": ["ccs-alerts-email"],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "above",
+    "matchType": "at_least_once",
+    "target": 300000,
+    "targetUnit": "ms",
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.llm.duration.bucket",
+                "temporality": "Cumulative",
+                "timeAggregation": "rate",
+                "spaceAggregation": "p50"
+              }
+            ],
+            "groupBy": [ { "name": "deployment.environment", "fieldDataType": "string" } ]
+          }
+        }
+      ]
+    }
+  }
+}

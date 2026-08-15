@@ -526,13 +526,27 @@ export function useSession(sessionId: string | null, projectId?: string, isGroup
           : { ...prev, items: [...prev.items, { kind: 'interrupted' }] });
       }
     } catch (err) {
+      // JoinSession мог упасть потому, что чат удалён на сервере или у нас нет к нему
+      // доступа. Сырой текст HubException («Доступ запрещён» / «Чат не найден») в ленте
+      // не помогает — переводим в понятное сообщение и снимаем canRetry, потому что повтор
+      // той же команды к удалённому/чужому чату не вылечит. Текст пользователя при этом
+      // остаётся в композере (sendMessage ещё не вызывался) — можно переключиться на
+      // другой чат и попробовать там.
+      const raw = err instanceof Error ? err.message : String(err);
+      const isGhost = raw.includes('Чат не найден');
+      const isForbidden = raw.includes('Доступ запрещён');
+      const text = isGhost
+        ? 'Чат не найден. Возможно, он был удалён — откройте другой чат.'
+        : isForbidden
+        ? 'Нет доступа к чату.'
+        : `Ошибка отправки: ${raw}`;
       setState(sessionId, prev => ({
         ...prev,
         isWaiting: false,
         items: [...prev.items, {
           kind: 'error' as const,
-          text: `Ошибка отправки: ${err instanceof Error ? err.message : String(err)}`,
-          canRetry: true,
+          text,
+          canRetry: !isGhost && !isForbidden,
         }],
       }));
     } finally {

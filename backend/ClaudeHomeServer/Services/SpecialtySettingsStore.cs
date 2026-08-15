@@ -50,8 +50,9 @@ public class ModelRoutePreset
     public List<string> Steps { get; set; } = [];
 }
 
-// Признак пресета в объединённом списке: общий для инстанса или личный владельца
-public enum PresetScope { Global, Owner }
+// Признак пресета в объединённом списке: общий для инстанса, назначенный пользователю
+// (админ, слой B9) или личный владельца. Порядок в списке — порядок резолва по id.
+public enum PresetScope { Global, User, Owner }
 
 // Слой настроек: шаблоны специальностей, «любая специальность» и пресеты-цепочки.
 public class SpecialtySettingsLayer
@@ -71,18 +72,22 @@ public class SpecialtySettingsLayer
 // записей, оставшихся ради собственных прав (уровней не несут, нижний слой затеняют).
 public sealed record SpecialtyResetResult(int Changed, IReadOnlyList<string> Shadowed);
 
-// Файл стора на диске (data/specialty-settings.json)
+// Файл стора на диске (data/specialty-settings.json). Users — слой «пользователь» (B9):
+// настройки, назначенные админом конкретному пользователю; ключ — id пользователя.
 public class SpecialtySettingsFile
 {
     public int Version { get; set; } = SpecialtySettingsStore.FormatVersion;
     public SpecialtySettingsLayer Global { get; set; } = new();
     public Dictionary<string, SpecialtySettingsLayer> Owners { get; set; } = new(StringComparer.Ordinal);
+    public Dictionary<string, SpecialtySettingsLayer> Users { get; set; } = new(StringComparer.Ordinal);
 }
 
 // Стор настроек специальностей и именованных пресетов-цепочек выбора модели.
-// Глобальные значения + per-owner слой: шаблоны специальностей переопределяют глобальные,
-// а личные пресеты живут РЯДОМ с глобальными — не затирают их даже при совпадении id или имени
-// (решение «Глобальные + личные рядом»).
+// Три слоя: глобальный (инстанс), «пользователь» (B9 — админ назначает конкретному
+// пользователю) и per-owner личный. Приоритет зафиксирован: личный → пользовательский →
+// глобальный; запись слоя заменяет нижнюю ЦЕЛИКОМ (полевого слияния нет). Пресеты всех
+// слоёв живут РЯДОМ — не затирают друг друга даже при совпадении id или имени
+// (решение «Глобальные + личные рядом»), поиск по id идёт от личного вниз.
 //
 // Файл живёт в data/ → попадает в бэкап автоматически (BackupPaths.ShouldInclude работает
 // от обратного). Формат версионирован: file.Version новее кода — содержимое игнорируется
@@ -125,8 +130,8 @@ public sealed class SpecialtySettingsStore
 
     public SpecialtySettingsFile Snapshot => _file;
 
-    // Настройка шаблона специальности: per-owner слой → глобальный. null — настройки нет
-    // (шаблон берётся из дефолтов кода SpecialtyCatalog).
+    // Настройка шаблона специальности: per-owner → пользовательский (B9) → глобальный.
+    // null — настройки нет (шаблон берётся из дефолтов кода SpecialtyCatalog).
     public SpecialtyTemplateSettings? TemplateSettings(string ownerId, PersonaSpecialty specialty)
     {
         var key = SpecialtyCatalog.KeyOf(specialty);
@@ -134,6 +139,9 @@ public sealed class SpecialtySettingsStore
         if (file.Owners.TryGetValue(ownerId, out var owner)
             && owner.Specialties.TryGetValue(key, out var ownerSettings))
             return ownerSettings;
+        if (file.Users.TryGetValue(ownerId, out var user)
+            && user.Specialties.TryGetValue(key, out var userSettings))
+            return userSettings;
         return file.Global.Specialties.TryGetValue(key, out var globalSettings) ? globalSettings : null;
     }
 
@@ -146,32 +154,41 @@ public sealed class SpecialtySettingsStore
         return SpecialtyCatalog.Get(specialty).DefaultTemplate;
     }
 
-    // Эффективные пресеты владельца: личные, затем ВСЕ глобальные. Личные пресеты
-    // не переопределяют глобальные (в том числе с тем же id или именем) — оба набора
-    // живут рядом. Порядок значим для поиска по id при разворачивании preset:{id}
-    // (ExpandChain): личный блок идёт первым.
+    // Эффективные пресеты владельца: личные, затем назначенные пользователю (B9),
+    // затем ВСЕ глобальные. Наборы не переопределяют друг друга (в том числе с тем же
+    // id или именем) — живут рядом. Порядок значим для поиска по id при разворачивании
+    // preset:{id} (ExpandChain): личный блок идёт первым.
     public IReadOnlyList<ModelRoutePreset> EffectivePresets(string ownerId)
     {
         var file = _file;
         var owner = file.Owners.GetValueOrDefault(ownerId);
-        if (owner is null || owner.Presets.Count == 0) return file.Global.Presets;
+        var user = file.Users.GetValueOrDefault(ownerId);
+        var globalCount = file.Global.Presets.Count;
+        if ((owner is null || owner.Presets.Count == 0)
+            && (user is null || user.Presets.Count == 0)) return file.Global.Presets;
 
-        var result = new List<ModelRoutePreset>(owner.Presets.Count + file.Global.Presets.Count);
-        result.AddRange(owner.Presets);
+        var result = new List<ModelRoutePreset>(
+            (owner?.Presets.Count ?? 0) + (user?.Presets.Count ?? 0) + globalCount);
+        if (owner is not null) result.AddRange(owner.Presets);
+        if (user is not null) result.AddRange(user.Presets);
         result.AddRange(file.Global.Presets);
         return result;
     }
 
-    // Объединённый список пресетов владельца с признаком слоя (общий / мой):
-    // личные впереди, затем глобальные — тот же порядок, что у EffectivePresets.
+    // Объединённый список пресетов владельца с признаком слоя (общий / пользователю / мой):
+    // личные впереди, затем пользовательские, затем глобальные — тот же порядок, что у
+    // EffectivePresets.
     public IReadOnlyList<(ModelRoutePreset Preset, PresetScope Scope)> EffectivePresetsWithScope(string ownerId)
     {
         var file = _file;
         var owner = file.Owners.GetValueOrDefault(ownerId);
+        var user = file.Users.GetValueOrDefault(ownerId);
         var result = new List<(ModelRoutePreset, PresetScope)>(
-            (owner?.Presets.Count ?? 0) + file.Global.Presets.Count);
+            (owner?.Presets.Count ?? 0) + (user?.Presets.Count ?? 0) + file.Global.Presets.Count);
         if (owner is not null)
             result.AddRange(owner.Presets.Select(p => (p, PresetScope.Owner)));
+        if (user is not null)
+            result.AddRange(user.Presets.Select(p => (p, PresetScope.User)));
         result.AddRange(file.Global.Presets.Select(p => (p, PresetScope.Global)));
         return result;
     }
@@ -186,30 +203,27 @@ public sealed class SpecialtySettingsStore
     }
 
     // Упорядоченный список матриц специальности для разворачивания уровня (ADR-007 §2):
-    // запись специальности (owner-слой → глобальный, целиком без полевого слияния), затем
-    // DefaultSpecialty (owner → глобальный). Только записи, которые ЕСТЬ в слое; пустые
-    // ячейки внутри записи рассматриваются разворачивателем (UserModelTierResolver) — здесь
-    // отдаём матрицу как есть, пустые ячейки в ней означают «спроси следующую».
+    // запись специальности (owner → пользовательский → глобальный, целиком без полевого
+    // слияния), затем DefaultSpecialty (та же цепочка). Только записи, которые ЕСТЬ в слое;
+    // пустые ячейки внутри записи рассматриваются разворачивателем (UserModelTierResolver) —
+    // здесь отдаём матрицу как есть, пустые ячейки в ней означают «спроси следующую».
     public IReadOnlyList<TierMatrix> SpecialtyMatrices(string ownerId, PersonaSpecialty specialty)
     {
         var key = SpecialtyCatalog.KeyOf(specialty);
         var file = _file;
+        var owner = file.Owners.GetValueOrDefault(ownerId);
+        var user = file.Users.GetValueOrDefault(ownerId);
         var result = new List<TierMatrix>(2);
-        // Запись специальности: owner-слой есть → она (целиком), иначе глобальная
-        if (file.Owners.TryGetValue(ownerId, out var owner)
-            && owner.Specialties.TryGetValue(key, out var ownerSettings))
-        {
-            result.Add(ToMatrix(ownerSettings));
-        }
-        else if (file.Global.Specialties.TryGetValue(key, out var globalSettings))
-        {
-            result.Add(ToMatrix(globalSettings));
-        }
-        // DefaultSpecialty: owner-слой → глобальный (та же логика)
-        if (file.Owners.TryGetValue(ownerId, out owner) && owner.DefaultSpecialty is { } ods)
-            result.Add(ToMatrix(ods));
-        else if (file.Global.DefaultSpecialty is { } gds)
-            result.Add(ToMatrix(gds));
+        // Запись специальности: первый непустой слой (owner → user → global), целиком
+        var spec = owner?.Specialties.GetValueOrDefault(key)
+            ?? user?.Specialties.GetValueOrDefault(key)
+            ?? file.Global.Specialties.GetValueOrDefault(key);
+        if (spec is not null)
+            result.Add(ToMatrix(spec));
+        // DefaultSpecialty: owner-слой → пользовательский → глобальный (та же логика)
+        var ds = owner?.DefaultSpecialty ?? user?.DefaultSpecialty ?? file.Global.DefaultSpecialty;
+        if (ds is not null)
+            result.Add(ToMatrix(ds));
         return result;
     }
 
@@ -217,24 +231,22 @@ public sealed class SpecialtySettingsStore
         new(s.TierStrong, s.TierMedium, s.TierWeak);
 
     // Источник УРОВНЯ специальности (ADR-007 §2): каким уровнем работают персоны этой
-    // специальности, если у задачи/персоны нет своего. Запись специальности (owner → глобальный),
-    // затем DefaultSpecialty (owner → глобальный). null — уровень не задан специальностью.
+    // специальности, если у задачи/персоны нет своего. Запись специальности (owner →
+    // пользовательский → глобальный), затем DefaultSpecialty (та же цепочка). null —
+    // уровень не задан специальностью.
     public ModelTier? SpecialtyDefaultTier(string ownerId, PersonaSpecialty specialty)
     {
         var key = SpecialtyCatalog.KeyOf(specialty);
         var file = _file;
-        if (file.Owners.TryGetValue(ownerId, out var owner)
-            && owner.Specialties.TryGetValue(key, out var ownerSettings))
-        {
-            if (ownerSettings.DefaultTier is { } t) return t;
-        }
-        else if (file.Global.Specialties.TryGetValue(key, out var globalSettings))
-        {
-            if (globalSettings.DefaultTier is { } t) return t;
-        }
-        if (file.Owners.TryGetValue(ownerId, out owner) && owner.DefaultSpecialty?.DefaultTier is { } odt) return odt;
-        if (file.Global.DefaultSpecialty?.DefaultTier is { } gdt) return gdt;
-        return null;
+        var owner = file.Owners.GetValueOrDefault(ownerId);
+        var user = file.Users.GetValueOrDefault(ownerId);
+        var spec = owner?.Specialties.GetValueOrDefault(key)
+            ?? user?.Specialties.GetValueOrDefault(key)
+            ?? file.Global.Specialties.GetValueOrDefault(key);
+        if (spec?.DefaultTier is { } tier) return tier;
+        return owner?.DefaultSpecialty?.DefaultTier
+            ?? user?.DefaultSpecialty?.DefaultTier
+            ?? file.Global.DefaultSpecialty?.DefaultTier;
     }
 
     // Разворот маршрута в цепочку шагов (ADR-007 §3). Единая точка разворачивания цепочки:
@@ -288,6 +300,27 @@ public sealed class SpecialtySettingsStore
             Persist(next);
         }
         _log?.LogInformation("Личные настройки специальностей обновлены (owner={Owner})", ownerId);
+        return null;
+    }
+
+    // Заменить слой «пользователь» (B9): настройки, назначенные админом конкретному
+    // пользователю. Пустой слой снимает назначение (остаются личный и глобальный).
+    // Приоритет слоёв зафиксирован: личный сильнее пользовательского, пользовательский
+    // сильнее глобального.
+    public string? SetUser(string userId, SpecialtySettingsLayer layer)
+    {
+        if (string.IsNullOrEmpty(userId)) return "Не указан пользователь";
+        var error = ValidateLayer(layer);
+        if (error is not null) return error;
+        lock (_writeLock)
+        {
+            var next = Clone(_file);
+            if (layer.IsEmpty) next.Users.Remove(userId);
+            else next.Users[userId] = NormalizeLayer(layer);
+            next.Version = FormatVersion;
+            Persist(next);
+        }
+        _log?.LogInformation("Настройки специальностей пользователя обновлены (user={User})", userId);
         return null;
     }
 
@@ -381,17 +414,20 @@ public sealed class SpecialtySettingsStore
         return true;
     }
 
-    // Права нижнего слоя для записи: для owner — глобальный слой, для global — каталожный
-    // дефолт. Нижней записи нет и каталожного дефолта нет → «полный доступ без ограничений»
-    // (Access=Full, Tools=null, DisallowedTools=null) — именно к нему возвращается наследование.
+    // Права нижнего слоя для записи: для owner — назначение пользователя (B9), затем
+    // глобальный; для global — каталожный дефолт. Нижней записи нет и каталожного дефолта
+    // нет → «полный доступ без ограничений» (Access=Full, Tools=null, DisallowedTools=null)
+    // — именно к нему возвращается наследование.
     private static (PersonaAccess Access, List<string>? Tools, List<string>? Disallowed) LowerRights(
         SpecialtySettingsFile file, string? ownerId, string specKey)
     {
         if (ownerId is not null)
         {
             var lower = IsAnyKey(specKey)
-                ? file.Global.DefaultSpecialty
-                : file.Global.Specialties.GetValueOrDefault(specKey);
+                ? file.Users.GetValueOrDefault(ownerId)?.DefaultSpecialty
+                    ?? file.Global.DefaultSpecialty
+                : file.Users.GetValueOrDefault(ownerId)?.Specialties.GetValueOrDefault(specKey)
+                    ?? file.Global.Specialties.GetValueOrDefault(specKey);
             if (lower is not null) return (lower.Access, lower.Tools, lower.DisallowedTools);
         }
         if (!IsAnyKey(specKey) && SpecialtyCatalog.TryGetByKey(specKey, out var entry)
@@ -581,6 +617,7 @@ public sealed class SpecialtySettingsStore
 
         file.Global ??= new SpecialtySettingsLayer();
         file.Owners ??= new Dictionary<string, SpecialtySettingsLayer>(StringComparer.Ordinal);
+        file.Users ??= new Dictionary<string, SpecialtySettingsLayer>(StringComparer.Ordinal);
         file.Version = FormatVersion;
         _file = file;
     }

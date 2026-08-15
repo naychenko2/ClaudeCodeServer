@@ -8,16 +8,15 @@ import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedContro
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { PillSwitch } from '../../components/Toolbar';
 import { ModelPicker } from '../../components/ModelPicker';
-import { ModelTierPicker } from '../../components/ModelTierPicker';
 import { PresetOptions } from '../../components/PresetOptions';
 import { RoutePicker } from '../../components/RoutePicker';
-import { EffectiveLine } from '../../components/EffectiveLine';
 import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
 import { parseTier, useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import {
-  chainSummary, findPreset, invalidateEffectiveLines, presetIdOf, routeDisplayLabel,
+  chainSummary, findPreset, formatEffectiveLine, invalidateEffectiveLines, presetIdOf, routeDisplayLabel,
   usePresets, usePreview, useSpecialtySettings, type EffectiveLineContext,
 } from '../../lib/presets';
+import { useTaskPreview } from '../tasks/useTaskPreview';
 import { effectiveSpecialtyRecord } from '../../lib/specialties';
 import { effortsForProvider } from '../../lib/effort';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
@@ -123,14 +122,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Пустая инструкция свёрнута в кнопку «+ инструкция» — раскрытие по клику
   const [instructionsOpen, setInstructionsOpen] = useState(false);
   const [model, setModel] = useState(persona?.model ?? initial?.model ?? '');
-  // Уровень модели ('' — не задан): слот, которым персона работает, когда явной модели нет
-  const [modelTier, setModelTier] = useState<ModelTierKey | ''>(parseTier(persona?.modelTier));
+  // Уровень модели ('' — не задан): слот, которым персона работает, когда явной модели нет.
+  // В UI выбора уровня больше нет — задача и оркестратор смотрят в ячейки tierStrong/Medium/Weak,
+  // а это поле осталось в формате персоны для совместимости со старыми сессиями и read-API
+  const [modelTier] = useState<ModelTierKey | ''>(parseTier(persona?.modelTier));
   // Свои модели по уровням (ADR-007 §2): модель или пресет в ячейке; пусто — наследуется
   // (специальность → «Модели по умолчанию»). Блок свёрнут, пока ничего не задано
   const [tierStrong, setTierStrong] = useState(persona?.tierStrong ?? '');
   const [tierMedium, setTierMedium] = useState(persona?.tierMedium ?? '');
   const [tierWeak, setTierWeak] = useState(persona?.tierWeak ?? '');
-  const [tierCellsOpen, setTierCellsOpen] = useState(false);
   // Точечный сброс уровней персоны (план model-settings-reset.md, шаг 3) — отдельный
   // busy от общего сохранения формы, бьёт сразу PUT'ом, не дожидаясь кнопки «Сохранить»
   const [tiersResetBusy, setTiersResetBusy] = useState(false);
@@ -291,12 +291,6 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
     if (fromSpec) return `Как у специальности · ${routeDisplayLabel(fromSpec, presets, chainCtx)}`;
     return tierModels[t] ? `Как у всех · ${modelLabel(tierModels[t])}` : 'Как у всех';
   };
-
-  // Свёрнутая подпись блока «Свои модели по уровням»: пусто — наследование, задано — что именно
-  const filledTierCells = TIER_ORDER.filter(t => tierCell(t));
-  const tierCellsSummary = filledTierCells.length === 0
-    ? 'как у специальности'
-    : filledTierCells.map(t => `${TIER_TITLE[t]}: ${routeDisplayLabel(tierCell(t), presets, chainCtx)}`).join(' · ');
 
   // Акцент персоны из выбранного цвета — им красим роль в hero и (через onColorChange) тулбар
   const accentColor = AGENT_COLORS[color] ?? C.accent;
@@ -1028,7 +1022,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           обычным персонам он не нужен, а у «тяжёлых» ролей (пантеон) приходит из шаблона */}
       <div style={{ marginTop: 18 }}>
         {instructions.trim() || instructionsOpen ? (
-          <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных слотов">
+          <Field label="Инструкция" hint="Полный регламент роли (markdown) — попадает в системный промпт после остальных уровней">
             <TextArea value={instructions} onChange={setInstructions} autoGrow minHeight={120} maxHeight={360}
               placeholder="Развёрнутый регламент: протоколы работы, критерии готовности, примеры…" />
           </Field>
@@ -1060,7 +1054,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   fontSize: 13, fontWeight: 600, fontFamily: FONT.sans,
                   color: brokenModelPreset ? C.textMuted : C.textHeading,
                 }}>
-                  {brokenModelPreset ? 'Пресет удалён — работает настройка по умолчанию' : modelPreset!.name}
+                  {brokenModelPreset ? 'Цепочка удалена — работает настройка по умолчанию' : modelPreset!.name}
                 </div>
                 {modelPreset && (
                   <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 2, lineHeight: 1.35 }}>
@@ -1098,46 +1092,37 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
           )}
         </Field>
 
-        {/* Уровень слабее явной модели выше: задал модель — она и пойдёт в ход */}
-        <Field label="Уровень модели" hint="Каким уровнем персона работает по умолчанию; задача может поднять или опустить.">
-          <ModelTierPicker
-            value={modelTier}
-            onChange={setModelTier}
-            defaultHint={model ? 'работает выбранной моделью' : 'как настроено для чатов персон'}
-          />
-          <div style={{ marginTop: 6 }}>
-            <EffectiveLine ctx={{ kind: 'persona', personaId: persona?.id }} />
-          </div>
-        </Field>
-
-        {/* Свои модели по уровням (спека, блок 4): три ячейки — модель или пресет;
-            пустая — наследуется (специальность → «Модели по умолчанию») */}
+        {/* Модели по уровням (спека, блок 4): три ячейки Сильная/Средняя/Слабая — модель
+            или цепочка; пустая ячейка наследуется (специальность → «Модели по умолчанию»).
+            Блок всегда раскрыт — это основной рабочий экран уровня, сворачивать нечего.
+            «Сейчас пойдёт» под каждой ячейкой — резолв места chat-persona с уровнем: видно
+            реальную модель и откуда она возьмётся, без догадок про наследование. */}
         <div style={{ gridColumn: '1 / -1' }}>
-          {tierCellsOpen ? (
-            <Field label="Свои модели по уровням">
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {isEdit && (tierStrong || tierMedium || tierWeak) && (
-                  <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                    <button
-                      type="button"
-                      onClick={resetPersonaTiers}
-                      disabled={tiersResetBusy}
-                      title="Вернуть наследование"
-                      style={{
-                        font: 'inherit', fontSize: 11.5, fontWeight: 600, color: C.accent,
-                        background: 'transparent', border: 'none', padding: 0,
-                        cursor: tiersResetBusy ? 'default' : 'pointer', textDecoration: 'underline',
-                        opacity: tiersResetBusy ? 0.5 : 1,
-                      }}
-                    >
-                      {tiersResetBusy ? 'Сбрасываю…' : 'Вернуть наследование'}
-                    </button>
-                  </div>
-                )}
-                {TIER_ORDER.map(t => {
-                  const cell = tierCell(t);
-                  return (
-                    <div key={t} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Field label="Модели">
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {isEdit && (tierStrong || tierMedium || tierWeak) && (
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    onClick={resetPersonaTiers}
+                    disabled={tiersResetBusy}
+                    title="Вернуть наследование"
+                    style={{
+                      font: 'inherit', fontSize: 11.5, fontWeight: 600, color: C.accent,
+                      background: 'transparent', border: 'none', padding: 0,
+                      cursor: tiersResetBusy ? 'default' : 'pointer', textDecoration: 'underline',
+                      opacity: tiersResetBusy ? 0.5 : 1,
+                    }}
+                  >
+                    {tiersResetBusy ? 'Сбрасываю…' : 'Вернуть наследование'}
+                  </button>
+                </div>
+              )}
+              {TIER_ORDER.map(t => {
+                const cell = tierCell(t);
+                return (
+                  <div key={t} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ width: 64, flexShrink: 0, fontSize: 12.5, color: C.textSecondary }}>
                         {TIER_TITLE[t]}
                       </span>
@@ -1168,42 +1153,21 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                         </button>
                       )}
                     </div>
-                  );
-                })}
-                <button
-                  type="button"
-                  onClick={() => setTierCellsOpen(false)}
-                  style={{
-                    alignSelf: 'flex-start', font: 'inherit', fontSize: 12, fontWeight: 600,
-                    color: C.textMuted, background: 'none', border: 'none', padding: '2px 2px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Свернуть
-                </button>
-              </div>
-            </Field>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setTierCellsOpen(true)}
-              style={{
-                width: '100%', display: 'flex', alignItems: 'center', gap: 8,
-                padding: '8px 11px', borderRadius: R.md, cursor: 'pointer', textAlign: 'left',
-                border: `1px solid ${C.border}`, background: C.bgWhite, font: 'inherit',
-              }}
-            >
-              <span style={{ fontFamily: FONT.sans, fontSize: 13, fontWeight: 600, color: C.textHeading }}>
-                Свои модели по уровням:
-              </span>
-              <span style={{
-                flex: 1, minWidth: 0, fontFamily: FONT.sans, fontSize: 12.5, color: C.textMuted,
-                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    <div style={{ paddingLeft: 72 }}>
+                      <PersonaTierPreview personaId={persona?.id ?? null} tier={t} />
+                    </div>
+                  </div>
+                );
+              })}
+              <div style={{
+                fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45,
+                marginTop: 2,
               }}>
-                {tierCellsSummary}
-              </span>
-            </button>
-          )}
+                Когда {persona?.name?.trim() ? persona.name.trim() : 'персону'} зовут сабагентом в чужой чат,
+                она отвечает моделью вызова — эти настройки касаются её собственного чата и задач.
+              </div>
+            </div>
+          </Field>
         </div>
 
         {caps.supportsEffort && (
@@ -1509,3 +1473,38 @@ const selectStyle: React.CSSProperties = {
   borderRadius: R.xl, padding: '10px 13px', fontSize: 14, fontFamily: FONT.sans,
   color: C.textHeading, outline: 'none', cursor: 'pointer',
 };
+
+// «Сейчас пойдёт» под одной ячейкой уровня персоны: резолв места chat-persona с уровнем.
+// Без personaId (форма создания) резолв нечего делать — резолверу нужна матрица персоны,
+// показываем только текстовый плейсхолдер, без обращения к API
+function PersonaTierPreview({ personaId, tier }: { personaId: string | null; tier: ModelTierKey }) {
+  const preview = useTaskPreview({
+    place: USAGE.chatPersona,
+    personaId: personaId || undefined,
+    tier,
+  });
+  const text = preview ? formatEffectiveLine(preview, { tierText: `уровень «${TIER_TITLE[tier]}` }) : null;
+  if (!personaId) {
+    return (
+      <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+        Сохраните персону — резолв для «{TIER_TITLE[tier]}» появится здесь.
+      </div>
+    );
+  }
+  if (!text) {
+    return (
+      <div style={{ fontFamily: FONT.sans, fontSize: 11.5, color: C.textMuted, lineHeight: 1.45 }}>
+        Резолв для «{TIER_TITLE[tier]}» подгружается…
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      fontFamily: FONT.sans, fontSize: 11.5, color: C.textSecondary, lineHeight: 1.45,
+      padding: '4px 9px', borderRadius: R.md,
+      background: C.bgPanel, border: `1px solid ${C.borderLight}`,
+    }}>
+      {text}
+    </div>
+  );
+}

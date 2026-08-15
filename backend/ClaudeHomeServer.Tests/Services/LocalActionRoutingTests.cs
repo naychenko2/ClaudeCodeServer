@@ -761,8 +761,12 @@ public class LocalActionRoutingTests
     }
 
     [Fact]
-    public void Resolver_МодельПерсоны_СвояСильнееУровня_УровеньСильнееМеста()
+    public void Resolver_УстаревшийModelTierПерсоны_БольшеНеВлияет()
     {
+        // Сторож (упрощение модели 15.08.2026): Persona.ModelTier выведен из цепочки
+        // приоритета — резолв его не читает. Уровень задаётся задачей, специальностью
+        // или дефолтом места; заданный ранее уровень мигрирует в TierMedium (см. тесты
+        // PersonaModelTierMigrationTests).
         var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
         var appSettings = new AppSettingsService(config);
         appSettings.Save(new AppSettings { ModelTierStrong = "opus", ModelTierMedium = "sonnet" });
@@ -772,14 +776,15 @@ public class LocalActionRoutingTests
         var resolver = new ModelAssignmentResolver(appSettings, Store(config),
             new UserModelTierResolver(users, appSettings));
 
-        // Явная модель персоны сильнее её уровня
+        // Явная модель персоны работает и при заданном (устаревшем) ModelTier
         Assert.Equal("glm-5.2", resolver.PersonaModel(
             new Persona { Model = "glm-5.2", ModelTier = ModelTier.Weak }, user.Id));
-        // Без своей модели — уровень персоны, развёрнутый по слотам ВЛАДЕЛЬЦА (не маркер)
+        // Без модели/ячеек уровень персоны НЕ разворачивается — место решает само
+        Assert.Null(resolver.PersonaModel(new Persona { ModelTier = ModelTier.Weak }, user.Id));
+        Assert.Null(resolver.PersonaModel(new Persona { ModelTier = ModelTier.Strong }, user.Id));
+        // Ячейка на уровне места — то, чем после миграции заменён уровень персоны
         Assert.Equal("user-haiku", resolver.PersonaModel(
-            new Persona { ModelTier = ModelTier.Weak }, user.Id));
-        Assert.Equal("opus", resolver.PersonaModel(new Persona { ModelTier = ModelTier.Strong }, user.Id));
-        // Ни модели, ни уровня — null: место решает само
+            new Persona { TierMedium = "user-haiku" }, user.Id, ModelTier.Medium));
         Assert.Null(resolver.PersonaModel(new Persona(), user.Id));
         Assert.Equal("opus", resolver.Resolve(LocalActionCatalog.ChatPersona,
             resolver.PersonaModel(new Persona(), user.Id), user.Id));
@@ -829,8 +834,8 @@ public class LocalActionRoutingTests
         });
 
         Assert.Equal("persona-opus", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Strong, TierStrong = "persona-opus" },
-            u1.Id));
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor, TierStrong = "persona-opus" },
+            u1.Id, ModelTier.Strong));
     }
 
     [Fact]
@@ -846,8 +851,8 @@ public class LocalActionRoutingTests
         });
 
         Assert.Equal("spec-sonnet", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Medium },
-            u1.Id));
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor },
+            u1.Id, ModelTier.Medium));
     }
 
     [Fact]
@@ -860,8 +865,8 @@ public class LocalActionRoutingTests
         users.SetModelTiers(u1.Id, null, null, weak: "user-haiku");
 
         Assert.Equal("user-haiku", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Weak },
-            u1.Id));
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor },
+            u1.Id, ModelTier.Weak));
     }
 
     [Fact]
@@ -899,9 +904,9 @@ public class LocalActionRoutingTests
         });
 
         Assert.Equal("owner-opus", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Strong }, u1));
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u1, ModelTier.Strong));
         Assert.Equal("global-opus", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.BackendExecutor, ModelTier = ModelTier.Strong }, u2));
+            new Persona { Specialty = PersonaSpecialty.BackendExecutor }, u2, ModelTier.Strong));
     }
 
     [Fact]
@@ -934,9 +939,10 @@ public class LocalActionRoutingTests
     }
 
     // --- Дефолтный уровень места в резолве персоны (de-факто bugfix 2-й итерации): когда
-    //     ни Persona.ModelTier, ни Specialty.DefaultTier не заданы, уровень даёт дефолт места
+    //     ни Specialty.DefaultTier, ни уровень задачи не заданы, уровень даёт дефолт места
     //     (Strong для чата персоны) — им матрица персоны и разворачивается. Иначе ячейка
-    //     персоны молча не срабатывала. Порядок: Persona.ModelTier → Specialty.DefaultTier → место.
+    //     персоны молча не срабатывала. Порядок (после вывода Persona.ModelTier 15.08.2026):
+    //     уровень задачи → Specialty.DefaultTier → место.
 
     [Fact]
     public void Resolver_ЯчейкаПерсоныБезУровня_ДефолтМестаСильная()
@@ -973,14 +979,15 @@ public class LocalActionRoutingTests
     }
 
     [Fact]
-    public void Resolver_ЯвныйУровеньПерсоны_СильнееДефолтаМеста()
+    public void Resolver_УстаревшийУровеньПерсоны_ДефолтМестаПобеждает()
     {
-        // Persona.ModelTier сильнее placeDefaultTier: уровень Weak при дефолте места Strong
-        // берёт слабую ячейку, а не сильную.
+        // Сторож (упрощение 15.08.2026): ModelTier=Weak больше не перекрывает дефолт места —
+        // уровень Strong берёт СИЛЬНУЮ ячейку, а не слабую. До упрощения ожидание было
+        // обратным («persona-haiku»).
         var (resolver, _, users, _, _, _) = BuildResolverWithSpecialty();
         users.Add("u1", "p", "user");
 
-        Assert.Equal("persona-haiku", resolver.PersonaModel(
+        Assert.Equal("persona-opus", resolver.PersonaModel(
             new Persona { TierStrong = "persona-opus", TierWeak = "persona-haiku", ModelTier = ModelTier.Weak },
             "u1", ModelTier.Strong));
     }
@@ -1052,7 +1059,7 @@ public class LocalActionRoutingTests
         });
 
         Assert.Equal("opus", resolver.PersonaModel(
-            new Persona { Specialty = PersonaSpecialty.None, ModelTier = ModelTier.Strong, TierStrong = "preset:p1" }, "u1"));
+            new Persona { Specialty = PersonaSpecialty.None, TierStrong = "preset:p1" }, "u1", ModelTier.Strong));
     }
 
     [Fact]
@@ -1743,8 +1750,8 @@ public class LocalActionRoutingTests
     [Fact]
     public void Preview_СпециальностьБезПерсоны_БезУровня_Пусто()
     {
-        // Нет ни overrideTier, ни ModelTier персоны, ни DefaultTier, ни place — уровень не
-        // определён, превью пустое (не падает на место: его нет).
+        // Нет ни overrideTier, ни DefaultTier, ни place — уровень не определён, превью
+        // пустое (не падает на место: его нет).
         var (resolver, _, users, _, specialty, _) = BuildResolverWithSpecialty();
         users.Add("u1", "p", "user");
         specialty.SetGlobal(new SpecialtySettingsLayer
@@ -1756,6 +1763,119 @@ public class LocalActionRoutingTests
 
         Assert.Null(d.Model);
         Assert.Null(d.Source);
+    }
+
+    // --- Сторож соответствия превью боевой дороге (волна настройки моделей 2026-08-14) ---
+    // Превью задачи/чата обязано совпадать с моделью боевого запуска хода: TaskExecutionService
+    // → ExecutorModel → Session.Model → ClaudeSession.EffectiveTurnChain → ResolveChain.
+    // Тесты прогоняют один и тот же вход через обе дороги и сверяют результат.
+
+    private static Persona PersonaSnapshot(Persona p, bool dropModel) => new()
+    {
+        Model = dropModel ? null : p.Model,
+        ModelTier = p.ModelTier,
+        Specialty = p.Specialty,
+        TierStrong = p.TierStrong,
+        TierMedium = p.TierMedium,
+        TierWeak = p.TierWeak,
+    };
+
+    [Fact]
+    public void Сторож_ПревьюЗадачи_СовпадаетСБоевойExecutorModel()
+    {
+        // Матрица сценариев «уровень задачи × модель персоны × матрицы»: превью контроллера
+        // (Preview с санитизацией персоны) обязано давать ту же модель, что боевой запуск.
+        // Полная боевая дорога: SessionManager.ResolveDefaultModel(TasksExecutor,
+        // ExecutorModel(task, persona)) — Resolve места добирает ответ, когда формула
+        // задачи отдала null.
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus", ModelTierWeak = "slot-haiku" });
+        var u1 = users.Add("u1", "p", "user");
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Specialties = { ["backendExecutor"] = Tmpl(strong: "spec-opus", weak: "spec-haiku") },
+        });
+
+        var personas = new (string? Model, ModelTier? Tier, string? Cell)[]
+        {
+            (null, null, "persona-opus"),                    // ячейка без уровня
+            ("persona-glm", null, null),                     // явная модель, без уровня задачи
+            (null, ModelTier.Strong, "persona-opus"),        // уровень персоны
+            ("persona-glm", ModelTier.Weak, "persona-haiku"),// модель+уровень (модель победит без уровня задачи)
+        };
+        foreach (var (model, tier, cell) in personas)
+        {
+            var persona = new Persona
+            {
+                Model = model,
+                ModelTier = tier,
+                Specialty = PersonaSpecialty.BackendExecutor,
+                TierStrong = cell,
+                TierWeak = cell is null ? null : "persona-haiku",
+            };
+            foreach (var taskTier in new ModelTier?[] { null, ModelTier.Strong, ModelTier.Weak })
+            {
+                var task = new TaskItem { Title = "t", OwnerId = u1.Id, ModelTier = taskTier };
+                var combat = resolver.Resolve(LocalActionCatalog.TasksExecutor,
+                    resolver.ExecutorModel(task, persona, u1.Id), u1.Id);
+
+                // Дорога превью: санитизация персоны при заданном уровне задачи (ModelsController.
+                // TaskPreview) + Preview(tasks-executor).
+                var effective = PersonaSnapshot(persona, dropModel: taskTier is not null);
+                var d = resolver.Preview(LocalActionCatalog.TasksExecutor, effective,
+                    effective.Specialty, u1.Id, taskTier);
+
+                d.Model.Should().Be(combat,
+                    $"превью задачи обязано совпадать с боевой моделью (persona model={model}, tier={tier}, taskTier={taskTier})");
+            }
+        }
+    }
+
+    [Fact]
+    public void Сторож_ПревьюЗадачи_БезПерсоны_СовпадаетСБоевойДорогой()
+    {
+        // Задача без персоны: бой — ExecutorModel(task, null) → null → ResolveDefaultModel
+        // берёт слот дефолта места; превью — Preview с заглушкой-персоной (ModelsController.
+        // TaskPreview) — обязано дать тот же ответ.
+        var (resolver, app, users, _, _, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "slot-opus", ModelTierWeak = "slot-haiku" });
+        var u1 = users.Add("u1", "p", "user");
+
+        foreach (var taskTier in new ModelTier?[] { null, ModelTier.Strong, ModelTier.Weak })
+        {
+            var task = new TaskItem { Title = "t", OwnerId = u1.Id, ModelTier = taskTier };
+            var combat = resolver.Resolve(LocalActionCatalog.TasksExecutor,
+                resolver.ExecutorModel(task, null, u1.Id), u1.Id);
+            var d = resolver.Preview(LocalActionCatalog.TasksExecutor, new Persona(),
+                PersonaSpecialty.None, u1.Id, taskTier);
+            d.Model.Should().Be(combat, $"без персоны: taskTier={taskTier}");
+        }
+    }
+
+    [Fact]
+    public void Сторож_ПревьюЧата_СовпадаетСEffectiveTurnChain()
+    {
+        // Контекст чата: цепочка превью = боевой EffectiveTurnChain (ResolveChain места по
+        // Session.Model), модель превью = первый шаг. Сценарии: замороженная модель из
+        // пресета слота, модель вне пресетов (хвост тира), пустая модель (место решает).
+        var (resolver, app, users, _, specialty, _) = BuildResolverWithSpecialty();
+        app.Save(new AppSettings { ModelTierStrong = "preset:main" });
+        specialty.SetGlobal(new SpecialtySettingsLayer
+        {
+            Presets = { Preset("main", "opus", "kimi-k3", "glm-5.2") },
+        });
+        var u1 = users.Add("u1", "p", "user");
+
+        foreach (var sessionModel in new string?[] { null, "glm-5.2", "stranger-model" })
+        {
+            var combatChain = resolver.ResolveChain(LocalActionCatalog.ChatNew, sessionModel, u1.Id);
+            // Дорога превью: замороженная модель — явная для места; пустая — Preview места
+            var frozen = !string.IsNullOrWhiteSpace(sessionModel);
+            var previewModel = frozen ? sessionModel!.Trim()
+                : resolver.Preview(LocalActionCatalog.ChatNew, null, PersonaSpecialty.None, u1.Id, null).Model;
+            previewModel.Should().Be(combatChain.FirstOrDefault(),
+                $"модель превью чата = первый шаг боевой цепочки (sessionModel={sessionModel})");
+        }
     }
 
     private sealed class SingleFactory(System.Net.Http.HttpMessageHandler handler) : IHttpClientFactory

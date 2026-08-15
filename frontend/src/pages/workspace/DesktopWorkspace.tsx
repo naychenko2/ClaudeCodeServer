@@ -6,7 +6,7 @@
 // пропсами (контент панелек тоже собирается там); HubHeader и диалоги тоже там.
 import { useState, useRef, useEffect, type ReactNode, type PointerEvent as ReactPointerEvent } from 'react';
 import { Plus, MessageCircle } from 'lucide-react';
-import type { Project, Session, Task, SkillInfo, AgentInfo } from '../../types';
+import type { Project, Session, Task, SkillInfo, AgentInfo, ChangedBySession } from '../../types';
 import { C, FONT, ISLAND, CHAT_COLUMN_W, SPLASH_W } from '../../lib/design';
 import { useCenterOffset } from '../../lib/centerOffset';
 import { Button, Island } from '../../components/ui';
@@ -90,6 +90,9 @@ interface Props {
   onFileForward?: () => void;
   canFileBack?: boolean;
   canFileForward?: boolean;
+  // Путь git status → чужие чаты, менявшие файл — строка «Также меняли» в шапке диффа
+  // открытого файла (тот же источник, что бейдж панели «Изменения»)
+  changedBy?: Map<string, ChangedBySession[]>;
   onCloseTask: () => void;
   // Персона из панельки «Команда» — студия в центре (приоритет ниже задачи, выше доски)
   selectedPersonaId: string | null;
@@ -379,7 +382,7 @@ export function DesktopWorkspace(p: Props) {
           <IslandSplitter orientation="v" active={dragging === 'split'} onMouseDown={handleSplitDrag} />
           <Island bg={C.bgMain} style={{ flex: 1, minWidth: 200 }}>
             <div style={{ flex: 1, overflow: 'hidden' }}>
-              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} />
+              <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.onToggleFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
             </div>
           </Island>
         </div>
@@ -388,7 +391,7 @@ export function DesktopWorkspace(p: Props) {
       {p.openFile && (p.fileFullscreen || p.isTablet) && centerIsland(
         <div style={{ flex: 1, overflow: 'hidden' }}>
           {/* На планшете сплита нет — тумблер режима не показываем */}
-          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} />
+          <FileViewer project={p.project} filePath={p.openFile} onClose={p.onCloseFile} onToggleFullscreen={p.isTablet ? undefined : p.onToggleFullscreen} fullscreen={p.fileFullscreen} initialTab={p.openFileDiffMode ? 'diff' : undefined} gitStagePath={p.gitStagePath ?? undefined} onOpenFile={p.onOpenDocLink} scrollToAnchor={p.scrollToAnchor} onFileBack={p.onFileBack} onFileForward={p.onFileForward} canFileBack={p.canFileBack} canFileForward={p.canFileForward} onTocChange={setToc} changedBy={p.changedBy?.get(p.openFile ?? '')} onOpenChat={p.onOpenTaskSession} />
         </div>
       )}
 

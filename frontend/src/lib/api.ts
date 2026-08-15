@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -29,6 +29,7 @@ export interface DifyDocument {
   id: string;
   name: string;
   indexingStatus: string;
+  error?: string | null;   // текст ошибки индексации (только у indexingStatus === 'error')
   tags?: string[];
 }
 
@@ -268,7 +269,8 @@ export const api = {
   },
 
   // Специальности персон и настройки к ним. Каталог отдаёт подписи и эффективные
-  // шаблоны прав; настройки — глобальный слой (пишет только админ) и личный слой вызывающего.
+  // шаблоны прав; настройки — глобальный слой (пишет только админ), личный слой
+  // вызывающего и user-слой (только для admin, конкретный пользователь).
   specialties: {
     list: () => request<SpecialtyCatalogEntry[]>('/specialties'),
     getSettings: () => request<SpecialtySettingsResponse>('/specialties/settings'),
@@ -280,15 +282,44 @@ export const api = {
       request<{ global: SpecialtySettingsLayer }>('/specialties/settings/global', {
         method: 'PUT', body: JSON.stringify(layer),
       }),
+    // User-слой конкретного пользователя (только для admin). Подтягивается отдельно
+    // от getSettings — основной ответ остаётся лёгким, admin в админке догружает
+    // слой по выбранному пользователю.
+    getUserLayer: (userId: string) =>
+      request<{ user: SpecialtySettingsLayer; userId: string }>(`/specialties/settings/user/${encodeURIComponent(userId)}`),
+    saveUserLayer: (userId: string, layer: SpecialtySettingsLayer) =>
+      request<{ user: SpecialtySettingsLayer }>(`/specialties/settings/user/${encodeURIComponent(userId)}`, {
+        method: 'PUT', body: JSON.stringify(layer),
+      }),
     // Сброс исключений к наследованию (возврат = удаление записи слоя, а не обнуление
     // ячеек): preview — числа/имена ДО подтверждения, reset — фактическая запись.
     // key — точечный жест (одна специальность), без него — весь слой.
-    resetPreview: (scope: 'owner' | 'global', key?: string) =>
-      request<ResetResult>(`/specialties/settings/reset/${scope}/preview${key ? `?key=${encodeURIComponent(key)}` : ''}`),
-    reset: (scope: 'owner' | 'global', key?: string) =>
-      request<ResetResult>(`/specialties/settings/reset/${scope}`, {
-        method: 'POST', body: JSON.stringify(key ? { key } : {}),
-      }),
+    // scope='user' — только для admin, требует userId.
+    resetPreview: (scope: 'owner' | 'global' | 'user', key?: string, userId?: string) => {
+      const qs = new URLSearchParams();
+      if (key) qs.set('key', key);
+      if (scope === 'user' && userId) qs.set('userId', userId);
+      const s = qs.toString();
+      return request<ResetResult>(`/specialties/settings/reset/${scope}/preview${s ? `?${s}` : ''}`);
+    },
+    reset: (scope: 'owner' | 'global' | 'user', key?: string, userId?: string) => {
+      const body: { key?: string; userId?: string } = {};
+      if (key) body.key = key;
+      if (scope === 'user' && userId) body.userId = userId;
+      return request<ResetResult>(`/specialties/settings/reset/${scope}`, {
+        method: 'POST', body: JSON.stringify(body),
+      });
+    },
+    // Лимит подмен за ход (фолбэк): `null` = снять настройку слоя (наследование).
+    // Управляется через ту же дорогу, что сброс — отдельных типов в index.ts нет,
+    // описаны здесь, чтобы не разъезжаться с бэком. scope='user' требует userId.
+    setMaxSubstitutions: (scope: 'owner' | 'global' | 'user', value: number | null, userId?: string) => {
+      const body: { maxSubstitutions: number | null; userId?: string } = { maxSubstitutions: value };
+      if (scope === 'user' && userId) body.userId = userId;
+      return request<{ maxSubstitutions: number }>(`/specialties/settings/fallback/${scope}`, {
+        method: 'PUT', body: JSON.stringify(body),
+      });
+    },
   },
 
   projects: {
@@ -1341,6 +1372,13 @@ export const api = {
       }),
     getDiff: (projectId: string, path: string) =>
       request<{ diff: string | null }>(`/projects/${projectId}/files/diff?path=${encodeURIComponent(path)}`),
+    // Панель «Изменения»: для присланных путей — какие ЕЩЁ чаты проекта их меняли.
+    // Ключи ответа — ровно присланные строки path (см. FilesController.ChangedBy)
+    changedBy: (projectId: string, paths: string[]) =>
+      request<{ files: Record<string, ChangedBySession[]> }>(`/projects/${projectId}/files/changed-by`, {
+        method: 'POST',
+        body: JSON.stringify({ paths }),
+      }),
     revert: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files/revert`, { method: 'POST', body: JSON.stringify({ path }) }),
     createFile: (projectId: string, path: string) =>

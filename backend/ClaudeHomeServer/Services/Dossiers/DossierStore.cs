@@ -14,7 +14,7 @@ namespace ClaudeHomeServer.Services.Dossiers;
 // «{username}:dossiers:{projectName}» (дифф по хешам, дебаунс) для будущего семантического
 // recall (этап 2); без Dify — REST-фильтры (Find) работают полнотекстово прямо по стору,
 // graceful degradation не требуется отдельно. Эталон структуры — TeamMemoryService.
-public sealed class DossierStore
+public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
 {
     private sealed class KnowledgeState
     {
@@ -190,6 +190,75 @@ public sealed class DossierStore
         var ownerDir = Path.Combine(_dataDir, ownerId);
         try { if (Directory.Exists(ownerDir)) Directory.Delete(ownerDir, recursive: true); }
         catch { /* уборка best-effort */ }
+    }
+
+    // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
+    // Цель на каждый scope «owner:project» с созданным датасетом; ключ записи — id паспорта.
+    // Карту Docs защищает _kLock (не _saveLock); порядок _syncLock → _kLock.
+    public IReadOnlyList<Knowledge.KnowledgeSyncTarget> ListTargets()
+    {
+        List<(string Key, string DatasetId)> snapshot;
+        lock (_kLock)
+            snapshot = _kStore
+                .Where(kv => !string.IsNullOrEmpty(kv.Value.DatasetId))
+                .Select(kv => (kv.Key, kv.Value.DatasetId!))
+                .ToList();
+
+        var targets = new List<Knowledge.KnowledgeSyncTarget>();
+        foreach (var (key, datasetId) in snapshot)
+        {
+            var idx = key.IndexOf(':');
+            if (idx <= 0 || idx >= key.Length - 1) continue;
+            var ownerId = key[..idx];
+            var projectId = key[(idx + 1)..];
+            targets.Add(new Knowledge.KnowledgeSyncTarget(
+                datasetId, [ownerId], $"dossiers:{key}",
+                docIds => ResolveDocsAsync(key, docIds),
+                keys => InvalidateDocsAsync(key, keys),
+                () => QueueSync(ownerId, projectId)));
+        }
+        return targets;
+    }
+
+    private async Task<IReadOnlyList<(string DocId, string EntryKey)>> ResolveDocsAsync(
+        string key, IReadOnlyCollection<string> docIds)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            lock (_kLock)
+            {
+                if (!_kStore.TryGetValue(key, out var state)) return [];
+                var byDocId = state.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+                return docIds
+                    .Where(byDocId.ContainsKey)
+                    .Select(d => (d, byDocId[d]))
+                    .ToList();
+            }
+        }
+        finally { _syncLock.Release(); }
+    }
+
+    private async Task InvalidateDocsAsync(string key, IReadOnlyCollection<string> entryKeys)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            lock (_kLock)
+            {
+                if (!_kStore.TryGetValue(key, out var state)) return;
+                var changed = false;
+                foreach (var entryKey in entryKeys)
+                    if (state.Docs.TryGetValue(entryKey, out var doc) && doc.Hash.Length > 0)
+                    {
+                        // Замена объекта, не правка поля: снапшот активного синка делит объекты
+                        state.Docs[entryKey] = new MemoryDocRef { DocId = doc.DocId, Hash = "" };
+                        changed = true;
+                    }
+                if (changed) SaveKnowledge();
+            }
+        }
+        finally { _syncLock.Release(); }
     }
 
     // --- Синхронизация с Dify (дифф по хешам, дебаунс) — эталон TeamMemoryService ---

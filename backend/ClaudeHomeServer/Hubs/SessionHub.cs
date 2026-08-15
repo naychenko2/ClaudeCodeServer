@@ -49,6 +49,11 @@ public class SessionHub : Hub
 
     private static HubException Denied() => new("Доступ запрещён");
 
+    // «Чат не найден» отдельно от «Доступ запрещён»: на «не найден» фронт сбрасывает
+    // activeSession из localStorage (лечение чата-призрака), на чужой — нет.
+    // Информации о владельце не утекает: null из GetById — id не существует ни у кого.
+    private static HubException NotFound() => new("Чат не найден");
+
     public override Task OnConnectedAsync()
     {
         var transport = Context.Features.Get<IHttpTransportFeature>()?.TransportType.ToString() ?? "unknown";
@@ -58,6 +63,7 @@ public class SessionHub : Hub
 
     public async Task JoinSession(string sessionId)
     {
+        if (_sessions.GetById(sessionId) is null) throw NotFound();
         if (!OwnsSession(sessionId)) throw Denied();
         _sessions.AddViewer(sessionId, Context.ConnectionId);
         await Groups.AddToGroupAsync(Context.ConnectionId, sessionId);

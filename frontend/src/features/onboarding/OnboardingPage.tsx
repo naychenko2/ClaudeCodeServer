@@ -12,7 +12,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Info, RotateCcw, Sparkles, UserRound } from 'lucide-react';
 import type { AuthState, Persona, Project, Session } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, FS, ISLAND, R, SP, Z } from '../../lib/design';
+import { C, CHAT_MAX_W, FONT, FS, ISLAND, R, SP, Z } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, Modal, ModalActions, ConfirmDialog } from '../../components/ui';
 import { PageCanvas } from '../../components/ui/PageCanvas';
@@ -264,6 +264,9 @@ function IntroChatShell({ kind, title, subtitle, project, start, onDone }: {
         // На узком экране кнопки-страховки не влезают в ряд с заголовком —
         // переносим их на вторую строку вместо overflow
         flexWrap: 'wrap', rowGap: SP.sm,
+        // Геометрия как у обычной шапки чата (ChatHeaderBar): ширина шапки = колонке
+        // ленты, иначе заголовок уезжает от центрированного чата
+        width: '100%', maxWidth: CHAT_MAX_W, margin: '0 auto', boxSizing: 'border-box',
         padding: isMobile ? `${SP.md}px ${SP.lg}px` : `${SP.lg}px ${SP.xl}px`,
         borderBottom: `1px solid ${C.border}`,
       }}>

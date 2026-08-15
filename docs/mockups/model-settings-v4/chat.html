@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Чат: «Сейчас пойдёт», заморозка, пометка подмены — v4</title>
+<style>
+  :root {
+    --c-bg-main:#F4F0E8; --c-bg-panel:#EDE7DC; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+    --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+    --c-text-heading:#2A251F; --c-text-primary:#39332B; --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E;
+    --c-on-accent:#FBF8F2;
+    --c-accent:#D97757; --c-accent-light:#F4ECE1; --c-accent-muted:#EAD3C5;
+    --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-dashed:#D0C6B4; --c-track:#D8CFBE;
+    --c-success-text:#3F7A4F; --c-success-bg:#E9F1E8;
+    --c-warning-bg:#FBEFE0; --c-warning-text:#8A6A28;
+    --c-info:#3E7CA6; --c-info-bg:#E7EFF5;
+    --c-overlay:rgba(23,19,15,.42);
+    --shadow-focus:0 0 0 3px rgba(217,119,87,.14);
+    --shadow-card:0 2px 8px rgba(60,50,35,.05);
+    --shadow-modal:0 24px 60px rgba(23,19,15,.40);
+    --shadow-sheet:0 -8px 40px rgba(23,19,15,.22);
+    --shadow-island:0 1px 2px rgba(60,50,35,.06), 0 6px 20px rgba(60,50,35,.10);
+    --shadow-dropdown:0 8px 28px rgba(60,50,35,.16);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:#201C18; --c-bg-panel:#272320; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+    --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+    --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB; --c-text-secondary:#B3A897; --c-text-muted:#8A8072;
+    --c-on-accent:#201C18;
+    --c-accent:#E38A6A; --c-accent-light:#3A2E27; --c-accent-muted:#4A362C;
+    --c-border:#3D3830; --c-border-light:#34302A; --c-dashed:#4A443B; --c-track:#453F37;
+    --c-success-text:#8FCB79; --c-success-bg:#232E20;
+    --c-warning-bg:#322717; --c-warning-text:#E7B96E;
+    --c-info:#5FA0CC; --c-info-bg:#1E2A33;
+    --c-overlay:rgba(0,0,0,.62);
+    --shadow-focus:0 0 0 3px rgba(227,138,106,.24);
+    --shadow-card:0 2px 10px rgba(0,0,0,.35);
+    --shadow-modal:0 28px 70px rgba(0,0,0,.65);
+    --shadow-sheet:0 -10px 46px rgba(0,0,0,.55);
+    --shadow-island:0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-dropdown:0 10px 32px rgba(0,0,0,.55);
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:24px 16px 64px; background:var(--c-bg-main); color:var(--c-text-primary);
+    font-family:'Hanken Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:13px; }
+  .page { max-width:1240px; margin:0 auto; }
+  h1.doc { font-family:'PT Serif',Georgia,serif; font-size:28px; color:var(--c-text-heading); margin:0 0 6px; }
+  p.lead, p.note { color:var(--c-text-secondary); max-width:900px; line-height:1.6; }
+  p.lead { margin:0 0 20px; } p.note { margin:0 0 16px; }
+  h2.sec { font-family:'PT Serif',Georgia,serif; font-size:22px; color:var(--c-text-heading); margin:44px 0 6px; padding-top:20px; border-top:1px solid var(--c-border); }
+
+  .themebar { position:sticky; top:0; z-index:30; display:flex; gap:8px; align-items:center; background:var(--c-bg-main); padding:8px 0 14px; }
+  .tbtn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; padding:6px 12px; border-radius:999px;
+    border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-secondary); }
+  .tbtn.on { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+
+  .hint { font-size:11px; color:var(--c-text-muted); line-height:1.45; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  .willgo { display:flex; align-items:center; gap:7px; font-size:11px; color:var(--c-text-muted); }
+  .willgo .mono { font-size:11px; font-weight:700; color:var(--c-text-heading); background:var(--c-bg-selected); border-radius:6px; padding:1px 6px; }
+  .btn { font:inherit; font-size:12px; font-weight:600; cursor:pointer; border-radius:12px; padding:7px 12px;
+    border:1px solid var(--c-border); background:var(--c-bg-white); color:var(--c-text-primary); }
+  .btn.primary { background:var(--c-accent); border-color:var(--c-accent); color:var(--c-on-accent); }
+  .pick { font:inherit; font-size:12px; cursor:pointer; display:inline-flex; align-items:center; gap:6px; max-width:100%;
+    padding:5px 9px; border-radius:8px; color:var(--c-text-secondary); background:var(--c-bg-card); border:1px solid var(--c-border); }
+  .pick:hover { border-color:var(--c-accent-muted); }
+  .pick .car { color:var(--c-text-muted); font-size:11px; }
+
+  /* Макет окна чата */
+  .win { background:var(--c-bg-panel); border:1px solid var(--c-border); border-radius:16px; overflow:hidden;
+    box-shadow:var(--shadow-island); display:flex; flex-direction:column; max-width:950px; margin:0 auto; }
+  .feed { padding:18px 20px; display:flex; flex-direction:column; gap:12px; background:var(--c-bg-main); flex:1; }
+  .msg { max-width:78%; }
+  .msg.user { align-self:flex-end; background:var(--c-accent); color:var(--c-on-accent); border-radius:14px 14px 4px 14px; padding:9px 13px; }
+  .msg.ai { align-self:flex-start; background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:14px 14px 14px 4px; padding:9px 13px; }
+
+  /* Пометка подмены в ленте (B5): причина + путь цепочки по клику */
+  .pill {
+    align-self:center; display:inline-flex; align-items:center; gap:6px; cursor:pointer; font:inherit;
+    background:var(--c-warning-bg); color:var(--c-warning-text); border:1px solid transparent;
+    border-radius:999px; padding:3px 10px; font-size:11px; font-weight:600;
+  }
+  .pill:hover { border-color:var(--c-warning-text); }
+  .pillpath {
+    align-self:center; display:none; background:var(--c-bg-card); border:1px solid var(--c-border);
+    border-radius:10px; padding:7px 12px; font-size:11px; color:var(--c-text-secondary); text-align:center; line-height:1.5;
+  }
+  .pillpath.on { display:block; }
+  .pillpath .mono { color:var(--c-text-heading); font-weight:700; }
+
+  /* Композер */
+  .composer { border-top:1px solid var(--c-border); background:var(--c-bg-panel); padding:10px 14px 12px; }
+  .composer .cbox { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:14px; padding:10px 12px; }
+  .composer textarea { width:100%; border:none; background:transparent; font:inherit; font-size:13px; color:var(--c-text-primary); outline:none; resize:none; }
+  .composer .cbar { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .sendb { width:30px; height:30px; border-radius:50%; border:none; background:var(--c-accent); color:var(--c-on-accent); font-size:14px; cursor:pointer; flex-shrink:0; }
+  .freeze-note { display:flex; gap:7px; align-items:flex-start; font-size:11px; color:var(--c-text-muted); margin-top:8px; line-height:1.45; }
+  .freeze-note b { color:var(--c-text-secondary); }
+
+  /* Карточка нового чата (NewChatSetup) */
+  .scene { background:var(--c-overlay); border-radius:24px; padding:40px 24px; display:flex; justify-content:center; gap:24px; flex-wrap:wrap; }
+  .modal { width:440px; max-width:100%; background:var(--c-bg-main); border-radius:20px; box-shadow:var(--shadow-modal); overflow:hidden; }
+  .m-head { padding:26px 28px 0; }
+  .m-title { font-family:'PT Serif',Georgia,serif; font-size:22px; font-weight:500; color:var(--c-text-heading); }
+  .m-close { float:right; width:32px; height:32px; border-radius:8px; border:none; cursor:pointer; background:transparent; color:var(--c-text-muted); font-size:16px; }
+  .m-body { padding:14px 28px 26px; }
+  .m-foot { display:flex; justify-content:flex-end; gap:8px; padding:0 28px 24px; }
+  .lvl { font-size:11px; font-weight:700; color:var(--c-text-muted); text-transform:uppercase; letter-spacing:.07em; margin:16px 2px 8px; }
+  .tf { width:100%; font:inherit; font-size:13px; padding:8px 11px; border-radius:10px; border:1px solid var(--c-border);
+    background:var(--c-bg-white); color:var(--c-text-primary); outline:none; }
+  .tf:focus { border-color:var(--c-accent); box-shadow:var(--shadow-focus); }
+
+  .phone { width:375px; background:var(--c-bg-panel); border:1px solid var(--c-border); border-radius:28px; overflow:hidden; box-shadow:var(--shadow-island); display:flex; flex-direction:column; }
+  .cmp { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+  @media (max-width:1100px){ .cmp { grid-template-columns:1fr; } }
+  .tag { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--c-text-muted); margin-bottom:6px; }
+  .rows { background:var(--c-bg-white); border:1px solid var(--c-border); border-radius:10px; overflow:hidden; }
+  .rows .row { padding:8px 12px; border-top:1px solid var(--c-border-light); font-size:12px; }
+  .rows .row:first-child { border-top:none; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <strong style="font-size:12px; color:var(--c-text-muted)">Тема:</strong>
+    <button class="tbtn on" data-theme-btn="light">Светлая</button>
+    <button class="tbtn" data-theme-btn="dark">Тёмная</button>
+    <span style="font-size:11px; color:var(--c-text-muted); margin-left:8px">Пометка подмены в ленте кликабельна.</span>
+  </div>
+
+  <h1 class="doc">Чат: «Сейчас пойдёт» и честная заморозка — v4</h1>
+  <p class="lead">
+    Начатый разговор держит модель, выбранную при создании (C1): правка цепочки действует на новые
+    чаты, но не на этот. Раньше об этом не говорил никто — теперь композер показывает «Сейчас пойдёт»
+    с пометкой о заморозке, а карточка нового чата объясняет сделку до старта. Пометка подмены в ленте
+    научилась показывать путь цепочки (B5). Выбор цепочки в самом чате в эту итерацию не входит.
+  </p>
+
+  <h2 class="sec">1. Карточка нового чата: сделка названа до старта</h2>
+  <p class="note">
+    Человек выбирает модель на старте и сразу видит: разговор останется на ней, даже если цепочку
+    потом перепишут. Превью «Сейчас пойдёт» — то же серверное, что у задачи и уровней.
+  </p>
+
+  <div class="scene">
+    <div class="modal">
+      <div class="m-head">
+        <button class="m-close">✕</button>
+        <div class="m-title">Новый чат</div>
+      </div>
+      <div class="m-body">
+        <div class="lvl" style="margin-top:2px">Название</div>
+        <input class="tf" placeholder="Назовётся по первому сообщению"/>
+        <div class="lvl">Модель</div>
+        <button class="pick" style="width:100%; justify-content:flex-start; padding:8px 11px">
+          <span>Уровень: Сильная</span><span class="car" style="margin-left:auto">▾</span>
+        </button>
+        <div class="willgo" style="margin-top:8px">Сейчас пойдёт: <span class="mono">Claude Opus 5</span></div>
+        <p class="hint" style="margin:10px 0 0; background:var(--c-bg-inset); border-radius:10px; padding:9px 12px">
+          <b style="color:var(--c-text-secondary)">Разговор держит выбранную модель до конца.</b>
+          Если позже изменить цепочку или уровни, этот чат не переключится — настройки подействуют
+          на новые чаты.
+        </p>
+      </div>
+      <div class="m-foot">
+        <button class="btn">Отмена</button>
+        <button class="btn primary">Начать</button>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">2. Композер начатого чата: «Сейчас пойдёт» + пометка о заморозке</h2>
+  <p class="note">
+    Чат начат на Opus 5. Цепочку «Основной — Сильная» с тех пор переписали — композер это не скрывает:
+    под превью стоит строка о заморозке со ссылкой на новые настройки.
+  </p>
+
+  <div class="win">
+    <div class="feed">
+      <div class="msg user">Собери план миграции биллинга на два спринта</div>
+      <div class="msg ai">Смотрю связи счетов и платежей, затем предложу план с оценкой по спринтам…</div>
+      <button class="pill" id="pill">⤳ Ход отвечала Kimi K3 вместо Claude Opus 5 — Opus 5 не ответила · как это случилось?</button>
+      <div class="pillpath" id="pillpath">
+        Ход пошёл по цепочке чата: <span class="mono">Claude Opus 5</span> — не ответила →
+        <span class="mono">Claude Sonnet 5</span> — лимит недели → <span class="mono">GLM 5.2</span> — не ответила →
+        <span class="mono">Kimi K3</span> — ответила.<br/>
+        Подмена действует только на этот ход: следующий снова начнёт с Opus 5.
+      </div>
+      <div class="msg ai">Готово: план на два спринта с рисками по данным лежит ниже…</div>
+    </div>
+    <div class="composer">
+      <div class="cbox">
+        <textarea rows="2" placeholder="Сообщение…"></textarea>
+        <div class="cbar">
+          <button class="pick">Claude Opus 5 <span class="car">▾</span></button>
+          <span class="willgo">Сейчас пойдёт: <span class="mono">Claude Opus 5</span></span>
+          <span style="flex:1"></span>
+          <button class="sendb">↑</button>
+        </div>
+      </div>
+      <div class="freeze-note">
+        🔒 <span><b>Модель этого разговора зафиксирована при создании.</b>
+        Вы переписали цепочку «Основной — Сильная» 12 минут назад — этот чат продолжит на старой модели;
+        новая цепочка подействует на чаты, начатые после правки.</span>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">3. Мобила: композер и пометка в узкой ленте</h2>
+  <p class="note">
+    В узкой ленте пометка подмены переносится на две строки, путь цепочки раскрывается по тапу
+    карточкой под пометкой. Заморозка — одна строка с иконкой, полный текст — по тапу.
+  </p>
+
+  <div class="scene" style="justify-content:flex-start">
+    <div class="phone">
+      <div class="feed" style="flex:1">
+        <div class="msg user">План миграции биллинга</div>
+        <div class="msg ai">Смотрю связи счетов…</div>
+        <button class="pill">⤳ Отвечала Kimi K3 вместо Opus 5</button>
+        <div class="msg ai">Готово: план ниже…</div>
+      </div>
+      <div class="composer">
+        <div class="cbox">
+          <textarea rows="2" placeholder="Сообщение…"></textarea>
+          <div class="cbar">
+            <button class="pick">Opus 5 <span class="car">▾</span></button>
+            <span style="flex:1"></span>
+            <button class="sendb">↑</button>
+          </div>
+        </div>
+        <div class="freeze-note">🔒 <span><b>Модель зафиксирована при создании чата</b> — правки цепочки действуют на новые чаты.</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Что изменилось</h2>
+  <div class="cmp">
+    <div>
+      <div class="tag">Было</div>
+      <div class="rows">
+        <div class="row">Заморозка Session.Model нигде не упомянута — правка цепочки «не срабатывает» молча (C1)</div>
+        <div class="row">Пометка подмены даёт только причину, путь цепочки не виден (B5)</div>
+        <div class="row">«Сейчас пойдёт» в чате отсутствует (B7)</div>
+      </div>
+    </div>
+    <div>
+      <div class="tag">Стало</div>
+      <div class="rows">
+        <div class="row">Карточка нового чата называет сделку до старта; композер напоминает о заморозке, когда настройки изменились</div>
+        <div class="row">Пометка раскрывается в путь: какие шаги пробовали, почему отпали, кто ответил</div>
+        <div class="row">Превью маршрута в карточке и композере — по серверному превью</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+<script>
+  document.querySelectorAll('[data-theme-btn]').forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.themeBtn === 'dark' ? 'dark' : '';
+    document.querySelectorAll('[data-theme-btn]').forEach(x => x.classList.toggle('on', x === b));
+  }));
+  document.getElementById('pill').addEventListener('click', () =>
+    document.getElementById('pillpath').classList.toggle('on'));
+</script>
+</body>
+</html>

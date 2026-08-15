@@ -7,7 +7,7 @@ import { modelLabel, providerLabel, modelProvider,
 import { effectiveTierModel as tierModelOf } from './modelTiers';
 import type { OllamaUsageInfo, AppSettings, UserProfile } from '../types';
 
-// Общие константы, типы и хелперы раздела «Поставщики моделей» — без компонентов
+// Общие константы, типы и хелперы раздела «Модели и расход» — без компонентов
 // (react-refresh требует компоненты держать отдельно). Используются вкладочной
 // раскладкой раздела и контролами её вкладок.
 
@@ -53,9 +53,9 @@ export const TIERS: Record<TierKey, { title: string; hint: string; field: keyof 
 };
 export const TIER_ORDER: TierKey[] = ['strong', 'medium', 'weak'];
 
-// Единая подпись состояния слота. Для личных/пользовательских слотов пустое значение
-// показывает наследование от глобального слота: «Как у всех · {modelLabel}». Для глобального
-// контекста пустой слот — «не задана — решает CLI».
+// Единая подпись состояния уровня. Для личных/пользовательских уровней пустое значение
+// показывает наследование от глобального уровня: «Как у всех · {modelLabel}». Для глобального
+// контекста пустой уровень — «не задана — выберет Claude Code сам».
 export function tierSubtitle(model: string, inheritedModel?: string | null): string {
   if (model) {
     const provider = providerLabel(modelProvider(model));
@@ -65,9 +65,9 @@ export function tierSubtitle(model: string, inheritedModel?: string | null): str
     return `Как у всех · ${modelLabel(inheritedModel)}`;
   }
   if (inheritedModel === undefined) {
-    return 'не задана — решает CLI';
+    return 'не задана — выберет Claude Code сам';
   }
-  return 'Как у всех · не задана — решает CLI';
+  return 'Как у всех · не задана — выберет Claude Code сам';
 }
 
 // Статус адаптера → цвет точки (только дизайн-токены)

@@ -9,7 +9,7 @@ namespace ClaudeHomeServer.Services;
 // («{username}:notes», permission only_me). Синхронизация — полный дифф по хешам
 // содержимого (устойчив к переименованиям/массовым правкам), с дебаунсом на мутации.
 // Без настроенного Dify всё тихо выключено (graceful degradation).
-public sealed class NotesKnowledgeService
+public sealed class NotesKnowledgeService : Knowledge.IKnowledgeSyncParticipant
 {
     // userId → { datasetId, noteId → { difyDocId, contentHash } }
     private sealed class Entry
@@ -171,6 +171,68 @@ public sealed class NotesKnowledgeService
                 Math.Round(ch.Score, 3), snippet.Replace('\n', ' ')));
         }
         return hits;
+    }
+
+    // --- Участник реконсайлера error-документов (Knowledge.IKnowledgeSyncParticipant) ---
+    // Цель на каждого пользователя с созданным датасетом заметок; ключ записи — noteId.
+    // Мутации entry.Docs в SyncAllAsync идут под _syncLock — берём его же, внутри _saveLock.
+    public IReadOnlyList<Knowledge.KnowledgeSyncTarget> ListTargets()
+    {
+        List<(string UserId, string DatasetId)> snapshot;
+        lock (_saveLock)
+            snapshot = _store
+                .Where(kv => !string.IsNullOrEmpty(kv.Value.DatasetId))
+                .Select(kv => (kv.Key, kv.Value.DatasetId!))
+                .ToList();
+
+        return snapshot
+            .Select(t => new Knowledge.KnowledgeSyncTarget(
+                t.DatasetId, [t.UserId], $"notes:{t.UserId}",
+                docIds => ResolveDocsAsync(t.UserId, docIds),
+                keys => InvalidateDocsAsync(t.UserId, keys),
+                () => QueueSync(t.UserId)))
+            .ToList();
+    }
+
+    private async Task<IReadOnlyList<(string DocId, string EntryKey)>> ResolveDocsAsync(
+        string userId, IReadOnlyCollection<string> docIds)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            lock (_saveLock)
+            {
+                if (!_store.TryGetValue(userId, out var entry)) return [];
+                var byDocId = entry.Docs.ToDictionary(kv => kv.Value.DocId, kv => kv.Key);
+                return docIds
+                    .Where(byDocId.ContainsKey)
+                    .Select(d => (d, byDocId[d]))
+                    .ToList();
+            }
+        }
+        finally { _syncLock.Release(); }
+    }
+
+    private async Task InvalidateDocsAsync(string userId, IReadOnlyCollection<string> entryKeys)
+    {
+        await _syncLock.WaitAsync();
+        try
+        {
+            lock (_saveLock)
+            {
+                if (!_store.TryGetValue(userId, out var entry)) return;
+                var changed = false;
+                foreach (var key in entryKeys)
+                    if (entry.Docs.TryGetValue(key, out var doc) && doc.Hash.Length > 0)
+                    {
+                        // Замена объекта, не правка поля — на случай общих снапшотов
+                        entry.Docs[key] = new DocRef { DocId = doc.DocId, Hash = "" };
+                        changed = true;
+                    }
+                if (changed) JsonFileStore.Save(_storePath, _store);
+            }
+        }
+        finally { _syncLock.Release(); }
     }
 
     // Уборка локальной записи индекса заметок пользователя — каскад удаления пользователя.

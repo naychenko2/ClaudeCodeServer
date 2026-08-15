@@ -291,6 +291,38 @@ public sealed class GitService(ILauncherFactory launchers)
     private static bool IsValidSha(string sha) =>
         sha.Length is >= 6 and <= 40 && sha.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f') or (>= 'A' and <= 'F'));
 
+    // Пути файлов, затронутых ОДНИМ коммитом (git show --name-only) — якорение паспортов
+    // (DossierCaptureService). Оговорка: на merge-коммите --name-only файлов не печатает
+    // (дифф к родителям неоднозначен) — его пути в выдачу не попадают. Для диапазона
+    // ревизий — ChangedFilePathsBetweenAsync (диапазонный diff, merge не слепой).
+    public async Task<IReadOnlyList<string>> ChangedFilePathsAsync(
+        string? ownerId, string root, string sha, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return [];
+        var r = await RunAsync(ownerId, root, ["show", "--name-only", "--pretty=format:", sha], ct: ct);
+        if (!r.Ok) return [];
+        return [.. r.Stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct()];
+    }
+
+    // Пути файлов, изменённых МЕЖДУ двумя ревизиями (git diff --name-only old new), — детект
+    // коммита для атрибуции файлов чатам (CommitAttributionService). Именно диапазонный diff,
+    // а не git show по old..new: show обходит КАЖДЫЙ коммит диапазона (статус сразу после
+    // большого pull упирался бы в таймаут) и слеп на merge-коммитах. null — дифф не построить
+    // (old больше не существует: переписанная история, добитая gc) — вызывающий решает,
+    // ретраить ли; пустой список — различий нет. Таймаут длиннее дефолта: дифф большого pull.
+    public async Task<IReadOnlyList<string>?> ChangedFilePathsBetweenAsync(
+        string? ownerId, string root, string oldSha, string newSha, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root) || !IsValidSha(oldSha) || !IsValidSha(newSha)) return null;
+        var r = await RunAsync(ownerId, root, ["diff", "--name-only", oldSha, newSha],
+            timeoutMs: 30_000, ct: ct);
+        if (!r.Ok) return null;
+        return [.. r.Stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+    }
+
     public async Task<GitCommitDetail?> CommitDetailAsync(string? ownerId, string root, string sha, CancellationToken ct = default)
     {
         if (!IsGitRepo(root) || !IsValidSha(sha)) return null;
@@ -932,7 +964,7 @@ public sealed class GitService(ILauncherFactory launchers)
 
     private static GitStatusDto ParsePorcelainV2(string output)
     {
-        string? branch = null, upstream = null;
+        string? branch = null, upstream = null, headSha = null;
         int ahead = 0, behind = 0;
         bool detached = false;
         var staged = new List<GitFileChange>();
@@ -949,6 +981,12 @@ public sealed class GitService(ILauncherFactory launchers)
             {
                 var head = t["# branch.head ".Length..];
                 if (head == "(detached)") detached = true; else branch = head;
+            }
+            else if (t.StartsWith("# branch.oid "))
+            {
+                // sha HEAD уже есть в статусе — детекту коммитов не нужен отдельный rev-parse
+                var oid = t["# branch.oid ".Length..];
+                if (oid != "(initial)") headSha = oid;
             }
             else if (t.StartsWith("# branch.upstream "))
                 upstream = t["# branch.upstream ".Length..];
@@ -986,7 +1024,8 @@ public sealed class GitService(ILauncherFactory launchers)
                 untracked.Add(new GitFileChange(t[2..], "?"));
         }
 
-        return new GitStatusDto(true, branch, upstream, ahead, behind, detached, staged, unstaged, untracked);
+        return new GitStatusDto(true, branch, upstream, ahead, behind, detached, staged, unstaged, untracked,
+            HeadSha: headSha);
     }
 
     // X — статус в индексе (staged), Y — в рабочем дереве (unstaged). '.' = без изменений.

@@ -105,6 +105,26 @@ public sealed class LlmSessionAdapterFactory : ILlmSessionAdapterFactory
         provider ??= _providers.ResolveByModel(
             _assignments?.Resolve(usageKey, session.Model, session.OwnerId) ?? session.Model);
 
+        // Guard согласованности пары «модель × провайдер»: модель — единственный источник
+        // правды (см. комментарий ResolveByModel), поле Provider вторично. Инцидент 14.08.2026:
+        // смена модели до первого хода оставила в sessions.json пару (Claude-модель, ключ glm) —
+        // CLI стартовал в профиле glm с моделью Anthropic → мгновенный 401 «OAuth session
+        // expired». Несочетаемая пара не должна доезжать до запуска CLI: чиним по модели
+        // (self-heal и старых записей), с warning — молча такое проглатывать нельзя.
+        if (provider is not null)
+        {
+            var effectiveModel = _assignments?.Resolve(usageKey, session.Model, session.OwnerId) ?? session.Model;
+            var byModelKey = _providers.ProviderKey(effectiveModel);
+            if (provider.Key != byModelKey)
+            {
+                _log?.LogWarning(
+                    "Сессия {SessionId}: рассогласованная пара Model={Model} × Provider={Provider} — исправлена по модели на {FixedProvider}",
+                    session.Id, effectiveModel ?? session.Model, session.Provider, byModelKey);
+                session.Provider = byModelKey == "claude" ? _subscriptionPool.Pick(effectiveModel) : byModelKey;
+                provider = byModelKey == "claude" ? null : _providers.GetByKey(byModelKey);
+            }
+        }
+
         if (provider is { Enabled: false })
             throw new InvalidOperationException(
                 $"Провайдер «{provider.DisplayName}» не настроен: задай LlmProviders:{provider.Key}:ApiKey в appsettings.Local.json");

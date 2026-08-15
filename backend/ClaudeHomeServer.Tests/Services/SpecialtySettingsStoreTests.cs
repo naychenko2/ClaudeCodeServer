@@ -102,6 +102,101 @@ public class SpecialtySettingsStoreTests : IDisposable
         store.SpecialtyMatrices(Other, PersonaSpecialty.BackendExecutor).Single().Strong.Should().Be("global-opus");
     }
 
+    // --- Слой «пользователь» (B9): приоритет owner → user → global ---
+
+    [Fact]
+    public void СлойПользователь_ПриоритетЛичныйПользовательскийГлобальный()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(new() { ["backendExecutor"] = Tmpl(strong: "global-opus") }));
+
+        // 1) Назначение пользователю бьёт глобальный
+        store.SetUser(Owner, Layer(new() { ["backendExecutor"] = Tmpl(strong: "user-opus") }));
+        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
+            .Should().Be("user-opus", "слой пользователя сильнее глобального");
+        // Изоляция: другому владельцу назначение не видно — он на глобальном
+        store.SpecialtyMatrices(Other, PersonaSpecialty.BackendExecutor).Single().Strong
+            .Should().Be("global-opus", "назначение действует только на своего пользователя");
+
+        // 2) Личный слой бьёт назначение пользователя
+        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = Tmpl(strong: "owner-opus") }));
+        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
+            .Should().Be("owner-opus", "личный слой сильнее назначения пользователя");
+
+        // 3) Снятие личного слоя (пустой) возвращает назначение пользователя
+        store.SetOwner(Owner, Layer());
+        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
+            .Should().Be("user-opus", "без личного слоя снова видно назначение пользователя");
+
+        // 4) Снятие назначения (пустой слой) возвращает глобальный
+        store.SetUser(Owner, Layer());
+        store.SpecialtyMatrices(Owner, PersonaSpecialty.BackendExecutor).Single().Strong
+            .Should().Be("global-opus", "без назначения снова глобальный");
+    }
+
+    [Fact]
+    public void СлойПользователь_ИзоляцияДанныхМеждуПользователями()
+    {
+        var store = NewStore();
+        store.SetUser(Owner, Layer(
+            specialties: new() { ["backendExecutor"] = Tmpl(strong: "user-opus") },
+            presets: [Preset("Назначенный", "glm-5.2")],
+            defaultSpecialty: Tmpl(weak: "user-haiku")));
+
+        // У своего пользователя назначение видно: запись + DefaultSpecialty + пресеты
+        store.SpecialtyMatrices(Owner, PersonaSpecialty.Analyst).Single().Weak.Should().Be("user-haiku");
+        store.EffectivePresets(Owner).Single().Name.Should().Be("Назначенный");
+        store.TemplateSettings(Owner, PersonaSpecialty.BackendExecutor)!.TierStrong.Should().Be("user-opus");
+        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().BeNull();
+
+        // У чужого — ничего от назначения
+        store.SpecialtyMatrices(Other, PersonaSpecialty.Analyst).Should().BeEmpty();
+        store.EffectivePresets(Other).Should().BeEmpty();
+        store.TemplateSettings(Other, PersonaSpecialty.BackendExecutor).Should().BeNull();
+    }
+
+    [Fact]
+    public void СлойПользователь_DefaultTierЦепочкаСлоёв()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(defaultSpecialty: Tmpl(defaultTier: ModelTier.Weak)));
+        store.SetUser(Owner, Layer(new() { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Medium) }));
+
+        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().Be(ModelTier.Medium,
+            "запись пользователя бьёт глобальный DefaultSpecialty");
+        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.Analyst).Should().Be(ModelTier.Weak,
+            "без записи пользователя — глобальный DefaultSpecialty");
+
+        // Личная запись бьёт запись пользователя
+        store.SetOwner(Owner, Layer(new() { ["backendExecutor"] = Tmpl(defaultTier: ModelTier.Strong) }));
+        store.SpecialtyDefaultTier(Owner, PersonaSpecialty.BackendExecutor).Should().Be(ModelTier.Strong);
+    }
+
+    [Fact]
+    public void СлойПользователь_Пресеты_ЛичныйРаньшеПользовательскогоРаньшеГлобального()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "Г", Steps = ["global-step"] }]));
+        store.SetUser(Owner, Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "П", Steps = ["user-step"] }]));
+        store.SetOwner(Owner, Layer(presets: [new ModelRoutePreset { Id = "dup", Name = "Л", Steps = ["owner-step"] }]));
+
+        // Поиск по id: личный раньше назначения, назначение раньше глобального
+        store.ExpandChain("preset:dup", Owner).Should().BeEquivalentTo(new[] { "owner-step" });
+        store.SetOwner(Owner, Layer());
+        store.ExpandChain("preset:dup", Owner).Should().BeEquivalentTo(new[] { "user-step" });
+        store.SetUser(Owner, Layer());
+        store.ExpandChain("preset:dup", Owner).Should().BeEquivalentTo(new[] { "global-step" });
+
+        // WithScope отдаёт три слоя с признаками в порядке резолва
+        store.SetUser(Owner, Layer(presets: [Preset("Назначенный", "local")]));
+        store.SetOwner(Owner, Layer(presets: [Preset("Личный", "claude")]));
+        var merged = store.EffectivePresetsWithScope(Owner);
+        merged.Should().HaveCount(3);
+        merged[0].Scope.Should().Be(PresetScope.Owner);
+        merged[1].Scope.Should().Be(PresetScope.User);
+        merged[2].Scope.Should().Be(PresetScope.Global);
+    }
+
     [Fact]
     public void SpecialtyMatrices_Запись_Затем_DefaultSpecialty()
     {
@@ -374,6 +469,8 @@ public class SpecialtySettingsStoreTests : IDisposable
         store.SetGlobal(Layer(
             specialties: new() { ["backendExecutor"] = Tmpl(strong: "opus", defaultTier: ModelTier.Strong) },
             presets: [Preset("Глобальный", "tier:medium", "glm-5.2")]));
+        store.SetUser(Owner, Layer(
+            specialties: new() { ["analyst"] = Tmpl(medium: "glm-user") }));
         store.SetOwner(Owner, Layer(
             defaultSpecialty: Tmpl(weak: "haiku")));
 
@@ -382,6 +479,8 @@ public class SpecialtySettingsStoreTests : IDisposable
         global.TierStrong.Should().Be("opus");
         global.DefaultTier.Should().Be(ModelTier.Strong);
         reloaded.Snapshot.Global.Presets.Single().Steps.Should().BeEquivalentTo(new[] { "tier:medium", "glm-5.2" });
+        reloaded.Snapshot.Users[Owner].Specialties["analyst"].TierMedium.Should().Be("glm-user",
+            "слой пользователя переживает перезапуск");
         reloaded.Snapshot.Owners[Owner].DefaultSpecialty!.TierWeak.Should().Be("haiku");
     }
 

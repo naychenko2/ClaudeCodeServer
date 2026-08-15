@@ -15,7 +15,9 @@ public record DifyDocumentInfo(
 public record DifyDocumentItem(
     [property: JsonPropertyName("id")] string Id,
     [property: JsonPropertyName("name")] string Name,
-    [property: JsonPropertyName("indexing_status")] string IndexingStatus);
+    [property: JsonPropertyName("indexing_status")] string IndexingStatus,
+    // Текст ошибки индексации (документы в статусе error); у здоровых — null
+    [property: JsonPropertyName("error")] string? Error = null);
 
 public record DifyDocumentsPage(
     [property: JsonPropertyName("data")] List<DifyDocumentItem> Data,
@@ -452,10 +454,17 @@ public class KnowledgeService
         resp.EnsureSuccessStatusCode();
     }
 
-    public async Task<DifyDocumentsPage> ListDocumentsAsync(string datasetId, int page = 1, int limit = 20)
+    // status — необязательный фильтр по display-статусу Dify (напр. "error" — упавшие на
+    // индексации); null — все документы. Реконсайлер зовёт метод в фоне — без настроенного
+    // Dify тихо отдаём пусто (соседние методы ведут себя так же).
+    public async Task<DifyDocumentsPage> ListDocumentsAsync(string datasetId, int page = 1, int limit = 20,
+        string? status = null)
     {
+        if (!IsConfigured) return new DifyDocumentsPage([], false, 0);
         var client = CreateClient();
-        var resp = await client.GetAsync($"datasets/{datasetId}/documents?page={page}&limit={limit}");
+        var query = $"datasets/{datasetId}/documents?page={page}&limit={limit}";
+        if (!string.IsNullOrEmpty(status)) query += $"&status={Uri.EscapeDataString(status)}";
+        var resp = await client.GetAsync(query);
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadFromJsonAsync<DifyDocumentsPage>()
             ?? new DifyDocumentsPage([], false, 0);
@@ -489,15 +498,17 @@ public class KnowledgeService
     // Возвращает ВСЕ документы датасета, обходя пагинацию Dify (одна страница ограничена).
     // Без этого статус БЗ показывал только первую страницу, и недавно добавленные документы
     // в крупных датасетах (>limit) были не видны на вкладке знаний.
-    public async Task<DifyDocumentsPage> ListAllDocumentsAsync(string datasetId)
+    // status — необязательный фильтр по display-статусу (см. ListDocumentsAsync).
+    public async Task<DifyDocumentsPage> ListAllDocumentsAsync(string datasetId, string? status = null)
     {
+        if (!IsConfigured) return new DifyDocumentsPage([], false, 0);
         const int pageSize = 100;
         var all = new List<DifyDocumentItem>();
         var page = 1;
         var total = 0;
         while (true)
         {
-            var p = await ListDocumentsAsync(datasetId, page, pageSize);
+            var p = await ListDocumentsAsync(datasetId, page, pageSize, status);
             all.AddRange(p.Data);
             total = p.Total;
             if (!p.HasMore || p.Data.Count == 0) break;

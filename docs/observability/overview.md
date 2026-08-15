@@ -171,7 +171,8 @@ truth для billing/accounting — метрики токенов и стоим�
 high-cardinality тег (например, `user_id` или `file_path`) невозможно: компилятор и тесты
 не дадут.
 
-**Allowlist тегов:** `{provider, model, execution, tool_name, outcome, error_type, reason}`.
+**Allowlist тегов:** `{provider, model, execution, tool_name, outcome, error_type, reason,
+dataset_type, healability}`.
 
 **`execution` — песочница или хост.** Значений ровно два (`local`/`docker`), берутся из кода
 (`TurnTelemetry.ExecutionKind` по `IProcessLauncher.IsSandboxed`), ограничитель значений им не
@@ -201,6 +202,12 @@ CLI»), и в тег уходил литерал `unknown`. На боевом х
 `TurnTelemetry.ModelFromEvent`, намерение осталось фолбэком на случай, если CLI модель не
 назвал. В спане `chat.turn` тег ставится дважды: намерением при старте хода и фактом, когда
 CLI его сообщит.
+
+**Оговорка про гейджи.** Теги `dataset_type` и `healability` (`ccs.dify.error_documents`)
+задаются не Record*-методом, а измерением в `GaugeRegistrar`, поэтому ни фасад, ни
+`MetricTagGuard` их не фильтруют. Ограничитель им и не нужен: оба значения — закрытые
+множества из кода (5 префиксов `Label` × 2 состояния лечимости), снаружи туда не приходит
+ничего. В allowlist они внесены как документация состава тегов.
 
 **Ограничитель значений** — `Telemetry/MetricTagGuard.cs`, вызывается внутри `ServerMetrics`
 (единственная точка записи, мимо не пройти). Две ступени:
@@ -264,6 +271,39 @@ CLI его сообщит.
 `ccs.sessions.active` до этой правки означал другое — сравнивать его с новыми точками
 нельзя.**
 
+## Метрики реконсайлера знаний
+
+Документы, упавшие на индексации в Dify (статус `error`), и их восстановление — контур описан
+в [architecture/knowledge.md](../architecture/knowledge.md#восстановление-error-документов-dify-реконсайлер).
+
+| Метрика | Тип | Что считает |
+|---|---|---|
+| `ccs.dify.error_documents` | ObservableGauge, `{document}` | документы в статусе `error` на последнем обходе, с разрезом по типу датасета и лечимости |
+| `ccs.dify.documents_recovered` | ObservableCounter, `{document}` | записи, вернувшиеся из `error` после пересоздания (считается по исчезновению из error-множества, а не по попытке лечения) |
+
+Теги гейджа: `dataset_type` (`notes` | `persona` | `team` | `dossiers` | `project`) и
+`healability` (`healable` — документ сопоставлен с записью локального стора и будет пересоздан;
+`unhealable` — сирота или ручной документ, источника контента у CCS нет). Всего 5 × 2 ряда.
+
+**Почему разрез по лечимости обязателен.** Без него гейдж врёт: unhealable-документы
+неустранимы, их количество не падает никогда, и общий ряд читался бы как «поломка, которая не
+проходит». Целевое состояние — `healable → 0` при ненулевом `unhealable`.
+
+**Почему `Label` цели в тегах нет.** Он содержит id персоны и путь проекта — это и PII, и
+кардинальность. Агрегация по типу датасета делается до измерения, чистой функцией
+`KnowledgeIndexReconciler.AggregateByType`; поимённый разбор берётся из логов реконсайлера и
+UI «Знаний», а не из метрики.
+
+**Регистрация — в `GaugeRegistrar`, не в `ServerMetrics`:** обе метрики читают снапшот
+runtime-объекта (`KnowledgeIndexReconciler.LastCounts` / `RecoveredTotal`), а `ServerMetrics` —
+статический фасад без доступа к DI. Гейдж многотеговый, поэтому `observeValues` с
+`IEnumerable<Measurement<long>>`, а не скалярный `observeValue`, как у гейджей сессий.
+Счётчик восстановленных — тоже Observable: значение живёт в реконсайлере и только растёт,
+инкрементировать его снаружи нечем.
+
+При `Dify:Reconcile:Mode=off` (дефолт) реконсайлер не обходит цели — обе метрики остаются
+пустыми, это не сбой сбора.
+
 ## Resource Attributes
 
 Standard OTel resource attributes на каждый экспортируемый сигнал:
@@ -288,7 +328,7 @@ Standard OTel resource attributes на каждый экспортируемый
 
 ```
 SigNoz (правила как код: docker/observability/alerts/*.json)
-   │  GET /api/v1/alerts  ← опрос раз в 60 с
+   │  GET {SignozUrl}/api/v1/alerts  ← опрос раз в 60 с
    ▼
 AlertPollingService  →  NotificationService  →  колокол + тост + web push
                                                           ↓
@@ -343,16 +383,25 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 ### Правила
 
 Живут в репе как код (`docker/observability/alerts/*.json`), накатываются идемпотентным
-`apply-alerts.ps1` — как и дашборды. Стартовые пороги подобраны «чтобы не молчать и не
-выть» и будут уточняться после первой недели наблюдений.
+`apply-alerts.ps1` — как и дашборды. Пороги калибровались по первой неделе метрик в
+ClickHouse (p50 хода ~120 с, p95 400–3500 с) — «чтобы не молчать и не выть».
 
-| Правило | Метрика | Порог |
-|---|---|---|
-| Пульс телеметрии пропал | `ccs.telemetry.heartbeat` | нет данных 15 мин |
-| Всплеск ошибок LLM | `ccs.llm.errors` | > 5 за 10 мин |
-| Ходы стали медленнее | `ccs.llm.duration.bucket` p99 | > 300 000 мс за 15 мин |
-| Отказы MCP-инструментов | `ccs.mcp.errors` | > 3 за 15 мин |
-| Сбой синхронизации знаний | `ccs.dify.sync.errors` | > 3 за 15 мин |
+| Правило | Метрика | Порог | Severity |
+|---|---|---|---|
+| Пульс телеметрии пропал | `ccs.telemetry.heartbeat` | нет данных 15 мин | critical |
+| Всплеск ошибок LLM | `ccs.llm.errors` | > 5 за 10 мин | warning |
+| Ходы стали медленнее | `ccs.llm.duration.bucket` p99 | > 600 000 мс за 30 мин | info |
+| Медиана ходов поползла | `ccs.llm.duration.bucket` p50 | > 300 000 мс за 15 мин | warning |
+| Отказы MCP-инструментов | `ccs.mcp.errors` | > 3 за 15 мин | warning |
+| Сбой синхронизации знаний | `ccs.dify.sync.errors` | > 3 за 15 мин | warning |
+
+Скорость ходов наблюдают два правила разного назначения. **«Ходы стали медленнее»** (p99,
+info) — индикатор «к сведению»: одинокий длинный ход для агентной работы норма, поэтому
+порог 10 мин и окно 30 мин отсеивают шум. Идеально тут требовать нескольких превышений
+(`at_least_n_times`), но SigNoz v0.134 в `threshold_rule` это значение не принимает (нет
+поля-счётчика в DTO) — компенсируем высоким порогом и широким окном. **«Медиана ходов
+поползла»** (p50, warning) ловит массовость: если половина ходов встала на 5+ минут, это
+уже авария, а не один тяжёлый ход — одиночного превышения медианы достаточно для триггера.
 
 > **Канал обязателен.** SigNoz отказывается создавать правило без канала уведомлений
 > («at least one channel is required») — даже когда доставка идёт опросом. Поэтому
@@ -366,12 +415,19 @@ AlertPollingService  →  NotificationService  →  колокол + тост + 
 "Telemetry": {
   "Alerts": {
     "Enabled": true,                    // на деве обычно false
-    "SignozUrl": "http://localhost:3301",
+    "SignozUrl": "http://localhost:3301/telemetry-proxy",
     "ApiKey": "<service account key>",
     "PollSeconds": 60
   }
 }
 ```
+
+> **`SignozUrl` — с base-path.** С v0.134 SigNoz поднимает ВЕСЬ HTTP-сервер (UI и API)
+> под префиксом из `SIGNOZ_GLOBAL_EXTERNAL__URL` (у нас `/telemetry-proxy`, задаётся в
+> `docker-compose.observability.yml`). URL без префикса даёт 404 на всё, кроме
+> `/api/v1/health`, — опрос молча деградирует в warn каждые 60 с. Раньше (до v0.134)
+> префикс относился только к SPA, а API отвечал и в корне — поэтому старые конфиги
+> с `http://localhost:3301` ломаются именно при обновлении SigNoz.
 
 Выключено или без ключа — служба не поднимается вовсе. Состояние разосланного лежит
 в `data/alert-state.json` и переживает перезапуск: повторять старые тревоги после

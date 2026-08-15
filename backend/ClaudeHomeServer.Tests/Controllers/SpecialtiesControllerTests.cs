@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -261,6 +262,128 @@ public class SpecialtiesControllerTests : IClassFixture<TestWebApplicationFactor
         });
         response.StatusCode.Should().Be(HttpStatusCode.Forbidden, "глобальный слой — только admin");
     }
+
+    // --- Слой «пользователь» (B9): назначение настроек конкретному пользователю ---
+
+    // Приоритет слоёв одним проходом: личный бьёт пользовательский, пользовательский
+    // бьёт глобальный; снятие слоя возвращает нижний.
+    [Fact]
+    public async Task Settings_СлойПользователь_ПриоритетЛичныйПользовательскийГлобальный()
+    {
+        var userId = GetSecondUserId();
+        var emptyLayer = new { specialties = new Dictionary<string, object>(), presets = Array.Empty<object>() };
+
+        // Чистый старт: снять все три слоя
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", emptyLayer);
+        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", emptyLayer);
+        await _user.PutAsJsonAsync("/api/specialties/settings", emptyLayer);
+
+        var backendCell = new { tierStrong = "global-model" };
+        // 1) Только глобальный — все ходят им
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", new
+        {
+            specialties = new Dictionary<string, object> { ["backendExecutor"] = backendCell },
+            presets = Array.Empty<object>(),
+        });
+        GetEffectiveStrong(userId).Should().Be("global-model");
+
+        // 2) Назначение пользователю бьёт глобальный
+        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", new
+        {
+            specialties = new Dictionary<string, object> { ["backendExecutor"] = new { tierStrong = "user-model" } },
+            presets = Array.Empty<object>(),
+        });
+        GetEffectiveStrong(userId).Should().Be("user-model",
+            "слой пользователя сильнее глобального");
+
+        // 3) Личный слой бьёт пользовательский
+        await _user.PutAsJsonAsync("/api/specialties/settings", new
+        {
+            specialties = new Dictionary<string, object> { ["backendExecutor"] = new { tierStrong = "owner-model" } },
+            presets = Array.Empty<object>(),
+        });
+        GetEffectiveStrong(userId).Should().Be("owner-model",
+            "личный слой сильнее назначения пользователя");
+
+        // 4) Снятие личного слоя возвращает назначение пользователя
+        await _user.PutAsJsonAsync("/api/specialties/settings", emptyLayer);
+        GetEffectiveStrong(userId).Should().Be("user-model");
+
+        // 5) Снятие назначения возвращает глобальный
+        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", emptyLayer);
+        GetEffectiveStrong(userId).Should().Be("global-model");
+
+        // Уборка
+        await _admin.PutAsJsonAsync("/api/specialties/settings/global", emptyLayer);
+    }
+
+    // Эффективная strong-ячейка матрицы для пользователя — через SpecialtyMatrices стора
+    // (тот же путь, которым идёт резолв ходов UserModelTierResolver).
+    private string? GetEffectiveStrong(string userId)
+    {
+        var store = _factory.Services.GetRequiredService<ClaudeHomeServer.Services.SpecialtySettingsStore>();
+        return store.SpecialtyMatrices(userId, ClaudeHomeServer.Models.PersonaSpecialty.BackendExecutor)
+            .FirstOrDefault()?.Strong;
+    }
+
+    // Изоляция: назначение видно только своему пользователю; назначает и снимает только
+    // админ; не-админ не читает чужие назначения, своё — читает.
+    [Fact]
+    public async Task Settings_СлойПользователь_ИзоляцияИПрава()
+    {
+        var userId = GetSecondUserId();
+        var layer = new
+        {
+            specialties = new Dictionary<string, object>
+            {
+                ["backendExecutor"] = new { tierStrong = "user-model" },
+            },
+            presets = Array.Empty<object>(),
+        };
+        var emptyLayer = new { specialties = new Dictionary<string, object>(), presets = Array.Empty<object>() };
+
+        // Не-админ не назначает слои пользователям
+        (await _user.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", layer)).StatusCode
+            .Should().Be(HttpStatusCode.Forbidden, "назначение — только admin");
+
+        // Админ назначает — пользователь видит назначение в своём settings.user
+        (await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", layer)).StatusCode
+            .Should().Be(HttpStatusCode.OK);
+        var settings = await (await _user.GetAsync("/api/specialties/settings"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        settings.GetProperty("user").GetProperty("specialties")
+            .TryGetProperty("backendExecutor", out var userEntry).Should().BeTrue(
+                "назначение пользователю видно ему в поле user его settings");
+
+        // Изоляция: у другого пользователя (админа) поле user пустое и эффективная модель
+        // не задета назначением seconduser
+        var adminSettings = await (await _admin.GetAsync("/api/specialties/settings"))
+            .Content.ReadFromJsonAsync<JsonElement>();
+        adminSettings.GetProperty("user").GetProperty("specialties").EnumerateObject()
+            .Should().BeEmpty("UserId админа свой — назначение seconduser ему не видно");
+
+        // Не-админ читает своё назначение, чужое — нет
+        (await _user.GetAsync($"/api/specialties/settings/user/{userId}")).StatusCode
+            .Should().Be(HttpStatusCode.OK, "своё назначение пользователь читает");
+        var adminId = GetAdminUserId();
+        (await _user.GetAsync($"/api/specialties/settings/user/{adminId}")).StatusCode
+            .Should().Be(HttpStatusCode.Forbidden, "чужое назначение не-админу недоступно");
+
+        // Неизвестный пользователь — 404
+        (await _admin.GetAsync("/api/specialties/settings/user/no-such-id")).StatusCode
+            .Should().Be(HttpStatusCode.NotFound);
+
+        // Уборка
+        await _admin.PutAsJsonAsync($"/api/specialties/settings/user/{userId}", emptyLayer);
+    }
+
+    private string GetSecondUserId() =>
+        _factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
+            .GetAll().Single(u => u.Username == TestWebApplicationFactory.SecondUsername).Id;
+
+    private string GetAdminUserId() =>
+        _factory.Services.GetRequiredService<ClaudeHomeServer.Services.UserStore>()
+            .GetAll().Single(u => u.Username == TestWebApplicationFactory.TestUsername).Id;
 
     // --- Сквозное применение шаблона к персоне ---
 

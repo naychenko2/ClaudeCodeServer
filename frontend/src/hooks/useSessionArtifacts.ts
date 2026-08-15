@@ -526,27 +526,6 @@ export function countFiles(items: ChatItem[], rootPath: string): number {
   return keys.size;
 }
 
-// Множество путей, ИЗМЕНЁННЫХ чатом, — для фильтра «только файлы чата» в панели
-// «Изменения». В отличие от countFiles пути, лишь упомянутые в тексте ответа, сюда
-// НЕ входят (упоминание — не правка). Берутся все file_changed, включая external=true —
-// это любая правка без заявки Edit/Write за время хода (TurnFileWatcher сторожит весь
-// rootPath): Bash/скрипты модели, но и человек в IDE в этот момент — принятое ограничение.
-// Ключи — lowercase с прямыми слэшами (как в computeArtifacts) — для сравнения
-// с путями git status (от корня репо, прямые слэши).
-export function computeChangedPaths(items: ChatItem[], rootPath: string): Set<string> {
-  const keys = new Set<string>();
-  for (const it of items) {
-    if (it.kind === 'file_changed') {
-      keys.add(it.path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase());
-    } else if (it.kind === 'tool_use' && WRITE_TOOLS.has(it.name)) {
-      const raw = extractToolPath(it.input);
-      const rel = raw ? toRelative(raw, rootPath) : null;
-      if (rel) keys.add(rel.toLowerCase());
-    }
-  }
-  return keys;
-}
-
 // Хук: подписывается на ленту активной сессии и мемоизует артефакты.
 // projectId/rootPath опциональны: в чат-режиме проекта нет, лента едет через
 // api.chats.getHistory, а с пустым rootPath файлы из абсолютных путей отсекаются

@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote } from 'lucide-react';
+import { AlertTriangle, X, File, Trash2, Maximize2, Columns2, RotateCcw, Save, Download, Music, Menu, SquarePen, Eye, Code, Copy, Check, FileDiff, History, Users, MessageCircle, MessageSquare, ChevronLeft, ChevronRight, TableOfContents, Lightbulb, StickyNote } from 'lucide-react';
 import SyntaxHighlighter from 'react-syntax-highlighter/dist/esm/prism-light';
 import { oneLight, oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
@@ -19,7 +19,7 @@ import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
 import yaml from 'react-syntax-highlighter/dist/esm/languages/prism/yaml';
 import sql from 'react-syntax-highlighter/dist/esm/languages/prism/sql';
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup';
-import type { Project, GitBlameLine, GitLogEntry } from '../types';
+import type { Project, GitBlameLine, GitLogEntry, ChangedBySession } from '../types';
 import { api } from '../lib/api';
 import { basename } from '../lib/paths';
 import { resolveDocImage, resolveDocLink, sliceSection, slugify } from '../lib/docsLinks';
@@ -48,7 +48,7 @@ import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
 import { base64ToBytes } from '../lib/binary';
-import { C, FONT, FS, MODAL_W, SHADOW, SP, TB } from '../lib/design';
+import { C, FONT, FS, MODAL_W, R, SHADOW, SP, TB } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch } from './Toolbar';
 import { ToolbarOverflowMenu, type OverflowItem } from './ToolbarOverflowMenu';
 import { useToolbarOverflow } from '../hooks/useToolbarOverflow';
@@ -120,6 +120,12 @@ interface Props {
   // показывает не эта зона (заметка vault рисуется своим NoteView). Панель по этому
   // null исчезает вместе со своей кнопкой, сохраняя место в раскладке.
   onTocChange?: (toc: DocToc | null) => void;
+  // Другие чаты проекта, менявшие этот файл (панель «Изменения» → бейдж/шапка диффа
+  // считают то же самое) — строка «Также меняли» в шапке вкладки Diff. undefined/пусто —
+  // строка не рисуется (нет данных, worktree-контекст активного чата, файл не менялся другими)
+  changedBy?: ChangedBySession[];
+  // Переход в чат по клику на имя из «Также меняли»
+  onOpenChat?: (sessionId: string) => void;
 }
 
 interface FileContent {
@@ -332,7 +338,7 @@ function AudioFilePlayer({ src, mimeType, fileName, fileSizeMb }: {
   );
 }
 
-export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange }: Props) {
+export function FileViewer({ project, filePath, onClose, onToggleFullscreen, fullscreen, isMobile, onOpenSidebar, initialTab, gitStagePath, scrollToLine, onOpenFile, scrollToAnchor, onFileBack, onFileForward, canFileBack, canFileForward, onTocChange, changedBy, onOpenChat }: Props) {
   const online = useOnline();
   // Хост-режим: путь абсолютный (вне корня проекта) — файл открыт карточкой инструмента/
   // изменённого файла чата, живущего в другом дереве. Контент — через /host-files/content,
@@ -1408,8 +1414,15 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       width: '100%', marginTop: 12,
       borderTop: `1px solid ${C.border}`, paddingTop: 4,
     } : {
+      // Липкая накладка: колонка плывёт справа (текст её обтекает), но при прокрутке
+      // остаётся в правом верхнем углу. Ниже зоны обтекания текст идёт во всю ширину
+      // и уходит ПОД колонку — поэтому фон непрозрачный, а рамка с тенью читаются
+      // как наложенная карточка, а не как часть документа
       float: 'right', width: 290, marginLeft: 18, marginBottom: 12,
-      borderLeft: `1px solid ${C.border}`, paddingLeft: 14,
+      position: 'sticky', top: SP.xs, zIndex: 1,
+      maxHeight: 'calc(100vh - 150px)', overflowY: 'auto',
+      background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
+      padding: '10px 12px', boxShadow: SHADOW.card,
     }}>
       <DocPropsPanel state={docProps} />
       <div ref={setSideEl} />
@@ -1984,10 +1997,40 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
         {!loading && !loadError && tab === 'diff' && (
           diff
-            ? <div data-selection-scope="doc" data-selection-priority="2"><DiffView
-                diff={diff}
-                staging={gitStagePath ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
-              /></div>
+            ? <div data-selection-scope="doc" data-selection-priority="2">
+                {/* «Также меняли» — другие чаты проекта, менявшие тот же файл (тот же
+                    источник, что бейдж в панели «Изменения»). Имена кликабельны — переход
+                    в чат. Пусто/нет данных — строка не рисуется */}
+                {changedBy && changedBy.length > 0 && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 5,
+                    padding: '6px 12px', fontSize: 12, fontFamily: FONT.sans, color: C.textMuted,
+                    borderBottom: `1px solid ${C.border}`, background: C.bgSelected,
+                  }}>
+                    <MessageSquare size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                    <span style={{ flexShrink: 0 }}>Также меняли:</span>
+                    {changedBy.map((s, i) => (
+                      <span key={s.sessionId} style={{ flexShrink: 0 }}>
+                        <span
+                          onClick={() => onOpenChat?.(s.sessionId)}
+                          title={onOpenChat ? 'Открыть чат' : undefined}
+                          style={{
+                            color: C.accent, cursor: onOpenChat ? 'pointer' : 'default',
+                            textDecoration: onOpenChat ? 'underline' : undefined,
+                          }}
+                        >
+                          «{s.name}»
+                        </span>
+                        {i < changedBy.length - 1 && ','}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <DiffView
+                  diff={diff}
+                  staging={gitStagePath ? { busy: stageBusy, onStageHunk: handleStageHunk, onStageLines: handleStageLines } : undefined}
+                />
+              </div>
             : <div style={{ color: C.textMuted, fontSize: 13, padding: 16 }}>Файл не изменён</div>
         )}
 

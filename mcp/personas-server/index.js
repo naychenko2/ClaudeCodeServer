@@ -224,9 +224,10 @@ const PERSONA_FIELDS = {
   outputFormat: { type: 'string' },
   speechExamples: { type: 'array', items: { type: 'string' } },
   systemPrompt: { type: 'string', description: 'УСТАРЕЛО: единый текст характера — используй character' },
-  model: { type: 'string', description: 'Модель LLM (пусто = дефолт сервера)' },
-  // Уровень модели вместо конкретной: резолвится в модель на бэке (слоты владельца).
-  // Явная model сильнее уровня; уровень самой задачи сильнее обоих.
+  // Уровень модели — единственный способ задать модель персоны (конкретную модель через
+  // MCP передать нельзя: поле «Модель» убрано из карточки, настраивается только ячейками
+  // уровней). Уровень резолвится в модель на бэке (слоты владельца); уровень самой задачи
+  // сильнее уровня персоны.
   modelTier: {
     type: 'string',
     enum: ['strong', 'medium', 'weak'],
@@ -408,7 +409,7 @@ const TOOLS = [
   {
     name: 'personas_update',
     description: 'Изменить персону: поля как при создании, передавай только изменяемые. ' +
-      'Пустая строка очищает role/model/effort/color/greeting (specialty — "none"). ' +
+      'Пустая строка очищает role/effort/color/greeting (specialty — "none"). ' +
       'Смена scope на "project" требует projectId.' +
       (BINDINGS ? ' bindings — ПОЛНАЯ замена набора привязок (свои собственные менять нельзя).' : ''),
     inputSchema: {
@@ -675,7 +676,10 @@ function personaBody(args, keys) {
   return body;
 }
 
-const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'model', 'modelTier', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
+// model сознательно отсутствует: конкретная модель персоне через MCP не задаётся (поле
+// «Модель» убрано из карточки — настраивается только ячейками уровней), и даже явная
+// передача model в аргументах сюда не попадёт — поле не попадёт и в body запроса
+const FIELD_KEYS = ['name', 'role', 'specialty', 'description', 'systemPrompt', 'modelTier', 'effort', 'color', 'greeting', 'memoryEnabled', 'scope', 'projectId', 'handle'];
 
 // Запрет самоэскалации: персона не может менять СОБСТВЕННЫЕ привязки
 // (проверка до любого fetch — изменение прав себе блокируется по построению)

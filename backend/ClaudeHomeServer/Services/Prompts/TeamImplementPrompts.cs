@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.RegularExpressions;
 using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Prompts;
@@ -435,10 +436,44 @@ public static class TeamImplementPrompts
         "(уточнить постановку, перевыдать работу, поправить план) — сделай это в пределах бюджета, " +
         "иначе позови человека маркером эскалации.";
 
+    // Первая содержательная строка текста модели в плоском виде: идёт в заголовок карточки
+    // остановки, в push (тело уведомления) и в цитаты ходов координатора — везде, где сырая
+    // разметка (##, **, бэктики, «- ») видна как есть. Правила зеркалят
+    // frontend/src/lib/markdownPlain.ts; лимит 120 считаем УЖЕ по очищенной строке, иначе
+    // хвост съедали бы снятые символы. Строки, от которых после чистки ничего не осталось
+    // (фенс, горизонтальная линейка, одинокая решётка), пропускаем — заголовок не должен
+    // оказаться пустым из-за оформления.
     private static string FirstLine(string text)
     {
-        var line = (text ?? "").Trim().Split('\n').FirstOrDefault()?.Trim() ?? "";
-        return line.Length <= 120 ? line : line[..120] + "…";
+        foreach (var raw in (text ?? "").Split('\n'))
+        {
+            var line = StripMarkdown(raw);
+            if (line.Length == 0) continue;
+            return line.Length <= 120 ? line : line[..120] + "…";
+        }
+        return "";
+    }
+
+    // Снятие markdown-разметки с одной строки (порядок правил — как в markdownPlain.ts).
+    private static string StripMarkdown(string line)
+    {
+        // Рамка код-фенса целиком, содержимое остаётся обычным текстом
+        line = Regex.Replace(line, @"^[ \t]*(?:```|~~~).*$", "");
+        // Начало строки: заголовок ATX, цитата, горизонтальная линейка, маркер списка
+        line = Regex.Replace(line, @"^[ \t]*#{1,6}[ \t]+", "");
+        line = Regex.Replace(line, @"^[ \t]*>[ \t]?", "");
+        line = Regex.Replace(line, @"^[ \t]*(?:-{3,}|\*{3,}|_{3,})[ \t]*$", "");
+        line = Regex.Replace(line, @"^[ \t]*(?:[-*+]|\d+[.)])[ \t]+", "");
+        // Картинки и ссылки — только подпись
+        line = Regex.Replace(line, @"!\[([^\]]*)\]\([^)]*\)", "$1");
+        line = Regex.Replace(line, @"\[([^\]]*)\]\([^)]*\)", "$1");
+        // Инлайн-код и выделение; одиночное «_» снимаем только по краям слова,
+        // иначе разрежет snake_case-идентификаторы
+        line = Regex.Replace(line, "`+", "");
+        line = Regex.Replace(line, @"\*\*|__|~~", "");
+        line = Regex.Replace(line, @"\*([^*]+)\*", "$1");
+        line = Regex.Replace(line, @"(^|[^\p{L}\p{N}_])_([^_]+)_(?=[^\p{L}\p{N}_]|$)", "$1$2");
+        return Regex.Replace(line, @"\s+", " ").Trim();
     }
 
     // Описание задачи исполнителю по под-задаче плана: что сделать, файлы во владении,

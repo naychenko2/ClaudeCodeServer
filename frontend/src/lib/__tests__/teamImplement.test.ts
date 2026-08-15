@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import type { ChatItem, ServerMessage, SessionTeamImplement, TeamEscalationKind, TeamPlan } from '../../types';
 import {
   teamImplementBadgeText, teamImplementStageShort, teamImplementTone,
-  teamEscalationTone, teamEscalationInformational, teamEscalationDetailsLines,
+  teamEscalationTone, teamEscalationInformational, teamEscalationDetailsMarkdown,
   teamImplementSwitchesMode, teamImplementModeHeld, teamImplementModeWarning,
   teamPlanRunLabel, TEAM_IMPLEMENT_MODE_HELD, TEAM_IMPLEMENT_AUTO_TITLE,
   teamPlanningIndicatorVisible, teamPlanningElapsedLabel, teamPlanningDoneText,
@@ -114,28 +114,41 @@ describe('карточка эскалации: тон и разбор детал
     expect(teamEscalationInformational(unknown)).toBe(false);
   });
 
-  // Состав под-задач приходит строками «— Заголовок (волна N)» — их рисуем списком,
-  // остальное абзацами (иначе карточка добавочной волны читается одной простынёй)
-  it('details режется на абзацы и пункты состава', () => {
+  // Состав под-задач приходит строками «— Заголовок (волна N)»: длинное тире markdown
+  // маркером списка не считает, поэтому перед рендером приводим его к «- ». Блок списка
+  // отбивается пустыми строками — иначе строка под последним пунктом уезжает внутрь него
+  it('состав под-задач становится markdown-списком, отбитым от абзацев', () => {
     const details = [
       'Под-задач: 2 · волн: 1 · исполнителей: 2.',
       '— Экспорт в XLSX (волна 1)',
       '— Кнопка выгрузки (волна 1)',
       'Работа уже идёт: авто-волны включены, и подтверждения она не ждёт.',
     ].join('\n');
-    expect(teamEscalationDetailsLines(details)).toEqual([
-      { kind: 'text', text: 'Под-задач: 2 · волн: 1 · исполнителей: 2.' },
-      { kind: 'item', text: 'Экспорт в XLSX (волна 1)' },
-      { kind: 'item', text: 'Кнопка выгрузки (волна 1)' },
-      { kind: 'text', text: 'Работа уже идёт: авто-волны включены, и подтверждения она не ждёт.' },
-    ]);
+    expect(teamEscalationDetailsMarkdown(details)).toBe([
+      'Под-задач: 2 · волн: 1 · исполнителей: 2.',
+      '',
+      '- Экспорт в XLSX (волна 1)',
+      '- Кнопка выгрузки (волна 1)',
+      '',
+      'Работа уже идёт: авто-волны включены, и подтверждения она не ждёт.',
+    ].join('\n'));
   });
 
-  it('однострочный details остаётся одним абзацем, пустой — ничем', () => {
-    expect(teamEscalationDetailsLines('Кира: нет доступа к базе')).toEqual([
-      { kind: 'text', text: 'Кира: нет доступа к базе' },
-    ]);
-    expect(teamEscalationDetailsLines('')).toEqual([]);
+  it('уже дефисный список не ломается, короткое тире — тоже список', () => {
+    expect(teamEscalationDetailsMarkdown('- Экспорт в XLSX (волна 1)')).toBe('- Экспорт в XLSX (волна 1)');
+    expect(teamEscalationDetailsMarkdown('– Кнопка выгрузки (волна 2)')).toBe('- Кнопка выгрузки (волна 2)');
+  });
+
+  // Тире внутри строки — это тире текста, а не маркер: трогать его нельзя
+  it('обычный абзац не меняется, тире внутри строки остаётся тире', () => {
+    const text = 'Под-задача «Экспорт» провалилась дважды — перевыдача не помогла.';
+    expect(teamEscalationDetailsMarkdown(text)).toBe(text);
+  });
+
+  it('готовые абзацы через пустую строку и пустой details', () => {
+    expect(teamEscalationDetailsMarkdown('Волна 2 не стартовала целиком.\n\nБюджет: задачи 6 из 6'))
+      .toBe('Волна 2 не стартовала целиком.\n\nБюджет: задачи 6 из 6');
+    expect(teamEscalationDetailsMarkdown('')).toBe('');
   });
 });
 

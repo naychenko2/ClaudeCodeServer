@@ -5,6 +5,7 @@ import { C, FONT, FS, R } from '../../lib/design';
 import { useAssistantName, PersonaContext } from './contexts';
 import { personaLabel } from '../../lib/personas';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
+import { markdownToPlain } from '../../lib/markdownPlain';
 
 // Уточняющий вопрос Claude (AskUserQuestion) — интерактивная карточка выбора
 interface QuestionDef { question: string; header?: string; multiSelect?: boolean; options: Array<{ label: string; description?: string }> }
@@ -61,7 +62,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
             if (chosen.length === 0) return null;
             return (
               <div key={qi}>
-                <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: 4 }}>{q.header || q.question}</div>
+                <div style={{ fontSize: FS.sm, color: C.textSecondary, marginBottom: 4 }}>{markdownToPlain(q.header || q.question)}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                   {chosen.map((label, li) => (
                     <span key={li} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: FS.sm, fontWeight: 600, color: C.successText, background: C.bgWhite, border: `1px solid ${C.success}`, borderRadius: R.sm, padding: '3px 9px' }}>
@@ -118,8 +119,9 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
 
   const renderQuestion = (q: QuestionDef, qi: number) => (
     <div>
+      {/* Текст вопроса и подписи опций — от модели: строчный контекст, markdown снимаем */}
       <div style={{ fontSize: FS.base, color: C.textHeading, fontWeight: 600, marginBottom: 9 }}>
-        {q.question}
+        {markdownToPlain(q.question)}
         {q.multiSelect && <span style={{ fontWeight: 400, color: C.textMuted, fontSize: FS.xs }}> · можно несколько</span>}
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -138,7 +140,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
               {!q.multiSelect && <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}><ChoiceMarker multi={false} selected={isSel} /></span>}
               <span style={{ flex: 1 }}>
                 <span style={{ display: 'block', fontSize: FS.base, fontWeight: 600, color: C.textHeading }}>{opt.label}</span>
-                {opt.description && <span style={{ display: 'block', fontSize: FS.sm, color: C.textSecondary, marginTop: 2, lineHeight: 1.4 }}>{opt.description}</span>}
+                {opt.description && <span style={{ display: 'block', fontSize: FS.sm, color: C.textSecondary, marginTop: 2, lineHeight: 1.4 }}>{markdownToPlain(opt.description)}</span>}
               </span>
               {q.multiSelect && <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}><ChoiceMarker multi selected={isSel} /></span>}
             </button>
@@ -222,7 +224,7 @@ export function AskQuestionView({ item, online, onAnswer, onInterrupt }: {
                 {ans
                   ? <Check size={11} color={C.accent} strokeWidth={3.5} style={{ flexShrink: 0 }} />
                   : <span style={{ width: 6, height: 6, borderRadius: '50%', background: active ? C.accent : C.textMuted, flexShrink: 0 }} />}
-                {q.header || `Q${qi + 1}`}
+                {markdownToPlain(q.header ?? '') || `Q${qi + 1}`}
               </button>
             );
           })}

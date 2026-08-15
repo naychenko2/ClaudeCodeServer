@@ -26,6 +26,10 @@ import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
+import { speak, stopSpeaking, primeAudio, setSpeechToast } from '../lib/tts';
+import { needAnswer, primeBeep } from '../lib/beep';
+import type { SpeechPhase } from '../hooks/useHandsFree';
+import { updateChatFields } from '../lib/chatUpdate';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
 import { getDraft } from '../lib/drafts';
 import { useModelCaps, assistantName, planModelChange } from '../lib/models';
@@ -217,6 +221,56 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       throw err;
     }
   }, [session.id, workLoopState, onSessionUpdated]);
+
+  // Голосовой режим чата: короткий формат ответа (секция промпта + оговорка персоны на
+  // бэке) + озвучка ответа. Прайминг аудио прямо в обработчике клика — политика autoplay
+  // разрешает воспроизведение только после пользовательского жеста.
+  const voiceMode = session.voiceMode === true;
+  // Фаза озвучки для режима разговора: петля в композере открывает микрофон только когда
+  // она вернулась в idle. Ведётся С ТОКЕНОМ вызова (Р12): новый speak внутри себя зовёт
+  // stopSpeaking(), и finally предыдущего иначе сбросил бы фазу уже начавшейся озвучки —
+  // микрофон открылся бы под играющее аудио
+  const [speechPhase, setSpeechPhase] = useState<SpeechPhase>('idle');
+  const speechCallRef = useRef(0);
+  const startSpeaking = useCallback((text: string) => {
+    const call = ++speechCallRef.current;
+    // Синхронно, ДО первого await: в кадре завершения хода петля обязана видеть, что
+    // озвучка будет, иначе успеет открыть микрофон ровно под старт синтеза
+    setSpeechPhase('willSpeak');
+    void (async () => {
+      try {
+        setSpeechPhase('speaking');
+        await speak(text);
+      } finally {
+        if (speechCallRef.current === call) setSpeechPhase('idle');
+      }
+    })();
+  }, []);
+  // Прервать озвучку: заодно осиротить текущий вызов, чтобы его finally не трогал фазу
+  const stopSpeech = useCallback(() => {
+    speechCallRef.current++;
+    stopSpeaking();
+    setSpeechPhase('idle');
+  }, []);
+  // Значение ПРИХОДИТ от композера: запрошенное состояние (PUT ещё в полёте) знает
+  // только он — там же живёт петля разговора. Свой ref здесь был вторым источником
+  // правды и после провала PUT или смены чата инвертировал режим
+  const handleToggleVoiceMode = useCallback(async (next: boolean) => {
+    primeAudio();
+    // Разбудить аудиоконтекст сигналов в том же жесте: сигнал «нужно решение» может
+    // понадобиться и без запуска петли, а вне жеста браузер контекст не пустит
+    primeBeep();
+    try {
+      const updated = await updateChatFields(session, { voiceMode: next });
+      onSessionUpdated?.(updated); // без этого кнопка не перерисуется
+      if (!next) stopSpeech();
+    } catch (err) {
+      showToast('Голосовой режим', err instanceof Error ? err.message : 'Не удалось переключить режим');
+      // Прокидываем: без флага на сервере эффект озвучки молчит (он гейтится voiceMode),
+      // и петля разговора крутилась бы вхолостую — композер по ошибке её гасит
+      throw err;
+    }
+  }, [session, onSessionUpdated, stopSpeech]);
 
   // Режим «Командная реализация»: live-состояние из событий team_implement,
   // до первого события — из Session.teamImplement; null — режим выключен
@@ -596,6 +650,55 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       notify(`${asstName} закончил`, `${session.name ?? 'Чат'}: ход завершён`);
     resultCountRef.current = rc;
   }, [items, session.name, asstName, muted]);
+  // Озвучка ответа в голосовом режиме — ОТДЕЛЬНЫЙ эффект, не расширение соседнего:
+  // тот гейтится notificationsMuted, а мьют браузерных уведомлений к озвучке отношения
+  // не имеет. Считаем свой счётчик result: ChatPanel живёт без key (см. комментарий про
+  // смену чата ниже), реф между чатами не обнуляется — без сброса по session.id переход
+  // из чата с 2 результатами в чат с 5 зачитал бы вслух чужой старый ответ.
+  const speakCountRef = useRef<number | null>(null);
+  const speakSessionRef = useRef(session.id);
+  useEffect(() => { setSpeechToast((text) => showToast('Озвучка', text)); }, []);
+  useEffect(() => {
+    const switched = speakSessionRef.current !== session.id;
+    if (switched) {
+      speakSessionRef.current = session.id;
+      speakCountRef.current = null; // первая загрузка нового чата — молчим
+      stopSpeech();
+    }
+    // Пока история грузится, items пуст у ЛЮБОГО чата: базовая отметка, взятая здесь,
+    // равна нулю, и первый же загруженный снапшот выглядел бы как новые ответы —
+    // открытие старого чата и F5 зачитывали бы вслух вчерашний ход. Baseline берём
+    // с первого ЗАГРУЖЕННОГО снапшота (та же причина, что у emptyChatFocus выше).
+    if (isHistoryLoading) {
+      speakCountRef.current = null;
+      return;
+    }
+    const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
+    const prev = speakCountRef.current;
+    speakCountRef.current = rc;
+    if (switched || prev === null || rc <= prev) return;
+    if (!voiceMode) return;
+    // Цикл «до готово» (Р8): отличить финальный result от промежуточного в момент события
+    // нельзя, а читать вслух каждую итерацию — мусор
+    if (workLoopState) return;
+
+    // Текст последнего ответа: все text-элементы ПОСЛЕ предыдущего result, без реплик
+    // сабагентов (parentToolUseId) — их озвучивать незачем
+    const lastResult = items.map((it, i) => ({ it, i })).filter(x => x.it.kind === 'result').at(-1);
+    const prevResultIdx = items.map((it, i) => ({ it, i })).filter(x => x.it.kind === 'result').at(-2)?.i ?? -1;
+    if (!lastResult) return;
+    const text = items
+      .slice(prevResultIdx + 1, lastResult.i)
+      .flatMap(it => (it.kind === 'text' && !it.parentToolUseId ? [it.text] : []))
+      .join('\n')
+      .trim();
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- фаза озвучки обязана выставиться синхронно в этом же кадре (Р12)
+    if (text) startSpeaking(text);
+  }, [items, session.id, voiceMode, workLoopState, isHistoryLoading, startSpeaking, stopSpeech]);
+
+  // Уход со страницы/размонтирование — озвучка не должна пережить чат
+  useEffect(() => () => stopSpeaking(), []);
+
   const pendingRef = useRef<string | undefined>(pendingMessage);
   pendingRef.current = pendingMessage;
   // «Свежие» значения для стабильных колбэков (useCallback без лишних пересозданий):
@@ -665,6 +768,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [isJoined, send, pendingMessage]);
 
   const handleSend = async (text: string, _attachments?: string[], opts?: { auto?: boolean }) => {
+    // Новый вопрос обрывает чтение предыдущего ответа. Прайминг здесь — второе место
+    // (первое в тумблере): режим персистится на чате, и «включил вчера — надиктовал
+    // сегодня» иначе упрётся в autoplay-политику браузера
+    stopSpeech();
+    if (voiceMode) primeAudio();
     // Авто-обвязка «Обсудить с командой» вложений не несёт — берём только при ручной отправке
     if (opts?.auto) {
       atBottomRef.current = true;
@@ -991,6 +1099,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const awaitingResponse = items.some(it =>
     (it.kind === 'permission_request' || it.kind === 'ask_question') && !it.resolved
   );
+  // Звуковой сигнал «нужно твоё решение» в голосовом режиме: карточку на экране человек
+  // не видит — он либо идёт с телефоном в кармане, либо слушает ответ. Сигнал живёт здесь,
+  // а не в петле, чтобы звучать и с выключенной петлёй (режим включён — значит слушают).
+  // Петля этот же случай доозвучивает фразой, с задержкой на длину сигнала
+  const prevAwaitingRef = useRef(false);
+  useEffect(() => {
+    const was = prevAwaitingRef.current;
+    prevAwaitingRef.current = awaitingResponse;
+    if (awaitingResponse && !was && voiceMode) needAnswer();
+  }, [awaitingResponse, voiceMode]);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
@@ -1975,6 +2093,14 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             onboarding={!!session.onboardingKind}
             worktreeBranch={session.worktreeBranch}
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
+            voiceMode={voiceMode}
+            onToggleVoiceMode={handleToggleVoiceMode}
+            // Вопрос модели выводит режим разговора из петли: голосом на разрешение
+            // не ответишь. Именно awaitingResponse, а НЕ isWaiting (тот = «ход идёт»
+            // и уходит выше как isGenerating)
+            awaitingResponse={awaitingResponse}
+            speechPhase={speechPhase}
+            onStopSpeech={stopSpeech}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
             rateWindow={worstRate}

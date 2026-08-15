@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
-import { AlertTriangle, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -26,6 +26,9 @@ import { showToast } from '../lib/toast';
 import { Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
+import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
+import { primeAudio } from '../lib/tts';
+import { isMicKeyboardFallback } from '../lib/voiceInput';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
@@ -98,6 +101,23 @@ export interface ComposerProps {
   // (ProjectGitBar), в композере остаётся только управление
   worktreeBranch?: string | null;
   onToggleWorktree?: () => void | Promise<void>;
+  // Голосовой режим чата: короткий формат ответа + озвучка. Кнопка видна при заданном
+  // onToggleVoiceMode; включённое состояние показываем цветом-токеном, а не только иконкой.
+  // Она же запускает режим разговора (hands-free) — отдельного тумблера озвучки больше нет
+  // Значение ЯВНОЕ, а не «переключи сам»: запрошенное состояние знает только композер
+  // (он же ведёт петлю), и второй источник правды в ChatPanel инвертировал бы режим
+  // после провалившегося PUT или смены чата
+  voiceMode?: boolean;
+  onToggleVoiceMode?: (next: boolean) => void | Promise<void>;
+  // Модель ждёт решения человека (permission_request / ask_question): режим разговора
+  // по нему выходит из петли — голосом на такое не ответишь
+  awaitingResponse?: boolean;
+  // Фаза озвучки ответа; владелец — ChatPanel (он зовёт speak). Петля открывает микрофон
+  // только когда фаза вернулась в idle — иначе она услышит собственный голос
+  speechPhase?: SpeechPhase;
+  // Оборвать играющую озвучку (владелец — ChatPanel): тап по кнопке разговора начинает
+  // с неё, иначе микрофон откроется под чтение предыдущего ответа
+  onStopSpeech?: () => void;
   // Краткий контекст последних реплик чата — для механики «Панель экспертов»
   // с настройкой «Приложить контекст чата» (собирает ChatPanel из ленты)
   chatContext?: string;
@@ -377,6 +397,11 @@ export function Composer({
   onboarding = false,
   worktreeBranch = null,
   onToggleWorktree,
+  voiceMode = false,
+  onToggleVoiceMode,
+  awaitingResponse = false,
+  speechPhase = 'idle',
+  onStopSpeech,
   chatContext,
   promptSuggestion = null,
   rateWindow,
@@ -424,11 +449,18 @@ export function Composer({
   // поэтому второй раз тот же restore до этого эффекта просто не доходит. Прежние ref-гарды
   // (applied-seq со сбросом при смене чата) как раз и воскрешали текст: seq — per-session
   // счётчик, сброс на переключении чата снимал фильтр с уже применённой команды.
+  // Последний ход отправлен петлёй разговора, а не руками. Живёт рядом с эффектом
+  // восстановления, потому что нужен только ему
+  const loopSentRef = useRef(false);
   useEffect(() => {
     const r = restore;
     if (!r || r.seq === 0) return;
     if (getDraft(sessionId).trim()) return;          // черновик важнее
     if (r.text == null) return;                      // нечего восстанавливать
+    // Ход отправлен голосом и прерван выходом из разговора: возвращать сказанное в поле
+    // нельзя. Человек этот текст не печатал и на экран не смотрит, а непустое поле подменит
+    // кнопку режима на «Отправить» — войти в разговор снова будет нечем
+    if (loopSentRef.current) { loopSentRef.current = false; return; }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- восстановление прерванного сообщения из события composer_restore
     setText(r.text);
     if (r.attachedPaths && r.attachedPaths.length > 0 && onReplaceAttachments) {
@@ -513,11 +545,26 @@ export function Composer({
   // Собеседнику можно длинную подпись (иначе она режется по 200px)
   const widePickers = !compactStrip && (stripWidth === 0 || stripWidth >= STRIP_WIDE);
 
+  // Режим разговора активен — зеркало фазы петли для колбэков движка распознавания.
+  // Объявлено ДО useVoiceInput: маршрут распознанного текста (буфер петли или поле ввода)
+  // и признак quiet читаются синхронно, в момент события движка
+  const talkActiveRef = useRef(false);
+  // Колбэки петли доступны только после её объявления (ниже) — держим ссылку
+  const handsFreeRef = useRef<{ onRecognized: (t: string) => void; onCycleEnd: () => void; onCycleError: (c: string) => void } | null>(null);
+
   // Голосовой ввод целиком в хуке: распознанное дописываем к тексту, а при мёртвом
-  // движке просто ставим фокус — диктовать будет системный ввод клавиатуры
+  // движке просто ставим фокус — диктовать будет системный ввод клавиатуры.
+  // В режиме разговора текст идёт в буфер петли (иначе появление текста в поле сделало бы
+  // из кнопки режима «Отправить» и намусорило в черновике), а тосты ведёт сама петля
   const { hasSpeech, isListening, recSeconds, startMic, stopMic } = useVoiceInput({
-    onResult: chunk => setText(prev => (prev ? prev + ' ' + chunk : chunk)),
+    onResult: chunk => {
+      if (talkActiveRef.current) handsFreeRef.current?.onRecognized(chunk);
+      else setText(prev => (prev ? prev + ' ' + chunk : chunk));
+    },
     onKeyboardFallback: () => textareaRef.current?.focus(),
+    onEnd: () => { if (talkActiveRef.current) handsFreeRef.current?.onCycleEnd(); },
+    onError: code => { if (talkActiveRef.current) handsFreeRef.current?.onCycleError(code); },
+    quiet: () => talkActiveRef.current,
   });
 
   // Автозапуск «Обсудить с командой» — чат открыт через «Созвать команду» из центра
@@ -658,15 +705,22 @@ export function Composer({
     }
   };
 
-  const handleSend = async () => {
-    const t = text.trim();
+  // overrideText — отправка мимо поля ввода (режим разговора шлёт свой буфер): текст
+  // берётся из аргумента, а resetInput() НЕ зовётся, иначе петля затирала бы недописанный
+  // черновик пользователя вместе с высотой поля.
+  // Возвращает, ушёл ли ход: петля разговора по false возвращается слушать
+  const handleSend = async (overrideText?: string): Promise<boolean> => {
+    const t = (overrideText ?? text).trim();
+    // Обычная отправка руками снимает пометку голосового хода: её текст человек писал сам,
+    // и вернуть его в поле при прерывании — правильное поведение
+    if (overrideText === undefined) loopSentRef.current = false;
 
     // Режим «Командная реализация»: обвязки нет — включаем режим на сессии и отправляем
     // тему обычным сообщением, дальше чат работает штабом (планирование → волны → проверка)
     if (teamMech === 'implementMode') {
-      if (!t) { setTeamOpen(true); return; }
+      if (!t) { setTeamOpen(true); return false; }
       // Вне проекта команды нет — состав обязателен (подсказка в зоне настроек)
-      if (!isProjectChat && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
+      if (!isProjectChat && teamSettings.participants.length === 0) { setTeamOpen(true); return false; }
       // Режим уже включён — сообщение уходит как новая вводная, не пересобирая состояние
       if (!teamImplement && onEnableTeamImplement) {
         try {
@@ -678,7 +732,7 @@ export function Composer({
           // Включение не удалось (причину уже показал тост) — вводную НЕ отправляем
           // обычным сообщением (M11): текст остаётся в поле, механика не сбрасывается,
           // человек может повторить или разобраться с причиной отказа
-          return;
+          return false;
         }
       }
       setLastMechanic(sessionId, 'implementMode');
@@ -686,8 +740,8 @@ export function Composer({
       setTeamMech(null);
       setTeamOpen(false);
       setTeamSettings(DEFAULT_TEAM_SETTINGS);
-      resetInput();
-      return;
+      if (overrideText === undefined) resetInput();
+      return true;
     }
 
     // Командный ход: текст поля — тема, обвязка собирается buildTeamTurnText
@@ -696,8 +750,8 @@ export function Composer({
       // (они работают по текущему диффу/контексту); дискуссии и командной реализации
       // нужен хотя бы один участник (подсказка — в зоне настроек)
       const topicOptional = teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
-      if (!t && !topicOptional) { setTeamOpen(true); return; }
-      if ((teamMech === 'discuss' || teamMech === 'implement') && teamSettings.participants.length === 0) { setTeamOpen(true); return; }
+      if (!t && !topicOptional) { setTeamOpen(true); return false; }
+      if ((teamMech === 'discuss' || teamMech === 'implement') && teamSettings.participants.length === 0) { setTeamOpen(true); return false; }
       // Автопилот работает только через цикл «до готово»: включаем work-loop ДО отправки
       // (PUT /chats/{id}/loop), только если он ещё не активен. Включение может не удаться
       // (чат занят, 4xx/5xx, обрыв) — тогда ход НЕ отправляем (как с «Командной реализацией»
@@ -706,7 +760,7 @@ export function Composer({
         try {
           await onToggleWorkLoop();
         } catch {
-          return;
+          return false;
         }
       }
       setLastMechanic(sessionId, teamMech);
@@ -714,13 +768,118 @@ export function Composer({
       setTeamMech(null);
       setTeamOpen(false);
       setTeamSettings(DEFAULT_TEAM_SETTINGS);
-      resetInput();
-      return;
+      if (overrideText === undefined) resetInput();
+      return true;
     }
 
-    if (!t && attachments.length === 0) return;
+    if (!t && attachments.length === 0) return false;
     onSend(t, attachments);
-    resetInput();
+    if (overrideText === undefined) resetInput();
+    return true;
+  };
+
+  // Режим разговора: автомат петли (слушаю → окно отмены → отправка → ход → озвучка →
+  // снова слушаю). Объявлен строго ВЫШЕ раннего return по offline — иначе на пропадании
+  // связи число хуков разъезжается
+  const handsFree = useHandsFree({
+    isGenerating,
+    awaitingResponse,
+    speechPhase,
+    offline: !!offline,
+    isListening,
+    startMic,
+    stopMic,
+    // Помечаем ход как голосовой: если его прервут выходом из разговора, бэкенд пришлёт
+    // composer_restore, и сказанное вернулось бы в поле ввода (см. эффект восстановления)
+    onSend: (t) => { loopSentRef.current = true; return handleSend(t); },
+    onStop,
+    activeRef: talkActiveRef,
+  });
+  useEffect(() => { handsFreeRef.current = handsFree; });
+  const talkActive = handsFree.active;
+
+  // Отсчёт окна отмены (2 секунды) — только для подписи в полосе ввода; сам таймер
+  // ведёт автомат петли
+  const [pendingLeft, setPendingLeft] = useState(0);
+  useEffect(() => {
+    if (handsFree.phase !== 'pending') return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- визуальный отсчёт окна отмены
+    setPendingLeft(2);
+    const id = setInterval(() => setPendingLeft(v => Math.max(0, v - 1)), 1000);
+    return () => clearInterval(id);
+  }, [handsFree.phase]);
+
+  // ЗАПРОШЕННОЕ значение голосового режима: PUT летит асинхронно, и второй тап должен
+  // сверяться с ним, а не с пропом. Иначе двойной тап оставлял бы режим включённым на
+  // сервере при выключенной петле — чат отвечает коротко и вслух, хотя человек «всё выключил»
+  const voiceModeWantedRef = useRef(voiceMode);
+  useEffect(() => { voiceModeWantedRef.current = voiceMode; }, [voiceMode]);
+
+  // Тап по кнопке режима. Синхронная часть жеста (прайминг аудио и старт микрофона) идёт
+  // ДО любого await: политика autoplay и разрешение микрофона живут только внутри жеста
+  const handleVoiceButton = () => {
+    if (talkActive) {
+      // В разговоре у кнопки ОДИН смысл — «прекрати»: заткнуть чтение, прервать ход,
+      // выйти из режима. Разбирать, в какой фазе мы сейчас, человеку на ходу некогда,
+      // а других кнопок в этот момент на экране нет
+      onStopSpeech?.();
+      // Прерывать ход надо и тогда, когда isGenerating ещё false: между отправкой и
+      // статусом «идёт ответ» есть окно в секунду-две, и клик в него оставлял бы ход
+      // жить — модель отвечала уже после выхода из разговора. Фаза петли знает про
+      // отправку раньше сервера. В speaking не зовём: ход там уже завершён, и
+      // прерывание нарисовало бы в ленте ложную карточку «Ход остановлен»
+      if (isGenerating || handsFree.phase === 'sending' || handsFree.phase === 'waiting') onStop();
+      handsFree.stop();
+      // Тап при активной петле выключает и сам голосовой режим (Р3)
+      if (voiceModeWantedRef.current) {
+        voiceModeWantedRef.current = false;
+        void Promise.resolve(onToggleVoiceMode?.(false)).catch(() => {
+          // Сервер остался во включённом состоянии — ref обязан это отражать, иначе
+          // следующий тап пошлёт то же самое значение и режим залипнет (тост уже показан)
+          voiceModeWantedRef.current = true;
+        });
+      }
+      return;
+    }
+    if (!hasSpeech || isMicKeyboardFallback()) {
+      showToast('Разговор', 'Распознавание речи на этом устройстве недоступно');
+      return;
+    }
+    if (workLoop?.active) {
+      showToast('Разговор', 'Идёт цикл «до готово» — разговор запустится после него');
+      return;
+    }
+    // Во время хода место кнопки режима занимает «Стоп» генерации, так что штатно сюда
+    // не попасть — гейт страхует гонку (ход стартовал между отрисовкой и тапом)
+    if (isGenerating) {
+      showToast('Разговор', 'Идёт ответ — дождитесь его или остановите ход');
+      return;
+    }
+    if (awaitingResponse) {
+      showToast('Разговор', 'Сначала ответьте на вопрос в ленте — голосом на него не ответить');
+      return;
+    }
+    if (teamMech) {
+      showToast('Разговор', 'Сначала снимите командную механику — она отправляет ход по-своему');
+      return;
+    }
+    // Режим озвучки персистится на чате, поэтому ответ читается вслух и без петли:
+    // тап по кнопке разговора означает «хватит читать, говорю я». Без обрыва микрофон
+    // открылся бы под играющий синтез и кусок ответа ушёл бы в чат репликой человека
+    onStopSpeech?.();
+    primeAudio();
+    handsFree.start();
+    startMic();
+    // PUT уходит следом за жестом. Провал гасит петлю: эффект озвучки в ChatPanel
+    // гейтится voiceMode, и без флага на сервере петля крутилась бы молча
+    if (!voiceModeWantedRef.current) {
+      voiceModeWantedRef.current = true;
+      void Promise.resolve(onToggleVoiceMode?.(true))
+        .catch(() => {
+          voiceModeWantedRef.current = false;
+          handsFree.abort('Не удалось включить голосовой режим — разговор выключен');
+        });
+    }
   };
 
   // Вставка файла из буфера (скриншот, документ) → отдаём File-объекты родителю на загрузку.
@@ -978,7 +1137,36 @@ export function Composer({
     </button>
   ) : null;
 
-  const inputArea = isListening ? (
+  // Режим разговора — СВОЯ ветка полосы ввода (ветку ручной записи ниже не трогаем:
+  // там красная точка, таймер и подтверждение вставки, здесь — фазы петли)
+  const loopArea = (
+    <div style={{ ...dotsStyle, gap: 10 }}>
+      {handsFree.phase === 'listening' ? (
+        <>
+          <span style={{ fontSize: FS.sm, color: C.accent, fontWeight: 600, flexShrink: 0 }}>слушаю</span>
+          <Waveform />
+        </>
+      ) : handsFree.phase === 'pending' ? (
+        <>
+          <span style={{
+            flex: 1, minWidth: 0, fontSize: FS.base, color: C.textPrimary,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {handsFree.buffer}
+          </span>
+          <span style={{ fontSize: 13, color: C.accent, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0 }}>
+            {pendingLeft > 0 ? `${pendingLeft}…` : 'отправляю'}
+          </span>
+        </>
+      ) : (
+        <span style={{ fontSize: FS.sm, color: C.textMuted, fontWeight: 600 }}>
+          {handsFree.phase === 'speaking' ? 'отвечает…' : handsFree.phase === 'sending' ? 'отправляю…' : 'думает…'}
+        </span>
+      )}
+    </div>
+  );
+
+  const inputArea = talkActive ? loopArea : isListening ? (
     <div style={{ ...dotsStyle, gap: 10 }}>
       <span style={{ width: 9, height: 9, borderRadius: '50%', background: C.danger, animation: 'pulsedot 1s ease-in-out infinite', flexShrink: 0 }} />
       <span style={{ fontSize: 13, color: C.dangerText, fontWeight: 600, fontFamily: FONT.mono, flexShrink: 0, minWidth: 34 }}>{fmtRecTime(recSeconds)}</span>
@@ -1195,6 +1383,58 @@ export function Composer({
     </button>
   ) : null;
 
+  // Кнопка режима разговора — ОДНА на всё: занимает место «Отправить» при пустом поле,
+  // запускает петлю (сказал → пауза → отправка → ответ вслух → снова слушаю) и выключает
+  // её вместе с голосовым режимом. Отдельного тумблера озвучки (Volume2/VolumeX) больше нет.
+  // Три состояния читаются цветом: выключено — нейтральная плашка, режим включён без петли —
+  // светлый accent, петля активна — заливка accent
+  const voiceButton = onToggleVoiceMode ? (
+    <button
+      type="button"
+      onClick={handleVoiceButton}
+      onContextMenu={(e) => e.preventDefault()}
+      title={talkActive
+        ? 'Разговор идёт: говори — отвечу вслух. Нажми, чтобы выключить'
+        : voiceMode
+          ? 'Голосовой режим включён (ответы короткие и вслух). Нажми — начнём разговор без рук'
+          : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
+      aria-label="Режим разговора"
+      style={{
+        ...iconBtnGuard,
+        width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
+        background: talkActive ? C.accent : voiceMode ? C.accentLight : C.bgSelected,
+        color: talkActive ? C.onAccent : voiceMode ? C.accent : C.textMuted,
+        cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+        transition: 'background 0.15s, color 0.15s',
+      }}
+    >
+      <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
+    </button>
+  ) : null;
+
+  // Кнопка разговора в АКТИВНОЙ петле: всегда «остановить», в любой фазе. Отдельная от
+  // voiceButton, потому что и вид, и смысл другие — не тумблер режима, а аварийный выход
+  // (глушит чтение, прерывает ход, выходит из режима). Стиль повторяет «Стоп» генерации:
+  // одинаковое действие должно выглядеть одинаково
+  const talkStopButton = onToggleVoiceMode ? (
+    <button
+      type="button"
+      onClick={handleVoiceButton}
+      onContextMenu={(e) => e.preventDefault()}
+      title="Остановить разговор: прерву ответ и выйду из режима"
+      aria-label="Остановить разговор"
+      style={{
+        ...iconBtnGuard,
+        width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
+        background: C.textHeading, color: C.bgMain, cursor: 'pointer',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+      }}
+    >
+      <StopIcon />
+    </button>
+  ) : null;
+
   // Во время записи mic+send заменяются на отмену (✕) и подтверждение (✓)
   const cancelRecBtn = (
     <button type="button" onClick={() => stopMic(false)} onContextMenu={(e) => e.preventDefault()} title="Отменить запись"
@@ -1213,9 +1453,7 @@ export function Composer({
   // (работают по текущему диффу/контексту)
   const canSend = hasText || attachments.length > 0
     || teamMech === 'qa' || teamMech === 'review' || teamMech === 'redteam';
-  // «Стоп» показываем, только когда чат активен и в поле ничего не введено.
-  // Как только появился текст — кнопка становится «Отправить» (даже во время генерации).
-  const sendButton = isGenerating && !canSend ? (
+  const stopButton = (
     <button
       type="button"
       onClick={onStop}
@@ -1238,10 +1476,14 @@ export function Composer({
     >
       <StopIcon />
     </button>
-  ) : (
+  );
+
+  // «Стоп» показываем, только когда чат активен и в поле ничего не введено.
+  // Как только появился текст — кнопка становится «Отправить» (даже во время генерации).
+  const sendButton = isGenerating && !canSend ? stopButton : (
     <button
       type="button"
-      onClick={handleSend}
+      onClick={() => void handleSend()}
       onContextMenu={(e) => e.preventDefault()}
       disabled={!canSend}
       title={isMobile ? 'Отправить' : 'Отправить (Enter) · Shift+Enter — новая строка'}
@@ -1501,7 +1743,16 @@ export function Composer({
       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
         {inputArea}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-          {isListening ? <>{cancelRecBtn}{confirmRecBtn}</> : <>{micButton}{sendButton}</>}
+          {/* Три ветки правой группы. В петле — ВСЕГДА одна кнопка «остановить», в любой
+              фазе (решение владельца): один жест глушит чтение, прерывает ход и выходит
+              из режима. Разбираться, что означает кнопка сейчас, на ходу невозможно.
+              Вне петли кнопка режима стоит на месте «Отправить» при пустом поле —
+              порядок «стоп → отправить» внутри sendButton не меняется */}
+          {talkActive
+            ? talkStopButton
+            : isListening
+              ? <>{cancelRecBtn}{confirmRecBtn}</>
+              : <>{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
     </div>

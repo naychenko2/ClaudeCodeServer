@@ -339,17 +339,23 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     return st.log.filter(c => !un.has(c.sha));
   }, [st.log, st.unpushed]);
 
-  // Коммиты по дням — разделителем-чертой, как чаты в списке (лог уже отсортирован
-  // от свежих к старым, поэтому просто режем его на подряд идущие дни)
+  // Коммиты по дням — разделителем-чертой, как чаты в списке. Группируем по
+  // КАЛЕНДАРНОМУ дню (Map), а не по подряд идущим коммитам: порядок лога по дате
+  // строгим не бывает (merge, ребейз, чужая таймзона), и один день попадал в список
+  // двумя блоками. А два блока с одной подписью — это дублирующийся React-ключ
+  // (title): реконсиляция ломается, и при уходе со скоупа ветки список коммитов
+  // оставался на экране вместо файлов рабочего дерева. Заодно чинится свёртка —
+  // collapsedDays тоже ключуется подписью дня.
   const commitDays = useMemo(() => {
-    const out: { title: string; items: GitLogEntry[] }[] = [];
+    const byDay = new Map<string, GitLogEntry[]>();
     for (const c of pushedCommits) {
       const title = dayGroupTitle(new Date(c.date));
-      const last = out[out.length - 1];
-      if (last && last.title === title) last.items.push(c);
-      else out.push({ title, items: [c] });
+      const items = byDay.get(title);
+      if (items) items.push(c);
+      else byDay.set(title, [c]);
     }
-    return out;
+    // Порядок групп — по первому появлению дня в логе (Map хранит порядок вставки)
+    return [...byDay].map(([title, items]) => ({ title, items }));
   }, [pushedCommits]);
 
   // Файлы выбранного скоупа (read-only) — коммит или стэш; грузим при активации

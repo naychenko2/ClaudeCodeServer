@@ -1,4 +1,4 @@
-import { memo, useState, useContext, useEffect } from 'react';
+import { memo, useState, useContext, useEffect, type ReactNode } from 'react';
 import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap, ChevronDown } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
@@ -436,10 +436,14 @@ function UserMessageBubble({ text, ts, children }: {
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache }: {
+function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead }: {
   text: string; online: boolean; onRetry: () => void; streaming?: boolean;
   model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
   turnCache?: { read: number; creation: number } | null;
+  // Плавающий элемент над текстом (аватар автора в персон-чате): первые строки ответа
+  // обтекают его справа, дальше текст идёт полной шириной — под аватаром не копится
+  // пустая полоса на всю высоту длинного сообщения
+  lead?: ReactNode;
 }) {
   // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
   const project = useContext(ChatProjectContext);
@@ -470,6 +474,9 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
       }}>
         {/* data-selection-doc: Ctrl+A в чате выделяет последний ответ ассистента (см. selectionScope) */}
         <div data-selection-doc="" style={{ fontSize: 14, color: C.textHeading, wordBreak: 'break-word' }}>
+          {/* Аватар-«лид»: float слева внутри пузыря — короткий ответ стоит рядом с лицом,
+              длинный обтекает его и продолжается под аватаром полной шириной */}
+          {lead && <div style={{ float: 'left', margin: '1px 9px 2px -3px' }}>{lead}</div>}
           <MarkdownContent text={text} />
           {/* Мигающая каретка стриминга (B2) */}
           {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
@@ -1117,13 +1124,21 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       );
       // Пост сабагента кнопки «какой промпт ушёл» не получает: его промпт собирал CLI,
       // а наш снимок описывает ход основного агента
+      //
+      // В персон-чате у реплики ассистента — аватар автора (главный сигнал «говорит она»).
+      // Авторство реплики (personaId из истории) главнее текущей персоны чата: после
+      // смены собеседника старые реплики сохраняют аватар прежней персоны. Аватар всплывает
+      // лидом ВНУТРЬ пузыря (lead в TextMessageView): текст обтекает его, и под ним не
+      // тянется пустая полоса на всю высоту длинного ответа.
+      const author = item.personaId ? (getPersonaById(item.personaId) ?? persona) : persona;
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
           <TextMessageView text={bodyText} online={online} onRetry={onRetry} streaming={streaming}
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
-            turnContextTokens={turnContextTokens} turnCache={turnCache} />
+            turnContextTokens={turnContextTokens} turnCache={turnCache}
+            lead={author ? <PersonaAvatar persona={author} size={28} /> : undefined} />
           {/* Карточка предложения командной механики — запуск только по кнопке */}
           {teamMechanicOffer && (
             <TeamMechanicOfferCard
@@ -1147,16 +1162,6 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
         </div>
       );
-      // В персон-чате слева от реплики ассистента — её аватар (главный сигнал «говорит она»).
-      // Авторство реплики (personaId из истории) главнее текущей персоны чата: после
-      // смены собеседника старые реплики сохраняют аватар прежней персоны.
-      const author = item.personaId ? (getPersonaById(item.personaId) ?? persona) : persona;
-      const rendered = author ? (
-        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-          <div style={{ flexShrink: 0, marginTop: 1 }}><PersonaAvatar persona={author} size={28} /></div>
-          <div style={{ flex: 1, minWidth: 0 }}>{msg}</div>
-        </div>
-      ) : msg;
       // F1/F2: доклад с id задачи под флагом — карточка с путём к результату. Лицом идёт
       // персона-исполнитель (автор реплики), а не персона чата: доклад пишет она.
       // Нет id (старая история, F5) — прежний рендер бейджем.
@@ -1170,7 +1175,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           />
         );
       }
-      return rendered;
+      return msg;
     }
 
     case 'thinking': {

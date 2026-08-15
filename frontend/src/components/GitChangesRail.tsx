@@ -10,7 +10,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties } from 'react';
 import {
   GitBranch, GitCommit, ChevronDown, ChevronRight, RefreshCw, ArrowDownToLine,
-  Settings, Sparkles, Undo2, Pencil, X, List, ListTree, Folder,
+  Settings, Sparkles, Undo2, Pencil, X, List, ListTree, ListFilter, Folder,
   ListChecks, CheckCheck, FoldVertical, UnfoldVertical, MessageSquarePlus, MessageSquare, MessageSquareDot, MessagesSquare,
   Check, Plus, Archive, ArchiveRestore, Trash2, UploadCloud, ExternalLink, FileDiff, User,
 } from 'lucide-react';
@@ -22,7 +22,8 @@ import {
   gitStage, gitUnstage, gitDiscard, gitDiscardAll, gitCommit, gitFetch, gitPull, gitCheckout, gitCreateBranch,
   gitStashPush, gitStashPop, gitStashDrop, clearGitError, gitSetAutoCommit, gitSaveNow, gitInit,
 } from '../lib/git';
-import { splitPath, relTime, fileChatBadge } from '../lib/gitFormat';
+import { splitPath, relTime, fileChatBadge, fileMatchesChatFilter, countChatFilter } from '../lib/gitFormat';
+import type { ChatFilterMode } from '../lib/gitFormat';
 import { useIsTouch } from '../lib/breakpoints';
 import { useLongPress } from '../hooks/useLongPress';
 import { PublishDialog } from './PublishDialog';
@@ -101,6 +102,47 @@ const chatBtnStyle: CSSProperties = {
   background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg,
   cursor: 'pointer', color: C.textSecondary, fontSize: 11.5, fontFamily: FONT.sans, whiteSpace: 'nowrap',
 };
+
+// Фильтр списка по авторству правки. Порядок пунктов — от общего к частному:
+// «все» → мой вклад → чужой → мимо чатов. Иконки те же, что у бейджа в строке файла
+// (см. renderFileRow), поэтому фильтр и бейдж читаются как одна система обозначений
+const CHAT_FILTER_ORDER: ChatFilterMode[] = ['all', 'mine', 'others', 'shared', 'outside'];
+const CHAT_FILTER_LABEL: Record<ChatFilterMode, string> = {
+  all: 'Все изменения',
+  mine: 'Только этот чат',
+  others: 'Другие чаты',
+  shared: 'Несколько чатов',
+  outside: 'Правки вне чатов',
+};
+// Подпись полосы состояния над списком — она говорит про уже отфильтрованный список,
+// поэтому формулировка другая, чем у пункта меню
+const CHAT_FILTER_BANNER: Record<ChatFilterMode, string> = {
+  all: '',
+  mine: 'Только файлы этого чата',
+  others: 'Файлы других чатов',
+  shared: 'Файлы, которые меняли несколько чатов',
+  outside: 'Правки вне чатов',
+};
+// Что показать вместо списка, когда фильтр спрятал все строки при непустом git status
+const CHAT_FILTER_EMPTY: Record<ChatFilterMode, string> = {
+  all: '',
+  mine: 'Этот чат файлы не менял',
+  others: 'Другие чаты файлов не меняли',
+  shared: 'Нет файлов, которые меняли бы несколько чатов',
+  outside: 'Правок вне чатов нет',
+};
+// «Все изменения» — своя иконка, а не общая с «этим чатом»: одинаковый значок у двух
+// режимов не давал бы прочитать с кнопки, включён фильтр или нет. Нейтральный ListFilter
+// читается как «фильтр в покое», остальные три — теми же значками, что бейдж строки.
+// «Другие чаты» — MessageSquare (чат без точки = не мой), а «много листочков»
+// (MessagesSquare) отдан своему пункту «Несколько чатов»: в бейдже строки этот значок
+// кодирует количество чатов (2+), и фильтр обязан значить ровно то же
+const chatFilterIcon = (mode: ChatFilterMode, size: number) =>
+  mode === 'others' ? <MessageSquare size={size} strokeWidth={ICON_STROKE} />
+  : mode === 'shared' ? <MessagesSquare size={size} strokeWidth={ICON_STROKE} />
+  : mode === 'outside' ? <User size={size} strokeWidth={ICON_STROKE} />
+  : mode === 'mine' ? <MessageSquareDot size={size} strokeWidth={ICON_STROKE} />
+  : <ListFilter size={size} strokeWidth={ICON_STROKE} />;
 
 interface Props {
   project: Project;
@@ -200,7 +242,8 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   // Свёрнутые дни в истории ветки (ключ — подпись группы). Не персистим: история
   // длинная, и свёрнутое вчера сегодня уже про другой день
   const [collapsedDays, setCollapsedDays] = useState<Set<string>>(new Set());
-  const [chatOnly, setChatOnly] = useState(false);                     // тогл «только файлы текущего чата» (не персистим)
+  const [chatFilter, setChatFilter] = useState<ChatFilterMode>('all'); // фильтр «кто менял файл» (не персистим)
+  const [chatMenu, setChatMenu] = useState<DOMRect | null>(null);      // меню фильтра (якорь кнопки в шапке)
   const [selectMode, setSelectMode] = useState(false);                 // режим выбора файлов (чекбоксы)
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set()); // снятые файлы (в режиме выбора)
   const [summary, setSummary] = useState('');
@@ -227,9 +270,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   const [forgejoCreds, setForgejoCreds] = useState<{ login: string; password: string | null } | null>(null);
   const [credsBusy, setCredsBusy] = useState(false);
   const [savingNow, setSavingNow] = useState(false);                           // «Сохранить сейчас» (документный режим)
-  // Меню настроек репозитория живёт порталом: пока оно открыто, контролы шапки не
-  // гаснут — иначе кнопка, которой его открыли, исчезает под курсором
-  usePanelHeaderHold(!!repoMenu);
+  // Меню настроек репозитория и меню фильтра живут порталом: пока открыты, контролы
+  // шапки не гаснут — иначе кнопка, которой его открыли, исчезает под курсором
+  usePanelHeaderHold(!!repoMenu || !!chatMenu);
 
   // Ширина панели — прячем подписи главных кнопок на узкой колонке (планшет).
   // До первого замера (0) считаем панель широкой, чтобы подписи не мигали
@@ -421,16 +464,24 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
     () => (isWorking || isBranch || isStash) ? null : st.unpushed.find(c => c.sha === activeScope) ?? null,
     [isWorking, isBranch, isStash, st.unpushed, activeScope]);
   const rows = isWorking ? workingFiles : commitRows;
-  // Фильтр «только файлы чата» — ЧИСТО отображение: режет только видимые строки и
+  // Фильтр «кто менял файл» — ЧИСТО отображение: режет только видимые строки и
   // счётчик скоупа. Стейджинг, «Отменить все», guard переключения ветки и форма
   // фиксации работают по полному workingFiles. В форме фиксации фильтр не действует
   // (список полный), чтобы «Зафиксировать» никогда не расходился с видимым.
-  const chatFilterOn = chatOnly && sessionFiles !== undefined && isWorking && mode !== 'commit';
+  const chatFilterOn = chatFilter !== 'all' && sessionFiles !== undefined && isWorking && mode !== 'commit';
   const visibleRows = useMemo(
     // Пути git status — от корня репо с прямыми слэшами (porcelain v2), ключи
     // sessionFiles — lowercase в том же формате: сравнение по lowercase корректно
-    () => chatFilterOn ? rows.filter(f => sessionFiles!.has(f.path.toLowerCase())) : rows,
-    [chatFilterOn, rows, sessionFiles]);
+    () => chatFilterOn ? rows.filter(f => fileMatchesChatFilter(f.path, changedBy, sessionFiles, chatFilter)) : rows,
+    [chatFilterOn, rows, changedBy, sessionFiles, chatFilter]);
+  // Счётчики пунктов меню — по полному списку рабочего дерева (сколько будет, если
+  // выбрать), поэтому от текущего выбора не зависят. Считаем только там, где меню
+  // вообще доступно: в чужих скоупах changedBy не про эти файлы
+  const chatFilterCounts = useMemo(
+    () => (isWorking && sessionFiles !== undefined)
+      ? countChatFilter(workingFiles.map(f => f.path), changedBy, sessionFiles)
+      : null,
+    [isWorking, workingFiles, changedBy, sessionFiles]);
   const tree = useMemo(() => buildTree(visibleRows), [visibleRows]);
 
   // Глубины всех папок дерева — для кнопок «свернуть/развернуть на уровень»
@@ -811,13 +862,15 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             </IconButton>
           </>
         )}
-        {/* Тогл «только файлы текущего чата»: виден при активном чате в скоупе
-            «Не зафиксировано»; в форме фиксации гаснет — там фильтр не действует */}
+        {/* Фильтр «кто менял файл»: виден при активном чате в скоупе «Не зафиксировано»;
+            в форме фиксации гаснет — там фильтр не действует. Иконка кнопки — та же,
+            что у выбранного режима в меню и в полосе состояния ниже: активный фильтр
+            читается прямо с кнопки, без её открытия */}
         {isWorking && sessionFiles !== undefined && (
-          <IconButton size="xs" active={chatOnly} disabled={mode === 'commit'}
-            title={chatOnly ? 'Показать все файлы' : 'Только файлы текущего чата'}
-            onClick={() => setChatOnly(v => !v)}>
-            <MessageSquareDot size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          <IconButton size="xs" active={chatFilter !== 'all' || !!chatMenu} disabled={mode === 'commit'}
+            title={chatFilter === 'all' ? 'Фильтр: кто менял файл' : `Фильтр: ${CHAT_FILTER_LABEL[chatFilter].toLowerCase()}`}
+            onClick={e => setChatMenu(chatMenu ? null : e.currentTarget.getBoundingClientRect())}>
+            {chatFilterIcon(chatFilter, ICON_SIZE.xs)}
           </IconButton>
         )}
         <IconSegmented<'list' | 'tree'>
@@ -849,6 +902,38 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
         padding: '8px 12px', borderBottom: `1px solid ${C.border}`,
       }}>{controls}</div>
     );
+
+  // Меню фильтра «кто менял файл» — портал по якорю кнопки в шапке. Выбор ОДИН
+  // (взаимоисключающие вопросы к списку), поэтому пункты с галочкой-точкой, а не
+  // чекбоксами. Счётчик справа отвечает «сколько получу, если нажму»: считается по
+  // полному рабочему дереву и от текущего выбора не зависит. Пункт с нулём остаётся
+  // на месте приглушённым — иначе состав меню прыгал бы после каждого хода ИИ
+  const chatMenuEl = chatMenu && chatFilterCounts && (
+    <Menu anchor={chatMenu} minWidth={230} maxHeight={CHAT_FILTER_ORDER.length * 38 + 12} onClose={() => setChatMenu(null)}>
+      {CHAT_FILTER_ORDER.map(m => {
+        const n = chatFilterCounts[m];
+        const active = chatFilter === m;
+        // Пустую корзину выбрать можно, но она приглушена: список станет пустым, и
+        // об этом честно скажет пустое состояние. Запрещать нечего — это не действие
+        const dim = n === 0 && m !== 'all';
+        return (
+          <MenuItem
+            key={m}
+            icon={active ? <Check size={15} strokeWidth={2} color={C.accent} /> : chatFilterIcon(m, 15)}
+            label={
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', minWidth: 0, opacity: dim ? 0.55 : 1 }}>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: active ? 600 : 400 }}>
+                  {CHAT_FILTER_LABEL[m]}
+                </span>
+                <span style={{ flexShrink: 0, fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted }}>{n}</span>
+              </span>
+            }
+            onClick={() => { setChatFilter(m); setChatMenu(null); }}
+          />
+        );
+      })}
+    </Menu>
+  );
 
   // Меню настроек репозитория — портал по якорю кнопки в шапке
   const repoMenuEl = repoMenu && (
@@ -926,6 +1011,7 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
   return (
     <div ref={railRef} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
       {headerControls}
+      {chatMenuEl}
       {repoMenuEl}
       {st.error && (
         <div onClick={() => clearGitError(project.id)} title="Скрыть"
@@ -938,8 +1024,9 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           показывает НЕ полный git status, и без пометки читался бы как он.
           Два случая, одна геометрия: включённый фильтр чата (accent) и открытый
           неопубликованный коммит (серая). Выше не встать — на десктопе шапка панели
-          живёт снаружи (PanelHeaderSlot — портал в карточку). Крышки-закрытия нет:
-          фильтр снимается тем же тоглом в шапке, скоуп — выбором строки ниже */}
+          живёт снаружи (PanelHeaderSlot — портал в карточку). Крестик справа снимает
+          состояние: у фильтра — сбрасывает его в «все файлы» (одним кликом, не заходя
+          в меню), у скоупа — возвращает к рабочему дереву */}
       {(chatFilterOn || scopeCommit || isBranch) && (
         <div style={{
           flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, minHeight: 24,
@@ -949,30 +1036,28 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
           color: chatFilterOn ? C.accent : C.textSecondary,
           whiteSpace: 'nowrap', overflow: 'hidden',
         }}>
-          {/* Иконка та же, что у источника состояния (тогл в шапке / строка коммита /
-              строка ветки внизу) — полоса читается как его продолжение */}
-          {chatFilterOn ? <MessageSquareDot size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+          {/* Иконка та же, что у источника состояния (кнопка фильтра в шапке / строка
+              коммита / строка ветки внизу) — полоса читается как его продолжение */}
+          {chatFilterOn ? <span style={{ display: 'flex', flexShrink: 0 }}>{chatFilterIcon(chatFilter, 12)}</span>
             : scopeCommit ? <GitCommit size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
               : <GitBranch size={12} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />}
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
             title={scopeCommit?.subject}>
             {chatFilterOn
-              ? `Только файлы этого чата · ${visibleRows.length} из ${workingFiles.length}`
+              ? `${CHAT_FILTER_BANNER[chatFilter]} · ${visibleRows.length} из ${workingFiles.length}`
               : scopeCommit
                 ? `Неопубликованный коммит · ${scopeCommit.subject}`
                 : `История ветки · ${status?.branch ?? '—'}`}
           </span>
-          {/* Закрытие просмотра — только в скоупах-«прошлом»: панель возвращается к
-              рабочему дереву. Крестик и его подсказка — тот же жест, что закрывает
-              форму фиксации ниже. У фильтра чата скоуп уже рабочий, закрывать нечего:
-              он снимается тоглом в шапке. Габарит кнопки (24) задаёт высоту полосы */}
-          {!chatFilterOn && (
-            <IconButton size="xs"
-              title={scopeCommit ? 'Закрыть просмотр коммита' : 'Закрыть историю ветки'}
-              onClick={() => selectScope('working')}>
-              <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
-            </IconButton>
-          )}
+          {/* Снятие состояния: у фильтра — вернуть все файлы, у скоупа-«прошлого» —
+              вернуться к рабочему дереву. Тот же жест, что закрывает форму фиксации
+              ниже. Габарит кнопки (24) задаёт высоту полосы */}
+          <IconButton size="xs"
+            title={chatFilterOn ? 'Показать все файлы'
+              : scopeCommit ? 'Закрыть просмотр коммита' : 'Закрыть историю ветки'}
+            onClick={() => { if (chatFilterOn) setChatFilter('all'); else selectScope('working'); }}>
+            <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+          </IconButton>
         </div>
       )}
 
@@ -1040,10 +1125,10 @@ export function GitChangesRail({ project, onOpenDiff, onOpenFile, onOpenCommit, 
             })
           ) : visibleRows.length === 0 ? (
             <div style={{ padding: '20px 12px', textAlign: 'center', fontSize: 12.5, color: C.textMuted, fontFamily: FONT.sans }}>
-              {/* Фильтр чата спрятал все строки при непустом git status — говорим
-                  об этом явно, а не притворяемся чистым деревом */}
+              {/* Фильтр спрятал все строки при непустом git status — говорим об этом
+                  явно (формулировкой под выбранный режим), а не притворяемся чистым деревом */}
               {isWorking
-                ? (chatFilterOn && rows.length > 0 ? 'Этот чат файлы не менял' : 'Рабочее дерево чистое')
+                ? (chatFilterOn && rows.length > 0 ? CHAT_FILTER_EMPTY[chatFilter] : 'Рабочее дерево чистое')
                 : 'Нет файлов'}
             </div>
           ) : viewMode === 'tree'

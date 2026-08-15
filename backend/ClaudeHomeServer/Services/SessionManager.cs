@@ -1983,7 +1983,11 @@ public class SessionManager : IDisposable
                 var projectId = session.ProjectId;
                 var addDirs = _agentSync.GetAddDirs(ownerId, session.Model, projectId);
                 // pmem — для ВСЕХ видимых персон с памятью (включая персону самого чата):
-                // файлы в add-dir видны все, определение сервера дешёвое (ленивый, без процесса)
+                // файлы в add-dir видны все, а Task(agentType=handle) может позвать любую.
+                // Объявление НЕ бесплатное: каждый сервер — отдельный процесс node на ход
+                // (CLI поднимает все stdio-серверы конфига на старте, alwaysLoad на это не
+                // влияет — см. docs/architecture/mcp-servers.md). Сузишь этот список —
+                // сузишь и круг персон, которых можно позвать сабагентом.
                 var (subagents, _) = SplitConsultants(ownerId, session,
                     _personas.GetForContext(ownerId, projectId).ToList());
                 var token = GetServiceToken(ownerId);

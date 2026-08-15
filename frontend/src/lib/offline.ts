@@ -198,7 +198,12 @@ function isNetworkError(e: unknown): boolean {
 
 // --- Запрос ---
 
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number }): Promise<T> {
+// parse: 'blob' — бинарный ответ (mp3 озвучки) отдаётся как Blob, минуя JSON.parse и кэш
+// IndexedDB. Ошибочные ветки (401, !res.ok, офлайн, таймаут) общие с JSON-путём: тело ошибки
+// сервер шлёт JSON'ом и при бинарном запросе — на полях status/body держится фолбэк озвучки.
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' }): Promise<T>;
+export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob' }): Promise<Blob>;
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob' }): Promise<T | Blob> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const isGet = method === 'GET';
 
@@ -214,7 +219,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
-  const { timeoutMs, ...fetchOptions } = options ?? {};
+  const { timeoutMs, parse, ...fetchOptions } = options ?? {};
   const controller = new AbortController();
   const effectiveTimeout = timeoutMs ?? FETCH_TIMEOUT_MS;
   // Признак «прервали мы сами по таймауту»: AbortError от нашего таймера неотличим от
@@ -267,6 +272,9 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       httpErr.body = err;
       throw httpErr;
     }
+
+    // Бинарный ответ (mp3 озвучки): без JSON.parse и без кэша IndexedDB
+    if (parse === 'blob') return await res.blob();
 
     // Тело может быть пустым (Ok() без контента у мутаций) — не парсим пустую строку как JSON
     const text = res.status === 204 ? '' : await res.text();

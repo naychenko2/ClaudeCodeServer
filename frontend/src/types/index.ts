@@ -602,6 +602,8 @@ export interface Session {
   lastReadAt?: string | null;
   // Чат заглушён: браузерные уведомления по нему не показываются
   notificationsMuted?: boolean;
+  // Голосовой режим чата: ответ короткий и озвучивается (POST /api/tts)
+  voiceMode?: boolean;
   // Цикл «до готово» (флаг work-loop); null/отсутствует — цикл выключен
   workLoop?: { promise: string; iteration: number; maxIterations: number; phase: 'working' | 'verifying' } | null;
   // Режим «Командная реализация»; null/отсутствует — режим выключен

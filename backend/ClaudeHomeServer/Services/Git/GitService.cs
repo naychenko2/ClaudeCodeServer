@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Execution;
@@ -39,6 +40,10 @@ public sealed record GitDossierFile(string Path, string Content);
 // Итог записи ветки паспортов: Created=false — дерево снапшота совпало с последним
 // коммитом ветки и новый коммит не создавался; CommitSha — tip ветки в обоих случаях.
 public sealed record GitDossiersWriteResult(bool Created, string CommitSha);
+
+// Tip ветки паспортов: реф, коммит, автор и дата последнего коммита — происхождение
+// данных при обратном чтении ветки (импорт «Историй решений»).
+public sealed record GitDossiersTip(string Ref, string CommitSha, string Author, DateTimeOffset Date);
 
 // Единая точка ЛОКАЛЬНЫХ git-операций над рабочим деревом проекта.
 // Запуск — через слой Execution (ILauncherFactory.ForOwner): для container-пользователей
@@ -748,6 +753,82 @@ public sealed class GitService(ILauncherFactory launchers)
     public Task PushDossiersBranchAsync(
         string? ownerId, string root, GitCredentials? creds = null, CancellationToken ct = default) =>
         NetworkOp(ownerId, root, ["push", "origin", DossiersRef], creds, ct);
+
+    // ---------- Чтение ветки паспортов ccs/dossiers/v1 (plumbing, только read-only) ----------
+
+    // Remote-tracking реф ветки паспортов: фолбэк, когда локальной ветки нет
+    // (репо стянули fetch'ем/клонировали, но ветку у себя не создавали)
+    private static string DossiersRemoteRef => $"refs/remotes/origin/{DossiersRef["refs/heads/".Length..]}";
+
+    // Резолв рефа ветки паспортов: локальная ветка, при её отсутствии — remote-tracking
+    // того же имени. Возвращает имя существующего рефа либо null (ветки нет нигде).
+    // --verify --quiet: отсутствующий реф — exit 1 без вывода (без --verify rev-parse
+    // эхом вернул бы имя как свободный аргумент — поэтому ещё и IsValidSha).
+    public async Task<string?> ResolveDossiersRefAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return null;
+        foreach (var refName in (string[])[DossiersRef, DossiersRemoteRef])
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", refName], ct: ct);
+            if (r.Ok && IsValidSha(r.Stdout.Trim())) return refName;
+        }
+        return null;
+    }
+
+    // Список blob-файлов дерева ветки паспортов (рекурсивно, пути от корня ветки).
+    // Ветка отсутствует либо дерево пустое — пустой список, без ошибки.
+    public async Task<IReadOnlyList<string>> ListDossiersFilesAsync(
+        string? ownerId, string root, CancellationToken ct = default)
+    {
+        var refName = await ResolveDossiersRefAsync(ownerId, root, ct);
+        if (refName is null) return [];
+        // Полный формат ls-tree ("<mode> <type> <sha>\t<path>"), не --name-only:
+        // фильтруем только blob — записи subtree/submodule не нужны
+        var r = await RunAsync(ownerId, root, ["ls-tree", "-r", refName], ct: ct);
+        if (!r.Ok) return [];
+        var files = new List<string>();
+        foreach (var raw in r.Stdout.Split('\n'))
+        {
+            var line = raw.TrimEnd('\r');
+            var tab = line.IndexOf('\t');
+            if (tab < 0) continue;
+            var meta = line[..tab].Split(' ');
+            if (meta is [_, "blob", _]) files.Add(line[(tab + 1)..]);
+        }
+        return files;
+    }
+
+    // Содержимое файла ветки паспортов по пути. null — ветки либо файла нет, или
+    // содержимое бинарное (паспорта — текст). Спека "ref:path" читает по рефу:
+    // рабочее дерево, индекс и HEAD не участвуют.
+    public async Task<string?> ReadDossiersFileAsync(
+        string? ownerId, string root, string relPath, CancellationToken ct = default)
+    {
+        var refName = await ResolveDossiersRefAsync(ownerId, root, ct);
+        if (refName is null) return null;
+        ValidateRel(root, relPath);
+        var spec = relPath.Replace('\\', '/');
+        var r = await RunAsync(ownerId, root, ["cat-file", "blob", $"{refName}:{spec}"], ct: ct);
+        if (!r.Ok) return null;
+        // Бинарь не показываем как текст
+        return r.Stdout.Contains('\0') ? null : r.Stdout;
+    }
+
+    // Tip ветки паспортов: автор и дата последнего коммита (для пометки происхождения
+    // при импорте). null — ветки нет. Формат тот же, что в LogAsync (%x1f между полями).
+    public async Task<GitDossiersTip?> GetDossiersTipAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        var refName = await ResolveDossiersRefAsync(ownerId, root, ct);
+        if (refName is null) return null;
+        var r = await RunAsync(ownerId, root,
+            ["log", "-1", "--pretty=format:%H%x1f%an%x1f%aI", refName], ct: ct);
+        if (!r.Ok) return null;
+        var parts = r.Stdout.Trim().Split('\x1f');
+        if (parts.Length < 3 || !IsValidSha(parts[0])) return null;
+        return DateTimeOffset.TryParse(parts[2], CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
+            ? new GitDossiersTip(refName, parts[0], parts[1], date)
+            : null;
+    }
 
     // ---------- Сетевые операции (remote; таймаут длиннее) ----------
 

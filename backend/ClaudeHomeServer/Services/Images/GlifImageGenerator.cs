@@ -21,9 +21,12 @@ public sealed class GlifImageGenerator : IImageGenerator
 {
     private const string McpUrl = "https://glif.app/api/mcp";
 
-    // Общий бюджет на генерацию: у glif штатный прогон 1–5 минут, дольше ждать нельзя —
-    // на том конце висит человек, ждущий иконку.
-    private static readonly TimeSpan TotalTimeout = TimeSpan.FromSeconds(180);
+    // Общий бюджет на генерацию: сам glif в описании compose_project заявляет штатное
+    // время прогона 1–5 минут, поэтому ждём с запасом. Прежние 180с рвали ход на
+    // середине штатной генерации — человек видел долгое ожидание и отказ. Если и 360с
+    // не хватило, картинку догонит очередь ImageBackfillService (причина «no-image»
+    // у неё транзиентная — повтор будет).
+    private static readonly TimeSpan TotalTimeout = TimeSpan.FromSeconds(360);
     private static readonly TimeSpan DefaultPoll = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan MinPoll = TimeSpan.FromSeconds(2);
     private static readonly TimeSpan MaxPoll = TimeSpan.FromSeconds(15);
@@ -77,6 +80,8 @@ public sealed class GlifImageGenerator : IImageGenerator
                 return [];
             }
 
+            // Последний разобранный ответ — по нему объясняем в логе пустой финал
+            var finished = job;
             IReadOnlyList<string> urls = job.State == GlifJobState.Completed ? job.MediaUrls : [];
             var poll = ClampPoll(job.PollIntervalSeconds);
 
@@ -93,6 +98,7 @@ public sealed class GlifImageGenerator : IImageGenerator
                 }
                 if (status.State == GlifJobState.Completed)
                 {
+                    finished = status;
                     urls = status.MediaUrls;
                     break;
                 }
@@ -102,7 +108,7 @@ public sealed class GlifImageGenerator : IImageGenerator
 
             if (urls.Count == 0)
             {
-                _logger.LogWarning("glif: джоба {JobId} завершилась без медиа", job.JobId);
+                LogEmptyResult(finished);
                 return [];
             }
 
@@ -129,6 +135,27 @@ public sealed class GlifImageGenerator : IImageGenerator
             _logger.LogWarning(ex, "Ошибка генерации картинки через glif");
             return [];
         }
+    }
+
+    // Джоба завершилась, а картинки нет. Два разных случая, и в логе они должны читаться
+    // по-разному: агент вместо генерации ответил текстом/вопросом («Want me to iterate…»,
+    // поля summary + interaction) — это его штатное поведение, промпт надо уточнять;
+    // либо пустой ответ сервера — это транзиентный сбой, лечится повтором.
+    private void LogEmptyResult(GlifJobResult job)
+    {
+        if (job.HasAgentReply)
+            _logger.LogWarning(
+                "glif: агент по джобе {JobId} ответил текстом вместо картинки: «{Summary}» (interaction: {Interaction}) — нужен более однозначный промпт",
+                job.JobId, Short(job.Summary) ?? "(без summary)", Short(job.Interaction) ?? "нет");
+        else
+            _logger.LogWarning("glif: джоба {JobId} завершилась без медиа", job.JobId);
+    }
+
+    private static string? Short(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        var t = text.Trim().ReplaceLineEndings(" ");
+        return t.Length > 300 ? t[..300] + "…" : t;
     }
 
     // Аргументы compose_project. num_images у glif нет — число вариантов просим текстом;

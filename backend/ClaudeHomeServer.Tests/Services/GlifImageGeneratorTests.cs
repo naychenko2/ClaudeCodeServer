@@ -194,4 +194,83 @@ public class GlifImageGeneratorTests
 
         GlifJobParser.Parse(body).State.Should().Be(GlifJobState.Completed);
     }
+
+    [Fact]
+    public void Парсер_УдачнаяДжоба_ТянетSummaryИПустойInteraction()
+    {
+        // Живой формат get_job_status (2026-08-16): рядом с media приходит summary,
+        // interaction у обычного прогона — null
+        var body = """
+            {"result":{"structuredContent":{
+              "outputType":"project_update","status":"completed",
+              "summary":"Here's your icon.","jobId":"job-6",
+              "media":[{"url":"https://i.glifusercontent.com/i:r/a.jpg","title":"icon","kind":"image"}],
+              "interaction":null}}}
+            """;
+
+        var job = GlifJobParser.Parse(body);
+
+        job.State.Should().Be(GlifJobState.Completed);
+        job.Summary.Should().Be("Here's your icon.");
+        job.Interaction.Should().BeNull("interaction: null — это не вопрос");
+        job.HasAgentReply.Should().BeTrue();
+        job.MediaUrls.Should().ContainSingle();
+    }
+
+    [Fact]
+    public void Парсер_АгентОтветилВопросомВместоКартинки_ЭтоВидноПоSummaryИInteraction()
+    {
+        // Джоба completed, медиа нет, зато агент переспрашивает — отличаем от пустого отказа
+        var body = """
+            {"result":{"structuredContent":{
+              "outputType":"project_update","status":"completed","jobId":"job-7",
+              "summary":"Want me to iterate on the icon style?",
+              "media":[],
+              "interaction":{"type":"question","question":"Flat or 3D?"}}}}
+            """;
+
+        var job = GlifJobParser.Parse(body);
+
+        job.State.Should().Be(GlifJobState.Completed);
+        job.MediaUrls.Should().BeEmpty();
+        job.Summary.Should().Be("Want me to iterate on the icon style?");
+        job.Interaction.Should().Be("Flat or 3D?");
+        job.HasAgentReply.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Парсер_ПустойФиналБезОтветаАгента_ОтличаетсяОтВопроса()
+    {
+        var job = GlifJobParser.Parse("""{"result":{"structuredContent":{"jobId":"job-8","status":"completed","media":[]}}}""");
+
+        job.State.Should().Be(GlifJobState.Completed);
+        job.MediaUrls.Should().BeEmpty();
+        job.HasAgentReply.Should().BeFalse("сказать агенту было нечего — это пустой отказ, а не вопрос");
+    }
+
+    [Fact]
+    public void Парсер_SummaryИInteractionВTextБлоке_ТожеНаходятся()
+    {
+        var body = """
+            {"result":{"content":[{"type":"text","text":"{\"jobId\":\"job-9\",\"status\":\"completed\",\"summary\":\"Need more detail\",\"interaction\":\"Which palette?\"}"}]}}
+            """;
+
+        var job = GlifJobParser.Parse(body);
+
+        job.Summary.Should().Be("Need more detail");
+        job.Interaction.Should().Be("Which palette?");
+        job.HasAgentReply.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Парсер_ЧужаяФормаInteraction_НеРонитРазбор()
+    {
+        // Объект без знакомых полей — берём сырой JSON, лишь бы было что показать в логе
+        var odd = GlifJobParser.Parse("""{"result":{"structuredContent":{"jobId":"j","status":"completed","interaction":{"foo":1}}}}""");
+        odd.Interaction.Should().Be("""{"foo":1}""");
+
+        // Массив/число вопросом не считаем
+        GlifJobParser.Parse("""{"result":{"structuredContent":{"jobId":"j","status":"completed","interaction":[1,2]}}}""")
+            .HasAgentReply.Should().BeFalse();
+    }
 }

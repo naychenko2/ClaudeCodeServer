@@ -22,10 +22,20 @@ public sealed record GlifJobResult(
     string? ProjectId,
     double? PollIntervalSeconds,
     IReadOnlyList<string> MediaUrls,
-    string? Error)
+    string? Error,
+    // Текстовый ответ агента (поле summary). У завершённой джобы без медиа это обычно
+    // встречный вопрос вида «Want me to iterate on…» — агент не нарисовал, а переспросил.
+    string? Summary = null,
+    // Поле interaction: null у обычного прогона, объект/строка — когда агент ждёт ответа.
+    // Храним человекочитаемым текстом, форма у сервера не зафиксирована.
+    string? Interaction = null)
 {
     public static readonly GlifJobResult Empty =
         new(GlifJobState.Unknown, null, null, null, [], null);
+
+    // Джоба завершилась без картинки, но агент что-то сказал — это его поведение,
+    // а не пустой отказ сервера.
+    public bool HasAgentReply => !string.IsNullOrWhiteSpace(Summary) || !string.IsNullOrWhiteSpace(Interaction);
 }
 
 // Чистый разбор ответов асинхронной генерации glif.app (HTTP MCP). Защитный:
@@ -37,7 +47,8 @@ public sealed record GlifJobResult(
 //     projectUrl, jobId, status:"working"|"failed", statusMessage, pollIntervalSeconds };
 //   • get_job_status → outputSchema сервер не публикует; боевой completed-ответ несёт
 //     content[] (text + resource_link с uri), structuredContent { outputType, projectId,
-//     jobId, status, media:[{url,title,kind}] } и _meta.glif.
+//     jobId, status, summary, media:[{url,title,kind}], interaction } и _meta.glif
+//     (живой ответ 2026-08-16: outputType "project_update", interaction: null).
 // Набор значений status get_job_status полностью НЕ ПРОВЕРЕН: точно встречались
 // working / completed, остальные («running», «queued», «cancelled» и пр.) трактуются
 // по смыслу — неизвестное значение считается «ещё считается», а не провалом.
@@ -82,13 +93,16 @@ public static class GlifJobParser
         var poll = FirstNumber(scopes, "pollIntervalSeconds", "poll_interval_seconds");
         var media = CollectMediaUrls(result, scopes);
         var statusMessage = FirstString(scopes, "statusMessage", "status_message", "message");
+        var summary = FirstString(scopes, "summary");
+        var interaction = FirstInteraction(scopes);
 
         var isError = result.TryGetProperty("isError", out var err) && err.ValueKind == JsonValueKind.True;
         var status = FirstString(scopes, "status");
         var state = isError ? GlifJobState.Failed : MapState(status, media.Count);
 
         return new GlifJobResult(state, jobId, projectId, poll, media,
-            state == GlifJobState.Failed ? statusMessage ?? "генерация glif не удалась" : null);
+            state == GlifJobState.Failed ? statusMessage ?? "генерация glif не удалась" : null,
+            summary, interaction);
     }
 
     // Тело ответа — чистый JSON либо SSE-поток (data:-строки); берём последний data-кадр.
@@ -202,6 +216,35 @@ public static class GlifJobParser
             foreach (var name in names)
                 if (GetString(scope, name) is { Length: > 0 } value)
                     return value;
+        return null;
+    }
+
+    // Поле interaction: у обычного прогона null, у «агент переспрашивает» — строка или
+    // объект неизвестной формы. Сводим к тексту: known-поля вопроса, иначе сырой JSON
+    // (обрезанный, чтобы не тащить простыню в лог).
+    private static string? FirstInteraction(IEnumerable<JsonElement> scopes)
+    {
+        foreach (var scope in scopes)
+        {
+            if (scope.ValueKind != JsonValueKind.Object) continue;
+            if (!scope.TryGetProperty("interaction", out var node)) continue;
+
+            switch (node.ValueKind)
+            {
+                case JsonValueKind.String:
+                    if (GetString(scope, "interaction") is { Length: > 0 } s) return s;
+                    continue;
+                case JsonValueKind.Object:
+                    var text = GetString(node, "question") ?? GetString(node, "prompt")
+                        ?? GetString(node, "message") ?? GetString(node, "text")
+                        ?? GetString(node, "type");
+                    if (text is { Length: > 0 }) return text;
+                    var raw = node.GetRawText();
+                    return raw.Length > 500 ? raw[..500] : raw;
+                default:
+                    continue;   // null / число / массив — вопроса тут нет
+            }
+        }
         return null;
     }
 

@@ -50,10 +50,14 @@ const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend', 'telem
 // Сегмент-переключатель хаба «Чаты | Проекты | Календарь | Заметки | Персоны» — на общем PillSwitch.
 // mobile: компакт-режим — неактивные сегменты иконками, подпись только у активного
 // (разделы помещаются на 320px без обрезания и скролла).
-export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
+// tablet: то же поведение, что у mobile, но autoCompact=true — полнотекстовые
+// подписи остаются, пока влезают; при переполнении переходим в иконки. Это
+// ступень 1 адаптива планшета; ступень 2 (скролл-полоса) — снаружи, в HubHeader.
+export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS }: {
   value: HubTabValue;
   onChange: (t: HubTabValue) => void;
   mobile?: boolean;
+  tablet?: boolean;
   // Какие разделы показать. На мобиле HubHeader передаёт сокращённый primary-набор,
   // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
   tabs?: HubTab[];
@@ -72,22 +76,28 @@ export function HubTabs({ value, onChange, mobile, tabs = DEFAULT_TABS }: {
   // «Проекты» в таббаре — обычная пилюля, отдельной зоны переключения нет.
   // Активный раздел вне набора табов: из TABLESS — не получает вкладку вовсе
   // (PillSwitch умеет «нет выбранного»), остальные скрытые дописываются условной
-  // вкладкой в конец. На мобиле так всплывают «Заметки» и «Персоны» из «⋯ Разделы»,
-  // чтобы было видно, где находишься. Модульный таб в набор фиксированных не входит —
-  // он живёт в moduleOptions ниже, поэтому из проверки исключаем.
+  // вкладкой в конец. На мобиле/планшете так всплывают «Заметки» и «Персоны» из
+  // «⋯ Разделы», чтобы было видно, где находишься. Модульный таб в набор фиксированных
+  // не входит — он живёт в moduleOptions ниже, поэтому из проверки исключаем.
   const isKnownFixed = !isModuleTab(displayValue) && (tabs.includes(displayValue) || TABLESS.includes(displayValue));
   const shown = isKnownFixed || isModuleTab(displayValue) ? tabs : [...tabs, displayValue as HubTab];
-  const fixedOptions = shown.map(v => mobile
+  // tablet: иконки у опций нужны как и на мобиле — если PillSwitch включит
+  // compact (autoCompact сработает при переполнении), иконки уже на месте.
+  const compactLike = mobile || tablet;
+  const fixedOptions = shown.map(v => compactLike
     ? { value: v as HubTabValue, label: TAB_LABELS[v], icon: TAB_ICONS[v] }
     : { value: v as HubTabValue, label: TAB_LABELS[v] });
-  const options = mobile ? [...fixedOptions, ...moduleOptions]
+  const options = compactLike ? [...fixedOptions, ...moduleOptions]
     : [...fixedOptions, ...moduleOptions.map(o => ({ value: o.value, label: o.label }))];
   return (
     <PillSwitch<HubTabValue>
       value={displayValue}
       onChange={onChange}
       draggable
+      // tablet: compact включается АВТОМАТИЧЕСКИ при переполнении (ступень 1).
+      // mobile: compact сразу (там места ещё меньше).
       compact={mobile}
+      autoCompact={tablet}
       persistKey="hub-tabs"
       variant="hub"
       options={options}

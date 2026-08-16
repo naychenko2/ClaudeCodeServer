@@ -31,7 +31,7 @@ import { PanelShell } from '../../components/ui/PanelShell';
 import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
 import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../components/ui/PanelDropGuide';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
-import { useWindowWidth } from '../../lib/breakpoints';
+import { useWindowWidth, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
   isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
@@ -46,9 +46,11 @@ import { PanelSlot } from './PanelSlot';
 import type { SessionPanels } from './useSessionPanels';
 
 const GAP = ISLAND.gap; // зазор между карточками — та самая «воздушность»
-
-// Порог планшета: шире — панель в потоке рядом с чатом, уже — drawer поверх
-const TABLET_INLINE_MIN = 1000;
+// TABLET_INLINE_MIN = TABLET_MAX — единственное место в коде, где мы выбираем drawer
+// поверх в плоском случае: ширина панели 300px на 1000px — это уже 30% окна.
+// Порог теперь производная от панели и токена PANEL_INLINE_MAX_SHARE, но жёсткая
+// граница «выше TABLET_MAX — НЕ compact» одна на оба режима, чтобы стек не
+// вылезал на широкий десктоп обходным путём.
 
 // Ширина полосы-приёмника, которую пустая зона показывает на время перетаскивания.
 // Здесь раскладка намеренно «дышит»: у пустой зоны нет ни одной панели, рядом с
@@ -158,7 +160,14 @@ export function PanelZone({
   // Компактный режим: до ДВУХ панелей стеком; выбор локальный эфемерный —
   // раскладка зоны не трогается. Третья открытая вытесняет самую старую (FIFO).
   const [tabletPanels, setTabletPanels] = useState<PanelKey[]>([]);
-  const tabletInline = windowWidth >= TABLET_INLINE_MIN;
+  // Порог inline: панель в потоке, только если её ширина ≤ PANEL_INLINE_MAX_SHARE окна.
+  // Десктоп ≥ TABLET_MAX — компактного режима в принципе нет, но граница формальна:
+  // защищает от «компактного» стека на широком экране, если бы режим включили
+  // снаружи (через props). Сейчас единственный вызов — DesktopWorkspace, который
+  // передаёт compact только при isTablet.
+  const tabletInline = !compact
+    || windowWidth > TABLET_MAX
+    || windowWidth >= width / PANEL_INLINE_MAX_SHARE;
 
   // Панель доступна на этом экране: ключ разрешён экраном (allowedKeys) и у панели
   // есть контент (у сессионных он всегда есть).
@@ -1187,14 +1196,27 @@ export function PanelZone({
   // drawer поверх на узком; между двумя панелями — хендл ресайза высот
   const compactBody = (() => {
     if (!compact || tabletKeys.length === 0) return null;
+    // В drawеr (tabletInline=false) форсируем fill у панелей: стек одноколоночный
+    // полноэкранный, по высоте панель должна дотягиваться до низа — иначе
+    // PanelShell стоит по контенту, длинный список выпирает за кромку drawer'а,
+    // а `overflow: clip` (родитель-холст с абсолютным позиционированием) срезает
+    // низ. На широком inline-варианте правила те же, что в обычной зоне:
+    // одиночная панель у центра — по контенту, две — делят высоту.
+    const drawer = !tabletInline;
+    // Жёсткий fill на все панели в drawer'е: единое полноэкранное поведение,
+    // скролл живёт ВНУТРИ PanelShell (minHeight:0 + flex:1 у контентной зоны).
+    const multiInCol = drawer || tabletKeys.length > 1;
     const stack = (
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+      // minHeight:0 на стеке drawer'а — без него flex-ребёнок растёт по контенту,
+      // и родитель (холст с overflow:clip) режет карточку у низа. С ним стек сам
+      // помещается в drawer, а скролл отдаётся содержимому панели.
+      <div style={{ flex: 1, minWidth: 0, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         {tabletKeys.map((k, ri) => (
           <Fragment key={k}>
             {ri > 0 && (
               <IslandSplitter orientation="h" active={rowDragging === 'tablet'} onMouseDown={handleRowDrag(tabletKeys[ri - 1], k, 'tablet')} gap={GAP} />
             )}
-            {renderPanel(k, tabletKeys.length > 1)}
+            {renderPanel(k, multiInCol)}
           </Fragment>
         ))}
       </div>

@@ -17,6 +17,13 @@ export const MOBILE_QUERY = `(max-width: ${MOBILE_MAX}px)`;
 export const TABLET_MAX = 1199;
 export const TABLET_QUERY = `(max-width: ${TABLET_MAX}px)`;
 
+// Максимальная доля ширины окна, которую боковая панель может занять в потоке.
+// Больше — панель открывается оверлеем (drawer), не двигая контент. На панели
+// шириной `w` это даёт порог окна `w / PANEL_INLINE_MAX_SHARE`: для типовой
+// панели 300px порог ~1000px — совпадает с бывшим литералом TABLET_INLINE_MIN
+// в PanelZone, который теперь производная от токена через useWindowWidth().
+export const PANEL_INLINE_MAX_SHARE = 0.3;
+
 // Реактивный флаг «мобильная раскладка» (matchMedia, обновляется при resize/повороте).
 export function useIsMobile(): boolean {
   const [m, setM] = useState(() =>

@@ -206,16 +206,20 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       )}
 
       {/* Центр — переключатель вкладок. На мобиле компакт-режим (иконки, подпись
-          у активного); если пять разделов не влезут — таббар скроллится, не обрезается */}
-      {isMobile ? (
+          у активного); если пять разделов не влезут — таббар скроллится, не обрезается.
+          Планшет: та же обёртка со скроллом — ступень 2 адаптива. Внутри HubTabs
+          включает autoCompact (ступень 1): полнотекстовые подписи остаются, пока
+          влезают; при переполнении таббар схлопывается до иконок. «Домой», «Заметки»
+          и «Персоны» тоже живут в «⋯ Разделы», чтобы таббар не скроллил оффскрин. */}
+      {(isMobile || isTablet) ? (
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
           <div className="cc-no-scrollbar" style={{ minWidth: 0, display: 'flex', overflowX: 'auto', overflowY: 'hidden' }}>
             <div style={{ flexShrink: 0, display: 'flex' }}>
-              <HubTabs mobile value={value} onChange={onTab} tabs={mobileTabs} />
+              <HubTabs mobile={isMobile} tablet={isTablet} value={value} onChange={onTab} tabs={mobileTabs} />
             </div>
           </div>
           {/* «Домой», «Заметки» и «Персоны» — в overflow «⋯», а не под скролл таббара */}
-          <ToolbarOverflowMenu isMobile title="Разделы" items={sectionItems} />
+          <ToolbarOverflowMenu isMobile={isMobile} title="Разделы" items={sectionItems} />
         </div>
       ) : (
         <HubTabs value={value} onChange={onTab} />

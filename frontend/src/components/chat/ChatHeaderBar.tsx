@@ -18,6 +18,7 @@ import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
+import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton, ChatTopicIcon, Modal, ModalActions } from '../ui';
 import { bumpNotes } from '../../lib/notes';
@@ -99,15 +100,19 @@ function RateRow({ w }: { w: RateWindow }) {
 // tone окрашивает пилюлю при приближении к лимиту (warn/danger).
 // stacked — двухстрочная пилюля (label скрыт/опущен): содержимое amount в столбик,
 // компактнее по ширине (для мобильного объединённого чипа).
-// wide — более широкий поповер на мобилке (для объединённого чипа с двумя секциями:
-// шире → меньше переносов → ниже по высоте, помещается на экран).
-function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, pulse, children }: {
-  label?: string; amount: React.ReactNode; title: string; isMobile?: boolean;
+// wide — более широкий поповер на узких раскладках (мобил/планшет: для объединённого
+// чипа с двумя секциями — шире → меньше переносов → ниже по высоте, помещается на экран).
+// isCompact — планшет (использует мобильную механику поповера wide).
+function BadgeShell({ label, amount, title, isMobile, isCompact, tone, stacked, wide, pulse, children }: {
+  label?: string; amount: React.ReactNode; title: string; isMobile?: boolean; isCompact?: boolean;
   tone?: 'warn' | 'danger'; stacked?: boolean; wide?: boolean; pulse?: boolean; children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
   const toneBorder = tone === 'danger' ? RATE_COLORS.danger.border : tone === 'warn' ? RATE_COLORS.warn.border : C.border;
+  // На планшете поповер следует той же мобильной геометрии — wide крепится fixed к краю
+  // экрана, иначе absolute+right:0 уезжает влево за экран.
+  const compact = isCompact || isMobile;
   return (
     <div style={{ position: 'relative', flexShrink: 0 }}>
       <button
@@ -136,9 +141,12 @@ function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, pulse
             // Широкий мобильный поповер: absolute+right:0 привязан к правому краю чипа,
             // а чип не у края экрана (справа кнопки) → широкий блок уезжал влево за экран.
             // Крепим fixed к правому краю ВЬЮПОРТА под тулбаром — всегда на экране.
-            wide && isMobile
+            wide && compact
               ? {
-                  position: 'fixed', top: TB.heightMobile + 6, right: 8, zIndex: 41,
+                  // На планшете шапка — десктопная (TB.heightDesktop), а на мобиле —
+                  // мобильная. Используем высоту тулбара чата по факту, чтобы поповер не
+                  // прилипал к неверной кромке после поворота экрана.
+                  position: 'fixed', top: (isMobile ? TB.heightMobile : TB.heightDesktop) + 6, right: 8, zIndex: 41,
                   width: 'min(340px, calc(100vw - 16px))',
                   maxHeight: 'calc(100dvh - 130px)', overflowY: 'auto',
                   padding: '12px 14px',
@@ -146,10 +154,10 @@ function BadgeShell({ label, amount, title, isMobile, tone, stacked, wide, pulse
                 }
               : {
                   position: 'absolute', top: '100%', right: 0, marginTop: 6, zIndex: 41,
-                  minWidth: isMobile ? 200 : 240,
+                  minWidth: compact ? 200 : 240,
                   maxWidth: 'calc(100vw - 24px)',
-                  maxHeight: isMobile ? 'calc(100dvh - 130px)' : undefined,
-                  overflowY: isMobile ? 'auto' : undefined,
+                  maxHeight: compact ? 'calc(100dvh - 130px)' : undefined,
+                  overflowY: compact ? 'auto' : undefined,
                   padding: '12px 14px',
                   background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, boxShadow: SHADOW.dropdown,
                 }
@@ -221,6 +229,8 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
 
 // Бейдж стоимости Claude (токены/ходы). Клик раскрывает разбивку (аналог /cost).
 // В режиме подписки сумма — это ≈ API-эквивалент (отдельно не списывается), что и поясняется.
+// Проп isMobile: на планшете передаём isCompact через isMobile — узкие раскладки
+// ведут себя одинаково (мини-размеры, wide-поповер).
 function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
   stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
   windows: RateWindow[];
@@ -241,7 +251,7 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
     <BadgeShell
       label="Claude"
       amount={amountNode}
-      isMobile={isMobile}
+      isCompact={isMobile}
       tone={tone}
       title={sub
         ? 'Claude ≈ по API-тарифу · по подписке отдельно не списывается'
@@ -350,7 +360,7 @@ function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
     <BadgeShell
       label={providerName}
       amount={amountNode}
-      isMobile={isMobile}
+      isCompact={isMobile}
       tone={tone}
       title={`Статистика сессии ${providerName} — нажмите для разбивки`}
     >
@@ -481,6 +491,9 @@ function ContextBadge(props: {
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
   assistantName?: string;
 }) {
+  // Внутренний бейдж: проп называется isMobile по историческим причинам, но на
+  // планшете снаружи передаётся isCompact. Узкие раскладки ведут себя одинаково
+  // (мини-размеры, wide-поповер), так что переименовывать проп тут не нужно.
   const { estimate, isMobile, isCompacting } = props;
   const tone = estimate.level !== 'normal' ? estimate.level : undefined;
 
@@ -491,7 +504,7 @@ function ContextBadge(props: {
     <BadgeShell
       label={isMobile ? 'Ctx' : 'Контекст'}
       amount={<ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile={isMobile} />}
-      isMobile={isMobile}
+      isCompact={isMobile}
       tone={tone}
       title="Заполнение контекста сессии — нажмите для деталей"
     >
@@ -556,10 +569,10 @@ function FalPopoverBody({ stats }: { stats: FalCostStats }) {
 }
 
 // Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
-function FalCostBadge({ stats, isMobile }: { stats: FalCostStats; isMobile?: boolean }) {
+function FalCostBadge({ stats, isCompact }: { stats: FalCostStats; isCompact?: boolean }) {
   if (stats.total <= 0) return null;
   return (
-    <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isMobile={isMobile}
+    <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isCompact={isCompact}
       title="Траты на fal.ai (медиа) — нажмите для разбивки">
       <FalPopoverBody stats={stats} />
     </BadgeShell>
@@ -621,11 +634,11 @@ function GlifPopoverBody({ stats }: { stats: GlifGenStats }) {
 
 // Бейдж генераций glif (медиа). Пер-кредитной цены нет — значение это счётчик
 // генераций (+ сумма кредитов, когда billing приехал). Разбивка по типам медиа.
-function GlifCostBadge({ stats, isMobile }: { stats: GlifGenStats; isMobile?: boolean }) {
+function GlifCostBadge({ stats, isCompact }: { stats: GlifGenStats; isCompact?: boolean }) {
   if (stats.count <= 0) return null;
   const amount = `${stats.count} ген.` + (stats.hasCredits ? ` · ${fmtCredits(stats.credits)}` : '');
   return (
-    <BadgeShell label="glif" amount={amount} isMobile={isMobile}
+    <BadgeShell label="glif" amount={amount} isCompact={isCompact}
       title="Генерации glif (медиа) — нажмите для разбивки">
       <GlifPopoverBody stats={stats} />
     </BadgeShell>
@@ -922,6 +935,13 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 }
 
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
+  // Планшет (601–1199): мобильная механика — объединённый чип, wide-поповер, плотная
+  // группа кнопок, заголовок с многоточием. Объединяем с mobile через `isCompact`,
+  // чтобы не дублировать ветки внутри costBadges / rightCluster / actionBtns.
+  const ww = useWindowWidth();
+  const isTablet = !isMobile && ww > MOBILE_MAX && ww <= TABLET_MAX;
+  const isCompact = isMobile || isTablet;
+
   // Теги чата: реестр проекта (для чата вне проекта тегов нет — кнопки тоже нет).
   // Локальная копия, чтобы создание тега сразу отражалось в меню без перезагрузки
   const [tagRegistry, setTagRegistry] = useState<ProjectTag[]>(() => project?.tagRegistry ?? []);
@@ -975,7 +995,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // compact (колонка стены): блок персоны — просто подпись, без перехода. Уводить
   // с экрана из шапки колонки нельзя: единственный выход отсюда — кнопка перехода
   // в ярлыке колонки, и она ведёт к самому чату, а не в чужой раздел.
-  const personaCardLink = openPersonaCard && !compact && !(isMobile && onBack) ? {
+  const personaCardLink = openPersonaCard && !compact && !(isCompact && onBack) ? {
     role: 'button' as const, tabIndex: 0,
     onClick: openPersonaCard,
     onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPersonaCard(); } },
@@ -1076,7 +1096,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   // На десктопе заголовок держит минимум ~20 символов (не ужимается в «З…»);
   // при нехватке места правый кластер бейджей уходит второй строкой (flexWrap ряда)
-  const titleMinW = isMobile ? 0 : 180;
+  const titleMinW = isCompact ? 0 : 180;
 
   // === Единая формула шапки: одна разметка на все типы чата и оба размера ===
   // Заголовок — собеседник, когда он есть: персона «Роль · Имя», команда — имена
@@ -1124,7 +1144,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
     // ряду длинный заголовок задачи выдавливал чипы и резался на 220px
     if (origin) slots.push(
-      <ChatOriginBadge key="origin" origin={origin} compact iconOnly={isMobile} style={{ flexShrink: 0, maxWidth: 260 }} />
+      <ChatOriginBadge key="origin" origin={origin} compact iconOnly={isCompact} style={{ flexShrink: 0, maxWidth: 260 }} />
     );
     if (groupTitle) slots.push(
       <span key="speaker" style={{ flexShrink: 0, fontSize: fs, color: C.textMuted, whiteSpace: 'nowrap' }}>
@@ -1149,7 +1169,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     );
     // Только усилие, и только выбранное ЯВНО: метка «По умолчанию» ничего не сообщает.
     // Модель ушла к постам — в шапке она врала после смены модели по ходу разговора
-    if (session.effort && !isMobile) slots.push(
+    if (session.effort && !isCompact) slots.push(
       <span key="effort" style={{ flexShrink: 0, fontFamily: FONT.mono, fontSize: 11, color: C.textMuted, whiteSpace: 'nowrap' }}>
         {effortLabel(session.effort)}
       </span>
@@ -1165,7 +1185,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Слот идентичности слева: стек участников (команда), аватар персоны, иначе пусто.
   // В hero у персоны — фото скруглённым квадратом с чётким краем (вариант A).
   const identity = (hero: boolean) => {
-    if (isGroup) return participantsStack(hero ? 34 : (isMobile ? 24 : 26));
+    if (isGroup) return participantsStack(hero ? 34 : (isCompact ? 24 : 26));
     if (!persona) return null;
     return hero ? (
       <PersonaFace
@@ -1217,8 +1237,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   );
   const titleBlock = titleContent(false);
   // Элементы шапки — выносим, чтобы отрендерить в двух раскладках (с центр. переключателем и без)
-  const openBtn = onOpenSidebar && !isMobile ? (
-    <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isMobile}>
+  const openBtn = onOpenSidebar && !isCompact ? (
+    <ToolbarIconButton onClick={onOpenSidebar} title="Открыть панель" isMobile={isCompact}>
       <Menu size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </ToolbarIconButton>
   ) : null;
@@ -1226,22 +1246,22 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     ? <BackButton onClick={onBack} style={{ flex: 1 }} title="Назад к списку">{titleBlock}</BackButton>
     : titleBlock;
   // Бейдж последней запущенной механики команды (только на десктопе)
-  const mechanicBadge = lastMechanic && !isMobile ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
+  const mechanicBadge = lastMechanic && !isCompact ? <TeamMechanicBadge id={lastMechanic} size="sm" /> : null;
 
   // Время жизни чата: у временного — остаток до авто-удаления, у бессрочного —
   // приглушённая иконка. Клик открывает выбор срока прямо здесь (в офлайне менять
   // нечего — сохранение всё равно не пройдёт)
   const expiryBadge = online ? (
-    <ExpiryButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
+    <ExpiryButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
   // Opt-out «не сохранять решения из этого чата» — только у проектных чатов, рядом со
   // «Временем жизни» (тем же паттерном кнопки в шапке)
   const dossierBtn = project && online ? (
-    <DossierOptOutButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
+    <DossierOptOutButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
   ) : null;
-  // На мобиле прогресс workflow втянут в объединённый чип (costBadges) — отдельный
-  // бейдж рисуем только на десктопе, где ряду хватает места.
-  const workflowBadge = activeWorkflow && !isMobile ? (
+  // На узких раскладках (мобил/планшет) прогресс workflow втянут в объединённый чип
+  // (costBadges) — отдельный бейдж рисуем только на десктопе, где ряду хватает места.
+  const workflowBadge = activeWorkflow && !isCompact ? (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 5, padding: '3px 8px',
       background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.lg, flexShrink: 0,
@@ -1254,25 +1274,25 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     </div>
   ) : null;
   const ctxBadge = (
-    <ContextBadge estimate={ctxEstimate} isMobile={isMobile} isWaiting={isWaiting}
+    <ContextBadge estimate={ctxEstimate} isMobile={isCompact} isWaiting={isWaiting}
       isCompacting={isCompacting} canCompact={canCompact} compactNote={compactNote}
       onCompact={onCompact} online={online} assistantName={asstName} />
   );
   // Плашка стоимости: у стороннего провайдера — своя (стоимость + баланс),
   // у Claude — CostBadge с лимитами подписки
   const providerCostBadge = isCliProvider
-    ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isMobile} />
-    : <CostBadge stats={cost} isMobile={isMobile} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />;
+    ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isCompact} />
+    : <CostBadge stats={cost} isMobile={isCompact} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
   const spendBadge = (
-    <SpendBadge sessionId={session.id} chatName={session.name} resultCount={cost.results} isMobile={isMobile} />
+    <SpendBadge sessionId={session.id} chatName={session.name} resultCount={cost.results} isMobile={isCompact} />
   );
   // compact (колонка стены): плашек контекста, стоимости и расхода нет — в узкой
   // шапке они занимают всю ширину и переносят строку, а следить за деньгами и
   // контекстом уместнее в полном виде чата (открывается кнопкой из ярлыка колонки)
-  const costBadges = compact ? null : isMobile ? (
-    // Мобилка: один объединённый чип (контекст + стоимость/расход) — не распирает шапку
+  const costBadges = compact ? null : isCompact ? (
+    // Мобил/планшет: один объединённый чип (контекст + стоимость/расход) — не распирает шапку
     <>
       <MobileCombinedBadge
         estimate={ctxEstimate} isWaiting={isWaiting} isCompacting={isCompacting}
@@ -1288,13 +1308,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     <>
       {ctxBadge}
       {providerCostBadge}
-      <FalCostBadge stats={falCost} isMobile={isMobile} />
-      <GlifCostBadge stats={glifCost} isMobile={isMobile} />
+      <FalCostBadge stats={falCost} isCompact={isCompact} />
+      <GlifCostBadge stats={glifCost} isCompact={isCompact} />
       {spendBadge}
     </>
   );
   const artifactsBtn = onToggleArtifacts ? (
-    <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isMobile} active={artifactsOpen}>
+    <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isCompact} active={artifactsOpen}>
       <div style={{ position: 'relative', display: 'flex' }}>
         <FileText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
         {artifactFileCount !== undefined && artifactFileCount > 0 && (
@@ -1314,7 +1334,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
   // живёт в разделе «Уведомления»
   const notifyBtn = online && !compact
-    ? <NotifyButton session={session} isMobile={isMobile} onSessionUpdated={onSessionUpdated} />
+    ? <NotifyButton session={session} isMobile={isCompact} onSessionUpdated={onSessionUpdated} />
     : null;
   // Теги чата — тот же TagAssignMenu, что в меню карточки списка. Только для проектных
   // чатов: теги живут в реестре проекта, у чата вне проекта их нет
@@ -1322,19 +1342,19 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     <ToolbarIconButton
       onClick={e => { const r = e.currentTarget.getBoundingClientRect(); setTagMenu(r); }}
       active={!!tagMenu}
-      isMobile={isMobile}
+      isMobile={isCompact}
       title="Теги чата"
     >
       <Tags size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
     </ToolbarIconButton>
   ) : null;
 
-  // На мобилке артефакты и настройки — плотная пара справа (gap 2 вместо TB.gap),
-  // читаются как единая группа действий чата; на десктопе — как раньше, врозь.
+  // На узких раскладках артефакты и настройки — плотная пара справа (gap 0 вместо
+  // TB.gap), читаются как единая группа действий чата; на десктопе — как раньше, врозь.
   const summaryBtn = <SessionSummaryButton session={session} hasMessages={hasMessages} online={online} />;
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
-  const actionBtns = isMobile
+  const actionBtns = isCompact
     ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
@@ -1342,12 +1362,12 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных
-  // промежуточных), прижат вправо; внутри себя тоже умеет переноситься. На мобиле —
-  // прежний однорядный хвост без переноса.
+  // промежуточных), прижат вправо; внутри себя тоже умеет переноситься. На узких
+  // раскладках (мобил/планшет) — однорядный хвост без переноса.
   const rightCluster = (
     <div style={{
       display: 'flex', alignItems: 'center', gap: TB.gap, marginLeft: 'auto', minWidth: 0,
-      ...(isMobile ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
+      ...(isCompact ? null : { flexWrap: 'wrap' as const, justifyContent: 'flex-end' as const }),
     }}>
       {mechanicBadge}{workflowBadge}{costBadges}{actionBtns}
     </div>
@@ -1356,7 +1376,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   // Hero-шапка (Islands, десктоп): не тулбар в коробке, а заголовок раздела прямо
   // на холсте — как шапка «Календаря». У персоны слева фото скруглённым квадратом
   // с чётким краем (не в круге); рядом крупная serif-идентификация, справа контролы.
-  if (island && !isMobile) {
+  if (island && !isCompact) {
     // Та же формула, что и в тулбарной шапке — крупным кеглем (minWidth 240:
     // serif-28 при меньшей ширине ломается)
     const heroTitle = titleContent(true);
@@ -1382,11 +1402,11 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   return (
     // compact (колонка стены): фон прозрачный — подложку даёт стеклянный остров
     // колонки, плотный тулбар закрывал бы дудл-холст под шапкой
-    <Toolbar isMobile={isMobile} noBorder={island} bg={island || compact ? 'transparent' : undefined}
+    <Toolbar isMobile={isCompact} noBorder={island} bg={island || compact ? 'transparent' : undefined}
       style={{
         ...(personaAccent ? { borderLeft: `3px solid ${personaAccent}` } : null),
         // Узкий десктоп: фиксированную высоту отпускаем, кластер переносится второй строкой
-        ...(isMobile ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
+        ...(isCompact ? null : { flexWrap: 'wrap' as const, height: 'auto', minHeight: TB.heightDesktop, padding: `6px ${TB.padX}px` }),
       }}>
       {openBtn}{titleEl}{rightCluster}
       {tagMenuEl}

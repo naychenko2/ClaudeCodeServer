@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Адаптивный UI планшета — макет v1</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=PT+Serif:wght@400;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* === Токены: значения 1-в-1 из frontend/src/lib/theme.css === */
+:root {
+  --c-bg-main:     #F4F0E8;
+  --c-bg-panel:    #EDE7DC;
+  --c-bg-card:     #FBF8F2;
+  --c-bg-white:    #FFFFFF;
+  --c-bg-selected: #E8E1D4;
+  --c-bg-inset:    #E7E0D2;
+  --c-text-heading:   #2A251F;
+  --c-text-primary:   #39332B;
+  --c-text-secondary: #756B5E;
+  --c-text-muted:     #9A8F7E;
+  --c-on-accent:      #FBF8F2;
+  --c-accent:       #D97757;
+  --c-accent-light: #F4ECE1;
+  --c-accent-muted: #EAD3C5;
+  --c-border:       #E0D7C8;
+  --c-border-light: #E8E1D4;
+  --c-divider:      #DDD4C4;
+  --c-overlay: rgba(23, 19, 15, 0.42);
+  --c-success-text: #3F7A4F;
+  --c-warning:      #C9923E;
+  --c-warning-text: #8A6A28;
+  --c-warning-bg:   #FBEFE0;
+  --c-danger-text:  #B4452F;
+  --c-plan:        #6C5CB0;
+  --c-plan-light:  #EEEBF8;
+  --c-plan-text:   #4E4196;
+  --c-nav-ink:    #2A251F;
+  --c-on-nav-ink: #F4ECE1;
+  --c-info:    #3E7CA6;
+  --c-diff-add-text: #1B5E20;
+  --c-diff-rem-text: #B71C1C;
+  --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+  --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+  --shadow-dropdown: 0 8px 28px rgba(60, 50, 35, 0.16);
+  --shadow-modal:    0 24px 60px rgba(23, 19, 15, 0.40);
+  --shadow-thumb:    0 1px 3px rgba(42, 37, 31, 0.12);
+}
+:root[data-theme="dark"] {
+  --c-bg-main:     #201C18;
+  --c-bg-panel:    #272320;
+  --c-bg-card:     #2E2A25;
+  --c-bg-white:    #2E2A25;
+  --c-bg-selected: #38332D;
+  --c-bg-inset:    #1B1815;
+  --c-text-heading:   #F2ECE1;
+  --c-text-primary:   #EDE6DB;
+  --c-text-secondary: #B3A897;
+  --c-text-muted:     #8A8072;
+  --c-on-accent:      #201C18;
+  --c-accent:       #E38A6A;
+  --c-accent-light: #3A2E27;
+  --c-accent-muted: #4A362C;
+  --c-border:       #3D3830;
+  --c-border-light: #34302A;
+  --c-divider:      #454037;
+  --c-overlay: rgba(0, 0, 0, 0.62);
+  --c-success-text: #8FCB79;
+  --c-warning:      #E0AC5A;
+  --c-warning-text: #E7B96E;
+  --c-warning-bg:   #322717;
+  --c-danger-text:  #EE8A72;
+  --c-plan:        #9385D8;
+  --c-plan-light:  #2A2540;
+  --c-plan-text:   #B0A4E6;
+  --c-nav-ink:    #EDE6DB;
+  --c-on-nav-ink: #201C18;
+  --c-info:    #5FA0CC;
+  --c-diff-add-text: #8FCB79;
+  --c-diff-rem-text: #EE8A72;
+  --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+  --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-dropdown: 0 10px 32px rgba(0, 0, 0, 0.55);
+  --shadow-modal:    0 28px 70px rgba(0, 0, 0, 0.65);
+  --shadow-thumb:    0 1px 3px rgba(0, 0, 0, 0.45);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Hanken Grotesk', -apple-system, 'Segoe UI', sans-serif;
+  background: var(--c-bg-main);
+  color: var(--c-text-primary);
+  font-size: 13px;
+  padding: 24px 16px 80px;
+}
+.serif { font-family: 'PT Serif', Georgia, serif; }
+.mono  { font-family: 'JetBrains Mono', monospace; }
+
+/* === Каркас страницы макета === */
+.page-head { max-width: 860px; margin: 0 auto 24px; display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+.page-head h1 { font-family: 'PT Serif', serif; font-size: 28px; color: var(--c-text-heading); font-weight: 700; }
+.page-head .sub { color: var(--c-text-secondary); font-size: 14px; }
+.theme-toggle {
+  margin-left: auto; padding: 8px 16px; border-radius: 999px; border: 1px solid var(--c-border);
+  background: var(--c-bg-card); color: var(--c-text-heading); font: inherit; font-weight: 600;
+  cursor: pointer; box-shadow: var(--shadow-card);
+}
+section { max-width: 860px; margin: 0 auto 56px; }
+.sec-title { font-family: 'PT Serif', serif; font-size: 22px; color: var(--c-text-heading); margin-bottom: 6px; }
+.sec-desc { color: var(--c-text-secondary); font-size: 14px; line-height: 1.5; margin-bottom: 16px; max-width: 720px; }
+.sec-desc code { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; }
+.frame-label { font-size: 11px; color: var(--c-text-muted); text-transform: uppercase; letter-spacing: .08em; margin: 18px 0 6px; }
+
+/* Фрейм = «экран планшета» */
+.frame {
+  position: relative; width: 768px; height: 560px; overflow: hidden;
+  background: var(--c-bg-main); border: 1px solid var(--c-border);
+  border-radius: 14px; box-shadow: var(--shadow-island);
+}
+.frame.w480 { width: 480px; }
+.frame.short { height: auto; }
+
+/* === Общие детали экрана === */
+.hub-bar {
+  height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 16px;
+  background: var(--c-bg-main); border-bottom: 1px solid var(--c-border);
+}
+.chat-col { position: absolute; inset: 52px 0 0; display: flex; flex-direction: column; align-items: center; padding: 24px 40px; gap: 14px; }
+.bubble { max-width: 78%; padding: 10px 14px; border-radius: 12px; line-height: 1.45; font-size: 13px; }
+.bubble.user { align-self: flex-end; background: var(--c-accent-light); color: var(--c-text-primary); border-bottom-right-radius: 4px; }
+.bubble.ai   { align-self: flex-start; background: var(--c-bg-card); border: 1px solid var(--c-border-light); color: var(--c-text-primary); border-bottom-left-radius: 4px; box-shadow: var(--shadow-card); }
+.backdrop { position: absolute; inset: 0; background: var(--c-overlay); z-index: 14; }
+
+/* Оверлей-панель (drawer) */
+.drawer {
+  position: absolute; top: 8px; bottom: 8px; width: 300px; z-index: 15;
+  background: var(--c-bg-panel); border: 1px solid var(--c-border-light);
+  border-radius: 14px; box-shadow: var(--shadow-modal);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.drawer.left  { left: 8px; }
+.drawer.right { right: 8px; width: min(85%, 380px); }
+.drawer-head {
+  flex: 0 0 auto; height: 40px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light);
+  font-weight: 600; color: var(--c-text-heading);
+}
+.drawer-head .x { margin-left: auto; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--c-text-muted); }
+.drawer-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px; }
+.sess { display: flex; gap: 10px; align-items: center; padding: 9px 10px; border-radius: 10px; }
+.sess.active { background: var(--c-bg-selected); }
+.sess .ava { width: 28px; height: 28px; border-radius: 50%; flex: 0 0 auto; display: grid; place-items: center; color: #fff; font-size: 11px; font-weight: 700; }
+.sess .t { font-weight: 600; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sess .s { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.file-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; color: var(--c-text-primary); }
+.file-row .ic { width: 22px; text-align: center; color: var(--c-text-muted); }
+.file-row .sz { margin-left: auto; font-size: 11px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; }
+.file-row.dir { font-weight: 600; color: var(--c-text-heading); }
+
+/* Видимый скроллбар в демо */
+.scroll-demo::-webkit-scrollbar { width: 8px; }
+.scroll-demo::-webkit-scrollbar-thumb { background: #D4CFC4; border-radius: 4px; }
+:root[data-theme="dark"] .scroll-demo::-webkit-scrollbar-thumb { background: #45403A; }
+
+/* lucide-иконки как в приложении (TAB_ICONS из HubTabs.tsx) */
+.lic { width: 18px; height: 18px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.lic.s15 { width: 15px; height: 15px; }
+.lic.s14 { width: 14px; height: 14px; }
+
+/* === Пилюли разделов === */
+.pill-strip { display: flex; align-items: center; gap: 4px; background: var(--c-bg-selected); border-radius: 9px; padding: 3px; }
+.pill {
+  display: flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 7px;
+  color: var(--c-text-secondary); font-weight: 600; font-size: 13px; white-space: nowrap;
+}
+.pill.on { background: var(--c-nav-ink); color: var(--c-on-nav-ink); box-shadow: var(--shadow-thumb); }
+.pill .dot { width: 6px; height: 6px; border-radius: 50%; }
+.pills-wrap { position: relative; }
+.pills-scroll { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; padding: 3px; background: var(--c-bg-selected); border-radius: 9px; }
+.pills-scroll::-webkit-scrollbar { display: none; }
+.fade-l, .fade-r { position: absolute; top: 0; bottom: 0; width: 28px; pointer-events: none; z-index: 2; }
+.fade-l { left: 0; background: linear-gradient(to right, var(--c-bg-main), transparent); border-radius: 9px 0 0 9px; }
+.fade-r { right: 0; background: linear-gradient(to left, var(--c-bg-main), transparent); border-radius: 0 9px 9px 0; }
+.more-chip { display: flex; align-items: center; gap: 4px; padding: 5px 10px; border-radius: 7px; background: var(--c-bg-card); border: 1px solid var(--c-border); color: var(--c-text-secondary); font-weight: 600; flex: 0 0 auto; }
+
+/* === Хедер чата === */
+.chat-header {
+  height: 52px; display: flex; align-items: center; gap: 8px; padding: 0 14px;
+  background: var(--c-bg-main); border-bottom: 1px solid var(--c-border);
+  position: relative;
+}
+.ch-ava { width: 30px; height: 30px; border-radius: 50%; background: #3E7CA6; color: #fff; display: grid; place-items: center; font-weight: 700; font-size: 12px; flex: 0 0 auto; }
+.ch-title { font-family: 'PT Serif', serif; font-weight: 700; font-size: 16px; color: var(--c-text-heading); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ch-sub { font-size: 11px; color: var(--c-text-muted); white-space: nowrap; }
+.icon-btn { width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; color: var(--c-text-muted); flex: 0 0 auto; }
+.icon-btn.tap { width: 36px; height: 36px; }
+.combo-chip {
+  display: flex; flex-direction: column; justify-content: center; gap: 1px;
+  padding: 4px 10px; border-radius: 9px; background: var(--c-bg-card); border: 1px solid var(--c-border);
+  box-shadow: var(--shadow-card); cursor: pointer; flex: 0 0 auto;
+}
+.combo-chip .r1, .combo-chip .r2 { display: flex; align-items: center; gap: 5px; font-size: 11px; line-height: 1.2; white-space: nowrap; }
+.combo-chip .r1 { color: var(--c-warning-text); font-weight: 700; }
+.combo-chip .r2 { color: var(--c-text-secondary); font-family: 'JetBrains Mono', monospace; font-size: 10.5px; }
+.ctx-bar { width: 34px; height: 4px; border-radius: 2px; background: var(--c-bg-selected); overflow: hidden; }
+.ctx-bar i { display: block; height: 100%; width: 62%; background: var(--c-warning); border-radius: 2px; }
+
+/* Поповер чипа */
+.popover {
+  position: absolute; top: 58px; right: 8px; width: min(340px, calc(100% - 16px));
+  max-height: calc(100% - 130px); overflow-y: auto; z-index: 30;
+  background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px;
+  box-shadow: var(--shadow-dropdown); padding: 12px;
+}
+.popover h4 { font-size: 11px; text-transform: uppercase; letter-spacing: .07em; color: var(--c-text-muted); margin: 10px 0 6px; }
+.popover h4:first-child { margin-top: 0; }
+.pop-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 0; font-size: 13px; color: var(--c-text-primary); }
+.pop-row .v { font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--c-text-heading); }
+.big-ctx { height: 8px; border-radius: 4px; background: var(--c-bg-selected); overflow: hidden; margin: 6px 0 2px; }
+.big-ctx i { display: block; height: 100%; width: 62%; background: var(--c-warning); }
+
+/* === Гит-бар (ProjectGitBar) === */
+.gitbar {
+  display: flex; align-items: center; gap: 12px; margin: 10px 12px 8px; height: 51px;
+  padding: 0 8px 0 12px; background: var(--c-bg-panel);
+  border: 1px solid var(--c-border); border-radius: 14px; position: relative;
+}
+.gitbar.slim { height: 44px; gap: 8px; margin: 6px 12px; }
+.gb-branch {
+  display: flex; align-items: center; gap: 7px; min-width: 0;
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px; color: var(--c-text-secondary);
+}
+.gb-branch .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gb-behind { font-size: 11px; color: var(--c-text-muted); flex-shrink: 0; }
+.gb-turn {
+  display: flex; align-items: center; gap: 6px; height: 28px; max-width: 220px; padding: 0 11px;
+  border-radius: 8px; background: var(--c-bg-panel); border: 1px solid var(--c-border);
+  color: var(--c-text-secondary); font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+  flex-shrink: 0; min-width: 0;
+}
+.gitbar.slim .gb-turn { max-width: 140px; }
+.gb-turn .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.gb-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--c-info); flex-shrink: 0; animation: pulse 1.2s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .35; } }
+.gb-diff {
+  display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 11px; flex-shrink: 0;
+  border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-white);
+  font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+}
+.gb-diff .add { color: var(--c-diff-add-text); }
+.gb-diff .rem { color: var(--c-diff-rem-text); }
+.gb-btn {
+  display: flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px 0 12px; flex-shrink: 0;
+  border: 1px solid var(--c-border); border-radius: 8px; background: var(--c-bg-card);
+  color: var(--c-text-heading); font-size: 12.5px; font-weight: 500;
+}
+.gb-btn.accent { background: var(--c-accent); color: var(--c-on-accent); border: none; font-weight: 600; padding: 0 12px; }
+.gb-btn .acc-ic { color: var(--c-accent); display: inline-flex; }
+/* планшет: кнопки — иконочные tap-цели 36px, diff-пилюля 32px */
+.gitbar.slim .gb-diff { height: 32px; }
+.gitbar.slim .gb-btn { height: 36px; }
+.gitbar.slim .gb-btn.icon-only { width: 36px; padding: 0; justify-content: center; }
+.gitbar.slim .gb-btn.accent { height: 36px; padding: 0 10px; gap: 5px; }
+.gitbar.slim .gb-btn.accent .n { font-family: 'JetBrains Mono', monospace; opacity: .85; }
+/* открытое меню области коммита (то же, что по тапу на десктопе) */
+.gb-menu {
+  position: absolute; bottom: 50px; right: 8px; z-index: 30; min-width: 220px;
+  background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 12px;
+  box-shadow: var(--shadow-dropdown); padding: 6px;
+}
+.gb-menu .ov-item .st { margin-left: auto; font-size: 11px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; }
+.ov-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: 13px; color: var(--c-text-primary); font-weight: 500; }
+.ov-item .ic { width: 20px; display: inline-flex; justify-content: center; color: var(--c-text-muted); }
+.ov-sep { height: 1px; background: var(--c-border-light); margin: 4px 6px; }
+/* микрострока — свёрнутое состояние бара (одна tap-цель, разворачивает slim) */
+.gitbar.micro {
+  height: 28px; margin: 4px 12px; gap: 8px; padding: 0 10px 0 12px; border-radius: 10px;
+  cursor: pointer; font-family: 'JetBrains Mono', monospace; font-size: 11.5px;
+  color: var(--c-text-secondary);
+}
+.gitbar.micro .lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.gitbar.micro .add { color: var(--c-diff-add-text); }
+.gitbar.micro .rem { color: var(--c-diff-rem-text); }
+.gitbar.micro .pub { color: var(--c-accent); font-weight: 700; }
+.gitbar.micro .chev { color: var(--c-text-muted); flex-shrink: 0; display: inline-flex; }
+/* шеврон сворачивания в развёрнутом slim-баре */
+.gb-collapse { width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center; color: var(--c-text-muted); flex-shrink: 0; }
+.err-line { margin: 0 12px 8px; font-size: 12px; color: var(--c-danger-text, #B71C1C); }
+
+/* Аннотации-выноски */
+.note { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; font-size: 12.5px; color: var(--c-text-secondary); line-height: 1.45; }
+.note::before { content: '→'; color: var(--c-accent); font-weight: 700; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--c-accent-light); color: var(--c-accent); font-weight: 700; font-size: 11px; margin-right: 6px; }
+@media (max-width: 840px) { .frame { width: 100%; } .frame.w480 { width: 100%; } }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>Планшетный адаптив</h1>
+  <span class="sub">портрет 601–1199px · фреймы 768 и 480 · токены design.ts/theme.css</span>
+  <button class="theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? '' : 'dark'">☾ Тема</button>
+</div>
+
+<!-- ============ СОСТОЯНИЕ A ============ -->
+<section>
+  <div class="sec-title">A. Левая панель — оверлей по правилу 30%</div>
+  <div class="sec-desc">
+    Сценарий: пользователь тапает «Чаты» на планшете 768px. Панель 300px — это 39% ширины окна,
+    больше порога <code>PANEL_INLINE_MAX_SHARE = 0.3</code> → она открывается поверх чата с backdrop,
+    лента не сдвигается. Тап по backdrop или ✕ закрывает.
+  </div>
+  <div class="frame">
+    <div class="hub-bar">
+      <div class="pill-strip">
+        <span class="pill on">Чаты</span><span class="pill">Проекты</span><span class="pill">Календарь</span>
+      </div>
+    </div>
+    <div class="chat-col">
+      <div class="bubble user">Собери список файлов проекта и предложи структуру заметок</div>
+      <div class="bubble ai">Готово: в проекте 4 папки верхнего уровня. Предлагаю вести заметки в <span class="mono">notes/</span>, связанные через <span class="mono">[[wikilinks]]</span>…</div>
+      <div class="bubble user">А что с панелью задач?</div>
+    </div>
+    <div class="backdrop"></div>
+    <div class="drawer left">
+      <div class="drawer-head">Чаты <span class="x">✕</span></div>
+      <div class="drawer-body">
+        <div class="sess active"><span class="ava" style="background:#3E7CA6">Д</span><div><div class="t">Денис · MCP-серверы</div><div class="s">2 мин назад · Claude Sonnet</div></div></div>
+        <div class="sess"><span class="ava" style="background:#8E4A82">К</span><div><div class="t">Кира · Пилюли хаба</div><div class="s">1 ч назад</div></div></div>
+        <div class="sess"><span class="ava" style="background:#3F7A4F">А</span><div><div class="t">Александр · ADR-009</div><div class="s">вчера</div></div></div>
+        <div class="sess"><span class="ava" style="background:#C2693B">В</span><div><div class="t">Вера · регрессия задач</div><div class="s">вчера</div></div></div>
+        <div class="sess"><span class="ava" style="background:#4B6BB0">С</span><div><div class="t">Софья · метрики флагов</div><div class="s">пн</div></div></div>
+      </div>
+    </div>
+  </div>
+  <div class="note">Чат под backdrop неподвижен: колонка не прыгает ни на пиксель — чтение не сбивается.</div>
+  <div class="note">На ширине ≥1000px та же панель 300px — ровно 30%: остаётся inline, как на десктопе.</div>
+</section>
+
+<!-- ============ СОСТОЯНИЕ B ============ -->
+<section>
+  <div class="sec-title">B. Правый оверлей — вся высота + внутренний скролл</div>
+  <div class="sec-desc">
+    Сейчас панель «Файлы» уползает за нижний край: у стека drawer нет <code>minHeight: 0</code>, панель
+    растёт по контенту. После правки: drawer прибит к <code>top: 8 / bottom: 8</code>, шапка липкая,
+    список скроллится внутри — низ всегда достижим.
+  </div>
+  <div class="frame">
+    <div class="hub-bar">
+      <div class="pill-strip"><span class="pill on">Чаты</span><span class="pill">Проекты</span><span class="pill">Календарь</span></div>
+    </div>
+    <div class="chat-col">
+      <div class="bubble ai">Добавила макет в <span class="mono">docs/mockups/</span> — посмотри состояние B, там длинный список файлов.</div>
+    </div>
+    <div class="backdrop"></div>
+    <div class="drawer right">
+      <div class="drawer-head">Файлы <span class="x">✕</span></div>
+      <div class="drawer-body scroll-demo" id="filesBody">
+        <div class="file-row dir"><span class="ic">▾</span>docs</div>
+        <div class="file-row dir"><span class="ic">▾</span>&nbsp;&nbsp;mockups</div>
+        <div class="file-row"><span class="ic">📄</span>&nbsp;&nbsp;&nbsp;tablet-adaptive-v1.html <span class="sz">18 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>&nbsp;&nbsp;&nbsp;persona-tool-picker-v1.html <span class="sz">22 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>&nbsp;&nbsp;&nbsp;notes-empty.html <span class="sz">9 КБ</span></div>
+        <div class="file-row dir"><span class="ic">▸</span>&nbsp;&nbsp;architecture</div>
+        <div class="file-row dir"><span class="ic">▸</span>&nbsp;&nbsp;adr</div>
+        <div class="file-row dir"><span class="ic">▾</span>frontend</div>
+        <div class="file-row dir"><span class="ic">▾</span>&nbsp;&nbsp;src</div>
+        <div class="file-row dir"><span class="ic">▸</span>&nbsp;&nbsp;&nbsp;components</div>
+        <div class="file-row dir"><span class="ic">▸</span>&nbsp;&nbsp;&nbsp;pages</div>
+        <div class="file-row dir"><span class="ic">▸</span>&nbsp;&nbsp;&nbsp;hooks</div>
+        <div class="file-row"><span class="ic">📄</span>&nbsp;&nbsp;&nbsp;main.tsx <span class="sz">4 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>&nbsp;&nbsp;&nbsp;index.css <span class="sz">7 КБ</span></div>
+        <div class="file-row dir"><span class="ic">▸</span>backend</div>
+        <div class="file-row dir"><span class="ic">▸</span>mcp</div>
+        <div class="file-row"><span class="ic">📄</span>docker-compose.claude.yml <span class="sz">3 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>CLAUDE.md <span class="sz">31 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>README.md <span class="sz">5 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>.env.example <span class="sz">1 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>package.json <span class="sz">2 КБ</span></div>
+        <div class="file-row"><span class="ic">📄</span>.gitignore <span class="sz">1 КБ</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="note">Скролл живёт в теле панели, шапка «Файлы ✕» не уезжает. Список в демо можно поскроллить.</div>
+  <div class="note">Тот же контракт у левого drawer из состояния A: единая механика, один код.</div>
+</section>
+
+<!-- ============ СОСТОЯНИЕ C ============ -->
+<section>
+  <div class="sec-title">C. Пилюли разделов — двухступенчатая деградация</div>
+  <div class="sec-desc">
+    Никаких наложений и вторых строк. Ступень 1 — <code>PillSwitch autoCompact</code> (уже существует):
+    полный текст, пока влезает; при тесноте — иконки у всех, подпись только у активного.
+    Ступень 2 — скролл-полоса с fade по краям (паттерн из мобильного HubHeader).
+  </div>
+
+  <div class="frame-label">768px · ступень 1 — compact: иконки + подпись активного</div>
+  <div class="frame short" style="height:auto">
+    <div class="hub-bar">
+      <div class="pill-strip">
+        <span class="pill on"><svg class="lic" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>Чаты</span>
+        <span class="pill" title="Проекты"><svg class="lic" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+        <span class="pill" title="Календарь"><svg class="lic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></span>
+        <span class="pill" title="Заметки"><svg class="lic" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></span>
+        <span class="pill" title="Персоны"><svg class="lic" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+      </div>
+      <span style="flex:1"></span>
+      <span class="icon-btn"><svg class="lic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+      <span class="icon-btn"><svg class="lic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+    </div>
+  </div>
+  <div class="note">Переход полнотекст→compact делает сам <code>autoCompact</code>: скрытый эталон + ResizeObserver.</div>
+
+  <div class="frame-label">480px · ступень 2 — скролл-полоса с fade и меню «⋯»</div>
+  <div class="frame short w480" style="height:auto">
+    <div class="hub-bar" style="padding:0 10px">
+      <div class="pills-wrap" style="flex:1; min-width:0">
+        <div class="fade-l"></div><div class="fade-r"></div>
+        <div class="pills-scroll">
+          <span class="pill on"><svg class="lic" viewBox="0 0 24 24"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>Чаты</span>
+          <span class="pill"><svg class="lic" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>Проекты</span>
+          <span class="pill"><svg class="lic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Календарь</span>
+          <span class="pill"><svg class="lic" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>Заметки</span>
+          <span class="pill"><svg class="lic" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>Персоны</span>
+        </div>
+      </div>
+      <span class="more-chip">⋯ Разделы</span>
+    </div>
+  </div>
+  <div class="note">Полоса свайпается пальцем, скроллбар скрыт, края затухают в <code>C.bgMain</code> — видно, что есть ещё.</div>
+  <div class="note">«⋯ Разделы» дублирует все табы списком — страховка для тех, кто не догадается свайпнуть.</div>
+</section>
+
+<!-- ============ СОСТОЯНИЕ D ============ -->
+<section>
+  <div class="sec-title">D. Хедер чата — один объединённый чип, одна строка</div>
+  <div class="sec-desc">
+    Пять бейджей (контекст, ₽, fal, glif, модель) на планшете схлопываются в существующий
+    <code>MobileCombinedBadge</code>: stacked-чип «контекст + расход», один широкий поповер.
+    Заголовок режется многоточием, правый кластер не переносится на вторую строку.
+  </div>
+  <div class="frame short" style="height:300px">
+    <div class="chat-header">
+      <span class="ch-ava">М</span>
+      <div style="min-width:0">
+        <div class="ch-title">Марина · Тревожность у подростков: длинное название чата</div>
+        <div class="ch-sub">Sonnet 5 · проект «Практика»</div>
+      </div>
+      <span style="flex:1"></span>
+      <span class="combo-chip">
+        <span class="r1"><span class="ctx-bar"><i></i></span> 62%</span>
+        <span class="r2">0,84 $ · сессия</span>
+      </span>
+      <span class="icon-btn tap"><svg class="lic" viewBox="0 0 24 24"><path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg></span>
+      <span class="icon-btn tap"><svg class="lic" viewBox="0 0 24 24"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg></span>
+      <span class="icon-btn tap">⋮</span>
+    </div>
+    <div class="popover">
+      <h4>Контекст</h4>
+      <div class="big-ctx"><i></i></div>
+      <div class="pop-row"><span>Использовано</span><span class="v">124k / 200k (62%)</span></div>
+      <div class="pop-row"><span>Автосжатие после</span><span class="v">80%</span></div>
+      <h4>Расход</h4>
+      <div class="pop-row"><span>Claude (подписка)</span><span class="v">0,84 $</span></div>
+      <div class="pop-row"><span>fal.ai (картинки)</span><span class="v">0,12 $</span></div>
+      <div class="pop-row"><span>glif</span><span class="v">—</span></div>
+      <h4>Модель</h4>
+      <div class="pop-row"><span>Слот</span><span class="v">strong → Sonnet 5</span></div>
+    </div>
+  </div>
+  <div class="note">Высота хедера фиксирована (<code>TB.heightDesktop = 52</code>) — лента не теряет 2–3 строки.</div>
+  <div class="note">Поповер прижат к правому краю, <code>maxHeight: calc(100dvh - 130px)</code>, скроллится — влезают все пять источников данных.</div>
+  <div class="note">Тон чипа — по худшему из показателей: 62% контекста → warning.</div>
+</section>
+
+<!-- ============ СОСТОЯНИЕ E ============ -->
+<section>
+  <div class="sec-title">E. Гит-бар — тонкая строка вместо десктопной полки</div>
+  <div class="sec-desc">
+    Сейчас планшет получает десктопный <code>ProjectGitBar</code> целиком: высота 51px + поля ≈ 69px,
+    кнопки с полными подписями «Зафиксировать» и «Опубликовать N» — самая тяжёлая полоса над композером.
+    Предложение: одна строка 44px. Ценность бара — «в какой ветке мы работаем» — остаётся текстом,
+    действия уходят в иконочные tap-цели 36px. Меню области коммита и диалог публикации не меняются.
+  </div>
+
+  <div class="frame-label">768px · сейчас — полная десктопная версия, 69px по вертикали</div>
+  <div class="frame short" style="height:auto; padding-bottom:10px">
+    <div class="gitbar">
+      <span class="gb-branch">
+        <svg class="lic s15" viewBox="0 0 24 24" style="color:var(--c-text-muted)"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <span class="lbl">feature/tablet-adaptive</span>
+        <span class="gb-behind">↓2</span>
+      </span>
+      <span class="gb-turn"><span class="lbl">ход: fix-pills</span><span class="gb-dot"></span></span>
+      <span style="flex:1"></span>
+      <span class="gb-diff"><span class="add">+128</span><span class="rem">−40</span></span>
+      <span class="gb-btn">
+        <span class="acc-ic"><svg class="lic s15" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></span>
+        Зафиксировать
+        <svg class="lic s14" viewBox="0 0 24 24" style="color:var(--c-text-muted)"><polyline points="6 9 12 15 18 9"/></svg>
+      </span>
+      <span class="gb-btn accent">
+        <svg class="lic s15" viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+        Опубликовать 3
+      </span>
+    </div>
+  </div>
+
+  <div class="frame-label">768px · стало — 56px по вертикали, действия иконками, меню коммита по тапу, шеврон сворачивает</div>
+  <div class="frame short" style="height:auto; padding-bottom:10px">
+    <div class="gitbar slim">
+      <span class="gb-branch">
+        <svg class="lic s15" viewBox="0 0 24 24" style="color:var(--c-text-muted)"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+        <span class="lbl">feature/tablet-adaptive</span>
+        <span class="gb-behind">↓2</span>
+      </span>
+      <span class="gb-turn"><span class="lbl">ход: fix-pills</span><span class="gb-dot"></span></span>
+      <span style="flex:1"></span>
+      <span class="gb-diff"><span class="add">+128</span><span class="rem">−40</span></span>
+      <span class="gb-btn icon-only" title="Зафиксировать" style="outline:2px solid var(--c-accent); outline-offset:-2px">
+        <span class="acc-ic"><svg class="lic s15" viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></span>
+      </span>
+      <span class="gb-btn accent" title="Опубликовать 3">
+        <svg class="lic s15" viewBox="0 0 24 24"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+        <span class="n">3</span>
+      </span>
+      <span class="gb-collapse" title="Свернуть">
+        <svg class="lic s14" viewBox="0 0 24 24"><polyline points="18 15 12 9 6 15"/></svg>
+      </span>
+      <div class="gb-menu">
+        <div class="ov-item"><span class="ic"><svg class="lic s15" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>Только этот чат</div>
+        <div class="ov-item"><span class="ic"><svg class="lic s15" viewBox="0 0 24 24"><path d="M9 20H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.69.9H20a2 2 0 0 1 2 2v5"/><circle cx="13" cy="14" r="2"/><path d="M13 22v-6"/></svg></span>Всё дерево</div>
+        <div class="ov-sep"></div>
+        <div class="ov-item"><span class="ic"><svg class="lic s15" viewBox="0 0 24 24"><path d="M12 3l1.9 4.6L18.5 9l-4.6 1.4L12 15l-1.9-4.6L5.5 9l4.6-1.4z"/></svg></span>Стиль сообщений коммита…</div>
+      </div>
+    </div>
+  </div>
+  <div class="note">Ветка читается как раньше (моноширинная, многоточие) — «где мы работаем» не прячем: это причина существования бара.</div>
+  <div class="note">«Зафиксировать» → иконка ✓ 36px; тап открывает то же меню области коммита. «Опубликовать 3» → ☁↑ + число: акцент и счётчик сохраняются.</div>
+  <div class="note">Diff-пилюля <code>+N/−M</code> не трогаем — она и так компактная, ведёт в панель «Изменения». Строка ошибки под баром — без изменений.</div>
+
+  <div class="frame-label">768px · по умолчанию свёрнут — микрострока 28px, один тап разворачивает slim-бар</div>
+  <div class="frame short" style="height:auto; padding-bottom:10px">
+    <div class="gitbar micro" title="Показать гит-действия">
+      <svg class="lic s14" viewBox="0 0 24 24" style="color:var(--c-text-muted); flex-shrink:0"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>
+      <span class="lbl">feature/tablet-adaptive</span>
+      <span class="gb-behind">↓2</span>
+      <span style="flex:1"></span>
+      <span class="add">+128</span>
+      <span class="rem">−40</span>
+      <span class="pub">↑ 3</span>
+      <span class="chev"><svg class="lic s14" viewBox="0 0 24 24"><polyline points="6 9 12 15 18 9"/></svg></span>
+    </div>
+  </div>
+  <div class="note">Микрострока — состояние покоя бара на планшете: 32px с полями вместо 56px slim и 69px десктопа. Вся строка — одна tap-цель (шеврон вниз — подсказка «разворачивается»).</div>
+  <div class="note">Счётчики в микростроке — только индикаторы: действия живут в развёрнутом баре. Выбор «свёрнуто/развёрнуто» запоминается, на десктопе всё остаётся развёрнутым.</div>
+  <div class="note">Авто-правило поверх: diff пуст, публиковать нечего, дерева нет → не показываем вообще (0px). Дерево активно, но работы нет → только микрострока с веткой.</div>
+</section>
+
+</body>
+</html>

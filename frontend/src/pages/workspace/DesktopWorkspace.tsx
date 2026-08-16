@@ -310,6 +310,11 @@ export function DesktopWorkspace(p: Props) {
           переключает проект, не уводя из воркспейса. */}
       <PanelZone
         side="left"
+        // Планшет: левая рельса тоже уходит в компакт-режим, иначе панель чатов шириной
+        // ~300px на 768px окна съедает 39% ленты и ломает чтение. Гейт drawer'а по
+        // windowWidth × PANEL_INLINE_MAX_SHARE (см. PanelZone), на широком планшете
+        // (≥1000px) стек встаёт inline, как у правой зоны (строка 459).
+        compact={p.isTablet}
         panels={zonePanels}
         railBadges={p.railBadges}
         sessionPanels={sessionPanels}

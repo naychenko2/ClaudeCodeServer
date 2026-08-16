@@ -2344,21 +2344,30 @@ public class ClaudeSession : ILlmSessionAdapter
             // applied=false — промпт пересобран, но модели не ушёл: работает промпт старта.
             PublishPromptSnapshot(sections, args, mcpServerNames,
                 applied: false, inheritedFromId: existing.PromptSnapshotId);
-            if (turnMcpPath != null)
-                try { File.Delete(turnMcpPath); }
-                catch (Exception ex)
-                {
-                    // Финализация прогона удалит только конфиг ПЕРВОГО хода — этот файл с
-                    // сервисным токеном больше никто не приберёт, важно хотя бы знать
-                    Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг same-process хода {turnMcpPath}: {ex.Message}");
-                }
             await existing.TurnTcs.Task.WaitAsync(ct);
             // Прогон умер, не выдав ни одного события хода (TOCTOU: фоновые агенты кончились,
             // CLI завершается сразу после успешной записи в stdin) — гонка same-process, а не
             // ошибка доставки. Молча перезапускаем ход новым процессом на ТОЙ ЖЕ паре, не отдавая
             // смерть наружу (иначе фолбэк сочтёт её Unreachable и навсегда сменит провайдера).
             // Обрыв посреди хода (TurnGotEvent=true) сюда не попадает — там DiedEmpty=false.
-            if (!existing.DiedEmpty) return;
+            if (!existing.DiedEmpty)
+            {
+                // Штатное завершение same-process хода: temp MCP-конфиг ЭТОГО хода больше не
+                // нужен (финализация прогона удалит только конфиг ПЕРВОГО хода — этот файл с
+                // сервисным токеном больше никто не приберёт, важно хотя бы знать о неудаче
+                // удаления). В DiedEmpty-ветке ниже файл НЕ трогаем: ретрай стартует новый
+                // процесс с этими же args (--mcp-config указывает на него), удалит его
+                // финализация нового прогона (run.TurnMcpPath). Удали файл до ретрая —
+                // CLI умирает мгновенно с «Invalid MCP configuration: config file not found»,
+                // ход гибнет молча (инцидент 16.08.2026).
+                if (turnMcpPath != null)
+                    try { File.Delete(turnMcpPath); }
+                    catch (Exception ex)
+                    {
+                        Console.Error.WriteLine($"[ClaudeSession] Не удалось удалить temp MCP-конфиг same-process хода {turnMcpPath}: {ex.Message}");
+                    }
+                return;
+            }
             existing.DiedEmpty = false;
             // existing уже финализирован (процесс мёртв, _run обнулён, ресурсы прогона сняты):
             // блок убийства несовместимого прогона ниже пропускаем, проваливаемся к запуску

@@ -1,21 +1,27 @@
 using System.Net.Http.Headers;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Images;
 
 namespace ClaudeHomeServer.Services;
 
 // Генерация изображений через fal.ai (тем же ключом Fal:ApiKey, что и учёт стоимости).
 // Синхронный вызов fal.run/{model}: возвращает картинку, которую мы скачиваем в байты.
-// Используется для AI-аватаров персон. Без ключа — Enabled=false (генерация недоступна).
-public sealed record GeneratedImage(byte[] Bytes, string ContentType);
-
-public class FalImageService
+// Драйвер IImageGenerator (ключ "fal"); выбором между драйверами занимается
+// ImageGenerationService. Без ключа — Enabled=false (генерация недоступна).
+public class FalImageService : IImageGenerator
 {
     private readonly IHttpClientFactory _http;
     private readonly string? _apiKey;
     private readonly string _model;
     private readonly ILogger<FalImageService> _logger;
+    private readonly IReadOnlyList<ImageModelInfo> _models;
+
+    public string Key => "fal";
+    public string DisplayName => "fal.ai";
 
     public bool Enabled => !string.IsNullOrWhiteSpace(_apiKey);
+
+    public IReadOnlyList<ImageModelInfo> Models => _models;
 
     public FalImageService(IHttpClientFactory http, IConfiguration config, ILogger<FalImageService> logger)
     {
@@ -24,6 +30,22 @@ public class FalImageService
         // Быстрая дешёвая модель для аватаров; переопределяется конфигом
         _model = (config["Fal:ImageModel"] ?? "fal-ai/flux/schnell").Trim('/');
         _logger = logger;
+        _models = BuildModels(_model);
+    }
+
+    // Курируемый список для пикера: две проверенные модели flux плюс модель из конфига,
+    // если админ прописал в Fal:ImageModel что-то своё (иначе она бы не выбиралась в UI).
+    private static IReadOnlyList<ImageModelInfo> BuildModels(string configured)
+    {
+        var models = new List<ImageModelInfo>
+        {
+            new("fal-ai/flux/schnell", "FLUX schnell", "Быстрая и дешёвая · иконки и простые сюжеты"),
+            new("fal-ai/flux/dev", "FLUX dev", "Качественнее и дороже · лица и мелкие детали"),
+        };
+        if (!string.IsNullOrWhiteSpace(configured)
+            && !models.Any(m => string.Equals(m.Id, configured, StringComparison.OrdinalIgnoreCase)))
+            models.Insert(0, new ImageModelInfo(configured, configured, "Модель из конфига Fal:ImageModel"));
+        return models;
     }
 
     // Сгенерировать одно квадратное изображение (первый вариант).
@@ -35,11 +57,17 @@ public class FalImageService
 
     // Сгенерировать несколько вариантов изображения по описанию (для выбора аватара).
     // Возвращает пустой список, если fal выключен/ошибка.
+    public Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
+        string prompt, int count, CancellationToken ct = default) =>
+        GenerateManyAsync(prompt, count, null, ct);
+
+    // Перегрузка с явной моделью (null — дефолт из конфига Fal:ImageModel).
     public async Task<IReadOnlyList<GeneratedImage>> GenerateManyAsync(
-        string prompt, int count, CancellationToken ct = default)
+        string prompt, int count, string? model, CancellationToken ct = default)
     {
         if (!Enabled || string.IsNullOrWhiteSpace(prompt)) return [];
         count = Math.Clamp(count, 1, 4);
+        var endpoint = string.IsNullOrWhiteSpace(model) ? _model : model.Trim().Trim('/');
         try
         {
             // Именованный клиент, общий с FalAccountService/FalCostService: под ним висит
@@ -47,7 +75,7 @@ public class FalImageService
             var client = _http.CreateClient("fal");
             client.Timeout = TimeSpan.FromSeconds(180);
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, $"https://fal.run/{_model}");
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"https://fal.run/{endpoint}");
             req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
             req.Content = JsonContent.Create(new
             {

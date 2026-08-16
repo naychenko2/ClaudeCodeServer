@@ -1,4 +1,4 @@
-using System.IdentityModel.Tokens.Jwt;
+﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text.Json;
 using ClaudeHomeServer.Hubs;
@@ -30,7 +30,8 @@ public class PersonasController : ControllerBase
     private readonly NotesService _notes;
     private readonly SkillsService _skills;
     private readonly KnowledgeService _knowledge;
-    private readonly FalImageService _falImage;
+    private readonly Services.Images.ImageGenerationService _images;
+    private readonly Services.Images.ImageBackfillService _imageBackfill;
     private readonly Services.Llm.OneShotClaudeRunner _oneShot;
     private readonly Services.Llm.ICheapTextRunner _cheap;
     private readonly PersonaPromptBuilder _promptBuilder;
@@ -45,7 +46,8 @@ public class PersonasController : ControllerBase
     public PersonasController(PersonaManager personas, ProjectManager projects,
         SessionManager sessions, UserStore users, PersonaMemoryService memory, PersonaBindingsService bindings,
         NotesService notes, SkillsService skills, KnowledgeService knowledge,
-        FalImageService falImage,
+        Services.Images.ImageGenerationService images,
+        Services.Images.ImageBackfillService imageBackfill,
         Services.Llm.OneShotClaudeRunner oneShot, Services.Llm.ICheapTextRunner cheap,
         PersonaPromptBuilder promptBuilder, PersonaAskService ask, PersonaAutomationService automation,
         SpecialtyTemplatesService specialtyTemplates, PersonaDraftService drafts,
@@ -63,7 +65,8 @@ public class PersonasController : ControllerBase
         _notes = notes;
         _skills = skills;
         _knowledge = knowledge;
-        _falImage = falImage;
+        _images = images;
+        _imageBackfill = imageBackfill;
         _oneShot = oneShot;
         _promptBuilder = promptBuilder;
         _ask = ask;
@@ -75,6 +78,10 @@ public class PersonasController : ControllerBase
     }
 
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
+
+    // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
+    private const string ImageGenerationOffError =
+        "Генерация изображений не настроена: ни один провайдер (fal.ai, glif) не подключён";
 
     private Task Broadcast(string action, string? personaId = null) =>
         _hub.Clients.Group("user_" + UserId)
@@ -586,26 +593,46 @@ public class PersonasController : ControllerBase
 
     // --- Аватар персоны ---
 
-    // Доступна ли AI-генерация аватара (настроен ли fal)
+    // Доступна ли AI-генерация аватара и чем именно её сделают (провайдер + модель).
+    // Поле generate НЕ переименовывать: на него завязаны формы персоны на фронте.
     [HttpGet("avatar/caps")]
-    public ActionResult Caps() => Ok(new { generate = _falImage.Enabled });
+    public ActionResult Caps()
+    {
+        var provider = _images.ActiveProviderFor(Services.Images.ImagePlaces.PersonaAvatar);
+        return Ok(new
+        {
+            generate = provider is not null,
+            provider = provider?.Key,
+            providerName = provider?.DisplayName,
+            // Эффективная модель настройки; null — дефолт самого драйвера
+            model = provider is null ? null : _images.ModelFor(Services.Images.ImagePlaces.PersonaAvatar, provider.Key),
+        });
+    }
 
-    // Сгенерировать НЕСКОЛЬКО вариантов аватар-фото через fal по описанию (для выбора).
-    // Кандидаты сохраняются во временную папку, аватар персоны НЕ меняется до выбора.
+    // Сгенерировать НЕСКОЛЬКО вариантов аватар-фото по описанию (для выбора); провайдера
+    // и модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
+    // папку, аватар персоны НЕ меняется до выбора.
     // prompt пуст → строим фото-промпт из имени/описания персоны.
     [HttpPost("{id}/avatar/generate")]
     public async Task<ActionResult> GenerateAvatar(string id, [FromBody] GenerateAvatarRequest req)
     {
         var persona = _personas.Get(id, UserId);
         if (persona is null) return NotFound();
-        if (!_falImage.Enabled) return BadRequest(new { error = "Генерация изображений не настроена (нет Fal:ApiKey)" });
 
         var prompt = string.IsNullOrWhiteSpace(req.Prompt)
             ? BuildAvatarPrompt(persona)
             : $"Photorealistic portrait photo. {req.Prompt.Trim()}";
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
-        var images = await _falImage.GenerateManyAsync(prompt, count);
+        // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
+        // как только генерацию настроят
+        if (!_images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
+        {
+            _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, UserId, prompt);
+            return BadRequest(new { error = ImageGenerationOffError });
+        }
+
+        var images = await _images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, count);
         if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
 
         // Свежая папка кандидатов (перезатираем прошлую генерацию)
@@ -754,20 +781,22 @@ public class PersonasController : ControllerBase
                "high detail, sharp focus, square crop.";
     }
 
-    // Фото-аватар автоматически, best-effort (не критично: при сбое или невключённом
-    // fal персона остаётся с инициалами). Общий путь для всех авто/LLM-сценариев
-    // создания, где человек не выбирает аватар сам — quick-create одной персоны,
-    // пакетная команда из ai/team.
+    // Фото-аватар автоматически, best-effort (создание персоны не срывается из-за картинки).
+    // Общий путь для всех авто/LLM-сценариев создания, где человек не выбирает аватар сам —
+    // quick-create одной персоны, пакетная команда из ai/team.
+    // Не получилось (провайдера нет, отказ, сбой) — персона остаётся с инициалами, а аватар
+    // догонит её из очереди, когда генерация заработает.
     private async Task<Persona> TryAutoGenerateAvatarAsync(Persona persona, string? avatarPrompt)
     {
-        if (!_falImage.Enabled) return persona;
+        var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
+            ? BuildAvatarPrompt(persona)
+            : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
+
+        if (!_images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar)) return EnqueueAvatarBackfill(persona, prompt);
         try
         {
-            var prompt = string.IsNullOrWhiteSpace(avatarPrompt)
-                ? BuildAvatarPrompt(persona)
-                : $"Photorealistic portrait photo. {avatarPrompt.Trim()}";
-            var images = await _falImage.GenerateManyAsync(prompt, 1);
-            if (images.Count == 0) return persona;
+            var images = await _images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, 1);
+            if (images.Count == 0) return EnqueueAvatarBackfill(persona, prompt);
             var dir = Path.Combine(_personas.AssetsDir, persona.Id);
             Directory.CreateDirectory(dir);
             var fileName = $"avatar-{Guid.NewGuid():N}{ImageAssetHelper.ExtFor(images[0].ContentType)}";
@@ -776,8 +805,15 @@ public class PersonasController : ControllerBase
         }
         catch
         {
-            return persona;
+            return EnqueueAvatarBackfill(persona, prompt);
         }
+    }
+
+    private Persona EnqueueAvatarBackfill(Persona persona, string prompt)
+    {
+        _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar,
+            persona.Id, string.IsNullOrEmpty(persona.OwnerId) ? UserId : persona.OwnerId, prompt);
+        return persona;
     }
 
     // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import type { LucideIcon } from 'lucide-react';
 import { C, R, FS, FONT, SHADOW, Z } from '../../lib/design';
@@ -33,7 +33,7 @@ export interface RailFlyoutAction {
   onClick: () => void;
 }
 
-export function RailFlyout({ side, label, hint, open, action, railWidth, children }: {
+export function RailFlyout({ side, label, hint, open, action, railWidth, hostStyle, standalone, children }: {
   // Сторона окна: у левой рельсы плашка растёт вправо, у правой — влево
   side: 'left' | 'right';
   label: string;
@@ -49,6 +49,14 @@ export function RailFlyout({ side, label, hint, open, action, railWidth, childre
   // Ширина капсулы рельсы: от её ВНЕШНЕЙ кромки выезжает плашка. Не от кнопки —
   // язычок выходит из-под панели, а не прирастает к иконке.
   railWidth: number;
+  // Стиль обёртки-якоря. Нужен тем, кто занимает ВСЮ ширину капсулы (шляпка рельсы
+  // с её чертой от кромки до кромки): по умолчанию якорь ужимается по содержимому,
+  // как кнопка.
+  hostStyle?: CSSProperties;
+  // Плашка-таблетка: рамка и скругления со ВСЕХ сторон, а не язычок, выехавший
+  // из-под капсулы. Так подписаны шляпки рельс — они называют не кнопку, а рельсу
+  // целиком, и отдельная форма отличает их от подписей кнопок.
+  standalone?: boolean;
   children: ReactNode;   // сама кнопка рельсы
 }) {
   const hostRef = useRef<HTMLSpanElement>(null);
@@ -138,7 +146,7 @@ export function RailFlyout({ side, label, hint, open, action, railWidth, childre
 
   return (
     <>
-      <span ref={hostRef} style={{ display: 'flex' }}>{children}</span>
+      <span ref={hostRef} style={{ display: 'flex', ...hostStyle }}>{children}</span>
       {shown && createPortal(
         <div
           ref={flyoutRef}
@@ -163,10 +171,13 @@ export function RailFlyout({ side, label, hint, open, action, railWidth, childre
             maxWidth: 280, boxSizing: 'border-box',
             background: C.bgWhite,
             border: `1px solid ${C.border}`,
-            // Сторона, обращённая к рельсе, открыта — оттуда плашка и выехала
-            ...(side === 'left'
-              ? { borderLeft: 'none', borderTopRightRadius: R.md, borderBottomRightRadius: R.md }
-              : { borderRight: 'none', borderTopLeftRadius: R.md, borderBottomLeftRadius: R.md }),
+            // Сторона, обращённая к рельсе, открыта — оттуда плашка и выехала.
+            // Таблетке (standalone) открывать нечего: она скруглена кругом.
+            ...(standalone
+              ? { borderRadius: R.md }
+              : side === 'left'
+                ? { borderLeft: 'none', borderTopRightRadius: R.md, borderBottomRightRadius: R.md }
+                : { borderRight: 'none', borderTopLeftRadius: R.md, borderBottomLeftRadius: R.md }),
             boxShadow: SHADOW.dropdown,
             fontFamily: FONT.sans, fontSize: FS.base, color: C.textPrimary,
             // Курсор над подписью — обычная стрелка: это ярлык кнопки, а не текст,

@@ -28,6 +28,7 @@ import { Toolbar, PillSwitch } from '../../components/Toolbar';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { RoutePicker } from '../../components/RoutePicker';
+import { ImageGenNote } from '../../components/ImageGenNote';
 import { useModels } from '../../lib/models';
 import { useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import { routeDisplayLabel, usePresets } from '../../lib/presets';
@@ -147,6 +148,8 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const [avatarPrompt, setAvatarPrompt] = useState('');
   const [avatarGenerating, setAvatarGenerating] = useState(false);
   const [avatarError, setAvatarError] = useState<string | null>(null);
+  // Отказ генерации — отдельно от avatarError: он живёт рядом с «Попробовать снова»
+  const [avatarGenError, setAvatarGenError] = useState<string | null>(null);
   const [avatarCandidates, setAvatarCandidates] = useState<string[]>([]);
   const [avatarSelecting, setAvatarSelecting] = useState<string | null>(null);
   const [cropState, setCropState] = useState<{ src: string; file: File } | null>(null);
@@ -458,12 +461,13 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     if (!persona || avatarGenerating) return;
     setAvatarGenerating(true);
     setAvatarError(null);
+    setAvatarGenError(null);
     setAvatarCandidates([]);
     try {
       const { candidates: files } = await api.personas.generateAvatar(persona.id, { prompt: avatarPrompt, count: 4 });
       setAvatarCandidates(files);
     } catch (e) {
-      setAvatarError(e instanceof Error ? e.message : 'Не удалось сгенерировать аватар');
+      setAvatarGenError(e instanceof Error ? e.message : 'Не удалось сгенерировать аватар');
     } finally {
       setAvatarGenerating(false);
     }
@@ -881,9 +885,11 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                 </div>
               </div>
 
-              {persona && canGenerateAvatar && (
+              {persona && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: `1px solid ${C.borderLight}`, paddingTop: 20 }}>
                   <FieldLabel>Фото-аватар</FieldLabel>
+                  {!canGenerateAvatar && <ImageGenNote kind="avatar" disabled />}
+                  {canGenerateAvatar && <>
                   <TextField value={avatarPrompt} onChange={setAvatarPrompt} placeholder="Опишите внешность (необязательно): рыжий кот в очках" />
                   <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
                     <Button variant="ghostAccent" size="sm" loading={avatarGenerating} disabled={avatarGenerating} onClick={() => void generateAvatarCandidates()}>
@@ -893,6 +899,13 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     <input ref={fileInputRef} type="file" accept="image/jpeg,image/png,image/webp" style={{ display: 'none' }}
                       onChange={e => { onAvatarFileChosen(e.target.files?.[0] ?? null); e.target.value = ''; }} />
                   </div>
+                  {/* Кто рисует + ожидание/отказ генерации; ошибка выбора кандидата — ниже */}
+                  <ImageGenNote
+                    kind="avatar"
+                    status={avatarGenerating ? 'running' : avatarGenError ? 'error' : 'idle'}
+                    error={avatarGenError}
+                    onRetry={() => void generateAvatarCandidates()}
+                  />
                   {avatarCandidates.length > 0 && !avatarGenerating && (
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, maxWidth: 280 }}>
                       {avatarCandidates.map(file => {
@@ -916,6 +929,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     </div>
                   )}
                   {avatarError && <span style={{ fontSize: 12, color: C.dangerText }}>{avatarError}</span>}
+                  </>}
                 </div>
               )}
             </>

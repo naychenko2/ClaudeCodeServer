@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -176,6 +176,19 @@ export const api = {
   glif: {
     // Агрегаты расхода приходят сразу за три окна (24ч/7д/30д) — параметра периода нет
     account: () => request<GlifAccountResponse>('/glif/account'),
+  },
+
+  // Генератор картинок инстанса ПО МЕСТАМ (иконка проекта, аватар персоны): у каждого
+  // места свой режим auto|fal|glif и своя модель. Чтение открыто всем (диалоги
+  // подписывают, кто и чем рисует), запись — админам. Патч места: поле не прислали —
+  // оставить, "" — сброс к конфигу; место вне places не трогается.
+  imageGeneration: {
+    get: () => request<ImageGenerationSettings>('/image-generation'),
+    save: (patch: ImageGenerationPatch) =>
+      request<ImageGenerationSettings>('/image-generation', { method: 'PUT', body: JSON.stringify(patch) }),
+    savePlace: (place: string, patch: ImagePlacePatch) =>
+      request<ImageGenerationSettings>('/image-generation',
+        { method: 'PUT', body: JSON.stringify({ places: { [place]: patch } }) }),
   },
 
   // Внешние модули (платформа): список включённых у юзера модулей для оболочки (R6).
@@ -1311,8 +1324,9 @@ export const api = {
       }),
   },
 
-  // История решений (change-dossiers, этап 1) — записи «зачем менялось, что решили,
-  // что отвергли, какие грабли», привязанные к коммитам. ADR-004 §4/§8
+  // История решений (change-dossiers) — записи «зачем менялось, что решили,
+  // что отвергли, какие грабли», привязанные к коммитам. ADR-004 §4/§6/§8.
+  // Этап 1: просмотр. Этап 3: экспорт в ветку ccs/dossiers/v1 через git-плюминг.
   dossiers: {
     list: (projectId: string, filter?: { file?: string; symbol?: string; commit?: string }) => {
       const qs = new URLSearchParams();
@@ -1322,6 +1336,18 @@ export const api = {
       const s = qs.toString();
       return request<DossierEntry[]>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
     },
+    // Готовность проекта к экспорту (ADR-004 §6): isGitRepo гейтит кнопку в UI,
+    // sharedFolder — предупреждение о втором владельце той же папки.
+    exportStatus: (projectId: string) =>
+      request<{ isGitRepo: boolean; sharedFolder: boolean }>(
+        `/projects/${encodeURIComponent(projectId)}/dossiers/export/status`),
+    // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
+    // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:
+    // count подставляется в текст успеха, nothingToExport переключает на состояние «пусто».
+    exportRun: (projectId: string, push: boolean) =>
+      request<{ status: 'exported' | 'nothingToExport'; count: number }>(
+        `/projects/${encodeURIComponent(projectId)}/dossiers/export`,
+        { method: 'POST', body: JSON.stringify({ push }) }),
   },
 
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../../lib/api';
 import type { Project } from '../../types';
 import { recordRecentProject } from '../../lib/pinnedProjects';
+import { IMAGE_PLACE, onImageBackfilled } from '../../lib/imageBackfill';
 
 // Открыть проект из шапки (зона/палитра): переиспользуем событие cc-open-session, которое
 // App уже слушает и переводит в раздел «Проекты» + setProject. Заодно отмечаем в «недавних».
@@ -59,6 +60,19 @@ export function ensureProjectsLoaded(): Promise<Project[]> { return load(); }
 // тогда вызывающий идёт через ensureProjectsLoaded().
 export function getCachedProject(id: string): Project | undefined {
   return cache.find(p => p.id === id);
+}
+
+// Догоняющая генерация дорисовала иконку проекта: перечитываем список (у иконки новое
+// имя файла icon-{guid}, значит и новый URL — прежний src браузер отдал бы из кэша) и
+// отдаём свежий проект подписчику. Общий кэш обновляется заодно, поэтому зона
+// переключения и палитра перерисовываются сами; повторные вызовы дедуплицирует inflight.
+export function onProjectIconBackfilled(handler: (project: Project) => void): () => void {
+  return onImageBackfilled(IMAGE_PLACE.icon, id => {
+    void load(true).then(list => {
+      const fresh = list.find(p => p.id === id);
+      if (fresh) handler(fresh);
+    });
+  });
 }
 
 export function useAllProjects(): Project[] {

@@ -1,8 +1,10 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -334,5 +336,63 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("tagRegistry").GetArrayLength().Should().Be(0);
+    }
+}
+
+// Иконка проекта при выключенной генерации (оба провайдера без ключей):
+// caps отдаёт generate:false, а иконка не теряется — уходит в догоняющую очередь.
+public class ProjectsIconCapsTests : IClassFixture<NoImageProvidersFactory>
+{
+    private readonly NoImageProvidersFactory _factory;
+    private readonly HttpClient _client;
+    private readonly string _tempProjectDir;
+
+    public ProjectsIconCapsTests(NoImageProvidersFactory factory)
+    {
+        _factory = factory;
+        _client = factory.CreateAuthenticatedClient();
+        _tempProjectDir = Path.Combine(factory.TempDir, "projects");
+        Directory.CreateDirectory(_tempProjectDir);
+    }
+
+    [Fact]
+    public async Task IconCaps_БезНастроенныхПровайдеров_GenerateFalseБезПровайдераИМодели()
+    {
+        var response = await _client.GetAsync("/api/projects/icon/caps");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("generate").GetBoolean().Should().BeFalse();
+        body.GetProperty("provider").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("model").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task GenerateIcon_БезНастроенныхПровайдеров_400ИЗаявкаВОчереди()
+    {
+        var dir = Path.Combine(_tempProjectDir, "icon_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        var created = await _client.PostAsJsonAsync("/api/projects", new { name = "БезИконки", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/generate", new { count = 1 });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
+        error.Should().NotContain("Fal:ApiKey");
+
+        var store = _factory.Services.GetRequiredService<ImageBackfillStore>();
+        store.Find(ImageBackfillKinds.ProjectIcon, id).Should().NotBeNull();
+    }
+
+    // Проекта ещё нет — заявке не за что зацепиться, только внятный отказ
+    [Fact]
+    public async Task GenerateIconPreview_БезНастроенныхПровайдеров_400()
+    {
+        var response = await _client.PostAsJsonAsync("/api/projects/icon/generate-preview",
+            new { name = "Черновик", count = 1 });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
     }
 }

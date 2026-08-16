@@ -6,6 +6,7 @@ import { api } from '../../lib/api';
 import { useSpecialtyCatalog } from '../../lib/specialties';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
+import { ImageGenNote } from '../../components/ImageGenNote';
 import { PillSwitch } from '../../components/Toolbar';
 import { RoutePicker } from '../../components/RoutePicker';
 import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
@@ -745,9 +746,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                 Генерация появится после сохранения персоны. Пока можно выбрать цвет инициалов.
               </span>
             ) : !canGenerate ? (
-              <span style={{ fontSize: 12.5, color: C.textSecondary, fontFamily: FONT.sans, lineHeight: 1.5 }}>
-                Генерация недоступна (fal не настроен). Доступен выбор цвета инициалов.
-              </span>
+              <ImageGenNote kind="avatar" disabled />
             ) : (
               <>
                 <TextField value={avatarPrompt} onChange={setAvatarPrompt}
@@ -757,9 +756,13 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                     {generating ? 'Генерирую 4 варианта…' : '✨ Сгенерировать 4 варианта'}
                   </Button>
                 </div>
-                {generating && (
-                  <WaitingIndicator hint="Обычно занимает 10–30 секунд" />
-                )}
+                {/* Кто рисует + ожидание/отказ генерации; ошибка выбора кандидата — ниже */}
+                <ImageGenNote
+                  kind="avatar"
+                  status={generating ? 'running' : avatarGenError ? 'error' : 'idle'}
+                  error={avatarGenError}
+                  onRetry={generateAvatar}
+                />
                 {candidates.length > 0 && !generating && persona && (
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, maxWidth: 220 }}>
                     {candidates.map(file => {
@@ -796,8 +799,8 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                     })}
                   </div>
                 )}
-                {(avatarGenError || selectError) && (
-                  <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans }}>{avatarGenError || selectError}</span>
+                {selectError && (
+                  <span style={{ fontSize: 12, color: C.dangerText, fontFamily: FONT.sans }}>{selectError}</span>
                 )}
               </>
             )}

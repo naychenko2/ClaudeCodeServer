@@ -908,6 +908,10 @@ export function PanelZone({
   const rail = (
     <PanelRail
       side={side}
+      // Обе зоны держат ОДИН набор панелей (панель переносится с края на край),
+      // поэтому подпись у левой и правой рельсы одна и та же
+      hat="Панели"
+      hatTitle="Панели инструментов"
       visible={showRail}
       peek={peekCard ? {
         node: peekCard,

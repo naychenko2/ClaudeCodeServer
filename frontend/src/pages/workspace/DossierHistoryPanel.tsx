@@ -5,23 +5,45 @@
 //
 // Источники: макет docs/mockups/decision-history-v1.html + предложение
 // docs/mockups/decision-history-proposal.md (Майя), тексты — заметка «Тексты —
-// Паспорта изменений (UI, empty-state, «Что нового»)», контракт — ADR-004 §4/§8.
+// Паспорта изменений (UI, empty-state, «Что нового»)», контракт — ADR-004 §4/§6/§8.
 // Бэкенд (GET /api/projects/{id}/dossiers) — Денис; до его готовности панель строит
 // запросы по контракту и просто получает пустой список/ошибку сети.
+//
+// Этап 3 (ADR §6): кнопка «Выгрузить в репозиторий» и модалка подтверждения.
+// Кнопка видна только при включённом флаге change-dossiers-recall И когда проект —
+// git-репозиторий (по данным GET .../dossiers/export/status). Тумблер opt-out
+// DossierOptOutButton живёт в шапке чата и сюда не ходит.
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useSyncExternalStore } from 'react';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, ClipboardList, File as FileIcon, GitCompare, History, Info,
-  Lightbulb, MessageCircle, Search, X,
+  Lightbulb, MessageCircle, Search, Upload, X,
 } from 'lucide-react';
 import type { DossierEntry, Persona } from '../../types';
 import { displayNameOf, type AuthState } from '../../types';
 import { api } from '../../lib/api';
 import { basename } from '../../lib/paths';
 import { C, FONT, FS, R, SP } from '../../lib/design';
+import { getFlag, subscribeFlags } from '../../lib/featureFlags';
 import { ICON_STROKE } from '../../components/ui/icons';
-import { Button, Dot, EmptyState, TextField } from '../../components/ui';
+import { Button, Dot, EmptyState, IconButton, TextField } from '../../components/ui';
+import { PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { useNow } from '../../lib/useNow';
+import { DossierExportDialog } from './DossierExportDialog';
+
+// Ключ фич-флага берётся напрямую через getFlag (а не useFeature/FLAGS): FLAGS
+// жёстко типизирован, а ключ change-dossiers-recall объявлен на бэкенде, а не
+// в этом файле. Подписка на общий стор всё равно работает — setAllFlags кладёт
+// значение по тому же ключу, что пришёл с /api/feature-flags.
+const FLAG_CHANGE_DOSSIERS_RECALL = 'change-dossiers-recall';
+function useChangeDossiersRecallEnabled(): boolean {
+  return useSyncExternalStore(
+    subscribeFlags,
+    () => getFlag(FLAG_CHANGE_DOSSIERS_RECALL),
+    () => getFlag(FLAG_CHANGE_DOSSIERS_RECALL),
+  );
+}
 
 interface Props {
   project: { id: string };
@@ -315,6 +337,31 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
 
+  // Этап 3 — экспорт в ветку ccs/dossiers/v1. Гейт видимости кнопки:
+  //   флаг change-dossiers-recall включён
+  //   И проект — git-репозиторий (isGitRepo из /dossiers/export/status)
+  // sharedFolder приезжает тем же запросом и подсовывается модалке для выноски.
+  const recallEnabled = useChangeDossiersRecallEnabled();
+  const [exportStatus, setExportStatus] = useState<{ isGitRepo: boolean; sharedFolder: boolean } | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
+
+  useEffect(() => {
+    if (!recallEnabled) {
+      // Сбрасываем на null и закрываем модалку, если флаг мигнул во время открытого диалога
+      setExportStatus(null);
+      setExportOpen(false);
+      return;
+    }
+    let cancelled = false;
+    api.dossiers.exportStatus(project.id)
+      .then(s => { if (!cancelled) setExportStatus(s); })
+      .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false }); });
+    return () => { cancelled = true; };
+  }, [project.id, recallEnabled]);
+
+  const showExportButton = recallEnabled && exportStatus?.isGitRepo === true;
+  const hasHeader = useHasPanelHeader();
+
   useEffect(() => {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс перед новым запросом (сменился фильтр/проект) — иначе список чужого фильтра мигнёт перед загрузкой
@@ -415,6 +462,21 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
           <Search size={11} strokeWidth={ICON_STROKE} />
           sha или текст
         </button>
+        {/* Запасной вариант на случай, когда PanelHeaderSlot не сработает (мобил/вложенный
+            контекст): тот же chipStyle, что у соседних чипов, иконка + короткая подпись. */}
+        {showExportButton && !hasHeader && (
+          <button
+            onClick={() => setExportOpen(true)}
+            title="Выгрузить в репозиторий"
+            style={{
+              ...chipStyle, cursor: 'pointer', color: C.textHeading,
+              background: C.bgCard, border: `1px solid ${C.border}`,
+            }}
+          >
+            <Upload size={11} strokeWidth={ICON_STROKE} />
+            Выгрузить
+          </button>
+        )}
       </div>
       {searchOpen && (
         <div style={{ marginTop: SP.sm, display: 'flex', gap: SP.xs, alignItems: 'center' }}>
@@ -505,6 +567,15 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {subheader}
       {exclusionNote}
+      {/* Кнопка тулбара (ADR §6): только когда у панели есть шапка. Без pinned —
+          выгрузка не главное действие панели, в покое шапка должна оставаться чистой. */}
+      {showExportButton && hasHeader && (
+        <PanelHeaderSlot side="right">
+          <IconButton size="sm" title="Выгрузить в репозиторий" onClick={() => setExportOpen(true)}>
+            <Upload size={14} strokeWidth={ICON_STROKE} />
+          </IconButton>
+        </PanelHeaderSlot>
+      )}
       <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px ${SP.lg}px` }}>
         {recent.map(entry => (
           <DossierCard
@@ -541,6 +612,14 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
           );
         })}
       </div>
+      {showExportButton && (
+        <DossierExportDialog
+          open={exportOpen}
+          onClose={() => setExportOpen(false)}
+          projectId={project.id}
+          sharedFolder={exportStatus?.sharedFolder === true}
+        />
+      )}
     </div>
   );
 }

@@ -2,8 +2,12 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
+using ClaudeHomeServer.Services.Images;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -153,5 +157,67 @@ public class PersonasControllerAvatarTests : IClassFixture<TestWebApplicationFac
             UploadForm(FakePng(), FakePng()));
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+}
+
+// Фабрика без единого настроенного генератора картинок: оба ключа пусты. Пустая строка
+// (а не отсутствие ключа) важна — FalImageService иначе подхватил бы FAL_KEY из окружения
+// машины, и «выключенная генерация» перестала бы быть выключенной.
+public class NoImageProvidersFactory : TestWebApplicationFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureAppConfiguration((_, config) =>
+        {
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Fal:ApiKey"] = "",
+                ["Glif:McpToken"] = "",
+            });
+        });
+    }
+}
+
+// Аватар персоны при выключенной генерации: caps честно говорит «нельзя», а сам аватар
+// не теряется — заявка уходит в очередь догоняющей генерации.
+public class PersonasAvatarCapsTests : IClassFixture<NoImageProvidersFactory>
+{
+    private readonly NoImageProvidersFactory _factory;
+    private readonly HttpClient _client;
+
+    public PersonasAvatarCapsTests(NoImageProvidersFactory factory)
+    {
+        _factory = factory;
+        _client = factory.CreateAuthenticatedClient();
+    }
+
+    [Fact]
+    public async Task Caps_БезНастроенныхПровайдеров_GenerateFalseБезПровайдераИМодели()
+    {
+        var response = await _client.GetAsync("/api/personas/avatar/caps");
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        body.GetProperty("generate").GetBoolean().Should().BeFalse();
+        body.GetProperty("provider").ValueKind.Should().Be(JsonValueKind.Null);
+        body.GetProperty("model").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task Generate_БезНастроенныхПровайдеров_400ИЗаявкаВОчереди()
+    {
+        var created = await _client.PostAsJsonAsync("/api/personas", new { name = "Без аватара" });
+        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+
+        var response = await _client.PostAsJsonAsync($"/api/personas/{id}/avatar/generate",
+            new { prompt = "рыжая кошка", count = 1 });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var error = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
+        error.Should().NotContain("Fal:ApiKey");
+
+        var store = _factory.Services.GetRequiredService<ImageBackfillStore>();
+        store.Find(ImageBackfillKinds.PersonaAvatar, id).Should().NotBeNull();
     }
 }

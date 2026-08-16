@@ -1,30 +1,12 @@
 import * as signalR from '@microsoft/signalr';
 import type { ServerMessage, TeamPlanDecision } from '../types';
-import { getConnectionState, setConnectionState, setDegraded } from './offline';
+import { setConnectionState } from './offline';
 
 let connection: signalR.HubConnection | null = null;
 
 // Набор подписчиков на событие reconnected: поддерживает отписку (в отличие от
 // прямых conn.onreconnected(), которые не имеют публичного off())
 const _reconnectedCallbacks = new Set<() => void>();
-
-// Дебаунс перехода в офлайн. Кратковременные разрывы WS (VPN/прокси/сеть рвут
-// канал, авто-реконнект поднимает за доли секунды) НЕ должны мигать индикатором.
-// Показываем «Офлайн» только если реконнект не удался за OFFLINE_DEBOUNCE_MS.
-let _offlineDebounce: ReturnType<typeof setTimeout> | null = null;
-const OFFLINE_DEBOUNCE_MS = 2_500;
-
-function scheduleOffline() {
-  // Начало реконнекта — сразу degraded: индикатор объясняет, что происходит, а данные
-  // продолжают тянуться. В offline уходим только если реконнект не удался за дебаунс.
-  if (getConnectionState() === 'online') setDegraded('SignalR reconnecting');
-  if (_offlineDebounce !== null) return; // уже запланировано
-  _offlineDebounce = setTimeout(() => { _offlineDebounce = null; setConnectionState('offline'); }, OFFLINE_DEBOUNCE_MS);
-}
-
-function cancelOffline() {
-  if (_offlineDebounce !== null) { clearTimeout(_offlineDebounce); _offlineDebounce = null; }
-}
 
 export function getConnection(): signalR.HubConnection {
   if (!connection) {
@@ -47,15 +29,18 @@ export function getConnection(): signalR.HubConnection {
             : Math.min(1000 * Math.pow(2, ctx.previousRetryCount - 1), 30_000),
       })
       .build();
-    // Состояние соединения двигает глобальный online/offline флаг.
-    // В офлайн уходим с дебаунсом — кратковременный разрыв+реконнект не мигает.
-    connection.onreconnecting(() => scheduleOffline());
-    // onclose — соединение закрыто окончательно (реконнекты исчерпаны или явный
-    // stop); тут офлайн без дебаунса.
-    connection.onclose(() => { cancelOffline(); setConnectionState('offline'); });
-    // Единственный onreconnected-обработчик: отменяем отложенный офлайн + online + диспатч
+    // onreconnecting — промежуточные попытки авто-реконнекта; UI не дёргаем:
+    // возврат поднимется через onreconnected, окончательный обрыв — через onclose.
+    // Кратковременные разрывы сети/WS теперь не мигают индикатором.
+    connection.onreconnecting(() => { /* noop */ });
+    // onclose — теоретический вход в offline (реконнекты исчерпаны или явный stop).
+    // При текущем делегате ретраев (nextRetryDelayInMilliseconds всегда возвращает
+    // число) onclose практически недостижим: реальный сигнал «хаб не поднялся»
+    // приходит через ветки reject в ensureConnected ниже — таймаут ожидания
+    // (8с) и переход в Disconnected, — где и поднимается offline.
+    connection.onclose(() => setConnectionState('offline'));
+    // onreconnected — онлайн + диспатч подписчикам
     connection.onreconnected(() => {
-      cancelOffline();
       setConnectionState('online');
       _reconnectedCallbacks.forEach(cb => { try { cb(); } catch { /* не даём одному упавшему обработчику блокировать остальных */ } });
     });
@@ -69,12 +54,24 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
   const conn = getConnection();
   if (conn.state === signalR.HubConnectionState.Disconnected) {
     if (!_startPromise) {
-      _startPromise = conn.start().finally(() => { _startPromise = null; });
+      _startPromise = conn.start()
+        .then(() => {
+          // Старт из Disconnected НЕ триггерит onreconnected (это не reconnect).
+          // Без явного подъёма флаг останется offline при заведомо живом хабе —
+          // на экране логина это и был дефект «Повторить врёт».
+          setConnectionState('online');
+        })
+        .finally(() => { _startPromise = null; });
     }
     await _startPromise;
   } else if (conn.state === signalR.HubConnectionState.Connecting ||
              conn.state === signalR.HubConnectionState.Reconnecting) {
-    // ждём пока не подключится; таймаут — чтобы офлайн (вечный Reconnecting) не висел бесконечно
+    // Ждём пока не подключится; таймаут — чтобы офлайн (вечный Reconnecting) не висел бесконечно.
+    // В ветках reject поднимаем offline: зонд возврата в онлайн тикает только пока
+    // мы offline, и при неподнявшемся хабе UI должен видеть честный статус. Сценарий:
+    // Wi-Fi без интернета / captive portal / упавший бэкенд за живым реверс-прокси —
+    // navigator.onLine === true, REST-запросов нет, сокет уходит в бесконечный
+    // Reconnecting, индикатор врёт «Онлайн», а sendMessage повисает на 8с.
     await new Promise<void>((resolve, reject) => {
       let waited = 0;
       const timer = setInterval(() => {
@@ -83,9 +80,11 @@ export async function ensureConnected(): Promise<signalR.HubConnection> {
           resolve();
         } else if (conn.state === signalR.HubConnectionState.Disconnected) {
           clearInterval(timer);
+          setConnectionState('offline');
           reject(new Error('SignalR disconnected while waiting'));
         } else if ((waited += 50) >= 8000) {
           clearInterval(timer);
+          setConnectionState('offline');
           reject(new Error('SignalR connect timeout'));
         }
       }, 50);

@@ -1,22 +1,21 @@
 import { useSyncExternalStore } from 'react';
-import { useConnectionStatus } from '../hooks/useConnectionStatus';
+import { useOnline } from '../hooks/useOnline';
 import { getSyncProgress, subscribeSyncProgress, syncLabel, syncCount } from '../lib/sync';
 import { C, R, FONT } from '../lib/design';
 
 // Единый, ненавязчивый индикатор состояния связи и прогресса синхронизации.
-// Сам подписывается на тройной статус связи (useConnectionStatus) и стор прогресса снапшота.
+// Сам подписывается на бинарный статус связи (useOnline) и стор прогресса снапшота.
 //
 // Состояния (по приоритету):
 //   1. Синхронизация (progress.active)  — спиннер accent + «Синхронизация done/total»
 //   2. Офлайн (offline)                 — приглушённый серый статус + «Офлайн»
-//   3. Нестабильно (degraded)           — жёлтая точка C.warning + «Соединение нестабильно»
-//   4. Онлайн                           — зелёная точка + переданный subtitle (путь/URL)
+//   3. Онлайн                           — зелёная точка + переданный subtitle (путь/URL)
 //
 // Варианты отображения:
 //   'footer' — для футера сайдбара воркспейса (иконка-кружок + заголовок + строка состояния)
 //   'badge'  — для шапки списка проектов (компактный одностройный бейдж)
 
-type ConnState = 'syncing' | 'offline' | 'degraded' | 'online';
+type ConnState = 'syncing' | 'offline' | 'online';
 
 interface SyncSnapshot {
   active: boolean;
@@ -64,19 +63,13 @@ interface BadgeProps {
 type Props = FooterProps | BadgeProps;
 
 export function ConnectionStatus(props: Props) {
-  const status = useConnectionStatus();
+  const online = useOnline();
   const progress = useSyncProgress();
 
-  const state: ConnState = progress.active
-    ? 'syncing'
-    : status === 'offline'
-      ? 'offline'
-      : status === 'degraded'
-        ? 'degraded'
-        : 'online';
+  const state: ConnState = progress.active ? 'syncing' : online ? 'online' : 'offline';
 
-  // Цвет точки-статуса: онлайн = зелёный, degraded = жёлтый warning, офлайн = приглушённый серый
-  const dotColor = state === 'offline' ? C.textMuted : state === 'degraded' ? C.warning : C.success;
+  // Цвет точки-статуса: онлайн = зелёный, офлайн = приглушённый серый
+  const dotColor = state === 'offline' ? C.textMuted : C.success;
 
   if (props.variant === 'footer') {
     // Строка состояния: при синхронизации/офлайне заменяет путь проекта
@@ -90,10 +83,6 @@ export function ConnectionStatus(props: Props) {
     } else if (state === 'offline') {
       statusText = 'Офлайн — сохранённые данные';
       statusColor = C.textMuted;
-      statusMono = false;
-    } else if (state === 'degraded') {
-      statusText = 'Соединение нестабильное, пробуем…';
-      statusColor = C.warning;
       statusMono = false;
     }
 
@@ -158,10 +147,6 @@ export function ConnectionStatus(props: Props) {
     text = 'Офлайн';
     mono = false;
     color = C.textMuted;
-  } else if (state === 'degraded') {
-    text = 'Соединение нестабильно';
-    mono = false;
-    color = C.warning;
   }
 
   // Для онлайн-URL убираем схему (https:// / http://) — на узком экране важнее видеть хост.

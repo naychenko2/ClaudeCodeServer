@@ -103,6 +103,18 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
             string.Equals(d.CommitSha, sha, StringComparison.OrdinalIgnoreCase)
             || d.SupersededSha.Contains(sha, StringComparer.OrdinalIgnoreCase));
 
+    // Запись по id (MCP dossier_get / REST): только свой владелец и свой проект — изоляция та же,
+    public ChangeDossier? GetById(string ownerId, string projectId, string id) =>
+        Snapshot(ownerId, projectId).FirstOrDefault(d => d.Id == id);
+
+    // Персист статусов после ленивого пересчёта устаревания (этап 2): вызывающий уже смутировал
+    // Status у объектов из List/Snapshot (те же ссылки живут в _store). Хеш Dify-документа
+    // (HashSource) статус не включает — пересинк семантического слоя не провоцируется.
+    public void PersistStatuses(string ownerId, string projectId)
+    {
+        lock (_saveLock) Save(ownerId, projectId);
+    }
+
     public ChangeDossier Add(ChangeDossier dossier)
     {
         lock (_saveLock)

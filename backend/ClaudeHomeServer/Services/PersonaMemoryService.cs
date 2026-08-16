@@ -33,6 +33,8 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
     private readonly PersonaManager _personas;
     private readonly UserStore _users;
     private readonly TeamMemoryService? _teamMemory;
+    // Recall паспортов изменений (этап 2, ADR-004 §5); null в юнит-тестах и без флага
+    private readonly Dossiers.DossierRecallService? _dossierRecall;
     // LLM-резолвер записи памяти (разрешение противоречий на авто-пути); null в юнит-тестах
     private readonly Memory.MemoryWriteResolver? _resolver;
     private readonly ILogger<PersonaMemoryService> _logger;
@@ -55,12 +57,14 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
 
     public PersonaMemoryService(KnowledgeService knowledge, PersonaManager personas, UserStore users,
         IConfiguration config, ILogger<PersonaMemoryService> logger,
-        TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null)
+        TeamMemoryService? teamMemory = null, Memory.MemoryWriteResolver? resolver = null,
+        Dossiers.DossierRecallService? dossierRecall = null)
     {
         _knowledge = knowledge;
         _personas = personas;
         _users = users;
         _teamMemory = teamMemory;
+        _dossierRecall = dossierRecall;
         _resolver = resolver;
         _logger = logger;
         var dataDir = Path.GetDirectoryName(
@@ -430,15 +434,18 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
     // (для манифеста атрибуции F3 — «персона опирается на…»). Text=null — нечего подмешивать.
     // TeamHits — записи памяти команды проекта (③-3.4), попавшие в тот же блок, отдельно от
     // личных hits: это чужой тип данных (TeamMemoryEntry, не PersonaMemoryHit), без scoring.
+    // DossierHits — паспорта изменений (этап 2, ADR-004 §5), третий кусок того же блока.
     public sealed record PersonaRecallResult(string? Text, IReadOnlyList<PersonaMemoryHit> Hits,
-        IReadOnlyList<TeamMemoryEntry> TeamHits);
+        IReadOnlyList<TeamMemoryEntry> TeamHits, IReadOnlyList<ChangeDossier> DossierHits);
 
     // Markdown-блок памяти для системного промпта хода (auto-recall персоны).
     // Рабочий фокус (если есть) — всегда первым блоком, без скоринга; при фокусе
     // результат не-null даже без хитов. null — персона не найдена / память выключена;
     // Text=null — память включена, но подмешивать нечего.
+    // dossierRequest — контекст паспортов изменений (проект чата + якоря хода); null —
+    // вызов вне проектного контекста (REST-проверка, persona_ask), секции паспортов нет.
     public async Task<PersonaRecallResult?> BuildRecallAsync(string ownerId, string personaId, string query,
-        int topK, double minScore)
+        int topK, double minScore, Dossiers.DossierRecallRequest? dossierRequest = null)
     {
         var persona = _personas.Get(personaId, ownerId);
         if (persona is null || !persona.MemoryEnabled) return null;
@@ -474,8 +481,25 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
             catch (Exception ex) { _logger.LogDebug(ex, "team-memory recall {Project}", persona.ProjectId); }
         }
 
-        if (top.Count == 0 && focus is null && teamBlock is null)
-            return new PersonaRecallResult(null, [], []);
+        // Паспорта изменений (этап 2, ADR-004 §5): третья секция того же блока — по якорям
+        // хода (файлы задачи/текста/прошлого хода), в рамках проекта ТЕКУЩЕГО чата (как
+        // team-memory — не по scope персоны: любая персона в проектном чате видит историю
+        // решений по коду, который правит). Ошибка не роняет recall памяти.
+        string? dossierBlock = null;
+        IReadOnlyList<ChangeDossier> dossierHits = [];
+        if (_dossierRecall is not null && dossierRequest is not null)
+        {
+            try
+            {
+                var dossierRecall = await _dossierRecall.BuildRecallBlockAsync(ownerId, dossierRequest);
+                dossierBlock = dossierRecall.Text;
+                dossierHits = dossierRecall.Used;
+            }
+            catch (Exception ex) { _logger.LogDebug(ex, "dossiers recall {Project}", dossierRequest.ProjectId); }
+        }
+
+        if (top.Count == 0 && focus is null && teamBlock is null && dossierBlock is null)
+            return new PersonaRecallResult(null, [], [], []);
 
         var sb = new StringBuilder();
         if (focus is not null)
@@ -501,7 +525,12 @@ public sealed class PersonaMemoryService : Knowledge.IKnowledgeSyncParticipant
             if (sb.Length > 0) sb.AppendLine();
             sb.Append(teamBlock);
         }
-        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top, teamHits);
+        if (dossierBlock is not null)
+        {
+            if (sb.Length > 0) sb.AppendLine();
+            sb.Append(dossierBlock);
+        }
+        return new PersonaRecallResult(sb.Length > 0 ? sb.ToString() : null, top, teamHits, dossierHits);
     }
 
     // Reinforcement: отметить обращение к записям (LastAccessedAt = now). Dify не трогаем —

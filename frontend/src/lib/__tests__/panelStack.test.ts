@@ -925,4 +925,13 @@ describe('sanitizeZones — runtime-поля эксклюзива', () => {
     expect(z.exclusive).toBe(false);
     expect(z.activeSide).toBeNull();
   });
+
+  it('closeCompactSignal из сырого состояния обнуляется (не утекает из localStorage)', () => {
+    const z = sanitizeZones({ closeCompactSignal: 5, left: { layout: [['chats']] } } as never);
+    expect(z.closeCompactSignal).toBe(0);
+  });
+
+  it('emptyZones стартует с нулевым closeCompactSignal', () => {
+    expect(emptyZones().closeCompactSignal).toBe(0);
+  });
 });

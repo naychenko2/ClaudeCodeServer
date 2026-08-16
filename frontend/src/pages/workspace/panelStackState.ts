@@ -339,6 +339,11 @@ export interface PanelZones {
   // Какая сторона открыта последней — сигнал для compact-зоны (правая на планшете)
   // схлопнуться, когда активность ушла в соседа. runtime, не персистится.
   activeSide: Zone | null;
+  // Счётчик сигнала «закрыть все compact-дроверы обеих зон» — планшет бросает
+  // его на смене активной сессии/чата: после навигации пользователю нужен чат, а
+  // не список поверх него. Каждая PanelZone подписывается эффектом и чистит свой
+  // локальный tabletPanels. runtime, не персистится (см. persist).
+  closeCompactSignal: number;
 }
 
 export function emptyZone(): ZoneState {
@@ -346,7 +351,7 @@ export function emptyZone(): ZoneState {
 }
 
 export function emptyZones(): PanelZones {
-  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [], exclusive: false, activeSide: null };
+  return { left: emptyZone(), right: emptyZone(), weights: {}, home: {}, tucked: [], railOrder: [], exclusive: false, activeSide: null, closeCompactSignal: 0 };
 }
 
 // Зона, в которой панель показывает свою иконку, когда закрыта
@@ -437,6 +442,7 @@ export function sanitizeZones(raw: unknown): PanelZones {
     // обнуляем вдобавок — на случай, что в сыром состоянии они всё же пришли)
     exclusive: false,
     activeSide: null,
+    closeCompactSignal: 0,
   });
 }
 
@@ -814,6 +820,7 @@ export function migrateZones(read: (key: string) => string | null, ns: string, l
     // runtime-поля миграции не знают — ставим дефолт
     exclusive: false,
     activeSide: null,
+    closeCompactSignal: 0,
   });
 }
 
@@ -896,6 +903,11 @@ export interface PanelZonesApi {
   // Отметить сторону активной — при exclusive сворачивает противоположную в stash
   // и разворачивает stash текущей. Зовётся из placeHere/reveal/toggleCollapsed.
   markActive: (side: Zone) => void;
+  // Бросить сигнал «закрыть compact-дроверы обеих зон» — планшет зовёт его на
+  // смене активной сессии/чата. Каждая смонтированная PanelZone подписывается
+  // эффектом на счётчик и чистит свой локальный tabletPanels. runtime, мимо persist
+  // — в localStorage не пишем.
+  closeCompactStack: () => void;
   // Показать панель по внешнему запросу (git-бар над композером). Возвращает
   // true, если она УЖЕ была открыта — тогда вызывающий просит её мигнуть.
   reveal: (k: PanelKey) => boolean;
@@ -987,10 +999,11 @@ function createPanelZones(ns: string, opts?: {
   const openers = new Map<Zone, (k: PanelKey) => void>();
 
   function persist() {
-    // exclusive/activeSide — runtime: в localStorage не пишем, иначе флаг
-    // поднимался бы на WallPage и при откате кода. sanitizeZones обнулит их и
-    // при чтении — двойная защита.
-    const { exclusive: _exclusive, activeSide: _activeSide, ...rest } = _zones;
+    // exclusive/activeSide/closeCompactSignal — runtime: в localStorage не пишем,
+    // иначе флаг поднимался бы на WallPage и при откате кода. sanitizeZones
+    // обнулит их и при чтении — двойная защита.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- destructure to omit
+    const { exclusive: _exclusive, activeSide: _activeSide, closeCompactSignal: _closeCompactSignal, ...rest } = _zones;
     lsSet(KEY, JSON.stringify(rest));
   }
 
@@ -1154,6 +1167,14 @@ function createPanelZones(ns: string, opts?: {
     // Отметить сторону активной — при exclusive свернёт противоположную в stash.
     const markActive = useCallback((side: Zone) => { commit(markActiveSide(_zones, side)); }, []);
 
+    // Сигнал «закрыть compact-дроверы обеих зон» — счётчик версий, каждая PanelZone
+    // подписана эффектом и при изменении чистит свой локальный tabletPanels. Мимо
+    // commit: ничего в раскладке не меняется, persist не нужен (см. persist()).
+    const closeCompactStack = useCallback(() => {
+      _zones = { ..._zones, closeCompactSignal: _zones.closeCompactSignal + 1 };
+      emit();
+    }, []);
+
     const registerOpener = useCallback((zone: Zone, open: (k: PanelKey) => void) => {
       openers.set(zone, open);
       // Снимаем только СВОЙ открыватель: зона могла перемонтироваться, и её место
@@ -1176,7 +1197,7 @@ function createPanelZones(ns: string, opts?: {
       return false;
     }, []);
 
-    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, reveal, registerOpener };
+    return { zones, toggle, openIn, close, closeTo, tuck, untuck, reorder, evict, swapWith, replaceWith, moveAt, moveToNewColumn, setMode, setWidth, toggleCollapsed, setWeights, setColFlex, setExclusive, markActive, closeCompactStack, reveal, registerOpener };
   }
 
   return { use: usePanelZones };

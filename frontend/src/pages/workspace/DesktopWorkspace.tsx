@@ -158,7 +158,7 @@ export function DesktopWorkspace(p: Props) {
   // его поднимают проектный воркспейс (этот файл) и раздел «Чаты» (ChatsPage) —
   // у обоих есть PanelZone с compact={isTablet}. WallPage и остальные разделы
   // хаба compact не передают, и эксклюзив у них не действует.
-  const { setExclusive, markActive } = wsPanels.use();
+  const { setExclusive, markActive, closeCompactStack } = wsPanels.use();
   useEffect(() => {
     setExclusive(!!p.isTablet);
     if (p.isTablet) markActive('left');
@@ -166,6 +166,19 @@ export function DesktopWorkspace(p: Props) {
     // setExclusive/markActive стабильны (useCallback в сторе) — в deps не нужны
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [p.isTablet]);
+
+  // Планшет: смена активной сессии закрывает открытые tablet-дроверы обеих зон —
+  // после навигации пользователю нужен чат, а не список поверх него. Триггер —
+  // ЛЮБОЙ источник смены id (список, уведомление, диплинк), не отдельные клики:
+  // навигация ВНУТРИ контентных панелей («открыть файл») дровер не закрывает,
+  // а вот смена активного чата — закрывает. closeCompactStack в сторе — счётчик,
+  // обе PanelZone слушают его и чистят свой локальный tabletPanels.
+  useEffect(() => {
+    if (!p.isTablet) return;
+    closeCompactStack();
+    // closeCompactStack стабилен (useCallback в сторе) — в deps не нужен
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [p.isTablet, p.activeSession?.id]);
 
   // Split чат|файл: пересчёт пропорции из пиксельных ширин (копия handleSplitterMouseDown)
   const handleSplitDrag = (e: ReactPointerEvent) => {

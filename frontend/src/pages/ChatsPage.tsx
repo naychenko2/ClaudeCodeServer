@@ -192,7 +192,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // При выходе/unmount флаг снимается — на мобильной ветке compact передаётся
   // безусловно, и isTablet там всегда false, так что эксклюзив десктопной веткой
   // не поднимается впустую.
-  const { setExclusive, markActive } = chatPanels.use();
+  const { setExclusive, markActive, closeCompactStack } = chatPanels.use();
   useEffect(() => {
     setExclusive(isTablet);
     if (isTablet) markActive('left');
@@ -200,6 +200,18 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     // setExclusive/markActive стабильны (useCallback в сторе) — в deps не нужны
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTablet]);
+
+  // Планшет: смена активного чата закрывает открытые tablet-дроверы обеих зон —
+  // после навигации пользователю нужен чат, а не список поверх него. Триггер —
+  // ЛЮБОЙ источник смены id (список, уведомление, диплинк). Зеркально
+  // DesktopWorkspace: тот же сигнал closeCompactStack в сторе, обе PanelZone
+  // слушают его и чистят свой локальный tabletPanels.
+  useEffect(() => {
+    if (!isTablet) return;
+    closeCompactStack();
+    // closeCompactStack стабилен (useCallback в сторе) — в deps не нужен
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTablet, activeId]);
 
   // Открытый чат всегда прочитан: пока он на экране, приходящие в него сообщения
   // не должны копить бейдж. Следим и за updatedAt, а не только за сменой чата.

@@ -47,7 +47,12 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   // они уже сжаты до иконок → замер осциллирует. Эталон всегда полнотекстовый и вне потока.
   const measureRef = useRef<HTMLDivElement>(null);
   const [overflowCompact, setOverflowCompact] = useState(false);
-  const effectiveCompact = compact ?? (autoCompact ? overflowCompact : false);
+  // compact форсирует (мобила), autoCompact ДОБАВЛЯЕТ детект переполнения
+  // (планшет — пока влезает полнотекст, при переполнении → иконки). Семантика
+  // «||»: явное false от compact не блокирует autoCompact (старая версия через
+  // ?? давала мёртвую ветку — explicit false nullish не считается). Двойное
+  // отрицание даёт корректный boolean на десктопе (undefined || … → false).
+  const effectiveCompact = !!(compact || (autoCompact && overflowCompact));
 
   // Авто-детект переполнения: натуральная ширина полнотекстового ряда vs доступная ширина трека
   useEffect(() => {

@@ -168,6 +168,14 @@ export function PanelZone({
   const tabletInline = !compact
     || windowWidth > TABLET_MAX
     || windowWidth >= width / PANEL_INLINE_MAX_SHARE;
+  // Производная от compact и tabletInline: сценарий, где открытость панелей
+  // живёт в ЭФЕМЕРНОМ локальном стеке (узкий планшет, drawer поверх
+  // контента). На десктопе и широком планшете inline открытость — в раскладке
+  // стора (persist), как у десктопа: переживает перемонтаж при смене проекта
+  // и ресайз. Источник открытости идёт за этой производной; рендеринг
+  // (стек/драуэр/бэкдроп) остаётся keyed на compact/tabletInline как раньше —
+  // спека v8.
+  const compactOverlay = compact && !tabletInline;
 
   // Панель доступна на этом экране: ключ разрешён экраном (allowedKeys) и у панели
   // есть контент (у сессионных он всегда есть).
@@ -191,7 +199,15 @@ export function PanelZone({
   const columns = compact ? [] : layout
     .map((col, ci) => ({ ci, keys: col.filter(keyAvailable) }))
     .filter(c => c.keys.length > 0);
-  const tabletKeys = compact ? tabletPanels.filter(keyAvailable) : [];
+  // Стек панелей для compactBody: на узком планшете (compactOverlay) — из
+  // эфемерного стека, на широком планшете inline и десктопе — из раскладки
+  // стора (persist, переживает смену проекта). Без compact — пусто, рендеринг
+  // идёт по колонкам.
+  const tabletKeys = compact
+    ? (compactOverlay
+      ? tabletPanels.filter(keyAvailable)
+      : layout.flat().filter(keyAvailable))
+    : [];
   const openKeys = compact ? tabletKeys : columns.flatMap(c => c.keys);
 
   // Колонка, ближайшая к ЦЕНТРУ экрана: у левой зоны это последняя (панели растут
@@ -290,12 +306,16 @@ export function PanelZone({
     return insertPlan(railCi, null) ? len + 1 : len;
   };
 
-  // Где панель лежит СЕЙЧАС (null — закрыта). Единственный ответ на этот вопрос:
-  // в компактном режиме раскладка зоны не участвует — там свой эфемерный стек, и
-  // открытость решает он. Спрашивать напрямую zoneOf нельзя: в компакте она
-  // отвечает «закрыта» про панель, которая стоит на экране.
-  const openZoneOf = (k: PanelKey): Zone | null =>
-    compact ? (tabletKeys.includes(k) ? side : null) : zoneOf(zones, k);
+  // Где панель лежит СЕЙЧАС (null — закрыта). На десктопе — из стора; в
+  // компактном оверлее — из эфемерного стека; на широком планшете inline —
+  // тоже из стора (persist): раскладка зоны — единственный источник открытости
+  // в обоих «persistent» ветках. Спрашивать напрямую zoneOf в компакте нельзя:
+  // она отвечает «закрыта» про панель, которая стоит на экране.
+  const openZoneOf = (k: PanelKey): Zone | null => {
+    if (compactOverlay) return tabletPanels.includes(k) ? side : null;
+    if (compact) return layout.flat().includes(k) ? side : null;
+    return zoneOf(zones, k);
+  };
 
   // Иконка панели живёт в ТОЙ зоне, где панель лежит; закрытая — в домашней.
   // Отсюда «иконка едет вместе с панелью», а закрытие возвращает её домой.
@@ -366,8 +386,11 @@ export function PanelZone({
     // (на планшете compact) схлопнется эффектом ниже. Зовём ДО ветвей: и compact,
     // и обычное открытие должны отметить сторону.
     markActive(side);
-    if (compact) {
-      // До двух панелей: третья вытесняет самую старую (FIFO)
+    if (compactOverlay) {
+      // До двух панелей: третья вытесняет самую старую (FIFO). Эфемерный
+      // стек живёт мимо стора; закрывает signal смены чата и эксклюзив сторон
+      // (см. эффекты ниже). На широком планшете inline идём общим путём —
+      // openIn через стор, раскладка живёт между перемонтажами.
       setTabletPanels(cur => [...cur.filter(x => x !== k), k].slice(-2));
       return;
     }
@@ -424,13 +447,28 @@ export function PanelZone({
     evict(side, allowedKeys);
   }, [evict, side, allowedKeys, layout, zoneState.stash]);
 
-  // Эксклюзив сторон на планшете: активность ушла в соседнюю зону — compact-стек
-  // этой очищаем (открыли чат слева → правая compact схлопнулась). Набор compact
-  // эфемерен по природе, возврат — переоткрытием по иконкам рельсы.
+  // Эксклюзив сторон на планшете: активность ушла в соседнюю зону — эфемерный
+  // стек этой очищаем (открыли чат слева → правый drawer схлопнулся). На
+  // широком планшете inline открытость живёт в раскладке стора — эффект на
+  // неё не действует: панель переживает смену стороны. Возврат drawer'а —
+  // переоткрытием по иконкам рельсы (спека v8).
   useEffect(() => {
-    if (!compact || !zones.exclusive || !zones.activeSide || zones.activeSide === side) return;
+    if (!compactOverlay || !zones.exclusive || !zones.activeSide || zones.activeSide === side) return;
     setTabletPanels([]);
-  }, [compact, zones.exclusive, zones.activeSide, side]);
+  }, [compactOverlay, zones.exclusive, zones.activeSide, side]);
+
+  // Планшет: смена активной сессии/чата на уровне страницы бросает сигнал
+  // closeCompactStack — эфемерный стек узкого планшета чистится в любом
+  // случае (даже без exclusive), потому что после навигации пользователю нужен
+  // чат, а не список поверх него. На широком планшете inline открытость в
+  // раскладке стора — эффект не действует (спека v8). Зовётся ДЛЯ ОБЕИХ
+  // сторон: drawer может лежать и в неактивной зоне (например, открыли
+  // «Файлы» справа, потом переключили чат слева — все drawer'ы уходят).
+  useEffect(() => {
+    if (!compactOverlay) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- чистка локального стека по сигналу стора: спека v7а
+    setTabletPanels([]);
+  }, [compactOverlay, zones.closeCompactSignal]);
 
   // Плавающие панели закрываются кликом мимо: слой висит поверх контента, и
   // «убрать его с глаз» должно быть так же дёшево, как открыть. Клик по самой
@@ -795,9 +833,10 @@ export function PanelZone({
       // Показанную панель клик закрывает, закрытую — открывает по общему правилу
       // (placeHere): своей копии правила у клика больше нет.
       if (!openKeys.includes(k)) placeHere(k);
-      else if (compact) setTabletPanels(cur => cur.filter(x => x !== k));
+      else if (compactOverlay) setTabletPanels(cur => cur.filter(x => x !== k));
       // Закрытие: вместимость и порядок кнопок ни при чём — togglePanelIn видит
-      // панель в этой зоне и просто закрывает её
+      // панель в этой зоне и просто закрывает её. На широком планшете inline
+      // открытость уже в сторе, и toggle идёт общим путём десктопа.
       else toggle(side, k);
     },
   };
@@ -812,7 +851,7 @@ export function PanelZone({
     const stretched = vi === undefined
       ? multiInCol || !!fillWanted[k]
       : panelStretched(k, vi, multiInCol ? 2 : 1);
-    const onCloseThis = compact ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k);
+    const onCloseThis = compactOverlay ? () => setTabletPanels(cur => cur.filter(x => x !== k)) : () => closeTo(side, k);
     const shell = (
       <PanelShell
         icon={<Icon size={15} strokeWidth={ICON_STROKE} color={C.textSecondary} style={{ flexShrink: 0 }} />}

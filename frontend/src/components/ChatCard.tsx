@@ -4,7 +4,7 @@ import type { Session } from '../types';
 import { C, R, SHADOW, FONT } from '../lib/design';
 import { ChatTopicBackdrop, ChatTopicIcon, IconButton, Menu, MenuItem } from './ui';
 import { ICON_STROKE } from './ui/icons';
-import { STATUS_CONFIG, STATUS_GLOW } from './StatusIndicator';
+import { STATUS_CONFIG, STATUS_GLOW, type SessionStatus } from './StatusIndicator';
 import { ExpiryBadge } from './ExpiryBadge';
 import { ExpiryPicker } from './chat/ExpiryPicker';
 import { expiresAt, expiryOptionLabel, formatExpiryDate } from '../lib/expiry';
@@ -295,7 +295,17 @@ export function ChatCard({
   // еле заметная волна статусного цвета. Ауры вокруг и цветного бордюра нет.
   // У живых (breath) волна движется, у error — ровная подкраска. Цвет и силу
   // подмешивания отдаём в CSS переменных --cc-status-c / --cc-tint-a
-  const glow = STATUS_GLOW[s.status];
+  //
+  // Когда практика «Командная реализация» стоит и ждёт человека (tone='wait':
+  // стадии interview/confirming/awaitingDecision), CLI-сессия может быть и
+  // working, и finished — но для человека это один смысл: «ждут меня». Оставлять
+  // оранжевую дышащую волну working на фоне жёлтого маркера «решение» — два
+  // взаимоисключающих сообщения об одном чате (большая волна перебивает маркер).
+  // Переключаем визуал статуса на 'waiting' (медовый, slow) — он усиливает жёлтый
+  // маркер, а не спорит с ним. Сам s.status не трогаем: это факт CLI, а не визуал
+  const teamWait = !!s.teamImplement && teamImplementTone(s.teamImplement.stage) === 'wait';
+  const visualStatus: SessionStatus = teamWait ? 'waiting' : s.status;
+  const glow = STATUS_GLOW[visualStatus];
   const hasGlow = glow.alpha > 0;
   const glowClass = !hasGlow ? ''
     : glow.breath
@@ -309,7 +319,7 @@ export function ChatCard({
   const unread = useHasUnread(s.updatedAt, s.id, s.lastReadAt);
   const unreadClass = !hasGlow && unread ? ' cc-unread' : '';
   const statusVars = {
-    '--cc-status-c': STATUS_CONFIG[s.status].color,
+    '--cc-status-c': STATUS_CONFIG[visualStatus].color,
     // Сила подмешивания в фон: alpha из STATUS_GLOW (45..72) задумана под
     // свечение — для заливки её ужимаем втрое и добавляем 10 п.п. Даёт 25..34%:
     // ниже ~10% подкраска на кремовом фоне уже неразличима

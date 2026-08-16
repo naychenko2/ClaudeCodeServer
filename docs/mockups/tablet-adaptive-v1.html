@@ -129,7 +129,9 @@ section { max-width: 860px; margin: 0 auto 56px; }
 .bubble { max-width: 78%; padding: 10px 14px; border-radius: 12px; line-height: 1.45; font-size: 13px; }
 .bubble.user { align-self: flex-end; background: var(--c-accent-light); color: var(--c-text-primary); border-bottom-right-radius: 4px; }
 .bubble.ai   { align-self: flex-start; background: var(--c-bg-card); border: 1px solid var(--c-border-light); color: var(--c-text-primary); border-bottom-left-radius: 4px; box-shadow: var(--shadow-card); }
-.backdrop { position: absolute; inset: 0; background: var(--c-overlay); z-index: 14; }
+/* Клик-кетчер drawer'а: на планшете ПРОЗРАЧНЫЙ — затемнения нет, тулбары и лента не гаснут.
+   Дим C.overlay остаётся только на мобиле (≤600px), где шит почти полноэкранный. */
+.backdrop { position: absolute; inset: 0; z-index: 14; background: transparent; }
 
 /* Оверлей-панель (drawer) */
 .drawer {
@@ -308,8 +310,9 @@ section { max-width: 860px; margin: 0 auto 56px; }
   <div class="sec-title">A. Левая панель — оверлей по правилу 30%</div>
   <div class="sec-desc">
     Сценарий: пользователь тапает «Чаты» на планшете 768px. Панель 300px — это 39% ширины окна,
-    больше порога <code>PANEL_INLINE_MAX_SHARE = 0.3</code> → она открывается поверх чата с backdrop,
-    лента не сдвигается. Тап по backdrop или ✕ закрывает.
+    больше порога <code>PANEL_INLINE_MAX_SHARE = 0.3</code> → она открывается поверх чата, лента не
+    сдвигается. <b>Без затемнения</b>: drawer плавает карточкой с <code>SHADOW.modal</code>, тулбары
+    и лента остаются живыми; тап вне панели (прозрачный клик-кетчер) или ✕ закрывает.
   </div>
   <div class="frame">
     <div class="hub-bar">
@@ -334,7 +337,7 @@ section { max-width: 860px; margin: 0 auto 56px; }
       </div>
     </div>
   </div>
-  <div class="note">Чат под backdrop неподвижен: колонка не прыгает ни на пиксель — чтение не сбивается.</div>
+  <div class="note">Чат под drawer неподвижен и не гаснет: колонка не прыгает ни на пиксель, хаб-бар и тулбар чата остаются подсвеченными и кликабельными. Затемнение <code>C.overlay</code> — только на мобиле ≤600px, там шит почти полноэкранный и модальность нужна.</div>
   <div class="note">На ширине ≥1000px та же панель 300px — ровно 30%: остаётся inline, как на десктопе.</div>
 </section>
 
@@ -390,12 +393,26 @@ section { max-width: 860px; margin: 0 auto 56px; }
 <section>
   <div class="sec-title">C. Пилюли разделов — двухступенчатая деградация</div>
   <div class="sec-desc">
-    Никаких наложений и вторых строк. Ступень 1 — <code>PillSwitch autoCompact</code> (уже существует):
-    полный текст, пока влезает; при тесноте — иконки у всех, подпись только у активного.
-    Ступень 2 — скролл-полоса с fade по краям (паттерн из мобильного HubHeader).
+    Никаких наложений и вторых строк. Полный ряд — <b>только текст, без иконок</b> (как на десктопе:
+    так ряд короче и влезает чаще). Ступень 1 — <code>PillSwitch autoCompact</code>: при тесноте —
+    иконки у всех, подпись только у активного; порог срабатывает раньше (запас 24px до края,
+    а не 6px). Ступень 2 — скролл-полоса с fade по краям (паттерн из мобильного HubHeader).
   </div>
 
-  <div class="frame-label">768px · ступень 1 — compact: иконки + подпись активного</div>
+  <div class="frame-label">768px · полный ряд — текст без иконок, как на десктопе</div>
+  <div class="frame short" style="height:auto">
+    <div class="hub-bar">
+      <div class="pill-strip">
+        <span class="pill on">Чаты</span><span class="pill">Проекты</span><span class="pill">Календарь</span><span class="pill">Заметки</span><span class="pill">Персоны</span>
+      </div>
+      <span style="flex:1"></span>
+      <span class="icon-btn"><svg class="lic" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+      <span class="icon-btn"><svg class="lic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
+    </div>
+  </div>
+  <div class="note">Иконки в полном ряду не показываем — это ~24px на каждой пилюле; без них пять разделов влезают в 768px.</div>
+
+  <div class="frame-label">768px · ступень 1 — compact: иконки + подпись активного (включается с запасом 24px до края)</div>
   <div class="frame short" style="height:auto">
     <div class="hub-bar">
       <div class="pill-strip">
@@ -410,7 +427,7 @@ section { max-width: 860px; margin: 0 auto 56px; }
       <span class="icon-btn"><svg class="lic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span>
     </div>
   </div>
-  <div class="note">Переход полнотекст→compact делает сам <code>autoCompact</code>: скрытый эталон + ResizeObserver.</div>
+  <div class="note">Переход полнотекст→compact делает сам <code>autoCompact</code>: скрытый эталон меряет текстовый ряд (без иконок), ResizeObserver включает compact, когда до края остаётся меньше 24px.</div>
 
   <div class="frame-label">480px · ступень 2 — скролл-полоса с fade и меню «⋯»</div>
   <div class="frame short w480" style="height:auto">

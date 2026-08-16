@@ -7,11 +7,14 @@ public enum FileMutationKind { Write, Create, Delete, Rename }
 
 public class FileService(
     ClaudeHomeServer.Services.Git.GitService? git = null,
-    ProjectManager? projects = null)
+    ProjectManager? projects = null,
+    ILogger<FileService>? logger = null)
 {
-    // git/projects опциональны (DI подставляет): git-операции идут через слой Execution
+    private readonly ILogger<FileService>? _logger = logger;
+
+    // git/projects/logger опциональны (DI подставляет): git-операции идут через слой Execution
     // с резолвом владельца по корню — статусы/дифф/револт честны и для container-юзеров.
-    // Без них (юнит-тесты) — прежний прямой запуск git на хосте.
+    // Без них (юнит-тесты) — прежний прямой запуск git на хосте и тихое логирование.
 
     // Владелец по корню проекта: у соседей по папке владелец один по построению
     private string? OwnerOf(string rootPath) =>
@@ -93,19 +96,51 @@ public class FileService(
 
         foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x))
         {
-            var info = new DirectoryInfo(d);
-            if (TreeExcludes.Contains(info.Name)) continue;
-            if (!showHidden && info.Name.StartsWith('.')) continue;
-            entries.Add(new FileEntry(info.Name, Path.GetRelativePath(rootPath, d).Replace('\\', '/'),
-                true, null, info.LastWriteTimeUtc, false));
+            // Чтение метаданных одной записи может бросить IOException/UnauthorizedAccessException
+            // (резервные DOS-имена вроде «nul», гонка «удалили между GetFiles и FileInfo», битые
+            // reparse-точки). Запись пропускается — иначе упадёт весь листинг папки.
+            string name;
+            DateTime modifiedAt;
+            string relDir;
+            try
+            {
+                var info = new DirectoryInfo(d);
+                name = info.Name;
+                modifiedAt = info.LastWriteTimeUtc;
+                relDir = Path.GetRelativePath(rootPath, d).Replace('\\', '/');
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger?.LogDebug(ex, "Пропуск подкаталога: не удалось прочитать метаданные ({Path})", d);
+                continue;
+            }
+            if (TreeExcludes.Contains(name)) continue;
+            if (!showHidden && name.StartsWith('.')) continue;
+            entries.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
         }
 
         foreach (var f in Directory.GetFiles(dir).OrderBy(x => x))
         {
-            var info = new FileInfo(f);
-            if (!showHidden && info.Name.StartsWith('.')) continue;
-            var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
-            entries.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
+            // см. комментарий в цикле директорий выше
+            string name;
+            DateTime modifiedAt;
+            long size;
+            string rel;
+            try
+            {
+                var info = new FileInfo(f);
+                name = info.Name;
+                size = info.Length;
+                modifiedAt = info.LastWriteTimeUtc;
+                rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                _logger?.LogDebug(ex, "Пропуск файла: не удалось прочитать метаданные ({Path})", f);
+                continue;
+            }
+            if (!showHidden && name.StartsWith('.')) continue;
+            entries.Add(new FileEntry(name, rel, false, size, modifiedAt,
                 modified.Contains(rel), IsNew: newFiles.Contains(rel)));
         }
 
@@ -136,11 +171,22 @@ public class FileService(
             .Take(100)
             .Select(f =>
             {
-                var info = new FileInfo(f);
-                var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
-                return new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
-                    modified.Contains(rel), IsNew: newFiles.Contains(rel));
-            });
+                // см. комментарий в List: одна битая запись не должна ронять весь поиск
+                try
+                {
+                    var info = new FileInfo(f);
+                    var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+                    return new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
+                        modified.Contains(rel), IsNew: newFiles.Contains(rel));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger?.LogDebug(ex, "Пропуск файла при поиске: не удалось прочитать метаданные ({Path})", f);
+                    return null;
+                }
+            })
+            .Where(e => e is not null)
+            .Select(e => e!);
     }
 
     // Рекурсивный листинг всего поддерева — для prefetch офлайн-снапшота и синхронизации папок.
@@ -160,22 +206,52 @@ public class FileService(
             foreach (var d in Directory.GetDirectories(dir).OrderBy(x => x))
             {
                 if (result.Count >= TreeMaxEntries) return;
-                var info = new DirectoryInfo(d);
-                if (TreeExcludes.Contains(info.Name)) continue;
-                if (!showHidden && info.Name.StartsWith('.')) continue;
-                var relDir = Path.GetRelativePath(rootPath, d).Replace('\\', '/');
+                // см. комментарий в List: битая запись пропускается, иначе упадёт всё дерево
+                string name;
+                DateTime modifiedAt;
+                string relDir;
+                try
+                {
+                    var info = new DirectoryInfo(d);
+                    name = info.Name;
+                    modifiedAt = info.LastWriteTimeUtc;
+                    relDir = Path.GetRelativePath(rootPath, d).Replace('\\', '/');
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger?.LogDebug(ex, "Пропуск подкаталога в Tree: не удалось прочитать метаданные ({Path})", d);
+                    continue;
+                }
+                if (TreeExcludes.Contains(name)) continue;
+                if (!showHidden && name.StartsWith('.')) continue;
                 if (IsWorktreesPath(relDir)) continue;
-                result.Add(new FileEntry(info.Name, relDir, true, null, info.LastWriteTimeUtc, false));
+                result.Add(new FileEntry(name, relDir, true, null, modifiedAt, false));
                 Walk(d);
             }
 
             foreach (var f in Directory.GetFiles(dir).OrderBy(x => x))
             {
                 if (result.Count >= TreeMaxEntries) return;
-                var info = new FileInfo(f);
-                if (!showHidden && info.Name.StartsWith('.')) continue;
-                var rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
-                result.Add(new FileEntry(info.Name, rel, false, info.Length, info.LastWriteTimeUtc,
+                // см. комментарий выше
+                string name;
+                DateTime modifiedAt;
+                long size;
+                string rel;
+                try
+                {
+                    var info = new FileInfo(f);
+                    name = info.Name;
+                    size = info.Length;
+                    modifiedAt = info.LastWriteTimeUtc;
+                    rel = Path.GetRelativePath(rootPath, f).Replace('\\', '/');
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    _logger?.LogDebug(ex, "Пропуск файла в Tree: не удалось прочитать метаданные ({Path})", f);
+                    continue;
+                }
+                if (!showHidden && name.StartsWith('.')) continue;
+                result.Add(new FileEntry(name, rel, false, size, modifiedAt,
                     modified.Contains(rel), IsNew: newFiles.Contains(rel)));
             }
         }

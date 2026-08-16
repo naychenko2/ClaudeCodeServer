@@ -1,5 +1,6 @@
 ﻿using ClaudeHomeServer.Services;
 using FluentAssertions;
+using Xunit;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -213,6 +214,61 @@ public class FileServiceTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "f.txt"), "");
         var entry = _svc.List(_root).Single(e => !e.IsDirectory);
         entry.Path.Should().Be("f.txt");
+    }
+
+    // ─── Устойчивость к битым записям (зарезервированные DOS-имена, гонки) ─────
+
+    // На Windows файл с DOS-резервированным именем (nul, con, prn, com1…) физически хранится
+    // в каталоге, но открытие/чтение метаданных через FileInfo.* падает с IOException.
+    // Баг: одна такая запись валила весь листинг папки (включая уже собранные подкаталоги).
+    // Фикс: try/catch вокруг чтения метаданных одной записи — битая пропускается.
+    [SkippableFact]
+    public void List_ФайлСDosReservedИменем_НеРоняетЛистинг()
+    {
+        // На Linux «nul» — обычное имя, IOException на чтение не воспроизводится.
+        // Гонку «файл удалён между GetFiles и FileInfo» в одном юнит-тесте не сэмулировать
+        // без DI-хука в FileService (не делаем — задача не требует), поэтому кейс покрыт
+        // только на Windows тем же механизмом try/catch, что и реальный продакшен.
+        Skip.IfNot(OperatingSystem.IsWindows(),
+            "DOS-резервированные имена — Windows only; на Linux нужен отдельный хук");
+
+        File.WriteAllText(Path.Combine(_root, "ok.txt"), "");
+        File.WriteAllText(Path.Combine(_root, "another.txt"), "data");
+
+        // Префикс «\\?\» обходит DOS-валидацию имён в WinAPI: создаётся реальный файл,
+        // который FileInfo.Length считать не сможет.
+        var nulPath = @"\\?\" + Path.Combine(_root, "nul");
+        using (File.Create(nulPath)) { }
+
+        // Должны получить оба «нормальных» файла; «nul» — без падения, без записи в выдаче.
+        var act = () => _svc.List(_root).Where(e => e.Name != "notes").ToList();
+        act.Should().NotThrow();
+        var entries = act();
+        entries.Should().HaveCount(2);
+        entries.Select(e => e.Name).Should().BeEquivalentTo(["ok.txt", "another.txt"]);
+    }
+
+    // Регрессия: после фикса try/catch обычное чтение списка папки работает как раньше —
+    // добавление защиты не должно ломать нормальный кейс. На любой ОС.
+    [Fact]
+    public void List_НесколькоОбычныхФайлов_ВсеВозвращаются()
+    {
+        File.WriteAllText(Path.Combine(_root, "a.txt"), "x");
+        File.WriteAllText(Path.Combine(_root, "b.txt"), "y");
+        File.WriteAllText(Path.Combine(_root, "c.txt"), "z");
+
+        var entries = _svc.List(_root).Where(e => e.Name != "notes").ToList();
+        entries.Should().HaveCount(3);
+        entries.Select(e => e.Name).Should().BeEquivalentTo(["a.txt", "b.txt", "c.txt"]);
+    }
+
+    // Несуществующая папка остаётся DirectoryNotFoundException — её НЕЛЬЗЯ глотать
+    // вместе с битыми записями (это контракт безопасности для контроллера → 404).
+    [Fact]
+    public void List_НесуществующаяПодпапка_ВсёЕщёБросаетDirectoryNotFound()
+    {
+        var act = () => _svc.List(_root, "ghost").ToList();
+        act.Should().Throw<DirectoryNotFoundException>();
     }
 
     // ─── Tree ────────────────────────────────────────────────────────────────

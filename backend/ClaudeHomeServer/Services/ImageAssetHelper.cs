@@ -47,11 +47,16 @@ public static class ImageAssetHelper
         await file.CopyToAsync(target);
     }
 
-    // Расширение по content-type сгенерированной картинки (fal отдаёт готовые байты)
-    public static string ExtFor(string contentType) => contentType switch
+    // Расширение по content-type сгенерированной картинки (генератор отдаёт готовые байты).
+    // SVG — отдельной строкой: векторные модели fal (recraft text-to-vector) отдают
+    // image/svg+xml, и сохранённый под .png вектор не отрисуется. Серверной обработки
+    // картинок нет (кроп — метаданные, применяются на фронте), так что .svg проходит
+    // весь путь как есть; content-type на отдаче подставит PhysicalFileByExt.
+    public static string ExtFor(string contentType) => (contentType ?? "").Split(';')[0].Trim() switch
     {
         "image/jpeg" => ".jpg",
         "image/webp" => ".webp",
+        "image/svg+xml" => ".svg",
         _ => ".png",
     };
 

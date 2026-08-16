@@ -27,19 +27,32 @@ public class FalImageService : IImageGenerator
     {
         _http = http;
         _apiKey = config["Fal:ApiKey"] ?? Environment.GetEnvironmentVariable("FAL_KEY");
-        // Быстрая дешёвая модель для аватаров; переопределяется конфигом
-        _model = (config["Fal:ImageModel"] ?? "fal-ai/flux/schnell").Trim('/');
+        // Дефолт — сильная растровая модель (Gemini 3.1 Flash Image): flux/schnell 2024 года
+        // рисует иконки заметно хуже. Переопределяется конфигом.
+        _model = (config["Fal:ImageModel"] ?? DefaultModel).Trim('/');
         _logger = logger;
         _models = BuildModels(_model);
     }
 
-    // Курируемый список для пикера: две проверенные модели flux плюс модель из конфига,
-    // если админ прописал в Fal:ImageModel что-то своё (иначе она бы не выбиралась в UI).
+    // Дефолтная модель драйвера. Растровая намеренно: векторный recraft отдаёт SVG,
+    // и хотя мы его сохраняем корректно (.svg), делать вектор дефолтом рано —
+    // он остаётся выбором в пикере.
+    public const string DefaultModel = "fal-ai/nano-banana-2";
+
+    // Курируемый список для пикера: актуальные модели (сверено с живым каталогом fal
+    // 2026-08-16) плюс модель из конфига, если админ прописал в Fal:ImageModel что-то
+    // своё (иначе она бы не выбиралась в UI).
     private static IReadOnlyList<ImageModelInfo> BuildModels(string configured)
     {
         var models = new List<ImageModelInfo>
         {
-            new("fal-ai/flux/schnell", "FLUX schnell", "Быстрая и дешёвая · иконки и простые сюжеты"),
+            new("fal-ai/nano-banana-2", "Nano Banana 2 (Google)",
+                "По умолчанию · быстрая и сильная · иконки и аватары"),
+            new("fal-ai/flux-2/klein/9b", "FLUX.2 klein",
+                "Базовая text-to-image fal · универсальная"),
+            new("fal-ai/recraft/v4.1/text-to-vector", "Recraft V4.1 вектор",
+                "Плоские логотипы и иконки · отдаёт SVG, один вариант за раз"),
+            new("fal-ai/flux/schnell", "FLUX schnell", "Быстрая и дешёвая · простые сюжеты"),
             new("fal-ai/flux/dev", "FLUX dev", "Качественнее и дороже · лица и мелкие детали"),
         };
         if (!string.IsNullOrWhiteSpace(configured)
@@ -77,12 +90,7 @@ public class FalImageService : IImageGenerator
 
             using var req = new HttpRequestMessage(HttpMethod.Post, $"https://fal.run/{endpoint}");
             req.Headers.Authorization = new AuthenticationHeaderValue("Key", _apiKey);
-            req.Content = JsonContent.Create(new
-            {
-                prompt,
-                image_size = "square",
-                num_images = count,
-            });
+            req.Content = JsonContent.Create(BuildRequestBody(endpoint, prompt, count));
 
             using var resp = await client.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
@@ -101,7 +109,10 @@ public class FalImageService : IImageGenerator
             {
                 var url = img.TryGetProperty("url", out var u) ? u.GetString() : null;
                 if (string.IsNullOrEmpty(url)) continue;
-                var (bytes, contentType) = await DownloadAsync(client, url, ct);
+                // content_type из ответа — запасной вариант, если storage не проставил заголовок
+                // (у векторного recraft это image/svg+xml, и молча считать его png нельзя)
+                var declared = img.TryGetProperty("content_type", out var c) ? c.GetString() : null;
+                var (bytes, contentType) = await DownloadAsync(client, url, declared, ct);
                 if (bytes is not null) result.Add(new GeneratedImage(bytes, contentType));
             }
             return result;
@@ -113,25 +124,64 @@ public class FalImageService : IImageGenerator
         }
     }
 
-    private static async Task<(byte[]? Bytes, string ContentType)> DownloadAsync(
-        HttpClient client, string url, CancellationToken ct)
+    // Тело запроса собирается ПО МОДЕЛИ: схемы входа у семейств fal разные, и лишний
+    // параметр возвращает 422 (nano-banana не знает image_size, у recraft-вектора нет
+    // num_images). Незнакомая модель из конфига идёт по flux-подобной схеме — она же
+    // была единственной до появления каталога.
+    internal static Dictionary<string, object?> BuildRequestBody(string model, string prompt, int count)
     {
+        var id = model.Trim().Trim('/');
+
+        // Gemini-семейство: размер задаётся не image_size, а парой aspect_ratio + resolution
+        if (id.Contains("nano-banana", StringComparison.OrdinalIgnoreCase))
+            return new Dictionary<string, object?>
+            {
+                ["prompt"] = prompt,
+                ["aspect_ratio"] = "1:1",
+                ["resolution"] = "1K",
+                ["num_images"] = count,
+            };
+
+        // Векторные модели recraft: только image_size, вариантов всегда один
+        if (id.Contains("text-to-vector", StringComparison.OrdinalIgnoreCase))
+            return new Dictionary<string, object?>
+            {
+                ["prompt"] = prompt,
+                ["image_size"] = SquareSize,
+            };
+
+        return new Dictionary<string, object?>
+        {
+            ["prompt"] = prompt,
+            ["image_size"] = SquareSize,
+            ["num_images"] = count,
+        };
+    }
+
+    // 1024×1024: у "square" сторона 512, и такая иконка в UI выглядит мылом
+    private const string SquareSize = "square_hd";
+
+    private static async Task<(byte[]? Bytes, string ContentType)> DownloadAsync(
+        HttpClient client, string url, string? declaredType, CancellationToken ct)
+    {
+        var fallback = string.IsNullOrWhiteSpace(declaredType) ? "image/png" : declaredType.Trim();
+
         if (url.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
         {
             // data:image/png;base64,....
             var comma = url.IndexOf(',');
-            if (comma < 0) return (null, "image/png");
+            if (comma < 0) return (null, fallback);
             var meta = url[5..comma];
             var contentType = meta.Split(';')[0];
-            if (string.IsNullOrEmpty(contentType)) contentType = "image/png";
+            if (string.IsNullOrEmpty(contentType)) contentType = fallback;
             try { return (Convert.FromBase64String(url[(comma + 1)..]), contentType); }
             catch { return (null, contentType); }
         }
 
         using var resp = await client.GetAsync(url, ct);
-        if (!resp.IsSuccessStatusCode) return (null, "image/png");
+        if (!resp.IsSuccessStatusCode) return (null, fallback);
         var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
-        var ct2 = resp.Content.Headers.ContentType?.MediaType ?? "image/png";
+        var ct2 = resp.Content.Headers.ContentType?.MediaType ?? fallback;
         return (bytes, ct2);
     }
 }

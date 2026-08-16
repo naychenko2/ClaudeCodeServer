@@ -308,6 +308,11 @@ export interface DocsScopeInfo {
 // GET /api/projects/{id}/dossiers?file=|symbol=|commit= (ADR-004 §4/§8).
 export type DossierStatus = 'active' | 'degraded' | 'archived';
 
+// Происхождение записи (этап 4 — импорт «Историй решений»). own — норма,
+// imported — приехала из ветки ccs/dossiers/v1 (см. ADR-004 §6). В UI своя запись
+// пометки не получает: 90% списка — свои, и пилюля «Своя» превращает ленту в шум.
+export type DossierOrigin = 'own' | 'imported';
+
 export interface DossierEntry {
   id: string;
   commitSha: string;
@@ -331,6 +336,11 @@ export interface DossierEntry {
   // Чат/задача, на которые указывают sessionId/taskId, больше не существуют —
   // соответствующие ссылки гасятся текстом вместо кнопки
   linksStale: boolean;
+  // Происхождение записи (этап 4): own — записана здесь, imported — приехала из
+  // ветки ccs/dossiers/v1. У импортированных заполнен importedAuthor — имя автора
+  // tip-коммита ветки (кто нажал «Выгрузить», тот и подписан).
+  origin: DossierOrigin;
+  importedAuthor: string | null;
 }
 
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)

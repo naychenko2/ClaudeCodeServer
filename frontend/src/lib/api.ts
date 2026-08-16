@@ -1348,6 +1348,15 @@ export const api = {
       request<{ status: 'exported' | 'nothingToExport'; count: number }>(
         `/projects/${encodeURIComponent(projectId)}/dossiers/export`,
         { method: 'POST', body: JSON.stringify({ push }) }),
+    // Импорт «Историй решений» из ветки ccs/dossiers/v1 (этап 4): читает ветку
+    // plumbing-командами и кладёт записи в стор с origin='imported' и importedAuthor.
+    // added — реально добавленные, skipped — остальные записи index.json
+    // (уже были импортированными / нечитаемые / кривые sha). noBranch — ветки нет
+    // ни локально, ни в origin (нейтральный ответ, не ошибка).
+    importRun: (projectId: string) =>
+      request<{ status: 'imported' | 'nothingToImport' | 'noBranch'; added: number; skipped: number }>(
+        `/projects/${encodeURIComponent(projectId)}/dossiers/import`,
+        { method: 'POST' }),
   },
 
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку

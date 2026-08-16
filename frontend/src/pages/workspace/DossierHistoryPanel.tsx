@@ -10,13 +10,16 @@
 // запросы по контракту и просто получает пустой список/ошибку сети.
 //
 // Этап 3 (ADR §6): кнопка «Выгрузить в репозиторий» и модалка подтверждения.
-// Кнопка видна только при включённом флаге change-dossiers-recall И когда проект —
-// git-репозиторий (по данным GET .../dossiers/export/status). Тумблер opt-out
-// DossierOptOutButton живёт в шапке чата и сюда не ходит.
+// Этап 4: кнопка-зеркало «Загрузить из репозитория» (Download слева от Upload),
+// модалка импорта, бейдж происхождения в метастроке импортированной записи,
+// заголовок группы «Две записи об одном коммите» между своей и импортированной
+// парой. Оба действия видны при включённом флаге change-dossiers-recall И когда
+// проект — git-репозиторий. Тумблер opt-out DossierOptOutButton живёт в шапке
+// чата и сюда не ходит.
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
-  AlertTriangle, Bot, ChevronDown, ChevronRight, ClipboardList, File as FileIcon, GitCompare, History, Info,
+  AlertTriangle, Bot, ChevronDown, ChevronRight, ClipboardList, Download, File as FileIcon, GitCompare, History, Info,
   Lightbulb, MessageCircle, Search, Upload, X,
 } from 'lucide-react';
 import type { DossierEntry, Persona } from '../../types';
@@ -30,6 +33,7 @@ import { Button, Dot, EmptyState, IconButton, TextField } from '../../components
 import { PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { useNow } from '../../lib/useNow';
 import { DossierExportDialog } from './DossierExportDialog';
+import { DossierImportDialog } from './DossierImportDialog';
 
 interface Props {
   project: { id: string };
@@ -78,6 +82,72 @@ function recordWord(n: number): string {
 }
 
 type Author = { name: string; persona: boolean };
+
+// Бейдж происхождения записи (этап 4, макет §1/§2): показывается только у
+// импортированных — своя запись остаётся чистой (90% списка, лишняя пилюля
+// превращает ленту в шум). Гамма info — нейтральная атрибуция, не статус ошибки.
+function OriginBadge({ author }: { author: string | null }) {
+  const label = author ? `Из репозитория · ${author}` : 'Из репозитория';
+  const tooltip = author
+    ? `Запись приехала из ветки ccs/dossiers/v1 — её выгрузил ${author}.`
+    : 'Запись приехала из ветки ccs/dossiers/v1.';
+  return (
+    <span
+      title={tooltip}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4, flexShrink: 0,
+        fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 600, lineHeight: 1,
+        color: C.info, background: C.infoBg,
+        borderRadius: R.max, padding: `${SP.xxs}px ${SP.xs}px ${SP.xxs}px 5px`,
+      }}
+    >
+      <Download size={11} strokeWidth={2} />
+      {label}
+    </span>
+  );
+}
+
+// Компактная иконка для свёрнутой месячной группы — пилюля не помещается в одну
+// строку, остаётся значок с title (макет §2, последний sample).
+function OriginIcon() {
+  return (
+    <span
+      title="Из репозитория"
+      style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, color: C.info }}
+    >
+      <Download size={11} strokeWidth={2} />
+    </span>
+  );
+}
+
+// Вторая в паре по одному коммиту — заголовок группы по текстам §2.4:
+// «Две записи об одном коммите / Ваша запись сохранена как есть — загрузка ничего
+// не перезаписывает. Рядом — как тот же коммит описали в репозитории.»
+function PairHeader() {
+  return (
+    <div style={{
+      margin: `${SP.xs}px 0 ${SP.xs}px ${AVATAR_INDENT}px`,
+      padding: `${SP.xs}px ${SP.sm}px`,
+      background: C.bgSelected, borderRadius: R.md,
+      display: 'flex', flexDirection: 'column', gap: 2,
+    }}>
+      <span style={{ fontSize: FS.xs, fontWeight: 700, color: C.textHeading }}>Две записи об одном коммите</span>
+      <span style={{ fontSize: FS.xs, color: C.textSecondary, lineHeight: 1.45 }}>
+        Ваша запись сохранена как есть — загрузка ничего не перезаписывает. Рядом — как тот же коммит описали в репозитории.
+      </span>
+    </div>
+  );
+}
+
+// Предикат: эта запись — imported, и предыдущая по тому же sha — own. Используется
+// в обоих местах рендера (recent и раскрытые месячные группы), чтобы показать
+// PairHeader между своей и импортированной записями.
+function isSecondInPair(entry: DossierEntry, prev: DossierEntry | null): boolean {
+  return entry.origin === 'imported'
+    && prev !== null
+    && prev.commitSha === entry.commitSha
+    && prev.origin === 'own';
+}
 
 function Avatar({ author, size = 26 }: { author: Author; size?: number }) {
   if (author.persona) {
@@ -171,6 +241,9 @@ function DossierCard({ entry, author, open, onToggle, onOpenChat, onOpenTask, on
             <span style={{ fontFamily: FONT.mono }}>{entry.commitSha.slice(0, 7)}</span>
             <Dot color={C.textMuted} size={3} />
             <span>{formatDate(entry.committedAt)}</span>
+            {/* Бейдж происхождения — только у импортированных записей (свои остаются
+                чистыми: 90% списка — свои, лишняя пилюля превращает ленту в шум) */}
+            {entry.origin === 'imported' && <OriginBadge author={entry.importedAuthor} />}
             {entry.status === 'degraded' && (
               <>
                 <Dot color={C.textMuted} size={3} />
@@ -240,6 +313,8 @@ function CompactRow({ entry, author, onClick }: { entry: DossierEntry; author: A
       <span style={{ flex: 1, minWidth: 0, fontSize: FS.sm, color: C.textPrimary, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
         {entry.summaryFailed ? 'Не удалось собрать описание.' : entry.why}
       </span>
+      {/* В компактной строке пилюля не помещается — только значок (макет §2) */}
+      {entry.origin === 'imported' && <OriginIcon />}
       <span style={{ flexShrink: 0, fontSize: FS.xs, color: C.textMuted, fontFamily: FONT.mono }}>{entry.commitSha.slice(0, 5)}</span>
     </div>
   );
@@ -327,9 +402,12 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   //   флаг change-dossiers-recall включён
   //   И проект — git-репозиторий (isGitRepo из /dossiers/export/status)
   // sharedFolder приезжает тем же запросом и подсовывается модалке для выноски.
+  // Этап 4 — кнопка импорта использует тот же гейт; вызов одного и того же
+  // /export/status не дублируем, импорт всегда возможен там же, где разрешён экспорт.
   const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [exportStatus, setExportStatus] = useState<{ isGitRepo: boolean; sharedFolder: boolean } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   useEffect(() => {
     if (!recallEnabled) {
@@ -395,6 +473,15 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   const { recent, groups } = useMemo(() => {
     if (!filtered) return { recent: [] as DossierEntry[], groups: [] as { key: string; label: string; entries: DossierEntry[] }[] };
     const cutoff = now - RECENT_DAYS * 24 * 60 * 60 * 1000;
+    // Внутри одной даты (тот же коммит) своя запись должна идти РАНЬШЕ импортированной —
+    // тексты §2.4: «панель показывает обе — своя сверху». Бэкенд сортирует только по
+    // committedAt desc и для одинаковой даты порядок не детерминирован: own < imported
+    // вторичным ключом делает это стабильным без потери основной сортировки.
+    const byShaAndOrigin = (a: DossierEntry, b: DossierEntry) => {
+      const dt = Date.parse(b.committedAt) - Date.parse(a.committedAt);
+      if (dt !== 0) return dt;
+      return a.origin === b.origin ? 0 : (a.origin === 'own' ? -1 : 1);
+    };
     const recentList: DossierEntry[] = [];
     const byMonth = new Map<string, DossierEntry[]>();
     for (const e of filtered) {
@@ -405,9 +492,10 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       list.push(e);
       byMonth.set(k, list);
     }
+    recentList.sort(byShaAndOrigin);
     const groupList = [...byMonth.entries()]
       .sort((a, b) => b[0].localeCompare(a[0]))
-      .map(([key, list]) => ({ key, label: monthLabel(list[0].committedAt), entries: list }));
+      .map(([key, list]) => ({ key, label: monthLabel(list[0].committedAt), entries: list.sort(byShaAndOrigin) }));
     return { recent: recentList, groups: groupList };
   }, [filtered, now]);
 
@@ -449,19 +537,33 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
           sha или текст
         </button>
         {/* Запасной вариант на случай, когда PanelHeaderSlot не сработает (мобил/вложенный
-            контекст): тот же chipStyle, что у соседних чипов, иконка + короткая подпись. */}
+            контекст): тот же chipStyle, что у соседних чипов, иконка + короткая подпись.
+            Импорт стоит СЛЕВА от выгрузки — пара «забрать / отдать» по направлению стрелок. */}
         {showExportButton && !hasHeader && (
-          <button
-            onClick={() => setExportOpen(true)}
-            title="Выгрузить в репозиторий"
-            style={{
-              ...chipStyle, cursor: 'pointer', color: C.textHeading,
-              background: C.bgCard, border: `1px solid ${C.border}`,
-            }}
-          >
-            <Upload size={11} strokeWidth={ICON_STROKE} />
-            Выгрузить
-          </button>
+          <>
+            <button
+              onClick={() => setImportOpen(true)}
+              title="Загрузить из репозитория"
+              style={{
+                ...chipStyle, cursor: 'pointer', color: C.textHeading,
+                background: C.bgCard, border: `1px solid ${C.border}`,
+              }}
+            >
+              <Download size={11} strokeWidth={ICON_STROKE} />
+              Загрузить
+            </button>
+            <button
+              onClick={() => setExportOpen(true)}
+              title="Выгрузить в репозиторий"
+              style={{
+                ...chipStyle, cursor: 'pointer', color: C.textHeading,
+                background: C.bgCard, border: `1px solid ${C.border}`,
+              }}
+            >
+              <Upload size={11} strokeWidth={ICON_STROKE} />
+              Выгрузить
+            </button>
+          </>
         )}
       </div>
       {searchOpen && (
@@ -553,47 +655,76 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {subheader}
       {exclusionNote}
-      {/* Кнопка тулбара (ADR §6): только когда у панели есть шапка. Без pinned —
-          выгрузка не главное действие панели, в покое шапка должна оставаться чистой. */}
+      {/* Кнопки тулбара (ADR §6): только когда у панели есть шапка. Без pinned —
+          ни одна из них не главное действие панели, в покое шапка должна оставаться
+          чистой. Импорт (Download) ставится слева от выгрузки (Upload) — пара
+          «забрать / отдать» читается по направлению стрелок. */}
       {showExportButton && hasHeader && (
         <PanelHeaderSlot side="right">
+          <IconButton size="sm" title="Загрузить из репозитория" onClick={() => setImportOpen(true)}>
+            <Download size={14} strokeWidth={ICON_STROKE} />
+          </IconButton>
           <IconButton size="sm" title="Выгрузить в репозиторий" onClick={() => setExportOpen(true)}>
             <Upload size={14} strokeWidth={ICON_STROKE} />
           </IconButton>
         </PanelHeaderSlot>
       )}
       <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px ${SP.lg}px` }}>
-        {recent.map(entry => (
-          <DossierCard
-            key={entry.id} entry={entry} author={authorOf(entry)}
-            open={openId === entry.id}
-            onToggle={() => setOpenId(prev => prev === entry.id ? null : entry.id)}
-            onOpenChat={onOpenChat} onOpenTask={onOpenTask} onOpenCommit={onOpenCommit}
-            fallbackFile={fileFilter}
-          />
+        {recent.map((entry, i) => (
+          <div key={entry.id}>
+            {/* Заголовок «Две записи об одном коммите» — только между своей и
+                импортированной записями по одному sha (тексты §2.4). Связь читается
+                по одинаковому mono-sha, отдельной рамки-обёртки не вводим. */}
+            {isSecondInPair(entry, i > 0 ? recent[i - 1] : null) && <PairHeader />}
+            <DossierCard
+              entry={entry} author={authorOf(entry)}
+              open={openId === entry.id}
+              onToggle={() => setOpenId(prev => prev === entry.id ? null : entry.id)}
+              onOpenChat={onOpenChat} onOpenTask={onOpenTask} onOpenCommit={onOpenCommit}
+              fallbackFile={fileFilter}
+            />
+          </div>
         ))}
         {groups.length > 0 && (
           <p style={{ fontSize: FS.xs, textTransform: 'uppercase', letterSpacing: '0.03em', fontWeight: 700, color: C.textMuted, margin: `2px 0 ${SP.xs}px` }}>
             Более 30 дней назад
           </p>
         )}
-        {groups.map(group => {
+        {groups.map((group, gi) => {
           const open = openMonths.has(group.key);
+          // Предыдущая запись для заголовка пары — последняя из recent (если recent не пуст)
+          // или последняя из предыдущей раскрытой группы, иначе null.
+          const prevAtStart = gi === 0
+            ? (recent.length > 0 ? recent[recent.length - 1] : null)
+            : (() => {
+                for (let g = gi - 1; g >= 0; g--) {
+                  if (openMonths.has(groups[g].key) && groups[g].entries.length > 0) {
+                    return groups[g].entries[groups[g].entries.length - 1];
+                  }
+                }
+                return recent.length > 0 ? recent[recent.length - 1] : null;
+              })();
           return (
             <div key={group.key}>
               <GroupHeader label={group.label} count={group.entries.length} open={open} onToggle={() => toggleMonth(group.key)} />
-              {open && group.entries.map(entry => (
-                openId === entry.id ? (
-                  <DossierCard
-                    key={entry.id} entry={entry} author={authorOf(entry)} open
-                    onToggle={() => setOpenId(null)}
-                    onOpenChat={onOpenChat} onOpenTask={onOpenTask} onOpenCommit={onOpenCommit}
-                    fallbackFile={fileFilter}
-                  />
-                ) : (
-                  <CompactRow key={entry.id} entry={entry} author={authorOf(entry)} onClick={() => setOpenId(entry.id)} />
-                )
-              ))}
+              {open && group.entries.map((entry, ei) => {
+                const prev = ei === 0 ? prevAtStart : group.entries[ei - 1];
+                return (
+                  <div key={entry.id}>
+                    {isSecondInPair(entry, prev) && <PairHeader />}
+                    {openId === entry.id ? (
+                      <DossierCard
+                        entry={entry} author={authorOf(entry)} open
+                        onToggle={() => setOpenId(null)}
+                        onOpenChat={onOpenChat} onOpenTask={onOpenTask} onOpenCommit={onOpenCommit}
+                        fallbackFile={fileFilter}
+                      />
+                    ) : (
+                      <CompactRow entry={entry} author={authorOf(entry)} onClick={() => setOpenId(entry.id)} />
+                    )}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
@@ -604,6 +735,17 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
           onClose={() => setExportOpen(false)}
           projectId={project.id}
           sharedFolder={exportStatus?.sharedFolder === true}
+        />
+      )}
+      {showExportButton && (
+        <DossierImportDialog
+          open={importOpen}
+          onClose={() => setImportOpen(false)}
+          projectId={project.id}
+          // Импорт добавил записи — дёргаем список, чтобы они появились с бейджем
+          // «Из репозитория» и парами по коммитам. Дёргается на закрытии success/nothing,
+          // а не на каждой фазе — иначе при ошибке получим лишний запрос.
+          onSuccess={() => setReloadTick(t => t + 1)}
         />
       )}
     </div>

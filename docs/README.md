@@ -40,7 +40,9 @@
 [team-implement-mode.md](architecture/team-implement-mode.md) (режим чата-штаба),
 [spend-analytics-api.md](architecture/spend-analytics-api.md).
 
-**features/** — [image-generation.md](features/image-generation.md) (выбор генератора картинок:
+**features/** — [decision-history-import-texts.md](features/decision-history-import-texts.md)
+(тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
+[image-generation.md](features/image-generation.md) (выбор генератора картинок:
 иконка проекта, аватар персоны), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
 [model-providers-rework.md](features/model-providers-rework.md),
 [model-route-format-validation.md](features/model-route-format-validation.md),

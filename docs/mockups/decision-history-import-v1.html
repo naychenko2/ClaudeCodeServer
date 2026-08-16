@@ -1,0 +1,814 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>История решений — происхождение и импорт — v1</title>
+<style>
+  /* Токены — копия theme.css (обе темы), макет самодостаточен */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-msg-bg: rgba(251, 248, 242, 0.42);
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:    #3E7CA6;
+    --c-info-bg: #E7EFF5;
+    --c-overlay: rgba(23,19,15,.42);
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+    --shadow-modal:    0 16px 48px rgba(23, 19, 15, 0.22);
+    --shadow-sheet:    0 -8px 40px rgba(23, 19, 15, 0.22);
+    --shadow-focus:    0 0 0 3px rgba(217, 119, 87, 0.14);
+    --shadow-button:   0 4px 14px rgba(217, 119, 87, 0.30);
+    --c-skeleton: #E4DCCC;
+    --canvas-ink: 42, 37, 31;
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-on-dark:        #FFFFFF;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-msg-bg: rgba(46, 42, 37, 0.38);
+    --c-success:      #7CB86A;
+    --c-success-bg:   #232E20;
+    --c-success-text: #8FCB79;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:    #5FA0CC;
+    --c-info-bg: #1E2A33;
+    --c-overlay: rgba(0,0,0,.55);
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+    --shadow-modal:    0 16px 48px rgba(0, 0, 0, 0.55);
+    --shadow-sheet:    0 -10px 46px rgba(0, 0, 0, 0.55);
+    --shadow-focus:    0 0 0 3px rgba(227, 138, 106, 0.24);
+    --shadow-button:   0 4px 16px rgba(227, 138, 106, 0.34);
+    --c-skeleton: #38332D;
+    --canvas-ink: 237, 230, 219;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px 16px 64px;
+    background: var(--c-bg-main);
+    color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .page { max-width: 1240px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 28px; max-width: 780px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading);
+    margin: 44px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 780px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+
+  /* Переключатель темы */
+  .themebar { position: sticky; top: 0; z-index: 20; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; cursor: pointer; border: 1px solid var(--c-border);
+    background: var(--c-bg-card); color: var(--c-text-primary); border-radius: 10px; padding: 6px 12px;
+  }
+  .tbtn[aria-pressed="true"] { background: var(--c-accent); color: var(--c-on-accent); border-color: transparent; }
+
+  /* Рамка «окна продукта» */
+  .frame {
+    background: var(--c-bg-main); border: 1px solid var(--c-border); border-radius: 14px;
+    padding: 12px; box-shadow: var(--shadow-card); overflow: hidden; position: relative;
+  }
+  .frame::before {
+    content: ''; position: absolute; inset: 0; pointer-events: none; opacity: .05;
+    background-image:
+      repeating-linear-gradient(45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px),
+      repeating-linear-gradient(-45deg, rgb(var(--canvas-ink)) 0 1px, transparent 1px 22px);
+  }
+  .frame > * { position: relative; }
+  .caption { font-size: 11px; color: var(--c-text-muted); margin: 8px 0 0; line-height: 1.5; }
+  svg.i { display: block; flex: 0 0 auto; }
+
+  /* Панель-остров */
+  .island {
+    background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px;
+    box-shadow: var(--shadow-island); display: flex; flex-direction: column; overflow: hidden;
+    max-width: 420px;
+  }
+  .island-h {
+    height: 40px; flex: 0 0 40px; background: var(--c-bg-inset); border-bottom: 1px solid var(--c-border-light);
+    display: flex; align-items: center; gap: 8px; padding: 0 6px 0 12px;
+  }
+  .island-h .ttl { font-size: 12px; color: var(--c-text-heading); font-weight: 600; display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; }
+  .island-h .ttl svg { color: var(--c-text-muted); }
+  .ibtns { display: flex; gap: 2px; flex: 0 0 auto; }
+  .ib {
+    width: 28px; height: 28px; border-radius: 8px; border: none; background: transparent;
+    color: var(--c-text-muted); display: grid; place-items: center; cursor: pointer; position: relative;
+  }
+  .ib:hover { background: var(--c-bg-selected); color: var(--c-text-primary); }
+  .ib:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+
+  /* Подшапка */
+  .panel-sub { padding: 10px 12px 8px; border-bottom: 1px solid var(--c-border-light); background: var(--c-bg-panel); }
+  .panel-sub .desc { font-size: 11.5px; color: var(--c-text-secondary); line-height: 1.5; margin: 0 0 8px; }
+  .scope-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--c-text-heading);
+    background: var(--c-bg-card); border: 1px solid var(--c-border); border-radius: 999px; padding: 4px 10px 4px 8px;
+    cursor: pointer; font-family: 'JetBrains Mono', monospace;
+  }
+  .chip svg { color: inherit; opacity: .85; }
+  .chip.txt { font-family: inherit; }
+
+  /* Тело панели */
+  .panel-body { padding: 10px 12px 16px; background: var(--c-bg-panel); }
+
+  /* Карточка записи */
+  .card { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 12px; padding: 10px 12px; margin-bottom: 8px; }
+  .card-top { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; flex: 0 0 26px; display: grid; place-items: center;
+    font-size: 10.5px; font-weight: 700; margin-top: 1px; }
+  .avatar.human { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .avatar.persona { background: var(--c-accent-light); color: var(--c-accent); box-shadow: 0 0 0 2px var(--c-bg-card), 0 0 0 3px var(--c-accent-muted); }
+  .avatar svg { width: 13px; height: 13px; }
+  .card-main { flex: 1; min-width: 0; }
+  .why { font-size: 13px; font-weight: 600; color: var(--c-text-heading); line-height: 1.4; margin: 0 0 3px; }
+  .meta-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; font-size: 11px; color: var(--c-text-muted); }
+  .meta-row .who { color: var(--c-text-secondary); font-weight: 600; }
+  .meta-row .who.persona-name { color: var(--c-accent); }
+  .meta-row .persona-tag { font-weight: 400; color: var(--c-text-muted); }
+  .meta-row .sha { font-family: 'JetBrains Mono', monospace; }
+  .dot { width: 3px; height: 3px; border-radius: 50%; background: var(--c-text-muted); flex: 0 0 auto; }
+  .preview { font-size: 11.5px; color: var(--c-text-secondary); margin-top: 4px; line-height: 1.4;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .chev { flex: 0 0 auto; color: var(--c-text-muted); margin-top: 3px; }
+
+  .card-expand { margin: 10px 0 2px 35px; }
+  .subsec { margin-bottom: 10px; }
+  .subsec:last-child { margin-bottom: 0; }
+  .subsec .h { font-size: 10.5px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700; color: var(--c-text-muted); margin: 0 0 4px; }
+  .subsec ul { margin: 0; padding-left: 16px; }
+  .subsec li { font-size: 12.5px; color: var(--c-text-primary); line-height: 1.5; margin-bottom: 3px; }
+  .subsec li::marker { color: var(--c-text-muted); }
+
+  .linkrow { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; margin-left: 35px; }
+  .lbtn {
+    display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11.5px; cursor: pointer;
+    border: 1px solid var(--c-border); background: var(--c-bg-white); color: var(--c-text-primary);
+    border-radius: 999px; padding: 4px 10px 4px 8px;
+  }
+  .lbtn svg { width: 12px; height: 12px; color: var(--c-text-muted); }
+
+  /* === НОВОЕ: бейдж происхождения === */
+  .origin {
+    display: inline-flex; align-items: center; gap: 4px; flex: 0 0 auto;
+    font-size: 11px; font-weight: 600; line-height: 1;
+    color: var(--c-info); background: var(--c-info-bg);
+    border-radius: 999px; padding: 3px 8px 3px 6px;
+  }
+  .origin svg { width: 11px; height: 11px; }
+  /* Мини-пометка в компактной строке свёрнутой месячной группы: только значок, без пилюли */
+  .compact-row {
+    display: flex; align-items: center; gap: 8px; padding: 6px 8px 6px 30px; border-radius: 8px; cursor: pointer;
+  }
+  .compact-row .cwhy { flex: 1; min-width: 0; font-size: 12px; color: var(--c-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .compact-row .cmeta { flex: 0 0 auto; font-size: 10.5px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; }
+  .compact-row .cavatar { width: 16px; height: 16px; border-radius: 50%; flex: 0 0 16px; display: grid; place-items: center; font-size: 8px; font-weight: 700; }
+  .compact-row .cavatar.human { background: var(--c-bg-selected); color: var(--c-text-secondary); }
+  .compact-row .corigin { flex: 0 0 auto; color: var(--c-info); display: grid; place-items: center; }
+  .compact-row .corigin svg { width: 11px; height: 11px; }
+
+  /* Модалка (срез) */
+  .modal-wrap { position: relative; border-radius: 14px; overflow: hidden; border: 1px solid var(--c-border-light);
+    background: var(--c-bg-main); min-height: 240px; display: grid; place-items: center; padding: 26px 14px; }
+  .modal-wrap::before { content: ''; position: absolute; inset: 0; background: var(--c-overlay); }
+  .modal {
+    position: relative; width: 100%; max-width: 380px; background: var(--c-bg-card);
+    border-radius: 20px; box-shadow: var(--shadow-modal); padding: 18px 18px 16px;
+  }
+  .modal h3 { margin: 0 0 12px; font-family: 'PT Serif', Georgia, serif; font-size: 18px; font-weight: 700; color: var(--c-text-heading); }
+  .modal p.body { margin: 0 0 14px; font-size: 14px; color: var(--c-text-primary); line-height: 1.5; }
+  .modal .foot { display: flex; gap: 10px; }
+  .branch-tag { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-inset); border-radius: 6px; padding: 2px 4px; }
+  .btn {
+    font: inherit; font-size: 12.5px; cursor: pointer; border-radius: 12px; padding: 9px 14px;
+    border: 1px solid transparent; background: var(--c-accent); color: var(--c-on-accent);
+    box-shadow: var(--shadow-button); flex: 1.5; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  }
+  .btn.ghost { background: transparent; color: var(--c-text-primary); border-color: transparent; box-shadow: none; flex: 1; }
+  .btn.sec { background: var(--c-bg-white); color: var(--c-text-primary); border-color: var(--c-border); box-shadow: none; }
+  .btn[disabled] { opacity: .6; cursor: default; }
+  .notice {
+    border-radius: 10px; padding: 8px 12px; display: flex; gap: 8px; align-items: flex-start;
+    font-size: 13px; line-height: 1.45; margin-bottom: 14px;
+  }
+  .notice svg { flex: 0 0 auto; margin-top: 1px; }
+  .notice.danger { background: var(--c-danger-bg); color: var(--c-danger-text); }
+  .notice.info { background: var(--c-info-bg); color: var(--c-info); }
+  .result-line { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 14px; }
+  .result-line svg { flex: 0 0 auto; margin-top: 1px; }
+  .result-line p { margin: 0; font-size: 14px; color: var(--c-text-primary); line-height: 1.5; }
+  .spin { animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Анатомия */
+  .anat { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  .anat .sample { background: var(--c-bg-panel); border: 1px solid var(--c-border-light); border-radius: 14px; padding: 16px; min-width: 300px; flex: 1; }
+  .anat .sample h4 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--c-text-muted); font-weight: 700; }
+
+  /* Мобильная шторка */
+  .phone {
+    width: 340px; height: 640px; border-radius: 26px; border: 1px solid var(--c-border);
+    background: var(--c-bg-main); position: relative; overflow: hidden; box-shadow: var(--shadow-card); flex: 0 0 auto;
+  }
+  .phone .content { padding: 12px; }
+  .sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 84%;
+    background: var(--c-bg-panel); border-radius: 22px 22px 0 0; box-shadow: var(--shadow-sheet);
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .grab { width: 36px; height: 4px; border-radius: 999px; background: var(--c-divider); margin: 8px auto 4px; }
+  .scrim { position: absolute; inset: 0; background: var(--c-overlay); }
+  .mob-h { display: flex; align-items: center; gap: 8px; padding: 2px 8px 8px 14px; border-bottom: 1px solid var(--c-border-light); }
+  .mob-h .ttl { flex: 1; font-size: 13px; font-weight: 700; color: var(--c-text-heading); display: flex; align-items: center; gap: 6px; }
+  .ib44 { width: 40px; height: 40px; border-radius: 10px; border: none; background: transparent; color: var(--c-text-muted); display: grid; place-items: center; }
+
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+  .grid3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .spec { max-width: 980px; }
+  .spec table { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-bottom: 16px; }
+  .spec th, .spec td { border: 1px solid var(--c-border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  .spec th { background: var(--c-bg-inset); color: var(--c-text-heading); font-weight: 600; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <strong style="font-size:12px; color: var(--c-text-secondary); margin-right: 6px;">Тема:</strong>
+    <button class="tbtn" data-theme-btn="light" aria-pressed="true">Светлая</button>
+    <button class="tbtn" data-theme-btn="dark" aria-pressed="false">Тёмная</button>
+  </div>
+
+  <h1 class="doc">История решений — происхождение записей и импорт из репозитория</h1>
+  <p class="lead">
+    Этап 4 «Истории решений»: ветку <code class="tok">ccs/dossiers/v1</code> читаем обратно — у записей появляется
+    происхождение («записана здесь» против «приехала из репозитория»), в панель добавляется ручной импорт
+    рядом с выгрузкой, а по одному коммиту могут лежать две записи — своя и импортированная.
+    Базовая панель и выгрузка — <code class="tok">decision-history-v1.html</code>; здесь только дельта этапа 4.
+    Переключатель темы в шапке действует на все разделы.
+  </p>
+
+  <!-- ============================== §1 ============================== -->
+  <h2 class="sec">1. Панель целиком: новое действие и пометки в списке</h2>
+  <p class="note">
+    Кнопка импорта — зеркало выгрузки: та же icon-кнопка тулбара (<code class="tok">IconButton size="sm"</code>),
+    иконка <code class="tok">Download</code> (lucide), стоит слева от «Выгрузить» (<code class="tok">Upload</code>) —
+    читается как пара «забрать / отдать». Пометка «Из репозитория» живёт в метастроке записи, после даты.
+  </p>
+  <div class="frame">
+    <div class="island">
+      <div class="island-h">
+        <span class="ttl">
+          <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+          История решений
+        </span>
+        <div class="ibtns">
+          <button class="ib" title="Импортировать из репозитория">
+            <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          </button>
+          <button class="ib" title="Выгрузить в репозиторий">
+            <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          </button>
+          <button class="ib" title="Закрыть панель">
+            <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="panel-sub">
+        <p class="desc">История решений по проекту</p>
+        <div class="scope-row">
+          <span class="chip" style="color: var(--c-text-muted);">Весь проект</span>
+          <button class="chip">
+            <svg class="i" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>
+            sha или текст
+          </button>
+        </div>
+      </div>
+      <div class="panel-body">
+
+        <!-- Своя запись: без пометки — локальное происхождение это норма -->
+        <div class="card">
+          <div class="card-top">
+            <div class="avatar human">АН</div>
+            <div class="card-main">
+              <p class="why">Перевели гейт истории решений на useFeature(FLAGS) — убрали прямое чтение конфига</p>
+              <div class="meta-row">
+                <span class="who">Андрей Н.</span>
+                <span class="dot"></span>
+                <span class="sha">d581737</span>
+                <span class="dot"></span>
+                <span>15 августа 2026</span>
+              </div>
+              <p class="preview">Решили: фронт читает флаги только через хук, не через api напрямую…</p>
+            </div>
+            <svg class="i chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <!-- Импортированная запись: бейдж происхождения + автор — тот, кто писал паспорт -->
+        <div class="card">
+          <div class="card-top">
+            <div class="avatar human">ОР</div>
+            <div class="card-main">
+              <p class="why">Развели контуры Dev/Prod на одном Dify через namespace датасетов</p>
+              <div class="meta-row">
+                <span class="who">Ольга Р.</span>
+                <span class="dot"></span>
+                <span class="sha">9c21a4b</span>
+                <span class="dot"></span>
+                <span>12 августа 2026</span>
+                <span class="origin">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Из репозитория
+                </span>
+              </div>
+              <p class="preview">Решили: один Dify-инстанс, контуры разводим префиксом имён датасетов…</p>
+            </div>
+            <svg class="i chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <!-- Пара по одному коммиту: своя + импортированная лежат рядом -->
+        <div class="card">
+          <div class="card-top">
+            <div class="avatar human">АН</div>
+            <div class="card-main">
+              <p class="why">Смена ExecutionEnvironment при живых чатах запрещена — добавили guard</p>
+              <div class="meta-row">
+                <span class="who">Андрей Н.</span>
+                <span class="dot"></span>
+                <span class="sha">77f0e12</span>
+                <span class="dot"></span>
+                <span>8 августа 2026</span>
+              </div>
+              <p class="preview">Решили: 400 на смену среды, пока у владельца есть незакрытые сессии…</p>
+            </div>
+            <svg class="i chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-top">
+            <div class="avatar persona">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+            </div>
+            <div class="card-main">
+              <p class="why">Смена ExecutionEnvironment при живых чатах запрещена — добавили guard</p>
+              <div class="meta-row">
+                <span class="who persona-name">Денис</span><span class="persona-tag">· персона</span>
+                <span class="dot"></span>
+                <span class="sha">77f0e12</span>
+                <span class="dot"></span>
+                <span>8 августа 2026</span>
+                <span class="origin">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                  Из репозитория
+                </span>
+              </div>
+              <p class="preview">Решили: guard на уровне UserStore, а не в контроллере — иначе обходится…</p>
+            </div>
+            <svg class="i chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+
+      </div>
+    </div>
+    <p class="caption">
+      Вверху — обычная своя запись (пометки нет), за ней — импортированная от другого участника.
+      Внизу — пара по коммиту <code class="tok">77f0e12</code>: своя и приехавшая из ветки лежат рядом,
+      связь читается по одинаковому sha в метастроках.
+    </p>
+  </div>
+
+  <!-- ============================== §2 ============================== -->
+  <h2 class="sec">2. Пометка происхождения: анатомия</h2>
+  <p class="note">
+    Принцип тот же, что у пары «человек / персона» в этапе 1: различие должно читаться боковым зрением
+    в списке, без наведения. Локальная запись — норма и остаётся чистой; помечаем только исключение.
+    Гамма — <code class="tok">info</code> (синяя): accent занят персонами, warning/danger сказали бы
+    «что-то не так», а тут — нейтральная атрибуция.
+  </p>
+  <div class="anat">
+    <div class="sample">
+      <h4>Импортированная — пилюля в метастроке</h4>
+      <div class="meta-row" style="font-size: 11px; color: var(--c-text-muted);">
+        <span class="who" style="color: var(--c-text-secondary); font-weight: 600;">Ольга Р.</span>
+        <span class="dot"></span>
+        <span class="sha">9c21a4b</span>
+        <span class="dot"></span>
+        <span>12 августа 2026</span>
+        <span class="origin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Из репозитория
+        </span>
+      </div>
+      <p class="caption" style="margin-top: 10px;">
+        Иконка <code class="tok">Download</code> 11px + текст «Из репозитория». Автор записи — тот,
+        кто писал паспорт (человек или персона), он остаётся в начале метастроки как обычно.
+      </p>
+    </div>
+    <div class="sample">
+      <h4>Своя — без пометки</h4>
+      <div class="meta-row" style="font-size: 11px; color: var(--c-text-muted);">
+        <span class="who" style="color: var(--c-text-secondary); font-weight: 600;">Андрей Н.</span>
+        <span class="dot"></span>
+        <span class="sha">d581737</span>
+        <span class="dot"></span>
+        <span>15 августа 2026</span>
+      </div>
+      <p class="caption" style="margin-top: 10px;">
+        Пустое место вместо бейджа и есть ответ «записана здесь». Симметричная пилюля «Своя»
+        превратила бы список в ленту одинаковых бейджей — шум вместо сигнала.
+      </p>
+    </div>
+    <div class="sample">
+      <h4>Компактная строка (свёрнутая месячная группа)</h4>
+      <div class="compact-row" style="padding-left: 8px; border: 1px dashed var(--c-border);">
+        <div class="cavatar human">ОР</div>
+        <span class="cwhy">Развели контуры Dev/Prod на одном Dify через namespace…</span>
+        <span class="corigin" title="Из репозитория">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </span>
+        <span class="cmeta">9c21a</span>
+      </div>
+      <p class="caption" style="margin-top: 10px;">
+        В однострочной записи пилюля не помещается — только значок <code class="tok">Download</code>
+        11px цветом <code class="tok">C.info</code> перед sha, с title «Из репозитория».
+      </p>
+    </div>
+  </div>
+
+  <!-- ============================== §3 ============================== -->
+  <h2 class="sec">3. Пара по одному коммиту</h2>
+  <p class="note">
+    Коллизия — не ошибка, а нормальный итог обмена: обе записи про коммит <code class="tok">77f0e12</code>
+    валидны, поэтому показываем обе, подряд (сортировка по дате коммита это гарантирует).
+    Склейки-контейнера нарочно нет: общий sha в mono уже говорит «это один коммит», а отдельная рамка
+    добавила бы уровень вложенности ради редкого случая. Раскрытая — импортированная: видно,
+    что её ссылки на чат/задачу ведут в источники <em>другого</em> участника.
+  </p>
+  <div class="frame">
+    <div style="max-width: 420px;">
+      <div class="card">
+        <div class="card-top">
+          <div class="avatar human">АН</div>
+          <div class="card-main">
+            <p class="why">Смена ExecutionEnvironment при живых чатах запрещена — добавили guard</p>
+            <div class="meta-row">
+              <span class="who">Андрей Н.</span>
+              <span class="dot"></span>
+              <span class="sha">77f0e12</span>
+              <span class="dot"></span>
+              <span>8 августа 2026</span>
+            </div>
+            <p class="preview">Решили: 400 на смену среды, пока у владельца есть незакрытые сессии…</p>
+          </div>
+          <svg class="i chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+      </div>
+      <div class="card" style="margin-bottom: 0;">
+        <div class="card-top">
+          <div class="avatar persona">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8V4H8"/><rect width="16" height="12" x="4" y="8" rx="2"/><path d="M2 14h2"/><path d="M20 14h2"/><path d="M15 13v2"/><path d="M9 13v2"/></svg>
+          </div>
+          <div class="card-main">
+            <p class="why">Смена ExecutionEnvironment при живых чатах запрещена — добавили guard</p>
+            <div class="meta-row">
+              <span class="who persona-name">Денис</span><span class="persona-tag">· персона</span>
+              <span class="dot"></span>
+              <span class="sha">77f0e12</span>
+              <span class="dot"></span>
+              <span>8 августа 2026</span>
+              <span class="origin">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Из репозитория
+              </span>
+            </div>
+          </div>
+          <svg class="i chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(180deg);"><path d="m6 9 6 6 6-6"/></svg>
+        </div>
+        <div class="card-expand">
+          <div class="subsec">
+            <p class="h">Что решили</p>
+            <ul>
+              <li>Guard на уровне UserStore, а не в контроллере — иначе обходится через фоновые задачи.</li>
+              <li>Сообщение об ошибке называет число живых чатов, а не просто «нельзя».</li>
+            </ul>
+          </div>
+          <div class="subsec">
+            <p class="h">Грабли</p>
+            <ul>
+              <li>Тесты на Linux гоняются слабее — ждём событие, а не Task.Delay.</li>
+            </ul>
+          </div>
+        </div>
+        <div class="linkrow">
+          <button class="lbtn">
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg>
+            Открыть чат
+          </button>
+          <button class="lbtn">
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/></svg>
+            Открыть задачу
+          </button>
+          <button class="lbtn">
+            <svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><path d="M11 18H8a2 2 0 0 1-2-2V9"/></svg>
+            Показать изменения
+          </button>
+        </div>
+      </div>
+    </div>
+    <p class="caption">
+      У импортированной записи кнопки «Открыть чат / Открыть задачу» ведут в источники её автора:
+      если они недоступны этому инстансу, действует то же правило протухших ссылок этапа 1 —
+      погашенный текст вместо кнопки, «Показать изменения» жива всегда (держится на коммите).
+    </p>
+  </div>
+
+  <!-- ============================== §4 ============================== -->
+  <h2 class="sec">4. Импорт: модалка и её состояния</h2>
+  <p class="note">
+    Диалог — брат <code class="tok">DossierExportDialog</code>: тот же <code class="tok">Modal width={MODAL_W.confirm}</code>,
+    переходы фаз внутри одного открытого окна, во время git-операции не закрывается
+    (<code class="tok">closeOnBackdrop=false</code>). Три обязательных состояния постановки —
+    «идёт», «завершён», «ветки нет» — плюс подтверждение и ошибка для полноты.
+  </p>
+  <div class="grid3">
+
+    <div class="modal-wrap">
+      <div class="modal">
+        <h3>Импортировать историю решений</h3>
+        <p class="body">Из ветки <span class="branch-tag">ccs/dossiers/v1</span> подтянутся записи, которых у вас ещё нет. Ваши записи не изменятся: если по коммиту есть и ваша, и приехавшая — в списке будут обе.</p>
+        <div class="foot">
+          <button class="btn ghost">Отмена</button>
+          <button class="btn sec" style="flex:1;">Импортировать</button>
+          <button class="btn">
+            <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Забрать и обновить
+          </button>
+        </div>
+        <p class="caption">Подтверждение. Вторичная кнопка читает локальную ветку, главная — сначала забирает её с remote.</p>
+      </div>
+    </div>
+
+    <div class="modal-wrap">
+      <div class="modal">
+        <h3>Импортировать историю решений</h3>
+        <p class="body">Из ветки <span class="branch-tag">ccs/dossiers/v1</span> подтянутся записи, которых у вас ещё нет…</p>
+        <div class="foot">
+          <button class="btn ghost" disabled>Отмена</button>
+          <button class="btn sec" style="flex:1;" disabled>Импортировать</button>
+          <button class="btn" disabled>
+            <svg class="i spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.56"/></svg>
+            Забрать и обновить
+          </button>
+        </div>
+        <p class="caption">«Импорт идёт»: нажатая кнопка показывает спиннер, остальные disabled, диалог не закрывается.</p>
+      </div>
+    </div>
+
+    <div class="modal-wrap">
+      <div class="modal">
+        <div class="result-line">
+          <svg class="i" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--c-success)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></svg>
+          <p>История решений импортирована — новых записей: 6. По 2 коммитам есть и ваша запись — обе лежат рядом в списке.</p>
+        </div>
+        <div class="foot">
+          <div style="flex:1;"></div>
+          <button class="btn sec">Закрыть</button>
+        </div>
+        <p class="caption">«Импорт завершён»: счётчик новых записей и честное число совпадений — человек понимает, откуда взялись пары.</p>
+      </div>
+    </div>
+
+    <div class="modal-wrap">
+      <div class="modal">
+        <div class="notice info">
+          <svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+          <span>Ветки <span class="branch-tag">ccs/dossiers/v1</span> в репозитории нет — импортировать нечего. Сначала историю должен выгрузить кто-то из участников.</span>
+        </div>
+        <div class="foot">
+          <div style="flex:1;"></div>
+          <button class="btn sec">Закрыть</button>
+        </div>
+        <p class="caption">«Ветки нет»: info-тон, не danger — это отсутствие данных, а не сбой. Кнопка импорта при этом активна всегда: статус ветки мог устареть, честный ответ даёт попытка.</p>
+      </div>
+    </div>
+
+    <div class="modal-wrap">
+      <div class="modal">
+        <div class="notice danger">
+          <svg class="i" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+          <span>Не удалось импортировать историю решений. Ваши записи не тронуты — попробуйте ещё раз.</span>
+        </div>
+        <div class="foot">
+          <button class="btn ghost">Отмена</button>
+          <button class="btn">Повторить</button>
+        </div>
+        <p class="caption">Ошибка: danger-выноска + возврат к действию той же кнопкой, что запускала импорт.</p>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============================== §5 ============================== -->
+  <h2 class="sec">5. Мобильная раскладка</h2>
+  <p class="note">
+    Панель — bottom-sheet, действия импорта/выгрузки уезжают из шапки в субхедер чипами
+    (запасной вариант, уже заведённый у выгрузки): <code class="tok">chipStyle</code>,
+    иконка + короткая подпись. Бейдж происхождения переносится вместе с метастрокой
+    (<code class="tok">flex-wrap</code>), на узком экране встаёт на следующую строку —
+    это читается естественно, не обрезается.
+  </p>
+  <div style="display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start;">
+    <div class="phone">
+      <div class="content">
+        <div style="height: 100%; border-radius: 12px; border: 1px dashed var(--c-border); opacity:.5; padding: 10px; font-size: 11px; color: var(--c-text-muted);">Лента чата под шторкой</div>
+      </div>
+      <div class="scrim"></div>
+      <div class="sheet">
+        <div class="grab"></div>
+        <div class="mob-h">
+          <span class="ttl">
+            <svg class="i" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color: var(--c-text-muted);"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+            История решений
+          </span>
+          <button class="ib44">
+            <svg class="i" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <div class="panel-sub">
+          <p class="desc">История решений по проекту</p>
+          <div class="scope-row">
+            <span class="chip" style="color: var(--c-text-muted);">Весь проект</span>
+            <button class="chip txt">
+              <svg class="i" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Импорт
+            </button>
+            <button class="chip txt">
+              <svg class="i" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              Выгрузить
+            </button>
+          </div>
+        </div>
+        <div class="panel-body" style="flex: 1; overflow: auto;">
+          <div class="card">
+            <div class="card-top">
+              <div class="avatar human">АН</div>
+              <div class="card-main">
+                <p class="why">Перевели гейт истории решений на useFeature(FLAGS)</p>
+                <div class="meta-row">
+                  <span class="who">Андрей Н.</span>
+                  <span class="dot"></span>
+                  <span class="sha">d581737</span>
+                  <span class="dot"></span>
+                  <span>15 августа 2026</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card" style="margin-bottom: 0;">
+            <div class="card-top">
+              <div class="avatar human">ОР</div>
+              <div class="card-main">
+                <p class="why">Развели контуры Dev/Prod на одном Dify через namespace датасетов</p>
+                <div class="meta-row">
+                  <span class="who">Ольга Р.</span>
+                  <span class="dot"></span>
+                  <span class="sha">9c21a4b</span>
+                  <span class="dot"></span>
+                  <span>12 августа 2026</span>
+                  <span class="origin">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                    Из репозитория
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="flex: 1; min-width: 300px;">
+      <div class="modal-wrap" style="max-width: 420px;">
+        <div class="modal">
+          <h3>Импортировать историю решений</h3>
+          <p class="body">Из ветки <span class="branch-tag">ccs/dossiers/v1</span> подтянутся записи, которых у вас ещё нет. Ваши записи не изменятся.</p>
+          <div class="foot">
+            <button class="btn ghost">Отмена</button>
+            <button class="btn">Забрать и обновить</button>
+          </div>
+          <p class="caption">Модалка на мобиле — та же: <code class="tok">MODAL_W.confirm</code> сжимается до ширины экрана с полями. В мобильной раскладке пара кнопок «просто импорт / забрать с remote» схлопывается в одну главную «Забрать и обновить» — тянуть remote всегда безопаснее, чем читать устаревшую локальную ветку.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================== §6 ============================== -->
+  <h2 class="sec">6. Токены новых элементов</h2>
+  <p class="note">Новых значений в шкалах нет — всё собрано из существующих токенов <code class="tok">design.ts</code>/<code class="tok">theme.css</code>, обе темы получают их бесплатно через CSS-переменные.</p>
+  <div class="spec">
+    <table>
+      <tr><th style="width: 240px;">Элемент</th><th>Токены</th><th>Комментарий</th></tr>
+      <tr>
+        <td>Кнопка «Импортировать» в шапке острова</td>
+        <td><code class="tok">IconButton size="sm"</code>, иконка <code class="tok">Download</code> 14px, <code class="tok">ICON_STROKE</code>; hover — <code class="tok">TB.iconHoverBg</code></td>
+        <td>Слева от «Выгрузить»: пара «забрать / отдать». Видимость по тому же гейту, что у выгрузки (флаг + git-репозиторий).</td>
+      </tr>
+      <tr>
+        <td>Чип «Импорт» в субхедере (мобиль / нет шапки)</td>
+        <td><code class="tok">chipStyle</code> панели: <code class="tok">C.bgCard</code> + <code class="tok">C.border</code>, <code class="tok">R.max</code>, <code class="tok">FS.xs</code></td>
+        <td>Запасной вариант, симметричный существующему чипу «Выгрузить».</td>
+      </tr>
+      <tr>
+        <td>Бейдж «Из репозитория»</td>
+        <td>фон <code class="tok">C.infoBg</code>, текст и иконка <code class="tok">C.info</code>, <code class="tok">R.max</code>, <code class="tok">FS.xs</code>, отступы <code class="tok">SP.xxs</code>/<code class="tok">SP.xs</code>, иконка <code class="tok">Download</code> 11px</td>
+        <td>В метастроке карточки после даты. Info-гамма: нейтральная атрибуция, не статус-ошибка; в тёмной теме контраст на <code class="tok">bgCard</code> сохраняется (проверено в §1–3).</td>
+      </tr>
+      <tr>
+        <td>Значок в компактной строке</td>
+        <td>иконка <code class="tok">Download</code> 11px, цвет <code class="tok">C.info</code></td>
+        <td>Свёрнутые месячные группы: только значок с title, пилюля не помещается.</td>
+      </tr>
+      <tr>
+        <td>Модалка импорта</td>
+        <td><code class="tok">Modal</code>, <code class="tok">MODAL_W.confirm</code>, выноски <code class="tok">Notice</code>: info — <code class="tok">C.infoBg</code>/<code class="tok">C.info</code>, danger — <code class="tok">C.dangerBg</code>/<code class="tok">C.dangerText</code>; успех — <code class="tok">C.success</code>; кнопки <code class="tok">Button</code> ghost/secondary/primary</td>
+        <td>Полная калька DossierExportDialog: фазы внутри одного окна, <code class="tok">closeOnBackdrop=false</code> на время git-операции.</td>
+      </tr>
+      <tr>
+        <td>Своя запись</td>
+        <td>—</td>
+        <td>Без пометки: локальное происхождение — норма, разметку получает только исключение.</td>
+      </tr>
+    </table>
+  </div>
+
+</div>
+
+<script>
+  const root = document.documentElement;
+  const btns = document.querySelectorAll('[data-theme-btn]');
+  btns.forEach(b => b.addEventListener('click', () => {
+    const t = b.getAttribute('data-theme-btn');
+    if (t === 'dark') root.setAttribute('data-theme', 'dark'); else root.removeAttribute('data-theme');
+    btns.forEach(x => x.setAttribute('aria-pressed', String(x === b)));
+  }));
+</script>
+</body>
+</html>

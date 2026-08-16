@@ -278,7 +278,7 @@ public class DossierGitExportTests : IDisposable
 
         result.Committed.Should().BeTrue();
         var tree = await BranchTreeAsync(p.RootPath);
-        tree.Should().HaveCount(2, "паспорт + index.json");
+        tree.Should().HaveCount(3, "паспорт + index.json + README.md");
         foreach (var (path, content) in tree)
         {
             path.Should().NotContain(Secret, "путь файла ветки не должен содержать секрет (slug из subject)");
@@ -339,5 +339,32 @@ public class DossierGitExportTests : IDisposable
             "паспорт чата другого проекта не попадает в ветку");
         tree.Should().NotContain(t => t.Content.Contains("66ff66ff"),
             "паспорт личного чата не попадает в ветку");
+    }
+
+    // --- (е) README.md в корне ветки: подготовленный продакт-аналитиком текст доезжает в
+    // ветку дословно и побайтово стабилен — повторный экспорт не создаёт коммит ---
+
+    [Fact]
+    public async Task Readme_ВКорнеВетки_НеМеняетсяПриПовторномЭкспорте()
+    {
+        var p = await MkRepoProjectAsync("repo_f");
+        var s = Sess("sess-f", p.Id);
+        _store.Add(Dossier(p.Id, "77aa77aa", "feat: паспорт для readme", s.Id));
+        var exporter = MkExporter(MkSessions(s));
+
+        var first = await exporter.ExportAsync(Owner, p);
+        first.Committed.Should().BeTrue();
+
+        var readme = await GitAsync(p.RootPath, "show", $"{GitService.DossiersRef}:README.md");
+        readme.Ok.Should().BeTrue("README.md обязан лежать в корне ветки: {0}", readme.Stderr);
+        readme.Stdout.Should().Be(DossierGitExporter.ReadmeText,
+            "README — подготовленный текст без подстановок, дословно");
+        readme.Stdout.Should().Contain("dossiers/{yyyy}/{mm}/{sha7}-{slug}.md")
+            .And.Contain("## Как найти запись по SHA коммита");
+
+        var second = await exporter.ExportAsync(Owner, p);
+        second.Committed.Should().BeFalse("README не изменился — нового коммита быть не должно");
+        (await GitAsync(p.RootPath, "show", $"{GitService.DossiersRef}:README.md")).Stdout
+            .Should().Be(readme.Stdout, "повторный экспорт не меняет README");
     }
 }

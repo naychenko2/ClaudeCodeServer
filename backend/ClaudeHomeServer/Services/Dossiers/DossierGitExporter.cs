@@ -32,6 +32,7 @@ public sealed record DossierBranchIndex(int Version, IReadOnlyList<DossierIndexE
 public sealed class DossierGitExporter
 {
     private const string IndexPath = "index.json";
+    private const string ReadmePath = "README.md";
     private const int IndexVersion = 1;
     private const int MaxSlugChars = 48;
 
@@ -63,7 +64,8 @@ public sealed class DossierGitExporter
         CancellationToken ct = default)
     {
         var files = BuildFiles(ownerId, project);
-        var dossiers = files.Count - 1;   // последний файл — index.json
+        // index.json и README.md — служебные файлы дерева, не паспорта
+        var dossiers = files.Count - 2;
 
         // Паспортов нет и ветка ещё не создавалась — пустой корневой коммит не нужен,
         // сразу «нечего выгружать». Если ветка есть, а подходящих паспортов не осталось
@@ -84,7 +86,8 @@ public sealed class DossierGitExporter
     }
 
     // Полное дерево ветки из паспортов проекта: файлы dossiers/{yyyy}/{mm}/{sha7}-{slug}.md
-    // плюс index.json. Порядок детерминирован (CommittedAt, Sha) — одинаковый стор обязан
+    // плюс index.json и README.md в корне. Порядок детерминирован (CommittedAt, Sha) —
+    // одинаковый стор обязан
     // давать побайтово одинаковое дерево, иначе каждый повторный экспорт плодил бы коммит.
     public IReadOnlyList<GitDossierFile> BuildFiles(string ownerId, Project project)
     {
@@ -118,6 +121,8 @@ public sealed class DossierGitExporter
         }
 
         files.Add(new GitDossierFile(IndexPath, SerializeIndex(entries)));
+        // README — самодостаточное описание ветки для того, кто открыл её без приложения
+        files.Add(new GitDossierFile(ReadmePath, ReadmeText));
         return files;
     }
 
@@ -239,6 +244,93 @@ public sealed class DossierGitExporter
 
     private static string SerializeIndex(IReadOnlyList<DossierIndexEntry> entries) =>
         JsonSerializer.Serialize(new DossierBranchIndex(IndexVersion, entries), IndexJsonOpts);
+
+    // Текст README.md в корне ветки — окончательная формулировка продакт-аналитика
+    // (docs/features/decision-history-import-texts.md §1): без подстановок и плейсхолдеров,
+    // побайтово одинаковый при каждой выгрузке, иначе экспорт плодил бы коммиты на пустом
+    // месте. internal для теста; правки текста — только зеркально с docs. Raw string
+    // нормализует переводы строк к LF — блоб одинаков на любой платформе.
+    internal const string ReadmeText =
+        """
+        # История решений
+
+        Эта ветка — память о том, **зачем** менялся код. Её ведёт AI Home: когда код меняют из чата
+        или задачи, приложение сохраняет цель изменения, принятые решения,
+        отвергнутые варианты и грабли. По команде человека накопленное выгружается сюда — в отдельную
+        ветку рядом с кодом, чтобы знания уезжали вместе с репозиторием, а не оставались в одном
+        приложении.
+
+        `git blame` отвечает «кто и что». Эта ветка отвечает «зачем».
+
+        ## Что здесь лежит
+
+        ```
+        dossiers/{yyyy}/{mm}/{sha7}-{slug}.md   одна запись — один коммит
+        index.json                              оглавление: коммит → файл записи
+        README.md                               этот файл
+        ```
+
+        Запись лежит в папке года и месяца коммита, к которому относится. Имя файла — первые 7
+        символов SHA коммита и короткая транслитерация его заголовка; если двум коммитам достался
+        один и тот же префикс, он удлиняется до различимого. Внутри — заголовок коммита, якоря
+        (SHA, дата, изменённые файлы и затронутые типы), а дальше разделы «Зачем», «Решения», «Отвергнуто»,
+        «Грабли», «Инварианты». Пустых разделов не бывает: чего не было — того и нет.
+
+        `index.json` — оглавление ветки, по нему ищут запись, не перебирая папки:
+
+        ```json
+        {
+          "version": 1,
+          "entries": [
+            {
+              "sha": "полный SHA коммита",
+              "file": "путь к файлу записи в этой ветке",
+              "subject": "заголовок коммита",
+              "committedAt": "дата коммита",
+              "discussion": "конспект обсуждения — зарезервировано, появится позже",
+              "taskId": "идентификатор задачи, если изменение делалось по задаче",
+              "supersededSha": ["SHA, которые этот коммит заменил при squash или rebase"]
+            }
+          ]
+        }
+        ```
+
+        ## Как найти запись по SHA коммита
+
+        Ветку не нужно выкладывать в рабочую папку — читайте прямо из git.
+
+        Через оглавление (надёжный путь: находит и коммиты, переписанные squash'ем — они остаются
+        в `supersededSha`):
+
+        ```
+        git show ccs/dossiers/v1:index.json
+        ```
+
+        Напрямую по имени файла — быстрее, когда SHA не переписывали:
+
+        ```
+        git ls-tree -r --name-only ccs/dossiers/v1 | grep 1a2b3c4
+        git show ccs/dossiers/v1:dossiers/2026/08/1a2b3c4-dobavit-import.md
+        ```
+
+        Если ветка пришла с `git fetch`, но локальной ещё нет — подставьте
+        `origin/ccs/dossiers/v1`.
+
+        ## Ветку не редактируют руками
+
+        Каждая выгрузка перезаписывает содержимое ветки целиком, поэтому ручные правки исчезнут при
+        следующей — и незаметно. Ветка обычная во всём остальном: `git pull` и `git push` работают
+        как всегда, рабочую папку выгрузка не трогает, в историю кода эти коммиты не попадают.
+
+        У кого проект открыт в AI Home — загружает записи отсюда к себе одной командой в панели
+        «История решений»; чужие записи приложение не перезаписывает своими.
+
+        ## Чего здесь нет
+
+        Переписки. В запись попадает выжимка — цель, решения, отказы, грабли, — а не текст
+        обсуждения. Разговоры, помеченные в приложении как «не сохранять решения», не выгружаются
+        вовсе. Секреты вычищаются перед записью в ветку.
+        """;
 
     // Существует ли уже ветка паспортов в этом репозитории (тем же ключом, что и
     // WriteDossiersBranchAsync). Ошибка git → консервативно «нет»: пустой коммит не создаём.

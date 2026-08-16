@@ -27,6 +27,9 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // из инжектируемых синглтонов. Объект тонкий, состояния не держит — ок per-request.
     private DossierGitExporter Exporter => new(sessions, store, git, secrets);
 
+    // Импортёр — тот же паттерн: тонкий объект над синглтонами, per-request
+    private DossierImporter Importer => new(store, git, secrets);
+
     // Чужой проект — 404, а не 403: подтверждать его существование незачему
     private Project? Owned(string id)
     {
@@ -139,6 +142,34 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         {
             await git.PushDossiersBranchAsync(p.OwnerId, p.RootPath, creds, ct);
             return Ok(new { pushed = true });
+        }
+        catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
+    }
+
+    // ---------- Импорт из ветки ccs/dossiers/v1 (этап 4, ADR-004 §6) ----------
+
+    // Ручной импорт «Историй решений»: читает ветку (локальную либо origin) read-only
+    // plumbing-командами и кладёт паспорта в стор с пометкой происхождения (origin=imported,
+    // автор и ветка-источник — в полях записи, видны в GET /dossiers). Повторный вызов того
+    // же состояния ветки — no-op: существующие записи не меняются, свой паспорт по тому же
+    // sha не перезаписывается никогда (импортированный живёт рядом отдельной записью).
+    [HttpPost("{id}/dossiers/import")]
+    public async Task<IActionResult> Import(string id, CancellationToken ct)
+    {
+        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
+        var p = Owned(id);
+        if (p is null) return NotFound();
+
+        try
+        {
+            var result = await Importer.ImportAsync(UserId, p, ct);
+            return Ok(new
+            {
+                status = !result.BranchFound ? "noBranch"
+                    : result.Added > 0 ? "imported" : "nothingToImport",
+                added = result.Added,
+                skipped = result.Skipped,
+            });
         }
         catch (GitCommandException ex) { return Conflict(new { error = ex.Message }); }
     }

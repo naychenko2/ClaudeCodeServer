@@ -4,6 +4,12 @@ namespace ClaudeHomeServer.Models;
 // кроме SummaryFailed-скелетов, которые из recall исключаются собственным флагом.
 public enum DossierStatus { Active, Degraded, Archived }
 
+// Происхождение записи (этап 4 — импорт «Историй решений»): Own — паспорт рождён при
+// коммите из чата/задачи этого инстанса; Imported — прочитан из ветки ccs/dossiers/v1
+// (восстановление на новой машине, чужая общая папка). Старые записи без поля читаются
+// как Own — дефолт значения enum.
+public enum DossierOrigin { Own, Imported }
+
 // Паспорт изменения (ADR-004): AI-выжимка «зачем, что решили, что отвергли, какие грабли»,
 // рождающаяся автоматически при коммите из чата/задачи. Ключ уникальности —
 // OwnerId+ProjectId+CommitSha (плюс совпадение с любым из SupersededSha, см. DossierStore).
@@ -41,4 +47,10 @@ public class ChangeDossier
 
     public string? DifyDocId { get; set; }
     public DossierStatus Status { get; set; } = DossierStatus.Active;
+
+    // Происхождение (этап 4): у Imported заполнены автор и ветка-источник — tip-коммит
+    // ветки, из которой запись приехала (GitDossiersTip). У Own оба поля null.
+    public DossierOrigin Origin { get; set; } = DossierOrigin.Own;
+    public string? ImportedAuthor { get; set; }
+    public string? ImportedFromBranch { get; set; }
 }

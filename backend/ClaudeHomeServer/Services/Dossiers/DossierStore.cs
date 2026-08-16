@@ -4,7 +4,6 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services.Memory;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.Dossiers;
 
@@ -127,6 +126,47 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
         }
         QueueSync(dossier.OwnerId, dossier.ProjectId);
         return dossier;
+    }
+
+    // Импорт партии из ветки ccs/dossiers/v1 (этап 4, ADR-004 §6): записи добавляются
+    // с ключевым правилом коллизий — СВОЙ паспорт по тому же commitSha не перезаписывается
+    // никогда, импортированный живёт рядом отдельной записью; уже существующий импортированный
+    // с тем же sha (включая SupersededSha — переякоренный после squash) — дубль и пропускается,
+    // поэтому повторный импорт того же состояния ветки — no-op: существующие записи не меняются.
+    // Дедуп — под _saveLock (гоны с Add одного и того же списка), один Save на партию.
+    // Возвращает число реально добавленных записей.
+    public int AddImportedRange(string ownerId, string projectId, IEnumerable<ChangeDossier> imported)
+    {
+        var added = 0;
+        lock (_saveLock)
+        {
+            var list = Get(ownerId, projectId);
+
+            // Представленные импортированными записями sha: их CommitSha + SupersededSha
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in list.Where(d => d.Origin == DossierOrigin.Imported))
+            {
+                seen.Add(d.CommitSha);
+                foreach (var s in d.SupersededSha) seen.Add(s);
+            }
+
+            foreach (var d in imported)
+            {
+                // Вторая проверка — от дублей внутри самой партии (index с одним sha дважды)
+                if (!seen.Add(d.CommitSha)) continue;
+                list.Add(d);
+                added++;
+            }
+
+            if (added > 0)
+            {
+                EvictIfNeeded(ownerId, projectId, list);
+                Save(ownerId, projectId);
+                WarnIfApproachingMigration(ownerId, projectId, list);
+            }
+        }
+        if (added > 0) QueueSync(ownerId, projectId);
+        return added;
     }
 
     // Предупреждение о приближении к порогу миграции на SQLite — once per project: размер файла

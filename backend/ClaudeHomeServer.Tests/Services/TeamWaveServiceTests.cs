@@ -28,6 +28,10 @@ public class TeamWaveServiceTests : IDisposable
     private string _plannerAnswer = "{}";
     private const string UserId = "user-1";
     private const string Username = "tester";
+    // Снимок уведомлений (NotificationService шлёт их тем же хабом в группу user_*) —
+    // под локом: бродкасты приходят и из фоновых задач
+    private readonly List<ClaudeHomeServer.Protocol.NotificationMessage> _notifications = [];
+    private readonly object _notificationsLock = new();
 
     public TeamWaveServiceTests()
     {
@@ -51,14 +55,28 @@ public class TeamWaveServiceTests : IDisposable
         var clientProxy = new Mock<IClientProxy>();
         clientProxy
             .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+            .Callback<string, object[], CancellationToken>((_, args, _) =>
+            {
+                if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.NotificationMessage n)
+                    lock (_notificationsLock) _notifications.Add(n);
+            })
             .Returns(Task.CompletedTask);
         clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
         _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
         _sessions = CreateSessionManager(config, userStore, appSettings, hub);
+        // Реальный NotificationService с дисковым стором (паттерн TaskExecutionServiceDelegationReportTests):
+        // напоминания о карточках проверяем по broadcast-снимку выше
+        var notif = new NotificationService(
+            new NotificationStore(config, NullLogger<NotificationStore>.Instance),
+            hub.Object,
+            new PushService(config, new PushSubscriptionStore(config),
+                new JwtService(config, userStore, NullLogger<JwtService>.Instance),
+                NullLogger<PushService>.Instance),
+            _personas, _projects, NullLogger<NotificationService>.Instance);
         _sut = new TeamWaveService(_sessions, _tasks, _projects, hub.Object,
-            NullLogger<TeamWaveService>.Instance, _personas);
+            NullLogger<TeamWaveService>.Instance, _personas, notif: notif);
     }
 
     public void Dispose()
@@ -1082,13 +1100,170 @@ public class TeamWaveServiceTests : IDisposable
     }
 
     [Theory]
-    // Уведомление и push идут от лица персоны штаба; без персоны — обезличенный фолбэк
-    [InlineData("Алекс", false, "Алекс: нужно ваше решение")]
-    [InlineData("Алекс", true, "Алекс ждёт ответов по задаче")]
-    [InlineData(null, false, "Команда ждёт вашего решения")]
-    [InlineData(null, true, "Команда ждёт ответов по задаче")]
-    public void WaitingTitle_ПерсонифицированныйЗаголовок(string? persona, bool answers, string expected) =>
-        TeamImplementPrompts.WaitingTitle(persona, answers).Should().Be(expected);
+    // Уведомление и push идут от лица персоны штаба; без персоны — обезличенный фолбэк.
+    // Заголовок разведён по виду карточки: в списке уведомлений видно только его, и по
+    // нему должно быть понятно, горит работа или просто ждёт решения/ответов.
+    // Гейт волны и информационные карточки — прежний текст «нужно ваше решение».
+    [InlineData("Алекс", TeamEscalationKind.WaveGate, "Алекс: нужно ваше решение")]
+    [InlineData(null, TeamEscalationKind.WaveGate, "Команда ждёт вашего решения")]
+    [InlineData("Алекс", TeamEscalationKind.WaveAdded, "Алекс: нужно ваше решение")]
+    // Вопросы интервью и тупик с уточнениями — ждём ответов, а не решения
+    [InlineData("Алекс", TeamEscalationKind.NeedsClarification, "Алекс ждёт ответов по задаче")]
+    [InlineData(null, TeamEscalationKind.NeedsClarification, "Команда ждёт ответов по задаче")]
+    // Не-информационные карточки, кроме гейта и вопросов: практика реально остановлена
+    [InlineData("Алекс", TeamEscalationKind.Blocker, "Алекс: практика остановлена")]
+    [InlineData("Алекс", TeamEscalationKind.TaskFailed, "Алекс: практика остановлена")]
+    [InlineData("Алекс", TeamEscalationKind.PlanDeviation, "Алекс: практика остановлена")]
+    [InlineData("Алекс", TeamEscalationKind.CheckFailed, "Алекс: практика остановлена")]
+    [InlineData("Алекс", TeamEscalationKind.ProductDecision, "Алекс: практика остановлена")]
+    [InlineData("Алекс", TeamEscalationKind.WaveStalled, "Алекс: практика остановлена")]
+    [InlineData("Алекс", TeamEscalationKind.Stopped, "Алекс: практика остановлена")]
+    [InlineData(null, TeamEscalationKind.BudgetExhausted, "Практика остановлена")]
+    public void WaitingTitle_ПерсонифицированныйЗаголовок(string? persona, TeamEscalationKind kind, string expected) =>
+        TeamImplementPrompts.WaitingTitle(persona, kind).Should().Be(expected);
+
+    // --- Повторные напоминания о висящей карточке остановки (прод 15→16.08) ---
+
+    private List<ClaudeHomeServer.Protocol.NotificationMessage> Notifications()
+    {
+        lock (_notificationsLock) return [.. _notifications];
+    }
+
+    // Опубликовать «состаренную» карточку остановки: порог первого напоминания считается
+    // от CreatedAt, поэтому для проверки порога карточка создаётся сразу постаревшей
+    // (init-свойство задаётся в инициализаторе).
+    private async Task<TeamEscalation> PublishAgedCardAsync(string sessionId, TeamEscalationKind kind,
+        TimeSpan age, string title)
+    {
+        var card = new TeamEscalation
+        {
+            Kind = kind,
+            Title = title,
+            Details = "Тестовая карточка",
+            CreatedAt = DateTime.UtcNow - age,
+            Actions = TeamEscalationActions.For(kind),
+        };
+        await _sessions.PublishTeamEscalationAsync(sessionId, card);
+        return card;
+    }
+
+    [Fact]
+    public async Task Напоминание_КарточкаБезОтветаДольшеЧаса_ПовторяетУведомление()
+    {
+        var (session, _, _) = await MakeStabAsync("remind-first");
+        var card = await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromHours(2), "Бюджет итерации израсходован");
+
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        Notifications().Should().ContainSingle("первый оклик человек пропустил — практика не молчит");
+        var n = Notifications()[0];
+        n.Title.Should().Be("Алекс: практика всё ещё ждёт", "напоминание — от лица координатора штаба");
+        n.Body.Should().Be("Бюджет итерации израсходован · без ответа 2 ч",
+            "заголовок карточки и целые часы без ответа");
+        n.SessionId.Should().Be(session.Id);
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id)
+            .RemindersSent.Should().Be(1, "счётчик напоминаний живёт на карточке");
+    }
+
+    [Fact]
+    public async Task Напоминание_ДоИстеченияЧаса_Молчит()
+    {
+        var (session, _, _) = await MakeStabAsync("remind-fresh");
+        await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromMinutes(30), "Бюджет итерации израсходован");
+
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        Notifications().Should().BeEmpty("порог первого напоминания — час после публикации");
+    }
+
+    [Fact]
+    public async Task Напоминание_ВтороеЧерезЧетыреЧасаПервого_ТретьегоНет()
+    {
+        var (session, _, _) = await MakeStabAsync("remind-second");
+        var card = await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromHours(2), "Бюджет итерации израсходован");
+
+        await _sut.CheckAwaitingEscalationsAsync();
+        Notifications().Should().ContainSingle();
+
+        // Состариваем первое напоминание на четыре часа: карточка — живой объект аккумулятора
+        var open = (await _sessions.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id);
+        open.RemindersSent.Should().Be(1);
+        open.LastReminderAt = DateTime.UtcNow.AddHours(-4);
+
+        await _sut.CheckAwaitingEscalationsAsync();
+        Notifications().Should().HaveCount(2, "второе напоминание — через 4 часа после первого");
+
+        // Лимит исчерпан: даже сутки молчания третьего оклика не дадут
+        open.LastReminderAt = DateTime.UtcNow.AddHours(-25);
+        await _sut.CheckAwaitingEscalationsAsync();
+        Notifications().Should().HaveCount(2, "максимум два напоминания — навязчивость хуже пропущенного сигнала");
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id)).Single(c => c.Id == card.Id)
+            .RemindersSent.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task Напоминание_ЧеловекВЧате_Молчит()
+    {
+        var (session, _, _) = await MakeStabAsync("remind-viewer");
+        await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromHours(2), "Бюджет итерации израсходован");
+        _sessions.AddViewer(session.Id, "conn-1");
+
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        Notifications().Should().BeEmpty("человек и так видит карточку в открытой ленте");
+    }
+
+    [Fact]
+    public async Task Напоминание_ИнформационнаяКарточка_НеНапоминает()
+    {
+        var (session, _, _) = await MakeStabAsync("remind-info");
+        // Добавочная волна — не остановка: работа идёт, карточка клика не ждёт
+        await PublishAgedCardAsync(session.Id, TeamEscalationKind.WaveAdded,
+            TimeSpan.FromHours(2), "Новая вводная в работе");
+
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        Notifications().Should().BeEmpty("информационные карточки напоминаний не порождают");
+    }
+
+    [Fact]
+    public async Task НапоминаниеПослеОтветаНаКарточку_Прекращается()
+    {
+        var (session, _, _) = await MakeStabAsync("remind-answered");
+        var card = await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromHours(2), "Бюджет итерации израсходован");
+        // Занимаем штаб: ответ по карточке уходит координатору ходом (очередь, не запуск CLI)
+        _sessions.GetById(session.Id)!.Status = SessionStatus.Working;
+        (await _sessions.RespondTeamEscalationAsync(session.Id, card.Id, "addBudget", userId: UserId))
+            .Should().BeTrue();
+
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        Notifications().Should().BeEmpty("карточка закрыта решением человека — напоминать не о чем");
+    }
+
+    // Счётчик напоминаний живёт на карточке в истории и переживает рестарт: после
+    // перезапуска сервера (аккумулятор чата не оживлён, карточка читается с диска) оклик
+    // не начинается заново — иначе человек получил бы второе «первое» напоминание.
+    [Fact]
+    public async Task Напоминание_ПослеРестартаСервера_СчётчикНеНачинаетсяЗаново()
+    {
+        var (session, _, _) = await MakeStabAsync("remind-restart", resumeSessionId: "csid-remind-restart");
+        await PublishAgedCardAsync(session.Id, TeamEscalationKind.BudgetExhausted,
+            TimeSpan.FromHours(2), "Бюджет итерации израсходован");
+
+        await _sut.CheckAwaitingEscalationsAsync();
+        Notifications().Should().ContainSingle("первое напоминание отправлено до рестарта");
+
+        ClearAccumulator(GetEntry(session.Id));
+        await _sut.CheckAwaitingEscalationsAsync();
+
+        Notifications().Should().ContainSingle("после рестарта счётчик прочитан с диска, а не обнулён");
+    }
 
     // --- Э5: непрерывный контур — новая вводная разворачивает волну с нуля ---
 

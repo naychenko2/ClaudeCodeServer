@@ -5457,6 +5457,58 @@ public class SessionManager : IDisposable
         await BroadcastTeamImplementAsync(sessionId, entry);
     }
 
+    // Открытые (не resolved) карточки остановки чата — сторожу повторных напоминаний
+    // (TeamWaveService.CheckAwaitingEscalationsAsync). Активный чат — живые объекты
+    // аккумулятора; неактивный (после рестарта) — копии с диска. У активного чата
+    // возвращённые объекты — те же, что в истории: их правки фиксируются снимком.
+    public async Task<IReadOnlyList<TeamEscalation>> GetOpenTeamEscalationsAsync(string sessionId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return [];
+        if (entry.Accumulator is { } acc)
+            return acc.GetAll().OfType<StoredTeamEscalationMessage>()
+                .Where(m => !m.Escalation.Resolved)
+                .Select(m => m.Escalation).ToList();
+        if (entry.Info.ClaudeSessionId is not string key) return [];
+        try
+        {
+            var stored = await _history.LoadAsync(key);
+            return stored.OfType<StoredTeamEscalationMessage>()
+                .Where(m => !m.Escalation.Resolved)
+                .Select(m => m.Escalation).ToList();
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Чтение карточек остановки с диска ({SessionId}) не удалось", sessionId);
+            return [];
+        }
+    }
+
+    // Отметить отправленное повторное напоминание по карточке остановки: счётчик и момент
+    // последнего оклика пишутся на карточку в истории — переживают рестарт сервера, чтобы
+    // после перезапуска не начать оклик заново. false — карточка уже закрыта либо её нет.
+    public async Task<bool> MarkTeamEscalationRemindedAsync(string sessionId, string escalationId)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return false;
+        if (entry.Accumulator is { } acc)
+        {
+            if (!acc.OnTeamEscalationReminded(escalationId)) return false;
+            try { await acc.SaveSnapshotAsync(_history); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "Сохранение истории после напоминания ({SessionId}) не удалось", sessionId);
+            }
+            return true;
+        }
+        // Чат неактивен (после рестарта аккумулятор ещё не оживлён) — правим историю на диске
+        return await MutateStoredAsync<StoredTeamEscalationMessage>(entry, sessionId,
+            m => m.EscalationId == escalationId && !m.Escalation.Resolved,
+            m =>
+            {
+                m.Escalation.RemindersSent++;
+                m.Escalation.LastReminderAt = DateTime.UtcNow;
+            });
+    }
+
     // Решение человека по карточке остановки (SessionHub.RespondTeamEscalation).
     // Кнопка — это ярлык: карточка гаснет, а координатору уходит ход с текстом решения,
     // как если бы человек написал его сам. Часть действий дополнительно двигает бэкенд:

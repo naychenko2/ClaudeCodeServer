@@ -423,6 +423,22 @@ internal class TurnAccumulator
         }
     }
 
+    // Отметить отправленное повторное напоминание по карточке (сторож ожидания
+    // TeamWaveService): счётчик живёт на карточке, чтобы переживать рестарт. false —
+    // карточки нет либо она уже закрыта человеком (напоминать больше не о чем).
+    public bool OnTeamEscalationReminded(string escalationId)
+    {
+        lock (_lock)
+        {
+            var card = _currentTurn.Concat(_history).OfType<StoredTeamEscalationMessage>()
+                .LastOrDefault(m => m.EscalationId == escalationId);
+            if (card is null || card.Escalation.Resolved) return false;
+            card.Escalation.RemindersSent++;
+            card.Escalation.LastReminderAt = DateTime.UtcNow;
+            return true;
+        }
+    }
+
     public Models.TeamEscalation? FindTeamEscalation(string escalationId)
     {
         lock (_lock)

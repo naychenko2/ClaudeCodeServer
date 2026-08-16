@@ -9,6 +9,7 @@ import { Button, Menu, TextField } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { tagColor } from '../lib/tagRegistry';
 import { useUserScrollGate } from '../lib/userScrollGate';
+import { useIsTouch } from '../lib/breakpoints';
 
 // Тонированный фон чипа: прозрачность цвета тега. Цвет приходит ДАННЫМИ из реестра
 // (палитра-данных GROUP_COLORS) — не тема, поэтому не через C.*; тёмная тема делит
@@ -150,6 +151,12 @@ export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, 
   onClose: () => void;
 }) {
   const isUserScroll = useUserScrollGate();
+  // Автофокус поля «Новый тег…» — только когда основной указатель НЕ палец: на touch-
+  // устройстве автофокус всё равно поднимает экранную клавиатуру (планшет в ландшафте
+  // шире 1199 CSS — тот же iPad Pro 12.9" = 1366px — попадает в «десктоп» по ширине,
+  // но экранная клавиатура у него всё равно есть). Ширина окна — косвенный критерий,
+  // coarse pointer — прямой.
+  const isTouch = useIsTouch();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     // capture: ловим скролл скролл-контейнера списка (он не всплывает до window).
@@ -166,7 +173,7 @@ export function TagAssignMenu({ anchor, registry, selected, onToggle, onCreate, 
 
   return (
     <Menu onClose={onClose} anchor={anchor} maxHeight={MENU_MAX_H} minWidth={MENU_W}>
-      <TagPickerBody registry={registry} selected={selected} onToggle={onToggle} onCreate={onCreate} autoFocusCreate />
+      <TagPickerBody registry={registry} selected={selected} onToggle={onToggle} onCreate={onCreate} autoFocusCreate={!isTouch} />
     </Menu>
   );
 }

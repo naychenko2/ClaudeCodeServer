@@ -64,23 +64,16 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [commitMenu]);
-
-  const diff = workingDiffStat(status);
-  const ahead = status?.ahead ?? 0;
-  const behind = status?.behind ?? 0;
-  const publishN = ahead > 0 ? ahead : st.unpushed.length;
-  const canPublish = publishN > 0;
-
-  // Нечего ни фиксировать, ни публиковать — бар не показываем, ЕСЛИ нет активного
-  // дерева. Активное дерево (чата или хода) держит бар даже при пустом диффе.
-  // Вне git-репозитория бару по-прежнему делать нечего
-  const treeActive = !!worktreeBranch || !!turnTree;
-  const isEmpty = diff.files === 0 && !canPublish;
-  if (!status?.isRepo || (!treeActive && isEmpty)) return null;
+  // При смене чата попап меню коммита закрывается: его пункты опираются на сессию
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс стейта попапа при смене чата
+  useEffect(() => { setCommitMenu(null); }, [session?.id]);
 
   // Планшет (601–1199): компактная геометрия — slim-бар (44 + поля 6/6 ≈ 56px),
   // действия иконками. Сворачивание в микростроку 28 + поля 4/4 ≈ 36px, дефолт
   // свёрнуто. На десктопе и мобиле — без изменений (мобил вообще скрыт гейтом ChatPanel).
+  // ВАЖНО: весь блок держим ВЫШЕ раннего `return null` ниже — иначе на первом рендере
+  // (git-статус ещё не пришёл) хуки не вызовутся, а на следующем вызовутся, и React
+  // падает с «Rendered more hooks than during the previous render» (#310).
   const ww = useWindowWidth();
   const isCompact = ww > MOBILE_MAX && ww <= TABLET_MAX;
 
@@ -110,6 +103,19 @@ export function ProjectGitBar({ project, session, turnTree = null, turnTreeLive 
     setCollapsed(next);
     try { localStorage.setItem(COLLAPSED_KEY, next ? '1' : '0'); } catch { /* ignore */ }
   }, []);
+
+  const diff = workingDiffStat(status);
+  const ahead = status?.ahead ?? 0;
+  const behind = status?.behind ?? 0;
+  const publishN = ahead > 0 ? ahead : st.unpushed.length;
+  const canPublish = publishN > 0;
+
+  // Нечего ни фиксировать, ни публиковать — бар не показываем, ЕСЛИ нет активного
+  // дерева. Активное дерево (чата или хода) держит бар даже при пустом диффе.
+  // Вне git-репозитория бару по-прежнему делать нечего
+  const treeActive = !!worktreeBranch || !!turnTree;
+  const isEmpty = diff.files === 0 && !canPublish;
+  if (!status?.isRepo || (!treeActive && isEmpty)) return null;
 
   // Метка: ветка worktree чата > имя папки (проект сам открыт как worktree) > ветка
   const label = worktreeBranch ?? (status.isWorktree ? basename(project.rootPath) : (status.branch ?? '—'));

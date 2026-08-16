@@ -154,8 +154,10 @@ export function DesktopWorkspace(p: Props) {
   // Эксклюзив боковых сторон на планшете: гейтит режим флагом exclusive в сторе
   // (его читают обе PanelZone + reveal из FileViewer/GitBar). При входе в планшет
   // активной становится левая («Чаты») — её stash разворачивается, правая compact
-  // чистится эффектом в PanelZone. При выходе/unmount флаг снимается — на WallPage
-  // и разделах хаба эксклюзива нет (там compact и так не передаётся).
+  // чистится эффектом в PanelZone. При выходе/unmount флаг снимается. Сейчас
+  // его поднимают проектный воркспейс (этот файл) и раздел «Чаты» (ChatsPage) —
+  // у обоих есть PanelZone с compact={isTablet}. WallPage и остальные разделы
+  // хаба compact не передают, и эксклюзив у них не действует.
   const { setExclusive, markActive } = wsPanels.use();
   useEffect(() => {
     setExclusive(!!p.isTablet);

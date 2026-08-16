@@ -103,11 +103,16 @@ function RateRow({ w }: { w: RateWindow }) {
 // wide — более широкий поповер на узких раскладках (мобил/планшет: для объединённого
 // чипа с двумя секциями — шире → меньше переносов → ниже по высоте, помещается на экран).
 // isCompact — планшет (использует мобильную механику поповера wide).
-function BadgeShell({ label, amount, title, isMobile, isCompact, tone, stacked, wide, pulse, children }: {
+function BadgeShell({ label, amount, title, isMobile, isCompact, tone, stacked, wide, pulse, resetKey, children }: {
   label?: string; amount: React.ReactNode; title: string; isMobile?: boolean; isCompact?: boolean;
-  tone?: 'warn' | 'danger'; stacked?: boolean; wide?: boolean; pulse?: boolean; children: React.ReactNode;
+  tone?: 'warn' | 'danger'; stacked?: boolean; wide?: boolean; pulse?: boolean;
+  // Попап показывает данные конкретного чата — при смене чата закрываем
+  resetKey?: string;
+  children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+  // Сброс при смене чата: попап не переживает переключение сессии
+  useEffect(() => { setOpen(false); }, [resetKey]);
   const toneBg = tone === 'danger' ? RATE_COLORS.danger.bg : tone === 'warn' ? RATE_COLORS.warn.bg : C.bgWhite;
   const toneBorder = tone === 'danger' ? RATE_COLORS.danger.border : tone === 'warn' ? RATE_COLORS.warn.border : C.border;
   // На планшете поповер следует той же мобильной геометрии — wide крепится fixed к краю
@@ -231,9 +236,9 @@ function ClaudeCostPopoverBody({ stats, billing, onBillingChange, windows }: {
 // В режиме подписки сумма — это ≈ API-эквивалент (отдельно не списывается), что и поясняется.
 // Проп isMobile: на планшете передаём isCompact через isMobile — узкие раскладки
 // ведут себя одинаково (мини-размеры, wide-поповер).
-function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
+function CostBadge({ stats, isMobile, billing, onBillingChange, windows, resetKey }: {
   stats: CostStats; isMobile?: boolean; billing: ClaudeBilling; onBillingChange?: (b: ClaudeBilling) => void;
-  windows: RateWindow[];
+  windows: RateWindow[]; resetKey?: string;
 }) {
   const worst = worstWindow(windows);
   if (!hasClaudeCostInfo(stats, windows)) return null;
@@ -253,6 +258,7 @@ function CostBadge({ stats, isMobile, billing, onBillingChange, windows }: {
       amount={amountNode}
       isCompact={isMobile}
       tone={tone}
+      resetKey={resetKey}
       title={sub
         ? 'Claude ≈ по API-тарифу · по подписке отдельно не списывается'
         : 'Стоимость Claude — нажмите для разбивки'}
@@ -335,8 +341,8 @@ function ProviderCostPopoverBody({ providerName, stats, balance }: {
   );
 }
 
-function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
-  providerName: string; stats: CostStats; balance: ProviderBalance | null; isMobile?: boolean;
+function ProviderCostBadge({ providerName, stats, balance, isMobile, resetKey }: {
+  providerName: string; stats: CostStats; balance: ProviderBalance | null; isMobile?: boolean; resetKey?: string;
 }) {
   // Есть активность (хотя бы один ход) или баланс — иначе в начале сессии прячем
   if (!hasProviderCostInfo(stats, balance)) return null;
@@ -362,6 +368,7 @@ function ProviderCostBadge({ providerName, stats, balance, isMobile }: {
       amount={amountNode}
       isCompact={isMobile}
       tone={tone}
+      resetKey={resetKey}
       title={`Статистика сессии ${providerName} — нажмите для разбивки`}
     >
       <ProviderCostPopoverBody providerName={providerName} stats={stats} balance={balance} />
@@ -489,7 +496,7 @@ function ContextPopoverBody({ estimate, isWaiting, isCompacting, canCompact, com
 function ContextBadge(props: {
   estimate: ContextEstimate; isMobile?: boolean; isWaiting: boolean; isCompacting: boolean;
   canCompact: boolean; compactNote?: string; onCompact: () => void; online: boolean;
-  assistantName?: string;
+  assistantName?: string; resetKey?: string;
 }) {
   // Внутренний бейдж: проп называется isMobile по историческим причинам, но на
   // планшете снаружи передаётся isCompact. Узкие раскладки ведут себя одинаково
@@ -506,6 +513,7 @@ function ContextBadge(props: {
       amount={<ContextAmount estimate={estimate} isCompacting={isCompacting} isMobile={isMobile} />}
       isCompact={isMobile}
       tone={tone}
+      resetKey={props.resetKey}
       title="Заполнение контекста сессии — нажмите для деталей"
     >
       <ContextPopoverBody {...props} />
@@ -569,10 +577,10 @@ function FalPopoverBody({ stats }: { stats: FalCostStats }) {
 }
 
 // Бейдж трат на fal.ai (медиа). Отдельная от Claude цифра. Разбивка по моделям.
-function FalCostBadge({ stats, isCompact }: { stats: FalCostStats; isCompact?: boolean }) {
+function FalCostBadge({ stats, isCompact, resetKey }: { stats: FalCostStats; isCompact?: boolean; resetKey?: string }) {
   if (stats.total <= 0) return null;
   return (
-    <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isCompact={isCompact}
+    <BadgeShell label="fal.ai" amount={fmtUsd(stats.total)} isCompact={isCompact} resetKey={resetKey}
       title="Траты на fal.ai (медиа) — нажмите для разбивки">
       <FalPopoverBody stats={stats} />
     </BadgeShell>
@@ -634,11 +642,11 @@ function GlifPopoverBody({ stats }: { stats: GlifGenStats }) {
 
 // Бейдж генераций glif (медиа). Пер-кредитной цены нет — значение это счётчик
 // генераций (+ сумма кредитов, когда billing приехал). Разбивка по типам медиа.
-function GlifCostBadge({ stats, isCompact }: { stats: GlifGenStats; isCompact?: boolean }) {
+function GlifCostBadge({ stats, isCompact, resetKey }: { stats: GlifGenStats; isCompact?: boolean; resetKey?: string }) {
   if (stats.count <= 0) return null;
   const amount = `${stats.count} ген.` + (stats.hasCredits ? ` · ${fmtCredits(stats.credits)}` : '');
   return (
-    <BadgeShell label="glif" amount={amount} isCompact={isCompact}
+    <BadgeShell label="glif" amount={amount} isCompact={isCompact} resetKey={resetKey}
       title="Генерации glif (медиа) — нажмите для разбивки">
       <GlifPopoverBody stats={stats} />
     </BadgeShell>
@@ -665,6 +673,8 @@ function MobileCombinedBadge(props: {
   windows: RateWindow[];
   // workflow (мобилка): прогресс фаз втягивается в этот же чип вместо отдельного бейджа
   activeWorkflow?: { phasesDone: number; phasesTotal: number };
+  // Сброс поповера при смене чата
+  resetKey?: string;
 }) {
   const {
     estimate, isCompacting, isCliProvider, providerName, cost, falCost, glifCost, balance, billing, windows, activeWorkflow,
@@ -727,6 +737,7 @@ function MobileCombinedBadge(props: {
       stacked
       wide
       pulse={wfActive}
+      resetKey={props.resetKey}
       title="Контекст и расход сессии — нажмите для деталей"
     >
       {wfActive && (
@@ -980,6 +991,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
 
   // Поповер управления участниками группового чата (клик по стеку аватаров)
   const [participantsOpen, setParticipantsOpen] = useState(false);
+  // При смене чата попапы тулбара закрываются: данные привязаны к сессии, и
+  // показывать стейт предыдущего чата в новом — дефект UX
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс стейтов попапов тулбара при смене чата
+  useEffect(() => { setTagMenu(null); setParticipantsOpen(false); }, [session.id]);
   // Клик по блоку персоны — карточка персоны: в проектном чате открывается в контентной зоне
   // проекта (вкладка «Команда», #/project/{id}/persona/{pid}), в глобальном — раздел «Персоны».
   // На мобиле блок вложен в BackButton («назад к списку») — там клик остаётся за ним.
@@ -1276,13 +1291,13 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const ctxBadge = (
     <ContextBadge estimate={ctxEstimate} isMobile={isCompact} isWaiting={isWaiting}
       isCompacting={isCompacting} canCompact={canCompact} compactNote={compactNote}
-      onCompact={onCompact} online={online} assistantName={asstName} />
+      onCompact={onCompact} online={online} assistantName={asstName} resetKey={session.id} />
   );
   // Плашка стоимости: у стороннего провайдера — своя (стоимость + баланс),
   // у Claude — CostBadge с лимитами подписки
   const providerCostBadge = isCliProvider
-    ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isCompact} />
-    : <CostBadge stats={cost} isMobile={isCompact} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} />;
+    ? <ProviderCostBadge providerName={asstName} stats={cost} balance={provBalance} isMobile={isCompact} resetKey={session.id} />
+    : <CostBadge stats={cost} isMobile={isCompact} billing={billing} onBillingChange={onBillingChange} windows={rateWindows} resetKey={session.id} />;
   // Бейдж расхода токенов чата (аналитика v2): обновляется по завершению хода —
   // триггер cost.results растёт вместе с result-сообщениями ленты
   const spendBadge = (
@@ -1301,6 +1316,7 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         isCliProvider={isCliProvider} providerName={asstName} cost={cost} falCost={falCost} glifCost={glifCost}
         balance={provBalance} billing={billing} onBillingChange={onBillingChange} windows={rateWindows}
         activeWorkflow={activeWorkflow}
+        resetKey={session.id}
       />
       {spendBadge}
     </>
@@ -1308,8 +1324,8 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
     <>
       {ctxBadge}
       {providerCostBadge}
-      <FalCostBadge stats={falCost} isCompact={isCompact} />
-      <GlifCostBadge stats={glifCost} isCompact={isCompact} />
+      <FalCostBadge stats={falCost} isCompact={isCompact} resetKey={session.id} />
+      <GlifCostBadge stats={glifCost} isCompact={isCompact} resetKey={session.id} />
       {spendBadge}
     </>
   );

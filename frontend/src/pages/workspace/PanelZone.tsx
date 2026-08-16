@@ -31,7 +31,7 @@ import { PanelShell } from '../../components/ui/PanelShell';
 import { PanelRail, RAIL_W, RAIL_GAP, type RailItem } from '../../components/ui/PanelRail';
 import { PanelDropGuide, PanelDropLine, SEP_HIT, sepShift } from '../../components/ui/PanelDropGuide';
 import { IslandSplitter } from '../../components/ui/IslandSplitter';
-import { useWindowWidth, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
+import { useWindowWidth, MOBILE_MAX, PANEL_INLINE_MAX_SHARE, TABLET_MAX } from '../../lib/breakpoints';
 import {
   PANEL_META, PANEL_KEYS, RAIL_GROUPS, SESSION_KEYS, WORKSPACE_KEYS,
   isPanelKey, type PanelKey, type RailBadgeInfo, type Zone,
@@ -1233,7 +1233,7 @@ export function PanelZone({
     }
     return (
       <>
-        <div onClick={() => setTabletPanels([])} style={{ position: 'absolute', inset: 0, zIndex: 14, background: C.overlay }} />
+        <div onClick={() => setTabletPanels([])} style={{ position: 'absolute', inset: 0, zIndex: 14, background: windowWidth <= MOBILE_MAX ? C.overlay : 'transparent' }} />
         <div style={{
           position: 'absolute', top: GAP, bottom: GAP, zIndex: 15,
           ...(isLeft ? { left: RAIL_W + GAP } : { right: RAIL_W + GAP }),

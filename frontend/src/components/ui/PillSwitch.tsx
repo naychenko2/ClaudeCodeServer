@@ -56,8 +56,9 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
     const probe = measureRef.current;
     if (!track || !probe) return;
     const measure = () => {
-      // −6 — внутренние отступы трека (padding 3 с каждой стороны)
-      setOverflowCompact(probe.offsetWidth > track.clientWidth - 6);
+      // −24 — запас до визуального прижатия ряда к краям хедера: компакт должен
+      // включиться заранее, до того как пилюли упрутся в края
+      setOverflowCompact(probe.offsetWidth > track.clientWidth - 24);
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -220,7 +221,7 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
               display: 'inline-flex', alignItems: 'center', gap: 6, boxSizing: 'border-box',
               padding: isMobile ? '8px 12px' : '6px 12px', fontSize: 13, fontWeight: 600,
             }}>
-              {opt.icon}{opt.label}
+              {opt.label}
             </span>
           ))}
         </div>
@@ -257,8 +258,9 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
         // В compact подпись привязана к value (не к highlight): при drag ширины
         // сегментов не меняются под пальцем — снапшот rects остаётся валидным
         const showLabel = iconsOnly ? false : (!effectiveCompact || opt.value === value);
-        // В компакте активный сегмент показываем ТЕКСТОМ без иконки, остальные — иконкой
-        const showIcon = iconsOnly ? true : (!effectiveCompact || opt.value !== value);
+        // В полном режиме — текст без иконок (как на десктопе, ~24px экономии на пилюле);
+        // иконки показываются только когда включился compact (либо iconsOnly безусловно).
+        const showIcon = iconsOnly ? true : (effectiveCompact ? opt.value !== value : !autoCompact);
         return (
           <button key={opt.value} ref={el => { btnRefs.current[i] = el; }}
             onClick={() => { if (suppressClick.current) return; onChange(opt.value); }}

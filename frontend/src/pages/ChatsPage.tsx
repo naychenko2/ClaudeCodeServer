@@ -6,7 +6,7 @@ import { joinUser, onMessage } from '../lib/signalr';
 import { navPush, navReplace, getNav, type NavSnapshot } from '../lib/nav';
 import { showToast } from '../lib/toast';
 import { C, FONT, CHAT_COLUMN_W, SPLASH_W } from '../lib/design';
-import { useIsMobile } from '../lib/breakpoints';
+import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { Button, IslandScaffold } from '../components/ui';
 import { PageCanvas } from '../components/ui/PageCanvas';
 import { ICON_SIZE } from '../components/ui/icons';
@@ -41,6 +41,11 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   const [creating, setCreating] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const isMobile = useIsMobile();
+  // Планшет (601–1199): боковые зоны уходят в компакт-режим drawer'ов поверх ленты,
+  // как в проектном воркспейсе. Формула та же, что в ChatHeaderBar: флаг зависит от
+  // ширины окна, иначе переход мобил↔десктоп через ресайз пропустил бы его.
+  const ww = useWindowWidth();
+  const isTablet = !isMobile && ww > MOBILE_MAX && ww <= TABLET_MAX;
 
   // Глобальные скиллы для кнопки «/» в композере. Чаты здесь вне проекта,
   // поэтому берём глобальные скиллы (~/.claude/skills), без агентов (они per-project).
@@ -181,6 +186,21 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
   // берутся по одной сессии.
   const sessionPanels = useSessionPanels(activeChat);
 
+  // Эксклюзив боковых сторон на планшете: гейт флагом exclusive в сторе chatPanels —
+  // зеркально DesktopWorkspace. При входе в планшет активной становится левая
+  // («Чаты»), её stash разворачивается, правая compact чистится эффектом в PanelZone.
+  // При выходе/unmount флаг снимается — на мобильной ветке compact передаётся
+  // безусловно, и isTablet там всегда false, так что эксклюзив десктопной веткой
+  // не поднимается впустую.
+  const { setExclusive, markActive } = chatPanels.use();
+  useEffect(() => {
+    setExclusive(isTablet);
+    if (isTablet) markActive('left');
+    return () => setExclusive(false);
+    // setExclusive/markActive стабильны (useCallback в сторе) — в deps не нужны
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isTablet]);
+
   // Открытый чат всегда прочитан: пока он на экране, приходящие в него сообщения
   // не должны копить бейдж. Следим и за updatedAt, а не только за сменой чата.
   const activeChatId = activeChat?.id;
@@ -263,6 +283,10 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
               side="left"
               allowedKeys={CHAT_KEYS}
               hideWhenEmpty
+              // Планшет: левая рельса сжимается, панель чатов уходит в drawer
+              // (mirror DesktopWorkspace:311-317). На широком планшете ≥1000px
+              // порог PANEL_INLINE_MAX_SHARE переключит стек обратно в поток.
+              compact={isTablet}
               panelStack={chatPanels}
               panels={{ chats: sidebar }}
               railBadges={{ chats: { primary: unreadCount || undefined, hint: unreadCount > 0 ? `${unreadCount} ${plural(unreadCount, 'непрочитанное', 'непрочитанных', 'непрочитанных')}` : undefined } }}
@@ -322,7 +346,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
           // с экрана целиком. Набор ключей это запрещает — и заодно чинит
           // раскладку, сохранённую до появления правила.
           right={activeChat && activeChat.messageCount > 0 ? (
-            <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} />
+            <PanelZone side="right" allowedKeys={SESSION_KEYS} hideWhenEmpty panelStack={chatPanels} panels={{}} sessionPanels={sessionPanels} compact={isTablet} />
           ) : undefined}
         />
       </div>

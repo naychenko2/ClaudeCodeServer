@@ -572,7 +572,7 @@ export default function App() {
   }, [auth?.serverUrl])
 
   // Снэпшот/drain — только при устойчивом онлайне. На мобиле связь часто «мигает»
-  // (online → degraded → online за секунды), и каждое возвращение дёргать полную
+  // (online → offline → online за секунды), и каждое возвращение дёргать полную
   // синхронизацию — перегружать канал и снова ронять связь. Задержка 5с + потолок
   // раз в минуту оставляют только осмысленные возвраты.
   const lastHeavySyncRef = useRef(0)
@@ -588,7 +588,7 @@ export default function App() {
     if (lastHeavySyncRef.current > 0 && sinceLast < 60_000) return
     stableOnlineTimerRef.current = setTimeout(() => {
       stableOnlineTimerRef.current = null
-      // Проверяем, что за 5с нас не унесло обратно в degraded/offline.
+      // Проверяем, что за 5с нас не унесло обратно в офлайн.
       if (!useOnlineRef.current()) return
       lastHeavySyncRef.current = Date.now()
       void drainOfflineQueues()

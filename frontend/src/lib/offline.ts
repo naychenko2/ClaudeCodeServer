@@ -1,8 +1,27 @@
-// Офлайн-слой: обёртка над fetch с network-first → IndexedDB-fallback,
-// глобальное состояние online/offline и блокировка мутаций офлайн.
+// Офлайн-слой: обёртка над fetch с network-first → IndexedDB-fallback
+// и блокировка мутаций офлайн.
 //
 // GET:    онлайн → сеть + запись в кэш; офлайн/сетевая ошибка → отдаём из кэша.
 // Мутации (POST/PUT/DELETE): офлайн → ошибка; онлайн → как обычно.
+//
+// Состояние связи — бинарное (online | offline), без промежуточных ступеней.
+//
+// ВХОДЫ в offline (три факта, эвристики нет):
+//   1. window 'offline' — ОС потеряла сеть.
+//   2. Сетевая ошибка fetch в catch-ветке request() — бэкенд недостижим.
+//   3. SignalR: окончательный обрыв (onclose) ИЛИ ветки reject ожидания
+//      подключения в ensureConnected() — таймаут 8с / переход в Disconnected.
+//      Ветки reject нужны, потому что текущий делегат ретраев nextRetryDelayInMilliseconds
+//      всегда возвращает число → onclose практически недостижим, и единственный
+//      реальный сигнал «хаб не поднялся» приходит именно отсюда.
+//
+// ВЫХОДЫ в online:
+//   1. window 'online' — ОС сообщает о возврате.
+//   2. SignalR onreconnected и успешный start() из Disconnected.
+//   3. Успешный ответ сервера в request() (включая 401/404/4xx/5xx — сервер живой).
+//   4. Односторонний зонд: GET /api/health раз в PROBE_INTERVAL_MS. Живёт
+//      ТОЛЬКО пока мы offline; в online не тикает. Провал зонда состояние
+//      НЕ меняет — это не «возврат эвристики».
 
 import { idbGet, idbSet } from './idb';
 
@@ -10,31 +29,16 @@ const BASE = '/api';
 
 // --- Состояние связи ---
 
-// Тройное состояние: online — стабильно; degraded — подозрение на нестабильность
-// (зависший запрос, первый промах пинга, SignalR reconnecting), данные тянутся,
-// мутации НЕ блокируются; offline — устойчивая пропажа, мутации → OfflineError.
-export type ConnectionState = 'online' | 'degraded' | 'offline';
-
 let _online = typeof navigator !== 'undefined' ? navigator.onLine : true;
-let _connectionState: ConnectionState = _online ? 'online' : 'offline';
 const _listeners = new Set<() => void>();
 
 export function isOnline(): boolean {
   return _online;
 }
 
-export function getConnectionState(): ConnectionState {
-  return _connectionState;
-}
-
-// Оба сабскрайба делят один набор слушателей: любой переход дёргает всех, а
-// useSyncExternalStore сам отсеивает неизменившийся снимок (isOnline/getConnectionState).
+// Один сабскрайб на смену состояния; useSyncExternalStore сам отсеивает
+// неизменившийся снимок (isOnline), лишних нотификаций нет.
 export function subscribeOnline(fn: () => void): () => void {
-  _listeners.add(fn);
-  return () => _listeners.delete(fn);
-}
-
-export function subscribeConnectionState(fn: () => void): () => void {
   _listeners.add(fn);
   return () => _listeners.delete(fn);
 }
@@ -55,164 +59,109 @@ export function becameVisibleRecently(): boolean {
     && Date.now() - _lastBecameVisibleAt < VISIBILITY_QUIET_WINDOW_MS;
 }
 
-export function setConnectionState(value: ConnectionState) {
-  // Успех (обычный запрос ответил, зонд достучался) сбрасывает счётчик промахов —
-  // иначе накопленные фейлы могли бы тут же снова увести в офлайн.
-  if (value === 'online') {
-    _consecutiveFailures = 0;
-    _firstFailureAt = null;
-  }
-  if (_connectionState === value) {
-    return;
-  }
-  _connectionState = value;
-  // Бинарный флаг — производный: degraded считается «ещё онлайн» (запросы и мутации идут).
-  _online = value !== 'offline';
-  // Состояние сменилось — пересчитаем каденс монитора немедленно
-  // (offline → частый зонд возврата; degraded → быстрый добор; online → спокойный heartbeat).
-  rescheduleMonitor();
+export function setOnline(value: boolean) {
+  if (_online === value) return;
+  _online = value;
+  // Односторонний зонд: тикает ТОЛЬКО в offline, гаснет в online.
+  // Провал зонда НЕ меняет состояние — поэтому это не возврат к вырезанной
+  // эвристике: раньше мигание вело «промах → подозрение → таймер выдержки →
+  // офлайн», здесь провал вообще ничего не делает, а в online зонд не
+  // запускается вовсе.
+  if (value) stopProbe(); else scheduleNextProbe();
   _listeners.forEach(fn => fn());
 }
 
-// Старые вызовы (ОС-события, тесты) маппятся на крайние состояния
-function setOnline(value: boolean) {
-  setConnectionState(value ? 'online' : 'offline');
+// signalr.ts зовёт setConnectionState('online' | 'offline') — единый биндинг
+// слоя SignalR на бинарный флаг isOnline.
+export function setConnectionState(value: 'online' | 'offline') {
+  setOnline(value === 'online');
 }
 
-// Подозрение на нестабильность. Переход только из online: из offline в degraded
-// не выходим — возврат требует явного успеха (ответ сервера / пинг).
-// Параметр намеренно сохранён: вызывающие стороны передают причину деградации,
-// она пригодится при добавлении логирования/телеметрии переходов состояния.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- задел на будущее, см. комментарий
-export function setDegraded(_reason: string) {
-  if (_connectionState !== 'online') return;
-  setConnectionState('degraded');
-}
-
-// --- Монитор связи (health-ping) ---
-// Активно проверяем достижимость сервера лёгким пингом. Один цикл, два режима:
-//   online  — heartbeat раз в HEARTBEAT_INTERVAL; устойчивый провал дольше
-//             OFFLINE_DWELL_MS уводит в offline. Это ловит «зависшую» сеть (мобильный
-//             интернет то есть, то нет): сокет цел, navigator.onLine=true, обычных
-//             запросов нет — раньше UI узнавал о пропаже только через server-timeout
-//             SignalR (~60с) или упёршись в 30-сек таймаут ручного действия.
-//   offline — probe раз в PROBE_INTERVAL; первый же ответ возвращает в онлайн.
-// Пинг гейтится видимостью вкладки: в фоне сеть/батарею не жжём, при возврате —
-// немедленная проверка (см. initConnectivity).
-let _monitorTimer: ReturnType<typeof setTimeout> | null = null;
-let _consecutiveFailures = 0;
-export let _firstFailureAt: number | null = null;
-export let _pingInFlight: Promise<boolean> | null = null;
-let _lastForcedCheckAt = 0;
-const HEARTBEAT_INTERVAL_MS = 15_000;
-const FAST_RETRY_MS = 5_000;
+// --- Односторонний зонд возврата (offline → online) ---
+// Живёт ТОЛЬКО пока мы offline. Любой успешный ответ сервера (включая 401/404)
+// поднимает флаг; 502/503/504 от реверс-прокси = бэкенд недостижим (живой прокси
+// при мёртвом сервере), таймаут и сетевой сбой — тоже провал. ПРОВАЛ НИЧЕГО
+// НЕ ДЕЛАЕТ с состоянием: зонд не может увести из online в offline.
+// Отдельный fetch (не через request()) — чтобы не триггерить IDB-фallback
+// и логаут по 401.
 const PROBE_INTERVAL_MS = 4_000;
-const PING_TIMEOUT_MS = 4_000;
-// Сколько должен длиться непрерывный провал, чтобы уйти в offline.
-// На мобильной сети короткие блипы не считаем — нужно устойчивое падение.
-const OFFLINE_DWELL_MS = 8_000;
-// Минимальный интервал между форс-проверками (focus, visibilitychange, ОС-событие online).
-const MIN_FORCED_CHECK_INTERVAL_MS = 2_000;
-// Порог «зависания запроса» — для мобилы 5с адекватнее, чем 2с.
-const DEGRADED_THRESHOLD_MS = 5_000;
-const FETCH_TIMEOUT_MS = 30_000;
+// Таймаут пинга строго меньше PROBE_INTERVAL_MS — иначе на «зависшей» сети
+// (fetch не реджектит, а висит) цикл получается ~8с вместо целевых 4с.
+const PING_TIMEOUT_MS = 3_000;
+// Минимальный интервал между форс-тиками зонда. На мобиле visibilitychange → visible
+// прилетает пачками (клавиатура, шторка, уведомления), fetch к мёртвому серверу
+// реджектит мгновенно, а мьютекс _probeInFlight про параллельность, не про частоту.
+const MIN_FORCED_PROBE_INTERVAL_MS = 2_000;
+let _lastForcedProbeAt = 0;
+let _probeTimer: ReturnType<typeof setTimeout> | null = null;
+let _probeInFlight: Promise<void> | null = null;
 
-// Один пинг сервера. true = сервер достижим (200/401/404 и т.п.),
-// false = сеть недоступна, таймаут ИЛИ gateway-ошибка реверс-прокси (502/503/504).
-export async function pingServer(): Promise<boolean> {
+function scheduleNextProbe() {
+  if (_probeTimer !== null || typeof window === 'undefined') return;
+  _probeTimer = setTimeout(() => { void runProbeTick(); }, PROBE_INTERVAL_MS);
+}
+
+function stopProbe() {
+  if (_probeTimer !== null) { clearTimeout(_probeTimer); _probeTimer = null; }
+}
+
+// Форсированный немедленный тик при возврате вкладки в видимость: сеть/батарею
+// в фоне не жжём, но вернулись — пробуем сразу, не ждём PROBE_INTERVAL_MS.
+function fireProbeNow() {
+  if (_online || typeof window === 'undefined') return;
+  // Троттл: visibilitychange на мобиле летит пачками — без него падает 5 пингов
+  // подряд. Сбрасываем отметку ДО проверки _probeInFlight, чтобы повторный тик
+  // внутри «тихого окна» отсчитывал новое 2с от своего фактического срабатывания.
+  const now = Date.now();
+  if (now - _lastForcedProbeAt < MIN_FORCED_PROBE_INTERVAL_MS) return;
+  _lastForcedProbeAt = now;
+  if (_probeTimer !== null) { clearTimeout(_probeTimer); _probeTimer = null; }
+  if (_probeInFlight !== null) return;
+  void runProbeTick();
+}
+
+async function probeHealth(): Promise<void> {
   const token = typeof localStorage !== 'undefined'
     ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
     : null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), PING_TIMEOUT_MS);
   try {
-    // Лёгкий health-эндпоинт. Не через request() — чтобы не триггерить IDB-fallback/логаут.
-    // На старом сервере без /health вернётся 404 — это тоже «достижим». SW не кэширует /api.
     const res = await fetch(BASE + '/health', {
       method: 'GET',
       cache: 'no-store',
       signal: controller.signal,
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
-    // За реверс-прокси (боевой :80/:8080) убитый бэкенд отдаёт 502/503/504 при живом
-    // прокси. Раньше это считалось «доступен» → приложение не уходило в офлайн, а
-    // запросы к API падали. Трактуем gateway-ошибки как недоступность бэкенда.
-    if (res.status === 502 || res.status === 503 || res.status === 504) return false;
-    return true;
+    // 502/503/504 от реверс-прокси при мёртвом бэкенде — НЕ «сервер достижим»
+    if (res.status === 502 || res.status === 503 || res.status === 504) return;
+    // Любой другой HTTP-ответ = сервер живой → поднимаем флаг.
+    setOnline(true);
   } catch {
-    return false; // reject (сетевой сбой) или abort по таймауту
+    // Сетевой сбой или таймаут — провал зонда НЕ меняет состояние
   } finally {
     clearTimeout(timer);
   }
 }
 
-// Задержка до следующего тика — по текущему состоянию связи и серии промахов.
-function nextMonitorDelay(): number {
-  if (_connectionState === 'offline') return PROBE_INTERVAL_MS;
-  // degraded — быстрая проверка стабилизации (подтвердить онлайн или добрать до офлайна)
-  if (_connectionState === 'degraded') return FAST_RETRY_MS;
-  return _consecutiveFailures > 0 ? FAST_RETRY_MS : HEARTBEAT_INTERVAL_MS;
-}
-
-function scheduleNextTick() {
-  if (_monitorTimer !== null || typeof window === 'undefined') return;
-  _monitorTimer = setTimeout(runMonitorTick, nextMonitorDelay());
-}
-
-// Пересобрать таймер под новый каденс (после смены _online). Немедленного пинга не шлём.
-function rescheduleMonitor() {
-  if (_monitorTimer !== null) { clearTimeout(_monitorTimer); _monitorTimer = null; }
-  scheduleNextTick();
-}
-
-export async function runMonitorTick() {
-  _monitorTimer = null;
+async function runProbeTick() {
+  _probeTimer = null;
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
-    scheduleNextTick();
+    scheduleNextProbe();
     return;
   }
-  // Мьютекс: один пинг в полёте. Если уже идёт — просто дождёмся следующего тика.
-  if (_pingInFlight !== null) {
-    scheduleNextTick();
+  // Инвариант односторонности: в онлайне зонд не работает.
+  if (_online) return;
+  if (_probeInFlight !== null) {
+    scheduleNextProbe();
     return;
   }
-  _pingInFlight = pingServer().finally(() => { _pingInFlight = null; });
-  const reachable = await _pingInFlight;
-  if (reachable) {
-    _consecutiveFailures = 0;
-    _firstFailureAt = null;
-    if (_connectionState !== 'online') setConnectionState('online');
-  } else {
-    _consecutiveFailures++;
-    if (_firstFailureAt === null) _firstFailureAt = Date.now();
-    // Устойчивый провал дольше OFFLINE_DWELL_MS — уходим в offline.
-    if (_connectionState === 'online') {
-      setDegraded('промах health-ping');
-    } else if (_connectionState === 'degraded'
-        && Date.now() - (_firstFailureAt ?? Date.now()) >= OFFLINE_DWELL_MS) {
-      setConnectionState('offline');
-    }
-  }
-  scheduleNextTick();
+  _probeInFlight = probeHealth().finally(() => { _probeInFlight = null; });
+  await _probeInFlight;
+  // Если за время полёта подняли флаг — больше не тикаем
+  if (_online) return;
+  scheduleNextProbe();
 }
-
-// Немедленная внеплановая проверка (возврат на вкладку, ОС-событие online, фокус окна).
-export function forceConnectivityCheck() {
-  if (typeof window === 'undefined') return;
-  // На мобиле focus/visibilitychange летят пачками (клавиатура, шторка, уведомления).
-  // Троттлим, иначе каждое событие запускает свой пинг и ломает гистерезис.
-  const now = Date.now();
-  if (now - _lastForcedCheckAt < MIN_FORCED_CHECK_INTERVAL_MS) {
-    return;
-  }
-  _lastForcedCheckAt = now;
-  if (_monitorTimer !== null) { clearTimeout(_monitorTimer); _monitorTimer = null; }
-  void runMonitorTick();
-}
-
-// Вызываются из signalr.ts по событиям соединения
-export function notifyOnline() { setOnline(true); }
-export function notifyOffline() { setOnline(false); }
 
 // Ошибка офлайн-операции — UI может отличить её от прочих
 export class OfflineError extends Error {
@@ -238,6 +187,8 @@ export class RequestTimeoutError extends Error {
     this.timeoutMs = timeoutMs;
   }
 }
+
+const FETCH_TIMEOUT_MS = 30_000;
 
 // fetch при сетевом сбое реджектит с TypeError; HTTP-ошибки (4xx/5xx) — это res.ok=false (сервер доступен)
 function isNetworkError(e: unknown): boolean {
@@ -270,20 +221,6 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // прочих abort'ов, а причину надо назвать точно (см. RequestTimeoutError)
   let timedOut = false;
   const timeoutId = setTimeout(() => { timedOut = true; controller.abort(); }, effectiveTimeout);
-  // Ранний таймер degraded: запрос «завис» >2с — сразу показываем нестабильность и
-  // форсим проверку связи, не дожидаясь 30-секундного таймаута. На заведомо долгие
-  // запросы (явный timeoutMs) не вешается — их длительность ожидаема.
-  const degradedId = timeoutMs === undefined
-    ? setTimeout(() => {
-        // Degraded — только индикатор; форс-пинг отсюда не нужен, иначе добавим
-        // нагрузку в узкий канал и спровоцируем лавину провалов на мобиле.
-        if (getConnectionState() === 'online') setDegraded('зависший запрос');
-      }, DEGRADED_THRESHOLD_MS)
-    : null;
-  const clearReqTimers = () => {
-    clearTimeout(timeoutId);
-    if (degradedId !== null) clearTimeout(degradedId);
-  };
 
   // FormData (multipart-загрузки) — Content-Type ставит сам браузер (с boundary)
   const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
@@ -298,7 +235,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
         ...(options?.headers as Record<string, string> | undefined),
       },
     });
-    clearReqTimers();
+    clearTimeout(timeoutId);
     // Сервер ответил (даже ошибкой) → мы онлайн
     setOnline(true);
 
@@ -339,18 +276,18 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     }
     return data;
   } catch (e) {
-    clearReqTimers();
+    clearTimeout(timeoutId);
     // AbortError от нашего таймаута трактуем как сетевую проблему
     if (isNetworkError(e) || (e instanceof DOMException && e.name === 'AbortError')) {
       // Свой таймаут на заведомо долгом запросе (явный timeoutMs) — не улика против
       // связи: сервер мог просто думать дольше отведённого. Состояние не трогаем,
-      // иначе успешная, но медленная операция уводила бы приложение в degraded/offline.
+      // иначе успешная, но медленная операция уводила бы приложение в офлайн.
       const ourTimeout = timedOut && timeoutMs !== undefined;
       if (!ourTimeout) {
-        // Уступчивый переход вместо резкого офлайна: первая ошибка — degraded,
-        // повтор из degraded — offline
-        if (_connectionState === 'online') setDegraded('сетевая ошибка запроса');
-        else if (_connectionState === 'degraded') setConnectionState('offline');
+        // Сетевая ошибка запроса — сразу офлайн. Эвристики нет: единственный способ
+        // узнать, что связи нет, — это не получить ответ; мутации блокируются,
+        // IDB-fallback для GET ловит OfflineError по instanceof (taskOutbox/notesOffline).
+        setOnline(false);
       }
       // Кэш выручает GET независимо от причины обрыва — сначала пробуем его
       if (isGet) {
@@ -372,23 +309,23 @@ export function initConnectivity() {
   if (_initialized || typeof window === 'undefined') return;
   _initialized = true;
 
-  // ОС однозначно потеряла сеть — сразу офлайн, без ожидания пинга
+  // ОС однозначно потеряла сеть — сразу офлайн
   window.addEventListener('offline', () => setOnline(false));
-  // ОС сообщает о сети, но до НАШЕГО сервера она может не дойти — не верим слепо,
-  // а тут же проверяем пингом (за ≤4с подтвердит или оставит офлайн).
-  window.addEventListener('online', () => forceConnectivityCheck());
-  // Возврат на вкладку/фокус окна — момент, когда точность статуса важнее всего
-  window.addEventListener('focus', () => forceConnectivityCheck());
+  // ОС сообщает о возврате сети — сразу онлайн. Проверять пингом не нужно:
+  // первый же реальный запрос через request() вернёт либо 200 (мы и так онлайн),
+  // либо сетевую ошибку (мы и так уйдём в офлайн). Без пинга возврат из
+  // авиарежима сразу поднимет флаг — иначе приложение застряло бы в офлайне
+  // до первого успешного запроса.
+  window.addEventListener('online', () => setOnline(true));
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
         _lastBecameVisibleAt = Date.now();
-        forceConnectivityCheck();
+        // Возврат на вкладку при офлайне — форсированный тик зонда, не ждём PROBE_INTERVAL_MS
+        fireProbeNow();
       }
     });
   }
-
-  // Запускаем цикл монитора: heartbeat в онлайне ловит пропажу сервера,
-  // probe в офлайне — его возвращение.
-  scheduleNextTick();
+  // При загрузке уже офлайн (navigator.onLine === false, сервер не доступен) — запускаем зонд
+  if (!_online) scheduleNextProbe();
 }

@@ -29,10 +29,9 @@ const h = vi.hoisted(() => {
   return {
     HubConnectionState,
     fake,
-    // Управляемое тестом тройное состояние связи (имитация поведения offline.ts)
-    connState: 'online' as string,
-    setConnectionState: vi.fn((v: string) => { h.connState = v; }),
-    setDegraded: vi.fn(() => { if (h.connState === 'online') h.connState = 'degraded'; }),
+    // Управляемое тестом бинарное состояние связи (имитация поведения offline.ts)
+    isOnline: true,
+    setConnectionState: vi.fn((v: string) => { h.isOnline = v === 'online'; }),
   };
 });
 
@@ -48,9 +47,7 @@ vi.mock('@microsoft/signalr', () => ({
 }));
 
 vi.mock('../offline', () => ({
-  getConnectionState: () => h.connState,
   setConnectionState: h.setConnectionState,
-  setDegraded: h.setDegraded,
 }));
 
 let signalr: typeof import('../signalr');
@@ -61,7 +58,7 @@ const fireReconnected = () => h.fake.reconnectedCbs.forEach(cb => cb());
 const fireClose = () => h.fake.closeCbs.forEach(cb => cb());
 
 beforeEach(async () => {
-  // Синглтон connection и дебаунс — модульные, пересоздаём модуль на каждый тест
+  // Синглтон connection — модульный, пересоздаём модуль на каждый тест
   vi.resetModules();
   vi.useFakeTimers();
   h.fake.state = h.HubConnectionState.Connected;
@@ -70,9 +67,8 @@ beforeEach(async () => {
   h.fake.closeCbs.length = 0;
   h.fake.start.mockClear();
   h.fake.invoke.mockClear();
-  h.connState = 'online';
+  h.isOnline = true;
   h.setConnectionState.mockClear();
-  h.setDegraded.mockClear();
 
   signalr = await import('../signalr');
   // Создаёт connection и регистрирует onreconnecting/onreconnected/onclose
@@ -83,55 +79,23 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('дебаунс офлайн-индикатора', () => {
-  it('реконнект из online — сразу degraded, offline только через 2.5с', () => {
-    fireReconnecting();
-    expect(h.setDegraded).toHaveBeenCalledTimes(1);
-    expect(h.connState).toBe('degraded');
-
-    vi.advanceTimersByTime(2499);
-    expect(h.setConnectionState).not.toHaveBeenCalledWith('offline');
-
-    vi.advanceTimersByTime(1);
-    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
-    expect(h.connState).toBe('offline');
-  });
-
-  it('реконнект из degraded не дёргает setDegraded повторно', () => {
-    h.connState = 'degraded';
-    fireReconnecting();
-    expect(h.setDegraded).not.toHaveBeenCalled();
-
-    vi.advanceTimersByTime(2500);
-    expect(h.connState).toBe('offline');
-  });
-
-  it('быстрый реконнект отменяет офлайн — в offline не уходим, состояние online', () => {
-    fireReconnecting();
-    vi.advanceTimersByTime(1000);
-    fireReconnected();
-    vi.advanceTimersByTime(10_000);
-
-    expect(h.setConnectionState).not.toHaveBeenCalledWith('offline');
-    expect(h.setConnectionState).toHaveBeenCalledWith('online');
-    expect(h.connState).toBe('online');
-  });
-
-  it('повторный onreconnecting не создаёт второй таймер', () => {
-    fireReconnecting();
-    vi.advanceTimersByTime(1000);
-    fireReconnecting();
-    vi.advanceTimersByTime(1500); // 2.5с от ПЕРВОГО события
-    expect(h.setConnectionState).toHaveBeenCalledTimes(1);
-    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
-    vi.advanceTimersByTime(10_000);
-    expect(h.setConnectionState).toHaveBeenCalledTimes(1);
-  });
-
-  it('onclose — офлайн сразу, без дебаунса', () => {
+describe('события соединения → глобальный online/offline', () => {
+  it('onclose → сразу offline', () => {
     fireClose();
     expect(h.setConnectionState).toHaveBeenCalledWith('offline');
-    expect(h.connState).toBe('offline');
+  });
+
+  it('onreconnected → сразу online', () => {
+    fireClose();
+    h.setConnectionState.mockClear();
+
+    fireReconnected();
+    expect(h.setConnectionState).toHaveBeenCalledWith('online');
+  });
+
+  it('onreconnecting → глобальный статус не трогается (UI не мигает)', () => {
+    fireReconnecting();
+    expect(h.setConnectionState).not.toHaveBeenCalled();
   });
 });
 
@@ -149,7 +113,19 @@ describe('ensureConnected через joinSession', () => {
     expect(h.fake.invoke).toHaveBeenCalledWith('JoinSession', 's1');
   });
 
-  it('вечный Reconnecting → таймаут через 8с, invoke не вызывается', async () => {
+  it('успешный start() из Disconnected поднимает флаг связи в online', async () => {
+    // onreconnected при старте из Disconnected не срабатывает (это не reconnect),
+    // и без явного setConnectionState('online') флаг остаётся offline при
+    // заведомо живом хабе. Это и был дефект «Повторить врёт» на экране логина.
+    h.fake.state = h.HubConnectionState.Disconnected;
+    h.setConnectionState.mockClear();
+
+    await signalr.joinSession('s1');
+
+    expect(h.setConnectionState).toHaveBeenCalledWith('online');
+  });
+
+  it('вечный Reconnecting → таймаут через 8с, invoke не вызывается, флаг связи → offline', async () => {
     h.fake.state = h.HubConnectionState.Reconnecting;
     const p = signalr.joinSession('s1');
     const guarded = p.catch((e: Error) => e); // не даём unhandled rejection
@@ -158,6 +134,9 @@ describe('ensureConnected через joinSession', () => {
 
     expect(await guarded).toEqual(new Error('SignalR connect timeout'));
     expect(h.fake.invoke).not.toHaveBeenCalled();
+    // Хвост ревью: при неподнявшемся хабе UI должен видеть честный offline,
+    // иначе зонд возврата (живёт только в offline) не запустится.
+    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
   });
 
   it('Reconnecting → Connected в пределах таймаута — дожидаемся и вызываем invoke', async () => {
@@ -172,7 +151,7 @@ describe('ensureConnected через joinSession', () => {
     expect(h.fake.invoke).toHaveBeenCalledWith('JoinSession', 's1');
   });
 
-  it('Reconnecting → Disconnected — ошибка без ожидания таймаута', async () => {
+  it('Reconnecting → Disconnected — ошибка без ожидания таймаута, флаг связи → offline', async () => {
     h.fake.state = h.HubConnectionState.Reconnecting;
     const p = signalr.joinSession('s1');
     const guarded = p.catch((e: Error) => e);
@@ -182,6 +161,7 @@ describe('ensureConnected через joinSession', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(await guarded).toEqual(new Error('SignalR disconnected while waiting'));
+    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
   });
 });
 

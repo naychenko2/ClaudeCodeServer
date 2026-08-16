@@ -6,7 +6,7 @@ import { api } from '../../lib/api';
 import { useSpecialtyCatalog } from '../../lib/specialties';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
-import { ImageGenNote } from '../../components/ImageGenNote';
+import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { PillSwitch } from '../../components/Toolbar';
 import { RoutePicker } from '../../components/RoutePicker';
 import { useModels, useModelCaps, modelProvider, modelLabel, USAGE } from '../../lib/models';
@@ -211,6 +211,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   const generating = avatarJob.status === 'running';
   const candidates = avatarJob.status === 'done' ? (avatarJob.result ?? []) : [];
   const avatarGenError = avatarJob.status === 'error' ? avatarJob.error ?? null : null;
+  // Заявку в очередь догоняющей генерации бэкенд подтверждает полем queued в теле ошибки;
+  // aiJobStore хранит только текст, поэтому признак держим рядом (живёт до ухода со страницы)
+  const [avatarGenQueued, setAvatarGenQueued] = useState(false);
   const [selectError, setSelectError] = useState<string | null>(null);
   const [selecting, setSelecting] = useState<string | null>(null);
   // Инлайн-панель «Внешность» под hero (открывается из мини-меню ✎)
@@ -320,9 +323,11 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Статус/результат в aiJobStore — переживает уход со страницы во время ожидания fal.ai.
   const generateAvatar = () => {
     if (!persona || generating) return;
+    setAvatarGenQueued(false);
     runAiJob<string[]>(avatarKey, () => api.personas
       .generateAvatar(persona.id, { prompt: avatarPrompt, count: 4 })
-      .then(r => r.candidates));
+      .then(r => r.candidates)
+      .catch((e: unknown) => { setAvatarGenQueued(isImageGenQueued(e)); throw e; }));
   };
 
   // Выбор кандидата из галереи → становится аватаром персоны
@@ -761,6 +766,7 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   kind="avatar"
                   status={generating ? 'running' : avatarGenError ? 'error' : 'idle'}
                   error={avatarGenError}
+                  queued={avatarGenQueued}
                   onRetry={generateAvatar}
                 />
                 {candidates.length > 0 && !generating && persona && (

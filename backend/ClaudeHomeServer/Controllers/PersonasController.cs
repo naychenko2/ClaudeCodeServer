@@ -624,16 +624,29 @@ public class PersonasController : ControllerBase
             : $"Photorealistic portrait photo. {req.Prompt.Trim()}";
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
+        // Очередь снимает заявку, как только у сущности есть картинка (Resolve → HasImage),
+        // поэтому перерисовка УЖЕ стоящего аватара фоном не догоняется — обещать «появится
+        // сам» здесь нельзя, отказ остаётся отказом.
+        var canBackfill = persona.Avatar.Kind != PersonaAvatarKind.Image
+            || string.IsNullOrEmpty(persona.Avatar.ImageFile);
+
         // Провайдера нет — отвечаем отказом, но аватар не теряем: заявка догонит его,
         // как только генерацию настроят
         if (!_images.EnabledFor(Services.Images.ImagePlaces.PersonaAvatar))
         {
-            _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, UserId, prompt);
-            return BadRequest(new { error = ImageGenerationOffError });
+            if (canBackfill) _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, UserId, prompt);
+            return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
         var images = await _images.GenerateManyAsync(Services.Images.ImagePlaces.PersonaAvatar, prompt, count);
-        if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
+        // Провайдер не отдал картинок (таймаут, отказ) — аватар тоже не теряем: заявка
+        // догонит персону фоном. queued в ответе — чтобы фронт сказал человеку честное
+        // «появится сам», а не «генератор не ответил, аватар остался прежним».
+        if (images.Count == 0)
+        {
+            if (canBackfill) _imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.PersonaAvatar, id, UserId, prompt);
+            return StatusCode(502, new { error = "Не удалось сгенерировать изображение", queued = canBackfill });
+        }
 
         // Свежая папка кандидатов (перезатираем прошлую генерацию)
         var candDir = Path.Combine(_personas.AssetsDir, id, "candidates");

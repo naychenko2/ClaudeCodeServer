@@ -28,7 +28,7 @@ import { Toolbar, PillSwitch } from '../../components/Toolbar';
 import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, IconButton, ConfirmDialog } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { RoutePicker } from '../../components/RoutePicker';
-import { ImageGenNote } from '../../components/ImageGenNote';
+import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { useModels } from '../../lib/models';
 import { useTierModels, TIER_ORDER, TIER_TITLE, type ModelTierKey } from '../../lib/modelTiers';
 import { routeDisplayLabel, usePresets } from '../../lib/presets';
@@ -150,6 +150,8 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
   const [avatarError, setAvatarError] = useState<string | null>(null);
   // Отказ генерации — отдельно от avatarError: он живёт рядом с «Попробовать снова»
   const [avatarGenError, setAvatarGenError] = useState<string | null>(null);
+  // Бэкенд принял заявку в очередь догоняющей генерации — аватар дорисуется фоном
+  const [avatarGenQueued, setAvatarGenQueued] = useState(false);
   const [avatarCandidates, setAvatarCandidates] = useState<string[]>([]);
   const [avatarSelecting, setAvatarSelecting] = useState<string | null>(null);
   const [cropState, setCropState] = useState<{ src: string; file: File } | null>(null);
@@ -462,11 +464,13 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
     setAvatarGenerating(true);
     setAvatarError(null);
     setAvatarGenError(null);
+    setAvatarGenQueued(false);
     setAvatarCandidates([]);
     try {
       const { candidates: files } = await api.personas.generateAvatar(persona.id, { prompt: avatarPrompt, count: 4 });
       setAvatarCandidates(files);
     } catch (e) {
+      setAvatarGenQueued(isImageGenQueued(e));
       setAvatarGenError(e instanceof Error ? e.message : 'Не удалось сгенерировать аватар');
     } finally {
       setAvatarGenerating(false);
@@ -904,6 +908,7 @@ export function PersonaWizard({ scope, projectId, projects, onOpenStudio, onStar
                     kind="avatar"
                     status={avatarGenerating ? 'running' : avatarGenError ? 'error' : 'idle'}
                     error={avatarGenError}
+                    queued={avatarGenQueued}
                     onRetry={() => void generateAvatarCandidates()}
                   />
                   {avatarCandidates.length > 0 && !avatarGenerating && (

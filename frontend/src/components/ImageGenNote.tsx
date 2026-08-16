@@ -50,12 +50,33 @@ export function generatorCaption(s: Settings, kind: ImageGenKind, disabled = fal
   return name ? `Рисует ${name}` : 'Генератор выбирается автоматически';
 }
 
-export function ImageGenNote({ kind, status = 'idle', error, onRetry, disabled = false, style }: {
+// Заявку в очередь догоняющей генерации ставит бэкенд (ImageBackfillService) и сообщает
+// об этом полем queued в теле ошибки; lib/offline прикрепляет тело к Error целиком.
+// Сами не угадываем: у generate-preview нового проекта догонять некому, и там queued нет.
+export function isImageGenQueued(err: unknown): boolean {
+  const body = (err as { body?: unknown } | null | undefined)?.body;
+  return !!body && typeof body === 'object' && (body as { queued?: unknown }).queued === true;
+}
+
+// Итог, когда картинка не пришла этим запросом. queued — заявка принята очередью:
+// картинка дорисуется фоном, и говорить «генератор не ответил» здесь было бы враньём.
+export function imageGenFailureText(kind: ImageGenKind, queued: boolean, generatorName?: string | null): string {
+  if (queued) {
+    return kind === 'icon'
+      ? 'Рисуется дольше обычного — иконка появится сама, диалог можно закрыть'
+      : 'Рисуется дольше обычного — аватар появится сам, диалог можно закрыть';
+  }
+  return `${generatorName ?? 'Генератор'} не ответил, картинка осталась прежней`;
+}
+
+export function ImageGenNote({ kind, status = 'idle', error, queued = false, onRetry, disabled = false, style }: {
   // Что рисуем: место настройки и текст ожидания
   kind: ImageGenKind;
   status?: 'idle' | 'running' | 'error';
   // Текст отказа от бэкенда (причину сами не придумываем)
   error?: string | null;
+  // Бэкенд принял заявку в очередь догоняющей генерации — это ожидание, а не ошибка
+  queued?: boolean;
   onRetry?: () => void;
   disabled?: boolean;
   style?: CSSProperties;
@@ -67,7 +88,11 @@ export function ImageGenNote({ kind, status = 'idle', error, onRetry, disabled =
   const waiting = kind === 'icon'
     ? 'Иконка рисуется — появится сама, можно продолжать'
     : 'Аватар рисуется — появится сам, можно продолжать';
-  const failed = `${activeName(settings, placeFor(settings, kind)) ?? 'Генератор'} не ответил, картинка осталась прежней`;
+  const failed = imageGenFailureText(kind, queued, activeName(settings, placeFor(settings, kind)));
+  // Заявка принята — информационный тон, не красная плашка ошибки
+  const tone = queued
+    ? { bg: C.infoBg, border: null as string | null, text: C.info }
+    : { bg: C.dangerBg, border: C.dangerBorder, text: C.dangerText };
 
   if (!caption && status === 'idle') return null;
 
@@ -86,15 +111,18 @@ export function ImageGenNote({ kind, status = 'idle', error, onRetry, disabled =
           display: 'flex', flexDirection: isMobile ? 'column' : 'row',
           alignItems: isMobile ? 'stretch' : 'center', gap: SP.sm,
           padding: `${SP.sm}px ${SP.md}px`, borderRadius: R.md,
-          background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
+          background: tone.bg,
+          ...(tone.border ? { border: `1px solid ${tone.border}` } : null),
         }}>
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: FS.base, color: C.dangerText, fontFamily: FONT.sans, lineHeight: 1.45 }}>
+            <div style={{ fontSize: FS.base, color: tone.text, fontFamily: FONT.sans, lineHeight: 1.45 }}>
               {failed}
             </div>
-            {error && (
+            {/* Техническую причину показываем только при отказе: под «появится сама»
+                строка «не удалось сгенерировать» противоречила бы обещанию */}
+            {error && !queued && (
               <div style={{
-                fontSize: FS.sm, color: C.dangerText, opacity: 0.85, marginTop: SP.xxs,
+                fontSize: FS.sm, color: tone.text, opacity: 0.85, marginTop: SP.xxs,
                 fontFamily: FONT.sans, lineHeight: 1.4, wordBreak: 'break-word',
               }}>
                 {error}

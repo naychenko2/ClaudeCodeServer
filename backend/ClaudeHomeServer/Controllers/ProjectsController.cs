@@ -394,16 +394,28 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
               + $"no border, no drop shadow, no 3D, no gloss, no padding, no text. {req.Prompt.Trim()}";
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
+        // Очередь снимает заявку, как только у сущности есть картинка (Resolve → HasImage),
+        // поэтому перерисовка УЖЕ стоящей иконки фоном не догоняется — обещать «появится
+        // сама» здесь нельзя, отказ остаётся отказом.
+        var canBackfill = p.Icon.Kind != ProjectIconKind.Image || string.IsNullOrEmpty(p.Icon.ImageFile);
+
         // Провайдера нет — отвечаем отказом, но иконку не теряем: заявка догонит проект,
         // как только генерацию настроят
         if (!imageGen.EnabledFor(Services.Images.ImagePlaces.ProjectIcon))
         {
-            imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.ProjectIcon, id, UserId, prompt);
-            return BadRequest(new { error = ImageGenerationOffError });
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.ProjectIcon, id, UserId, prompt);
+            return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
         }
 
         var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.ProjectIcon, prompt, count);
-        if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
+        // Провайдер не отдал картинок (таймаут, отказ) — иконку тоже не теряем: заявка
+        // догонит проект фоном. queued в ответе — чтобы фронт сказал человеку честное
+        // «появится сама», а не «генератор не ответил, иконка осталась прежней».
+        if (images.Count == 0)
+        {
+            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.ProjectIcon, id, UserId, prompt);
+            return StatusCode(502, new { error = "Не удалось сгенерировать изображение", queued = canBackfill });
+        }
 
         // Свежая папка кандидатов (перезатираем прошлую генерацию)
         var candDir = Path.Combine(projects.IconsDir, id, "candidates");
@@ -439,6 +451,7 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
 
         var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.ProjectIcon, prompt, count);
+        // Без queued: проекта ещё нет, догонять картинку некому — отказ здесь окончательный
         if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
 
         var candidates = images

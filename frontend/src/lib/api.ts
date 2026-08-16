@@ -374,10 +374,14 @@ export const api = {
     // Можно ли генерировать иконку (настроен ли fal)
     iconCaps: () => request<{ generate: boolean }>('/projects/icon/caps'),
     // Генерация галереи кандидатов: возвращает имена файлов (иконка НЕ меняется до выбора). count 1..4.
+    // timeoutMs — под серверный бюджет генерации: у glif он 360 с (GlifImageGenerator),
+    // и с дефолтными 30 с браузер обрывал бы запрос раньше ответа — вместе с признаком
+    // queued, по которому мы обещаем «иконка появится сама».
     generateIcon: (id: string, opts?: { prompt?: string; count?: number }) =>
       request<{ candidates: string[] }>(`/projects/${encodeURIComponent(id)}/icon/generate`, {
         method: 'POST',
         body: JSON.stringify({ prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
+        timeoutMs: 400_000,
       }),
     // Выбор кандидата — он становится иконкой проекта, возвращается обновлённый проект
     selectIcon: (id: string, file: string) =>
@@ -396,6 +400,7 @@ export const api = {
       request<{ candidates: { dataUrl: string }[] }>('/projects/icon/generate-preview', {
         method: 'POST',
         body: JSON.stringify({ name: opts?.name?.trim() || undefined, prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
+        timeoutMs: 400_000,
       }),
     // Прикрепить готовую картинку (генеративную, без оригинала/кропа) к уже созданному проекту —
     // используется диалогом создания после create() для досыла сгенерированной иконки.
@@ -837,6 +842,8 @@ export const api = {
     avatarCaps: () => request<{ generate: boolean }>('/personas/avatar/caps'),
     // Генерация галереи кандидатов: возвращает имена файлов (аватар персоны НЕ меняется
     // до явного выбора). count — сколько вариантов (1..4).
+    // timeoutMs — под серверный бюджет генерации (у glif 360 с): с дефолтными 30 с
+    // браузер обрывал бы запрос раньше ответа с признаком queued.
     generateAvatar: (id: string, opts?: { prompt?: string; count?: number }) =>
       request<{ candidates: string[] }>(`/personas/${encodeURIComponent(id)}/avatar/generate`, {
         method: 'POST',
@@ -844,6 +851,7 @@ export const api = {
           prompt: opts?.prompt?.trim() || undefined,
           count: opts?.count,
         }),
+        timeoutMs: 400_000,
       }),
     // Выбор кандидата — он становится аватаром персоны, возвращается обновлённая персона
     selectAvatar: (id: string, file: string) =>

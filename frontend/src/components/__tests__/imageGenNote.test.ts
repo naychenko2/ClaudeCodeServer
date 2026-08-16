@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { IMAGE_GEN_OFF_HINT, generatorCaption, placeFor } from '../ImageGenNote';
+import { IMAGE_GEN_OFF_HINT, generatorCaption, imageGenFailureText, isImageGenQueued, placeFor } from '../ImageGenNote';
 import { IMAGE_PLACE } from '../../lib/imageBackfill';
 import type { ImageGenerationSettings, ImagePlaceSettings } from '../../types';
 
@@ -53,6 +53,32 @@ describe('подпись генератора', () => {
   it('настройка не доехала: подсказку даём только если место и так недоступно по caps', () => {
     expect(generatorCaption(null, 'icon')).toBeNull();
     expect(generatorCaption(null, 'icon', true)).toBe(IMAGE_GEN_OFF_HINT);
+  });
+});
+
+// Картинка не пришла синхронно — два разных исхода. Заявка принята очередью догоняющей
+// генерации (queued от бэкенда) — картинка дорисуется сама, и «генератор не ответил»
+// здесь враньё; заявки нет (generate-preview нового проекта) — честный отказ.
+describe('текст, когда картинка не пришла', () => {
+  it('заявка принята — обещаем картинку, а не отказ', () => {
+    expect(imageGenFailureText('icon', true, 'glif'))
+      .toBe('Рисуется дольше обычного — иконка появится сама, диалог можно закрыть');
+    expect(imageGenFailureText('avatar', true, 'glif'))
+      .toBe('Рисуется дольше обычного — аватар появится сам, диалог можно закрыть');
+  });
+
+  it('заявки нет — прежний честный отказ с именем генератора', () => {
+    expect(imageGenFailureText('icon', false, 'glif')).toBe('glif не ответил, картинка осталась прежней');
+    expect(imageGenFailureText('avatar', false, null)).toBe('Генератор не ответил, картинка осталась прежней');
+  });
+});
+
+describe('признак заявки в очередь', () => {
+  it('читается из тела ответа ошибки, а не угадывается', () => {
+    expect(isImageGenQueued({ body: { error: 'Не удалось сгенерировать изображение', queued: true } })).toBe(true);
+    expect(isImageGenQueued({ body: { error: 'Не удалось сгенерировать изображение' } })).toBe(false);
+    expect(isImageGenQueued(new Error('офлайн'))).toBe(false);
+    expect(isImageGenQueued(undefined)).toBe(false);
   });
 });
 

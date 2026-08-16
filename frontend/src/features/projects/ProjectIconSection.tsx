@@ -4,7 +4,7 @@ import type { Project, ProjectIcon as ProjectIconType } from '../../types';
 import { api } from '../../lib/api';
 import { C, R, FONT, SHADOW, SP } from '../../lib/design';
 import { Button } from '../../components/ui';
-import { ImageGenNote } from '../../components/ImageGenNote';
+import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { Menu, MenuItem } from '../../components/ui/Menu';
 import { AGENT_COLORS, agentDotColor } from '../../components/AgentSelector';
 import { ProjectIcon } from './ProjectIcon';
@@ -52,6 +52,8 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
   const [err, setErr] = useState('');
   // Отказ генерации держим отдельно от err: он живёт в блоке генерации рядом с «Попробовать снова»
   const [genErr, setGenErr] = useState('');
+  // Бэкенд принял заявку в очередь догоняющей генерации — тогда это ожидание, а не отказ
+  const [genQueued, setGenQueued] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { api.projects.iconCaps().then(r => setCanGenerate(r.generate)).catch(() => {}); }, []);
@@ -66,7 +68,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
     return onProjectIconBackfilled(fresh => {
       if (fresh.id !== project.id) return;
       setDraftIcon(fresh.icon);
-      setGenErr('');
+      setGenErr(''); setGenQueued(false);
       iconUpdatedRef.current(fresh);
     });
   }, [creating, project.id]);
@@ -90,7 +92,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
   const applyUpdated = (updated: Project) => { setDraftIcon(updated.icon); onIconUpdated(updated); };
 
   const generate = async () => {
-    setGenerating(true); setErr(''); setGenErr(''); setCandidates(null);
+    setGenerating(true); setErr(''); setGenErr(''); setGenQueued(false); setCandidates(null);
     try {
       if (creating) {
         const r = await api.projects.generateIconPreview({ name, prompt });
@@ -99,7 +101,11 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
         const r = await api.projects.generateIcon(project.id, { prompt, count: 4 });
         setCandidates(r.candidates);
       }
-    } catch (e: unknown) { setGenErr(e instanceof Error ? e.message : 'Не удалось сгенерировать'); }
+    } catch (e: unknown) {
+      // creating: проекта ещё нет — очереди тоже, признак придёт только от {id}/icon/generate
+      setGenQueued(isImageGenQueued(e));
+      setGenErr(e instanceof Error ? e.message : 'Не удалось сгенерировать');
+    }
     finally { setGenerating(false); }
   };
 
@@ -270,6 +276,7 @@ export function ProjectIconSection({ project, name, onNameChange, color, onColor
             kind="icon"
             status={generating ? 'running' : genErr ? 'error' : 'idle'}
             error={genErr}
+            queued={genQueued}
             onRetry={() => void generate()}
           />
         </div>

@@ -1324,8 +1324,9 @@ export const api = {
       }),
   },
 
-  // История решений (change-dossiers, этап 1) — записи «зачем менялось, что решили,
-  // что отвергли, какие грабли», привязанные к коммитам. ADR-004 §4/§8
+  // История решений (change-dossiers) — записи «зачем менялось, что решили,
+  // что отвергли, какие грабли», привязанные к коммитам. ADR-004 §4/§6/§8.
+  // Этап 1: просмотр. Этап 3: экспорт в ветку ccs/dossiers/v1 через git-плюминг.
   dossiers: {
     list: (projectId: string, filter?: { file?: string; symbol?: string; commit?: string }) => {
       const qs = new URLSearchParams();
@@ -1335,6 +1336,18 @@ export const api = {
       const s = qs.toString();
       return request<DossierEntry[]>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
     },
+    // Готовность проекта к экспорту (ADR-004 §6): isGitRepo гейтит кнопку в UI,
+    // sharedFolder — предупреждение о втором владельце той же папки.
+    exportStatus: (projectId: string) =>
+      request<{ isGitRepo: boolean; sharedFolder: boolean }>(
+        `/projects/${encodeURIComponent(projectId)}/dossiers/export/status`),
+    // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
+    // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:
+    // count подставляется в текст успеха, nothingToExport переключает на состояние «пусто».
+    exportRun: (projectId: string, push: boolean) =>
+      request<{ status: 'exported' | 'nothingToExport'; count: number }>(
+        `/projects/${encodeURIComponent(projectId)}/dossiers/export`,
+        { method: 'POST', body: JSON.stringify({ push }) }),
   },
 
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку

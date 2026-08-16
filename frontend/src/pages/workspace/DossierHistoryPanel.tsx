@@ -15,7 +15,6 @@
 // DossierOptOutButton живёт в шапке чата и сюда не ходит.
 
 import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
-import { useSyncExternalStore } from 'react';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, ClipboardList, File as FileIcon, GitCompare, History, Info,
   Lightbulb, MessageCircle, Search, Upload, X,
@@ -25,25 +24,12 @@ import { displayNameOf, type AuthState } from '../../types';
 import { api } from '../../lib/api';
 import { basename } from '../../lib/paths';
 import { C, FONT, FS, R, SP } from '../../lib/design';
-import { getFlag, subscribeFlags } from '../../lib/featureFlags';
+import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { Button, Dot, EmptyState, IconButton, TextField } from '../../components/ui';
 import { PanelHeaderSlot, useHasPanelHeader } from '../../components/ui';
 import { useNow } from '../../lib/useNow';
 import { DossierExportDialog } from './DossierExportDialog';
-
-// Ключ фич-флага берётся напрямую через getFlag (а не useFeature/FLAGS): FLAGS
-// жёстко типизирован, а ключ change-dossiers-recall объявлен на бэкенде, а не
-// в этом файле. Подписка на общий стор всё равно работает — setAllFlags кладёт
-// значение по тому же ключу, что пришёл с /api/feature-flags.
-const FLAG_CHANGE_DOSSIERS_RECALL = 'change-dossiers-recall';
-function useChangeDossiersRecallEnabled(): boolean {
-  return useSyncExternalStore(
-    subscribeFlags,
-    () => getFlag(FLAG_CHANGE_DOSSIERS_RECALL),
-    () => getFlag(FLAG_CHANGE_DOSSIERS_RECALL),
-  );
-}
 
 interface Props {
   project: { id: string };
@@ -341,7 +327,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   //   флаг change-dossiers-recall включён
   //   И проект — git-репозиторий (isGitRepo из /dossiers/export/status)
   // sharedFolder приезжает тем же запросом и подсовывается модалке для выноски.
-  const recallEnabled = useChangeDossiersRecallEnabled();
+  const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
   const [exportStatus, setExportStatus] = useState<{ isGitRepo: boolean; sharedFolder: boolean } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
 

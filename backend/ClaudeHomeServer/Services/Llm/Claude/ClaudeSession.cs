@@ -1309,6 +1309,9 @@ public class ClaudeSession : ILlmSessionAdapter
                 catch (OperationCanceledException) { /* остановка сессии — штатно */ }
                 catch (Exception ex)
                 {
+                    // Ошибка хода обязана попадать и в лог сервера, а не только в чат
+                    // (инцидент 16.08.2026: ObjectDisposedException в ленте, в логе пусто)
+                    Console.Error.WriteLine($"[ClaudeSession] Ход упал с исключением (session {Info.Id}): {ex}");
                     // Статус Error выставит SessionManager по ErrorMessage
                     await _onMessage(new ErrorMessage(ex.Message));
                 }
@@ -1320,6 +1323,13 @@ public class ClaudeSession : ILlmSessionAdapter
                     _currentTurnSuppressTasksExecute = false;
                     _turnLock.Release();
                 }
+            }
+            catch (Exception ex)
+            {
+                // Гонка с DisposeAsync (реанимация зависшего чата убивает адаптер под
+                // запаркованным ходом): ход тихо отменяем, но фиксируем в логе —
+                // необработанное исключение fire-and-forget невидимо нигде
+                Console.Error.WriteLine($"[ClaudeSession] Ход не стартовал (гонка с dispose сессии {Info.Id}): {ex.Message}");
             }
             finally { Interlocked.Decrement(ref _queuedTurns); }
         });
@@ -2460,6 +2470,22 @@ public class ClaudeSession : ILlmSessionAdapter
 
             // stdin оставляем открытым — claude пишет control_response в него при permission-запросах
             var skipResubmit = ShouldSkipResubmit(text, _lastSubmittedTurnText, _lastTurnResolved, _lastSubmitWasNewProcess);
+            if (skipResubmit)
+            {
+                // Доп-проверка durability: submit прошлого процесса мог НЕ долететь до транскрипта
+                // (процесс убит до чтения stdin — CLI пишет user-сообщение в .jsonl только при
+                // чтении). Инцидент 16.08.2026: такой skip запускал CLI с --resume без submit,
+                // тот отдавал пустой result (numTurns=0) — ход «завершался успехом» без ответа.
+                // Текста в транскрипте нет → submit обязателен; есть → skip как раньше (без дубля).
+                var lastUserText = ReadLastTranscriptUserText();
+                if (!string.Equals(lastUserText, text, StringComparison.Ordinal))
+                {
+                    skipResubmit = false;
+                    Console.Error.WriteLine(
+                        "[ClaudeSession] Ре-аттемпт: прошлый submit не durable в транскрипте (текста нет) — " +
+                        $"пойдём обычным submit (session {Info.Id})");
+                }
+            }
             await _stdinLock.WaitAsync(ct);
             try
             {
@@ -3007,6 +3033,25 @@ public class ClaudeSession : ILlmSessionAdapter
         => !lastTurnResolved && lastSubmitWasNewProcess
            && lastSubmittedText is not null && text == lastSubmittedText;
 
+    // Последний user-текст главного транскрипта этой сессии (null — файла нет/ошибка/вложение)
+    private string? ReadLastTranscriptUserText()
+        => TranscriptProbe.LastUserText(
+            Info.ClaudeSessionId is { } csid
+                ? TranscriptProbe.FindMainTranscript(_rootPath, csid)
+                : null);
+
+    // Пустой result CLI: «success» без единого хода модели и без токенов — служебный маркер
+    // «модель не вызывалась» (микро-ход task-notification на --resume; запуск без submit при
+    // ре-аттемпте фолбэком), а не ответ пользовательскому ходу. Любой настоящий ответ модели
+    // даёт numTurns>=1; отказы в правах и api-ошибки приходят с непустым subtype/статусом/отказами
+    // и пустым не считаются. Чистая функция для теста (инцидент 16.08.2026).
+    internal static bool IsEmptyNoopResult(int numTurns, string subtype, string? apiErrorStatus,
+        IReadOnlyList<string>? permissionDenials, UsageInfo? usage)
+        => numTurns == 0 && subtype == "success" && apiErrorStatus is null
+           && (permissionDenials is null || permissionDenials.Count == 0)
+           && (usage is null || (usage.InputTokens == 0 && usage.OutputTokens == 0
+                                  && usage.CacheReadTokens == 0 && usage.CacheCreationTokens == 0));
+
     private static string BuildLaunchSignature(
         IReadOnlyList<string> args, string mcpServerKeys,
         IReadOnlyDictionary<string, string> envOverrides, string? personaLayerPrompt)
@@ -3245,9 +3290,6 @@ public class ClaudeSession : ILlmSessionAdapter
                         break;
                     }
                     CorrTrace("result-emit", Info.Id, contRun, root);
-                    // Ход получил свой result (success или error) — завершён, ре-аттемпт этого
-                    // текста уже не висящий: повторный ход с тем же текстом пойдёт обычным submit.
-                    _lastTurnResolved = true;
                 }
                 var subtype = root.TryGetProperty("subtype", out var st) ? st.GetString() ?? "success" : "success";
                 // Числа читаем через безопасные хелперы: openrouter-совместимый поток шлёт
@@ -3265,6 +3307,25 @@ public class ClaudeSession : ILlmSessionAdapter
                         denials.Add(x.TryGetProperty("tool_name", out var tnm) ? tnm.GetString() ?? "?" : "?");
                 }
                 var usage = ParseUsage(root);
+                if (IsEmptyNoopResult(numTurns, subtype, apiErr, denials, usage))
+                {
+                    // Пустой result CLI (ноль ходов модели, ноль токенов, success без api-ошибки
+                    // и отказов) — служебный маркер «модель не вызывалась», а не ответ
+                    // пользовательскому ходу. Так CLI завершает микро-ходы task-notification'ов
+                    // на --resume и запуск без submit (ре-аттемпт фолбэком). До фикса такой
+                    // result резолвил ход «успехом»: пользователь видел завершённый ход без
+                    // ответа, а настоящий result хода затем скипался фильтром корреляции
+                    // (инцидент 16.08.2026: ходы «Проверь»/«Ну как» по 280 мс с нулём токенов).
+                    // Проглатываем: ход ждёт настоящего result; не придёт — процесс завершится
+                    // и его смерть уйдёт наружу честной ошибкой/фолбэком.
+                    Console.Error.WriteLine(
+                        "[ClaudeSession] Пустой result CLI (numTurns=0, без вызова модели) не засчитан ответом ходу " +
+                        $"(session {Info.Id}) — ждём настоящий result");
+                    break;
+                }
+                // Ход получил свой result (success или error) — завершён, ре-аттемпт этого
+                // текста уже не висящий: повторный ход с тем же текстом пойдёт обычным submit.
+                _lastTurnResolved = true;
                 // На стороннем эндпоинте CLI считает total_cost_usd по ценам Anthropic —
                 // пересчитываем по ценам конфига модели (нет цен → стоимость не показываем)
                 if (_providers is not null && _providers.ResolveByModel(EffectiveModel) is not null)
@@ -4081,8 +4142,13 @@ public class ClaudeSession : ILlmSessionAdapter
             catch (OperationCanceledException) { } // 10 с истекло — идём дальше
         }
         _currentProcess?.Dispose();
-        _cts.Dispose();
-        _turnLock.Dispose();
-        _stdinLock.Dispose();
+        // _cts/_turnLock/_stdinLock НЕ диспозим (инцидент 16.08.2026: «Cannot access a
+        // disposed object: SemaphoreSlim» в ленте). Реанимация зависшего чата
+        // (ReviveStuckSession) зовёт DisposeAsync в фоне, пока ход запаркован на
+        // _turnLock или идёт внутри него — dispose примитивов под живыми ожидателями
+        // это гонка by design: WaitAsync/Wait/Release бросают ObjectDisposedException
+        // в чат пользователя или в необработанное исключение. SemaphoreSlim без
+        // AvailableWaitHandle не держит неуправляемых ресурсов — мусорщик соберёт их
+        // вместе с отвязанным адаптером (entry.Process = null в ReviveStuckSession).
     }
 }

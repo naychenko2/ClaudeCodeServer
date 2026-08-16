@@ -102,25 +102,8 @@ internal sealed class MainTranscriptTailer : IDisposable
         }
     }
 
-    // Путь главного транскрипта — те же корни и уплощение cwd, что у сабагент-ватчера
-    private string? ResolvePath()
-    {
-        var flat = string.Concat(_cwd.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
-        foreach (var root in WorkflowAgentParser.AllowedRoots)
-        {
-            if (!Directory.Exists(root)) continue;
-
-            var byConvention = Path.Combine(root, flat, _claudeSessionId + ".jsonl");
-            if (File.Exists(byConvention)) return byConvention;
-
-            foreach (var projDir in Directory.GetDirectories(root))
-            {
-                var candidate = Path.Combine(projDir, _claudeSessionId + ".jsonl");
-                if (File.Exists(candidate)) return candidate;
-            }
-        }
-        return null;
-    }
+    // Путь главного транскрипта — единый поиск с TranscriptProbe (те же корни и уплощение cwd)
+    private string? ResolvePath() => TranscriptProbe.FindMainTranscript(_cwd, _claudeSessionId);
 
     public void Dispose()
     {

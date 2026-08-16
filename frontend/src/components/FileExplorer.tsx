@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
@@ -182,8 +182,9 @@ function SyncSpinner() {
 }
 
 interface TreeNode {
-  entry: FileEntry;
+  entry: FileEntry | null;     // null только для error-ноды
   depth: number;
+  error?: { type: 'offline' | 'error'; path: string };  // заполнено у error-нод
 }
 
 function FilesTip({ icon, title, text, extra }: { icon: ReactNode; title: string; text: string; extra?: ReactNode }) {
@@ -274,6 +275,75 @@ function FilesRootEmptyState({ onCreateFile }: { onCreateFile?: () => void }) {
           }
         />
       </div>
+    </div>
+  );
+}
+
+// Полноформатное состояние ошибки листинга — для корня и мобильной папки,
+// где панель занимает всю область и есть место под иконку/заголовок/кнопку.
+// Два варианта: offline (нет связи) и error (сервер ответил 5xx и т.п.) — тексты
+// разные, потому что лекарства разные (восстановить сеть vs посмотреть логи).
+function FilesDirErrorState({ type, onRetry }: { type: 'offline' | 'error'; onRetry: () => void }) {
+  const offline = type === 'offline';
+  const accent = offline ? C.warningText : C.dangerText;
+  const accentBg = offline ? C.warningBg : C.dangerBg;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '32px 16px 20px', gap: 14 }}>
+      <div style={{
+        width: 48, height: 48, borderRadius: 14,
+        background: accentBg, color: accent,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        {offline
+          ? <CloudOff size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />
+          : <AlertTriangle size={ICON_SIZE.xl} strokeWidth={ICON_STROKE} />}
+      </div>
+      <div style={{ textAlign: 'center' }}>
+        <div style={{
+          fontFamily: FONT.serif, fontWeight: 500, fontSize: 18,
+          color: C.textPrimary, letterSpacing: '-0.01em', marginBottom: 4,
+        }}>
+          {offline ? 'Нет связи' : 'Не удалось загрузить содержимое'}
+        </div>
+        <div style={{ fontSize: 12.5, color: C.textSecondary, lineHeight: 1.5 }}>
+          {offline
+            ? 'Проверьте подключение к серверу и попробуйте ещё раз'
+            : 'Сервер ответил ошибкой. Попробуйте повторить запрос.'}
+        </div>
+      </div>
+      <Button
+        variant="secondary"
+        size="md"
+        leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+        onClick={onRetry}
+      >
+        Повторить
+      </Button>
+    </div>
+  );
+}
+
+// Компактная строка ошибки листинга внутри раскрытой папки дерева.
+// Не ломает ритм списка: высота как у обычной строки (ROW_H=22), отступ по глубине.
+function FilesInlineErrorRow({ depth, type, onRetry }: { depth: number; type: 'offline' | 'error'; onRetry: () => void }) {
+  const offline = type === 'offline';
+  const accent = offline ? C.warningText : C.dangerText;
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      paddingLeft: 8 + depth * INDENT, paddingRight: 8,
+      height: ROW_H, fontSize: 12, color: accent, fontFamily: FONT.sans,
+      boxSizing: 'border-box',
+    }}>
+      {offline
+        ? <CloudOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+        : <AlertTriangle size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+      <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {offline ? 'Нет связи' : 'Не удалось загрузить'}
+      </span>
+      <Button size="xs" variant="ghost" onClick={onRetry}>
+        Повторить
+      </Button>
     </div>
   );
 }
@@ -637,6 +707,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [expanded, setExpanded] = useState<Set<string>>(() => initial?.expanded ?? new Set());
   const [mobileDir, setMobileDir] = useState<string>(() => initial?.mobileDir ?? '');
   const [loadingDirs, setLoadingDirs] = useState<Set<string>>(new Set());
+  // Ошибка загрузки по пути: 'offline' (OfflineError) или 'error' (прочее).
+  // Без неё loadDir, проглотивший throw через .catch(), выглядел как «пусто» —
+  // и панель показывала «Проект пуст» при живых файлах в корне.
+  const [dirErrors, setDirErrors] = useState<Map<string, 'offline' | 'error'>>(new Map());
   const inFlight = useRef(new Set<string>());
   const dirCacheRef = useRef(dirCache);
   useEffect(() => { dirCacheRef.current = dirCache; }, [dirCache]);
@@ -775,8 +849,18 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     inFlight.current.add(path);
     setLoadingDirs(prev => new Set(prev).add(path));
     try {
-      const entries = await api.files.list(project.id, path).catch(() => null);
-      if (entries) setDirCache(prev => new Map(prev).set(path, entries));
+      const entries = await api.files.list(project.id, path);
+      setDirCache(prev => new Map(prev).set(path, entries));
+      // Успех — чистим прошлую ошибку для пути, если была
+      setDirErrors(prev => {
+        if (!prev.has(path)) return prev;
+        const n = new Map(prev);
+        n.delete(path);
+        return n;
+      });
+    } catch (e) {
+      // OfflineError (связь) отдельно от прочих сбоев сервера — тексты в UI разные
+      setDirErrors(prev => new Map(prev).set(path, e instanceof OfflineError ? 'offline' : 'error'));
     } finally {
       inFlight.current.delete(path);
       setLoadingDirs(prev => { const n = new Set(prev); n.delete(path); return n; });
@@ -807,6 +891,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     if (st) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- восстановление кэша проводника при смене проекта
       setDirCache(st.dirCache);
+      setDirErrors(new Map());
       setExpanded(st.expanded);
       setMobileDir(st.mobileDir);
       setCreateInDir(st.createInDir);
@@ -817,6 +902,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       if (st.mobileDir) loadDir(st.mobileDir);
     } else {
       setDirCache(new Map());
+      setDirErrors(new Map());
       setExpanded(new Set());
       setMobileDir('');
       setCreateInDir('');
@@ -847,6 +933,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const invalidateDir = useCallback(async (path: string) => {
     inFlight.current.delete(path);
     setDirCache(prev => { const n = new Map(prev); n.delete(path); return n; });
+    // Ошибка устарела — чистим, чтобы на экране не висела «Нет связи», пока идёт новый запрос
+    setDirErrors(prev => {
+      if (!prev.has(path)) return prev;
+      const n = new Map(prev);
+      n.delete(path);
+      return n;
+    });
     await loadDir(path);
   }, [loadDir]);
 
@@ -1199,10 +1292,16 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           result.push(...walk(entry.path, depth + 1));
         }
       }
+      // Раскрытая папка, листинг которой не загрузился — отдельная нода в ритме дерева.
+      // Без неё такая папка выглядела бы как пустая: ни «Нет связи», ни «Повторить».
+      // Корень ('') обрабатывается отдельно в JSX — здесь только вложенные.
+      if (path !== '' && expanded.has(path) && dirErrors.has(path)) {
+        result.push({ entry: null, depth: depth + 1, error: { type: dirErrors.get(path)!, path } });
+      }
       return result;
     };
     return walk('', 0);
-  }, [dirCache, expanded, sortMode, onlyChanged, isRepo, passesChangedFilter]);
+  }, [dirCache, expanded, sortMode, onlyChanged, isRepo, passesChangedFilter, dirErrors]);
 
   const rootLoading = !dirCache.has('') && loadingDirs.has('');
 
@@ -1584,6 +1683,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         ) : isMobile ? (
           mobileDirLoading ? (
             <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
+          ) : dirErrors.has(mobileDir) && !dirCache.has(mobileDir) ? (
+            // Мобильная папка не загрузилась — error вместо «Папка пуста».
+            // Не сносим уже отрисованные данные, если они в кэше (фоновый фейл reload через SignalR)
+            <FilesDirErrorState type={dirErrors.get(mobileDir)!} onRetry={() => invalidateDir(mobileDir)} />
           ) : mobileEntries.length === 0 ? (
             onlyChanged && isRepo ? (
               <EmptyState
@@ -1603,6 +1706,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           )
         ) : rootLoading ? (
           <div style={{ padding: '24px 12px', color: C.textMuted, fontSize: 13, textAlign: 'center', fontFamily: FONT.mono }}>Загрузка…</div>
+        ) : dirErrors.has('') && !dirCache.has('') ? (
+          // Корень не загрузился — показываем ошибку с «Повторить», а не «Проект пуст».
+          // Но только пока в кэше пусто: фоновая перезагрузка через SignalR может моргнуть
+          // на сети и не должна сносить уже отрисованные данные
+          <FilesDirErrorState type={dirErrors.get('')!} onRetry={() => invalidateDir('')} />
         ) : flatTree.length === 0 ? (
           onlyChanged && isRepo ? (
             <EmptyState
@@ -1617,7 +1725,13 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           // width: max-content — строки растягиваются под самое длинное имя,
           // контейнер даёт горизонтальный скролл вместо обрезания
           <div style={{ minWidth: '100%', width: 'max-content' }}>
-            {flatTree.map(({ entry, depth }) => renderFileRow(entry, depth))}
+            {flatTree.map((node) => {
+              if (node.error) {
+                const err = node.error;
+                return <FilesInlineErrorRow key={`err:${err.path}`} depth={node.depth} type={err.type} onRetry={() => invalidateDir(err.path)} />;
+              }
+              return renderFileRow(node.entry!, node.depth);
+            })}
           </div>
         )}
       </div>

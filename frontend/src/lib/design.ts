@@ -112,6 +112,12 @@ export const C = {
   // Светлая «панель вывода» — для текстовых результатов (Read/Grep/Glob и пр.)
   outputBg:    'var(--c-output-bg)',   // белый фон панели вывода
   outputBorder:'var(--c-output-border)',   // граница панели вывода
+
+  // Aurora-сияние в композере (режим разговора): rgba-центры лент ДО blur.
+  // «Я говорю» → user (accent), «AI отвечает» → цвет проекта (projectColorHex,
+  // альфу накладывает Composer) либо ai (fallback вне проекта). Значения — theme.css.
+  auroraUser: 'var(--c-aurora-user)',
+  auroraAi:   'var(--c-aurora-ai)',
 } as const
 
 // === Радиусы (единая шкала) ===

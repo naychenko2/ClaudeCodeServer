@@ -4,6 +4,11 @@
 //
 // Тон синтезируем WebAudio, а не проигрываем файл: 40 мс писка не стоят сетевого запроса
 // и не должны конкурировать за HTMLAudioElement с озвучкой ответа.
+//
+// Каждый сигнал здесь же дёргает пульс aurora-сияния (auroraPulse) — свет вспыхивает
+// в такт звуку, даже когда амплитуда голоса недоступна (ход, озвучка, псевдо-режим).
+
+import { auroraPulse } from './auroraPulse';
 
 let ctx: AudioContext | null = null;
 
@@ -50,6 +55,7 @@ function tone(freq: number, peak: number, durSec: number, type: OscillatorType =
 
 // Сигнал ~40 мс. Тихая деградация: нет WebAudio или контекст не разбужен — молчим.
 export function beep(): void {
+  auroraPulse();
   tone(880, 0.12, 0.04);
 }
 
@@ -61,6 +67,8 @@ const THINKING_PERIOD_MS = 4000;
 let thinkingTimer: ReturnType<typeof setInterval> | null = null;
 
 function tick(): void {
+  // 0.7 над фоном 0.50: волна заметно подскакивает на каждом тике, каждый раз
+  auroraPulse(0.7);
   tone(330, 0.10, 0.09);
 }
 
@@ -84,7 +92,13 @@ const NEED_ANSWER_GAP_SEC = 0.16;
 export const NEED_ANSWER_DURATION_MS = 560;
 
 export function needAnswer(): void {
-  for (let i = 0; i < 3; i++) tone(780, 0.22, 0.08, 'sine', i * NEED_ANSWER_GAP_SEC);
+  // Тройной пинг — тройная вспышка: пульс приходит в такт каждому тону (setTimeout
+  // с тем же гэпом), auroraPulse берёт максимум — тон доламывает затухание прошлой
+  // волны. Тон планируем по-прежнему WebAudio-часами (delaySec), звук не меняется
+  for (let i = 0; i < 3; i++) {
+    tone(780, 0.22, 0.08, 'sine', i * NEED_ANSWER_GAP_SEC);
+    setTimeout(() => auroraPulse(1), i * NEED_ANSWER_GAP_SEC * 1000);
+  }
 }
 
 // «Микрофон открыт, говори» (референс .cc-attachments/sounds/listen-3-double.wav).
@@ -94,6 +108,7 @@ export function needAnswer(): void {
 export const MIC_READY_DURATION_MS = 120;
 
 export function micReady(): void {
+  auroraPulse(0.85); // «слушаю» — выше тика ожидания, ниже «нужен ответ»
   tone(520, 0.12, 0.03);
   tone(700, 0.12, 0.03, 'sine', 0.09);
 }

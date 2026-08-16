@@ -79,6 +79,79 @@ body {
   animation: cc-wave 0.9s ease-in-out infinite;
 }
 
+/* === Aurora-сияние над композером (режим разговора) ===
+   «Северное сияние» — свет поднимается ТОЛЬКО от верхней кромки карточки. Слой
+   лежит ЗА непрозрачной карточкой, по ширине — ровно карточка (left/right: 0),
+   снизу обрезан внутри неё (за её фоном). БОКОВОГО света нет не клипом, а
+   геометрией: сами ленты сужены по горизонтали (left 12% / width 76%), их
+   градиенты гаснут задолго до боковых кромок — blur'у нечего вытекать вбок.
+   (Клип здесь бы не помог: filter применяется ПОСЛЕ обрезки и вытекает за неё.)
+   Мягкость затухания вверх даёт filter: blur — ленты задаются ярко (альфа
+   в theme.css), гаусс разносит их плавно, резких границ нет.
+   ЛЕНТЫ живут в index.css, потому что animation и составные градиенты — не
+   inline-стиль: React перезатирает их на каждый рендер, а тут декларативные
+   keyframes + рассинхрон дрейфа. Цвет лент подставляет Composer через style
+   (токены C.aurora*), прозрачность дышит от голоса через --amp (useMicLevel). */
+.cc-aurora {
+  position: absolute;
+  /* Вылет только вверх — высокий столб света; ширина — ровно карточка, низ — за её фоном */
+  top: -48px;
+  left: 0;
+  right: 0;
+  bottom: 40%;
+  pointer-events: none;
+  /* Гауссово затухание наружу — вместо обрезки и блум-теней */
+  filter: blur(26px);
+  /* Дыхание: --amp 0..1 пишет useMicLevel прямо в этот узел (без React state) —
+     это и амплитуда голоса, и пульс звуковых сигналов (auroraPulse). Диапазон
+     широкий: от трети до полной яркости, чтобы вспышки читались глазом */
+  opacity: calc(.38 + .62 * var(--amp, 0));
+}
+.cc-aurora-band {
+  position: absolute;
+  top: -20%;
+  /* Шире, чем раньше (12%/76%): свет охватывает почти всю кромку, но у самых
+     боковых краёв всё ещё гаснет — вбок ничего не торчит (геометрия вместо клипа) */
+  left: 5%;
+  width: 90%;
+  height: 140%;
+  will-change: transform;
+}
+.cc-aurora-band {
+  position: absolute;
+  top: -20%;
+  /* Сужение по горизонтали: градиенты гаснут до боковых кромок карточки,
+      вбок света нет вообще (см. комментарий блока) */
+  left: 12%;
+  width: 76%;
+  height: 140%;
+  will-change: transform;
+}
+@keyframes cc-aurora-drift-1 {
+  0%   { transform: translate3d(-6%, -4%, 0) rotate(-4deg); }
+  50%  { transform: translate3d(6%, 5%, 0) rotate(3deg); }
+  100% { transform: translate3d(-6%, -4%, 0) rotate(-4deg); }
+}
+@keyframes cc-aurora-drift-2 {
+  0%   { transform: translate3d(5%, 3%, 0) rotate(5deg); }
+  50%  { transform: translate3d(-7%, -6%, 0) rotate(-3deg); }
+  100% { transform: translate3d(5%, 3%, 0) rotate(5deg); }
+}
+@keyframes cc-aurora-drift-3 {
+  0%   { transform: translate3d(-3%, 6%, 0) rotate(2deg); }
+  50%  { transform: translate3d(4%, -5%, 0) rotate(-5deg); }
+  100% { transform: translate3d(-3%, 6%, 0) rotate(2deg); }
+}
+.cc-aurora .band-1 { animation: cc-aurora-drift-1 16s ease-in-out infinite; }
+.cc-aurora .band-2 { animation: cc-aurora-drift-2 12s ease-in-out infinite; }
+.cc-aurora .band-3 { animation: cc-aurora-drift-3 9s ease-in-out infinite; }
+/* Тише движения: дрейф выключен, остаётся статичная картинка + дыхание амплитуды */
+@media (prefers-reduced-motion: reduce) {
+  .cc-aurora .band-1,
+  .cc-aurora .band-2,
+  .cc-aurora .band-3 { animation: none; }
+}
+
 @keyframes composer-dot-bounce {
   0%, 80%, 100% { transform: translateY(0); opacity: 0.4; }
   40% { transform: translateY(-5px); opacity: 1; }

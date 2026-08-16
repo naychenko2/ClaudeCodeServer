@@ -27,6 +27,7 @@ import { Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
+import { useMicLevel } from '../hooks/useMicLevel';
 import { primeAudio } from '../lib/tts';
 import { isMicKeyboardFallback } from '../lib/voiceInput';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
@@ -115,6 +116,10 @@ export interface ComposerProps {
   // Фаза озвучки ответа; владелец — ChatPanel (он зовёт speak). Петля открывает микрофон
   // только когда фаза вернулась в idle — иначе она услышит собственный голос
   speechPhase?: SpeechPhase;
+  // Зеркало «петля разговора активна» наверх: ChatPanel гейтит по нему поточную
+  // озвучку хода (стриминг нужен только в talk-режиме). Значение приходит от самой
+  // петли, второй источник правды не заводим
+  onHandsFreeActiveChange?: (active: boolean) => void;
   // Оборвать играющую озвучку (владелец — ChatPanel): тап по кнопке разговора начинает
   // с неё, иначе микрофон откроется под чтение предыдущего ответа
   onStopSpeech?: () => void;
@@ -135,6 +140,9 @@ export interface ComposerProps {
   // Сигнал «поставь курсор в поле»: растущее число (на стене — фокус колонки).
   // Именно счётчик, а не boolean: повторный запрос на то же значение не сработал бы.
   focusSignal?: number;
+  // Фирменный цвет проекта чата (projectMainColor): им светится aurora-сияние
+  // при озвучке ответа AI. Не задан (чат вне проекта) — токен auroraAi (фиолетовый)
+  projectColorHex?: string;
 }
 
 // Ступени полосы контролов («губы» под полем ввода) — по ширине САМОЙ полосы, не окна.
@@ -197,6 +205,39 @@ function Waveform() {
       ))}
     </div>
   );
+}
+
+// Aurora-сияние — свет над верхней кромкой карточки композера (режим разговора):
+// три полупрозрачные ленты градиента дрейфуют каждая в своём ритме (keyframes —
+// index.css, .cc-aurora*), слой лежит ЗА непрозрачной карточкой и ограничен её
+// верхней зоной — наружу торчит только верхний ореол, размытый blur'ом (filter
+// в классе). Дышит от голоса: прозрачность = f(--amp), переменную пишет
+// useMicLevel в rAF
+function Aurora({ color, bandRef }: { color: string; bandRef: React.RefObject<HTMLDivElement | null> }) {
+  // Фокусы лент — у верхней кромки И у центра: свет клубится над серединой
+  // карточки, к боковым кромкам градиенты гаснут (лево/право — чисто, ширина
+  // ленты 90% в index.css). Стопы на 92%: гаснет совсем медленно — максимум света
+  const bands: Array<{ cls: string; style: React.CSSProperties }> = [
+    { cls: 'band-1', style: { background: `radial-gradient(ellipse 62% 55% at 40% 80%, ${color}, transparent 92%)` } },
+    { cls: 'band-2', style: { background: `radial-gradient(ellipse 70% 48% at 60% 76%, ${color}, transparent 92%)` } },
+    { cls: 'band-3', style: { background: `radial-gradient(ellipse 55% 60% at 50% 58%, ${color}, transparent 88%)` } },
+  ];
+  return (
+    <div ref={bandRef} className="cc-aurora" style={{ zIndex: 0 }}>
+      {bands.map(b => <div key={b.cls} className={`cc-aurora-band ${b.cls}`} style={b.style} />)}
+    </div>
+  );
+}
+
+// Цвет проекта приезжает непрозрачным hex (#AABBCC) — лентам нужна альфа для
+// мягкого затухания градиентов. Переводим в rgba, альфу берём как у токенов
+// auroraUser/auroraAi (одинаковая плотность света у «моего» и «проектного» цвета).
+// Нестандартный формат — пропускаем насквозь, слой просто станет плотнее
+function withAuroraAlpha(hex: string, alpha: number): string {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
 function fmtRecTime(s: number): string {
@@ -401,6 +442,7 @@ export function Composer({
   onToggleVoiceMode,
   awaitingResponse = false,
   speechPhase = 'idle',
+  onHandsFreeActiveChange,
   onStopSpeech,
   chatContext,
   promptSuggestion = null,
@@ -408,6 +450,7 @@ export function Composer({
   restore = null,
   onReplaceAttachments,
   focusSignal,
+  projectColorHex,
 }: ComposerProps) {
   const asstName = useAssistantName();
   // Черновик per-session. Composer смонтирован с key={sessionId} (см. ChatPanel), поэтому
@@ -461,7 +504,6 @@ export function Composer({
     // нельзя. Человек этот текст не печатал и на экран не смотрит, а непустое поле подменит
     // кнопку режима на «Отправить» — войти в разговор снова будет нечем
     if (loopSentRef.current) { loopSentRef.current = false; return; }
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- восстановление прерванного сообщения из события composer_restore
     setText(r.text);
     if (r.attachedPaths && r.attachedPaths.length > 0 && onReplaceAttachments) {
       onReplaceAttachments(r.attachedPaths);
@@ -563,7 +605,13 @@ export function Composer({
     },
     onKeyboardFallback: () => textareaRef.current?.focus(),
     onEnd: () => { if (talkActiveRef.current) handsFreeRef.current?.onCycleEnd(); },
-    onError: code => { if (talkActiveRef.current) handsFreeRef.current?.onCycleError(code); },
+    onError: code => {
+      if (!talkActiveRef.current) return;
+      // micDead — смерть движка: канарейке амплитуды важно знать о ней (конфликт
+      // захватов?), самому автомату её передаст onCycleError ниже
+      if (code === 'mic-dead') reportMicDeadRef.current?.();
+      handsFreeRef.current?.onCycleError(code);
+    },
     quiet: () => talkActiveRef.current,
   });
 
@@ -797,6 +845,28 @@ export function Composer({
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;
+  // Зеркало петли для ChatPanel: поточная озвучка хода гейтится по нему. Ref, а не
+  // пропс-значение: значение живёт у родителя, оттуда же приходит с гейтом голосового
+  // режима — здесь только честно сообщаем текущее состояние петли
+  useEffect(() => { onHandsFreeActiveChange?.(talkActive); }, [talkActive, onHandsFreeActiveChange]);
+
+  // Aurora-сияние: живёт в карточке композера при активной петле разговора И при
+  // озвучке ответа в голосовом режиме без петли. Цвет — по фазе петли, дыхание —
+  // амплитуда голоса (см. useMicLevel). Поток амплитуды открыт только в
+  // микрофонных фазах петли — та же эхо-дисциплина
+  const auroraVisible = talkActive || (voiceMode && speechPhase !== 'idle');
+  const auroraRef = useRef<HTMLDivElement>(null);
+  // Луп дыхания живёт всё время видимости сияния (пульсы звуков должны дышать и в
+  // фазах хода/озвучки), поток амплитуды — только в микрофонных фазах петли,
+  // речевой псевдо-паттерн — пока играет озвучка ответа (микрофон закрыт, честной
+  // амплитуды нет). Вне петли озвучка видна по speechPhase
+  const auroraMicActive = talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending');
+  const auroraSpeechActive = talkActive ? handsFree.phase === 'speaking' : speechPhase !== 'idle';
+  const { reportMicDead: reportMicDeadToAurora } = useMicLevel({ active: auroraVisible, micActive: auroraMicActive, speechActive: auroraSpeechActive, targetRef: auroraRef });
+  // useVoiceInput объявлен ВЫШЕ и его onError уже позвал канарейку — держим
+  // актуальную ссылку для объявления ниже по файлу, не копию на момент рендера
+  const reportMicDeadRef = useRef(reportMicDeadToAurora);
+  useEffect(() => { reportMicDeadRef.current = reportMicDeadToAurora; });
 
   // Отсчёт окна отмены (2 секунды) — только для подписи в полосе ввода; сам таймер
   // ведёт автомат петли
@@ -1640,7 +1710,26 @@ export function Composer({
             : undefined}
         />
       )}
-    <div style={containerStyle}>
+    {/* Обёртка карточки ввода: держит её вместе с aurora-нимбом. Нимб — сиблинг
+        ЗА карточкой: тело прячет непрозрачный фон самой карточки, наружу торчит
+        только ореол. Обёртка НЕ создаёт стокинг-контекст (z:auto), поэтому три
+        z-уровня сравниваются в общем контексте: карточка z:2 > губа контролов
+        z:1 > нимб z:0 — карточка по-прежнему поверх верхней кромки губы, а
+        опаковый фон губы (десктоп) глушит нижний вылет нимба */}
+    <div style={{ position: 'relative' }}>
+      {auroraVisible && (
+        <Aurora
+          // Я говорю (listening/pending) — оранжевый accent (токен auroraUser в
+          // обеих темах = accent). Весь цикл ответа AI (ход + озвучка) и озвучка
+          // вне петли — цвет проекта («голос проекта», альфу накладываем поверх
+          // hex — см. withAuroraAlpha); вне проекта — токен ai
+          color={talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending')
+            ? C.auroraUser
+            : projectColorHex ? withAuroraAlpha(projectColorHex, 1) : C.auroraAi}
+          bandRef={auroraRef}
+        />
+      )}
+      <div style={{ ...containerStyle, position: 'relative', zIndex: 2 }}>
       {/* Перетаскивание файла над композером: подсказка поверх карточки.
           pointerEvents:none — иначе слой перехватил бы drop у самой карточки */}
       {dragOver && (
@@ -1755,6 +1844,7 @@ export function Composer({
               : <>{micButton}{!canSend && !isGenerating && voiceButton ? voiceButton : sendButton}</>}
         </div>
       </div>
+      </div>
     </div>
 
     {/* Полоса контролов — ПОД рамкой композера, на собственной «губе»: на десктопе
@@ -1763,8 +1853,11 @@ export function Composer({
         отрицательный margin заводит её верх под карточку (карточка positioned и
         рисуется поверх static-губы), скруглены только нижние углы. Строка всегда одна:
         на узком экране пикеры справа схлопнуты в иконки, а левые кнопки по мере
-        нехватки места уезжают справа налево в «⋯» (см. useToolbarOverflow). */}
+        нехватки места уезжают справа налево в «⋯» (см. useToolbarOverflow).
+        position:relative+zIndex:1 — над aurora-нимбом (z:0): фон губы (десктоп)
+        глушит его нижний вылет, но ниже самой карточки ввода (z:2) */}
     <div ref={stripRef} style={{
+      position: 'relative', zIndex: 1,
       display: 'flex', alignItems: 'center', gap: isMobile ? 6 : 4,
       flexWrap: 'nowrap', minWidth: 0,
       ...(isMobile

@@ -241,11 +241,38 @@ public static class TeamImplementPrompts
     // Заголовок уведомления и push (Э8). В push видны только заголовок и тело, поэтому имя
     // персоны вклеиваем в текст: штаб говорит с человеком от лица координатора. Персоны нет
     // (или её удалили) — остаётся обезличенный текст из раздела «Тексты» продуктового плана.
-    // waitingForAnswers — ждём ответов на вопросы интервью, а не решения по карточке.
-    public static string WaitingTitle(string? personaName, bool waitingForAnswers) =>
+    // Текст разведён по виду карточки: в списке уведомлений видно только заголовок, и человек
+    // должен понимать по нему, горит ли работа: остановлена (блокер, бюджет, выход за план…),
+    // ждёт решения (гейт волны, информационные) или ждёт ответов на вопросы (интервью,
+    // тупик с уточнениями). Тело уведомления несёт причину и здесь не участвует.
+    public static string WaitingTitle(string? personaName, TeamEscalationKind kind)
+    {
+        var named = !string.IsNullOrWhiteSpace(personaName);
+        return kind switch
+        {
+            // Вопросы интервью и тупик с уточнениями — не «решение», а ответы: текст свой
+            TeamEscalationKind.NeedsClarification => named
+                ? $"{personaName} ждёт ответов по задаче" : "Команда ждёт ответов по задаче",
+            // Гейт волны («запускать следующую?») и информационные карточки — прежний текст
+            TeamEscalationKind.WaveGate or TeamEscalationKind.WaveAdded => named
+                ? $"{personaName}: нужно ваше решение" : "Команда ждёт вашего решения",
+            // Остальные не-информационные — работа реально встала
+            _ => named ? $"{personaName}: практика остановлена" : "Практика остановлена",
+        };
+    }
+
+    // Заголовок повторного напоминания о висящей карточке: работа стоит и ответа всё ещё
+    // нет — отличается от первого оклика, чтобы в списке уведомлений было видно, что это
+    // повтор, а не новая остановка.
+    public static string ReminderTitle(string? personaName) =>
         string.IsNullOrWhiteSpace(personaName)
-            ? waitingForAnswers ? "Команда ждёт ответов по задаче" : "Команда ждёт вашего решения"
-            : waitingForAnswers ? $"{personaName} ждёт ответов по задаче" : $"{personaName}: нужно ваше решение";
+            ? "Команда всё ещё ждёт решения"
+            : $"{personaName}: практика всё ещё ждёт";
+
+    // Тело повторного напоминания: заголовок карточки и сколько часов она без ответа
+    // (округление вниз до целых часов)
+    public static string ReminderBody(string cardTitle, int hoursWithoutAnswer) =>
+        $"{cardTitle} · без ответа {hoursWithoutAnswer} ч";
 
     // Тело уведомления о вопросах интервью: сама карточка вопросов уже в ленте чата
     public const string QuestionNotificationBody = "Вопросы по задаче — откройте чат и выберите варианты";

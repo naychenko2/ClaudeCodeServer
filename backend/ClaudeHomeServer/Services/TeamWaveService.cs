@@ -571,6 +571,71 @@ public class TeamWaveService
             .Select(t => t.Title)];
     }
 
+    // --- Повторные напоминания о висящей карточке ---
+
+    // Первое напоминание — через час после публикации карточки, второе — через четыре часа
+    // после первого. Максимум два на карточку: навязчивость хуже пропущенного сигнала.
+    private static readonly TimeSpan FirstReminderAfter = TimeSpan.FromHours(1);
+    private static readonly TimeSpan NextReminderAfter = TimeSpan.FromHours(4);
+    private const int MaxReminders = 2;
+
+    // Сторож ожидающих карточек (TeamWaveWatchdog, тот же тик, что и у зависших волн):
+    // открытая карточка без ответа дольше порога — повторить уведомление. Первый оклик
+    // уходил один раз, и пропущенная ночью карточка оставляла практику стоять до утра —
+    // «молчаливых пауз не бывает» и здесь. Счётчик напоминаний живёт на карточке в истории
+    // и переживает рестарт сервера.
+    public async Task CheckAwaitingEscalationsAsync()
+    {
+        foreach (var session in _sessions.GetTeamImplementSessions())
+        {
+            if (session.TeamImplement is not { } team) continue;
+            // Человек прямо сейчас в этом чате — он и так видит карточку в ленте
+            if (_sessions.HasViewers(session.Id)) continue;
+
+            var ownerId = session.OwnerId
+                ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
+            if (ownerId is null || _notif is null) continue;
+
+            foreach (var card in await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            {
+                if (!AwaitsHuman(card, team)) continue;
+                if (card.RemindersSent >= MaxReminders) continue;
+                // Порог первого напоминания — от публикации карточки, второго — от первого
+                var anchor = card.RemindersSent == 0 ? card.CreatedAt : card.LastReminderAt ?? card.CreatedAt;
+                var threshold = card.RemindersSent == 0 ? FirstReminderAfter : NextReminderAfter;
+                if (DateTime.UtcNow - anchor < threshold) continue;
+
+                var hours = (int)Math.Floor((DateTime.UtcNow - card.CreatedAt).TotalHours);
+                var authorId = card.PersonaId ?? team.CoordinatorPersonaId ?? session.PersonaId;
+                // Push — по тем же правилам, что у первого уведомления (только когда человека
+                // нет в чате); зрителей мы выше отсекли, поэтому здесь он всегда уходит
+                await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
+                    Title: TeamImplementPrompts.ReminderTitle(PersonaName(authorId, ownerId)),
+                    Body: TeamImplementPrompts.ReminderBody(card.Title, hours),
+                    Url: ChatUrl(session),
+                    Kind: "claude",
+                    TaskId: card.TaskId,
+                    ProjectId: session.ProjectId,
+                    PersonaId: authorId,
+                    Tag: "Командная реализация") { SessionId = session.Id }, sendPush: true);
+                await _sessions.MarkTeamEscalationRemindedAsync(session.Id, card.Id);
+                _log.LogInformation("Напоминание {Number} о карточке «{Title}» чата-штаба {SessionId} отправлено",
+                    card.RemindersSent + 1, card.Title, session.Id);
+            }
+        }
+    }
+
+    // Карточка ждёт действия человека: не информационная (добавочная волна не ждёт клика)
+    // и стадия режима всё ещё стоит в ожидании её ответа (тупик с уточнениями держит
+    // интервью, остальные карточки — «ждёт решения»). Ответ сообщением возвращает стадию
+    // в работу, НЕ гася карточку (ResumeTeamFromDecisionOnUserInput), и по такой
+    // «карточке-призраку» будить нельзя.
+    private static bool AwaitsHuman(TeamEscalation card, SessionTeamImplement team) =>
+        !card.Kind.IsInformational()
+        && (card.Kind != TeamEscalationKind.NeedsClarification
+            ? team.Stage == TeamImplementStage.AwaitingDecision
+            : team.Stage == TeamImplementStage.Interview);
+
     // Единая точка остановки: карточка в ленте + уведомление, а если человека нет в чате —
     // ещё и web push. Молчаливых остановок в режиме быть не должно.
     public async Task RaiseEscalationAsync(Session session, TeamEscalation escalation)
@@ -585,12 +650,11 @@ public class TeamWaveService
         var away = !_sessions.HasViewers(session.Id);
         var authorId = escalation.PersonaId
             ?? session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
-        // Заголовок от имени персоны (Э8): в push видны только Title и Body, поэтому имя
-        // вклеиваем в текст — обезличенное «Команда ждёт…» остаётся фолбэком, когда персоны
-        // у штаба нет. Тупик в волне — не «решение», а ответы на вопросы: текст свой.
-        var waitingForAnswers = escalation.Kind == TeamEscalationKind.NeedsClarification;
+        // Заголовок от имени персоны (Э8) и по виду карточки: остановка, гейт волны и
+        // вопросы различаются уже в списке уведомлений. Обезличенное «Команда ждёт…»
+        // остаётся фолбэком, когда персоны у штаба нет.
         await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
-            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId), waitingForAnswers),
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId), escalation.Kind),
             Body: escalation.Title,
             Url: ChatUrl(session),
             Kind: "claude",
@@ -615,7 +679,9 @@ public class TeamWaveService
 
         var authorId = session.TeamImplement?.CoordinatorPersonaId ?? session.PersonaId;
         await _notif.SendNotificationMessageAsync(ownerId, new Protocol.NotificationMessage(
-            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId), waitingForAnswers: true),
+            // Вопрос интервью — тот же текст, что у карточки тупика с уточнениями
+            Title: TeamImplementPrompts.WaitingTitle(PersonaName(authorId, ownerId),
+                TeamEscalationKind.NeedsClarification),
             Body: TeamImplementPrompts.QuestionNotificationBody,
             Url: ChatUrl(session),
             Kind: "claude",

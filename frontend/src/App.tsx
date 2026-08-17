@@ -22,6 +22,8 @@ import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
+import { useThemeColor } from './hooks/useThemeColor'
+import { projectMainColor } from './features/projects/projectUtil'
 import { showToast } from './lib/toast'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged, onMessage } from './lib/signalr'
@@ -152,6 +154,13 @@ export default function App() {
     return 'home'
   })
   const effectiveHubTab: HubTabValue = hubTab
+
+  // Цвет титлбара окна (Chromium: meta[name=theme-color]): внутри открытого
+  // проекта — фирменный цвет проекта, вне — акцент текущей темы. «Спящий»
+  // проект (уход в «Чаты»/«Заметки» без выхода) НЕ красит: красим только когда
+  // WorkspacePage реально на экране, т.е. вкладка хаба — 'projects'.
+  const inProjectScreen = effectiveHubTab === 'projects' && !!project;
+  useThemeColor(inProjectScreen ? projectMainColor(project!) : C.accent);
 
   // Витрина дизайн-системы #/ui-kit — переключается по hash без перезагрузки,
   // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,

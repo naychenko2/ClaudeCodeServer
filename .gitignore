@@ -112,3 +112,6 @@ docs/plans/
 backend/.tmpbuild/
 backend/.vite/
 test-results/
+
+# Планы plan-mode сессий (выход из планирования пишет сюда); итог работы живёт в коммитах
+.claude/plans/

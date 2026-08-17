@@ -26,7 +26,8 @@ import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
-import { speak, stopSpeaking, primeAudio, setSpeechToast } from '../lib/tts';
+import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, type StreamSpeech } from '../lib/tts';
+import { turnText, turnStreamChunks, turnStreamTail, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
 import { needAnswer, primeBeep } from '../lib/beep';
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
@@ -657,6 +658,23 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // из чата с 2 результатами в чат с 5 зачитал бы вслух чужой старый ответ.
   const speakCountRef = useRef<number | null>(null);
   const speakSessionRef = useRef(session.id);
+
+  // === Поточная озвучка хода (только режим разговора: voiceMode && handsFreeActive) ===
+  // Единственный владелец звука хода в talk-режиме — StreamSpeech: speak() тут не зовётся
+  // вовсе (ни на result, ни в фолбэке hitMarkup), что закрывает и дубль озвучки, и
+  // конфликт токенов. Гейт handsFreeActive поднимает Composer (петля живёт там).
+  const [handsFreeActive, setHandsFreeActive] = useState(false);
+  const streamStRef = useRef<TurnStreamState>(TURN_STREAM_INIT);
+  const streamRef = useRef<StreamSpeech | null>(null);
+  // Сброс на границах хода/чата: новый ход (user_message), прерывание, ошибка, смена
+  // чата, загрузка истории (F5 — иначе первый снапшот выглядел бы дельтами). Очередь
+  // гасится через stop()
+  const resetStreamSpeech = useCallback(() => {
+    streamStRef.current = TURN_STREAM_INIT;
+    streamRef.current?.stop();
+    streamRef.current = null;
+  }, []);
+
   useEffect(() => { setSpeechToast((text) => showToast('Озвучка', text)); }, []);
   useEffect(() => {
     const switched = speakSessionRef.current !== session.id;
@@ -664,6 +682,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       speakSessionRef.current = session.id;
       speakCountRef.current = null; // первая загрузка нового чата — молчим
       stopSpeech();
+      resetStreamSpeech();
     }
     // Пока история грузится, items пуст у ЛЮБОГО чата: базовая отметка, взятая здесь,
     // равна нулю, и первый же загруженный снапшот выглядел бы как новые ответы —
@@ -671,30 +690,81 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // с первого ЗАГРУЖЕННОГО снапшота (та же причина, что у emptyChatFocus выше).
     if (isHistoryLoading) {
       speakCountRef.current = null;
+      resetStreamSpeech();
       return;
     }
     const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
     const prev = speakCountRef.current;
     speakCountRef.current = rc;
-    if (switched || prev === null || rc <= prev) return;
+    if (switched || prev === null) return;
+    if (rc <= prev) {
+      // Новый ход начался (счётчик result сброшен редьюсером) — резка с нуля
+      if (rc < prev) resetStreamSpeech();
+      return;
+    }
+
+    // === Пришёл result: закрываем стрим хвостом, а в одиночном режиме — speak() ===
+    const stream = streamRef.current;
+    const text = turnText(items);
+    if (stream) {
+      // Хвост ВСЕГДА, даже если cursor не двигался (короткий ответ без точек — весь
+      // текст одним куском) — это и есть защита от дубля уже озвученного. Разметка
+      // (hitMarkup) закрывается ТОТ ЖЕ путём: санитайзер вычистит код/таблицы из
+      // хвоста, отдельный startSpeaking(весь текст) был бы дублем озвученных кусков
+      const tail = turnStreamTail(streamStRef.current, items);
+      if (tail) stream.enqueue(tail);
+      stream.end();
+      void stream.done.then(() => {
+        // Сброс refs — здесь; фазу снимает сам стрим (onDone-колбэк, единая точка
+        // для всех исходов: доиграла очередь, stop(), внешний stopSpeaking())
+        if (streamRef.current === stream) {
+          streamRef.current = null;
+          streamStRef.current = TURN_STREAM_INIT;
+        }
+      });
+      return;
+    }
+    // Стрим не создавался (гейт talk-режима не прошёл ни разу) — старый путь: озвучка
+    // всего текста хода одним speak(). Гейты одиночного режима прежние.
     if (!voiceMode) return;
     // Цикл «до готово» (Р8): отличить финальный result от промежуточного в момент события
     // нельзя, а читать вслух каждую итерацию — мусор
     if (workLoopState) return;
-
-    // Текст последнего ответа: все text-элементы ПОСЛЕ предыдущего result, без реплик
-    // сабагентов (parentToolUseId) — их озвучивать незачем
-    const lastResult = items.map((it, i) => ({ it, i })).filter(x => x.it.kind === 'result').at(-1);
-    const prevResultIdx = items.map((it, i) => ({ it, i })).filter(x => x.it.kind === 'result').at(-2)?.i ?? -1;
-    if (!lastResult) return;
-    const text = items
-      .slice(prevResultIdx + 1, lastResult.i)
-      .flatMap(it => (it.kind === 'text' && !it.parentToolUseId ? [it.text] : []))
-      .join('\n')
-      .trim();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- фаза озвучки обязана выставиться синхронно в этом же кадре (Р12)
     if (text) startSpeaking(text);
-  }, [items, session.id, voiceMode, workLoopState, isHistoryLoading, startSpeaking, stopSpeech]);
+  }, [items, session.id, voiceMode, workLoopState, isHistoryLoading, startSpeaking, stopSpeech, resetStreamSpeech]);
+
+  // Эффект стриминга: режет нарастающий текст хода на предложения и озвучивает их
+  // по мере появления, не дожидаясь result. tool_use/thinking_delta ничего не делают —
+  // курсор абсолютный, конкатенация turnText продолжается сама (озвучка вслух во
+  // время работы инструмента — цель фичи)
+  useEffect(() => {
+    if (!voiceMode || !handsFreeActive) return;
+    const r = turnStreamChunks(streamStRef.current, items);
+    if (r.off) { streamStRef.current = { ...streamStRef.current, off: true }; return; }
+    streamStRef.current = { ...streamStRef.current, cursor: r.cursor };
+    if (r.chunks.length === 0) return;
+    if (!streamRef.current) {
+      // Первый кусок хода: стрим создаётся здесь, фаза — синхронно ДО await (Р12),
+      // иначе петля успела бы открыть микрофон под старт синтеза. Возврат в idle —
+      // только onDone-колбэк стрима: он срабатывает при любом исходе (очередь
+      // доиграла / stop() / внешний stopSpeaking) ровно один раз
+      const call = ++speechCallRef.current;
+      const s = startStreamSpeak(() => {
+        if (speechCallRef.current !== call) return; // осиротели — фазу трогать нельзя
+        if (streamRef.current !== s) return; // стрим уже сброшен (новый ход/чат)
+        streamRef.current = null;
+        streamStRef.current = TURN_STREAM_INIT;
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- финал озвучки: микрофон петли открывается именно отсюда
+        setSpeechPhase('idle');
+      });
+      streamRef.current = s;
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- см. startSpeaking: та же дисциплина токена
+      setSpeechPhase('willSpeak');
+      setSpeechPhase('speaking');
+    }
+    for (const c of r.chunks) streamRef.current!.enqueue(c);
+  }, [items, voiceMode, handsFreeActive]);
 
   // Уход со страницы/размонтирование — озвучка не должна пережить чат
   useEffect(() => () => stopSpeaking(), []);
@@ -2100,6 +2170,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // и уходит выше как isGenerating)
             awaitingResponse={awaitingResponse}
             speechPhase={speechPhase}
+            onHandsFreeActiveChange={setHandsFreeActive}
             onStopSpeech={stopSpeech}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}

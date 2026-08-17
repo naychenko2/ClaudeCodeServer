@@ -66,9 +66,14 @@ const MOCKS = () => {
     r.onend?.();
   };
   w.__finishSpeech = () => {
-    const u = utts[utts.length - 1] as unknown as MockUtterance | undefined;
+    // Поточная озвучка шлёт в браузерный синтезатор КАЖДЫЙ кусок отдельной
+    // utterance — «доиграть» надо все недоигранные, а не только последнюю
     synth.speaking = false;
-    u?.onend?.();
+    for (const u of utts) {
+      const m = u as unknown as MockUtterance;
+      m.onend?.();
+      m.onend = null;
+    }
   };
   // Пустой цикл распознавания ровно так, как его отдаёт настоящий движок:
   // сначала onerror('no-speech'), СЛЕДОМ onend — на этой паре счётчик бесплодных
@@ -111,6 +116,22 @@ async function openChat(page: Page, token: string, chatId: string, serverTts = f
   await expect(page.locator('textarea.cc-composer-input')).toBeVisible({ timeout: 20_000 });
 }
 
+// Момент прихода result ловим в WS-фреймах SignalR — единственный строгий признак
+// конца ХОДА (фаза «отвечает…» им не является: озвучка живёт и после result).
+// Фреймы SignalR летят текстом, результат хода — событие с "type":"result" внутри
+// JSON-обёртки события message. Фиксируем момент: result и первый TTS-вызов могут
+// приехать одной пачкой (SignalR батчит)
+const watchForResult = (page: Page) => {
+  const state = { seen: false, at: 0 };
+  page.on('websocket', ws => {
+    ws.on('framereceived', (frame: { payload: string | Buffer }) => {
+      const s = typeof frame.payload === 'string' ? frame.payload : Buffer.from(frame.payload).toString('utf8');
+      if (s.includes('"type":"result"') && !state.seen) { state.seen = true; state.at = Date.now(); }
+    });
+  });
+  return state;
+};
+
 test.describe('режим разговора', () => {
   let token: string;
   let chatId: string;
@@ -141,6 +162,10 @@ test.describe('режим разговора', () => {
   });
 
   test('круг петли: слушаю → окно отмены → отправка → озвучка → снова слушаю, без эха', async ({ page }) => {
+    test.setTimeout(300_000); // ход живой + стриминговые куски до и после result
+    // Подписка на WS — ДО открытия чата: page.on('websocket') видит только сокеты,
+    // открытые ПОСЛЕ подписки, а хаб поднимается при загрузке страницы
+    const result = watchForResult(page);
     await openChat(page, token, chatId);
     await page.getByRole('button', { name: 'Режим разговора' }).click();
     await expect(page.getByText('слушаю')).toBeVisible();
@@ -170,9 +195,19 @@ test.describe('режим разговора', () => {
     const recsWhileSpeaking = await page.evaluate(() => (window as unknown as { __recs: unknown[] }).__recs.length);
     expect(recsWhileSpeaking, 'микрофон не открывается под озвучку').toBe(recsWhileThinking);
 
-    // Синтезатор замолчал — петля снова слушает
+    // Ход обязан завершиться ДО ручного «замолчал»: поточная озвучка может дать
+    // куски и ДО result (хвост доедет после), и тест не знает, приедет ли ещё.
+    // Ждём result-фрейм и даём хвостовому куску встать в синтезатор
+    await expect.poll(() => result.seen, {
+      message: 'ход должен завершиться (result-фрейм)',
+      timeout: 240_000,
+    }).toBe(true);
+    await page.waitForTimeout(1000);
+
+    // Синтезатор замолчал (доигрываем ВСЕ utterances — кусков может быть несколько,
+    // включая опоздавший хвост) — петля снова слушает
     await page.evaluate(() => (window as unknown as { __finishSpeech: () => void }).__finishSpeech());
-    await expect(page.getByText('слушаю')).toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('слушаю')).toBeVisible({ timeout: 15_000 });
     const recsAfter = await page.evaluate(() => (window as unknown as { __recs: unknown[] }).__recs.length);
     expect(recsAfter, 'после озвучки микрофон открывается снова').toBeGreaterThan(recsWhileSpeaking);
   });
@@ -372,5 +407,157 @@ test.describe('режим разговора', () => {
     await page.getByRole('button', { name: 'Режим разговора' }).click();
     await expect(page.getByText('Не удалось включить голосовой режим')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByText('слушаю')).toBeHidden();
+  });
+
+  // === Поточная озвучка хода (стриминг TTS) ===
+  // Оба сценария против живого хода с реальным стримом дельт: /api/tts перехвачен
+  // управляемым моком. Ходы медленные и флаковые — таймаут сценария поднят явно,
+  // а чаты изолированы (один сценарий — один чат), чтобы недоигравший ход не утекал
+  // в следующий тест.
+
+  // Мок /api/tts: считает вызовы/тексты и МОМЕНТ первого вызова (для сверки с
+  // result-фреймом), отдаёт валидный пустой WAV (тот же крошечный silent-wav, что
+  // в primeAudio: Chromium его играет и ЗАКАНЧИВАЕТ — обрезанный mp3 без целого
+  // фрейма не декодируется и onended не приходит)
+  const ttsMock = () => {
+    const calls: string[] = [];
+    const state = { firstAt: 0 };
+    return {
+      calls,
+      state,
+      install(page: Page) {
+        void page.route('**/api/tts', async route => {
+          const body = route.request().postDataJSON() as { text: string };
+          if (state.firstAt === 0) state.firstAt = Date.now();
+          calls.push(body?.text ?? '');
+          const wav = Buffer.from(
+            'UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=', 'base64');
+          await route.fulfill({ status: 200, contentType: 'audio/wav', body: wav });
+        });
+      },
+    };
+  };
+
+  // Управляемый Audio: play() резолвится, но onended зовётся ТОЛЬКО командой
+  // __finishAudio() из теста — кусок можно держать «играющим» сколь угодно долго
+  // и отпускать очередь по сценарию. Куски озвучки отличаем от primeAudio-разогрева
+  // по blob:-src: у разогрева data:audio/wav
+  const SLOW_AUDIO_MOCK = () => {
+    const w = window as unknown as Record<string, unknown>;
+    const players: { onended: (() => void) | null; onerror: (() => void) | null; paused: boolean; src: string }[] = [];
+    w.__players = players;
+    w.__finishAudio = () => {
+      const p = players.find(x => !x.paused && x.src.startsWith('blob:'));
+      if (p) { p.paused = true; p.onended?.(); }
+    };
+    w.__playingCount = () => players.filter(x => !x.paused && x.src.startsWith('blob:')).length;
+    class SlowAudio {
+      onended: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      paused = false;
+      src: string;
+      // playBlob передаёт src КОНСТРУКТОРОМ (new Audio(url)) — забрать его здесь,
+      // иначе фильтр blob: не отличит куски озвучки от primeAudio-разогрева
+      constructor(src = '') { this.src = src; players.push(this); }
+      play() { return Promise.resolve(); }
+      pause() { this.paused = true; }
+    }
+    Object.defineProperty(window, 'Audio', { value: SlowAudio, configurable: true });
+  };
+
+  // Свой чат под сценарий: изоляция ходов между тестами
+  const makeChat = async (playwright: import('@playwright/test').Playwright, baseURL: string, name: string) => {
+    const request = await playwright.request.newContext({ baseURL });
+    try {
+      const r = await request.post('/api/chats', {
+        data: { mode: 'auto', name },
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(r.ok(), 'чат сценария должен создаться').toBeTruthy();
+      return (await r.json()).id as string;
+    } finally {
+      await request.dispose();
+    }
+  };
+
+  // watchForResult — общий хелпер модуля (см. определение рядом с openChat):
+  // стрим-сценарии сверяют момент первого TTS-вызоза с моментом result-фрейма
+
+  test('озвучка началась до result: первый кусок синтезируется, пока ход жив', async ({ page, playwright, baseURL }) => {
+    test.setTimeout(300_000);
+    const ownChat = await makeChat(playwright, baseURL, `E2E stream-before-result ${Date.now()}`);
+    const tts = ttsMock();
+    tts.install(page);
+    const result = watchForResult(page);
+    await openChat(page, token, ownChat, true);
+    await page.getByRole('button', { name: 'Режим разговора' }).click();
+    await expect(page.getByText('слушаю')).toBeVisible();
+    // Фаза listening устоялась: микрофон открывается с дебаунсом RESTART_MS (1.5с),
+    // и фраза, посланная раньше, уходит в никуда — петля её не слышит
+    await page.waitForTimeout(2500);
+
+    // Просим писать построчно: модели стримят такие ответы построчно, первое
+    // предложение закрывается переносом строки задолго до конца хода
+    await page.evaluate(() => (window as unknown as { __say: (t: string) => void })
+      .__say(`напиши ровно четыре коротких предложения про лето, каждое с новой строки ${Date.now() % 1000}`));
+    await expect(page.getByText('думает…')).toBeVisible({ timeout: 15_000 });
+
+    // Строгая проверка «ДО result»: первый TTS-вызов произошёл РАНЬШЕ прихода
+    // result-фрейма. Без стриминга первый вызов физически невозможен раньше result
+    await expect.poll(() => tts.calls.length, {
+      message: 'первый кусок должен уйти на синтез',
+      timeout: 240_000,
+    }).toBeGreaterThan(0);
+    // result мог уже прийти (модель быстрая) — сверяем МОМЕНТЫ, а не текущее
+    // состояние: первое предложение озвучено раньше, чем ход закрылся
+    expect(tts.state.firstAt < result.at || !result.seen,
+      `первый TTS (${tts.state.firstAt}) должен быть раньше result-фрейма (${result.at}, seen=${result.seen})`).toBe(true);
+  });
+
+  test('микрофон закрыт, пока играет второй кусок очереди', async ({ page, playwright, baseURL }) => {
+    test.setTimeout(300_000);
+    const ownChat = await makeChat(playwright, baseURL, `E2E stream-mic-closed ${Date.now()}`);
+    const tts = ttsMock();
+    tts.install(page);
+    // Плеер под контролем теста: куски «играют», пока их не доиграет __finishAudio —
+    // иначе мгновенный WAV пролетает очередь быстрее, чем успеваешь замерить эхо
+    await page.addInitScript(SLOW_AUDIO_MOCK);
+    await openChat(page, token, ownChat, true);
+    await page.getByRole('button', { name: 'Режим разговора' }).click();
+    await expect(page.getByText('слушаю')).toBeVisible();
+    // Устойка микрофона после входа в listening (RESTART_MS = 1.5с)
+    await page.waitForTimeout(2500);
+
+    await page.evaluate(() => (window as unknown as { __say: (t: string) => void })
+      .__say(`напиши ровно три коротких предложения про море, каждое с новой строки ${Date.now() % 1000}`));
+    await expect(page.getByText('думает…')).toBeVisible({ timeout: 15_000 });
+    // Микрофон закрыт на время хода — база, от которой меряем
+    const recsWhileTurn = await recCount(page);
+
+    // Ждём, пока в очереди наберётся минимум два куска; первый при этом ИГРАЕТ
+    // (замоканный Audio не кончается сам) — очередь реально живая
+    await expect.poll(() => tts.calls.length, {
+      message: 'минимум два куска должны уйти на синтез',
+      timeout: 240_000,
+    }).toBeGreaterThanOrEqual(2);
+    expect(await page.evaluate(() => (window as unknown as { __playingCount: () => number }).__playingCount()),
+      'первый кусок играет, очередь живая').toBeGreaterThan(0);
+
+    // Кусок играет, второй ждёт в очереди — микрофон закрыт. 3 секунды реального
+    // времени на то, чтобы гвард его открыл (микрофон стартует с дебаунсом 1.5с)
+    await page.waitForTimeout(3000);
+    expect(await recCount(page), 'микрофон не открывается, пока играет очередь').toBe(recsWhileTurn);
+
+    // Доигрываем очередь: каждый вызов закрывает один кусок (onended), очередь
+    // уходит, done резолвится — петля возвращается слушать и открывает микрофон
+    for (let i = 0; i < tts.calls.length + 2; i++) {
+      await page.evaluate(() => (window as unknown as { __finishAudio: () => void }).__finishAudio());
+      await page.waitForTimeout(300);
+    }
+    await expect(page.getByText('слушаю')).toBeVisible({ timeout: 60_000 });
+    await expect.poll(() => recCount(page), {
+      message: 'после конца очереди микрофон открывается',
+      timeout: 30_000,
+    }).toBeGreaterThan(recsWhileTurn);
   });
 });

@@ -144,43 +144,102 @@ export function sanitizeForSpeech(md: string): string {
 // Сокращения, после которых точка не заканчивает предложение
 const ABBREVIATIONS = ['т.е', 'т.к', 'т.д', 'т.п', 'др', 'см', 'рис', 'стр', 'г', 'гг', 'руб', 'проф', 'акад'];
 
+// Длина (в символах, ПОСЛЕ курсора) первого законченного предложения, или -1, если
+// его нет. Правила — общие для полной нарезки (splitSentences) и поточной резки
+// дельт (takeSpeakableChunk): одно место, одни сокращения.
+function sentenceBoundary(text: string): number {
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch !== '.' && ch !== '!' && ch !== '?' && ch !== '…' && ch !== '\n') continue;
+
+    // Хвостовая пачка знаков («?!», «...») не рвётся
+    while (i + 1 < text.length && '.!?…'.includes(text[i + 1])) i++;
+
+    if (ch === '.') {
+      // Сокращение перед точкой — предложение не закончилось. Одиночная буква тоже:
+      // в «т.е.» перед ПЕРВОЙ точкой стоит просто «т», и по списку его не поймать
+      const before = text.slice(0, i).trimEnd();
+      const lastWord = before.split(/[\s(]/).pop()?.toLowerCase() ?? '';
+      if (ABBREVIATIONS.includes(lastWord) || /^\p{L}$/u.test(lastWord)) continue;
+      // Точка внутри числа («3.14») тоже не конец
+      if (i + 1 < text.length && /\d/.test(text[i + 1]) && /\d/.test(text[i - 1] ?? '')) continue;
+    }
+
+    return i + 1;
+  }
+  return -1;
+}
+
 export function splitSentences(text: string): string[] {
   const clean = (text ?? '').trim();
   if (!clean) return [];
 
   const out: string[] = [];
   let start = 0;
-  for (let i = 0; i < clean.length; i++) {
-    const ch = clean[i];
-    if (ch !== '.' && ch !== '!' && ch !== '?' && ch !== '…' && ch !== '\n') continue;
-
-    // Хвостовая пачка знаков («?!», «...») не рвётся
-    while (i + 1 < clean.length && '.!?…'.includes(clean[i + 1])) i++;
-
-    if (ch === '.') {
-      // Сокращение перед точкой — предложение не закончилось. Одиночная буква тоже:
-      // в «т.е.» перед ПЕРВОЙ точкой стоит просто «т», и по списку его не поймать
-      const before = clean.slice(start, i).trimEnd();
-      const lastWord = before.split(/[\s(]/).pop()?.toLowerCase() ?? '';
-      if (ABBREVIATIONS.includes(lastWord) || /^\p{L}$/u.test(lastWord)) continue;
-      // Точка внутри числа («3.14») тоже не конец
-      if (i + 1 < clean.length && /\d/.test(clean[i + 1]) && /\d/.test(clean[i - 1] ?? '')) continue;
-    }
-
-    const piece = clean.slice(start, i + 1).trim();
+  for (;;) {
+    const end = sentenceBoundary(clean.slice(start));
+    if (end < 0) break;
+    const piece = clean.slice(start, start + end).trim();
     if (piece) out.push(piece);
-    start = i + 1;
+    start += end;
   }
   const tail = clean.slice(start).trim();
   if (tail) out.push(tail);
   return out;
 }
 
+// --- Поточная резка нарастающего текста хода (режим разговора) ---
+
+// Незакрытое предложение длиннее лимита режем принудительно: модель пишет без точек —
+// иначе до result висела бы тишина на весь кусок
+export const MAX_STREAM_CHUNK = 400;
+
+export interface SpeakableChunk {
+  chunk: string | null; // готовый к озвучке кусок; null — ждать следующих дельт
+  cursor: number;       // новый курсор (за отданным куском); не двигается при null
+  hitMarkup: boolean;   // впереди код-блок/таблица — стриминг на этом ходу выключается
+}
+
+// Код-блок (``` / ~~~) или строка таблицы (| в начале строки): вслух не читается,
+// остаток хода закрывает обычный путь на result (санитайзер вырежет разметку)
+const CODE_BLOCK_AHEAD = /(^|\n)\s*(?:```|~~~)/;
+const TABLE_ROW_AHEAD = /(^|\n)\s*\|/;
+
+// Взять следующий озвучиваемый кусок из нарастающего текста хода. Курсор абсолютный,
+// вызов повторяется на каждой text_delta: текст хода — конкатенация элементов, и
+// резка продолжается сама, в том числе после tool_use (новый text-элемент).
+export function takeSpeakableChunk(text: string, cursor: number): SpeakableChunk {
+  const rest = text.slice(cursor);
+  if (!rest.trim()) return { chunk: null, cursor, hitMarkup: false };
+
+  if (CODE_BLOCK_AHEAD.test(rest) || TABLE_ROW_AHEAD.test(rest))
+    return { chunk: null, cursor, hitMarkup: true };
+
+  const end = sentenceBoundary(rest);
+  if (end > 0) return { chunk: rest.slice(0, end).trim(), cursor: cursor + end, hitMarkup: false };
+
+  // Предложения нет, но кусок разросся: рез по последнему пробелу до лимита (не
+  // посреди слова); пробела нет вовсе — по лимиту насильно: обрыв фразы лучше
+  // полминуты тишины
+  if (rest.length > MAX_STREAM_CHUNK) {
+    const window = rest.slice(0, MAX_STREAM_CHUNK);
+    const cut = window.lastIndexOf(' ');
+    const at = cut > 0 ? cut : MAX_STREAM_CHUNK;
+    const chunk = rest.slice(0, at).trim();
+    if (chunk) return { chunk, cursor: cursor + at, hitMarkup: false };
+  }
+
+  // Хвост без терминальной пунктуации не отдаём из дельт — его закроет result
+  return { chunk: null, cursor, hitMarkup: false };
+}
+
 // --- Проигрывание ---
 
 let currentAudio: HTMLAudioElement | null = null;
 let currentUrl: string | null = null;
-// Токен текущего сеанса озвучки: старая очередь, дожившая до нового вызова, себя прекращает
+// Токен текущего сеанса озвучки: старая очередь, дожившая до нового вызова, себя прекращает.
+// Проверяется перед КАЖДЫМ куском и в speak()/startStreamSpeak() — это общий выключатель
+// всех очередей (в т.ч. поточной): чужой токен = молча закончиться
 let speakToken = 0;
 // Ожидающие конца озвучки: stopSpeaking() резолвит их НЕМЕДЛЕННО, не дожидаясь висящего
 // запроса синтеза (там таймаут 45 с). Ждущий петли разговора иначе стоял бы всё это время.
@@ -343,6 +402,173 @@ function playBlob(blob: Blob, token: number): Promise<void> {
       done();
     });
   });
+}
+
+// --- Поточная озвучка хода (режим разговора) ---
+
+// Стрим поверх той же механики, что runSpeak: куски едут по одному, следующий
+// синтезируется, пока играет текущий. Отличие от speak() — очередь ОТКРЫТАЯ: куски
+// приезжают по мере появления предложений в ленте, конец хода закрывает end().
+//
+// Токен — общий глобальный speakToken: внешний stopSpeaking() (смена чата, выход из
+// разговора, новый speak()) гасит стрим так же, как обычную очередь. Локальный токен
+// отрезал бы стрим от этих выключателей.
+export interface StreamSpeech {
+  enqueue(text: string): void; // кусок (уже предложение) — в очередь
+  end(): void;                 // кусков больше не будет
+  done: Promise<void>;         // резолв по концу ПОСЛЕДНЕГО куска (onended), не по постановке
+  stop(): void;                // немедленно: очередь чистится, done резолвится
+}
+
+// onDone — единственный канал «стрим закончился» для владельца фазы (ChatPanel):
+// вызывается ровно один раз из finishDone при любом исходе (очередь доиграла,
+// stop(), внешний stopSpeaking(), потеря токена). Колбэк-канал вместо нескольких
+// done.then в вызывающем коде закрывает гонку «кто первый занулил ref — тот и
+// снял фазу»: снятие фазы всегда в одном месте
+export function startStreamSpeak(onDone?: () => void): StreamSpeech {
+  watchConnection();
+  const token = ++speakToken;
+  const queue: string[] = [];
+  let ended = false;
+  let stopped = false;
+  let failedToServer = false;
+  let resolveDone: () => void;
+  const done = new Promise<void>(r => { resolveDone = r; });
+  let settledDone = false;
+  const finishDone = () => {
+    if (settledDone) return;
+    settledDone = true;
+    resolveDone();
+    onDone?.();
+  };
+  // done резолвится и по стопу/смене владельца звука: ждущий (петля) не должен
+  // висеть на убитом стриме. Сам токен проверяется в цикле ниже
+  speechWaiters.push(finishDone);
+
+  // Единственный потребитель очереди: enqueue/end лишь подкладывают куски и будят
+  // цикл. Без флага каждый вызов порождал ПАРАЛЛЕЛЬНЫЙ цикл — куски расхватывались
+  // вперегонки (два аудио сразу), а цикл от end() видел пустую очередь и закрывал
+  // done до конца воспроизведения.
+  // Prefetch — как в runSpeak: следующий кусок синтезируется, пока играет текущий,
+  // иначе между фразами висела бы пауза на круг до сервера (вся суть стриминга).
+  // Пока текущий кусок ИГРАЕТ, цикл стоит на await playBlob — prefetch будится
+  // отдельным звоном из enqueue.
+  let pumping = false;
+  let prefetch: Promise<Blob | null> | null = null;
+  let prefetchText = '';
+  let prefetchFailed = false; // запрос упал — кусок обязан доозвучиться голосом браузера
+  const startPrefetch = () => {
+    if (prefetch || serverTtsUnavailable || failedToServer) return;
+    const next = queue.find(t => t.trim());
+    if (next === undefined) return;
+    prefetchText = next;
+    prefetchFailed = false;
+    prefetch = synthesize(next)
+      .catch(e => {
+        const status = (e as { status?: number }).status;
+        const reason = (e as { body?: { reason?: string } }).body?.reason;
+        prefetchFailed = true;
+        if (status === 503 && reason === 'not_configured') {
+          serverTtsUnavailable = true;
+          notifyFallbackOnce();
+        } else if (status !== undefined) {
+          failedToServer = true; // временный отказ сервера — дальше голосом браузера
+        }
+        return null;
+      });
+  };
+  const dropPrefetch = () => {
+    if (!prefetch) return;
+    void prefetch.catch(() => null);
+    prefetch = null;
+    prefetchText = '';
+  };
+
+  const pump = async () => {
+    if (pumping) return;
+    pumping = true;
+    try {
+      for (;;) {
+        if (token !== speakToken) { finishDone(); return; }
+        const text = queue.shift();
+        if (text === undefined) {
+          if (ended) { finishDone(); return; }
+          return; // ждём следующих кусков; pump перезапустится из enqueue/end
+        }
+        if (!text.trim()) continue;
+
+        if (serverTtsUnavailable || failedToServer) {
+          await speakWithBrowser(text, token);
+          if (token !== speakToken) { finishDone(); return; }
+          continue;
+        }
+
+        let blob: Blob | null;
+        let fromPrefetch = false;
+        if (prefetch && prefetchText === text) {
+          blob = await prefetch;
+          fromPrefetch = true;
+          prefetch = null;
+          prefetchText = '';
+        } else {
+          dropPrefetch();
+          try {
+            blob = await synthesize(text);
+          } catch (e) {
+            const status = (e as { status?: number }).status;
+            const reason = (e as { body?: { reason?: string } }).body?.reason;
+            if (status === undefined) { finishDone(); return; } // связи нет — молчим и закрываем
+            if (status === 503 && reason === 'not_configured') {
+              serverTtsUnavailable = true;
+              notifyFallbackOnce();
+            }
+            failedToServer = true;
+            if (token === speakToken) { await speakWithBrowser(text, token); }
+            if (token !== speakToken) { finishDone(); return; }
+            continue;
+          }
+        }
+
+        if (token !== speakToken) { finishDone(); return; }
+        // Prefetch упал (503/upstream): сам blob=null, но кусок ещё не звучал —
+        // доозвучиваем его голосом браузера, как это делает runSpeak
+        if (!blob && fromPrefetch && prefetchFailed && token === speakToken) {
+          await speakWithBrowser(text, token);
+          if (token !== speakToken) { finishDone(); return; }
+          continue;
+        }
+        if (!blob) continue; // пустой ответ синтеза — к следующему куску
+        startPrefetch(); // пока играет этот кусок, следующий уже синтезируется
+        await playBlob(blob, token);
+        if (token !== speakToken) { finishDone(); return; }
+      }
+    } finally {
+      pumping = false;
+    }
+  };
+
+  const stream: StreamSpeech = {
+    enqueue(text) {
+      if (ended || stopped) return; // поздние дельты после end() не читаются
+      queue.push(text);
+      startPrefetch(); // цикл может стоять на playBlob текущего куска — prefetch продолжит без него
+      void pump();
+    },
+    end() {
+      ended = true;
+      void pump();
+    },
+    stop() {
+      if (stopped) return;
+      stopped = true;
+      queue.length = 0;
+      finishDone();
+      // Оборвать играющий кусок и осиротить стрим: чистящий цикл увидит чужой токен
+      stopSpeaking();
+    },
+    done,
+  };
+  return stream;
 }
 
 // --- Фолбэк: голос браузера ---

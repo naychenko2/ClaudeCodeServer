@@ -107,3 +107,8 @@ docs/plans/
 # фронта frontend/src/features/notes/ молча выпадает из репозитория (ловилось на ревью).
 /notes/
 !/notes/Доработки.md
+
+# Одноразовые выходные каталоги локальных прогонов (dotnet test с кастомным OutDir, vitest из backend, playwright)
+backend/.tmpbuild/
+backend/.vite/
+test-results/

@@ -41,7 +41,7 @@ public sealed partial class DocsIndexService(FileService? files = null)
         new("pdf", "PDF", [".pdf"], false),
         new("office", "Office", [".docx", ".xlsx", ".pptx"], false),
         new("visio", "Visio", [".vsdx", ".vsdm", ".vssx", ".vssm", ".vstx", ".vstm"], false),
-        new("diagram", "Диаграммы", [".drawio", ".dio"], false),
+        new("diagram", "Диаграммы", [".drawio", ".dio", ".excalidraw"], false),
         new("image", "Картинки", [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"], false),
         new("audio", "Аудио", [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus", ".weba"], false),
         new("video", "Видео", [".mp4", ".webm", ".mov", ".avi", ".mkv"], false),

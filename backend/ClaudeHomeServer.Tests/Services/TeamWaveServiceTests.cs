@@ -1421,23 +1421,22 @@ public class TeamWaveServiceTests : IDisposable
 
         ok.Should().BeTrue();
         _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
-            .Should().BeEmpty("«Перезапустить» идёт докрутом по состоянию, а авто-волны сняты");
-        (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
-            .Should().ContainSingle(c => c.Kind == TeamEscalationKind.WaveGate,
-                "тупика нет: человеку показан гейт, но запуск требует второго клика");
-        Team(session.Id).Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+            .Should().ContainSingle("«Перезапустить» — явная кнопка человека: раздача с первого клика");
+        var team = Team(session.Id);
+        team.Stage.Should().Be(TeamImplementStage.Wave);
+        team.WaveStartedAt.Should().NotBeNull("сторож зависших волн снова тикает");
     }
 
-    // КРАСНЫЙ (дефект приёмки D4, круг 2 от 2026-08-17): человек пишет в чат, пока висит
-    // гейт-карточка. Каждое сообщение снимает стадию «ждёт решения» → докрут по состоянию →
-    // при снятых авто-волнах поднимается ЕЩЁ ОДНА такая же гейт-карточка (с уведомлением и
-    // push), а прежняя остаётся открытой. Два сообщения — три одинаковых карточки в ленте.
-    // Ожидание: на одну закрытую волну открыт ровно один гейт. Снять Skip после починки.
-    [Fact(Skip = "Дефект приёмки D4: ответ текстом при висящем гейте плодит дубли карточек")]
+    // D4 (приёмка круга 2, починен кругом 3): человек пишет в чат, пока висит гейт-карточка.
+    // Каждое сообщение снимает стадию «ждёт решения» → докрут по состоянию → при снятых
+    // авто-волнах поднимался ЕЩЁ ОДИН такой же гейт (с уведомлением, push и своим счётчиком
+    // напоминаний), а прежняя оставалась открытой. Договор: на одну закрытую волну человеку
+    // показывают ровно один открытый гейт, сколько бы сообщений он ни написал.
+    [Fact]
     public async Task ГейтВолны_ОтветТекстом_НеПлодитДублейКарточек()
     {
         var (session, plan) = await MakeRunningStabAsync("qa-gate-text", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
 

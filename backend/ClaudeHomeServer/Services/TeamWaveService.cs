@@ -458,8 +458,28 @@ public class TeamWaveService
     // волны (CloseWaveIfDoneAsync) и докрута по состоянию (StartWaveCoreAsync с trigger=
     // StateCatchUp, D1 ревью 2026-08-17) — текст и кнопки одни, где бы волна ни ждала
     // решения человека. «Запустить» на карточке идёт trigger=UserCommand и гейт не повторяет.
+    // Дедуп (D4, приёмка круга 2): каждое сообщение человека при висящем гейте снова зовёт
+    // докрут по состоянию — без проверки в ленте росли одинаковые открытые гейты (каждый со
+    // своим уведомлением, push и счётчиком напоминаний). Открытый гейт той же закрытой волны
+    // уже ждёт ответа: карточку не дублируем, но стадию, как и публикация, возвращаем
+    // в «ждёт решения» — иначе докрут оставил бы практику «в волне» без идущей волны.
     private async Task RaiseWaveGateAsync(Session session, TeamImplementPlan plan, int closedWave, int nextWave)
     {
+        if ((await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Any(c => c.Kind == TeamEscalationKind.WaveGate && c.Wave == closedWave))
+        {
+            _sessions.WithTeamState(session.Id, t =>
+            {
+                if (t.Stage != TeamImplementStage.AwaitingDecision)
+                    t.StageBeforeDecision = t.Stage;
+                t.Stage = TeamImplementStage.AwaitingDecision;
+                t.WaveStartedAt = null;
+                t.WaveActivityAt = null;
+                return true;
+            });
+            await _sessions.SaveTeamImplementStateAsync(session.Id);
+            return;
+        }
         await RaiseEscalationAsync(session, new TeamEscalation
         {
             Kind = TeamEscalationKind.WaveGate,

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  handsFreeReducer, HANDS_FREE_INITIAL, BARREN_WARN, BARREN_OFF,
+  handsFreeReducer, HANDS_FREE_INITIAL, BARREN_WARN, BARREN_OFF, isStopCommand,
   type HandsFreeState, type HandsFreeEvent,
 } from '../useHandsFree';
 
@@ -11,6 +11,25 @@ function run(events: HandsFreeEvent[], from: HandsFreeState = HANDS_FREE_INITIAL
 }
 
 const listening = () => run([{ type: 'toggle' }]);
+
+describe('isStopCommand', () => {
+  it.each([
+    ['стоп'], ['Стоп'], ['стоп.'], ['стоп,'], [' хватит '],
+    ['Отбой!'], ['конец связи'], ['Выключи разговор'], ['достаточно'],
+  ])('«%s» — команда выхода', (text) => {
+    expect(isStopCommand(text)).toBe(true);
+  });
+
+  it.each([
+    ['стоп а теперь расскажи про моря'],
+    ['хватит денег ушло на такси'],
+    ['расскажи про стоп'],
+    ['выключи свет на кухне'],
+    [''],
+  ])('«%s» — обычная речь, не команда', (text) => {
+    expect(isStopCommand(text)).toBe(false);
+  });
+});
 
 describe('handsFreeReducer', () => {
   it('полный круг разговора', () => {
@@ -40,6 +59,40 @@ describe('handsFreeReducer', () => {
     const s = run([{ type: 'recognized', text: 'ой не то' }, { type: 'toggle' }], listening());
     expect(s.phase).toBe('off');
     expect(s.buffer).toBe('');
+  });
+
+  it('голосовая «стоп» выключает петлю в фазе слушания, буфер не отправляется', () => {
+    let s = listening();
+    s = handsFreeReducer(s, { type: 'recognized', text: 'привет' });
+    expect(s.phase).toBe('pending');
+    // Продолжение в окне отмены: человек передумал и сказал «стоп» — это команда
+    s = handsFreeReducer(s, { type: 'recognized', text: 'Стоп.' });
+    expect(s.phase).toBe('off');
+    expect(s.notice).toBe('voiceOff');
+    expect(s.buffer).toBe('');
+  });
+
+  it('«стоп» в окне отмены гасит и накопленный буфер', () => {
+    // Сценарий: наговорил текст → пауза → окно взводится → сказал «стоп». Буфер
+    // обязан умереть вместе с петлёй, иначе он уйдёт в чат следующим ходом
+    const s = run([
+      { type: 'recognized', text: 'напиши сочинение' },
+      { type: 'cycleEnded' },
+      { type: 'recognized', text: 'стоп' },
+    ], listening());
+    expect(s.phase).toBe('off');
+    expect(s.buffer).toBe('');
+    expect(s.notice).toBe('voiceOff');
+  });
+
+  it('фраза со «стоп» внутри — обычная речь, петля работает дальше', () => {
+    let s = listening();
+    s = handsFreeReducer(s, { type: 'recognized', text: 'стоп а теперь продолжай' });
+    expect(s.phase).toBe('pending');
+    expect(s.buffer).toBe('стоп а теперь продолжай');
+    // Окно отправки взводится как обычно
+    s = handsFreeReducer(s, { type: 'cycleEnded' });
+    expect(s.phase).toBe('pending');
   });
 
   it('речь в окне отмены дописывает буфер и снимает таймер', () => {

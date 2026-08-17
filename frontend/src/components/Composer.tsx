@@ -152,6 +152,17 @@ export interface ComposerProps {
 const STRIP_COMPACT = 640;
 const STRIP_WIDE = 900;
 
+// Гасим нативный touch-callout / контекстное меню на иконочных кнопках.
+// На планшете long-press по SVG-иконке внутри кнопки иначе вызывает меню
+// браузера «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод
+// не стартует). Подавляем callout и выделение; onContextMenu гасит и правый клик.
+const iconBtnGuard: CSSProperties = {
+  WebkitTouchCallout: 'none',
+  WebkitUserSelect: 'none',
+  userSelect: 'none',
+  touchAction: 'manipulation',
+};
+
 // Получить имя файла из пути
 function basename(filePath: string): string {
   return filePath.replace(/\\/g, '/').split('/').pop() ?? filePath;
@@ -829,6 +840,12 @@ export function Composer({
   // Режим разговора: автомат петли (слушаю → окно отмены → отправка → ход → озвучка →
   // снова слушаю). Объявлен строго ВЫШЕ раннего return по offline — иначе на пропадании
   // связи число хуков разъезжается
+  // ЗАПРОШЕННОЕ значение голосового режима: PUT летит асинхронно, и второй тап должен
+  // сверяться с ним, а не с пропом. Иначе двойной тап оставлял бы режим включённым на
+  // сервере при выключенной петле — чат отвечает коротко и вслух, хотя человек «всё выключил»
+  const voiceModeWantedRef = useRef(voiceMode);
+  useEffect(() => { voiceModeWantedRef.current = voiceMode; }, [voiceMode]);
+
   const handsFree = useHandsFree({
     isGenerating,
     awaitingResponse,
@@ -842,6 +859,17 @@ export function Composer({
     onSend: (t) => { loopSentRef.current = true; return handleSend(t); },
     onStop,
     activeRef: talkActiveRef,
+    // Голосовая команда выхода («стоп»): петля уже погашена редьюсером, здесь только
+    // хвост тапа по кнопке — страховочное прерывание хода и PUT voiceMode=false (Р3)
+    onVoiceExit: () => {
+      if (isGenerating || handsFree.phase === 'sending' || handsFree.phase === 'waiting') onStop();
+      if (voiceModeWantedRef.current) {
+        voiceModeWantedRef.current = false;
+        void Promise.resolve(onToggleVoiceMode?.(false)).catch(() => {
+          voiceModeWantedRef.current = true;
+        });
+      }
+    },
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;
@@ -878,12 +906,6 @@ export function Composer({
     const id = setInterval(() => setPendingLeft(v => Math.max(0, v - 1)), 1000);
     return () => clearInterval(id);
   }, [handsFree.phase]);
-
-  // ЗАПРОШЕННОЕ значение голосового режима: PUT летит асинхронно, и второй тап должен
-  // сверяться с ним, а не с пропом. Иначе двойной тап оставлял бы режим включённым на
-  // сервере при выключенной петле — чат отвечает коротко и вслух, хотя человек «всё выключил»
-  const voiceModeWantedRef = useRef(voiceMode);
-  useEffect(() => { voiceModeWantedRef.current = voiceMode; }, [voiceMode]);
 
   // Тап по кнопке режима. Синхронная часть жеста (прайминг аудио и старт микрофона) идёт
   // ДО любого await: политика autoplay и разрешение микрофона живут только внутри жеста
@@ -1215,6 +1237,16 @@ export function Composer({
         <>
           <span style={{ fontSize: FS.sm, color: C.accent, fontWeight: 600, flexShrink: 0 }}>слушаю</span>
           <Waveform />
+          {/* Подсказка голосовой команды: единственный способ выйти из разговора
+              без касаний. С самого старта — человеку без экрана нужно знать о ней
+              ДО первого затыкания, а не после. Формулировка — глагол действия
+              («выключу»), а не обрывок «выход»: сразу ясно, ЧТО произойдёт */}
+          <span
+            title="Голосом: «стоп», «хватит», «отбой», «конец связи», «выключи разговор» — разговор выключится без касаний"
+            style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0, whiteSpace: 'nowrap' }}
+          >
+            скажите «стоп» — выключу
+          </span>
         </>
       ) : handsFree.phase === 'pending' ? (
         <>
@@ -1423,17 +1455,6 @@ export function Composer({
       </button>
     </div>
   );
-
-  // Гасим нативный touch-callout / контекстное меню на иконочных кнопках.
-  // На планшете long-press по SVG-иконке внутри кнопки иначе вызывает меню
-  // браузера «Скачать/Поделиться/Печать» и перебивает onClick (голосовой ввод
-  // не стартует). Подавляем callout и выделение; onContextMenu гасит и правый клик.
-  const iconBtnGuard: CSSProperties = {
-    WebkitTouchCallout: 'none',
-    WebkitUserSelect: 'none',
-    userSelect: 'none',
-    touchAction: 'manipulation',
-  };
 
   const micButton = hasSpeech ? (
     <button

@@ -20,7 +20,7 @@ export type HandsFreePhase = 'off' | 'listening' | 'pending' | 'sending' | 'wait
 
 // Реплики автомата о себе. Произносятся тем же speak() и ТОЛЬКО там, где озвучки ответа
 // заведомо нет (Р18): иначе speak() внутри себя зовёт stopSpeaking() и обрежет ответ
-export type HandsFreeNotice = 'stillThere' | 'needDecision' | 'idleOff' | 'micDead';
+export type HandsFreeNotice = 'stillThere' | 'needDecision' | 'idleOff' | 'micDead' | 'voiceOff';
 
 export interface HandsFreeState {
   phase: HandsFreePhase;
@@ -84,6 +84,27 @@ function append(buffer: string, chunk: string): string {
   return buffer ? `${buffer} ${t}` : t;
 }
 
+// Голосовая команда выхода из разговора. Сравнение ТОЧНОЕ по всему чанку (после
+// нормализации регистра и пунктуации): «стоп, а теперь расскажи…» — обычная речь,
+// не команда, и улетать в чат обязана. Синонимы покрывают очевидные «замолчать и
+// выйти»: короткие слова работают и при шуме, составные — реже, зато без ложных
+// срабатываний на «хватит» в середине мысли
+const STOP_COMMANDS = new Set([
+  'стоп', 'хватит', 'отбой', 'конец связи', 'выключись',
+  'выключи разговор', 'достаточно', 'прекрати', 'хватит говорить',
+]);
+
+// Нормализация: нижний регистр, срез пунктуации вокруг и внутри (движки распознавания
+// любят «Стоп.» и «стоп,»), схлопывание пробелов
+function normalizeSpeech(text: string): string {
+  return text.toLowerCase().replace(/[.,!?;:«»"'—–-]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Публично для тестов: командой считается точное совпадение всего чанка
+export function isStopCommand(text: string): boolean {
+  return STOP_COMMANDS.has(normalizeSpeech(text));
+}
+
 // Бесплодный цикл: движок отработал вхолостую. Считается ровно один раз за цикл —
 // по cycleEnded, который приходит всегда (в том числе следом за onerror)
 function barrenTick(s: HandsFreeState): HandsFreeState {
@@ -122,6 +143,11 @@ export function handsFreeReducer(s: HandsFreeState, e: HandsFreeEvent): HandsFre
       return stop(s, 'needDecision');
 
     case 'recognized':
+      // Голосовая команда выхода: работает в микрофонных фазах (listening/pending),
+      // где единственный способ сказать «хватит» без касаний. Точное совпадение —
+      // см. isStopCommand; буфер при этом НЕ отправляется
+      if ((s.phase === 'listening' || s.phase === 'pending') && isStopCommand(e.text))
+        return stop(s, 'voiceOff');
       if (s.phase === 'listening')
         return enter(s, 'pending', { buffer: append(s.buffer, e.text), barren: 0, warned: false });
       // Речь продолжилась в окне отмены: буфер дописан, окно снято, слушаем дальше
@@ -198,6 +224,11 @@ export interface HandsFreeOptions {
   onSend: (text: string) => void | boolean | Promise<boolean | void>;
   // Прерывание убежавшего хода при выключении петли в фазе ожидания
   onStop: () => void;
+  // Петлю погасила ГОЛОСОВАЯ команда выхода («стоп»): автомат уже выключен,
+  // здесь композер доделывает хвост тапа по кнопке — страховочное прерывание хода
+  // и PUT voiceMode=false (инвариант Р3: выход из петли гасит и режим). Звать
+  // handsFree.stop() из него НЕЛЬЗЯ — toggle при выключенной петле её бы запустил
+  onVoiceExit?: () => void;
   // Зеркало «петля активна» для синхронного чтения из колбэков движка распознавания
   activeRef: React.RefObject<boolean>;
 }
@@ -239,6 +270,7 @@ const NOTICE_TEXT: Record<HandsFreeNotice, string> = {
   needDecision: 'Нужно твоё решение, посмотри на экран.',
   idleOff: 'Выключаю разговор.',
   micDead: 'Распознавание недоступно, выключаю разговор.',
+  voiceOff: 'Выключаю разговор.',
 };
 
 export function useHandsFree(opts: HandsFreeOptions): HandsFree {
@@ -424,6 +456,9 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     // по концу реплики возвращаемся слушать. Остальные реплики произносятся уже
     // после выключения, и автомату о них знать нечего
     if (notice === 'stillThere') void said.then(() => dispatch({ type: 'speechFinished' }));
+    // Голосовой выход: автомат уже погашен, композеру осталось доделать хвост тапа
+    // по кнопке (страховочное прерывание хода и PUT voiceMode=false)
+    if (notice === 'voiceOff') o.current.onVoiceExit?.();
   }, [notice]);
 
   // Размонтирование (в т.ч. смена чата — Composer стоит с key по сессии): микрофон,

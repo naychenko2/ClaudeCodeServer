@@ -258,6 +258,42 @@ test.describe('режим разговора', () => {
     await expect(page.getByText('слушаю')).toBeHidden();
   });
 
+  test('голосовая «стоп» выключает разговор без касаний', async ({ page }) => {
+    await openChat(page, token, chatId);
+    const voiceBtn = page.getByRole('button', { name: 'Режим разговора' });
+    await expect(voiceBtn).toBeVisible({ timeout: 120_000 });
+    await expect.poll(async () => {
+      if (await page.getByText('слушаю').isVisible()) return true;
+      await voiceBtn.click().catch(() => { /* перерисовалась — повторим */ });
+      return false;
+    }, { message: 'петля должна стартовать', timeout: 60_000, intervals: [1000] }).toBe(true);
+
+    // Наговорили текст → окно отмены → сказали «стоп»: буфер умирает вместе с петлёй,
+    // в чат ничего не уходит, режим выключается, звучит подтверждение
+    await page.evaluate(() => (window as unknown as { __say: (t: string) => void }).__say('запиши что-нибудь'));
+    // .first(): фраза живёт и в буфере петли (композер), и в ленте чата — точного
+    // совпадения два, strict mode падает на дубле
+    await expect(page.getByText('запиши что-нибудь').first()).toBeVisible({ timeout: 5_000 });
+    await page.evaluate(() => (window as unknown as { __say: (t: string) => void }).__say('Стоп.'));
+    await expect(voiceBtn, 'петля должна погаснуть').toBeVisible({ timeout: 10_000 });
+    await expect(page.getByText('слушаю')).toBeHidden();
+
+    // Подтверждение прозвучало голосом
+    await expect.poll(
+      async () => (await spoken(page)).some(t => t.includes('Выключаю разговор')),
+      { message: 'петля должна подтвердить выход голосом', timeout: 10_000 },
+    ).toBe(true);
+
+    // Сказанное НЕ ушло в чат сообщением: кнопка режима вернулась (значит canSend
+    // сброшен и буфер петли пуст), а реплика «запиши что-нибудь» не появилась в ленте
+    // как отправленное сообщение — проверяем по отсутствию хода: текст «думает…»
+    // не появлялся бы после выхода
+    await page.waitForTimeout(2500);
+    await expect(page.getByText('думает…')).toBeHidden();
+    expect(await page.evaluate(() => (window as unknown as { __speaking: () => boolean }).__speaking()),
+      'синтезатор не должен продолжать читать ответ').toBe(false);
+  });
+
   test('реплика «ты ещё здесь?» звучит при закрытом микрофоне', async ({ page }) => {
     await openChat(page, token, chatId);
     // Чат общий на весь файл: ход предыдущего сценария мог ещё идти, а во время хода

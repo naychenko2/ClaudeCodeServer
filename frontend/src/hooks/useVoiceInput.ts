@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { showToast } from '../lib/toast';
+import { talkDiag } from '../lib/talkDiag';
 import {
   isMicKeyboardFallback, setMicKeyboardFallback,
   describeSpeechError, isSilentSpeechError, MIC_FALLBACK_TEXT,
@@ -161,10 +162,10 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, qu
     // и watchdog убивал вполне рабочий движок.
     const alive = () => { gotAudio = true; clearWatchdog(); };
 
-    rec.onstart = alive;
-    rec.onaudiostart = alive;
-    rec.onsoundstart = alive;
-    rec.onspeechstart = alive;
+    rec.onstart = () => { talkDiag('engine: start'); alive(); };
+    rec.onaudiostart = () => { talkDiag('engine: audiostart'); alive(); };
+    rec.onsoundstart = () => { talkDiag('engine: soundstart'); alive(); };
+    rec.onspeechstart = () => { talkDiag('engine: speechstart'); alive(); };
 
     rec.onresult = (e: SpeechResultEventLike) => {
       alive();
@@ -173,11 +174,13 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, qu
         const r = e.results[i];
         if (r.isFinal && r[0]?.transcript) last = r[0].transcript;
       }
+      talkDiag(`engine: result final="${last}" interim=${e.results.length > 0 && !e.results[e.results.length - 1].isFinal}`);
       if (recCancelRef.current) return; // отменено — не вставляем
       if (last) onResultRef.current(last);
     };
 
     rec.onend = () => {
+      talkDiag('engine: end');
       clearWatchdog();
       // Движок отработал — ссылку гасим: по ней startMic отличает живое распознавание
       // от залипшего флага
@@ -186,9 +189,10 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, qu
       onEndRef.current?.();
     };
     rec.onerror = (e: { error?: string }) => {
+      const code = String(e?.error ?? 'unknown');
+      talkDiag('engine: error', code);
       clearWatchdog();
       setListening(false);
-      const code = String(e?.error ?? 'unknown');
       onErrorRef.current?.(code);
       // Причина сбоя — прямо в тост: без неё на устройстве не понять, что именно не так.
       // В quiet-режиме тосты ведёт вызывающий (петля разговора их демпфирует)
@@ -199,6 +203,7 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, qu
     recognitionRef.current = rec;
     try {
       rec.start();
+      talkDiag('engine: start() called');
       setListening(true);
       // Детектор «мёртвого» движка: если за MIC_WATCHDOG_MS не пришёл audiostart —
       // распознавания в браузере нет (нет Google-сервисов). Переходим на клавиатурный
@@ -206,6 +211,7 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, qu
       micWatchdogRef.current = window.setTimeout(() => {
         if (gotAudio) return;
         micWatchdogRef.current = null;
+        talkDiag('engine: watchdog — признаков жизни нет, считаем движок мёртвым');
         try { rec.abort(); } catch { /* noop */ }
         setListening(false);
         setMicKeyboardFallback();

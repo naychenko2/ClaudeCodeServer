@@ -20,6 +20,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { takeAuroraPulse, onAuroraWake } from '../lib/auroraPulse';
 import { AmpConflictDetector } from '../lib/ampConflict';
+import { talkDiag } from '../lib/talkDiag';
 
 // Окно канарейки: смерть движка распознавания в это время после открытия нашего
 // потока считается конфликтом захватов
@@ -91,6 +92,8 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
   // Момент старта ТЕКУЩЕЙ озвучки: от него считаем фазу огибающей «фраза/пауза»,
   // чтобы каждая реплика начиналась с «вдоха», а не с рандомной точки цикла
   const speechStartRef = useRef(0);
+  // Троттлинг диагностического лога громкости (раз в 2 с)
+  const lastVoiceLogRef = useRef(0);
 
   // --- Луп дыхания: весь период active, источник амплитуды подключается ниже ---
   useEffect(() => {
@@ -142,7 +145,15 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
         // Корм детектора конфликта: речь в нашей амплитуде — это RMS заметно выше
         // фонового шума (~0.2 после нормировки; порог ниже пиковой речи, но выше
         // дыхания/шума комнаты)
-        if (raw > 0.2) conflictRef.current.noteVoice();
+        if (raw > 0.2) {
+          conflictRef.current.noteVoice();
+          // Диагностика: фиксируем первый громкий кадр цикла (не спамим каждый кадр).
+          // Латиница в значении — чтобы не путаться в похожих кириллических логах
+          if (performance.now() - lastVoiceLogRef.current > 2000) {
+            lastVoiceLogRef.current = performance.now();
+            talkDiag(`amp: voice raw=${raw.toFixed(2)}`);
+          }
+        }
       } else if (speaking) {
         // Озвучка: одна плавная волна от старта реплики — подъём ~1.2 с, спад ~1.2 с,
         // затем мягкий повтор (0.3 Гц: цикл ~3.3 с). Без вибрации: частые синусы
@@ -191,7 +202,12 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
     let cancelled = false;
 
     conflictRef.current.setStream(true);
-    if (!ampUnsafeSession && !isAmpUnsafePlatform()) {
+    if (ampUnsafeSession) {
+      talkDiag('amp: поток не открываем — вкладка помечена ampUnsafe (конфликт/канарейка)');
+    } else if (isAmpUnsafePlatform()) {
+      talkDiag('amp: поток не открываем — Apple-платформа (WebKit)');
+    } else {
+      talkDiag('amp: открываю getUserMedia для амплитуды');
       // real-путь с деградацией: отказ — тихо остаёмся в псевдо, разговор не трогаем.
       // Эффект микрофона петли уже открыл SpeechRecognition — условие канарейки
       void navigator.mediaDevices?.getUserMedia({ audio: { echoCancellation: true } })
@@ -200,15 +216,18 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
           stream = s;
           const AC = window.AudioContext
             ?? (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-          if (!AC) return;
+          if (!AC) { talkDiag('amp: AudioContext недоступен — псевдо'); return; }
           ctx = new AC();
           const analyser = ctx.createAnalyser();
           analyser.fftSize = 512;
           ctx.createMediaStreamSource(s).connect(analyser);
           slot.analyser = analyser;
           openedAtRef.current = Date.now();
+          talkDiag('amp: поток открыт, анализатор подключен');
         })
-        .catch(() => { /* отказ/отзыв доступа — остаёмся в псевдо */ });
+        .catch((e) => {
+          talkDiag('amp: getUserMedia отказ — остаёмся в псевдо', e instanceof Error ? e.message : e);
+        });
     }
 
     return () => {
@@ -229,10 +248,13 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
   }, []);
 
   const reportCycleEnd = useCallback((barren: boolean) => {
-    if (!conflictRef.current.cycleEnd(barren)) return;
+    const verdict = conflictRef.current.cycleEnd(barren);
+    talkDiag('amp: конец цикла', { barren, verdict });
+    if (!verdict) return;
     // Конфликт подтверждён: голос был у нас, движок глух. Честная амплитуда
     // отключается до перезагрузки вкладки — разговор дороже сияния. Немедленный
     // перезапуск эффекта гасит живой захват, не дожидаясь смены фазы петли
+    talkDiag('amp: КОНФЛИКТ ЗАХВАТОВ — вырубаю честную амплитуду до перезагрузки');
     ampUnsafeSession = true;
     setStreamKick(k => k + 1);
   }, []);

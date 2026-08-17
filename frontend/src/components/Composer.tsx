@@ -30,6 +30,7 @@ import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
 import { useMicLevel } from '../hooks/useMicLevel';
 import { primeAudio } from '../lib/tts';
 import { isMicKeyboardFallback } from '../lib/voiceInput';
+import { talkDiag, talkDiagSave } from '../lib/talkDiag';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
@@ -884,6 +885,13 @@ export function Composer({
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;
+  // Диагностика петли: фазы и старт/стоп. Дамп сохраняется при остановке —
+  // его можно вытащить с телефона через window.__talkDiag() или localStorage
+  useEffect(() => { talkDiag('loop: фаза', handsFree.phase); }, [handsFree.phase]);
+  useEffect(() => {
+    if (talkActive) talkDiag('loop: START петли разговора');
+    else { talkDiag('loop: STOP петли разговора'); talkDiagSave(); }
+  }, [talkActive]);
   // Зеркало буфера петли: onEnd движка читает его синхронно, чтобы решить,
   // был ли цикл бесплодным (пустой буфер = ни слова не распознано)
   useEffect(() => { talkBufferRef.current = handsFree.buffer; });
@@ -966,6 +974,7 @@ export function Composer({
   // Тап по кнопке режима. Синхронная часть жеста (прайминг аудио и старт микрофона) идёт
   // ДО любого await: политика autoplay и разрешение микрофона живут только внутри жеста
   const handleVoiceButton = () => {
+    talkDiag('tap: кнопка режима разговора', { talkActive });
     if (talkActive) {
       // В разговоре у кнопки ОДИН смысл — «прекрати»: заткнуть чтение, прервать ход,
       // выйти из режима. Разбирать, в какой фазе мы сейчас, человеку на ходу некогда,
@@ -978,6 +987,7 @@ export function Composer({
       return;
     }
     if (!hasSpeech || isMicKeyboardFallback()) {
+      talkDiag('tap: отказ — hasSpeech', hasSpeech, 'keyboardFallback', isMicKeyboardFallback());
       showToast('Разговор', 'Распознавание речи на этом устройстве недоступно');
       return;
     }

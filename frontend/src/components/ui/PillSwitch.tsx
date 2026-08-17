@@ -22,7 +22,7 @@ type PillGeom = { left: number; width: number };
 // так тап между вкладками анимируется, а не перескакивает.
 const pillMemory = new Map<string, PillGeom>();
 
-export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, autoCompact, iconsOnly, variant = 'default', renderOption }: {
+export function PillSwitch<T extends string>({ value, options, onChange, fill, isMobile, draggable, persistKey, compact, autoCompact, iconsOnly, variant = 'default', renderOption, onCompactOverflowChange }: {
   value: T;
   options: { value: T; label: string; icon?: ReactNode; title?: string }[];
   onChange: (v: T) => void;
@@ -39,6 +39,11 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   /** Кастомный рендер конкретного сегмента (вернуть null — обычная кнопка). Активный
    *  кастомный сегмент рисует свой фон и подавляет скользящую пилюлю под собой. */
   renderOption?: (opt: { value: T; label: string; icon?: ReactNode }, active: boolean) => ReactNode;
+  /** Сообщает о том, что компактный ряд (иконки + подпись активного) тоже не влезает
+   *  в трек. Только в autoCompact-режиме: вызывается при каждом изменении состояния.
+   *  Используется, чтобы вызывающий код мог откатиться на мобильную схему
+   *  (например, переключиться с полного набора табов на сокращённый + «⋯»). */
+  onCompactOverflowChange?: (overflow: boolean) => void;
 }) {
   const hub = variant === 'hub';
   const trackRef = useRef<HTMLDivElement>(null);
@@ -46,6 +51,12 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   // Мерить видимые кнопки нельзя: (1) в них попадает absolute-пилюля, (2) в компакте
   // они уже сжаты до иконок → замер осциллирует. Эталон всегда полнотекстовый и вне потока.
   const measureRef = useRef<HTMLDivElement>(null);
+  // Скрытый компактный эталон — все сегменты иконками, активный — с самой длинной
+  // подписью из опций. Нужен, чтобы вызывающий код мог узнать «даже компакт не влезает»
+  // и откатиться на мобильную схему (например, убрать часть табов и перенести в «⋯»).
+  // Замер по худшему случаю: при смене активного таба компактный ряд не должен
+  // расширяться сверх уже измеренного.
+  const compactProbeRef = useRef<HTMLDivElement>(null);
   const [overflowCompact, setOverflowCompact] = useState(false);
   // compact форсирует (мобила), autoCompact ДОБАВЛЯЕТ детект переполнения
   // (планшет — пока влезает полнотекст, при переполнении → иконки). Семантика
@@ -54,22 +65,34 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
   // отрицание даёт корректный boolean на десктопе (undefined || … → false).
   const effectiveCompact = !!(compact || (autoCompact && overflowCompact));
 
-  // Авто-детект переполнения: натуральная ширина полнотекстового ряда vs доступная ширина трека
+  // Самая длинная подпись среди опций — для компактного эталона: активный сегмент
+  // берётся с ней, чтобы замер покрывал худший случай (любой реальный активный
+  // таб даст ряд не шире эталона).
+  const longestLabel = options.reduce((acc, o) => o.label.length > acc.length ? o.label : acc, '');
+
+  // Авто-детект переполнения: натуральная ширина полнотекстового ряда vs доступная ширина трека.
+  // Параллельно меряем компактный ряд (иконки + подпись у активного) — если даже он не влезает,
+  // сообщаем наружу через onCompactOverflowChange, чтобы вызывающий код мог откатиться
+  // на мобильную схему (иконки без подписей + «⋯ Разделы»).
   useEffect(() => {
     if (!autoCompact) return;
     const track = trackRef.current;
     const probe = measureRef.current;
+    const compactProbe = compactProbeRef.current;
     if (!track || !probe) return;
     const measure = () => {
       // −24 — запас до визуального прижатия ряда к краям хедера: компакт должен
       // включиться заранее, до того как пилюли упрутся в края
       setOverflowCompact(probe.offsetWidth > track.clientWidth - 24);
+      if (compactProbe && onCompactOverflowChange) {
+        onCompactOverflowChange(compactProbe.offsetWidth > track.clientWidth - 24);
+      }
     };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(track);
     return () => ro.disconnect();
-  }, [autoCompact, options, isMobile, fill]);
+  }, [autoCompact, options, isMobile, fill, onCompactOverflowChange]);
   const btnRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const suppressClick = useRef(false);               // гасим клик, если это был drag
 
@@ -229,6 +252,30 @@ export function PillSwitch<T extends string>({ value, options, onChange, fill, i
               {opt.label}
             </span>
           ))}
+        </div>
+      )}
+      {/* Скрытый компактный эталон: все сегменты иконками, активный — с самой длинной
+          подписью. Если даже этот ряд не влезает в трек — сообщаем наружу через
+          onCompactOverflowChange, чтобы вызывающий код мог откатиться на мобильную
+          схему (иконки без подписей + «⋯ Разделы»). Ширины сегментов повторяют
+          реальные, чтобы замер совпадал с тем, что видит пользователь. */}
+      {autoCompact && (
+        <div ref={compactProbeRef} aria-hidden style={{
+          position: 'absolute', visibility: 'hidden', pointerEvents: 'none', top: 0, left: 0,
+          display: 'flex', gap: 3, whiteSpace: 'nowrap',
+        }}>
+          {options.map((opt, i) => {
+            const isActive = opt.label === longestLabel;
+            return (
+              <span key={i} style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6, boxSizing: 'border-box',
+                padding: '0 11px', fontSize: 13, fontWeight: 600,
+              }}>
+                {opt.icon}
+                {isActive && opt.label}
+              </span>
+            );
+          })}
         </div>
       )}
       {/* Скользящая пилюля */}

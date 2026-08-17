@@ -382,16 +382,22 @@ export const api = {
     // Кандидаты двух видов: name (из белого списка) или paths (нарисованные моделью).
     // Бэк валидирует имя по членству в LucideGlyphs.All и пути по алфавиту/лимитам.
     // Стор не меняется: возвращаются до 4 кандидатов, фронт сам выбирает и зовёт select.
+    // Подбор значка — серверный бюджет генерации места project-icon доходит до 180 с,
+    // дефолтный клиентский таймаут 30 с обрывал бы запрос раньше ответа. Таймаут расширен
+    // явно — общий FETCH_TIMEOUT_MS в offline.ts не трогаем (растровые вызовы тоже
+    // задают свой timeoutMs по тому же принципу).
     suggestIcon: (id: string, opts?: { prompt?: string }) =>
       request<{ candidates: GlyphCandidate[]; failReason?: string | null }>(
         `/projects/${encodeURIComponent(id)}/icon/suggest`,
         {
           method: 'POST',
           body: JSON.stringify({ prompt: opts?.prompt?.trim() || undefined }),
+          timeoutMs: 180_000,
         },
       ),
     // Кандидаты ДО создания проекта (диалог «Добавить проект»): серверная сторона не
-    // сохраняется, имя берётся из черновика названия.
+    // сохраняется, имя берётся из черновика названия. Тот же серверный лимит 180 с —
+    // клиентский таймаут расширен явно (см. комментарий выше).
     suggestIconPreview: (opts?: { name?: string; prompt?: string }) =>
       request<{ candidates: GlyphCandidate[]; failReason?: string | null }>(
         '/projects/icon/suggest-preview',
@@ -401,6 +407,7 @@ export const api = {
             name: opts?.name?.trim() || undefined,
             prompt: opts?.prompt?.trim() || undefined,
           }),
+          timeoutMs: 180_000,
         },
       ),
     // Принять кандидата: сервер валидирует тело целиком (источник не доверен, ADR-009 §8),

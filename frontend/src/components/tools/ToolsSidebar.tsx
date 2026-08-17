@@ -266,10 +266,13 @@ export function PreviewServiceList({
           <div key={source}>
             {/* Группа-разделитель — тот же ListDateDivider dense, что рисует разделы
                 «Документации»: шеврон + черта справа, клик сворачивает. Подложка
-                прилипающая — группа не теряется при скролле длинного списка */}
+                прилипающая — группа не теряется при скролле длинного списка. Фон
+                подложки — В ТОЧНОСТИ фон полотна списка (bgWhite в PanelShell,
+                bgPanel в старом сайдбаре): иначе плашка темнее фона и читается
+                как постоянная подсветка выбранной группы */}
             <div style={{
               position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
-              background: C.bgPanel, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
+              background: inHeader ? C.bgWhite : C.bgPanel, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
             }}>
               <ListDateDivider
                 title={sourceMeta(source).label}

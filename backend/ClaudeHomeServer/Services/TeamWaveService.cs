@@ -583,18 +583,24 @@ public class TeamWaveService
             var lastActivity = team.WaveActivityAt ?? startedAt;
             if (DateTime.UtcNow - lastActivity < _waveTimeout) continue;
 
-            var stalled = StalledTaskTitles(session, team.WaveNumber);
+            var stalled = StalledWaveTasks(session, team.WaveNumber);
             await RaiseEscalationAsync(session, new TeamEscalation
             {
                 Kind = TeamEscalationKind.WaveStalled,
                 Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveStalled,
-                    stalled.FirstOrDefault() ?? $"волна {team.WaveNumber}"),
+                    stalled.FirstOrDefault()?.Title ?? $"волна {team.WaveNumber}"),
                 Details = $"Волна {team.WaveNumber} идёт дольше {_waveTimeout.TotalMinutes:0} минут и не закрывается. " +
                           (stalled.Count > 0
-                              ? "Молчат задачи: " + string.Join(", ", stalled.Select(t => $"«{t}»")) + "."
+                              ? "Молчат задачи: " + string.Join(", ", stalled.Select(t => $"«{t.Title}»")) + "."
                               : "Незакрытых задач волны не видно — возможно, они удалены."),
+                // D3 (приёмка круга 2): «Снять» работает только с TaskId, а он честен лишь когда
+                // молчит РОВНО ОДНА под-задача — иначе кнопка сняла бы первую попавшую, а не ту,
+                // что выбрал человек. При нескольких (или ни одной) молчащих берём набор без «Снять».
+                TaskId = stalled.Count == 1 ? stalled[0].Id : null,
                 Wave = team.WaveNumber,
-                Actions = TeamEscalationActions.For(TeamEscalationKind.WaveStalled),
+                Actions = stalled.Count == 1
+                    ? TeamEscalationActions.For(TeamEscalationKind.WaveStalled)
+                    : TeamEscalationActions.WithoutDrop(),
             });
             _log.LogWarning("Волна {Wave} чата-штаба {SessionId} не двигается дольше таймаута",
                 team.WaveNumber, session.Id);
@@ -642,7 +648,7 @@ public class TeamWaveService
                 // D2 (ревью 2026-08-17): у карточки мёртвой зоны свой набор кнопок, БЕЗ «Снять»:
                 // TaskId у неё нет, а блок раздачи по состоянию ниже ветки drop в SessionManager
                 // запускал бы следующую волну — подпись кнопки врала о последствии.
-                Actions = TeamEscalationActions.DeadZone(),
+                Actions = TeamEscalationActions.WithoutDrop(),
             });
             _log.LogWarning("Мёртвая зона конвейера чата-штаба {SessionId}: волна {Wave} закрыта, " +
                 "следующая не роздана дольше таймаута", session.Id, team.WaveNumber);
@@ -650,8 +656,9 @@ public class TeamWaveService
         finally { gate.Release(); }
     }
 
-    // Названия незакрытых задач текущей волны — для текста карточки зависания
-    private List<string> StalledTaskTitles(Session session, int wave)
+    // Незакрытые задачи текущей волны — для карточки зависания: заголовки в текст и
+    // TaskId кнопке «Снять» (когда молчит ровно одна, D3)
+    private List<TaskItem> StalledWaveTasks(Session session, int wave)
     {
         var ownerId = session.OwnerId
             ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
@@ -661,8 +668,7 @@ public class TeamWaveService
         return [.. pool
             .Where(t => t.SourceSessionId == session.Id
                 && t.Labels.Contains($"волна {wave}")
-                && t.Status != TaskItemStatus.Done)
-            .Select(t => t.Title)];
+                && t.Status != TaskItemStatus.Done)];
     }
 
     // --- Повторные напоминания о висящей карточке ---

@@ -1365,17 +1365,15 @@ public class TeamWaveServiceTests : IDisposable
             .Should().ContainSingle("«Продолжить» — кнопка человека: работа возобновляется сразу");
     }
 
-    // D2, соседняя карточка: у обычной зависшей волны (таймаут идущей волны) «Снять» осталась.
-    // КРАСНЫЙ (дефект приёмки D3, круг 2 от 2026-08-17, поведение унаследовано от master):
-    // карточка таймаута публикуется БЕЗ TaskId (TeamWaveService.CheckStalledWavesAsync), поэтому
-    // ветка drop в RespondTeamEscalationAsync не срабатывает — «Снять» не снимает ничего, только
-    // перезаводит отсечку сторожа и уходит ходом координатору. Та же болезнь, из-за которой у
-    // карточки мёртвой зоны кнопку убрали, но здесь она осталась. Снять Skip после починки.
-    [Fact(Skip = "Дефект приёмки D3: «Снять» на карточке зависшей волны не снимает под-задачу")]
+    // D3 (приёмка круга 2, починен кругом 3): карточка таймаута волны публикуется с TaskId,
+    // когда молчит ровно ОДНА под-задача — «Снять» закрывает её и волной, как заявлено.
+    // При нескольких молчащих кнопки «Снять» нет вовсе (WithoutDrop): одна кнопка не может
+    // выбрать, какую из них снять.
+    [Fact]
     public async Task КарточкаЗависшейВолны_КнопкаСнять_ЗакрываетПодЗадачу()
     {
         var (session, plan) = await MakeRunningStabAsync("qa-stalled-drop");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _sessions.WithTeamState(session.Id, t =>
         {
             t.WaveStartedAt = DateTime.UtcNow.AddHours(-5);

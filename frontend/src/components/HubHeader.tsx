@@ -60,44 +60,48 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showModelsSpend, setShowModelsSpend] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
-  // «Даже компактный ряд табов не влезает в трек» — на планшете переключаем
-  // набор с полного (5 разделов) на сокращённый (3 primary + «⋯ Разделы»).
+  // «Даже компактный ряд табов не влезает в центр таббара» — на планшете
+  // переключаем набор с полного (5 разделов) на сокращённый (3 primary + «⋯ Разделы»).
   // Замер делаем сами, по ПОСТОЯННОМУ скрытому эталону полного набора 5 табов —
   // эталон не зависит от того, какая ветка сейчас отрисована, поэтому цикла
   // «3 влезают → 5 не влезают → 3 влезают…» нет. Стартуем с true (откат),
   // чтобы первый кадр до замера ничего не выпирал за края.
   const [compactOverflow, setCompactOverflow] = useState<boolean>(true);
-  // Трек таббара (обёртка над HubTabs) и скрытый компактный эталон полного набора —
-  // эталон живёт в DOM постоянно и вне потока, его ширина сопоставляется с
-  // clientWidth трека. Решение принимаем сами, не через колбэк PillSwitch: его
-  // компактный эталон строится из ТЕКУЩИХ options, и в откатной ветке (3 таба)
-  // он заведомо влезает — отсюда и была осцилляция.
-  const trackRef = useRef<HTMLDivElement>(null);
+  // Ссылка на контейнер центра таббара — он определяет ширину «куда должен влезть»
+  // (центр — единственная flex:1 среди секций на планшете) и его наблюдает
+  // ResizeObserver: открытие/закрытие боковых панелей и длинная крошка проекта
+  // пересчитывают решение.
+  const centerRef = useRef<HTMLDivElement>(null);
+  // Скрытый компактный эталон полного набора — существует всегда на планшете,
+  // живёт ВНУТРИ центрального контейнера (не внутри трека со скроллом, иначе
+  // absolute-пробник раздувает scrollWidth трека, хоть и невидим).
   const probeFullRef = useRef<HTMLDivElement>(null);
 
   // «Собрать цепочку…» из панелей выбора модели — открыть единый раздел «Модели и расход»
   useEffect(() => subscribeModelProvidersNav(() => setShowModelsSpend(true)), []);
 
-  // Замер «влезают ли 5 табов в трек таббара» — по скрытому компактному эталону
-  // полного набора (probeFull). В откатной ветке PillSwitch внутри трека рисует
-  // только 3 таба, поэтому его собственный замер становится заведомо ложным;
-  // здесь же эталон один и тот же в обеих ветках. На десктопе/мобиле замер не нужен.
-  // −24 — запас до визуального прижатия ряда к краям (как в PillSwitch).
-  // Гистерезис получается бесплатно: в откатной ветке кнопка «⋯» сужает трек
-  // (родитель — flex-центр, место отдаётся под иконку меню), и обратный переход
-  // к полному ряду случается только при реальном расширении окна более чем
-  // на ширину «⋯» относительно точки отката.
+  // Замер «влезают ли 5 табов» — по скрытому компактному эталону полного набора
+  // (probeFull). Решение принимаем сами, не через колбэк PillSwitch: его компактный
+  // эталон строится из ТЕКУЩИХ options, и в откатной ветке (3 таба) он заведомо
+  // влезает → цикл. Здесь же эталон один и тот же в обеих ветках.
+  // Меряем по ширине ЦЕНТРА, а не по ширине внутреннего трека (внутренний трек
+  // — flex-элемент без `flex: 1`, его ширина = ширина содержимого; мерить по нему
+  // — условие истинно всегда, обратный переход к 5 табам невозможен, планшет
+  // залипает в откате). Центр с `flex: 1 1 0%` + `minWidth: 0` от содержимого не
+  // зависит (трек скроллится, кнопка «⋯» — flexShrink:0 внутри центра) → ответ
+  // — чистая функция ширины окна, обе ветки дают одинаковый результат, осцилляции
+  // нет. −24 — буфер на дребезг при протяжке ресайза.
   useEffect(() => {
     if (!isTablet) return;
-    const track = trackRef.current;
+    const center = centerRef.current;
     const probe = probeFullRef.current;
-    if (!track || !probe) return;
+    if (!center || !probe) return;
     const measure = () => {
-      setCompactOverflow(probe.offsetWidth > track.clientWidth - 24);
+      setCompactOverflow(probe.offsetWidth > center.clientWidth - 24);
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(track);
+    ro.observe(center);
     return () => ro.disconnect();
   }, [isTablet]);
 
@@ -242,9 +246,12 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       boxSizing: 'border-box', borderBottom: isMobile ? `1px solid ${C.border}` : 'none',
     }}>
       {/* Левая секция — логотип, он же вход на дашборд. На мобиле скрыт: место нужно
-          вкладкам, а на дашборд там ведёт пункт «Домой» в «⋯ Разделы» */}
+          вкладкам, а на дашборд там ведёт пункт «Домой» в «⋯ Разделы».
+          Планшет: секция по содержимому — растёт только центр таббара, а крошка
+          проекта сжимается через свой `maxWidth + ellipsis + minWidth: 0` ниже.
+          Десктоп: место делится поровну между всеми тремя секциями. */}
       {!isMobile && (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ flex: isTablet ? '0 1 auto' : 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
           {logo}
           {projectCrumb}
         </div>
@@ -253,19 +260,21 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {/* Центр — переключатель вкладок. На мобиле компакт-режим (иконки, подпись
           у активного); если пять разделов не влезут — таббар скроллится, не обрезается.
           Планшет: пробуем полный ряд из 5 разделов; если он не влезает даже
-          компактно — откатываемся на мобильную схему (3 primary + «⋯»). Замер
-          «влезают ли 5 табов» делает HubHeader сам по скрытому эталону полного
-          набора (probeFull ниже), а не PillSwitch: его собственный эталон
-          строится из текущих options и в откатной ветке заведомо влезает →
-          цикл «3 → 5 → 3 → …». Ступень 2 (скролл-полоса таббара) снаружи, в
-          обёртке ниже. «Домой» в таббар не добавляем — на планшете есть
-          логотип-favicon (`HubHeader.tsx:151-161`). */}
+          компактно — откатываемся на мобильную схему (3 primary + «⋯»).
+          Замер «влезают ли 5 табов» делает HubHeader сам по скрытому эталону
+          полного набора (probeFull ниже — в этом же контейнере, не внутри
+          скролл-трека), а не PillSwitch: его собственный эталон строится из
+          текущих options и в откатной ветке заведомо влезает → цикл.
+          Ступень 2 (скролл-полоса таббара) — во внутреннем треке ниже.
+          «Домой» в таббар не добавляем — на планшете есть логотип-favicon. */}
       {(isMobile || isTablet) ? (
-        <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
+        <div
+          ref={centerRef}
+          style={{ flex: 1, minWidth: 0, position: 'relative', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}
+        >
           <div
-            ref={trackRef}
             className="cc-no-scrollbar"
-            style={{ position: 'relative', minWidth: 0, display: 'flex', overflowX: 'auto', overflowY: 'hidden' }}
+            style={{ minWidth: 0, display: 'flex', overflowX: 'auto', overflowY: 'hidden' }}
           >
             <div style={{ flexShrink: 0, display: 'flex' }}>
               {isMobile || compactOverflow ? (
@@ -284,40 +293,42 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
                 />
               )}
             </div>
-            {/* Скрытый компактный эталон полного набора — существует всегда на планшете,
-                не зависит от того, какая ветка отрисована. Геометрия (gap 3, padding 0
-                11px, fontSize 13, fontWeight 600, иконка у всех, подпись у самого
-                длинного) повторяет реальные компактные кнопки PillSwitch — иначе
-                замер врал бы на пару пикселей и порог «вписался/не вписался» мог
-                скакать. */}
-            {isTablet && (
-              <div
-                ref={probeFullRef}
-                aria-hidden
-                style={{
-                  position: 'absolute', visibility: 'hidden', pointerEvents: 'none',
-                  top: 0, left: 0, display: 'flex', gap: 3, whiteSpace: 'nowrap',
-                }}
-              >
-                {DEFAULT_TABS.map((tab) => {
-                  const label = TAB_LABELS[tab];
-                  const isActive = label.length === longestHubLabel.length;
-                  return (
-                    <span
-                      key={tab}
-                      style={{
-                        display: 'inline-flex', alignItems: 'center', gap: 6, boxSizing: 'border-box',
-                        padding: '0 11px', fontSize: 13, fontWeight: 600,
-                      }}
-                    >
-                      {TAB_ICONS[tab]}
-                      {isActive && label}
-                    </span>
-                  );
-                })}
-              </div>
-            )}
           </div>
+          {/* Скрытый компактный эталон полного набора — существует всегда на планшете,
+              не зависит от того, какая ветка отрисована. Лежит В ЦЕНТРЕ, не в
+              треке со скроллом: внутри `overflow-x: auto` absolute-пробник раздувал
+              бы scrollWidth трека, хоть и невидим. Геометрия (gap 3, padding 0
+              11px, fontSize 13, fontWeight 600, иконка у всех, подпись у самого
+              длинного) повторяет реальные компактные кнопки PillSwitch — иначе
+              замер врал бы на пару пикселей и порог «вписался/не вписался» мог
+              скакать. */}
+          {isTablet && (
+            <div
+              ref={probeFullRef}
+              aria-hidden
+              style={{
+                position: 'absolute', visibility: 'hidden', pointerEvents: 'none',
+                top: 0, left: 0, display: 'flex', gap: 3, whiteSpace: 'nowrap',
+              }}
+            >
+              {DEFAULT_TABS.map((tab) => {
+                const label = TAB_LABELS[tab];
+                const isActive = label.length === longestHubLabel.length;
+                return (
+                  <span
+                    key={tab}
+                    style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 6, boxSizing: 'border-box',
+                      padding: '0 11px', fontSize: 13, fontWeight: 600,
+                    }}
+                  >
+                    {TAB_ICONS[tab]}
+                    {isActive && label}
+                  </span>
+                );
+              })}
+            </div>
+          )}
           {/* На мобиле и при откате на планшете — «Домой», «Заметки» и «Персоны» в «⋯»;
               когда 5 табов влезают, меню не нужно. */}
           {(isMobile || compactOverflow) && (
@@ -328,8 +339,11 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
         <HubTabs value={value} onChange={onTab} />
       )}
 
-      {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin) */}
-      <div style={{ flex: isMobile ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
+      {/* Правая секция — меню аватара (управление пользователями — внутри меню, admin).
+          Планшет: секция по содержимому — её контент прижат `flex-end`, и при
+          `flex: 1` она держала бы пустоту перед колокольчиком, отнимая место у
+          центра таббара. Десктоп — равное деление между секциями, как раньше. */}
+      <div style={{ flex: (isMobile || isTablet) ? 'none' : 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 8 }}>
         {/* «Открыть в новом окне» — только в разделе «Телеметрия» и только когда SigNoz
             доступен (иначе открылась бы вкладка с ошибкой прокси). Иконкой, как колокольчик. */}
         {onOpenExternal && (

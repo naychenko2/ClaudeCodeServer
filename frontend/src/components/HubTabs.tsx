@@ -59,7 +59,7 @@ const TABLESS: HubTab[] = ['home', 'notifications', 'knowledge', 'spend', 'telem
 // tablet: то же поведение, что у mobile, но autoCompact=true — полнотекстовые
 // подписи остаются, пока влезают; при переполнении переходим в иконки. Это
 // ступень 1 адаптива планшета; ступень 2 (скролл-полоса) — снаружи, в HubHeader.
-export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS, onCompactOverflowChange }: {
+export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS }: {
   value: HubTabValue;
   onChange: (t: HubTabValue) => void;
   mobile?: boolean;
@@ -67,10 +67,6 @@ export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS, 
   // Какие разделы показать. На мобиле HubHeader передаёт сокращённый primary-набор,
   // остальное уходит в «⋯ Разделы» (overflow), чтобы вкладки не скроллились под обрез.
   tabs?: HubTab[];
-  // Колбэк «даже компактный ряд табов не влезает в трек» — HubHeader использует
-  // его, чтобы на планшете откатиться с полного набора 5 разделов на мобильную
-  // схему (3 primary + «⋯ Разделы»), когда 5 не помещаются.
-  onCompactOverflowChange?: (overflow: boolean) => void;
 }) {
   // Вкладки внешних модулей из реестра (ТЗ R6): дописываются в конец, значение `module:{id}`.
   const modules = useModules();
@@ -111,7 +107,6 @@ export function HubTabs({ value, onChange, mobile, tablet, tabs = DEFAULT_TABS, 
       persistKey="hub-tabs"
       variant="hub"
       options={options}
-      onCompactOverflowChange={onCompactOverflowChange}
     />
   );
 }

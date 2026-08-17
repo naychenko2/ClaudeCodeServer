@@ -10,13 +10,16 @@
 //
 // Раскладки: десктоп — горизонтальная полоска; мобиль — компактная карточка.
 
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { Sparkles } from 'lucide-react';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
-import { Button } from '../../components/ui';
+import { Button, Modal } from '../../components/ui';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useMe } from '../../lib/defaultPersona';
+import { usePersonas, personaLabel } from '../../lib/personas';
+import { makeLead } from '../personas/TeamCommandCenter';
+import { PersonaAvatar } from '../personas/PersonaAvatar';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 
 // Ключи отказа — РАЗДЕЛЬНЫЕ для двух вариантов карточки: «познакомиться» и
@@ -55,11 +58,28 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
   const [scaffoldDismissed, setScaffoldDismissed] = useState<boolean>(() => {
     try { return localStorage.getItem(dismissedScaffoldKey(projectId)) === '1'; } catch { return false; }
   });
+  // Пикер «Выбрать из команды» — отдельный state: открывается по клику на новую
+  // кнопку в showIntro-варианте, закрывается при выборе или отмене. Держим здесь,
+  // а не в TeamCommandCenter, чтобы карточка оставалась самодостаточной (у неё
+  // свой сценарий «первого назначения», не требующий открывать командный центр).
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Список персон проекта — тот же источник и фильтр, что в TeamCommandCenter
+  // (usePersonas + scope === 'project' && projectId === ...). Перерендер
+  // сработает и при приходе personas_changed (realtime, см. lib/personas.ts).
+  const personas = usePersonas();
+  const team = useMemo(
+    () => personas.filter(p => p.scope === 'project' && p.projectId === projectId),
+    [personas, projectId],
+  );
 
   // Только владелец. !ownerId — владелец по умолчанию (старые проекты без поля)
   const isOwner = !projectOwnerId || (!!me.userId && projectOwnerId === me.userId);
   const hasLead = !!defaultPersonaId;
   const scaffoldPending = presetKey === 'pending';
+  // Кнопку «Выбрать из команды» показываем только когда команда непуста и это
+  // вариант «нет руководителя». При пустой команде единственный путь — онбординг.
+  const canPickFromTeam = !hasLead && team.length > 0;
 
   // Вариант 1: нет руководителя (и закрыли не «Позже» в этом виде карточки)
   const showIntro = onboardingOn && isOwner && !hasLead && !introDismissed;
@@ -79,6 +99,15 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
     try { localStorage.setItem(dismissedScaffoldKey(projectId), '1'); } catch { /* см. выше */ }
     setScaffoldDismissed(true);
   }, [projectId]);
+  // Закрываем модалку сразу при выборе — карточка исчезнет сама, когда бэк пришлёт
+  // personas_changed action='default' и App.tsx/WorkspacePage прокинет обновлённый
+  // defaultPersonaId в проп (см. App.tsx:348-360, WorkspacePage.tsx:971-973).
+  const handlePickFromTeam = useCallback((personaId: string) => {
+    const p = team.find(t => t.id === personaId);
+    setPickerOpen(false);
+    if (!p) return;
+    void makeLead(p);
+  }, [team]);
 
   if (!showIntro && !showScaffold) return null;
 
@@ -92,40 +121,75 @@ export function ProjectIntroCard({ projectId, projectOwnerId, defaultPersonaId, 
     : 'Расскажите о проекте — по короткому интервью появится его руководитель: персона по умолчанию для чатов этого проекта.';
   const primaryLabel = isScaffold ? 'Продолжить знакомство' : 'Познакомиться';
 
-  return isMobile ? (
-    <div style={mobileCard}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
-        <Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
-        <div style={mobileTitle}>{title}</div>
-      </div>
-      <div style={mobileText}>{body}</div>
-      <Button variant="primary" size="md" fullWidth onClick={handleMeet}
-        leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
-        {primaryLabel}
-      </Button>
-      <Button variant="ghost" size="md" fullWidth onClick={isScaffold ? handleLaterScaffold : handleLaterIntro}>
-        Позже
-      </Button>
-    </div>
-  ) : (
-    <div style={desktopBar}>
-      <div style={desktopBarIcon}>
-        <Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent }} />
-      </div>
-      <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
-        <div style={desktopTitle}>{title}</div>
-        <div style={desktopText}>{body}</div>
-      </div>
-      <div style={{ flexShrink: 0, display: 'flex', gap: SP.sm }}>
-        <Button variant="ghost" size="md" onClick={isScaffold ? handleLaterScaffold : handleLaterIntro}>
-          Позже
-        </Button>
-        <Button variant="primary" size="md" onClick={handleMeet}
-          leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
-          {primaryLabel}
-        </Button>
-      </div>
-    </div>
+  return (
+    <>
+      {isMobile ? (
+        <div style={mobileCard}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm }}>
+            <Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent, flexShrink: 0 }} />
+            <div style={mobileTitle}>{title}</div>
+          </div>
+          <div style={mobileText}>{body}</div>
+          <Button variant="primary" size="md" fullWidth onClick={handleMeet}
+            leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+            {primaryLabel}
+          </Button>
+          {/* Кнопка только в showIntro-варианте (не в showScaffold), и только при непустой
+              команде: в пустой «Выбрать из команды» бессмысленно — онбординг единственный путь. */}
+          {canPickFromTeam && (
+            <Button variant="ghost" size="md" fullWidth onClick={() => setPickerOpen(true)}>
+              Выбрать из команды
+            </Button>
+          )}
+          <Button variant="ghost" size="md" fullWidth onClick={isScaffold ? handleLaterScaffold : handleLaterIntro}>
+            Позже
+          </Button>
+        </div>
+      ) : (
+        <div style={desktopBar}>
+          <div style={desktopBarIcon}>
+            <Sparkles size={ICON_SIZE.md} strokeWidth={ICON_STROKE} style={{ color: C.accent }} />
+          </div>
+          <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={desktopTitle}>{title}</div>
+            <div style={desktopText}>{body}</div>
+          </div>
+          <div style={{ flexShrink: 0, display: 'flex', gap: SP.sm }}>
+            <Button variant="ghost" size="md" onClick={isScaffold ? handleLaterScaffold : handleLaterIntro}>
+              Позже
+            </Button>
+            {/* Тот же гейт, что в мобиле: показываем только в showIntro и при непустой команде. */}
+            {canPickFromTeam && (
+              <Button variant="ghost" size="md" onClick={() => setPickerOpen(true)}>
+                Выбрать из команды
+              </Button>
+            )}
+            <Button variant="primary" size="md" onClick={handleMeet}
+              leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}>
+              {primaryLabel}
+            </Button>
+          </div>
+        </div>
+      )}
+      {/* Модалка-пикер — общая для обеих раскладок, Modal сам адаптируется под
+          ширину окна (центрированная карточка на десктопе / шторка на мобиле).
+          Только в showIntro: в showScaffold руководитель уже есть, и кнопки нет. */}
+      {canPickFromTeam && pickerOpen && (
+        <Modal title="Выбрать из команды"
+          subtitle="Назначить руководителем проекта — будет дефолт-персоной чатов этого проекта."
+          onClose={() => setPickerOpen(false)}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.xs }}>
+            {team.map(p => (
+              <button key={p.id} onClick={() => handlePickFromTeam(p.id)}
+                style={pickerRow}>
+                <PersonaAvatar persona={p} size={32} />
+                <span style={pickerLabel}>{personaLabel(p)}</span>
+              </button>
+            ))}
+          </div>
+        </Modal>
+      )}
+    </>
   );
 }
 
@@ -159,3 +223,17 @@ const desktopTitle: React.CSSProperties = {
   fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 600, color: C.textHeading, lineHeight: 1.3,
 };
 const desktopText: React.CSSProperties = { fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 };
+
+// Стили пикера «Выбрать из команды» — близнецы memberCard из TeamCommandCenter:
+// плоская кнопка-строка с аватаром и подписью, та же плотность и скругление.
+// Hover не окрашиваем (CSS-inline без состояний) — палитра сама подсказывает
+// кликабельность: фон белый, граница светлее фона карточки.
+const pickerRow: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: SP.sm, width: '100%', textAlign: 'left',
+  background: C.bgWhite, border: `1px solid ${C.borderLight}`, borderRadius: R.lg,
+  padding: '10px 12px', cursor: 'pointer', fontFamily: FONT.sans,
+};
+const pickerLabel: React.CSSProperties = {
+  fontSize: FS.base, fontWeight: 600, color: C.textHeading,
+  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1,
+};

@@ -35,6 +35,23 @@ const TAB_OPTIONS: { value: Tab; label: string }[] = [
   { value: 'activity', label: 'Активность' },
 ];
 
+// Делает персону руководителем проекта (дефолт-персоной чатов проекта).
+// Используется и из TeamCommandCenter (смена руководителя), и из ProjectIntroCard
+// (первое назначение) — единый путь, без ConfirmDialog. После успеха бэк шлёт
+// personas_changed action='default', App.tsx перечитывает проект —
+// defaultPersonaId в UI обновляется без перезагрузки.
+// onAssigned — опциональный колбэк для оптимистичного апдейта локального UI
+// (TeamCommandCenter подменяет leadId сразу, не дожидаясь realtime-синка).
+export async function makeLead(p: Persona, onAssigned?: () => void) {
+  try {
+    await api.personas.makeDefault(p.id);
+    onAssigned?.();
+    showToast('Команда', `«${personaLabel(p)}» — теперь руководитель проекта.`);
+  } catch (e) {
+    showToast('Команда', e instanceof Error ? e.message : 'Не удалось назначить руководителя проекта.');
+  }
+}
+
 export function TeamCommandCenter({
   project, onOpenPersona, onNewPersona, onOpenSession, onOpenSessionById, onClose,
 }: {
@@ -69,21 +86,12 @@ export function TeamCommandCenter({
   const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
   const [leadId, setLeadId] = useState<string | null>(project.defaultPersonaId ?? null);
   useEffect(() => { setLeadId(project.defaultPersonaId ?? null); }, [project.id, project.defaultPersonaId]);
-  const makeLead = async (p: Persona) => {
-    try {
-      await api.personas.makeDefault(p.id);
-      setLeadId(p.id);
-      showToast('Команда', `«${personaLabel(p)}» — теперь руководитель проекта.`);
-    } catch (e) {
-      showToast('Команда', e instanceof Error ? e.message : 'Не удалось назначить руководителя проекта.');
-    }
-  };
   // Смена СУЩЕСТВУЮЩЕГО руководителя — только через подтверждение (страховка от
   // случайного клика мимо пункта меню); первое назначение — сразу, без диалога.
   const [confirmLead, setConfirmLead] = useState<Persona | null>(null);
   const requestMakeLead = async (p: Persona) => {
     if (leadId && leadId !== p.id) { setConfirmLead(p); return; }
-    await makeLead(p);
+    await makeLead(p, () => setLeadId(p.id));
   };
 
   const refresh = useCallback(async () => {
@@ -235,7 +243,7 @@ export function TeamCommandCenter({
           title="Сменить руководителя проекта?"
           subtitle={<>Сейчас проект ведёт <b>{currentLead ? personaLabel(currentLead) : '—'}</b>. Руководителем станет <b>{personaLabel(confirmLead)}</b> — прежняя останется в команде проекта.</>}
           confirmLabel="Сменить"
-          onConfirm={() => { const p = confirmLead; setConfirmLead(null); void makeLead(p); }}
+          onConfirm={() => { const p = confirmLead; setConfirmLead(null); void makeLead(p, () => setLeadId(p.id)); }}
           onCancel={() => setConfirmLead(null)}
         />
       )}

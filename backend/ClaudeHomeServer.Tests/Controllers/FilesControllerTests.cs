@@ -265,6 +265,34 @@ public class FilesControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task CreateFile_ExistingPath_Returns409AndKeepsContent()
+    {
+        var (id, _) = await SetupProjectWithFileAsync("clash.txt", "старое содержимое");
+        var response = await _client.PostAsJsonAsync(
+            $"/api/projects/{id}/files/create",
+            new { path = "clash.txt", content = "новое" });
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        // Коллизия не трогает существующий файл — тихая перезапись это data loss
+        var get = await _client.GetAsync($"/api/projects/{id}/files/content?path=clash.txt");
+        var body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be("старое содержимое");
+    }
+
+    [Fact]
+    public async Task CreateFile_WithContent_WritesContent()
+    {
+        var id = await CreateProjectAsync("CreateFileContentTest");
+        var template = """{"type":"excalidraw","version":2,"source":"ccs","elements":[],"appState":{},"files":{}}""";
+        var response = await _client.PostAsJsonAsync(
+            $"/api/projects/{id}/files/create",
+            new { path = "diagram.excalidraw", content = template });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var get = await _client.GetAsync($"/api/projects/{id}/files/content?path=diagram.excalidraw");
+        var body = JsonSerializer.Deserialize<JsonElement>(await get.Content.ReadAsStringAsync());
+        body.GetProperty("content").GetString().Should().Be(template);
+    }
+
+    [Fact]
     public async Task CreateDir_ValidPath_Returns200()
     {
         var id = await CreateProjectAsync("MkdirTest");

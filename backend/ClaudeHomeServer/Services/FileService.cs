@@ -354,11 +354,19 @@ public class FileService(
         NotifyMutated(rootPath, relativePath, FileMutationKind.Write);
     }
 
-    public void CreateFile(string rootPath, string relativePath)
+    public void CreateFile(string rootPath, string relativePath) => CreateFile(rootPath, relativePath, "");
+
+    // Создание с начальным содержимым (диаграммы из меню «+»: шаблон пишется одним
+    // запросом, чтобы сбой не оставлял пустой файл). Коллизия — ошибка, а не тихая
+    // перезапись: File.WriteAllText молча стёр бы существующий файл.
+    // Guard best-effort: Exists+WriteAllText не атомарны, при двух одновременных
+    // create на один путь победит один из них — 409 это подсказка UI, не гарантия.
+    public void CreateFile(string rootPath, string relativePath, string content)
     {
         var path = SafeJoin(rootPath, relativePath);
+        if (File.Exists(path)) throw new InvalidOperationException("файл уже существует");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-        File.WriteAllText(path, "");
+        File.WriteAllText(path, content);
         NotifyMutated(rootPath, relativePath, FileMutationKind.Create);
     }
 

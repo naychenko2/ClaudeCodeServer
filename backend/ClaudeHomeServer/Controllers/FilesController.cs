@@ -374,11 +374,13 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
     }
 
     [HttpPost("create")]
-    public IActionResult CreateFile(string projectId, [FromBody] PathRequest req)
+    public IActionResult CreateFile(string projectId, [FromBody] CreateFileRequest req)
     {
-        try { files.CreateFile(GetRoot(projectId), req.Path); return Ok(); }
+        try { files.CreateFile(GetRoot(projectId), req.Path, req.Content ?? ""); return Ok(); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (UnauthorizedAccessException) { return StatusCode(403); }
+        // Коллизия имён: существующий файл не перезаписываем молча
+        catch (InvalidOperationException) { return Conflict(new { error = "exists" }); }
     }
 
     [HttpPost("mkdir")]
@@ -819,6 +821,9 @@ public class FilesController(FileService files, ProjectManager projects, SyncSer
 public record ChangedByRequest(List<string>? Paths);
 public record SaveContentRequest(string Content);
 public record PathRequest(string Path);
+// Создание файла: Content == null → пустой файл (старый контракт { path } работает);
+// существующий путь → 409, без тихой перезаписи
+public record CreateFileRequest(string Path, string? Content = null);
 public record RenameRequest(string OldPath, string NewPath);
 public record SaveFromUrlRequest(string Url, string Path);
 public record ToMarkdownRequest(string Path, string? TargetDir = null, bool Enhance = false);

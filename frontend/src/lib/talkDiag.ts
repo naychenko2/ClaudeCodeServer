@@ -44,10 +44,12 @@ export function talkDiagDump(): string {
   return [`=== talk diag ===`, ...head, ...body].join('\n');
 }
 
-// Сохранить дамп в localStorage: переживает перезагрузку вкладки. Вызывается
-// при каждой остановке петли разговора
+// Сохранить дамп: в localStorage (переживает перезагрузку вкладки) и на сервер
+// (POST /api/tts/diag — единственный способ достать лог с телефона, где консоли
+// нет). Отправка fire-and-forget: разговор уже остановлен, ждать некого
 export function talkDiagSave(): void {
   try { localStorage.setItem('talkDiagLast', talkDiagDump()); } catch { /* недоступен — не критично */ }
+  void talkDiagUpload();
 }
 
 // Прочитать последний сохранённый дамп (для window.__talkDiag после перезагрузки)
@@ -59,4 +61,23 @@ export function talkDiagSaved(): string | null {
 if (typeof window !== 'undefined') {
   (window as Window & { __talkDiag?: () => string }).__talkDiag = () =>
     entries.length ? talkDiagDump() : (talkDiagSaved() ?? '(пусто)');
+}
+
+// --- Отправка на сервер (телефон/планшет: консоль недоступна) ---
+
+import { request } from './offline';
+
+// POST /api/tts/diag: дамп пишется в серверный лог с тегом [talk-diag]. Запрос
+// идёт через общий request (авторизация, офлайн-гейт, таймаут); длина ограничена
+// сервером (64k), фронтовый буфер меньше
+export async function talkDiagUpload(): Promise<boolean> {
+  try {
+    await request('/tts/diag', {
+      method: 'POST',
+      body: JSON.stringify({ dump: talkDiagDump(), version: 'v2' }),
+    });
+    return true;
+  } catch {
+    return false; // связи нет — дамп остаётся в localStorage (talkDiagLast)
+  }
 }

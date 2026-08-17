@@ -114,10 +114,9 @@ export const C = {
   outputBorder:'var(--c-output-border)',   // граница панели вывода
 
   // Aurora-сияние в композере (режим разговора): rgba-центры лент ДО blur.
-  // «Я говорю» → user (accent), «AI отвечает» → цвет проекта (projectColorHex,
-  // альфу накладывает Composer) либо ai (fallback вне проекта). Значения — theme.css.
+  // «Я говорю» и fallback вне проекта → user (accent), «AI отвечает» →
+  // цвет проекта (projectColorHex, альфу накладывает Composer). Значения — theme.css.
   auroraUser: 'var(--c-aurora-user)',
-  auroraAi:   'var(--c-aurora-ai)',
 } as const
 
 // === Радиусы (единая шкала) ===

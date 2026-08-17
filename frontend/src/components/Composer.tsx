@@ -142,7 +142,7 @@ export interface ComposerProps {
   // Именно счётчик, а не boolean: повторный запрос на то же значение не сработал бы.
   focusSignal?: number;
   // Фирменный цвет проекта чата (projectMainColor): им светится aurora-сияние
-  // при озвучке ответа AI. Не задан (чат вне проекта) — токен auroraAi (фиолетовый)
+  // при озвучке ответа AI. Не задан (чат вне проекта) — тоже accent (auroraUser)
   projectColorHex?: string;
 }
 
@@ -242,8 +242,8 @@ function Aurora({ color, bandRef }: { color: string; bandRef: React.RefObject<HT
 }
 
 // Цвет проекта приезжает непрозрачным hex (#AABBCC) — лентам нужна альфа для
-// мягкого затухания градиентов. Переводим в rgba, альфу берём как у токенов
-// auroraUser/auroraAi (одинаковая плотность света у «моего» и «проектного» цвета).
+// мягкого затухания градиентов. Переводим в rgba, альфу берём как у токена
+// auroraUser (одинаковая плотность света у «моего» и «проектного» цвета).
 // Нестандартный формат — пропускаем насквозь, слой просто станет плотнее
 function withAuroraAlpha(hex: string, alpha: number): string {
   const m = /^#([0-9a-f]{6})$/i.exec(hex.trim());
@@ -1799,10 +1799,10 @@ export function Composer({
           // Я говорю (listening/pending) — оранжевый accent (токен auroraUser в
           // обеих темах = accent). Весь цикл ответа AI (ход + озвучка) и озвучка
           // вне петли — цвет проекта («голос проекта», альфу накладываем поверх
-          // hex — см. withAuroraAlpha); вне проекта — токен ai
-          color={talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending')
+          // hex — см. withAuroraAlpha); вне проекта — тоже accent (как «я говорю»)
+          color={talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending') || !projectColorHex
             ? C.auroraUser
-            : projectColorHex ? withAuroraAlpha(projectColorHex, 1) : C.auroraAi}
+            : withAuroraAlpha(projectColorHex, 1)}
           bandRef={auroraRef}
         />
       )}

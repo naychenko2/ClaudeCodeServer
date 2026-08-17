@@ -1,8 +1,9 @@
 import { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, memo, type ReactNode } from 'react';
-import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw } from 'lucide-react';
+import { X, Folder, FolderPlus, ChevronRight, SquarePen, Trash2, ArrowRight, Paperclip, BookOpen, Search, Plus, Check, Copy, Upload, Monitor, Server, GitBranch, ArrowDownWideNarrow, FoldVertical, UnfoldVertical, Lightbulb, StickyNote, AlertTriangle, CloudOff, RefreshCw, Workflow } from 'lucide-react';
 import type { Project, FileEntry } from '../types';
 import { api } from '../lib/api';
 import { OfflineError } from '../lib/offline';
+import { DIAGRAM_KINDS, DIAGRAM_META, diagramFileName, retargetDiagramExt, type DiagramKind } from '../lib/diagramTemplates';
 
 const KB_TEXT_EXT = new Set([
   '.txt', '.md', '.markdown', '.cs', '.ts', '.tsx', '.js', '.jsx',
@@ -35,7 +36,7 @@ import { useGitState, ensureGit } from '../lib/git';
 import { useOnline } from '../hooks/useOnline';
 import { EmptyState } from './EmptyState';
 import { C, R, FS, SP, FONT, MODAL_W } from '../lib/design';
-import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, useHasPanelHeader, usePanelHeaderHold } from './ui';
+import { Modal, ModalActions, TextField, IconButton, Button, Menu, MenuItem, PanelHeaderSlot, FileTypeTile, FileStatusBadge, SegmentedControl, useHasPanelHeader, usePanelHeaderHold } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 
 interface Props {
@@ -781,6 +782,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   const [searchError, setSearchError] = useState<string | null>(null);
   const [showCreateFile, setShowCreateFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
+  // Создание диаграммы: тип + полное имя файла + ошибка (409/сеть) в модалке
+  const [showCreateDiagram, setShowCreateDiagram] = useState(false);
+  const [diagramKind, setDiagramKind] = useState<DiagramKind>('excalidraw');
+  const [diagramName, setDiagramName] = useState(() => diagramFileName('excalidraw'));
+  const [diagramError, setDiagramError] = useState<string | null>(null);
   const [createInDir, setCreateInDir] = useState(() => initial?.createInDir ?? '');
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
@@ -995,6 +1001,29 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
     if (createInDir) setExpanded(prev => new Set(prev).add(createInDir));
     setNewlyCreatedPath(normPath(path));
     setTimeout(() => setNewlyCreatedPath(null), 1500);
+  };
+
+  // Создание диаграммы из меню «+»: один запрос с шаблоном (атомарно — сбой не
+  // оставляет пустой файл), 409 коллизии показываем в модалке не закрывая её.
+  const handleCreateDiagram = async () => {
+    const name = diagramName.trim();
+    if (!name || name.includes('/')) { setDiagramError('Введите имя файла без слэшей'); return; }
+    const path = createInDir ? `${createInDir}/${name}` : name;
+    try {
+      await api.files.createFile(project.id, path, DIAGRAM_META[diagramKind].template);
+      setDiagramError(null);
+      setShowCreateDiagram(false);
+      touchNotesStore(path);
+      await invalidateDir(createInDir);
+      if (createInDir) setExpanded(prev => new Set(prev).add(createInDir));
+      setNewlyCreatedPath(normPath(path));
+      setTimeout(() => setNewlyCreatedPath(null), 1500);
+      onOpenFile(path);
+    } catch (e) {
+      if (e instanceof OfflineError) setDiagramError('Создание недоступно офлайн');
+      else if ((e as { status?: number } | null)?.status === 409) setDiagramError('Файл с таким именем уже существует');
+      else setDiagramError('Не удалось создать файл');
+    }
   };
 
   const handleCreateDir = async () => {
@@ -1536,6 +1565,14 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
         label="Файл"
         onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setShowCreateFile(true); }}
       />
+      {/* Диаграммы — файлы проекта: в vault заметок пункта нет */}
+      {!inNotes && (
+        <MenuItem
+          icon={<Workflow size={15} strokeWidth={ICON_STROKE} />}
+          label="Диаграмма"
+          onClick={() => { setCreateMenu(null); if (isMobile) setCreateInDir(mobileDir); setDiagramName(diagramFileName(diagramKind)); setDiagramError(null); setShowCreateDiagram(true); }}
+        />
+      )}
       <MenuItem
         icon={<FolderPlusIcon />}
         label="Папка"
@@ -1808,6 +1845,48 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
             autoFocus
             onEnter={handleCreateFile}
           />
+        </Modal>
+      )}
+
+      {/* === Диалог создания диаграммы === */}
+      {showCreateDiagram && (
+        <Modal
+          width={MODAL_W.form}
+          onClose={() => setShowCreateDiagram(false)}
+          title="Новая диаграмма"
+          subtitle={
+            createInDir
+              ? <>В папке <span style={{ fontFamily: FONT.mono, color: C.textPrimary }}>{createInDir}/</span></>
+              : 'В корне проекта'
+          }
+          footer={
+            <ModalActions
+              confirmLabel="Создать"
+              onConfirm={handleCreateDiagram}
+              confirmDisabled={!diagramName.trim()}
+              onCancel={() => setShowCreateDiagram(false)}
+            />
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <SegmentedControl
+              value={diagramKind}
+              options={DIAGRAM_KINDS.map(k => ({ value: k, label: DIAGRAM_META[k].label }))}
+              onChange={k => { setDiagramKind(k); setDiagramName(prev => retargetDiagramExt(prev, k)); }}
+            />
+            <div style={{ fontSize: 12.5, color: C.textMuted }}>{DIAGRAM_META[diagramKind].hint}</div>
+            <TextField
+              value={diagramName}
+              onChange={v => setDiagramName(v)}
+              placeholder={diagramFileName(diagramKind)}
+              mono
+              autoFocus
+              onEnter={handleCreateDiagram}
+            />
+            {diagramError && (
+              <div style={{ fontSize: 12.5, color: C.dangerText }}>{diagramError}</div>
+            )}
+          </div>
         </Modal>
       )}
 

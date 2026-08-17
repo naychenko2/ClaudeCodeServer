@@ -41,6 +41,8 @@ const EXT_META: Record<string, { bg: string; fg: string; label: string }> = {
   pptx: { bg: '#F9E7DC', fg: '#C2693B', label: 'ppt' },
   vsdx: { bg: '#E4EAF6', fg: '#3B5BA5', label: 'vsd' },
   drawio: { bg: '#FBF3D5', fg: '#B5830A', label: 'dio' },
+  excalidraw: { bg: '#F2E6F0', fg: '#8E4A82', label: 'exc' },
+  mmd:  { bg: '#FBF3D5', fg: '#B5830A', label: 'mmd' },
   mp3:  { bg: '#EDE6F5', fg: '#6E58A6', label: 'mp3' },
   wav:  { bg: '#EDE6F5', fg: '#6E58A6', label: 'wav' },
   mp4:  { bg: '#E6EEF5', fg: '#3E7CA6', label: 'mp4' },

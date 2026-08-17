@@ -1384,8 +1384,8 @@ export const api = {
       }),
     revert: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files/revert`, { method: 'POST', body: JSON.stringify({ path }) }),
-    createFile: (projectId: string, path: string) =>
-      request<void>(`/projects/${projectId}/files/create`, { method: 'POST', body: JSON.stringify({ path }) }),
+    createFile: (projectId: string, path: string, content?: string) =>
+      request<void>(`/projects/${projectId}/files/create`, { method: 'POST', body: JSON.stringify({ path, content }) }),
     mkdir: (projectId: string, path: string) =>
       request<void>(`/projects/${projectId}/files/mkdir`, { method: 'POST', body: JSON.stringify({ path }) }),
     rename: (projectId: string, oldPath: string, newPath: string) =>

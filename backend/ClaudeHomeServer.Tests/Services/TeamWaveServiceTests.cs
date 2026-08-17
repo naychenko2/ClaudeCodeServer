@@ -1311,6 +1311,198 @@ public class TeamWaveServiceTests : IDisposable
             .Should().ContainSingle("«Перезапустить» запускает следующую волну — уже честной подписью");
     }
 
+    // --- Приёмка, круг 2 (2026-08-17): обратная сторона гейта авто-волн ---
+
+    // D1, обратная сторона: «Добавить бюджет» — явная кнопка человека, и при СНЯТЫХ
+    // авто-волнах она обязана раздать волну, а не поднять ещё один гейт поверх решения.
+    [Fact]
+    public async Task RespondEscalation_AddBudgetПриСнятыхАвтоволнах_РаздаётВолнуБезГейта()
+    {
+        var (session, plan) = await MakeRunningStabAsync("qa-addbudget-manual", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        var budgetCard = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.BudgetExhausted,
+            Title = "Бюджет итерации исчерпан",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, budgetCard);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, budgetCard.Id, "addBudget",
+            userId: UserId);
+
+        ok.Should().BeTrue();
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().ContainSingle("«Добавить бюджет» — кнопка человека: гейт авто-волн ей не нужен");
+    }
+
+    // D1, обратная сторона: «Продолжить» после «Остановить» — тоже явная кнопка.
+    [Fact]
+    public async Task RespondEscalation_ResumeПриСнятыхАвтоволнах_РаздаётВолнуБезГейта()
+    {
+        var (session, plan) = await MakeRunningStabAsync("qa-resume-manual", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        await _sessions.StopTeamImplementAsync(session.Id, UserId);
+        var stopCard = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.Stopped,
+            Title = "Практика остановлена",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.Stopped),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, stopCard);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, stopCard.Id, "resume", userId: UserId);
+
+        ok.Should().BeTrue();
+        Team(session.Id).Stopped.Should().BeFalse();
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().ContainSingle("«Продолжить» — кнопка человека: работа возобновляется сразу");
+    }
+
+    // D2, соседняя карточка: у обычной зависшей волны (таймаут идущей волны) «Снять» осталась.
+    // КРАСНЫЙ (дефект приёмки D3, круг 2 от 2026-08-17, поведение унаследовано от master):
+    // карточка таймаута публикуется БЕЗ TaskId (TeamWaveService.CheckStalledWavesAsync), поэтому
+    // ветка drop в RespondTeamEscalationAsync не срабатывает — «Снять» не снимает ничего, только
+    // перезаводит отсечку сторожа и уходит ходом координатору. Та же болезнь, из-за которой у
+    // карточки мёртвой зоны кнопку убрали, но здесь она осталась. Снять Skip после починки.
+    [Fact(Skip = "Дефект приёмки D3: «Снять» на карточке зависшей волны не снимает под-задачу")]
+    public async Task КарточкаЗависшейВолны_КнопкаСнять_ЗакрываетПодЗадачу()
+    {
+        var (session, plan) = await MakeRunningStabAsync("qa-stalled-drop");
+        var first = await _sut.StartWaveAsync(session, plan);
+        _sessions.WithTeamState(session.Id, t =>
+        {
+            t.WaveStartedAt = DateTime.UtcNow.AddHours(-5);
+            t.WaveActivityAt = DateTime.UtcNow.AddHours(-5);
+            return true;
+        });
+
+        await _sut.CheckStalledWavesAsync();
+
+        var card = (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Single(c => c.Kind == TeamEscalationKind.WaveStalled);
+        card.TaskId.Should().NotBeNull("иначе «Снять» нечего снимать — ветка drop не сработает");
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, card.Id, "drop", userId: UserId);
+        ok.Should().BeTrue();
+        _tasks.GetById(first[0].Id)!.Status.Should().Be(TaskItemStatus.Done,
+            "«Снять» обязана закрыть под-задачу зависшей волны");
+    }
+
+    // D2, тот же набор кнопок при СНЯТЫХ авто-волнах: «Перезапустить» идёт поводом StateCatchUp
+    // (в белом списке кнопок его нет), поэтому конвейер не едет сразу — человек получает
+    // гейт-карточку и жмёт «Запустить» вторым кликом. Тупика нет, но подпись обещает больше,
+    // чем делает (наблюдение приёмки, круг 2). Тест фиксирует фактический договор.
+    [Fact]
+    public async Task КарточкаМёртвойЗоны_ПерезапускПриСнятыхАвтоволнах_ПоднимаетГейтВместоРаздачи()
+    {
+        var (session, plan) = await MakeRunningStabAsync("qa-deadzone-manual", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.PlanDeviation,
+            Title = "Работа выходит за план",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        _sessions.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Wave; return true; });
+        _sessions.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-1);
+        await _sut.CheckStalledWavesAsync();
+        var card = (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Single(c => c.Kind == TeamEscalationKind.WaveStalled);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, card.Id, "restart", userId: UserId);
+
+        ok.Should().BeTrue();
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().BeEmpty("«Перезапустить» идёт докрутом по состоянию, а авто-волны сняты");
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Should().ContainSingle(c => c.Kind == TeamEscalationKind.WaveGate,
+                "тупика нет: человеку показан гейт, но запуск требует второго клика");
+        Team(session.Id).Stage.Should().Be(TeamImplementStage.AwaitingDecision);
+    }
+
+    // КРАСНЫЙ (дефект приёмки D4, круг 2 от 2026-08-17): человек пишет в чат, пока висит
+    // гейт-карточка. Каждое сообщение снимает стадию «ждёт решения» → докрут по состоянию →
+    // при снятых авто-волнах поднимается ЕЩЁ ОДНА такая же гейт-карточка (с уведомлением и
+    // push), а прежняя остаётся открытой. Два сообщения — три одинаковых карточки в ленте.
+    // Ожидание: на одну закрытую волну открыт ровно один гейт. Снять Skip после починки.
+    [Fact(Skip = "Дефект приёмки D4: ответ текстом при висящем гейте плодит дубли карточек")]
+    public async Task ГейтВолны_ОтветТекстом_НеПлодитДублейКарточек()
+    {
+        var (session, plan) = await MakeRunningStabAsync("qa-gate-text", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+
+        await _sessions.SendMessageAsync(session.Id, "да, поехали", []);
+        await _sessions.SendMessageAsync(session.Id, "ну что там", []);
+
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Where(c => c.Kind == TeamEscalationKind.WaveGate)
+            .Should().ContainSingle("на одну закрытую волну человеку показывают один гейт, "
+                + "а не по карточке на каждое его сообщение");
+    }
+
+    // Состояние режима переживает рестарт: то, что чинит фикс (стадия, ClosedWave, отсечки,
+    // AutoWaves), лежит в data/sessions.json и читается обратно тем же сериализатором.
+    [Fact]
+    public async Task СостояниеРежима_ПослеГейта_ПереживаетРестартЧерезSessionsJson()
+    {
+        var (session, plan) = await MakeRunningStabAsync("qa-persist", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        var live = Team(session.Id);
+
+        var opts = new System.Text.Json.JsonSerializerOptions
+        {
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+        };
+        var onDisk = System.Text.Json.JsonSerializer.Deserialize<List<Session>>(
+            await File.ReadAllTextAsync(Path.Combine(_dir, "sessions.json")), opts)!
+            .Single(s => s.Id == session.Id).TeamImplement!;
+
+        onDisk.Stage.Should().Be(live.Stage);
+        onDisk.WaveNumber.Should().Be(live.WaveNumber);
+        onDisk.ClosedWave.Should().Be(live.ClosedWave);
+        onDisk.AutoWaves.Should().BeFalse("снятые авто-волны обязаны пережить рестарт — иначе гейт исчезнет");
+        onDisk.WaveStartedAt.Should().Be(live.WaveStartedAt);
+        onDisk.PlanCardId.Should().Be(live.PlanCardId);
+    }
+
+    // Старая запись sessions.json (до ветки) читается без потерь: полей режима в ней меньше,
+    // недостающие берут дефолты, чат не теряется.
+    [Fact]
+    public void СтараяЗаписьSessionsJson_БезНовыхПолейРежима_ЧитаетсяСДефолтами()
+    {
+        // Форма файла — как его пишет SessionManager.SaveSessions (PascalCase + enum строкой)
+        const string legacy = """
+            [{"Id":"s-old","ProjectId":"p-1","ClaudeSessionId":"c-1","Status":"Finished",
+              "TeamImplement":{"Enabled":true,"Stage":"Wave","WaveNumber":2}}]
+            """;
+        var opts = new System.Text.Json.JsonSerializerOptions
+        {
+            Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+        };
+
+        var loaded = System.Text.Json.JsonSerializer.Deserialize<List<Session>>(legacy, opts)!.Single();
+
+        loaded.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave);
+        loaded.TeamImplement.WaveNumber.Should().Be(2);
+        loaded.TeamImplement.ClosedWave.Should().Be(0);
+        loaded.TeamImplement.WaveStartedAt.Should().BeNull();
+        loaded.TeamImplement.AutoWaves.Should().BeTrue("дефолт режима — авто-волны включены");
+    }
+
     // --- Бюджет: волна помещается целиком или не стартует ---
 
     // План из двух под-задач ОДНОЙ волны: обе уходят исполнителям разом

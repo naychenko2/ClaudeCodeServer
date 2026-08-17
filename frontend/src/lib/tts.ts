@@ -7,7 +7,7 @@
 // Текст режется на предложения и синтезируется очередью: следующий кусок уходит на синтез,
 // пока играет текущий, — иначе между фразами повисали бы паузы на круг до сервера.
 
-import { request, subscribeConnectionState, getConnectionState } from './offline';
+import { request, subscribeOnline, isOnline } from './offline';
 
 // Максимум символов, который отдаём на озвучку: лимит контроллера — 3000, но слушать
 // простыню всё равно никто не станет — режем раньше и честно предупреждаем
@@ -24,8 +24,8 @@ let connectionWatcherAttached = false;
 function watchConnection() {
   if (connectionWatcherAttached || typeof window === 'undefined') return;
   connectionWatcherAttached = true;
-  subscribeConnectionState(() => {
-    if (getConnectionState() === 'online') serverTtsUnavailable = false;
+  subscribeOnline(() => {
+    if (isOnline()) serverTtsUnavailable = false;
   });
 }
 

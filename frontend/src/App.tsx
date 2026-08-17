@@ -35,7 +35,7 @@ import { idbClear } from './lib/idb'
 import { setAllFlags, getFlag, FLAGS } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
-import { isWallActive, setWallActive } from './lib/wallMode'
+import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -510,6 +510,12 @@ export default function App() {
   useEffect(() => {
     const onPop = (e: PopStateEvent) => {
       const s = e.state as NavSnapshot | null
+      // Уход из зоны проектов кнопкой «назад» — та же память режима, что при клике
+      // по пилюле (switchHubTab): клик «Проекты» из другого раздела вернёт туда,
+      // где были до ухода. Внутренняя навигация зоны ('project'/'projects') не считается
+      if (s && s.screen !== 'project' && s.screen !== 'projects' && (hubTab === 'projects' || hubTab === 'wall')) {
+        setWallReturn(hubTab === 'wall' ? 'wall' : project ? 'workspace' : 'list')
+      }
       if (s?.screen === 'project' && s.project) {
         // Возврат в открытый проект
         if (project?.id !== s.project.id) {
@@ -697,6 +703,13 @@ export default function App() {
   // Переключатель раздела «Чаты | Проекты». НЕ сбрасывает открытый проект — он «спит»
   // при уходе в «Чаты» и восстанавливается при возврате в «Проекты» (навигационная память).
   const switchHubTab = (t: HubTabValue) => {
+    // Уход ИЗ зоны проектов (стена/воркспейс/список — все три живут на пилюле
+    // «Проекты») в другой раздел — запоминаем режим: клик «Проекты» из другого
+    // раздела вернёт именно туда, где были до ухода. Пишем до всех early-return
+    // ниже, чтобы покрыть каждый путь ухода.
+    if (t !== 'projects' && (hubTab === 'projects' || hubTab === 'wall')) {
+      setWallReturn(hubTab === 'wall' ? 'wall' : project ? 'workspace' : 'list')
+    }
     // Покидаем «Аналитику токенов» — чистим контекст открытия, чтобы следующий
     // вход через меню/таб открыл чистый обзор (виджет/бейдж выставят свежий ctx)
     if (hubTab === 'spend' && t !== 'spend') setSpendCtx({})
@@ -736,10 +749,28 @@ export default function App() {
       navPush({ screen: 'projects' })
       return
     }
-    // Возврат в рабочий режим: пока стена «активна», вкладка «Проекты» ведёт на неё,
-    // а не в воркспейс (выйти из режима — кнопкой «К проектам» на самой стене или
-    // кликом по подсвеченным «Проектам» прямо со стены)
+    // Возврат в зону проектов из другого раздела: пока стена «активна», пилюля
+    // «Проекты» возвращает в режим, где были до ухода, — на стену, если уходили
+    // с неё, либо в «спящий» воркспейс/список, если уходили из них, но по пути
+    // заглянули на стену (клик по проекту в доке стены уходит в воркспейс, не
+    // гася режим). Явный выход из режима — «К проектам» на самой стене или
+    // повторный клик по подсвеченным «Проектам» прямо со стены.
     if (t === 'projects' && hubTab !== 'wall' && isWallActive()) {
+      const ret = getWallReturn()
+      if (ret === 'workspace' && project) {
+        localStorage.setItem(HUB_TAB_KEY, 'projects')
+        setHubTab('projects')
+        navPush({ screen: 'project', project, view: 'sidebar', file: null })
+        return
+      }
+      if (ret === 'list') {
+        localStorage.removeItem(OPEN_PROJECT_KEY)
+        localStorage.setItem(HUB_TAB_KEY, 'projects')
+        setProject(null)
+        setHubTab('projects')
+        navPush({ screen: 'projects' })
+        return
+      }
       localStorage.setItem(HUB_TAB_KEY, 'wall')
       setHubTab('wall')
       navPush({ screen: 'wall' })

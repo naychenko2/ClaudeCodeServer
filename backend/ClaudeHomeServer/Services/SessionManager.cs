@@ -4806,10 +4806,12 @@ public class SessionManager : IDisposable
         if (TeamEscalationRaiser is { } raise) await raise(entry.Info, card);
         else await PublishTeamEscalationAsync(sessionId, card);
 
-        // Раздача — тем же путём, что «Запустить» и авто-волна: план у TeamWaveService
+        // Раздача — тем же путём, что «Запустить» и авто-волна: план у TeamWaveService.
+        // Повод UserCommand: добавочная волна разворачивается вводной человека — точки
+        // контроля уже пройдены, гейт авто-волн ей не нужен.
         if (TeamWaveStarter is { } starter)
         {
-            try { await starter(entry.Info, plan); }
+            try { await starter(entry.Info, plan, TeamWaveTrigger.UserCommand); }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Раздача добавочной волны по плану {PlanId} (чат {SessionId}) не удалась",
@@ -4963,10 +4965,11 @@ public class SessionManager : IDisposable
 
         // Раздача под-задач и пакетный запуск волны (Э3) — в TeamWaveService: он знает про
         // задачи и исполнителей, которых SessionManager по построению не знает (цикл DI
-        // разорван хуком, как OnSessionMessage у TaskExecutionService).
+        // разорван хуком, как OnSessionMessage у TaskExecutionService). Повод UserCommand:
+        // «Запустить» — явное решение человека, гейт авто-волн не нужен.
         if (decision == TeamPlanDecision.Run && TeamWaveStarter is { } starter)
         {
-            try { await starter(entry.Info, plan); }
+            try { await starter(entry.Info, plan, TeamWaveTrigger.UserCommand); }
             catch (Exception ex)
             {
                 _log.LogError(ex, "Раздача волны по плану {PlanId} (чат {SessionId}) не удалась", planId, sessionId);
@@ -5051,7 +5054,9 @@ public class SessionManager : IDisposable
     // Хук раздачи волны (Э3): назначается TeamWaveService при старте — так разрывается
     // цикл зависимостей (TaskExecutionService → SessionManager). null — раздача недоступна
     // (юнит-тесты без полного DI, инспекционный режим): режим тогда лишь меняет стадию.
-    public Func<Session, TeamImplementPlan, Task>? TeamWaveStarter { get; set; }
+    // Повод вызова (D1, ревью 2026-08-17) решает судьбу гейта авто-волн в TeamWaveService:
+    // SessionManager лишь честно говорит, кнопка это была или докрут по состоянию.
+    public Func<Session, TeamImplementPlan, TeamWaveTrigger, Task>? TeamWaveStarter { get; set; }
 
     // Сохранить карточку плана в историю чата после правки бэкендом (Э3 проставляет
     // TeamImplementSubtask.TaskId). Карточка уже Resolved, поэтому обновляем её напрямую:
@@ -5643,16 +5648,24 @@ public class SessionManager : IDisposable
         // keepPlan/answer…), авто-раздача следующей была уже подавлена, и кроме этого
         // вызова позвать её было некому. Действия с иной стадией (finish/stop/editRest/
         // retryPlan) сюда не попадают: их стадия не Wave.
+        // D1 (ревью 2026-08-17): повод вызова различает два случая — кнопки «Запустить»/
+        // «Добавить бюджет»/«Продолжить» это явное решение запускать (гейт не нужен), а
+        // докрут по состоянию при снятых авто-волнах обязан показать гейт-карточку вместо
+        // молчаливой раздачи. Что именно делать, решает TeamWaveService по поводу вызова —
+        // второй точки истины здесь не заводим.
         // Раздавать нечего (волна уже идёт) — StartWave вернёт пустой список и не навредит.
         if (entry.Info.TeamImplement is { } teamNow
             && teamNow.PlanCardId is { } planId
             && TeamWaveStarter is { } starter)
         {
             var plan = await GetTeamPlanAsync(sessionId, planId);
-            if (plan is not null && (actionId is "runNext" or "addBudget" or "resume"
+            var trigger = actionId is "runNext" or "addBudget" or "resume"
+                ? TeamWaveTrigger.UserCommand
+                : TeamWaveTrigger.StateCatchUp;
+            if (plan is not null && (trigger == TeamWaveTrigger.UserCommand
                     || WaveStartPendingAfterDecision(teamNow, plan)))
             {
-                try { await starter(entry.Info, plan); }
+                try { await starter(entry.Info, plan, trigger); }
                 catch (Exception ex)
                 {
                     _log.LogError(ex, "Раздача волны по решению человека (чат {SessionId}) не удалась", sessionId);
@@ -6507,6 +6520,29 @@ public class SessionManager : IDisposable
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
         await BroadcastTeamImplementAsync(sessionId, entry);
+
+        // Третья дверь в мёртвую зону (Major, ревью 2026-08-17): интервью могло закончиться
+        // ПОСЛЕ закрытия волны (clarify посреди волны → CloseWaveIfDoneAsync стоит в
+        // waitsHuman, ставит ClosedWave и конвейер не двигает). Тогда выше стадия вернулась
+        // в Wave, но отсечки не заводятся (ClosedWave == WaveNumber) и раздачу следующей
+        // никто не позвал — тот же стоящий конвейер, который сторож ловил бы только через
+        // таймаут простоя. Тот же предикат и тот же вызов раздачи, что у двух других точек
+        // выхода из ожидания; повод StateCatchUp — гейт при снятых авто-волнах решает
+        // TeamWaveService, как и везде.
+        if (entry.Info.TeamImplement is { } teamNow
+            && teamNow.PlanCardId is { } planId
+            && TeamWaveStarter is { } starter)
+        {
+            var plan = await GetTeamPlanAsync(sessionId, planId);
+            if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
+            {
+                try { await starter(entry.Info, plan, TeamWaveTrigger.StateCatchUp); }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "Раздача волны после выхода из интервью (чат {SessionId}) не удалась", sessionId);
+                }
+            }
+        }
     }
 
     // Новая вводная человека (Э5): итерация начинается заново — бюджет обнуляется, счёт волн
@@ -6601,7 +6637,8 @@ public class SessionManager : IDisposable
         // списком кнопок он не покрывался вовсе — после закрытой волны практика возвращалась
         // в Wave без раздачи следующей и стояла часами. Признак тот же, что у кнопок
         // (WaveStartPendingAfterDecision); саму раздачу и её гейты по-прежнему решает
-        // TeamWaveService.
+        // TeamWaveService. Повод StateCatchUp (D1): текстовый ответ — не кнопка «Запустить»,
+        // при снятых авто-волнах человек получает гейт-карточку, а не молчаливую раздачу.
         if (entry.Info.TeamImplement is { } teamNow
             && teamNow.PlanCardId is { } planId
             && TeamWaveStarter is { } starter)
@@ -6609,7 +6646,7 @@ public class SessionManager : IDisposable
             var plan = await GetTeamPlanAsync(sessionId, planId);
             if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
             {
-                try { await starter(entry.Info, plan); }
+                try { await starter(entry.Info, plan, TeamWaveTrigger.StateCatchUp); }
                 catch (Exception ex)
                 {
                     _log.LogError(ex, "Раздача волны после ответа человека (чат {SessionId}) не удалась", sessionId);

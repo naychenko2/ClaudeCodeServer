@@ -63,7 +63,7 @@ public class TeamWaveService
             int.TryParse(config?["TeamImplement:DeadZoneTimeoutMinutes"], out var dz) && dz > 0 ? dz : 15);
         // Хук раздачи в SessionManager: цикл зависимостей (TaskExecutionService → SessionManager)
         // разорван так же, как у подписки TaskExecutionService на OnSessionMessage
-        _sessions.TeamWaveStarter = (session, plan) => StartWaveAsync(session, plan);
+        _sessions.TeamWaveStarter = (session, plan, trigger) => StartWaveAsync(session, plan, trigger);
         // Э4: карточка остановки + уведомление с push — единая точка на все триггеры
         _sessions.TeamEscalationRaiser = RaiseEscalationAsync;
         // Э8: ASK-вопрос интервью тоже будит человека уведомлением и push
@@ -100,17 +100,22 @@ public class TeamWaveService
     // Точек вызова три (подтверждение плана, авто-волна после закрытия предыдущей, кнопка
     // «Запустить» на карточке), и прийти они могут одновременно — поэтому раздача идёт под
     // per-session локом: две параллельные раздачи одной волны создали бы дубли задач.
-    public async Task<IReadOnlyList<TaskItem>> StartWaveAsync(Session session, TeamImplementPlan plan)
+    // trigger — повод вызова (D1, ревью 2026-08-17): явная кнопка человека раздаёт как есть,
+    // докрут по состоянию при снятых авто-волнах заменяется гейт-карточкой. Дефолт — прежнее
+    // поведение существующих вызовов (кнопка/подтверждение плана).
+    public async Task<IReadOnlyList<TaskItem>> StartWaveAsync(Session session, TeamImplementPlan plan,
+        TeamWaveTrigger trigger = TeamWaveTrigger.UserCommand)
     {
         var gate = _waveLocks.GetOrAdd(session.Id, _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync();
-        try { return await StartWaveCoreAsync(session, plan); }
+        try { return await StartWaveCoreAsync(session, plan, trigger); }
         finally { gate.Release(); }
     }
 
     // Тело раздачи БЕЗ лока: зовётся из StartWaveAsync (взял лок) и из закрытия волны
     // (оно уже держит тот же лок — SemaphoreSlim не реентрантен, повторный захват = дедлок).
-    private async Task<IReadOnlyList<TaskItem>> StartWaveCoreAsync(Session session, TeamImplementPlan plan)
+    private async Task<IReadOnlyList<TaskItem>> StartWaveCoreAsync(Session session, TeamImplementPlan plan,
+        TeamWaveTrigger trigger)
     {
         if (session.TeamImplement is not { } team) return [];
         var ownerId = session.OwnerId
@@ -143,26 +148,33 @@ public class TeamWaveService
         var gate = _sessions.WithTeamState(session.Id, t =>
         {
             // Человек нажал «Остановить»: текущие исполнители дорабатывают, новые не стартуют
-            if (t.Stopped) return (Reserved: false, Stopped: true, Exceeded: (string?)null, Held: (string?)null);
+            if (t.Stopped) return (Reserved: false, Stopped: true, Exceeded: (string?)null, Held: (string?)null, Gate: false, ClosedWave: 0);
             // M2: волна не стартует поверх стадий, которые ждут человека. Окно clarify→vN+1:
             // координатор объявил тупик (версия плана ещё та же, гард версий пропускает), а
             // доехавшие задачи волны запускали следующую — стадия затиралась в Wave, интервью
             // сбито. То же с «ждёт решения»: конвейер, идущий поверх нерешённой карточки,
             // и есть «практика ждёт решения», которая на самом деле не ждёт.
             if (t.Stage is TeamImplementStage.Interview or TeamImplementStage.AwaitingDecision)
-                return (false, false, null, $"практика в стадии «{t.Stage.ToWireToken()}» и ждёт человека");
+                return (false, false, null, $"практика в стадии «{t.Stage.ToWireToken()}» и ждёт человека", false, 0);
             // Э8: волна идёт ТОЛЬКО по подтверждённой последней версии плана. Два случая:
             // план устарел (после интервью опубликован vN+1 — старый доигрывать нельзя) либо
             // новая версия ещё не подтверждена человеком (авто-волны смену плана не покрывают).
             // Нули — состояние или карточка из до-Э8: гард выключен, прежнее поведение цело.
             if (t.PlanVersion > 0 && plan.Version < t.PlanVersion)
                 return (false, false, null,
-                    $"план версии {plan.Version} устарел: актуальна версия {t.PlanVersion}");
+                    $"план версии {plan.Version} устарел: актуальна версия {t.PlanVersion}", false, 0);
             if (t.ApprovedPlanVersion > 0 && plan.Version > t.ApprovedPlanVersion)
                 return (false, false, null,
-                    $"версия плана {plan.Version} ещё не подтверждена человеком");
+                    $"версия плана {plan.Version} ещё не подтверждена человеком", false, 0);
             if (t.Budget.ExceededReasonForWave(subtasks.Count) is { } reason)
-                return (Reserved: false, Stopped: false, Exceeded: reason, Held: (string?)null);
+                return (Reserved: false, Stopped: false, Exceeded: reason, Held: (string?)null, Gate: false, ClosedWave: 0);
+            // D1 (ревью 2026-08-17): докрут конвейера по состоянию при снятых авто-волнах —
+            // не раздача, а гейт-карточка: следующая волна идёт только по явной кнопке
+            // человека. Явная кнопка (runNext/addBudget/resume, подтверждение плана) сюда
+            // не попадает: у неё trigger=UserCommand. Бюджет проверен выше — его карточка
+            // информативнее, чем гейт, за которым сразу последовал бы отказ по квоте.
+            if (trigger == TeamWaveTrigger.StateCatchUp && !t.AutoWaves)
+                return (Reserved: false, Stopped: false, Exceeded: null, Held: null, Gate: true, t.ClosedWave);
 
             t.Budget.TasksUsed += subtasks.Count;
             t.Budget.RunsUsed += subtasks.Count;
@@ -173,7 +185,7 @@ public class TeamWaveService
             // Отсечки для сторожа зависших волн (Э4): волна идёт, пока поля не обнулены
             t.WaveStartedAt = DateTime.UtcNow;
             t.WaveActivityAt = DateTime.UtcNow;
-            return (Reserved: true, Stopped: false, Exceeded: null, Held: (string?)null);
+            return (Reserved: true, Stopped: false, Exceeded: null, Held: (string?)null, Gate: false, ClosedWave: 0);
         });
         if (gate.Stopped)
         {
@@ -199,6 +211,15 @@ public class TeamWaveService
                 Wave = wave,
                 Actions = TeamEscalationActions.For(TeamEscalationKind.BudgetExhausted),
             });
+            return [];
+        }
+        // Гейт авто-волн (D1): снятые авто-волны + докрут по состоянию — вместо раздачи
+        // карточка «Волна N закрыта. Запустить следующую?», той же сборкой, что у закрытия
+        // волны. Публикация уводит практику в «ждёт решения» — работу вернёт кнопка
+        // «Запустить» на самой карточке (trigger=UserCommand, повторного гейта не будет).
+        if (gate.Gate)
+        {
+            await RaiseWaveGateAsync(session, plan, gate.ClosedWave, wave);
             return [];
         }
         // Режим успели выключить между проверкой в начале и транзакцией — раздавать некуда
@@ -406,21 +427,13 @@ public class TeamWaveService
             {
                 // Авто: следующая волна идёт сама. Бюджет проверяет раздача — она же
                 // поднимет карточку исчерпания, если квота кончилась. Зовём Core: лок волны
-                // уже наш, повторный захват семафора здесь означал бы дедлок.
-                started = (await StartWaveCoreAsync(session, plan)).Count > 0;
+                // уже наш, повторный захват семафора здесь означал бы дедлок. Повод
+                // UserCommand: авто-волны уже проверены здесь, гейта в раздаче не нужно.
+                started = (await StartWaveCoreAsync(session, plan, TeamWaveTrigger.UserCommand)).Count > 0;
             }
             else if (hasNext && !team.Stopped)
             {
-                await RaiseEscalationAsync(session, new TeamEscalation
-                {
-                    Kind = TeamEscalationKind.WaveGate,
-                    Title = $"Волна {wave} закрыта. Запустить волну {nextWave}?",
-                    Details = $"Закрыто под-задач: {current.Count}. Осталось волн по плану: " +
-                              $"{plan.Subtasks.Where(s => s.TaskId is null).Select(s => s.Wave).Distinct().Count()}. " +
-                              "Авто-волны сняты, поэтому следующая ждёт вашего решения.",
-                    Wave = wave,
-                    Actions = TeamEscalationActions.For(TeamEscalationKind.WaveGate),
-                });
+                await RaiseWaveGateAsync(session, plan, wave, nextWave!.Value);
             }
             else if (!hasNext)
             {
@@ -439,6 +452,24 @@ public class TeamWaveService
             await _sessions.SendOrEnqueueAsync(session.Id, summaryTurn,
                 senderPersonaId: null, silent: true, suppressTasksExecute: true,
                 staffNote: summaryNote);
+    }
+
+    // Гейт-карточка следующей волны при снятых авто-волнах: единая сборка для закрытия
+    // волны (CloseWaveIfDoneAsync) и докрута по состоянию (StartWaveCoreAsync с trigger=
+    // StateCatchUp, D1 ревью 2026-08-17) — текст и кнопки одни, где бы волна ни ждала
+    // решения человека. «Запустить» на карточке идёт trigger=UserCommand и гейт не повторяет.
+    private async Task RaiseWaveGateAsync(Session session, TeamImplementPlan plan, int closedWave, int nextWave)
+    {
+        await RaiseEscalationAsync(session, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.WaveGate,
+            Title = $"Волна {closedWave} закрыта. Запустить волну {nextWave}?",
+            Details = $"Закрыто под-задач: {plan.Subtasks.Count(s => s.Wave == closedWave && s.TaskId is not null)}. " +
+                      $"Осталось волн по плану: {plan.Subtasks.Where(s => s.TaskId is null).Select(s => s.Wave).Distinct().Count()}. " +
+                      "Авто-волны сняты, поэтому следующая ждёт вашего решения.",
+            Wave = closedWave,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.WaveGate),
+        });
     }
 
     // Провал хода исполнителя (хук TaskExecutionService.TeamTaskFailed): одна перевыдача
@@ -577,27 +608,46 @@ public class TeamWaveService
     // хода координатора). Карточка WaveStalled переводит практику в «ждёт решения», поэтому
     // повторных карточек не будет — ровно одна. Остановлена человеком практика — не мёртвая
     // зона, стойкость там выбрана осознанно.
+    // Состояние перечитывается под локом волны непосредственно перед публикацией (Minor,
+    // ревью 2026-08-17): между дешёвой проверкой выше и карточкой параллельная раздача
+    // успевает выставить Stage=Wave с отсечками и стартовать исполнителей — публикация
+    // перетёрла бы это на «ждёт решения», и волна шла бы, чего бэкенд уже не знает.
     private async Task CheckDeadZoneStallAsync(Session session, SessionTeamImplement team)
     {
         if (team.WaveNumber == 0 || team.ClosedWave != team.WaveNumber || team.Stopped) return;
         if (team.PlanCardId is not { } planId) return;
         if (DateTime.UtcNow - session.UpdatedAt < _deadZoneTimeout) return;
-        var plan = await _sessions.GetTeamPlanAsync(session.Id, planId);
-        if (plan is null || !plan.Subtasks.Any(s => s.TaskId is null)) return;
 
-        await RaiseEscalationAsync(session, new TeamEscalation
+        var gate = _waveLocks.GetOrAdd(session.Id, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync();
+        try
         {
-            Kind = TeamEscalationKind.WaveStalled,
-            Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveStalled,
-                $"волна {team.WaveNumber} закрыта, следующая не роздана"),
-            Details = $"Волна {team.WaveNumber} закрыта, но следующая не была роздана дольше " +
-                      $"{_deadZoneTimeout.TotalMinutes:0} минут — конвейер стоит без работы. " +
-                      "Проверьте состояние практики: возможно, раздача не стартовала.",
-            Wave = team.WaveNumber,
-            Actions = TeamEscalationActions.For(TeamEscalationKind.WaveStalled),
-        });
-        _log.LogWarning("Мёртвая зона конвейера чата-штаба {SessionId}: волна {Wave} закрыта, " +
-            "следующая не роздана дольше таймаута", session.Id, team.WaveNumber);
+            var fresh = _sessions.WithTeamState(session.Id,
+                t => (Stage: t.Stage, StartedAt: t.WaveStartedAt, ClosedWave: t.ClosedWave, Stopped: t.Stopped));
+            if (fresh.Stage != TeamImplementStage.Wave || fresh.StartedAt is not null
+                || fresh.ClosedWave != team.WaveNumber || fresh.Stopped)
+                return;
+            var plan = await _sessions.GetTeamPlanAsync(session.Id, planId);
+            if (plan is null || !plan.Subtasks.Any(s => s.TaskId is null)) return;
+
+            await RaiseEscalationAsync(session, new TeamEscalation
+            {
+                Kind = TeamEscalationKind.WaveStalled,
+                Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveStalled,
+                    $"волна {team.WaveNumber} закрыта, следующая не роздана"),
+                Details = $"Волна {team.WaveNumber} закрыта, но следующая не была роздана дольше " +
+                          $"{_deadZoneTimeout.TotalMinutes:0} минут — конвейер стоит без работы. " +
+                          "Проверьте состояние практики: возможно, раздача не стартовала.",
+                Wave = team.WaveNumber,
+                // D2 (ревью 2026-08-17): у карточки мёртвой зоны свой набор кнопок, БЕЗ «Снять»:
+                // TaskId у неё нет, а блок раздачи по состоянию ниже ветки drop в SessionManager
+                // запускал бы следующую волну — подпись кнопки врала о последствии.
+                Actions = TeamEscalationActions.DeadZone(),
+            });
+            _log.LogWarning("Мёртвая зона конвейера чата-штаба {SessionId}: волна {Wave} закрыта, " +
+                "следующая не роздана дольше таймаута", session.Id, team.WaveNumber);
+        }
+        finally { gate.Release(); }
     }
 
     // Названия незакрытых задач текущей волны — для текста карточки зависания

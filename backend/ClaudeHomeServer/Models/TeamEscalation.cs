@@ -156,4 +156,14 @@ public static class TeamEscalationActions
         TeamEscalationKind.WaveAdded => [new("stop", "Остановить")],
         _ => [],
     };
+
+    // Карточка мёртвой зоны конвейера (TeamWaveService.CheckDeadZoneStall) — частный случай
+    // WaveStalled БЕЗ «Снять» (D2, ревью 2026-08-17): TaskId у карточки нет, ветка drop ничего
+    // не снимает, а блок раздачи по состоянию под ним запускал бы следующую волну — подпись
+    // кнопки врала о последствии. «Перезапустить» запускает её честной подписью.
+    public static IReadOnlyList<TeamEscalationAction> DeadZone() =>
+    [
+        new("restart", "Перезапустить"),
+        new("finish", "Завершить"),
+    ];
 }

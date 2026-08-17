@@ -26,6 +26,10 @@ public class TeamWaveService
     private readonly ILogger<TeamWaveService> _log;
     // Таймаут волны (Э4): волна молчит дольше — сторож поднимает эскалацию.
     private readonly TimeSpan _waveTimeout;
+    // Страховка мёртвой зоны конвейера (прод 2026-08-17): волна закрыта, следующая не
+    // роздана и раздачу никто не позвал. Работа не идёт вовсе, поэтому порог короче
+    // общего таймаута волны — висеть так долго конвейер не должен ни при каком раскладе.
+    private readonly TimeSpan _deadZoneTimeout;
     // Переходы волны идут из двух независимых потоков (колбэк завершения задачи и сторож),
     // поэтому «кто закрывает волну» решается под этим локом, а не проверкой состояния на глаз.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _waveLocks = new();
@@ -55,6 +59,8 @@ public class TeamWaveService
         // (сборка + тесты у исполнителя легко занимают полчаса).
         _waveTimeout = TimeSpan.FromMinutes(
             int.TryParse(config?["TeamImplement:WaveTimeoutMinutes"], out var m) && m > 0 ? m : 90);
+        _deadZoneTimeout = TimeSpan.FromMinutes(
+            int.TryParse(config?["TeamImplement:DeadZoneTimeoutMinutes"], out var dz) && dz > 0 ? dz : 15);
         // Хук раздачи в SessionManager: цикл зависимостей (TaskExecutionService → SessionManager)
         // разорван так же, как у подписки TaskExecutionService на OnSessionMessage
         _sessions.TeamWaveStarter = (session, plan) => StartWaveAsync(session, plan);
@@ -531,7 +537,15 @@ public class TeamWaveService
         foreach (var session in _sessions.GetTeamImplementSessions())
         {
             if (session.TeamImplement is not { } team) continue;
-            if (team.Stage != TeamImplementStage.Wave || team.WaveStartedAt is not { } startedAt) continue;
+            if (team.Stage != TeamImplementStage.Wave) continue;
+            // Мёртвая зона конвейера (прод 2026-08-17): Stage=Wave, но волна закрыта и
+            // следующая не роздана (WaveStartedAt пуст) — прежний гард пропускал такое
+            // молча, и конвейер стоял часами, пока человек не трогал его руками.
+            if (team.WaveStartedAt is not { } startedAt)
+            {
+                await CheckDeadZoneStallAsync(session, team);
+                continue;
+            }
             // Отсчёт — от последней активности волны (закрытая задача, перевыдача), а не от
             // её старта: волна из пяти долгих задач живая, пока задачи закрываются одна
             // за другой, и эскалировать её только за длительность — ложная тревога.
@@ -554,6 +568,36 @@ public class TeamWaveService
             _log.LogWarning("Волна {Wave} чата-штаба {SessionId} не двигается дольше таймаута",
                 team.WaveNumber, session.Id);
         }
+    }
+
+    // Страховка мёртвой зоны конвейера: волна закрыта (ClosedWave == WaveNumber), в плане
+    // есть нерозданные под-задачи, а WaveStartedAt пуст — раздачу следующей никто не позвал
+    // (любой БУДУЩИЙ путь в такое состояние, не только прод-инцидент 17.08). Отсчёт — от
+    // UpdatedAt чата: в мёртвой зоне это последний факт в нём (решение по карточке, конец
+    // хода координатора). Карточка WaveStalled переводит практику в «ждёт решения», поэтому
+    // повторных карточек не будет — ровно одна. Остановлена человеком практика — не мёртвая
+    // зона, стойкость там выбрана осознанно.
+    private async Task CheckDeadZoneStallAsync(Session session, SessionTeamImplement team)
+    {
+        if (team.WaveNumber == 0 || team.ClosedWave != team.WaveNumber || team.Stopped) return;
+        if (team.PlanCardId is not { } planId) return;
+        if (DateTime.UtcNow - session.UpdatedAt < _deadZoneTimeout) return;
+        var plan = await _sessions.GetTeamPlanAsync(session.Id, planId);
+        if (plan is null || !plan.Subtasks.Any(s => s.TaskId is null)) return;
+
+        await RaiseEscalationAsync(session, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.WaveStalled,
+            Title = TeamImplementPrompts.EscalationTitle(TeamEscalationKind.WaveStalled,
+                $"волна {team.WaveNumber} закрыта, следующая не роздана"),
+            Details = $"Волна {team.WaveNumber} закрыта, но следующая не была роздана дольше " +
+                      $"{_deadZoneTimeout.TotalMinutes:0} минут — конвейер стоит без работы. " +
+                      "Проверьте состояние практики: возможно, раздача не стартовала.",
+            Wave = team.WaveNumber,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.WaveStalled),
+        });
+        _log.LogWarning("Мёртвая зона конвейера чата-штаба {SessionId}: волна {Wave} закрыта, " +
+            "следующая не роздана дольше таймаута", session.Id, team.WaveNumber);
     }
 
     // Названия незакрытых задач текущей волны — для текста карточки зависания

@@ -2697,7 +2697,7 @@ public class SessionManager : IDisposable
             // её кнопок (спека: «написал, что делать, координатор учёл и пошёл дальше с того
             // же места»). Стадию возвращаем ДО очереди, по тем же правилам, что решение по
             // карточке, — иначе текст человека упирался бы в гейты стадии «ждёт решения».
-            ResumeTeamFromDecisionOnUserInput(sessionId, entry);
+            await ResumeTeamFromDecisionOnUserInput(sessionId, entry);
 
             // Занятый чат (ход в полёте) ИЛИ активный цикл «до готово»: сообщение встаёт в
             // видимую очередь (pending_messages) и ждёт конца хода — разбор по result
@@ -5638,13 +5638,19 @@ public class SessionManager : IDisposable
         // «Запустить», а ещё «Добавить бюджет» и «Продолжить» — после них практика обязана
         // поехать сама. Без раздачи волна не стартовала, WaveStartedAt оставался пустым и
         // сторож молчал: человек нажал кнопку, а работа встала навсегда без единого сигнала.
+        // Мёртвая зона (прод 2026-08-17): тот же вызов ещё и по СОСТОЯНИЮ, а не только по
+        // кнопке из белого списка — карточка могла висеть ПОСЛЕ закрытия волны (allow/
+        // keepPlan/answer…), авто-раздача следующей была уже подавлена, и кроме этого
+        // вызова позвать её было некому. Действия с иной стадией (finish/stop/editRest/
+        // retryPlan) сюда не попадают: их стадия не Wave.
         // Раздавать нечего (волна уже идёт) — StartWave вернёт пустой список и не навредит.
-        if (actionId is "runNext" or "addBudget" or "resume"
-            && entry.Info.TeamImplement?.PlanCardId is { } planId
+        if (entry.Info.TeamImplement is { } teamNow
+            && teamNow.PlanCardId is { } planId
             && TeamWaveStarter is { } starter)
         {
             var plan = await GetTeamPlanAsync(sessionId, planId);
-            if (plan is not null)
+            if (plan is not null && (actionId is "runNext" or "addBudget" or "resume"
+                    || WaveStartPendingAfterDecision(teamNow, plan)))
             {
                 try { await starter(entry.Info, plan); }
                 catch (Exception ex)
@@ -6187,6 +6193,19 @@ public class SessionManager : IDisposable
     private static bool AllPlannedWavesClosed(SessionTeamImplement team) =>
         team.PlannedWaves > 0 && team.ClosedWave >= team.PlannedWaves;
 
+    // Мёртвая зона конвейера (прод 2026-08-17): карточка остановки висела ПОСЛЕ закрытия
+    // волны — авто-раздача следующей уже была подавлена («практика ждёт человека»), а белый
+    // список actionId ответа её не покрывал: конвейер замолкал до ручного «Остановить →
+    // Продолжить». Признак «раздачу нужно позвать» после решения человека: практика вернулась
+    // в Wave, все РОЗДАННЫЕ волны закрыты (ClosedWave == WaveNumber), а в плане есть
+    // нерозданные под-задачи. Решение «раздать или поднять карточку» остаётся за
+    // TeamWaveService (бюджет, версии плана, «Остановить») — здесь только «пора ли звать».
+    private static bool WaveStartPendingAfterDecision(SessionTeamImplement team, TeamImplementPlan plan) =>
+        team.Stage == TeamImplementStage.Wave
+        && team.WaveNumber > 0
+        && team.ClosedWave == team.WaveNumber
+        && plan.Subtasks.Any(s => s.TaskId is null);
+
     // У координатора есть живый фоновый субагент (Tool Agent и т.п.) — ход, завершённый
     // текстом без маркера, не тупик: координатор ждёт собственного результата. P16: по этому
     // признаку гард молчаливого тупика молчит (аналог TeamPlanningInFlight). entry.Process —
@@ -6553,7 +6572,7 @@ public class SessionManager : IDisposable
     // N»), идём в Idle: итерация завершена, режим ждёт новой вводной.
     // Карточку в ленте не гасим: она остаётся историей, а повторное решение по ней приведёт
     // практику в то же состояние (путь идемпотентен по стадии).
-    private void ResumeTeamFromDecisionOnUserInput(string sessionId, SessionEntry entry)
+    private async Task ResumeTeamFromDecisionOnUserInput(string sessionId, SessionEntry entry)
     {
         if (entry.Info.TeamImplement is not { Stage: TeamImplementStage.AwaitingDecision }) return;
 
@@ -6576,8 +6595,27 @@ public class SessionManager : IDisposable
         });
         entry.Info.UpdatedAt = DateTime.UtcNow;
         SaveSessions();
-        FireAndForget(BroadcastTeamImplementAsync(sessionId, entry),
-            $"рассылка состояния режима после ответа человека на карточку ({sessionId})");
+        await BroadcastTeamImplementAsync(sessionId, entry);
+
+        // Мёртвая зона конвейера (прод 2026-08-17): у текстового ответа нет actionId, белым
+        // списком кнопок он не покрывался вовсе — после закрытой волны практика возвращалась
+        // в Wave без раздачи следующей и стояла часами. Признак тот же, что у кнопок
+        // (WaveStartPendingAfterDecision); саму раздачу и её гейты по-прежнему решает
+        // TeamWaveService.
+        if (entry.Info.TeamImplement is { } teamNow
+            && teamNow.PlanCardId is { } planId
+            && TeamWaveStarter is { } starter)
+        {
+            var plan = await GetTeamPlanAsync(sessionId, planId);
+            if (plan is not null && WaveStartPendingAfterDecision(teamNow, plan))
+            {
+                try { await starter(entry.Info, plan); }
+                catch (Exception ex)
+                {
+                    _log.LogError(ex, "Раздача волны после ответа человека (чат {SessionId}) не удалась", sessionId);
+                }
+            }
+        }
     }
 
     // Возврат в интервью (Э8). Два входа: координатор сказал маркером `clarify`, что дальше

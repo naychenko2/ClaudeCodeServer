@@ -4125,6 +4125,63 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Checking);
     }
 
+    // Прод 2026-08-17 («мёртвая зона конвейера»): карточка PlanDeviation висела ПОСЛЕ
+    // закрытия волны — авто-раздача следующей была подавлена, «Разрешить» в белый список
+    // actionId не входил, и после ответа практика возвращалась в Wave без раздачи. Теперь
+    // признак «пора звать раздачу» — состояние (ClosedWave == WaveNumber + нерозданные
+    // под-задачи), а не кнопка.
+    [Fact]
+    public async Task RespondEscalation_AllowПослеЗакрытойВолны_РаздаётСледующуюВолну()
+    {
+        var (session, plan, handed) = await MakeStabWithPlanAndStarterAsync("ti-allow-deadzone");
+        // Одна волна роздана и закрыта, вторая ждёт — форма мёртвой зоны инцидента
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1; t.ClosedWave = 1; t.PlannedWaves = 2;
+            return true;
+        });
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.PlanDeviation,
+            Title = "Работа выходит за план",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
+        };
+        await _sut.PublishTeamEscalationAsync(session.Id, escalation);
+
+        var ok = await _sut.RespondTeamEscalationAsync(session.Id, escalation.Id, "allow", userId: TestUserId);
+
+        ok.Should().BeTrue();
+        handed().Should().BeSameAs(plan,
+            "«Разрешить» по карточке, висевшей после закрытия волны, обязан раздать следующую волну");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave);
+    }
+
+    // Тот же инцидент, второй вход в него: ответ обычным сообщением (у текста нет actionId,
+    // белым списком он не покрывался вовсе) — раздача теперь решается тем же состоянием.
+    [Fact]
+    public async Task ТекстВОжиданииРешения_ПослеЗакрытойВолны_РаздаётСледующуюВолну()
+    {
+        var (session, plan, handed) = await MakeStabWithPlanAndStarterAsync("ti-text-deadzone");
+        _sut.WithTeamState(session.Id, t =>
+        {
+            t.WaveNumber = 1; t.ClosedWave = 1; t.PlannedWaves = 2;
+            return true;
+        });
+        await _sut.PublishTeamEscalationAsync(session.Id, new TeamEscalation
+        {
+            Kind = TeamEscalationKind.PlanDeviation,
+            Title = "Работа выходит за план",
+            Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
+        });
+        session.Status = SessionStatus.Working;
+
+        await _sut.SendMessageAsync(session.Id, "разрешаю, делай как считаешь нужным", []);
+
+        handed().Should().BeSameAs(plan,
+            "текстовый ответ после закрытой волны тоже обязан запустить раздачу следующей");
+        _sut.GetById(session.Id)!.TeamImplement!.Stage.Should().Be(TeamImplementStage.Wave);
+    }
+
     [Fact]
     public async Task КарточкаОстановки_ЧужойВладелец_НеОтвечает()
     {

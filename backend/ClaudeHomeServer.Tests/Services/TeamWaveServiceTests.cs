@@ -804,6 +804,195 @@ public class TeamWaveServiceTests : IDisposable
         team.Stage.Should().Be(TeamImplementStage.Wave, "стадию «Остановить» не двигает — работу не возобновляет");
     }
 
+    // Приёмка мёртвой зоны: авто-волны СНЯТЫ, а карточка, погашенная человеком, — не гейт
+    // волны (PlanDeviation, «Разрешить»). Договор режима при снятых авто-волнах: следующая
+    // волна идёт только по явной кнопке человека, иначе он получает гейт-карточку.
+    // КРАСНЫЙ (дефект приёмки 2026-08-17): раздача по состоянию (WaveStartPendingAfterDecision)
+    // зовёт StartWaveAsync напрямую, а флаг AutoWaves читает только CloseWaveIfDoneAsync —
+    // волна 2 уходит исполнителям мимо гейта. Снять Skip после починки.
+    [Fact(Skip = "Дефект приёмки: раздача по состоянию игнорирует снятые авто-волны")]
+    public async Task RespondEscalation_AllowПриСнятыхАвтоволнах_НеРаздаётВолнуМимоГейта()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-allow-manual", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.PlanDeviation,
+            Title = "Работа выходит за план",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+        // Волна закрылась, пока карточка ждала ответа: гейт-карточку закрытие не подняло
+        // (практика ждёт человека) — форма мёртвой зоны при снятых авто-волнах
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "allow", userId: UserId);
+
+        ok.Should().BeTrue();
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().BeEmpty("авто-волны сняты — «Разрешить» по чужой карточке не заменяет кнопку запуска");
+    }
+
+    // Действия, уводящие практику из волны, конвейер не двигают и из формы мёртвой зоны:
+    // «Завершить с замечаниями» — в проверку, «Изменить остаток» — в интервью,
+    // «Повторить планирование» — в планирование. Новая работа ни в одном случае не уходит.
+    [Theory]
+    [InlineData("finishWithIssues", TeamImplementStage.Checking)]
+    [InlineData("editRest", TeamImplementStage.Interview)]
+    [InlineData("retryPlan", TeamImplementStage.Planning)]
+    public async Task RespondEscalation_ДействияВнеВолны_СледующуюВолнуНеРаздают(
+        string actionId, TeamImplementStage expected)
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-noflow-" + actionId, autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        var gate = (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Single(c => c.Kind == TeamEscalationKind.WaveGate);
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, gate.Id, actionId, userId: UserId);
+
+        ok.Should().BeTrue();
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().BeEmpty($"«{actionId}» новую работу не разворачивает");
+        Team(session.Id).Stage.Should().Be(expected);
+    }
+
+    // Повторное решение по той же карточке (двойной клик, ретрай запроса) не должно раздать
+    // волну второй раз — иначе на одной под-задаче выросли бы задачи-дубли.
+    [Fact]
+    public async Task RespondEscalation_ПовторноеРешениеПоТойЖеКарточке_ВолнуНеРаздаётДважды()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-allow-twice");
+        var first = await _sut.StartWaveAsync(session, plan);
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.PlanDeviation,
+            Title = "Работа выходит за план",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+
+        var firstAnswer = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "allow", userId: UserId);
+        var secondAnswer = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "allow", userId: UserId);
+
+        firstAnswer.Should().BeTrue();
+        secondAnswer.Should().BeFalse("карточка уже погашена — второе решение по ней не проходит");
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().ContainSingle("повторное решение не должно раздать ту же волну второй раз");
+        Team(session.Id).Budget.WavesUsed.Should().Be(2, "волна 2 посчитана один раз");
+    }
+
+    // Две параллельные раздачи по решению человека (клик по карточке и текстовый ответ
+    // одновременно) идут через один и тот же per-session семафор волны — дублей быть не должно.
+    [Fact]
+    public async Task РешениеИТекстОдновременно_ВолнаРаздаётсяОдинРаз()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-decision-race");
+        var first = await _sut.StartWaveAsync(session, plan);
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.PlanDeviation,
+            Title = "Работа выходит за план",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        _sessions.GetById(session.Id)!.Status = SessionStatus.Working;
+
+        await Task.WhenAll(
+            _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "allow", userId: UserId),
+            _sessions.SendMessageAsync(session.Id, "разрешаю, продолжай", []));
+
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().ContainSingle("две параллельные раздачи не должны создать задачи-дубли");
+        Team(session.Id).Budget.WavesUsed.Should().Be(2);
+    }
+
+    // P23 в форме мёртвой зоны: плановые волны кончились (ClosedWave >= PlannedWaves), а в
+    // плане ещё висят нерозданные под-задачи. Раздавать нечего — практика уходит в Idle,
+    // а не встаёт в вечную «волну N из N».
+    [Fact]
+    public async Task RespondEscalation_ВсеПлановыеВолныЗакрыты_ВIdleБезРаздачи()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-allow-terminal");
+        var first = await _sut.StartWaveAsync(session, plan);
+        var escalation = new TeamEscalation
+        {
+            Kind = TeamEscalationKind.PlanDeviation,
+            Title = "Работа выходит за план",
+            Wave = 1,
+            Actions = TeamEscalationActions.For(TeamEscalationKind.PlanDeviation),
+        };
+        await _sessions.PublishTeamEscalationAsync(session.Id, escalation);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        // Итерация признана завершённой на первой волне
+        _sessions.WithTeamState(session.Id, t => { t.PlannedWaves = 1; return true; });
+
+        var ok = await _sessions.RespondTeamEscalationAsync(session.Id, escalation.Id, "allow", userId: UserId);
+
+        ok.Should().BeTrue();
+        _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
+            .Should().BeEmpty("плановые волны закрыты — новую работу решение не разворачивает");
+        Team(session.Id).Stage.Should().Be(TeamImplementStage.Idle,
+            "итерация завершена: Idle, а не вечная «волна N из N»");
+    }
+
+    // Сторож мёртвой зоны не должен путать «конвейер встал» со стадиями, где работы и не
+    // должно быть: интервью, планирование, проверка, ожидание новой вводной.
+    [Theory]
+    [InlineData(TeamImplementStage.Interview)]
+    [InlineData(TeamImplementStage.Planning)]
+    [InlineData(TeamImplementStage.Checking)]
+    [InlineData(TeamImplementStage.Idle)]
+    public async Task СторожВолн_МёртваяЗонаВнеСтадииВолны_Молчит(TeamImplementStage stage)
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-deadzone-stage-" + stage, autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        _sessions.WithTeamState(session.Id, t => { t.Stage = stage; return true; });
+        _sessions.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-1);
+
+        await _sut.CheckStalledWavesAsync();
+
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Where(c => c.Kind == TeamEscalationKind.WaveStalled).Should().BeEmpty(
+                $"в стадии «{stage}» работы и не должно быть — тревожить человека не за что");
+    }
+
+    // Практика остановлена человеком: стоящий конвейер здесь — его собственное решение,
+    // карточка о «мёртвой зоне» была бы ложной тревогой.
+    [Fact]
+    public async Task СторожВолн_МёртваяЗонаПриОстановкеЧеловеком_Молчит()
+    {
+        var (session, plan) = await MakeRunningStabAsync("wave-deadzone-stopped", autoWaves: false);
+        var first = await _sut.StartWaveAsync(session, plan);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        _sessions.WithTeamState(session.Id, t =>
+        {
+            t.Stage = TeamImplementStage.Wave;
+            t.Stopped = true;
+            return true;
+        });
+        _sessions.GetById(session.Id)!.UpdatedAt = DateTime.UtcNow.AddHours(-1);
+
+        await _sut.CheckStalledWavesAsync();
+
+        (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
+            .Where(c => c.Kind == TeamEscalationKind.WaveStalled).Should().BeEmpty(
+                "остановлено человеком — стоящий конвейер тут ожидаем");
+    }
+
     // --- M2: волна не идёт поверх стадий, которые ждут человека ---
 
     [Theory]

@@ -33,9 +33,12 @@ public sealed record CheapProfileSpec(
 // а не CheapTextRunner'ом.
 // Tier — слот по умолчанию, когда админ ничего не выбирал; null = вычислить из Profile
 // (Small/Text → слабая, Large → средняя): см. EffectiveDefaultTier.
+// CloudTimeoutMs — пер-местный потолок ожидания ОБЛАЧНОГО шага вместо потолка профиля:
+// для мест, чей исполнитель отвечает дольше (или зависает дольше), чем допускает профиль,
+// не трогая общий потолок для всех остальных мест того же профиля. null = профиль.
 public sealed record LocalAction(
     string Key, string Title, string Group, CheapProfile Profile, bool DefaultLocal,
-    bool Agentic = false, ModelTier? Tier = null);
+    bool Agentic = false, ModelTier? Tier = null, int? CloudTimeoutMs = null);
 
 // Каталог всех фоновых one-shot действий — единый источник правды для роутинга и UI.
 // Сюда НЕ входят технически неприменимые: задача-исполнитель (агентная сессия с
@@ -211,10 +214,15 @@ public static class LocalActionCatalog
         // Значок проекта: Large — в промпт уходит весь белый список имён lucide, а на
         // Small/Text потолок контекста обрежет его и модель начнёт выдумывать
         // несуществующие имена. Локаль выключена по той же причине, что у фона:
-        // рисование SVG — не текстовая задача. Тир Medium: подобрать имя из готового
-        // списка проще, чем сочинить дудл на 14 фигур (ADR-009 §9).
+        // рисование SVG — не текстовая задача. Тир Strong — решение владельца
+        // (2026-08-17), поднят с Medium (ADR-009 §9).
+        // Собственный лимит облака 180 с (прод 17.08): сильная модель отвечает 52–126 с,
+        // а потолок профиля Large в 300 с оставлял зависший вызов висеть пять минут —
+        // миграция значков на таком вызове стояла в полдня (Узбекистан/Общие вопросы,
+        // no-model). 180 с покрывает наблюдаемые ответы с запасом и не трогает общий
+        // потолок профиля для остальных Large-мест.
         new(ProjectIcon, "Значок проекта", "Проекты", CheapProfile.Large,
-            DefaultLocal: false, Tier: ModelTier.Medium),
+            DefaultLocal: false, Tier: ModelTier.Strong, CloudTimeoutMs: 180_000),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

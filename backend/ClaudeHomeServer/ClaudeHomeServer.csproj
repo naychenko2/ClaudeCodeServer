@@ -20,6 +20,13 @@
     <Content Update="appsettings.Local.json" CopyToPublishDirectory="Never" />
   </ItemGroup>
 
+  <!-- Белый список имён значков (ADR-009 §5.2): генерируемая копия iconNames установленного
+       lucide-react, правится только генератором (frontend/scripts/gen-glyph-names.mjs), не руками.
+       LogicalName задан явно — код читает ресурс по короткому имени и не зависит от папок -->
+  <ItemGroup>
+    <EmbeddedResource Include="Services\ProjectIcons\lucide-icon-names.g.txt" LogicalName="lucide-icon-names.g.txt" />
+  </ItemGroup>
+
   <!-- Хостовый publish: встроенные MCP-серверы и дефолты CLI кладём рядом с exe —
        TasksServerLocator и синк workflows ищут их от AppContext.BaseDirectory
        (в контейнере это делала копия в /app из Dockerfile) -->

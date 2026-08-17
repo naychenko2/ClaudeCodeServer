@@ -81,10 +81,11 @@ public sealed class CheapTextRunner(
     }
 
     // Таймаут ОБЛАЧНЫХ шагов цепочки (выбранная модель через CLI, direct-адаптер,
-    // финальный claude): профильный CloudTimeoutMs, а не локальный TimeoutMs — тот
-    // калибровался под Ollama и облачную сильную модель на сложной задаче обрывал.
+    // финальный claude): эффективный пер-местный лимит (каталог → профиль), а не
+    // локальный TimeoutMs — тот калибровался под Ollama и облачную сильную модель
+    // на сложной задаче обрывал.
     private TimeSpan CloudTimeoutFor(string actionKey) =>
-        TimeSpan.FromMilliseconds(router.ProfileFor(actionKey).CloudTimeoutMs);
+        TimeSpan.FromMilliseconds(router.CloudTimeoutMsFor(actionKey));
 
     // Потолок вывода для ОБЛАЧНЫХ шагов (direct-адаптер, RunDetailedAsync). Локальный
     // NumPredict — это num_predict Ollama (бережёт память GPU), для облачного маршрута он
@@ -169,10 +170,12 @@ public sealed class CheapTextRunner(
             return await claude.RunAsync(prompt, model, timeout: cloudTimeout, ct: ct, ownerId: ownerId,
                 label: actionKey);
         }
-        catch (LlmTimeoutException) when (!ct.IsCancellationRequested)
+        catch (LlmTimeoutException ex) when (!ct.IsCancellationRequested)
         {
-            log.LogWarning("cheap-runner: действие {Action} не ответило за {Timeout} — повторяю один раз",
-                actionKey, cloudTimeout);
+            // В сообщении исключения — применённый лимит и фактическая длительность:
+            // отказ по времени без этих цифр в логе не разбирается
+            log.LogWarning("cheap-runner: действие {Action} — {Message}; повторяю один раз",
+                actionKey, ex.Message);
             return await claude.RunAsync(prompt, model, timeout: cloudTimeout, ct: ct, ownerId: ownerId,
                 label: actionKey);
         }
@@ -345,10 +348,10 @@ public sealed class CheapTextRunner(
         {
             return await claude.RunDetailedAsync(prompt, claudeModel, effTimeout, ct, ownerId, label: actionKey);
         }
-        catch (LlmTimeoutException) when (!ct.IsCancellationRequested)
+        catch (LlmTimeoutException ex) when (!ct.IsCancellationRequested)
         {
-            log.LogWarning("cheap-runner (detailed): действие {Action} не ответило за {Timeout} — повторяю один раз",
-                actionKey, effTimeout);
+            log.LogWarning("cheap-runner (detailed): действие {Action} — {Message}; повторяю один раз",
+                actionKey, ex.Message);
             return await claude.RunDetailedAsync(prompt, claudeModel, effTimeout, ct, ownerId, label: actionKey);
         }
     }

@@ -21,10 +21,12 @@ public sealed record OneShotResult(string Text, OneShotUsage? Usage, long Durati
 // Отказ one-shot вызова по таймауту. Наследник InvalidOperationException — потребители,
 // ловящие её, ведут себя как раньше; отдельный тип нужен, чтобы CheapTextRunner мог
 // сделать ОДИН повтор (обрыв по таймауту — не приговор), а человек увидел честную
-// причину отказа вместо «уточните задачу». Сообщение не меняется: по нему
-// ChangelogService.DescribeFailure различает таймаут и сбой CLI.
-public sealed class LlmTimeoutException()
-    : InvalidOperationException("AI не ответил за отведённое время");
+// причину отказа вместо «уточните задачу». Базовое сообщение обязано сохранять подстроку
+// «не ответил за отведённое время»: по ней ChangelogService.DescribeFailure различает
+// таймаут и сбой CLI. Вариант с деталями (TimeoutMessage) называет применённый лимит
+// и фактическую длительность — без них лог места («модель не ответила») не разбирается.
+public sealed class LlmTimeoutException(string? message = null)
+    : InvalidOperationException(message ?? "AI не ответил за отведённое время");
 
 // Абстракция one-shot вызова LLM — для мокирования в тестах.
 // В DI интерфейс указывает на тот же singleton OneShotClaudeRunner.
@@ -225,12 +227,37 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
             RecordSpend(result, model, ownerId, label, poolSubKey);
             return result;
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Отмена пришла СНАРУЖИ (у icon/suggest это RequestAborted: фронт рвёт HTTP
+            // раньше нашего лимита), а не по нашему таймауту — честно называем это в
+            // сообщении, иначе «лимит 180 с, ждали 30 с» читается как ложный таймаут
+            launcher.Kill(process, turnId);
+            throw new LlmTimeoutException(
+                $"ход отменён вызывающим после {FmtSec(started.Elapsed)} (лимит был {FmtSec(timeout ?? DefaultTimeout)})");
+        }
         catch (OperationCanceledException)
         {
+            // Обрыв по нашему лимиту: применённое значение и фактическая длительность —
+            // в сообщение, их подхватывают логи мест (CheapTextRunner, ProjectIconGlyphService)
             launcher.Kill(process, turnId);
-            throw new LlmTimeoutException();
+            throw new LlmTimeoutException(TimeoutMessage(timeout, started.Elapsed));
         }
     }
+
+    // Сообщение отказа по времени: применённый лимит + сколько фактически ждали.
+    // Подстрока «не ответил за отведённое время» — контракт ChangelogService.DescribeFailure.
+    // internal — тестируется напрямую, без запуска процесса.
+    internal static string TimeoutMessage(TimeSpan? timeout, TimeSpan elapsed)
+    {
+        var limit = timeout ?? DefaultTimeout;
+        return $"AI не ответил за отведённое время (лимит {FmtSec(limit)}, ждали {FmtSec(elapsed)})";
+    }
+
+    // Числа — инвариантной культурой: в ru-RU «0.#» даёт запятую, и по логам место
+    // отказа невозможно grep'ать стабильно (та же грабля, что ADR-008 §4.3)
+    private static string FmtSec(TimeSpan value) =>
+        value.TotalSeconds.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture) + " с";
 
     // Аргументы запуска claude для one-shot. Вынесены из RunCliAsync отдельным методом,
     // чтобы состав флагов проверялся тестом без запуска процесса.

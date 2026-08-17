@@ -136,7 +136,14 @@ public sealed class LocalActionRouter
     // идёт на локаль (UsesLocal требует живую Ollama) — локальный потолок; иначе цепочка
     // может закончиться на claude, и потолок обязан быть облачным.
     public int TimeoutMsFor(string actionKey) =>
-        UsesLocal(actionKey) ? ProfileFor(actionKey).TimeoutMs : ProfileFor(actionKey).CloudTimeoutMs;
+        UsesLocal(actionKey) ? ProfileFor(actionKey).TimeoutMs : CloudTimeoutMsFor(actionKey);
+
+    // Эффективный потолок ожидания ОБЛАЧНОГО шага: пер-местное значение из каталога
+    // (место с нестандартной скоростью исполнителя), иначе потолок профиля. Единственная
+    // точка склейки — CheapTextRunner берёт лимит только отсюда.
+    public int CloudTimeoutMsFor(string actionKey) =>
+        LocalActionCatalog.Find(actionKey)?.CloudTimeoutMs
+            ?? ProfileFor(actionKey).CloudTimeoutMs;
 
     // Модель, которой пойдёт локальный вызов (для UI использования)
     public string LocalModel => _ollama.TextModel;

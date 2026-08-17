@@ -47,6 +47,7 @@ import { MermaidDiagram } from './MermaidDiagram';
 import { DocumentViewer } from './DocumentViewer';
 import { OfficeViewer } from './OfficeViewer';
 import { DrawioViewer, type DrawioHandle } from './DrawioViewer';
+import { ExcalidrawViewer, type ExcalidrawHandle } from './ExcalidrawViewer';
 import { base64ToBytes } from '../lib/binary';
 import { C, FONT, FS, MODAL_W, R, SHADOW, SP, TB } from '../lib/design';
 import { Toolbar, ToolbarIconButton, PillSwitch } from './Toolbar';
@@ -437,6 +438,8 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const [officeCacheKey, setOfficeCacheKey] = useState<string | undefined>();
   // Режим draw.io: по умолчанию просмотр (read-only), кнопка «Редактировать» → edit
   const [drawioMode, setDrawioMode] = useState<'view' | 'edit'>('view');
+  // Режим Excalidraw: зеркально draw.io — по умолчанию просмотр, «Редактировать» → edit
+  const [excalidrawMode, setExcalidrawMode] = useState<'view' | 'edit'>('view');
   const [editContent, setEditContent] = useState('');
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [unsavedConfirm, setUnsavedConfirm] = useState(false);
@@ -454,6 +457,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   useEffect(() => { setCommentCounts(null); }, [filePath]);
   const onCommentCounts = useCallback((total: number, open: number) => setCommentCounts({ total, open }), []);
   const drawioRef = useRef<DrawioHandle>(null);
+  const excalidrawRef = useRef<ExcalidrawHandle>(null);
   const marks = useSyncMarks(project.id);
   // Фидбек кнопки «Скопировать» в тулбаре
   const [copied, setCopied] = useState(false);
@@ -553,6 +557,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     setOfficeDiscardDialog(false);
     setOfficeCacheKey(undefined);
     setDrawioMode('view');
+    setExcalidrawMode('view');
     setLoading(true);
     setLoadError(false);
     setLoadForbidden(false);
@@ -871,8 +876,16 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   }, [filePath, fileContent]);
 
   const handleClose = async () => {
-    // draw.io в режиме edit — сохраняем текущие правки перед закрытием
-    if (isDrawio && drawioMode === 'edit') await drawioRef.current?.flush();
+    // draw.io / Excalidraw в режиме edit — сохраняем текущие правки перед закрытием.
+    // Сбой сохранения не должен молча закрыть файл и потерять правки: показываем
+    // ошибку и оставляем файл открытым.
+    try {
+      if (isDrawio && drawioMode === 'edit') await drawioRef.current?.flush();
+      if (isExcalidraw && excalidrawMode === 'edit') await excalidrawRef.current?.flush();
+    } catch (e) {
+      setActionError(mutationErrorText(e, 'Не удалось сохранить диаграмму — файл не закрыт'));
+      return;
+    }
     if (hasUnsavedChanges) {
       setUnsavedIntent('close');
       setUnsavedConfirm(true);
@@ -1048,6 +1061,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isMermaid = /\.mmd$/i.test(fileName);
   const isHtml = /\.html?$/i.test(fileName);
   const isDrawio = /\.(drawio|dio)$/i.test(fileName);
+  const isExcalidraw = /\.excalidraw$/i.test(fileName);
   const diffStats = diff ? {
     added: diff.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).length,
     removed: diff.split('\n').filter(l => l.startsWith('-') && !l.startsWith('---')).length,
@@ -1071,11 +1085,12 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
   const isPdfViewing = !loading && !loadError && tab === 'file' && !!fileContent?.isDocument && fileContent.docKind === 'pdf';
   const isHtmlPreviewing = !loading && !loadError && tab === 'file' && isHtml && htmlTab === 'preview' && !editing && !fileContent?.isBinary;
   const isDrawioViewing = !loading && !loadError && tab === 'file' && isDrawio && !fileContent?.isBinary;
+  const isExcalidrawViewing = !loading && !loadError && tab === 'file' && isExcalidraw && !fileContent?.isBinary;
 
   // Сохранение диаграммы из встроенного редактора draw.io: пишем XML и обновляем diff.
   // fileContent.content обновляем, но iframe не перезагружаем (DrawioViewer грузит XML
   // только по событию init), поэтому редактор не сбрасывается.
-  const handleDrawioSave = async (xml: string) => {
+  const handleDiagramSave = async (xml: string) => {
     try {
       await api.files.saveContent(project.id, filePath, xml);
       setFileContent(prev => prev ? { ...prev, content: xml } : prev);
@@ -1187,6 +1202,18 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
             key: 'drawio-view', label: 'Просмотр', primary: true, title: 'Просмотр (правки сохраняются)',
             icon: <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
             onClick: () => { void (async () => { await drawioRef.current?.flush(); setDrawioMode('view'); })(); },
+          };
+    } else if (isExcalidrawViewing && !isHostMode) {
+      mainAction = excalidrawMode === 'view'
+        ? {
+            key: 'excalidraw-edit', label: 'Редактировать',
+            icon: <SquarePen size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+            onClick: () => setExcalidrawMode('edit'),
+          }
+        : {
+            key: 'excalidraw-view', label: 'Просмотр', primary: true, title: 'Просмотр (правки сохраняются)',
+            icon: <Eye size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
+            onClick: () => { void (async () => { await excalidrawRef.current?.flush(); setExcalidrawMode('view'); })(); },
           };
     } else if (online && !isMobile && !isHostMode && !fileContent?.isBinary) {
       // На мобиле правку открывает плавающая кнопка (FAB) внизу слева
@@ -1706,7 +1733,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Содержимое. Для .md (просмотр и редактирование) — белый «лист» вместо
           карточного фона; в тёмной теме bgWhite = карточный тон, глаз не режет. */}
-      <div ref={contentAreaRef} style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing) ? 0 : 16, display: 'flex', flexDirection: 'column', background: (isMarkdown && tab === 'file') ? C.bgWhite : undefined }}>
+      <div ref={contentAreaRef} style={{ flex: 1, overflow: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing || isExcalidrawViewing) ? 'hidden' : 'auto', padding: (isOfficeFile || isCodeEditing || isPdfViewing || isHtmlPreviewing || isDrawioViewing || isExcalidrawViewing) ? 0 : 16, display: 'flex', flexDirection: 'column', background: (isMarkdown && tab === 'file') ? C.bgWhite : undefined }}>
         {loading && (
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', flex: 1, gap: 14 }}>
             <div style={{ width: 36, height: 36, borderRadius: '50%', border: `3px solid ${C.border}`, borderTopColor: C.accent, animation: 'spin 0.8s linear infinite' }} />
@@ -1900,7 +1927,9 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
                   </Suspense>
                 )
                 : isDrawio
-                  ? <DrawioViewer ref={drawioRef} key={drawioMode} content={content} mode={drawioMode} onSave={handleDrawioSave} />
+                  ? <DrawioViewer ref={drawioRef} key={drawioMode} content={content} mode={drawioMode} onSave={handleDiagramSave} />
+                : isExcalidraw
+                  ? <ExcalidrawViewer ref={excalidrawRef} content={content} mode={excalidrawMode} onSave={handleDiagramSave} />
                 : isHtml && htmlTab === 'preview'
                   ? <iframe
                       srcDoc={content}
@@ -2137,7 +2166,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
 
       {/* Плавающая кнопка редактирования на мобиле (MA4). ЛЕВЫЙ нижний угол — правый занят
           глобальным AiLauncher (⌘/Ctrl+K), чтобы кнопки не накладывались. */}
-      {isMobile && online && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !(isHtml && htmlTab === 'preview') && (
+      {isMobile && online && !editing && !isHostMode && tab === 'file' && fileContent && !fileContent.isBinary && !fileContent.isImage && !fileContent.isDocument && !fileContent.isVideo && !fileContent.isAudio && !isDrawio && !isExcalidraw && !(isHtml && htmlTab === 'preview') && (
         <button
           onClick={() => { setEditing(true); setTab('file'); }}
           title="Редактировать"

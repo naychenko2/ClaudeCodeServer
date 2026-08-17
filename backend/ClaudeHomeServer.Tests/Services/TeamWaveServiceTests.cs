@@ -228,7 +228,7 @@ public class TeamWaveServiceTests : IDisposable
         var (session, backend, frontend) = await MakeStabAsync("wave-run");
         var plan = MakePlan(backend, frontend);
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         // Волна 1 — только серверная под-задача: фронтовая ждёт своей волны
         created.Should().HaveCount(1);
@@ -264,7 +264,7 @@ public class TeamWaveServiceTests : IDisposable
     {
         var (session, backend, frontend) = await MakeStabAsync("wave-launch-fail");
         var plan = MakePlan(backend, frontend);
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var task = created[0];
 
         await _sut.RaiseLaunchFailedAsync(_sessions.GetById(session.Id)!, task,
@@ -280,16 +280,16 @@ public class TeamWaveServiceTests : IDisposable
     {
         var (session, backend, frontend) = await MakeStabAsync("wave-wait");
         var plan = MakePlan(backend, frontend);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         // Задача первой волны ещё в работе — вторую не раздаём
-        var blocked = await _sut.StartWaveAsync(session, plan);
+        var blocked = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         blocked.Should().BeEmpty("волна 2 зависит от невыполненной волны 1");
         plan.Subtasks[1].TaskId.Should().BeNull();
 
         // Первая закрыта — вторая уходит исполнителю
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
-        var second = await _sut.StartWaveAsync(session, plan);
+        var second = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         second.Should().HaveCount(1);
         second[0].PersonaId.Should().Be(frontend.Id);
@@ -305,12 +305,12 @@ public class TeamWaveServiceTests : IDisposable
     {
         var (session, backend, frontend) = await MakeStabAsync("wave-done");
         var plan = MakePlan(backend, frontend);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
-        var second = await _sut.StartWaveAsync(session, plan);
+        var second = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(second[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
 
-        var extra = await _sut.StartWaveAsync(session, plan);
+        var extra = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         extra.Should().BeEmpty("все под-задачи плана уже розданы");
         _tasks.GetByProject(session.ProjectId!).Should().HaveCount(2, "дублей задач нет");
@@ -323,7 +323,7 @@ public class TeamWaveServiceTests : IDisposable
         await _sessions.SetTeamImplementAsync(session.Id, enabled: false, userId: UserId);
         var plan = MakePlan(backend, frontend);
 
-        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan);
+        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty();
         _tasks.GetByProject(session.ProjectId!).Should().BeEmpty();
@@ -337,7 +337,7 @@ public class TeamWaveServiceTests : IDisposable
         session.WorktreeBranch = "feature/x";
         var plan = MakePlan(backend, frontend);
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created[0].Description.Should().Contain(session.WorktreePath,
             "исполнитель обязан знать, что работа идёт в worktree, а не в основном репо");
@@ -355,7 +355,7 @@ public class TeamWaveServiceTests : IDisposable
         session.WorktreeBranch = "feature/y";
         var plan = MakePlan(backend, frontend);
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created[0].WorktreePath.Should().Be(session.WorktreePath);
         created[0].WorktreeBranch.Should().Be("feature/y");
@@ -367,7 +367,7 @@ public class TeamWaveServiceTests : IDisposable
         var (session, backend, frontend) = await MakeStabAsync("wave-no-worktree");
         var plan = MakePlan(backend, frontend);
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created[0].WorktreePath.Should().BeNull("исполнитель стартует в корне проекта");
     }
@@ -505,7 +505,7 @@ public class TeamWaveServiceTests : IDisposable
         var team = session.TeamImplement!;
         team.Budget.TasksUsed = team.Budget.MaxTasks;
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty("бюджет итерации исчерпан — цикл останавливается");
         _tasks.GetByProject(session.ProjectId!).Should().BeEmpty("ни одной задачи сверх бюджета");
@@ -524,7 +524,7 @@ public class TeamWaveServiceTests : IDisposable
         var team = session.TeamImplement!;
         team.Budget.WavesUsed = team.Budget.MaxWaves;
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty("потолок числа волн исчерпан");
         _tasks.GetByProject(session.ProjectId!).Should().BeEmpty();
@@ -538,7 +538,7 @@ public class TeamWaveServiceTests : IDisposable
         var plan = MakePlan(backend, frontend);
         await _sessions.StopTeamImplementAsync(session.Id, UserId);
 
-        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan);
+        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty();
         _tasks.GetByProject(session.ProjectId!).Should().BeEmpty();
@@ -548,7 +548,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ЗакрытиеВолны_Авто_СледующаяВолнаСтартуетСама()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-auto");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         first.Should().ContainSingle();
 
         // Исполнитель закрыл задачу — единственный путь в Done поднимает событие
@@ -569,7 +569,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ЗакрытиеВолны_АвтоСнято_СледующаяЖдётРешенияЧеловека()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-manual", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
@@ -583,7 +583,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ЗакрытиеВолны_ПовторныйКолбэк_ВторойРазНеЗакрывает()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-twice");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
 
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
@@ -597,7 +597,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ЗакрытиеПоследнейВолны_ПереводитВПроверку()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-last");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
 
@@ -617,7 +617,7 @@ public class TeamWaveServiceTests : IDisposable
         // Раньше кнопка ничего не делала: под-задача оставалась незакрытой, и волна не могла
         // закрыться до ручного tasks_complete.
         var (session, plan) = await MakeRunningStabAsync("wave-skip");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var task = first[0];
         var escalation = new TeamEscalation
         {
@@ -643,7 +643,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_Drop_ЗакрываетПодЗадачуСПояснением()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-drop", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var task = first[0];
         var escalation = new TeamEscalation
         {
@@ -705,7 +705,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_AllowПослеЗакрытойВолны_РаздаётСледующуюВолну()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-allow");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         // Координатор сообщил о расхождении с планом — практика ждёт решения человека
         var escalation = new TeamEscalation
         {
@@ -740,7 +740,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_RunNextПослеЗакрытойВолны_РаздаётВолнуРовноОдинРаз()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-runnext", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         var gate = (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
@@ -760,7 +760,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_FinishПослеЗакрытойВолны_СледующуюВолнуНеРаздаёт()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-finish", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         var gate = (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
@@ -781,7 +781,7 @@ public class TeamWaveServiceTests : IDisposable
         // в форме мёртвой зоны (Wave + закрытая волна + нерозданные под-задачи), остановка
         // не должна разворачивать новую работу
         var (session, plan) = await MakeRunningStabAsync("wave-stop-dead", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         _sessions.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Wave; return true; });
@@ -813,7 +813,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_AllowПриСнятыхАвтоволнах_НеРаздаётВолнуМимоГейта()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-allow-manual", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var escalation = new TeamEscalation
         {
             Kind = TeamEscalationKind.PlanDeviation,
@@ -847,7 +847,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ОтветТекстом_ПриСнятыхАвтоволнах_НеРаздаётВолнуМимоГейта()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-answer-manual", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var escalation = new TeamEscalation
         {
             Kind = TeamEscalationKind.PlanDeviation,
@@ -877,7 +877,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task МаркерРазговора_ПослеЗакрытияВолныВИнтервью_РаздаётСледующуюВолну()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-talk-deadzone");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         // Координатор объявил тупик посреди волны — практика в интервью, волны на паузе
         await _sessions.EnterInterviewAsync(session.Id, "тест: тупик в волне", withTurn: false);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
@@ -903,7 +903,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task МаркерРазговора_ПослеЗакрытияВолны_ПриСнятыхАвтоволнах_ПоднимаетГейт()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-talk-gate", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         await _sessions.EnterInterviewAsync(session.Id, "тест: тупик в волне", withTurn: false);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
@@ -929,7 +929,7 @@ public class TeamWaveServiceTests : IDisposable
         string actionId, TeamImplementStage expected)
     {
         var (session, plan) = await MakeRunningStabAsync("wave-noflow-" + actionId, autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         var gate = (await _sessions.GetOpenTeamEscalationsAsync(session.Id))
@@ -949,7 +949,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_ПовторноеРешениеПоТойЖеКарточке_ВолнуНеРаздаётДважды()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-allow-twice");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var escalation = new TeamEscalation
         {
             Kind = TeamEscalationKind.PlanDeviation,
@@ -977,7 +977,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task РешениеИТекстОдновременно_ВолнаРаздаётсяОдинРаз()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-decision-race");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var escalation = new TeamEscalation
         {
             Kind = TeamEscalationKind.PlanDeviation,
@@ -1006,7 +1006,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_ВсеПлановыеВолныЗакрыты_ВIdleБезРаздачи()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-allow-terminal");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var escalation = new TeamEscalation
         {
             Kind = TeamEscalationKind.PlanDeviation,
@@ -1039,7 +1039,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task СторожВолн_МёртваяЗонаВнеСтадииВолны_Молчит(TeamImplementStage stage)
     {
         var (session, plan) = await MakeRunningStabAsync("wave-deadzone-stage-" + stage, autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         _sessions.WithTeamState(session.Id, t => { t.Stage = stage; return true; });
@@ -1058,7 +1058,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task СторожВолн_МёртваяЗонаПриОстановкеЧеловеком_Молчит()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-deadzone-stopped", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         _sessions.WithTeamState(session.Id, t =>
@@ -1089,7 +1089,7 @@ public class TeamWaveServiceTests : IDisposable
         var plan = MakePlan(backend, frontend);
         _sessions.WithTeamState(session.Id, t => { t.Stage = stage; return true; });
 
-        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan);
+        var created = await _sut.StartWaveAsync(_sessions.GetById(session.Id)!, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty("человек сейчас отвечает — конвейер ждёт его");
         _tasks.GetByProject(session.ProjectId!).Should().BeEmpty();
@@ -1103,7 +1103,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ЗакрытиеВолны_ПрактикаВИнтервью_СледующаяНеСтартует()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-close-interview");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         // Координатор объявил тупик — волны на паузе, идёт интервью
         _sessions.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Interview; return true; });
 
@@ -1121,7 +1121,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ЗакрытиеПоследнейВолны_ПрактикаЖдётРешения_ВПроверкуНеУводит()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-close-awaiting");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         var second = _tasks.GetByProject(session.ProjectId!).First(t => t.Labels.Contains("волна 2"));
@@ -1142,7 +1142,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ПровалЗадачи_ПерваяНеудача_Перевыдача()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-retry");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var failed = _tasks.MarkClaudeResult(first[0].Id, "error")!;
 
         await _sut.OnTaskFailedAsync(failed);
@@ -1158,7 +1158,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ПровалЗадачи_ВтораяНеудача_Эскалация()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-retry2");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var failed = _tasks.MarkClaudeResult(first[0].Id, "error")!;
         await _sut.OnTaskFailedAsync(failed);
 
@@ -1174,7 +1174,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ПровалЗадачи_ПотолокПеревыдачВыбран_СразуЭскалация()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-retry-cap");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         Team(session.Id).Budget.RetriesUsed = Team(session.Id).Budget.MaxRetries;
         var failed = _tasks.MarkClaudeResult(first[0].Id, "error")!;
 
@@ -1188,7 +1188,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task СторожВолн_ВолнаМолчитДольшеТаймаута_ПоднимаетКарточку()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-stalled");
-        await _sut.StartWaveAsync(session, plan);
+        await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         // Волна не подаёт признаков жизни четыре часа — при дефолтном таймауте это зависание
         var stalledTeam = Team(session.Id);
         stalledTeam.WaveStartedAt = DateTime.UtcNow.AddHours(-4);
@@ -1205,7 +1205,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task СторожВолн_ВолнаВПределахТаймаута_Молчит()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-fresh");
-        await _sut.StartWaveAsync(session, plan);
+        await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         await _sut.CheckStalledWavesAsync();
 
@@ -1218,7 +1218,7 @@ public class TeamWaveServiceTests : IDisposable
         // Таймаут считается от последней активности: волна из долгих задач идёт часами,
         // но пока в ней что-то закрывается — она живая, а не зависшая
         var (session, plan) = await MakeRunningStabAsync("wave-long-alive");
-        await _sut.StartWaveAsync(session, plan);
+        await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var team = Team(session.Id);
         team.WaveStartedAt = DateTime.UtcNow.AddHours(-6);
         team.WaveActivityAt = DateTime.UtcNow.AddMinutes(-5);
@@ -1238,7 +1238,7 @@ public class TeamWaveServiceTests : IDisposable
         // состояние не видел вовсе: бейдж «волна N из M», работы нет, тишина. Карточка
         // WaveStalled уводит практику в «ждёт решения», поэтому второй тик не дублирует её.
         var (session, plan) = await MakeRunningStabAsync("wave-deadzone", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         // Решение человека вернуло практику в Wave, но раздача не случилась — мёртвая зона
@@ -1260,7 +1260,7 @@ public class TeamWaveServiceTests : IDisposable
     {
         // Отсчёт мёртвой зоны — от UpdatedAt чата: сразу после решения человека паниковать рано
         var (session, plan) = await MakeRunningStabAsync("wave-deadzone-fresh", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         _sessions.WithTeamState(session.Id, t => { t.Stage = TeamImplementStage.Wave; return true; });
@@ -1281,7 +1281,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task КарточкаМёртвойЗоны_БезКнопкиСнять_ПерезапускРаздаётВолну()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-deadzone-buttons");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         // Мёртвая зона при включённых авто: волна закрылась, пока висела карточка (waitsHuman
         // не двигает конвейер), и раздачу после ответа никто не позвал — форма инцидента 17.08
         var escalation = new TeamEscalation
@@ -1319,7 +1319,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_AddBudgetПриСнятыхАвтоволнах_РаздаётВолнуБезГейта()
     {
         var (session, plan) = await MakeRunningStabAsync("qa-addbudget-manual", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         var budgetCard = new TeamEscalation
@@ -1344,7 +1344,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task RespondEscalation_ResumeПриСнятыхАвтоволнах_РаздаётВолнуБезГейта()
     {
         var (session, plan) = await MakeRunningStabAsync("qa-resume-manual", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         await _sessions.StopTeamImplementAsync(session.Id, UserId);
@@ -1455,7 +1455,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task СостояниеРежима_ПослеГейта_ПереживаетРестартЧерезSessionsJson()
     {
         var (session, plan) = await MakeRunningStabAsync("qa-persist", autoWaves: false);
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
         await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
         var live = Team(session.Id);
@@ -1519,7 +1519,7 @@ public class TeamWaveServiceTests : IDisposable
         var team = session.TeamImplement!;
         team.Budget.TasksUsed = team.Budget.MaxTasks - 1;
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty("волна либо помещается в остаток целиком, либо не стартует");
         _tasks.GetByProject(session.ProjectId!).Should().BeEmpty(
@@ -1540,7 +1540,7 @@ public class TeamWaveServiceTests : IDisposable
         var team = session.TeamImplement!;
         team.Budget.TasksUsed = team.Budget.MaxTasks - 2;
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().HaveCount(2);
         var after = Team(session.Id);
@@ -1556,7 +1556,7 @@ public class TeamWaveServiceTests : IDisposable
         var (session, plan) = await MakeRunningStabAsync("wave-race");
 
         await Task.WhenAll(Enumerable.Range(0, 8)
-            .Select(_ => Task.Run(() => _sut.StartWaveAsync(session, plan))));
+            .Select(_ => Task.Run(() => _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand))));
 
         _tasks.GetByProject(session.ProjectId!).Should().ContainSingle(
             "волна раздаётся ровно один раз, сколько бы вызовов ни пришло разом");
@@ -1584,8 +1584,8 @@ public class TeamWaveServiceTests : IDisposable
             "без аккумулятора план десериализуется заново на каждое чтение — предпосылка гонки");
 
         await Task.WhenAll(
-            _sut.StartWaveAsync(session, snapshot1),
-            _sut.StartWaveAsync(session, snapshot2));
+            _sut.StartWaveAsync(session, snapshot1, TeamWaveTrigger.UserCommand),
+            _sut.StartWaveAsync(session, snapshot2, TeamWaveTrigger.UserCommand));
 
         _tasks.GetByProject(session.ProjectId!).Should().HaveCount(2,
             "волна из двух под-задач раздаётся один раз, а не дважды с двух устаревших снимков плана");
@@ -1603,7 +1603,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ПровалЗадачи_ПараллельныеПровалыРазныхПодзадачПослеРестарта_НеТеряютAttempts()
     {
         var (session, plan) = await MakeRestartedRunningStabAsync("wave-retry-race-restart");
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         created.Should().HaveCount(2, "предпосылка: обе под-задачи волны 1 розданы разом");
         var failedA = _tasks.MarkClaudeResult(created[0].Id, "error")!;
         var failedB = _tasks.MarkClaudeResult(created[1].Id, "error")!;
@@ -1625,7 +1625,7 @@ public class TeamWaveServiceTests : IDisposable
     public async Task ПровалЗадачи_ПараллельныеПровалы_ДаютРовноОднуПеревыдачу()
     {
         var (session, plan) = await MakeRunningStabAsync("wave-retry-race");
-        var first = await _sut.StartWaveAsync(session, plan);
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
         var failed = _tasks.MarkClaudeResult(first[0].Id, "error")!;
 
         await Task.WhenAll(Enumerable.Range(0, 6)
@@ -1695,7 +1695,7 @@ public class TeamWaveServiceTests : IDisposable
             return true;
         });
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty("актуальна версия 2 — старый план не доигрывается");
         Team(session.Id).Budget.TasksUsed.Should().Be(0, "бюджет на устаревший план не тратится");
@@ -1714,7 +1714,7 @@ public class TeamWaveServiceTests : IDisposable
             return true;
         });
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().BeEmpty("новая версия плана ждёт кнопки «Запустить» даже при авто-волнах");
     }
@@ -1727,7 +1727,7 @@ public class TeamWaveServiceTests : IDisposable
         var (session, backend, frontend) = await MakeStabAsync("wave-legacy");
         var plan = MakePlan(backend, frontend);
 
-        var created = await _sut.StartWaveAsync(session, plan);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
 
         created.Should().HaveCount(1);
     }
@@ -1737,7 +1737,7 @@ public class TeamWaveServiceTests : IDisposable
     {
         // Ожидание ответа человека — не зависание: в интервью таймаут волны не тикает
         var (session, backend, frontend) = await MakeStabAsync("wave-interview-timeout");
-        await _sut.StartWaveAsync(session, MakePlan(backend, frontend));
+        await _sut.StartWaveAsync(session, MakePlan(backend, frontend), TeamWaveTrigger.UserCommand);
         _sessions.WithTeamState(session.Id, t =>
         {
             t.Stage = TeamImplementStage.Interview;

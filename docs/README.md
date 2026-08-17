@@ -47,6 +47,8 @@
 [model-providers-rework.md](features/model-providers-rework.md),
 [model-route-format-validation.md](features/model-route-format-validation.md),
 [project-backgrounds.md](features/project-backgrounds.md),
+[project-icon-glyphs.md](features/project-icon-glyphs.md) (значок проекта вместо картинки:
+тексты интерфейса и «Что нового»),
 [project-onboarding-v2.md](features/project-onboarding-v2.md) (критерии снятия флага
 знакомства v2).
 
@@ -74,7 +76,9 @@
 [ADR-006](adr/ADR-006-reader-embed-check.md) (проверка встраиваемости для «Чтения»),
 [ADR-007](adr/ADR-007-model-preset-chains.md) (пресет как именованная цепочка моделей),
 [ADR-008](adr/ADR-008-project-background-generation.md) (фон проекта: контракт генерации
-без разметки, серверная сборка тайла и форма хранения);
+без разметки, серверная сборка тайла и форма хранения),
+[ADR-009](adr/ADR-009-project-icon-glyph.md) (значок проекта: контракт ответа модели,
+белый список lucide и форма хранения);
 [model-resolution-and-fallback.md](adr/model-resolution-and-fallback.md) — приложение к ADR-007
 (резолв модели и фолбэк хода по цепочке).
 

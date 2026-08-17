@@ -1,5 +1,8 @@
 ﻿using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json.Serialization;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
@@ -13,14 +16,10 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects")]
-public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, Services.Images.ImageGenerationService imageGen, Services.Images.ImageBackfillService imageBackfill, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
+public class ProjectsController(ProjectManager projects, SessionManager sessions, AppSettingsService appSettings, UserStore users, UserHomeResolver homes, WorkspaceKnowledgeStore wkStore, TaskManager tasks, ProjectEventLogService events, TeamMemoryService teamMemory, ClaudeHomeServer.Services.Dossiers.DossierStore dossiers, KnowledgeService knowledge, NotesKnowledgeService notesKb, PersonaManager personas, PersonaMemoryService personaMemory, ClaudeHomeServer.Services.Git.GitService git, ClaudeHomeServer.Services.Git.GitServerService gitServer, ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService iconGlyphs, ILogger<ProjectsController> logger, IHubContext<SessionHub> hub) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
-
-    // Провайдеров генерации несколько (fal.ai, glif) — про конкретный ключ конфига не пишем
-    private const string ImageGenerationOffError =
-        "Генерация изображений не настроена: ни один провайдер (fal.ai, glif) не подключён";
 
     private Task BroadcastTeamMemory(string action, string projectId, string? entryId = null) =>
         hub.Clients.Group("user_" + UserId).SendAsync("message", new TeamMemoryChangedMessage(action, projectId, entryId));
@@ -36,7 +35,33 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;
-        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, p.Icon, p.McpServersOn, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey };
+        return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey };
+    }
+
+    // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ (имя либо пути), разметку фронт не
+    // получает — имя рисует компонент lucide, пути уходят значением атрибута d. Поле v —
+    // версия содержимого значка для cache-busting у icon.svg (ADR-009 §8).
+    private static object ProjectIconDto(ProjectIcon icon) => new
+    {
+        icon.Kind,
+        icon.Color,
+        Glyph = icon.Glyph is null ? null : new
+        {
+            icon.Glyph.Name,
+            icon.Glyph.Paths,
+            icon.Glyph.SetAt,
+            V = GlyphVersion(icon.Glyph),
+        },
+    };
+
+    // Первые 8 hex от SHA-256 содержимого значка: меняется вместе со значком,
+    // стабильна между рестартами (ADR-009 §8, параметр ?v= у icon.svg)
+    private static string GlyphVersion(ProjectGlyph glyph)
+    {
+        var payload = glyph.Name is not null
+            ? "n:" + glyph.Name
+            : "p:" + string.Join('\n', glyph.Paths ?? []);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..8].ToLowerInvariant();
     }
 
     [HttpGet("builtin-prompt")]
@@ -360,166 +385,72 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return NoContent();
     }
 
-    // --- Иконка проекта (по образцу аватара персоны) ---
+    // --- Значок проекта (ADR-009 §8) ---
+    // Растровый путь (caps/generate/candidate/set-image/upload/recrop/original/GET icon)
+    // удалён вместе с ассетами: значок — данные записи, разметку собирает сервер.
 
-    // Доступна ли AI-генерация иконки и чем именно её сделают (провайдер + модель).
-    // Поле generate НЕ переименовывать: на него завязана секция иконки на фронте.
-    [HttpGet("icon/caps")]
-    public ActionResult IconCaps()
-    {
-        var provider = imageGen.ActiveProviderFor(Services.Images.ImagePlaces.ProjectIcon);
-        return Ok(new
-        {
-            generate = provider is not null,
-            provider = provider?.Key,
-            providerName = provider?.DisplayName,
-            // Эффективная модель настройки; null — дефолт самого драйвера
-            model = provider is null ? null : imageGen.ModelFor(Services.Images.ImagePlaces.ProjectIcon, provider.Key),
-        });
-    }
-
-    // Сгенерировать НЕСКОЛЬКО вариантов иконки по описанию (для выбора); провайдера и
-    // модель выбирает роутер по настройке инстанса. Кандидаты сохраняются во временную
-    // папку, иконка проекта НЕ меняется до выбора.
-    [HttpPost("{id}/icon/generate")]
-    public async Task<ActionResult> GenerateIcon(string id, [FromBody] GenerateIconRequest req)
+    // Подобрать кандидатов значка: до четырёх вперемешку (имена из набора lucide +
+    // нарисованные пути). Стор НЕ меняется — принятие отдельным вызовом select. Любой
+    // сбой (место не настроено, битый JSON, ни одного годного) = пустой набор с причиной:
+    // проект остаётся на инициалах, это фолбэк, а не ошибка (ADR-009 §7).
+    [HttpPost("{id}/icon/suggest")]
+    public async Task<ActionResult> SuggestIcon(string id, [FromBody] SuggestIconRequest? req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-
-        var prompt = string.IsNullOrWhiteSpace(req.Prompt)
-            ? BuildIconPrompt(p)
-            : $"Flat minimalist 2D vector emblem, full-bleed filling the entire square canvas edge to edge, "
-              + "solid flat background color, bold simple shapes, no rounded-rectangle app-icon frame, "
-              + $"no border, no drop shadow, no 3D, no gloss, no padding, no text. {req.Prompt.Trim()}";
-        var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
-
-        // Очередь снимает заявку, как только у сущности есть картинка (Resolve → HasImage),
-        // поэтому перерисовка УЖЕ стоящей иконки фоном не догоняется — обещать «появится
-        // сама» здесь нельзя, отказ остаётся отказом.
-        var canBackfill = p.Icon.Kind != ProjectIconKind.Image || string.IsNullOrEmpty(p.Icon.ImageFile);
-
-        // Провайдера нет — отвечаем отказом, но иконку не теряем: заявка догонит проект,
-        // как только генерацию настроят
-        if (!imageGen.EnabledFor(Services.Images.ImagePlaces.ProjectIcon))
-        {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.ProjectIcon, id, UserId, prompt);
-            return BadRequest(new { error = ImageGenerationOffError, queued = canBackfill });
-        }
-
-        var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.ProjectIcon, prompt, count);
-        // Провайдер не отдал картинок (таймаут, отказ) — иконку тоже не теряем: заявка
-        // догонит проект фоном. queued в ответе — чтобы фронт сказал человеку честное
-        // «появится сама», а не «генератор не ответил, иконка осталась прежней».
-        if (images.Count == 0)
-        {
-            if (canBackfill) imageBackfill.Enqueue(Services.Images.ImageBackfillKinds.ProjectIcon, id, UserId, prompt);
-            return StatusCode(502, new { error = "Не удалось сгенерировать изображение", queued = canBackfill });
-        }
-
-        // Свежая папка кандидатов (перезатираем прошлую генерацию)
-        var candDir = Path.Combine(projects.IconsDir, id, "candidates");
-        try { if (Directory.Exists(candDir)) Directory.Delete(candDir, recursive: true); } catch { }
-        Directory.CreateDirectory(candDir);
-
-        var files = new List<string>();
-        foreach (var img in images)
-        {
-            var ext = ImageAssetHelper.ExtFor(img.ContentType);
-            var name = $"cand-{Guid.NewGuid():N}{ext}";
-            await System.IO.File.WriteAllBytesAsync(Path.Combine(candDir, name), img.Bytes);
-            files.Add(name);
-        }
-        return Ok(new { candidates = files });
+        var result = await iconGlyphs.SuggestAsync(p.Name, req?.Hint, p.OwnerId!, HttpContext.RequestAborted);
+        return Ok(IconSuggestView(result));
     }
 
-    // Генерация кандидатов иконки ДО создания проекта (в диалоге «Добавить проект»): проекта
-    // ещё нет, поэтому байты возвращаем инлайн как data-url и на диск НИЧЕГО не пишем.
-    // Литерал «icon» первым сегментом не конфликтует с «{id}/icon/...» (как и «icon/caps»).
-    [HttpPost("icon/generate-preview")]
-    public async Task<ActionResult> GenerateIconPreview([FromBody] GenerateIconPreviewRequest req)
+    // Тот же подбор ДО создания проекта — по черновику названия из диалога «Добавить
+    // проект» (ADR-009 §8). Проекта (и владельца-владения) ещё нет, гейт — только
+    // авторизация: подбор идёт от UserId текущего пользователя, стор не меняется.
+    [HttpPost("icon/suggest-preview")]
+    public async Task<ActionResult> SuggestIconPreview([FromBody] SuggestIconPreviewRequest? req)
     {
-        // Проекта ещё нет — ставить заявку в очередь не на что, только честный отказ
-        if (!imageGen.EnabledFor(Services.Images.ImagePlaces.ProjectIcon))
-            return BadRequest(new { error = ImageGenerationOffError });
-
-        var prompt = string.IsNullOrWhiteSpace(req.Prompt)
-            ? BuildIconPrompt(req.Name ?? "")
-            : $"Flat minimalist 2D vector emblem, full-bleed filling the entire square canvas edge to edge, "
-              + "solid flat background color, bold simple shapes, no rounded-rectangle app-icon frame, "
-              + $"no border, no drop shadow, no 3D, no gloss, no padding, no text. {req.Prompt.Trim()}";
-        var count = req.Count is >= 1 and <= 4 ? req.Count.Value : 4;
-
-        var images = await imageGen.GenerateManyAsync(Services.Images.ImagePlaces.ProjectIcon, prompt, count);
-        // Без queued: проекта ещё нет, догонять картинку некому — отказ здесь окончательный
-        if (images.Count == 0) return StatusCode(502, new { error = "Не удалось сгенерировать изображение" });
-
-        var candidates = images
-            .Select(i => new { dataUrl = $"data:{i.ContentType};base64,{Convert.ToBase64String(i.Bytes)}" })
-            .ToList();
-        return Ok(new { candidates });
+        var name = req?.Name?.Trim();
+        if (string.IsNullOrEmpty(name))
+            return BadRequest(new { error = "Имя проекта обязательно: подбор идёт по названию" });
+        var result = await iconGlyphs.SuggestAsync(name, req!.Hint, UserId, HttpContext.RequestAborted);
+        return Ok(IconSuggestView(result));
     }
 
-    // Отдать кандидата иконки (превью в галерее выбора). access_token в query для <img>.
-    [HttpGet("{id}/icon/candidate/{file}")]
-    public IActionResult IconCandidate(string id, string file)
+    // Форма ответа подбора — общая для suggest и suggest-preview: кандидаты
+    // (имя либо пути) плюс причина пустого набора.
+    private static object IconSuggestView(Services.ProjectIcons.ProjectIconGlyphResult result) => new
     {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        var safe = Path.GetFileName(file);   // защита от path-traversal
-        var full = Path.Combine(projects.IconsDir, id, "candidates", safe);
-        if (!System.IO.File.Exists(full)) return NotFound();
-        return ImageAssetHelper.PhysicalFileByExt(full);
-    }
+        candidates = result.Candidates.Select(c => c.IsNamed
+            ? (object)new { name = c.Name }
+            : new { paths = c.Paths }),
+        result.FailReason,
+    };
 
-    // Выбрать кандидата как иконку проекта: делаем основным, чистим остальных кандидатов.
+    // Принять значок: Kind = Glyph, Glyph = {Name|Paths}. Тело валидируется ЦЕЛИКОМ заново
+    // тем же валидатором, что и ответ модели, — клиент такой же недоверенный источник
+    // (ADR-009 §8, инвариант «валидация на входе в стор» §11.3).
     [HttpPost("{id}/icon/select")]
     public ActionResult SelectIcon(string id, [FromBody] SelectIconRequest req)
     {
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
-        if (string.IsNullOrWhiteSpace(req.File)) return BadRequest(new { error = "Не указан файл" });
 
-        var dir = Path.Combine(projects.IconsDir, id);
-        var candPath = Path.Combine(dir, "candidates", Path.GetFileName(req.File));
-        if (!System.IO.File.Exists(candPath)) return NotFound(new { error = "Кандидат не найден" });
+        var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(req.Name, req.Paths);
+        if (candidate is null)
+            return BadRequest(new
+            {
+                error = "Негодный значок: нужно ровно одно поле — name из набора либо 1–4 корректные строки d",
+            });
 
-        var ext = Path.GetExtension(candPath);
-        var fileName = $"icon-{Guid.NewGuid():N}{ext}";   // cache-busting
-        System.IO.File.Copy(candPath, Path.Combine(dir, fileName), overwrite: true);
-
-        // Удаляем прежнюю иконку и всю папку кандидатов
-        if (!string.IsNullOrEmpty(p.Icon.ImageFile))
-            try { System.IO.File.Delete(Path.Combine(dir, p.Icon.ImageFile)); } catch { }
-        try { Directory.Delete(Path.Combine(dir, "candidates"), recursive: true); } catch { }
-
-        return Ok(WithCount(projects.SetIconImage(id, fileName)));
+        return Ok(WithCount(projects.SetIconGlyph(id, new ProjectGlyph
+        {
+            Name = candidate.Name,
+            Paths = candidate.Paths?.ToList(),
+            SetAt = DateTime.UtcNow,
+        })));
     }
 
-    // Прикрепить готовую картинку-иконку к УЖЕ созданному проекту (паритет с SetIconImage:
-    // без оригинала/кропа). Нужен, чтобы досылать СГЕНЕРИРОВАННУЮ в диалоге создания иконку
-    // после create() — генерация там была stateless, файла на сервере ещё нет.
-    [HttpPost("{id}/icon/set-image")]
-    [RequestSizeLimit(15_000_000)]
-    public async Task<ActionResult> SetIconImageFile(string id, [FromForm] IFormFile? image)
-    {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        if (image is null) return BadRequest(new { error = "Нужен файл image" });
-
-        var check = await ImageAssetHelper.ValidateImageAsync(image);
-        if (check.Error is not null) return BadRequest(new { error = check.Error });
-
-        var dir = Path.Combine(projects.IconsDir, id);
-        Directory.CreateDirectory(dir);
-        var name = $"icon-{Guid.NewGuid():N}{check.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(image, Path.Combine(dir, name));
-
-        return Ok(WithCount(projects.SetIconImage(id, name)));
-    }
-
-    // Переключить режим иконки: буквы (initials) ↔ картинка (image). Файлы картинки НЕ стираются —
-    // это возврат к инициалам без потери загруженной/сгенерированной картинки (и обратно к ней).
+    // Переключить режим иконки: инициалы ↔ значок. Значок при возврате на инициалы НЕ
+    // стирается — это путь «назад» и «снова вперёд» без повторного подбора.
     [HttpPost("{id}/icon/mode")]
     public ActionResult SetIconMode(string id, [FromBody] SetIconModeRequest req)
     {
@@ -529,116 +460,40 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var kind = (req.Kind ?? "").Trim().ToLowerInvariant() switch
         {
             "initials" => ProjectIconKind.Initials,
-            "image" => ProjectIconKind.Image,
+            "glyph" => ProjectIconKind.Glyph,
             _ => (ProjectIconKind?)null,
         };
-        if (kind is null) return BadRequest(new { error = "Режим должен быть 'initials' или 'image'" });
-        if (kind == ProjectIconKind.Image && string.IsNullOrEmpty(p.Icon.ImageFile))
-            return BadRequest(new { error = "У проекта нет картинки — сначала сгенерируйте или загрузите" });
+        if (kind is null) return BadRequest(new { error = "Режим должен быть 'initials' или 'glyph'" });
+        if (kind == ProjectIconKind.Glyph && p.Icon.Glyph is null)
+            return BadRequest(new { error = "У проекта нет значка — сначала подберите его" });
 
         return Ok(WithCount(projects.SetIconKind(id, kind.Value)));
     }
 
-    // Отдать картинку иконки. JWT принимается и в query access_token (браузерный <img>).
-    [HttpGet("{id}/icon")]
-    public IActionResult Icon(string id)
+    // Собранный сервером SVG значка — единственная разрешённая форма значка как
+    // самостоятельного ресурса (ADR-009 §4). Только Paths-вид: Name-значок рисует фронт
+    // компонентом lucide, файла для него не существует. access_token в query — для <img>.
+    [HttpGet("{id}/icon.svg")]
+    public IActionResult IconSvg(string id)
     {
         var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId || p.Icon.Kind != ProjectIconKind.Image
-            || string.IsNullOrEmpty(p.Icon.ImageFile))
+        if (p is null || p.OwnerId != UserId
+            || p.Icon.Kind != ProjectIconKind.Glyph
+            || p.Icon.Glyph?.Paths is not { Count: > 0 } paths)
             return NotFound();
 
-        var full = Path.Combine(projects.IconsDir, id, p.Icon.ImageFile);
-        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
-    }
-
-    // Оригинал загруженной иконки (для перекропа). access_token в query — как GET icon.
-    [HttpGet("{id}/icon/original")]
-    public IActionResult IconOriginal(string id)
-    {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId || string.IsNullOrEmpty(p.Icon.OriginalFile))
-            return NotFound();
-
-        var full = Path.Combine(projects.IconsDir, id, p.Icon.OriginalFile);
-        return System.IO.File.Exists(full) ? ImageAssetHelper.PhysicalFileByExt(full) : NotFound();
-    }
-
-    // Загрузка своей иконки: оригинал + кропнутый квадрат + параметры кропа (JSON).
-    // Валидация: заявленный ContentType из белого списка И настоящие magic bytes.
-    [HttpPost("{id}/icon/upload")]
-    [RequestSizeLimit(15_000_000)]
-    public async Task<ActionResult> UploadIcon(string id,
-        [FromForm] IFormFile? original, [FromForm] IFormFile? cropped, [FromForm] string? crop)
-    {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        if (original is null || cropped is null)
-            return BadRequest(new { error = "Нужны файлы original и cropped" });
-
-        var originalCheck = await ImageAssetHelper.ValidateImageAsync(original);
-        if (originalCheck.Error is not null) return BadRequest(new { error = originalCheck.Error });
-        var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
-        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
-
-        var cropState = ImageAssetHelper.ParseCrop(crop);
-
-        var dir = Path.Combine(projects.IconsDir, id);
-        Directory.CreateDirectory(dir);
-        var originalName = $"original-{Guid.NewGuid():N}{originalCheck.Ext}";
-        var imageName = $"icon-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(original, Path.Combine(dir, originalName));
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
-
-        return Ok(WithCount(projects.SetIconUploaded(id, imageName, originalName, cropState)));
-    }
-
-    // Перекроп сохранённого оригинала: новая кропнутая картинка + параметры.
-    [HttpPost("{id}/icon/recrop")]
-    [RequestSizeLimit(5_000_000)]
-    public async Task<ActionResult> RecropIcon(string id,
-        [FromForm] IFormFile? cropped, [FromForm] string? crop)
-    {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId) return NotFound();
-        if (string.IsNullOrEmpty(p.Icon.OriginalFile))
-            return BadRequest(new { error = "У проекта нет оригинала для перекропа" });
-        if (cropped is null) return BadRequest(new { error = "Нужен файл cropped" });
-
-        var croppedCheck = await ImageAssetHelper.ValidateImageAsync(cropped);
-        if (croppedCheck.Error is not null) return BadRequest(new { error = croppedCheck.Error });
-
-        var dir = Path.Combine(projects.IconsDir, id);
-        Directory.CreateDirectory(dir);
-        var imageName = $"icon-{Guid.NewGuid():N}{croppedCheck.Ext}";
-        await ImageAssetHelper.SaveFormFileAsync(cropped, Path.Combine(dir, imageName));
-
-        return Ok(WithCount(projects.SetIconRecropped(id, imageName, ImageAssetHelper.ParseCrop(crop))));
-    }
-
-    // Промпт иконки по умолчанию — из имени проекта. Просим ПЛОСКИЙ символ во всю площадь
-    // без рамки/фона-плитки/тени/полей: иначе модель рисует «иконку приложения» с рамкой и
-    // мелким символом в центре, а наша плитка добавляет вторую рамку.
-    private static string BuildIconPrompt(Project project) => BuildIconPrompt(project.Name);
-
-    // Перегрузка по имени — для генерации ДО создания проекта (проекта ещё нет). Пустое имя →
-    // безымянный фолбэк (абстрактная эмблема).
-    private static string BuildIconPrompt(string name)
-    {
-        var subject = string.IsNullOrWhiteSpace(name)
-            ? "an abstract project emblem"
-            : $"a project named '{name.Trim()}'";
-        return $"Flat minimalist 2D vector emblem representing {subject}. " +
-            "A single bold symbol that fills the entire square canvas edge to edge (full-bleed), " +
-            "simple flat shapes, solid flat background color, high contrast, centered composition. " +
-            "No rounded-rectangle app-icon frame, no border, no drop shadow, no 3D, no gloss, " +
-            "no small padding around the symbol, no text, no letters.";
+        Response.Headers.CacheControl = "private, max-age=604800, immutable";
+        Response.Headers.XContentTypeOptions = "nosniff";
+        Response.Headers.ContentSecurityPolicy = "default-src 'none'";
+        return Content(Services.ProjectIcons.GlyphSvg.Build(paths), "image/svg+xml");
     }
 }
 
-public record GenerateIconRequest(string? Prompt, int? Count);
-public record GenerateIconPreviewRequest(string? Name, string? Prompt, int? Count);
-public record SelectIconRequest(string File);
+// Контракт — «prompt», как шлёт фронт (api.ts); без атрибута поле молча терялось (QA 2026-08-17)
+public record SuggestIconRequest([property: JsonPropertyName("prompt")] string? Hint);
+// Preview-подбор до создания проекта: name — черновик названия, prompt — та же подсказка
+public record SuggestIconPreviewRequest(string? Name, [property: JsonPropertyName("prompt")] string? Hint);
+public record SelectIconRequest(string? Name, List<string>? Paths);
 public record SetIconModeRequest(string? Kind);
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,

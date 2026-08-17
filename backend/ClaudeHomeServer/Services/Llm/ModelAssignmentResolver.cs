@@ -71,6 +71,18 @@ public sealed class ModelAssignmentResolver(
         ResolveChain(usageKey, explicitModel, ownerId).FirstOrDefault();
 
     /// <summary>
+    /// Разворот значения слота/маршрута (id модели | tier:* | preset:{id}) в цепочку конкретных
+    /// моделей — для ФОНОВЫХ мест (CheapTextRunner): слот тира может быть маркером, а не
+    /// моделью, и тот же разворот, что у маршрута места, обязана пройти единственная точка
+    /// (ExpandRouteToModels: preset → шаги цепочки, tier-шаг → слот владельца, защита от цикла
+    /// «слот ↔ пресет»). local/direct-шаги пропускаются — это не модель claude CLI (локаль и
+    /// прямой адаптер — свои шаги цепочки CheapTextRunner, до этой точки уже пройденные).
+    /// Пустой список — разворота нет (битый пресет, пустые слоты): решает вызывающий.
+    /// </summary>
+    public IReadOnlyList<string> ExpandModelChain(string? routeValue, string? ownerId) =>
+        ExpandRouteToModels(routeValue, ownerId, agentic: true);
+
+    /// <summary>
     /// Цепочка конкретных моделей хода (первая = основная, остальные = план фолбэка,
     /// ADR-007 §4). Источник: явная модель → назначение админа → дефолт места (слот).
     /// Разворачивает preset:{id} через ExpandChain, tier:*-шаги по слотам владельца (БЕЗ

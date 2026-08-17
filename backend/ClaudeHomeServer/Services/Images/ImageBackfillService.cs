@@ -16,21 +16,23 @@ public sealed record ImageBackfillSummary(int Generated, int Skipped, int Failed
     public static readonly ImageBackfillSummary Empty = new(0, 0, 0);
 }
 
-// Картинка догнала сущность — карточка проекта/персоны обновляется без перезагрузки.
-// Kind — ImageBackfillKinds.*, EntityId — id проекта или персоны.
+// Картинка догнала сущность — карточка персоны обновляется без перезагрузки.
+// Kind — ImageBackfillKinds.*, EntityId — id персоны.
 public record ImageBackfilledMessage(string Kind, string EntityId)
     : ServerMessage("image_backfilled");
 
 /// <summary>
-/// Догоняющая генерация картинок: проект или персона, созданные при выключенном (или
-/// упавшем) генераторе, получают иконку/аватар позже сами. Образец — ProjectBackgroundBackfill.
+/// Догоняющая генерация картинок: персона, созданная при выключенном (или упавшем)
+/// генераторе, получает аватар позже сама. Образец — ProjectBackgroundBackfill. Иконки
+/// проектов здесь больше нет: значок — SVG из текстового места модели, без внешнего
+/// сервиса (ADR-009).
 ///
 /// Идемпотентность держится на самой очереди: заявка снимается, как только у сущности
 /// появилась картинка — неважно, сгенерировали её мы, выбрал человек из кандидатов или
 /// загрузил свою. Поэтому повторный прогон — no-op, генератор не дёргается.
 /// </summary>
 public sealed class ImageBackfillService(
-    ImageBackfillStore store, ImageGenerationService images, ProjectManager projects,
+    ImageBackfillStore store, ImageGenerationService images,
     PersonaManager personas, IHubContext<SessionHub> hub, IHostApplicationLifetime lifetime,
     ILogger<ImageBackfillService> log)
 {
@@ -261,26 +263,15 @@ public sealed class ImageBackfillService(
     }
 
     // Сохранение — тем же путём, что и ручной выбор кандидата: файл в каталоге ассетов
-    // сущности + перевод иконки/аватара в режим картинки
+    // сущности + перевод аватара в режим картинки
     private async Task SaveAsync(ImageBackfillRequest request, GeneratedImage image)
     {
         var ext = ImageAssetHelper.ExtFor(image.ContentType);
-        if (request.Kind == ImageBackfillKinds.ProjectIcon)
-        {
-            var dir = Path.Combine(projects.IconsDir, request.EntityId);
-            Directory.CreateDirectory(dir);
-            var name = $"icon-{Guid.NewGuid():N}{ext}";   // cache-busting, как в SelectIcon
-            await File.WriteAllBytesAsync(Path.Combine(dir, name), image.Bytes);
-            projects.SetIconImage(request.EntityId, name);
-        }
-        else
-        {
-            var dir = Path.Combine(personas.AssetsDir, request.EntityId);
-            Directory.CreateDirectory(dir);
-            var name = $"avatar-{Guid.NewGuid():N}{ext}";
-            await File.WriteAllBytesAsync(Path.Combine(dir, name), image.Bytes);
-            personas.SetAvatarImage(request.EntityId, request.OwnerId, name);
-        }
+        var dir = Path.Combine(personas.AssetsDir, request.EntityId);
+        Directory.CreateDirectory(dir);
+        var name = $"avatar-{Guid.NewGuid():N}{ext}";
+        await File.WriteAllBytesAsync(Path.Combine(dir, name), image.Bytes);
+        personas.SetAvatarImage(request.EntityId, request.OwnerId, name);
     }
 
     // Персонам вдобавок шлём штатное personas_changed: раздел «Персоны» уже слушает его
@@ -307,17 +298,6 @@ public sealed class ImageBackfillService(
     // Сущность заявки: есть ли она, стоит ли уже картинка и чем подписать промпт по умолчанию
     private Target? Resolve(ImageBackfillRequest request)
     {
-        if (request.Kind == ImageBackfillKinds.ProjectIcon)
-        {
-            var project = projects.GetById(request.EntityId);
-            if (project is null || project.OwnerId != request.OwnerId) return null;
-            return new Target(
-                project.Name,
-                project.Icon.Kind == Models.ProjectIconKind.Image
-                    && !string.IsNullOrEmpty(project.Icon.ImageFile),
-                DefaultIconPrompt(project.Name));
-        }
-
         if (request.Kind == ImageBackfillKinds.PersonaAvatar)
         {
             var persona = personas.GetByIdInternal(request.EntityId);
@@ -334,21 +314,9 @@ public sealed class ImageBackfillService(
 
     private sealed record Target(string Name, bool HasImage, string DefaultPrompt);
 
-    // Промпты по умолчанию — на случай, если заявка пришла без своего (напр. пережила
+    // Промпт по умолчанию — на случай, если заявка пришла без своего (напр. пережила
     // рестарт со старым форматом). Держим в одной формулировке с ручной генерацией
-    // (ProjectsController.BuildIconPrompt / PersonasController.BuildAvatarPrompt).
-    private static string DefaultIconPrompt(string name)
-    {
-        var subject = string.IsNullOrWhiteSpace(name)
-            ? "an abstract project emblem"
-            : $"a project named '{name.Trim()}'";
-        return $"Flat minimalist 2D vector emblem representing {subject}. " +
-            "A single bold symbol that fills the entire square canvas edge to edge (full-bleed), " +
-            "simple flat shapes, solid flat background color, high contrast, centered composition. " +
-            "No rounded-rectangle app-icon frame, no border, no drop shadow, no 3D, no gloss, " +
-            "no small padding around the symbol, no text, no letters.";
-    }
-
+    // (PersonasController.BuildAvatarPrompt).
     private static string DefaultAvatarPrompt(string name, string? description)
     {
         var who = string.IsNullOrWhiteSpace(description) ? name : $"{name}, {description}";

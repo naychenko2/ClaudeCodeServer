@@ -1,6 +1,10 @@
 ﻿namespace ClaudeHomeServer.Models;
 
-public enum ProjectIconKind { Initials, Image }
+// Значок проекта (ADR-009 §6). Номера закреплены ЯВНО, значение 1 выведено из
+// обращения: в старом сторе им была растровая картинка (Image), enum лежит на диске
+// числом, и без явных номеров каждая старая запись молча стала бы «значковой» с пустым
+// значком. Ту же дисциплину обязан соблюдать любой, кто добавит сюда новое значение.
+public enum ProjectIconKind { Initials = 0, Glyph = 2 }
 
 // Тег проекта — элемент реестра общих тегов (имя, порядок, цвет)
 public sealed class ProjectTag
@@ -10,18 +14,27 @@ public sealed class ProjectTag
     public string? Color { get; set; }
 }
 
-// Иконка проекта (по образцу PersonaAvatar). Кроп переиспользуем — AvatarCropState нейтрален.
+// Иконка проекта: инициалы+цвет по умолчанию, подобранный значок опционально.
+// Файлов у иконки больше нет — значок это данные записи, а не ассет (ADR-009 §6).
 public class ProjectIcon
 {
     public ProjectIconKind Kind { get; set; } = ProjectIconKind.Initials;
     // Ключ цвета из палитры AGENT_COLORS фронта (yellow/orange/blue/green/purple/red/brown/cyan/pink)
     public string? Color { get; set; }
-    // Имя файла картинки в data/project-icons/{id}/ (когда Kind == Image)
-    public string? ImageFile { get; set; }
-    // Оригинал загруженного файла (для перекропа); у сгенерированных иконок — null
-    public string? OriginalFile { get; set; }
-    // Параметры кропа, которыми получен ImageFile из OriginalFile
-    public AvatarCropState? Crop { get; set; }
+    // Подобранный значок; null — не подбирался. Заполнен ⇔ Kind может быть Glyph.
+    public ProjectGlyph? Glyph { get; set; }
+}
+
+// Значок (ADR-009 §6): имя иконки из белого списка lucide ЛИБО нарисованные моделью
+// пути — заполнено ровно одно (инвариант §11.4 держит валидатор на входе в стор,
+// ProjectIconGlyphService.ValidateGlyph). Разметку из путей собирает GlyphSvg.Build.
+public sealed class ProjectGlyph
+{
+    // Имя из белого списка; взаимоисключительно с Paths
+    public string? Name { get; set; }
+    // 1–4 провалидированные строки d (ADR-009 §3)
+    public List<string>? Paths { get; set; }
+    public DateTime SetAt { get; set; }
 }
 
 // Состояние фона проекта (ADR-008 §6). Pending — генерация в работе (протухает через

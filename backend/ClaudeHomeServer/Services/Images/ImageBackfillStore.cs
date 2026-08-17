@@ -2,14 +2,15 @@ using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Images;
 
-// Виды сущностей, картинку которым догоняет фоновая генерация.
+// Виды сущностей, картинку которым догоняет фоновая генерация. Иконки проектов здесь
+// больше нет: значок подбирается текстовым местом модели мгновенно и без внешнего
+// сервиса — догонять нечего (ADR-009).
 public static class ImageBackfillKinds
 {
-    public const string ProjectIcon = "project-icon";
     public const string PersonaAvatar = "persona-avatar";
 
     public static bool IsKnown(string? kind) =>
-        kind is ProjectIcon or PersonaAvatar;
+        kind is PersonaAvatar;
 }
 
 // Заявка очереди: «этой сущности не хватает картинки». Живёт до тех пор, пока картинка

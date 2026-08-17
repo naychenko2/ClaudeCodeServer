@@ -38,10 +38,6 @@ public class ProjectManager
         Load();
     }
 
-    // Папка с ассетами иконок проектов: data/project-icons/ (рядом со стором projects.json).
-    // Ассеты конкретного проекта — data/project-icons/{id}/ (аналог PersonaManager.AssetsDir).
-    public string IconsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "project-icons");
-
     // Тайлы фонов: data/project-backgrounds/{id}/tile-{guid}.svg (ADR-008 §6).
     // В бэкап едут по общему правилу — исключений и своего способа копирования не требуют.
     public string BackgroundsDir => Path.Combine(Path.GetDirectoryName(_storePath)!, "project-backgrounds");
@@ -226,40 +222,23 @@ public class ProjectManager
         return project;
     }
 
-    // Установить сгенерированную иконку-картинку. Оригинал/кроп загруженного файла теряют смысл.
-    public Project SetIconImage(string id, string imageFile)
+    // Установить подобранный значок (ADR-009 §6): Kind = Glyph, Glyph = {Name|Paths, SetAt}.
+    // Значок обязан пройти валидацию ДО вызова (контроллер, ProjectIconGlyphService.ValidateGlyph) —
+    // инвариант «валидация на входе в стор» (§11.3).
+    public Project SetIconGlyph(string id, ProjectGlyph glyph)
     {
         var project = _projects.GetValueOrDefault(id)
             ?? throw new KeyNotFoundException($"Проект не найден: {id}");
-        DeleteAsset(id, project.Icon.OriginalFile, keep: null);
-        project.Icon.Kind = ProjectIconKind.Image;
-        project.Icon.ImageFile = imageFile;
-        project.Icon.OriginalFile = null;
-        project.Icon.Crop = null;
+        project.Icon.Kind = ProjectIconKind.Glyph;
+        project.Icon.Glyph = glyph;
         project.UpdatedAt = DateTime.UtcNow;
         Save();
         return project;
     }
 
-    // Загруженная иконка: кропнутая картинка + оригинал (для перекропа) + параметры кропа.
-    public Project SetIconUploaded(string id, string imageFile, string originalFile, AvatarCropState? crop)
-    {
-        var project = _projects.GetValueOrDefault(id)
-            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
-        DeleteAsset(id, project.Icon.ImageFile, keep: imageFile);
-        DeleteAsset(id, project.Icon.OriginalFile, keep: originalFile);
-        project.Icon.Kind = ProjectIconKind.Image;
-        project.Icon.ImageFile = imageFile;
-        project.Icon.OriginalFile = originalFile;
-        project.Icon.Crop = crop;
-        project.UpdatedAt = DateTime.UtcNow;
-        Save();
-        return project;
-    }
-
-    // Переключить режим отображения иконки (буквы ↔ картинка) БЕЗ стирания файлов картинки —
-    // это «путь назад» на инициалы с сохранённой картинкой (и обратно). Переход в Image
-    // допустим только при наличии ImageFile (иначе показывать нечего) — гарантирует контроллер.
+    // Переключить режим отображения иконки (инициалы ↔ значок) БЕЗ стирания значка —
+    // это «путь назад» на инициалы с сохранённым значком (и обратно). Переход в Glyph
+    // допустим только при наличии Glyph (иначе показывать нечего) — гарантирует контроллер.
     public Project SetIconKind(string id, ProjectIconKind kind)
     {
         var project = _projects.GetValueOrDefault(id)
@@ -270,25 +249,22 @@ public class ProjectManager
         return project;
     }
 
-    // Перекроп существующего оригинала: заменяется только кропнутая картинка и параметры.
-    public Project SetIconRecropped(string id, string imageFile, AvatarCropState? crop)
+    // Установить значок фоновой миграцией (ADR-009 §10). Отличается от SetIconGlyph двумя
+    // вещами: UpdatedAt НЕ трогаем — по нему сортируется список проектов, и массовая
+    // миграция перетасовала бы его целиком (та же причина, что у методов фона ниже); а
+    // проверка «значка ещё нет» идёт под тем же локом, что и запись — выбор пользователя,
+    // случившийся между отбором кандидатов миграции и обработкой, не перетирается.
+    public bool TrySetIconGlyphMigrated(string id, ProjectGlyph glyph)
     {
-        var project = _projects.GetValueOrDefault(id)
-            ?? throw new KeyNotFoundException($"Проект не найден: {id}");
-        DeleteAsset(id, project.Icon.ImageFile, keep: imageFile);
-        project.Icon.Kind = ProjectIconKind.Image;
-        project.Icon.ImageFile = imageFile;
-        project.Icon.Crop = crop;
-        project.UpdatedAt = DateTime.UtcNow;
-        Save();
-        return project;
-    }
-
-    // Удалить файл-ассет иконки проекта (кроме keep); ошибки удаления не критичны
-    private void DeleteAsset(string projectId, string? file, string? keep)
-    {
-        if (string.IsNullOrEmpty(file) || file == keep) return;
-        try { File.Delete(Path.Combine(IconsDir, projectId, file)); } catch { /* не критично */ }
+        lock (_saveLock)
+        {
+            var project = _projects.GetValueOrDefault(id);
+            if (project is null || project.Icon.Glyph is not null) return false;
+            project.Icon.Kind = ProjectIconKind.Glyph;
+            project.Icon.Glyph = glyph;
+            JsonFileStore.Save(_storePath, _projects.Values.ToList());
+            return true;
+        }
     }
 
     // === Фон проекта (ADR-008) ===
@@ -563,14 +539,8 @@ public class ProjectManager
         var removed = _projects.TryRemove(id, out _);
         if (removed)
         {
-            // Чистим ассеты иконки проекта (best-effort, как у PersonaManager.Delete)
-            try
-            {
-                var dir = Path.Combine(IconsDir, id);
-                if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true);
-            }
-            catch { /* не критично */ }
-            // …и тайлы фона: осиротевших файлов не остаётся, сборщика сирот не требуется
+            // Ассетов у иконки больше нет (ADR-009 §6) — чистим только тайлы фона:
+            // осиротевших файлов не остаётся, сборщика сирот не требуется
             try
             {
                 var dir = Path.Combine(BackgroundsDir, id);

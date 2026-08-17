@@ -6,7 +6,7 @@ import { Modal, ModalActions, TextField, Field, SegmentedControl } from '../../.
 import { GroupSelect } from '../GroupSelect';
 import { SyncToggleRow } from '../components/SyncToggleRow';
 import { GIT_MODES, GitModeCard, GitPushRow, type GitMode } from '../components/GitModeCards';
-import { ProjectIconSection, type DraftIcon } from '../ProjectIconSection';
+import { ProjectIconSection, type DraftGlyph } from '../ProjectIconSection';
 import { invalidateProjectsCache } from '../useAllProjects';
 import { basename } from '../../../lib/paths';
 
@@ -31,7 +31,9 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
   const [gitMode, setGitMode] = useState<GitMode>('none');
   const [gitPush, setGitPush] = useState(false);
   const [color, setColor] = useState<string | null>(null);
-  const [draftIcon, setDraftIcon] = useState<DraftIcon | null>(null);
+  // Подобранный значок держим до create(); после create() досылаем selectIcon.
+  // null — не подбирали: у проекта будут инициалы (как до фичи, ADR-009 §7).
+  const [draftGlyph, setDraftGlyph] = useState<DraftGlyph | null>(null);
   const [error, setError] = useState('');
   // Имя, набранное руками: пока его нет, для существующей папки название
   // подставляется из последнего сегмента пути (очистка поля снова включает автоподстановку).
@@ -61,15 +63,16 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         gitAutoCommit: gitMode === 'auto',
         gitAutoPush: gitMode === 'auto' && gitPush,
       }, color);
-      // Картинку иконки прикрепляем ВТОРЫМ вызовом к уже созданному проекту (best-effort, как git):
-      // загрузка своего файла — uploadIcon (есть оригинал+кроп), генеративная — setIconImageFile.
-      // Сбой не отменяет создание — иконку можно задать в «Редактировать проект».
+      // Значок досылаем best-effort тем же selectIcon, что и в Edit (ADR-009 §8): тот
+      // же валидатор на входе, тот же контракт. Сбой не отменяет создание — значок
+      // можно подобрать в «Редактировать проект» (как раньше с генеративной иконкой).
       let created = p;
-      if (draftIcon) {
+      if (draftGlyph && (draftGlyph.name || (draftGlyph.paths && draftGlyph.paths.length))) {
         try {
-          created = draftIcon.original
-            ? await api.projects.uploadIcon(p.id, draftIcon.original, draftIcon.blob, draftIcon.crop!)
-            : await api.projects.setIconImageFile(p.id, draftIcon.blob);
+          created = await api.projects.selectIcon(p.id, {
+            name: draftGlyph.name ?? null,
+            paths: draftGlyph.paths ?? null,
+          });
         } catch { /* проект создан, иконку можно доставить в настройках проекта */ }
       }
       if (sync) api.sync.add(p.id, '', true).catch(() => {});
@@ -102,18 +105,25 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
         options={[{ value: 'new', label: 'Новый' }, { value: 'existing', label: 'Существующий' }]}
       />
 
-      {/* Иконка + название проекта (тот же блок, что в «Редактировать проект»). В режиме создания
-          картинка (генерация/загрузка) держится в draftIcon и прикрепляется после create().
-          Черновой Project несёт актуальные name/color для живого превью инициалов. */}
+      {/* Иконка + название проекта (тот же блок, что в «Редактировать проект»). В режиме
+          создания значок держится в draftGlyph (name/paths) и крепится через selectIcon
+          после create(). Черновой Project несёт актуальные name/color для превью. */}
       <ProjectIconSection
         creating
-        project={{ id: '', name, rootPath: '', createdAt: '', updatedAt: '', icon: { kind: 'initials', color: color ?? undefined } }}
+        project={{
+          id: '', name, rootPath: '', createdAt: '', updatedAt: '',
+          icon: {
+            kind: 'glyph',
+            color: color ?? undefined,
+            glyph: draftGlyph ? { name: draftGlyph.name ?? null, paths: draftGlyph.paths ?? null } : null,
+          },
+        }}
         name={name}
         onNameChange={handleNameChange}
         color={color}
         onColorChange={setColor}
         onIconUpdated={() => {}}
-        onDraftIconChange={setDraftIcon}
+        onDraftGlyphChange={setDraftGlyph}
       />
 
       {mode === 'existing' && (

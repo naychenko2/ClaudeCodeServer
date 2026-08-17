@@ -1,19 +1,17 @@
 namespace ClaudeHomeServer.Services.Images;
 
-// Места применения генератора. Их ровно два, и настройка у каждого своя: иконке нужна
-// плоская эмблема без рамки, аватару — портрет, поэтому один сервис может устраивать
-// человека в одном месте и не устраивать в другом. Ключи стабильные: уходят в API и в UI
-// и совпадают с ImageBackfillKinds.* — заявка очереди сама называет своё место.
+// Места применения генератора. Место одно — аватар персоны (там лицо, SVG не годится);
+// иконка проекта ушла из картинок: значок подбирается текстовым местом модели и
+// собирается как SVG (ADR-009). Ключи стабильные: уходят в API и в UI и совпадают с
+// ImageBackfillKinds.* — заявка очереди сама называет своё место.
 public static class ImagePlaces
 {
-    public const string ProjectIcon = "project-icon";
     public const string PersonaAvatar = "persona-avatar";
 
-    public static readonly string[] All = [ProjectIcon, PersonaAvatar];
+    public static readonly string[] All = [PersonaAvatar];
 
     public static string TitleOf(string? place) => place switch
     {
-        ProjectIcon => "Иконка проекта",
         PersonaAvatar => "Аватар персоны",
         _ => place ?? "",
     };

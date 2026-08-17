@@ -9,6 +9,14 @@ export interface ModelTiers {
   weak: string | null;
 }
 
+// Кандидат значка проекта (ADR-009 §2.2): заполнено ровно одно из полей.
+// name — имя lucide-иконки из белого списка; paths — нарисованные моделью строки d.
+// Сервер валидирует оба варианта; на фронте достаточно хранить как есть.
+export interface GlyphCandidate {
+  name?: string | null;
+  paths?: string[] | null;
+}
+
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
@@ -370,98 +378,43 @@ export const api = {
       }),
     delete: (id: string) => request<void>(`/projects/${id}`, { method: 'DELETE' }),
 
-    // --- Иконка проекта (по образцу аватара персоны) ---
-    // Можно ли генерировать иконку (настроен ли fal)
-    iconCaps: () => request<{ generate: boolean }>('/projects/icon/caps'),
-    // Генерация галереи кандидатов: возвращает имена файлов (иконка НЕ меняется до выбора). count 1..4.
-    // timeoutMs — под серверный бюджет генерации: у glif он 360 с (GlifImageGenerator),
-    // и с дефолтными 30 с браузер обрывал бы запрос раньше ответа — вместе с признаком
-    // queued, по которому мы обещаем «иконка появится сама».
-    generateIcon: (id: string, opts?: { prompt?: string; count?: number }) =>
-      request<{ candidates: string[] }>(`/projects/${encodeURIComponent(id)}/icon/generate`, {
-        method: 'POST',
-        body: JSON.stringify({ prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
-        timeoutMs: 400_000,
-      }),
-    // Выбор кандидата — он становится иконкой проекта, возвращается обновлённый проект
-    selectIcon: (id: string, file: string) =>
+    // --- Значок проекта (ADR-009: SVG, белый список lucide, модельный подбор) ---
+    // Кандидаты двух видов: name (из белого списка) или paths (нарисованные моделью).
+    // Бэк валидирует имя по членству в LucideGlyphs.All и пути по алфавиту/лимитам.
+    // Стор не меняется: возвращаются до 4 кандидатов, фронт сам выбирает и зовёт select.
+    suggestIcon: (id: string, opts?: { prompt?: string }) =>
+      request<{ candidates: GlyphCandidate[]; failReason?: string | null }>(
+        `/projects/${encodeURIComponent(id)}/icon/suggest`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ prompt: opts?.prompt?.trim() || undefined }),
+        },
+      ),
+    // Кандидаты ДО создания проекта (диалог «Добавить проект»): серверная сторона не
+    // сохраняется, имя берётся из черновика названия.
+    suggestIconPreview: (opts?: { name?: string; prompt?: string }) =>
+      request<{ candidates: GlyphCandidate[]; failReason?: string | null }>(
+        '/projects/icon/suggest-preview',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            name: opts?.name?.trim() || undefined,
+            prompt: opts?.prompt?.trim() || undefined,
+          }),
+        },
+      ),
+    // Принять кандидата: сервер валидирует тело целиком (источник не доверен, ADR-009 §8),
+    // проставляет Kind=Glyph и Glyph, возвращает обновлённый проект.
+    selectIcon: (id: string, candidate: { name?: string | null; paths?: string[] | null }) =>
       request<Project>(`/projects/${encodeURIComponent(id)}/icon/select`, {
-        method: 'POST', body: JSON.stringify({ file }),
+        method: 'POST', body: JSON.stringify(candidate),
       }),
-    // Смена режима иконки (буквы ↔ картинка) без стирания картинки — «путь назад» на инициалы.
-    // Переход в 'image' на бэке требует наличия картинки (иначе 400).
-    setIconMode: (id: string, kind: 'initials' | 'image') =>
+    // Переключение режима отображения значка: буквы ↔ глиф. Файлов больше нет,
+    // Glyph не стирается — «Вернуть значок» показывает его снова на той же плитке.
+    setIconMode: (id: string, kind: 'initials' | 'glyph') =>
       request<Project>(`/projects/${encodeURIComponent(id)}/icon/mode`, {
         method: 'POST', body: JSON.stringify({ kind }),
       }),
-    // Генерация кандидатов иконки ДО создания проекта (диалог «Добавить проект»): байты
-    // приходят инлайн как data-url, на сервере ничего не сохраняется.
-    generateIconPreview: (opts?: { name?: string; prompt?: string; count?: number }) =>
-      request<{ candidates: { dataUrl: string }[] }>('/projects/icon/generate-preview', {
-        method: 'POST',
-        body: JSON.stringify({ name: opts?.name?.trim() || undefined, prompt: opts?.prompt?.trim() || undefined, count: opts?.count }),
-        timeoutMs: 400_000,
-      }),
-    // Прикрепить готовую картинку (генеративную, без оригинала/кропа) к уже созданному проекту —
-    // используется диалогом создания после create() для досыла сгенерированной иконки.
-    setIconImageFile: (id: string, image: Blob) => {
-      const form = new FormData();
-      form.append('image', image, 'icon.png');
-      return request<Project>(`/projects/${encodeURIComponent(id)}/icon/set-image`, {
-        method: 'POST', body: form, timeoutMs: 60_000,
-      });
-    },
-    // URL картинки-иконки для браузерного <img>: токен через ?access_token=, cache-busting по imageFile.
-    // Возвращает null, если у проекта нет картинки.
-    iconUrl: (project: Project): string | null => {
-      if (project.icon?.kind !== 'image' || !project.icon.imageFile) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
-      const params = new URLSearchParams();
-      if (token) params.set('access_token', token);
-      params.set('v', project.icon.imageFile);
-      return `/api/projects/${encodeURIComponent(project.id)}/icon?${params}`;
-    },
-    // Загрузка своей иконки: оригинал + кропнутый квадрат + параметры кропа
-    uploadIcon: (id: string, original: File, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
-      const form = new FormData();
-      form.append('original', original, original.name || 'original');
-      form.append('cropped', cropped, 'icon.jpg');
-      form.append('crop', JSON.stringify(crop));
-      return request<Project>(`/projects/${encodeURIComponent(id)}/icon/upload`, {
-        method: 'POST', body: form, timeoutMs: 60_000,
-      });
-    },
-    // Перекроп сохранённого оригинала (без повторной загрузки файла)
-    recropIcon: (id: string, cropped: Blob, crop: { scale: number; offsetX: number; offsetY: number }) => {
-      const form = new FormData();
-      form.append('cropped', cropped, 'icon.jpg');
-      form.append('crop', JSON.stringify(crop));
-      return request<Project>(`/projects/${encodeURIComponent(id)}/icon/recrop`, {
-        method: 'POST', body: form, timeoutMs: 60_000,
-      });
-    },
-    // URL оригинала загруженной иконки (для перекропа) — токен через ?access_token=
-    iconOriginalUrl: (project: Project): string | null => {
-      if (!project.icon?.originalFile) return null;
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
-      const params = new URLSearchParams();
-      if (token) params.set('access_token', token);
-      params.set('v', project.icon.originalFile);
-      return `/api/projects/${encodeURIComponent(project.id)}/icon/original?${params}`;
-    },
-    // URL картинки-кандидата (галерея генерации) для <img>: токен через ?access_token=
-    iconCandidateUrl: (id: string, file: string): string => {
-      const token = typeof localStorage !== 'undefined'
-        ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
-        : null;
-      const params = new URLSearchParams();
-      if (token) params.set('access_token', token);
-      return `/api/projects/${encodeURIComponent(id)}/icon/candidate/${encodeURIComponent(file)}?${params}`;
-    },
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
     // --- Фон рабочего пространства (фича project-backgrounds, ADR-008 §7) ---
     // Сгенерировать / перегенерировать фон. Тоже гейтится флагом+владением на бэке (404).

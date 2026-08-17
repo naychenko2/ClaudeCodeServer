@@ -24,5 +24,8 @@ public static class BackupSchema
     // 7 — новое значение PersonaSpecialty (DevopsExecutor): старый код не знает его и
     //     уронил бы десериализацию personas.json при восстановлении (тот же кейс, что 3→4
     //     для BackendExecutor/FrontendExecutor)
-    public const int Version = 7;
+    // 8 — из ProjectIcon удалены ImageFile/OriginalFile/Crop и значение enum Image, добавлен
+    //     Glyph (ADR-009 §6): старый код не знает поля Glyph и при первом же Save молча
+    //     вытер бы значки у всех проектов; Kind=1 (бывший Image) выведен из обращения
+    public const int Version = 8;
 }

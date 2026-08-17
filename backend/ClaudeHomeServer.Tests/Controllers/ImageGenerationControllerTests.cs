@@ -27,12 +27,11 @@ public class ImageProvidersFactory : TestWebApplicationFactory
     }
 }
 
-// Настройка генератора картинок для вкладки «Применение»: по месту (иконка проекта,
-// аватар персоны), чтение — всем, запись — админам.
+// Настройка генератора картинок для вкладки «Применение»: по месту (аватар персоны —
+// иконка проекта ушла к SVG-значкам, ADR-009), чтение — всем, запись — админам.
 public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactory>
 {
     private const string Url = "/api/image-generation";
-    private const string Icon = "project-icon";
     private const string Avatar = "persona-avatar";
 
     private readonly HttpClient _admin;
@@ -55,7 +54,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
         };
         var response = await _admin.PutAsJsonAsync(Url, new
         {
-            places = new Dictionary<string, object> { [Icon] = empty, [Avatar] = empty },
+            places = new Dictionary<string, object> { [Avatar] = empty },
         });
         response.StatusCode.Should().Be(HttpStatusCode.OK);
     }
@@ -88,10 +87,10 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
         models[0].GetProperty("id").GetString().Should().NotBeNullOrWhiteSpace();
         models[0].GetProperty("displayName").GetString().Should().NotBeNullOrWhiteSpace();
 
-        // Оба места — с названием, режимом и вычисленным активным провайдером
+        // Место — с названием, режимом и вычисленным активным провайдером
         body.GetProperty("places").EnumerateArray()
-            .Select(p => p.GetProperty("key").GetString()).Should().Equal(Icon, Avatar);
-        foreach (var key in new[] { Icon, Avatar })
+            .Select(p => p.GetProperty("key").GetString()).Should().Equal(Avatar);
+        foreach (var key in new[] { Avatar })
         {
             var place = Place(body, key);
             place.GetProperty("title").GetString().Should().NotBeNullOrWhiteSpace();
@@ -107,7 +106,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
     {
         var put = await _user.PutAsJsonAsync(Url, new
         {
-            places = new Dictionary<string, object> { [Icon] = new { provider = "fal" } },
+            places = new Dictionary<string, object> { [Avatar] = new { provider = "fal" } },
         });
         put.StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
@@ -120,7 +119,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
         // Явный выбор фолбэка не даёт — ненастроенный glif означал бы неработающую генерацию
         var put = await _admin.PutAsJsonAsync(Url, new
         {
-            places = new Dictionary<string, object> { [Icon] = new { provider = "glif" } },
+            places = new Dictionary<string, object> { [Avatar] = new { provider = "glif" } },
         });
         put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var body = await put.Content.ReadFromJsonAsync<JsonElement>();
@@ -128,7 +127,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
 
         // Настройка не изменилась
         var after = await _admin.GetFromJsonAsync<JsonElement>(Url);
-        Place(after, Icon).GetProperty("provider").GetString().Should().Be("auto");
+        Place(after, Avatar).GetProperty("provider").GetString().Should().Be("auto");
     }
 
     [Fact]
@@ -136,7 +135,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
     {
         var put = await _admin.PutAsJsonAsync(Url, new
         {
-            places = new Dictionary<string, object> { [Icon] = new { provider = "midjourney" } },
+            places = new Dictionary<string, object> { [Avatar] = new { provider = "midjourney" } },
         });
         put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var body = await put.Content.ReadFromJsonAsync<JsonElement>();
@@ -152,7 +151,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
         {
             places = new Dictionary<string, object>
             {
-                [Icon] = new { provider = "fal" },
+                [Avatar] = new { provider = "fal" },
                 ["chat-background"] = new { provider = "fal" },
             },
         });
@@ -162,7 +161,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
 
         // Валидные места из того же запроса тоже не применились
         var after = await _admin.GetFromJsonAsync<JsonElement>(Url);
-        Place(after, Icon).GetProperty("provider").GetString().Should().Be("auto");
+        Place(after, Avatar).GetProperty("provider").GetString().Should().Be("auto");
     }
 
     [Fact]
@@ -172,7 +171,7 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
         {
             places = new Dictionary<string, object>
             {
-                [Icon] = new { models = new Dictionary<string, string?> { ["fal"] = "fal-ai/нет-такой-модели" } },
+                [Avatar] = new { models = new Dictionary<string, string?> { ["fal"] = "fal-ai/нет-такой-модели" } },
             },
         });
         put.StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -190,57 +189,28 @@ public class ImageGenerationControllerTests : IClassFixture<ImageProvidersFactor
         {
             places = new Dictionary<string, object>
             {
-                [Icon] = new { models = new Dictionary<string, string?> { ["fal"] = "fal-ai/flux/dev" } },
+                [Avatar] = new { models = new Dictionary<string, string?> { ["fal"] = "fal-ai/flux/dev" } },
             },
         });
         models.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await models.Content.ReadFromJsonAsync<JsonElement>();
-        Place(body, Icon).GetProperty("provider").GetString().Should().Be("auto");
-        ModelOf(body, Icon, "fal").Should().Be("fal-ai/flux/dev");
+        Place(body, Avatar).GetProperty("provider").GetString().Should().Be("auto");
+        ModelOf(body, Avatar, "fal").Should().Be("fal-ai/flux/dev");
 
         // Только провайдер: модель не прислана — прежняя остаётся на месте
         var provider = await _admin.PutAsJsonAsync(Url, new
         {
-            places = new Dictionary<string, object> { [Icon] = new { provider = "fal" } },
+            places = new Dictionary<string, object> { [Avatar] = new { provider = "fal" } },
         });
         provider.StatusCode.Should().Be(HttpStatusCode.OK);
         body = await provider.Content.ReadFromJsonAsync<JsonElement>();
-        Place(body, Icon).GetProperty("provider").GetString().Should().Be("fal");
-        ModelOf(body, Icon, "fal").Should().Be("fal-ai/flux/dev");
+        Place(body, Avatar).GetProperty("provider").GetString().Should().Be("fal");
+        ModelOf(body, Avatar, "fal").Should().Be("fal-ai/flux/dev");
 
         // И то же самое после перечитывания
         body = await _admin.GetFromJsonAsync<JsonElement>(Url);
-        Place(body, Icon).GetProperty("provider").GetString().Should().Be("fal");
-        ModelOf(body, Icon, "fal").Should().Be("fal-ai/flux/dev");
-
-        await ResetAsync();
-    }
-
-    [Fact]
-    public async Task МестаНастраиваютсяОтдельно()
-    {
-        await ResetAsync();
-
-        var put = await _admin.PutAsJsonAsync(Url, new
-        {
-            places = new Dictionary<string, object>
-            {
-                [Icon] = new
-                {
-                    provider = "fal",
-                    models = new Dictionary<string, string?> { ["fal"] = "fal-ai/flux/dev" },
-                },
-            },
-        });
-        put.StatusCode.Should().Be(HttpStatusCode.OK);
-
-        var body = await _admin.GetFromJsonAsync<JsonElement>(Url);
-        Place(body, Icon).GetProperty("provider").GetString().Should().Be("fal");
-        ModelOf(body, Icon, "fal").Should().Be("fal-ai/flux/dev");
-
-        // Аватар остался на своей настройке — правка иконки его не касается
-        Place(body, Avatar).GetProperty("provider").GetString().Should().Be("auto");
-        ModelOf(body, Avatar, "fal").Should().BeNull();
+        Place(body, Avatar).GetProperty("provider").GetString().Should().Be("fal");
+        ModelOf(body, Avatar, "fal").Should().Be("fal-ai/flux/dev");
 
         await ResetAsync();
     }

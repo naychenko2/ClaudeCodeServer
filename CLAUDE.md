@@ -154,10 +154,10 @@ Claude Design проект: `52adb1f7-312b-4f25-8c47-2bccfca9df94`. Ключев
 
 ## Генератор картинок (Services/Images)
 
-Иконку проекта и аватар персоны рисует слой драйверов `IImageGenerator` (fal.ai — синхронный,
+Аватар персоны рисует слой драйверов `IImageGenerator` (fal.ai — синхронный,
 glif — `compose_project` + опрос джобы) за роутером `ImageGenerationService`. Провайдера
 (Автоматически | fal.ai | glif) и модель выбирает админ **отдельно для каждого места**
-(`ImagePlaces`: `project-icon`, `persona-avatar`) — секция «Картинки» вкладки «Применение»
+(`ImagePlaces` — сейчас одно: `persona-avatar`) — секция «Картинки» вкладки «Применение»
 (`GET/PUT /api/image-generation`, стор `data/image-generation.json` поверх секции конфига
 `Images`). Модель выбирается только у fal; в «Автоматически» (порядок `glif` → `fal`) и у glif
 её подбирает сам генератор. Инвариант тот же, что у моделей:
@@ -165,6 +165,16 @@ glif — `compose_project` + опрос джобы) за роутером `Image
 Не нарисовалось (сервис не настроен, отказ) — сущность живёт на инициалах, а картинку догоняет
 очередь `ImageBackfillService` (`data/image-backfill.json`, событие `image_backfilled`).
 Детали — [docs/features/image-generation.md](docs/features/image-generation.md).
+
+## Значок проекта (Services/ProjectIcons)
+
+Иконка проекта — **не картинка**: модель по названию проекта отдаёт либо имя иконки из
+белого списка lucide (`LucideGlyphs`, серверная копия ключей карты `GLYPHS` фронта), либо
+1–4 строки `d` в `viewBox 24`; разметки от модели не приходит никогда, SVG собирает
+`GlyphSvg.Build` через `XmlWriter`. Место модели — `project-icon` в `LocalActionCatalog`,
+любой сбой молча оставляет инициалы. Контракт ответа, валидация путей, белый список и форма
+хранения — [ADR-009](docs/adr/ADR-009-project-icon-glyph.md); тексты интерфейса —
+[docs/features/project-icon-glyphs.md](docs/features/project-icon-glyphs.md).
 
 ## Claude Code CLI subprocess
 

@@ -101,6 +101,9 @@ public static class LocalActionCatalog
     public const string DossierSummary = "dossier-summary";
     // Фон проекта (ADR-008): JSON со списком фигур дудла и ключом цвета палитры
     public const string ProjectBackground = "project-background";
+    // Значок проекта (ADR-009): имя иконки из белого списка lucide либо нарисованные
+    // моделью path'ы в viewBox 24; разметку собирает сервер (GlyphSvg.Build)
+    public const string ProjectIcon = "project-icon";
 
     // Дефолты профилей. Переопределяются
     // Ollama:Profiles:{small|text|large}:{NumCtx|NumPredict|TimeoutMs|CloudTimeoutMs|CloudNumPredict}.
@@ -205,6 +208,13 @@ public static class LocalActionCatalog
         // «сойдёт за успех» тут дороже честного отказа.
         new(ProjectBackground, "Фон проекта", "Проекты", CheapProfile.Large,
             DefaultLocal: false, Tier: ModelTier.Strong),
+        // Значок проекта: Large — в промпт уходит весь белый список имён lucide, а на
+        // Small/Text потолок контекста обрежет его и модель начнёт выдумывать
+        // несуществующие имена. Локаль выключена по той же причине, что у фона:
+        // рисование SVG — не текстовая задача. Тир Medium: подобрать имя из готового
+        // списка проще, чем сочинить дудл на 14 фигур (ADR-009 §9).
+        new(ProjectIcon, "Значок проекта", "Проекты", CheapProfile.Large,
+            DefaultLocal: false, Tier: ModelTier.Medium),
     ];
 
     private static readonly Dictionary<string, LocalAction> ByKey =

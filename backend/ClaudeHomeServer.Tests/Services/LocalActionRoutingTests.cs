@@ -701,6 +701,77 @@ public class LocalActionRoutingTests
         Assert.Equal("CLAUDE[glm-5.2]:prompt-text", result);
     }
 
+    // --- Слот-пресет: значение слота разворачивается в конкретную модель (дефект места
+    //     project-icon: маркер preset:… уходил в CLI как имя модели → no-model) ---
+
+    // Раннер с полным набором зависимостей разворачивания (как DI): слоты, пресеты,
+    // ModelAssignmentResolver — та же точка, что и у маршрутных пресетов.
+    private static (CheapTextRunner Runner, FakeOneShot Claude, AppSettingsService App,
+        UserStore Users, SpecialtySettingsStore Specialty) BuildCheapRunnerWithResolver()
+    {
+        var config = ConfigWithTempData(new() { ["Ollama:Model"] = "" });
+        var appSettings = new AppSettingsService(config);
+        var users = new UserStore(config, new FakeHostEnvironment(), NullLogger<UserStore>.Instance);
+        var userTiers = new UserModelTierResolver(users, appSettings);
+        var store = Store(config);
+        var specialty = Specialty(config);
+        var router = new LocalActionRouter(Ollama(config), store, config, NullLogger<LocalActionRouter>.Instance);
+        var assignment = new ModelAssignmentResolver(appSettings, store, userTiers, specialty);
+        var claude = new FakeOneShot();
+        var runner = new CheapTextRunner(router, Ollama(config), Cloud(config), claude,
+            NullLogger<CheapTextRunner>.Instance, appSettings, userTiers, assignment);
+        return (runner, claude, appSettings, users, specialty);
+    }
+
+    [Fact]
+    public async Task CheapRunner_СлотПресет_РазворачиваетсяВМодельПервогоШага()
+    {
+        // Место БЕЗ явного админ-маршрута (дефолт каталога — слот уровня): слот medium =
+        // preset:p1. Дефект: строка "preset:p1" уходила в CLI как имя модели → no-model.
+        var (runner, claude, app, _, specialty) = BuildCheapRunnerWithResolver();
+        app.Save(new AppSettings { ModelTierMedium = "preset:p1" });
+        specialty.SetGlobal(new SpecialtySettingsLayer { Presets = { Preset("p1", "glm-5.2", "deepseek") } });
+
+        var result = await runner.RunAsync(LocalActionCatalog.Changelog, "prompt-text", "haiku");
+
+        // В CLI идёт конкретная модель первого шага цепочки, а не маркер preset:p1
+        Assert.Equal("CLAUDE[glm-5.2]:prompt-text", result);
+        Assert.Equal(["glm-5.2"], claude.Calls);
+    }
+
+    [Fact]
+    public async Task CheapRunner_СлотПресет_БитаяСсылка_ОткатНаМодельДействия()
+    {
+        // Слот ссылается на удалённый пресет: fail-open на модель действия (haiku) + warning,
+        // а не невнятный no-model от CLI с "preset:no-such" в качестве имени модели.
+        var (runner, claude, app, _, _) = BuildCheapRunnerWithResolver();
+        app.Save(new AppSettings { ModelTierMedium = "preset:no-such" });
+
+        var result = await runner.RunAsync(LocalActionCatalog.Changelog, "prompt-text", "haiku");
+
+        Assert.Equal("CLAUDE[haiku]:prompt-text", result);
+        Assert.Equal(["haiku"], claude.Calls);
+        claude.Calls.Should().NotContain(c => c != null && c.StartsWith("preset:"),
+            "маркер пресета не должен доходить до CLI как имя модели");
+    }
+
+    [Fact]
+    public async Task CheapRunner_СлотПресет_TierШаг_РезолвитсяПоСлотуВладельца()
+    {
+        // Первый шаг цепочки — tier:weak: разворачивается по слоту ВЛАДЕЛЬЦА действия
+        // (личный слот сильнее глобального), как и любой tier-шаг агентной ветки.
+        var (runner, claude, app, users, specialty) = BuildCheapRunnerWithResolver();
+        app.Save(new AppSettings { ModelTierMedium = "preset:p1", ModelTierWeak = "slot-haiku" });
+        var u1 = users.Add("u1", "p", "user");
+        users.SetModelTiers(u1.Id, null, null, weak: "user-haiku");
+        specialty.SetGlobal(new SpecialtySettingsLayer { Presets = { Preset("p1", "tier:weak", "glm-5.2") } });
+
+        var result = await runner.RunAsync(LocalActionCatalog.Changelog, "prompt-text", "haiku", ownerId: u1.Id);
+
+        Assert.Equal("CLAUDE[user-haiku]:prompt-text", result);
+        Assert.Equal(["user-haiku"], claude.Calls);
+    }
+
     // --- Агентные места (группа «Чаты и персоны») и ModelAssignmentResolver ---
 
     [Fact]

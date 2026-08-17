@@ -281,6 +281,13 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner,
     ClaudeHomeServer.Services.Llm.CheapTextRunner>();
 // Фон рабочего пространства проекта: JSON от модели → собранный сервером SVG-тайл (ADR-008)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundService>();
+// Значок проекта: текстовый ход по названию → кандидаты (имя lucide | пути), разметку
+// собирает GlyphSvg (ADR-009); без состояния, синглтон как и остальные места модели
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconGlyphService>();
+// Разовая миграция значков существующим проектам (ADR-009 §10): бэкап → прогон → удаление
+// растровых иконок; идемпотентна, при полностью мигрированном сторе старт — чистый no-op
+builder.Services.AddSingleton<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigration>();
+AddHosted<ClaudeHomeServer.Services.ProjectIcons.ProjectIconMigrationService>();
 // Разовая генерация фонов существующим проектам при включении флага (ADR-008 §10) плюс
 // подстраховка на старте: прогон идемпотентен, повторный запуск ничего не перетирает
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backgrounds.ProjectBackgroundBackfill>();

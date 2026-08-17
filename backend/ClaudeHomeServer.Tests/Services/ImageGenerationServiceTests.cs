@@ -9,7 +9,6 @@ namespace ClaudeHomeServer.Tests.Services;
 // ни один провайдер.
 public class ImageGenerationServiceTests
 {
-    private const string Icon = ImagePlaces.ProjectIcon;
     private const string Avatar = ImagePlaces.PersonaAvatar;
 
     // Драйвер-заглушка: считает вызовы и запоминает модель, с которой его позвали
@@ -55,10 +54,10 @@ public class ImageGenerationServiceTests
         var glif = new FakeGenerator("glif", enabled: false);
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()));
 
-        Assert.True(service.EnabledFor(Icon));
-        Assert.Equal("fal", service.ActiveProviderFor(Icon)?.Key);
+        Assert.True(service.EnabledFor(Avatar));
+        Assert.Equal("fal", service.ActiveProviderFor(Avatar)?.Key);
 
-        var images = await service.GenerateManyAsync(Icon, "кот", 1);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1);
 
         Assert.Single(images);
         Assert.Equal(1, fal.Calls);
@@ -87,7 +86,7 @@ public class ImageGenerationServiceTests
         var fal = new FakeGenerator("fal", enabled: true);
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()));
 
-        var images = await service.GenerateManyAsync(Icon, "кот", 2);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 2);
 
         Assert.Single(images);
         Assert.Equal(1, glif.Calls);
@@ -100,11 +99,11 @@ public class ImageGenerationServiceTests
         var fal = new FakeGenerator("fal", enabled: true);
         var glif = new FakeGenerator("glif", enabled: true, returnsImages: false);
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()));
-        Assert.Null(service.UpdateSettings(Icon, "glif"));
+        Assert.Null(service.UpdateSettings(Avatar, "glif"));
 
-        Assert.Equal("glif", service.ActiveProviderFor(Icon)?.Key);
+        Assert.Equal("glif", service.ActiveProviderFor(Avatar)?.Key);
 
-        var images = await service.GenerateManyAsync(Icon, "кот", 1);
+        var images = await service.GenerateManyAsync(Avatar, "кот", 1);
 
         Assert.Empty(images);           // выбранный провайдер вернул пусто — молча на fal не уходим
         Assert.Equal(0, fal.Calls);
@@ -120,8 +119,8 @@ public class ImageGenerationServiceTests
         var service = new ImageGenerationService([fal, glif],
             Store(NewTempDir(), ("Images:Provider", "glif")));
 
-        Assert.False(service.EnabledFor(Icon));
-        Assert.Empty(await service.GenerateManyAsync(Icon, "кот", 1));
+        Assert.False(service.EnabledFor(Avatar));
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1));
         Assert.Equal(0, fal.Calls);
     }
 
@@ -133,40 +132,9 @@ public class ImageGenerationServiceTests
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()));
 
         Assert.False(service.AnyEnabled);
-        Assert.False(service.EnabledFor(Icon));
+        Assert.False(service.EnabledFor(Avatar));
         Assert.Null(service.ActiveProviderFor(Avatar));
-        Assert.Empty(await service.GenerateManyAsync(Icon, "кот", 1));
-    }
-
-    [Fact]
-    public async Task МестаНезависимы_СвойПровайдерИСвояМодель()
-    {
-        var tempDir = NewTempDir();
-        var fal = new FakeGenerator("fal", enabled: true)
-        {
-            Models = [new ImageModelInfo("fal-ai/flux/dev", "FLUX dev")],
-        };
-        var glif = new FakeGenerator("glif", enabled: true);
-        var service = new ImageGenerationService([fal, glif], Store(tempDir));
-
-        // Иконка — на fal с конкретной моделью, аватар оставляем на auto (то есть glif)
-        Assert.Null(service.UpdateSettings(Icon, "fal",
-            new Dictionary<string, string?> { ["fal"] = "fal-ai/flux/dev" }));
-
-        Assert.Equal("fal", service.ActiveProviderFor(Icon)?.Key);
-        Assert.Equal("glif", service.ActiveProviderFor(Avatar)?.Key);
-
-        await service.GenerateManyAsync(Icon, "эмблема", 1);
-        Assert.Equal(1, fal.Calls);
-        Assert.Equal("fal-ai/flux/dev", fal.LastModel);
-
-        await service.GenerateManyAsync(Avatar, "портрет", 1);
-        Assert.Equal(1, glif.Calls);
-        Assert.Equal(1, fal.Calls);      // выбор иконки на аватар не повлиял
-
-        // Модель места fal у аватара не задана — драйвер идёт на свой дефолт
-        Assert.Equal("fal-ai/flux/dev", service.ModelFor(Icon, "fal"));
-        Assert.Null(service.ModelFor(Avatar, "fal"));
+        Assert.Empty(await service.GenerateManyAsync(Avatar, "кот", 1));
     }
 
     [Fact]
@@ -176,7 +144,7 @@ public class ImageGenerationServiceTests
         var service = new ImageGenerationService([fal],
             Store(NewTempDir(), ("Images:Models:fal", "fal-ai/flux/dev")));
 
-        await service.GenerateManyAsync(Icon, "кот", 1);
+        await service.GenerateManyAsync(Avatar, "кот", 1);
         Assert.Equal("fal-ai/flux/dev", fal.LastModel);
         Assert.Equal("fal-ai/flux/dev", service.ModelFor(Avatar, "fal"));
     }
@@ -192,21 +160,19 @@ public class ImageGenerationServiceTests
         var glif = new FakeGenerator("glif", enabled: true);
         var service = new ImageGenerationService([fal, glif], Store(tempDir));
 
-        Assert.Null(service.UpdateSettings(Icon, "glif", new Dictionary<string, string?> { ["fal"] = "fal-ai/flux/dev" }));
-        Assert.Equal("glif", service.ModeFor(Icon));
-        Assert.Equal("fal-ai/flux/dev", service.ModelFor(Icon, "fal"));
+        Assert.Null(service.UpdateSettings(Avatar, "glif", new Dictionary<string, string?> { ["fal"] = "fal-ai/flux/dev" }));
+        Assert.Equal("glif", service.ModeFor(Avatar));
+        Assert.Equal("fal-ai/flux/dev", service.ModelFor(Avatar, "fal"));
 
         // Неизвестное место, неизвестный провайдер и модель не из курируемого списка — отказ с текстом
         Assert.NotNull(service.UpdateSettings("chat-background", "fal"));
-        Assert.NotNull(service.UpdateSettings(Icon, "midjourney"));
-        Assert.NotNull(service.UpdateSettings(Icon, null, new Dictionary<string, string?> { ["fal"] = "нет-такой" }));
+        Assert.NotNull(service.UpdateSettings(Avatar, "midjourney"));
+        Assert.NotNull(service.UpdateSettings(Avatar, null, new Dictionary<string, string?> { ["fal"] = "нет-такой" }));
 
         // Настройка пережила рестарт (перечитали файл новым стором)
         var reloaded = new ImageGenerationService([fal, glif], Store(tempDir));
-        Assert.Equal("glif", reloaded.ModeFor(Icon));
-        Assert.Equal("fal-ai/flux/dev", reloaded.ModelFor(Icon, "fal"));
-        // Соседнее место не тронуто
-        Assert.Equal("auto", reloaded.ModeFor(Avatar));
+        Assert.Equal("glif", reloaded.ModeFor(Avatar));
+        Assert.Equal("fal-ai/flux/dev", reloaded.ModelFor(Avatar, "fal"));
     }
 
     [Fact]
@@ -216,15 +182,15 @@ public class ImageGenerationServiceTests
         var glif = new FakeGenerator("glif", enabled: false);
         var service = new ImageGenerationService([fal, glif], Store(NewTempDir()));
 
-        var error = service.UpdateSettings(Icon, "glif");
+        var error = service.UpdateSettings(Avatar, "glif");
 
         Assert.NotNull(error);
         Assert.Contains("не настроен", error);
-        Assert.Equal("auto", service.ModeFor(Icon));
+        Assert.Equal("auto", service.ModeFor(Avatar));
     }
 
     [Fact]
-    public void СтарыйФорматСтора_РаскладываетсяНаОбаМеста()
+    public void СтарыйФорматСтора_РаскладываетсяНаМесто()
     {
         var tempDir = NewTempDir();
         // Файл формата 1: один выбор на весь инстанс
@@ -240,12 +206,5 @@ public class ImageGenerationServiceTests
             Assert.Equal("fal", service.ModeFor(place));
             Assert.Equal("fal-ai/flux/dev", service.ModelFor(place, "fal"));
         }
-
-        // Правка одного места после миграции не сбрасывает соседнее
-        Assert.Null(service.UpdateSettings(Avatar, "glif"));
-        var reloaded = new ImageGenerationService([fal, glif], Store(tempDir));
-        Assert.Equal("fal", reloaded.ModeFor(Icon));
-        Assert.Equal("glif", reloaded.ModeFor(Avatar));
-        Assert.Equal("fal-ai/flux/dev", reloaded.ModelFor(Icon, "fal"));
     }
 }

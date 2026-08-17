@@ -76,6 +76,30 @@ public class BackupValidationTests : IDisposable
         BackupValidation.Validate(_dir).Should().NotBeEmpty();
     }
 
+    // Сторож от отката инкремента: формат projects.json сломан удалением
+    // ImageFile/OriginalFile/Crop и значения enum Image (ADR-009 §6) — архивы,
+    // снятые новой версией, обязаны отвергаться старым кодом с внятной ошибкой
+    [Fact]
+    public void ВерсияСхемы_Поднята8_ПослеУдаленияРастровыхИконокПроекта()
+    {
+        BackupSchema.Version.Should().Be(8);
+    }
+
+    [Fact]
+    public void СтараяЗаписьРастровойИконки_ПроходитВалидациюАрхива()
+    {
+        // projects.json до ADR-009: лишние для новой модели поля валидацию не роняют —
+        // десериализатор их игнорирует, Kind=1 (бывший Image) — легальное число
+        Write("users.json", ValidUsers);
+        Write("projects.json", """
+            [ { "Id": "p1", "Name": "Старый", "RootPath": "C:/x", "OwnerId": "u1",
+                "Icon": { "Kind": 1, "Color": "blue", "ImageFile": "icon-abc.png",
+                          "OriginalFile": "original-abc.png", "Crop": { "X": 1, "Y": 2, "Size": 3 } } } ]
+            """);
+
+        BackupValidation.Validate(_dir).Should().BeEmpty();
+    }
+
     [Fact]
     public void ОтсутствующиеНеобязательныеСторы_НеОшибка()
     {

@@ -337,62 +337,288 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
         body.GetProperty("tagRegistry").GetArrayLength().Should().Be(0);
     }
-}
 
-// Иконка проекта при выключенной генерации (оба провайдера без ключей):
-// caps отдаёт generate:false, а иконка не теряется — уходит в догоняющую очередь.
-public class ProjectsIconCapsTests : IClassFixture<NoImageProvidersFactory>
-{
-    private readonly NoImageProvidersFactory _factory;
-    private readonly HttpClient _client;
-    private readonly string _tempProjectDir;
+    // === Значок проекта (ADR-009 §8): suggest/select/mode/icon.svg ===
 
-    public ProjectsIconCapsTests(NoImageProvidersFactory factory)
+    // Стаб места модели: отвечает заготовленным JSON на любой вызов — как будто
+    // «Поставщики моделей» настроены и модель ответила по контракту ADR-009 §2.2
+    private sealed class StubCheapRunner(string reply) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
-        _factory = factory;
-        _client = factory.CreateAuthenticatedClient();
-        _tempProjectDir = Path.Combine(factory.TempDir, "projects");
-        Directory.CreateDirectory(_tempProjectDir);
+        public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(reply);
+        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+            CancellationToken ct = default) => Task.FromResult<string?>(reply);
+        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
+            => Task.FromResult<string?>(reply);
+        public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
+            string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(new ClaudeHomeServer.Services.Llm.OneShotResult(reply, null, 0));
+    }
+
+    // Годный ответ модели по контракту: 2 имени + 2 нарисованных, вперемешку
+    private const string ModelGlyphsReply =
+        """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"paths":["M3 21h18","M6 21V9l6-4 6 4v12"]},{"paths":["M4 18l5-4 4 4 7-4"]}]}""";
+
+    [Fact]
+    public async Task SuggestIcon_МодельНеНастроена_ПустыеКандидатыИПроектНеИзменён()
+    {
+        var project = await CreateProjectAsync("SuggestNoModel");
+        var id = project.GetProperty("id").GetString()!;
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/suggest", new { });
+
+        // Сбой модели — фолбэк, а не ошибка: пустой набор с причиной, проект на инициалах (ADR-009 §7)
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("candidates").GetArrayLength().Should().Be(0);
+        body.GetProperty("failReason").GetString().Should().NotBeNullOrEmpty();
+
+        var after = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync($"/api/projects/{id}")).Content.ReadAsStringAsync());
+        after.GetProperty("icon").GetProperty("kind").GetString().Should().Be("initials");
+        after.GetProperty("icon").GetProperty("glyph").ValueKind.Should().Be(JsonValueKind.Null);
     }
 
     [Fact]
-    public async Task IconCaps_БезНастроенныхПровайдеров_GenerateFalseБезПровайдераИМодели()
+    public async Task SuggestIcon_ОтветМодели_ДоЧетырёхКандидатовВперемешку()
     {
-        var response = await _client.GetAsync("/api/projects/icon/caps");
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = s => s.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(
+                new StubCheapRunner(ModelGlyphsReply)),
+        };
+        var client = factory.CreateAuthenticatedClient();
+        var dir = Path.Combine(factory.TempDir, "glyph-project");
+        Directory.CreateDirectory(dir);
+        var created = await client.PostAsJsonAsync("/api/projects", new { name = "GlyphTest", rootPath = dir });
+        created.EnsureSuccessStatusCode();
+        var id = JsonSerializer.Deserialize<JsonElement>(
+            await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
+
+        var response = await client.PostAsJsonAsync($"/api/projects/{id}/icon/suggest", new { prompt = "копилка" });
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
-        body.GetProperty("generate").GetBoolean().Should().BeFalse();
-        body.GetProperty("provider").ValueKind.Should().Be(JsonValueKind.Null);
-        body.GetProperty("model").ValueKind.Should().Be(JsonValueKind.Null);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var candidates = body.GetProperty("candidates");
+        candidates.GetArrayLength().Should().Be(4);
+        // Виды вперемешку: у первых двух только name, у остальных только paths
+        candidates[0].TryGetProperty("name", out var nameEl).Should().BeTrue();
+        nameEl.GetString().Should().Be("piggy-bank");
+        candidates[0].TryGetProperty("paths", out _).Should().BeFalse();
+        candidates[2].GetProperty("paths").GetArrayLength().Should().Be(2);
+
+        // Стор не меняется: candidates нигде не хранятся между вызовами (ADR-009 §8)
+        var after = JsonSerializer.Deserialize<JsonElement>(
+            await (await client.GetAsync($"/api/projects/{id}")).Content.ReadAsStringAsync());
+        after.GetProperty("icon").GetProperty("kind").GetString().Should().Be("initials");
+    }
+
+    // Стаб, чувствительный к пожеланию: годный JSON только когда подсказка дошла до
+    // построенного промпта; иначе «модель отвечает мусором», парсер отвергает —
+    // так тест ловит молчаливую потерю поля на биндинге (QA 2026-08-17: фронт шлёт "prompt")
+    private sealed class HintSensitiveCheapRunner(string hintMarker) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
+    {
+        public string? LastPrompt { get; private set; }
+
+        public bool UsesLocal(string actionKey) => false;
+        public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
+        public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
+            string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
+        {
+            LastPrompt = prompt;
+            return Task.FromResult(prompt.Contains(hintMarker, StringComparison.Ordinal) ? ModelGlyphsReply : "");
+        }
+        public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
+            CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
+            => Task.FromResult<string?>(null);
+        public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
+            string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
+            int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
+            => Task.FromResult(new ClaudeHomeServer.Services.Llm.OneShotResult("", null, 0));
     }
 
     [Fact]
-    public async Task GenerateIcon_БезНастроенныхПровайдеров_400ИЗаявкаВОчереди()
+    public async Task SuggestIcon_ПодсказкаИзПоляPrompt_ДоходитДоМоделиИВлияетНаРезультат()
     {
-        var dir = Path.Combine(_tempProjectDir, "icon_" + Guid.NewGuid().ToString("N")[..8]);
+        // Тест обязан идти через реальный пайплайн биндинга (PostAsJsonAsync): при откате
+        // [JsonPropertyName("prompt")] поле Hint не распакуется из тела, пожелание выпадет
+        // из промпта — и стаб ответит мусором вместо кандидатов.
+        var cheap = new HintSensitiveCheapRunner("копилка с монетками");
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = s => s.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(cheap),
+        };
+        var client = factory.CreateAuthenticatedClient();
+        var dir = Path.Combine(factory.TempDir, "glyph-hint-project");
         Directory.CreateDirectory(dir);
-        var created = await _client.PostAsJsonAsync("/api/projects", new { name = "БезИконки", rootPath = dir });
+        var created = await client.PostAsJsonAsync("/api/projects",
+            new { name = "GlyphHintTest", rootPath = dir });
         created.EnsureSuccessStatusCode();
-        var id = (await created.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("id").GetString()!;
+        var id = JsonSerializer.Deserialize<JsonElement>(
+            await created.Content.ReadAsStringAsync()).GetProperty("id").GetString()!;
 
-        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/generate", new { count = 1 });
+        var response = await client.PostAsJsonAsync($"/api/projects/{id}/icon/suggest",
+            new { prompt = "копилка с монетками" });
 
-        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
-        var error = (await response.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("error").GetString();
-        error.Should().NotContain("Fal:ApiKey");
-
-        var store = _factory.Services.GetRequiredService<ImageBackfillStore>();
-        store.Find(ImageBackfillKinds.ProjectIcon, id).Should().NotBeNull();
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        // Кандидаты есть только потому, что пожелание дошло до промпта и изменило ответ модели
+        body.GetProperty("candidates").GetArrayLength().Should().Be(4);
+        body.GetProperty("failReason").ValueKind.Should().Be(JsonValueKind.Null);
+        cheap.LastPrompt.Should().Contain("Что изобразить (пожелание владельца): копилка с монетками");
     }
 
-    // Проекта ещё нет — заявке не за что зацепиться, только внятный отказ
     [Fact]
-    public async Task GenerateIconPreview_БезНастроенныхПровайдеров_400()
+    public async Task SuggestIconPreview_МаршрутЗарегистрирован_Отвечает200СКандидатами()
     {
-        var response = await _client.PostAsJsonAsync("/api/projects/icon/generate-preview",
-            new { name = "Черновик", count = 1 });
+        // Дефект волны: маршрут не был зарегистрирован — POST отдавал 405. Любой
+        // не-200 (405/404) роняет тест, поэтому он чувствителен к снятию регистрации.
+        using var factory = new TestWebApplicationFactory
+        {
+            ExtraServices = s => s.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(
+                new StubCheapRunner(ModelGlyphsReply)),
+        };
+        var client = factory.CreateAuthenticatedClient();
+
+        var response = await client.PostAsJsonAsync("/api/projects/icon/suggest-preview",
+            new { name = "Домашняя бухгалтерия", prompt = "копилка" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        body.GetProperty("candidates").GetArrayLength().Should().Be(4);
+        body.GetProperty("failReason").ValueKind.Should().Be(JsonValueKind.Null);
+    }
+
+    [Fact]
+    public async Task SelectIcon_ИмяИзНабора_УстанавливаетЗначок()
+    {
+        var project = await CreateProjectAsync("SelectName");
+        var id = project.GetProperty("id").GetString()!;
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/select",
+            new { name = "wallet" });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        var icon = body.GetProperty("icon");
+        icon.GetProperty("kind").GetString().Should().Be("glyph");
+        icon.GetProperty("glyph").GetProperty("name").GetString().Should().Be("wallet");
+        icon.GetProperty("glyph").GetProperty("v").GetString().Should().HaveLength(8);
+
+        // Name-значок файла не имеет — icon.svg отдаёт 404 (ADR-009 §7, последняя строка)
+        var svg = await _client.GetAsync($"/api/projects/{id}/icon.svg");
+        svg.StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task SelectIcon_Пути_ОтдаютСобранныйСерверомSvg()
+    {
+        var project = await CreateProjectAsync("SelectPaths");
+        var id = project.GetProperty("id").GetString()!;
+
+        // Пример из ADR-009 §2.2 с координатами -5/-6 не проходит его же габарит §3.4 —
+        // здесь годные данные (тот же приём, что в тестах сервиса)
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/select",
+            new { paths = new[] { "M3 21h18", "M6 21V9l6-4 6 4v12" } });
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var svg = await _client.GetAsync($"/api/projects/{id}/icon.svg");
+
+        svg.StatusCode.Should().Be(HttpStatusCode.OK);
+        svg.Content.Headers.ContentType!.ToString().Should().Be("image/svg+xml");
+        svg.Headers.CacheControl!.ToString().Should().Contain("max-age=604800");
+        svg.Headers.CacheControl!.NoStore.Should().BeFalse();
+        svg.Headers.GetValues("X-Content-Type-Options").Should().Equal("nosniff");
+        svg.Headers.GetValues("Content-Security-Policy").Should().Equal("default-src 'none'");
+        var content = await svg.Content.ReadAsStringAsync();
+        content.Should().StartWith("<svg ");
+        content.Should().Contain("<path d=\"M3 21h18\"");
+        content.Should().Contain("stroke=\"currentColor\"");
+        // Ни байта разметки от модели: путь едет экранированным атрибутом, не тегом
+        content.Should().NotContainAny("<script", "onload");
+    }
+
+    [Theory]
+    [InlineData("not-a-lucide-name", null)]      // имя вне белого списка
+    [InlineData("wallet", "M3 21h18")]           // оба вида сразу
+    [InlineData(null, "M0 0e5 5")]               // экспонента в d
+    public async Task SelectIcon_НегодноеТело_400ИСторНеМеняется(string? name, string? path)
+    {
+        var project = await CreateProjectAsync("SelectBad");
+        var id = project.GetProperty("id").GetString()!;
+
+        object body = name is not null && path is not null
+            ? new { name, paths = new[] { path } }
+            : name is not null ? new { name } : new { paths = new[] { path! } };
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/select", body);
+
+        // Валидация стоит на входе в стор: клиент — такой же недоверенный источник, как
+        // модель (ADR-009 §11.3)
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var after = JsonSerializer.Deserialize<JsonElement>(
+            await (await _client.GetAsync($"/api/projects/{id}")).Content.ReadAsStringAsync());
+        after.GetProperty("icon").GetProperty("kind").GetString().Should().Be("initials");
+    }
+
+    [Fact]
+    public async Task SelectIcon_СыраяРазметкаВПутях_400()
+    {
+        var project = await CreateProjectAsync("SelectRaw");
+        var id = project.GetProperty("id").GetString()!;
+
+        var response = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/select",
+            new { paths = new[] { "<svg onload=alert(1)>" } });
 
         response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+    }
+
+    [Fact]
+    public async Task SetIconMode_ИнициалыИЗначок_ПереключаютсяБезПотериЗначка()
+    {
+        var project = await CreateProjectAsync("ModeGlyph");
+        var id = project.GetProperty("id").GetString()!;
+
+        // Значка ещё нет — переходить на glyph некуда
+        var early = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/mode", new { kind = "glyph" });
+        early.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+
+        await _client.PostAsJsonAsync($"/api/projects/{id}/icon/select", new { name = "rocket" });
+
+        var toInitials = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/mode", new { kind = "initials" });
+        toInitials.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body = JsonSerializer.Deserialize<JsonElement>(await toInitials.Content.ReadAsStringAsync());
+        body.GetProperty("icon").GetProperty("kind").GetString().Should().Be("initials");
+        // Значок не стёрт — путь «снова вперёд» без повторного подбора
+        body.GetProperty("icon").GetProperty("glyph").GetProperty("name").GetString().Should().Be("rocket");
+
+        var backToGlyph = await _client.PostAsJsonAsync($"/api/projects/{id}/icon/mode", new { kind = "glyph" });
+        backToGlyph.StatusCode.Should().Be(HttpStatusCode.OK);
+        var body2 = JsonSerializer.Deserialize<JsonElement>(await backToGlyph.Content.ReadAsStringAsync());
+        body2.GetProperty("icon").GetProperty("kind").GetString().Should().Be("glyph");
+    }
+
+    [Fact]
+    public async Task IconЭндпоинты_ЧужойПроект_404()
+    {
+        var project = await CreateProjectAsync("ForeignGlyph");
+        var id = project.GetProperty("id").GetString()!;
+
+        using var factory = new TestWebApplicationFactory();
+        var other = factory.CreateAuthenticatedClient(
+            TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
+
+        (await other.PostAsJsonAsync($"/api/projects/{id}/icon/suggest", new { }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await other.PostAsJsonAsync($"/api/projects/{id}/icon/select", new { name = "wallet" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await other.PostAsJsonAsync($"/api/projects/{id}/icon/mode", new { kind = "glyph" }))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await other.GetAsync($"/api/projects/{id}/icon.svg"))
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 }

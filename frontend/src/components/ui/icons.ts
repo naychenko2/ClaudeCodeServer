@@ -25,3 +25,10 @@ export const ICON_PROPS = {
   strokeLinecap: 'round' as const,
   strokeLinejoin: 'round' as const,
 }
+
+// Карта значков проекта (ADR-009 §5): единственная точка, где имя из белого списка
+// связано с реальным lucide-компонентом. Серверная копия множества имён —
+// `LucideGlyphs.All` в Services/ProjectIcons/ProjectIconGlyphService.cs; равенство
+// держит тест-сторож на бэке (§11.5). Реэкспорт из lib/projectGlyphs.ts, чтобы место
+// импорта не расходилось с ADR-009.
+export { GLYPHS } from '../../lib/projectGlyphs'

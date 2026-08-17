@@ -56,7 +56,8 @@ public interface ICheapTextRunner
 public sealed class CheapTextRunner(
     LocalActionRouter router, OllamaClient ollama, CloudCheapClient cloud, IOneShotRunner claude,
     ILogger<CheapTextRunner> log, AppSettingsService? appSettings = null,
-    UserModelTierResolver? userTiers = null) : ICheapTextRunner
+    UserModelTierResolver? userTiers = null, ModelAssignmentResolver? assignment = null)
+    : ICheapTextRunner
 {
     public bool UsesLocal(string actionKey) => router.UsesLocal(actionKey);
 
@@ -99,11 +100,30 @@ public sealed class CheapTextRunner(
     // ненастроенный инстанс гонял бы теги и заголовки на дорогом дефолте CLI. Склейка личного и
     // глобального слота — через UserModelTierResolver, единая точка как в ModelAssignmentResolver
     // (агентная ветка); ownerId == null/неизвестный → поведение прежнее (общий слот).
-    private string? EffectiveFallback(ActionRoute route, string? fallbackModel, string? ownerId) =>
-        route.Kind == RouteKind.Tier
-            ? userTiers?.ModelFor(route.Tier ?? ModelTier.Medium, ownerId)
-                ?? appSettings?.TierModel(route.Tier ?? ModelTier.Medium) ?? fallbackModel
-            : fallbackModel;
+    // Слот-МАРКЕР (preset:{id} или tier:* — слот-пресет) — не модель: отданный в CLI как есть,
+    // он ронял ход невнятным no-model (дефект места project-icon). Маркер разворачивается в
+    // конкретную модель первого шага цепочки той же точкой, что и маршрут места —
+    // ModelAssignmentResolver.ExpandModelChain. Пустой разворот (битая ссылка пресета) —
+    // модель действия + warning; без assignment (ручная сборка в тестах) — прежнее поведение.
+    private string? EffectiveFallback(ActionRoute route, string? fallbackModel, string? ownerId)
+    {
+        if (route.Kind != RouteKind.Tier) return fallbackModel;
+        var tier = route.Tier ?? ModelTier.Medium;
+        var slot = userTiers?.ModelFor(tier, ownerId) ?? appSettings?.TierModel(tier);
+        if (assignment is null || !IsMarkerRoute(slot)) return slot ?? fallbackModel;
+        var expanded = assignment.ExpandModelChain(slot, ownerId).FirstOrDefault();
+        if (expanded is not null) return expanded;
+        log.LogWarning(
+            "cheap-runner: слот {Slot} (уровень {Tier}) развернулся пусто — действие идёт на модель действия",
+            slot, tier);
+        return fallbackModel;
+    }
+
+    // Значение, которому нужен разворот в конкретную модель: ссылка на пресет или уровень.
+    private static bool IsMarkerRoute(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && (LocalActionOverridesStore.IsPresetRoute(value)
+            || LocalActionOverridesStore.ParseTierRoute(value) is not null);
 
     // Цепочка одинакова для всех действий: выбранный исполнитель → локальная модель →
     // claude. Последний шаг умышленно без страховки: если упал и он, исключение уходит

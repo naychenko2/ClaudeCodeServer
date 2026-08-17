@@ -5,6 +5,7 @@ import { useSession } from '../hooks/useSession';
 import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonasLoaded, personaLabel } from '../lib/personas';
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
+import { projectMainColor } from '../features/projects/projectUtil';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
@@ -2181,6 +2182,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // открылся пустой чат. Оба счётчика монотонны, поэтому сумма растёт от любого
             // из них; 0 = сигнала не было (Composer такое значение игнорирует).
             focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus}
+            // Фирменный цвет проекта — им светится aurora-сияние при озвучке
+            // ответа (говорит «голос проекта»); чат вне проекта — фиолетовый токен
+            projectColorHex={project ? projectMainColor(project) : undefined}
           />
           </div>
         </div>

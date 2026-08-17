@@ -17,8 +17,9 @@
 // защита прежняя: гейт платформ (Apple — сразу псевдо), канарейка (micDead при
 // открытом потоке → псевдо до конца вкладки), псевдо-режим как безопасный fallback.
 
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { takeAuroraPulse, onAuroraWake } from '../lib/auroraPulse';
+import { AmpConflictDetector } from '../lib/ampConflict';
 
 // Окно канарейки: смерть движка распознавания в это время после открытия нашего
 // потока считается конфликтом захватов
@@ -65,10 +66,20 @@ export interface MicLevel {
   // Если наш поток был открыт недавно — конфликт признан, второй захват на этой
   // вкладке запрещается до перезагрузки
   reportMicDead: () => void;
+  // Конец цикла распознавания; barren — движок не отдал ни слова за цикл.
+  // Прокидывается в детектор конфликта: голос в нашей амплитуде при глухом
+  // движке = второй захват перехватил микрофон
+  reportCycleEnd: (barren: boolean) => void;
 }
 
 export function useMicLevel({ active, micActive, speechActive, targetRef }: MicLevelOptions): MicLevel {
   const slotRef = useRef<AnalyserSlot>({ analyser: null });
+  // Детектор конфликта захватов: наша амплитуда голос слышит, движок — нет.
+  // Живёт между фазами петли (слушание → ожидание → слушание), поэтому ref
+  const conflictRef = useRef(new AmpConflictDetector());
+  // Тик принудительного перезапуска эффекта потока: конфликт обнаружен посреди
+  // живого захвата — гасим его немедленно, не дожидаясь смены фазы петли
+  const [streamKick, setStreamKick] = useState(0);
   // Момент открытия real-потока (0 — не открыт). Нужен канарейке: reportMicDead
   // приходит извне, после факта
   const openedAtRef = useRef(0);
@@ -128,6 +139,10 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
         const rms = Math.sqrt(sum / buf.length);
         // Нормировка с запасом: бытовая речь даёт RMS ~0.05-0.3
         raw = Math.min(1, rms * 4);
+        // Корм детектора конфликта: речь в нашей амплитуде — это RMS заметно выше
+        // фонового шума (~0.2 после нормировки; порог ниже пиковой речи, но выше
+        // дыхания/шума комнаты)
+        if (raw > 0.2) conflictRef.current.noteVoice();
       } else if (speaking) {
         // Озвучка: одна плавная волна от старта реплики — подъём ~1.2 с, спад ~1.2 с,
         // затем мягкий повтор (0.3 Гц: цикл ~3.3 с). Без вибрации: частые синусы
@@ -175,6 +190,7 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
     let ctx: AudioContext | null = null;
     let cancelled = false;
 
+    conflictRef.current.setStream(true);
     if (!ampUnsafeSession && !isAmpUnsafePlatform()) {
       // real-путь с деградацией: отказ — тихо остаёмся в псевдо, разговор не трогаем.
       // Эффект микрофона петли уже открыл SpeechRecognition — условие канарейки
@@ -197,17 +213,29 @@ export function useMicLevel({ active, micActive, speechActive, targetRef }: MicL
 
     return () => {
       cancelled = true;
+      conflictRef.current.setStream(false);
       stream?.getTracks().forEach(t => t.stop());
       void ctx?.close().catch(() => { /* уже закрыт */ });
       slot.analyser = null;
       openedAtRef.current = 0;
     };
-  }, [micActive]);
+    // streamKick: конфликт захватов гасит живой поток немедленно — эффект
+    // перезапускается, но real-путь уже закрыт ampUnsafeSession
+  }, [micActive, streamKick]);
 
   const reportMicDead = useCallback(() => {
     const opened = openedAtRef.current;
     if (opened && Date.now() - opened <= CANARY_MS) ampUnsafeSession = true;
   }, []);
 
-  return { reportMicDead };
+  const reportCycleEnd = useCallback((barren: boolean) => {
+    if (!conflictRef.current.cycleEnd(barren)) return;
+    // Конфликт подтверждён: голос был у нас, движок глух. Честная амплитуда
+    // отключается до перезагрузки вкладки — разговор дороже сияния. Немедленный
+    // перезапуск эффекта гасит живой захват, не дожидаясь смены фазы петли
+    ampUnsafeSession = true;
+    setStreamKick(k => k + 1);
+  }, []);
+
+  return { reportMicDead, reportCycleEnd };
 }

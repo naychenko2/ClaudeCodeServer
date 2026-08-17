@@ -11,11 +11,13 @@ import { Columns3, LogOut, Plus } from 'lucide-react';
 import { C, FONT, R } from '../../lib/design';
 import { RailCapsule, RailHat, RailIconButton, RailSep } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
+import { useWindowWidth } from '../../lib/breakpoints';
+import { plural } from '../../lib/spend';
 import { showToast } from '../../lib/toast';
 import type { Session } from '../../types';
 import { useChatActivity, STATUS_COLOR, STATUS_PULSE, type ActivityStatus } from '../../lib/projectActivity';
 import { projectMainColor } from '../projects/projectUtil';
-import { useWallState, initWall, addChatSafe, focusChat, swapChats, startOrderDrag, MAX_CHATS } from './wallStore';
+import { useWallState, initWall, addChatSafe, focusChat, swapChats, startOrderDrag, slotCount, MAX_CHATS } from './wallStore';
 import { WallPicker } from './WallPicker';
 
 // Тип данных перетаскивания карточки чата (кладёт SessionList в плоском режиме)
@@ -38,6 +40,11 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
 }) {
   const { chats, projects, focusId } = useWallState();
   const activity = useChatActivity();
+  // Невлезшие колонки — той же формулой, какой их режет сама стена (WallPage):
+  // в воркспейсе колонок не видно, и это единственная сводка «сколько ещё ждёт
+  // за бортом». Знак — «+N», как у невлезших проектов на лупе дока (ProjectRail)
+  const w = useWindowWidth();
+  const hidden = Math.max(0, chats.length - slotCount(w));
   // Тащат чат по экрану (мишень видна) и курсор именно над доком (мишень «горит»).
   // dragging слушаем на документе: dragover самой капсулы не срабатывает, пока
   // курсор не дойдёт до неё, а знать «сюда можно» надо заранее.
@@ -141,13 +148,18 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
       <RailIconButton
         side="left"
         label={`Стена${chats.length > 0 ? ` (${chats.length})` : ''}`}
+        hint={hidden > 0
+          ? `на экран влезает ${slotCount(w)} — ещё ${hidden} ${plural(hidden, 'чат', 'чата', 'чатов')} не поместилось`
+          : undefined}
         onClick={() => onOpenWall?.()}
       >
         <span style={{ position: 'relative', display: 'flex' }}>
           <Columns3 size={16} strokeWidth={ICON_STROKE} />
-          {chats.length > 0 && (
-            // Счётчик набора — справка, а не сигнал: акцентная заливка тут кричала бы
-            // громче колокольчика уведомлений. Нейтральная плашка в тон панелей.
+          {hidden > 0 && (
+            // Счётчик НЕВЛЕЗШИХ — справка, а не сигнал: акцентная заливка тут кричала бы
+            // громче колокольчика уведомлений. Нейтральная плашка в тон панелей. Знак
+            // «+N» — тот же, что у невлезших проектов на лупе дока (ProjectRail):
+            // число на рельсе везде значит «сколько ещё за бортом», а не размер списка
             <span style={{
               position: 'absolute', top: -6, right: -8, minWidth: 13, height: 13,
               padding: '0 3px', borderRadius: R.full, background: C.bgPanel, color: C.textSecondary,
@@ -155,7 +167,7 @@ export function WallDock({ onOpenWall, onExit, slots = 0 }: {
               fontSize: 9, fontWeight: 700, lineHeight: '11px', textAlign: 'center',
               pointerEvents: 'none',
             }}>
-              {chats.length}
+              +{hidden}
             </span>
           )}
         </span>

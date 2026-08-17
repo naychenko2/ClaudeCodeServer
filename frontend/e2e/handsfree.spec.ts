@@ -294,6 +294,51 @@ test.describe('режим разговора', () => {
       'синтезатор не должен продолжать читать ответ').toBe(false);
   });
 
+  test('уход из чата с живой петлёй честно гасит режим', async ({ page }) => {
+    await openChat(page, token, chatId);
+    const voiceBtn = page.getByRole('button', { name: 'Режим разговора' });
+    await expect(voiceBtn).toBeVisible({ timeout: 120_000 });
+    await expect.poll(async () => {
+      if (await page.getByText('слушаю').isVisible()) return true;
+      await voiceBtn.click().catch(() => { /* перерисовалась — повторим */ });
+      return false;
+    }, { message: 'петля должна стартовать', timeout: 60_000, intervals: [1000] }).toBe(true);
+
+    // Уходим в другой раздел (живой клик по вкладке хаба) — композер размонтируется
+    // вместе с петлёй. PUT voiceMode=false обязан уйти в cleanup размонтирования
+    const putDone = page.waitForResponse(
+      r => r.url().includes('/api/chats/') && r.request().method() === 'PUT' && r.request().postDataJSON()?.voiceMode === false,
+      { timeout: 15_000 },
+    );
+    await page.getByRole('button', { name: 'Заметки' }).first().click();
+    await putDone;
+
+    // Возврат в чат: режим выключен честно — плашки паузы нет, кнопка нейтральна.
+    // Возврат той же вкладкой «Чаты»: goto по hash-URL не перезружает SPA и не
+    // дёргает popstate — приложение осталось бы в «Заметках»
+    await page.getByRole('button', { name: 'Чаты' }).first().click();
+    await expect(page.locator('textarea.cc-composer-input')).toBeVisible({ timeout: 20_000 });
+    await expect(page.getByText('Разговор на паузе'), 'режим должен быть погашен').toBeHidden();
+    await expect(page.getByText('слушаю'), 'петля не должна воскреснуть сама').toBeHidden();
+    // Хаб-таб персистится в localStorage (cc_hub_tab) и утащил бы за собой все
+    // СЛЕДУЮЩИЕ тесты файла — каждый открывает чат через goto уже на новой странице,
+    // где App стартует из сохранённой вкладки «Заметки». Возвращаем дефолт
+    await page.evaluate(() => localStorage.setItem('cc_hub_tab', 'chats'));
+  });
+
+  test('плашка «на паузе» показывает состояние режима без петли и продолжает разговор', async ({ page }) => {
+    // Режим включён, петли нет — состояние после возврата в чат или F5 при включённом
+    // голосовом режиме. Полоса обязана честно сказать, что слушания нет, и дать продолжить
+    await openChat(page, token, chatId);
+    await setVoiceMode(page, true);
+    await page.reload();
+    await expect(page.getByText('Разговор на паузе — ответы всё ещё озвучиваются')).toBeVisible({ timeout: 20_000 });
+
+    // «Продолжить» — тот же путь, что тап по кнопке режима: петля стартует
+    await page.getByRole('button', { name: 'Продолжить' }).click();
+    await expect(page.getByText('слушаю')).toBeVisible({ timeout: 10_000 });
+  });
+
   test('реплика «ты ещё здесь?» звучит при закрытом микрофоне', async ({ page }) => {
     await openChat(page, token, chatId);
     // Чат общий на весь файл: ход предыдущего сценария мог ещё идти, а во время хода

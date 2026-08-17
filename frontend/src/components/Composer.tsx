@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, WifiOff, X } from 'lucide-react';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, VolumeX, WifiOff, X } from 'lucide-react';
 import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
@@ -837,15 +837,23 @@ export function Composer({
     return true;
   };
 
+  // Хвост выхода из разговора. ДВЕ разновидности — прерывание хода в них НЕ одно и то же:
+  // полный exitTalk — «человек явно сказал прекрати» (кнопка, голосовое «стоп»): прерываем
+  //   ход и гасим режим;
+  // quietExitTalk — размонтирование (уход в другой чат/раздел): ход живёт на сервере и
+  //   фронта не требует, обычный уход из чата его никогда не прерывал. Гасим ТОЛЬКО
+  //   режим (PUT voiceMode=false), озвучка «в пустоту» не играёт — её гейтит живой чат.
+  // Реализации пишутся в refs эффектом (не в рендере): cleanup размонтирования и колбэки
+  // хука всегда дёргают свежую версию, а объявлены выше useHandsFree, куда уходят как
+  // onVoiceExit
+  const exitTalkRef = useRef<(() => void) | null>(null);
+  const exitTalk = useCallback(() => { exitTalkRef.current?.(); }, []);
+  const quietExitTalkRef = useRef<(() => void) | null>(null);
+  const quietExitTalk = useCallback(() => { quietExitTalkRef.current?.(); }, []);
+
   // Режим разговора: автомат петли (слушаю → окно отмены → отправка → ход → озвучка →
   // снова слушаю). Объявлен строго ВЫШЕ раннего return по offline — иначе на пропадании
   // связи число хуков разъезжается
-  // ЗАПРОШЕННОЕ значение голосового режима: PUT летит асинхронно, и второй тап должен
-  // сверяться с ним, а не с пропом. Иначе двойной тап оставлял бы режим включённым на
-  // сервере при выключенной петле — чат отвечает коротко и вслух, хотя человек «всё выключил»
-  const voiceModeWantedRef = useRef(voiceMode);
-  useEffect(() => { voiceModeWantedRef.current = voiceMode; }, [voiceMode]);
-
   const handsFree = useHandsFree({
     isGenerating,
     awaitingResponse,
@@ -860,16 +868,8 @@ export function Composer({
     onStop,
     activeRef: talkActiveRef,
     // Голосовая команда выхода («стоп»): петля уже погашена редьюсером, здесь только
-    // хвост тапа по кнопке — страховочное прерывание хода и PUT voiceMode=false (Р3)
-    onVoiceExit: () => {
-      if (isGenerating || handsFree.phase === 'sending' || handsFree.phase === 'waiting') onStop();
-      if (voiceModeWantedRef.current) {
-        voiceModeWantedRef.current = false;
-        void Promise.resolve(onToggleVoiceMode?.(false)).catch(() => {
-          voiceModeWantedRef.current = true;
-        });
-      }
-    },
+    // общий хвост выхода — прерывание хода и PUT voiceMode=false (Р3)
+    onVoiceExit: exitTalk,
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;
@@ -907,6 +907,46 @@ export function Composer({
     return () => clearInterval(id);
   }, [handsFree.phase]);
 
+  // ЗАПРОШЕННОЕ значение голосового режима: PUT летит асинхронно, и второй тап должен
+  // сверяться с ним, а не с пропом. Иначе двойной тап оставлял бы режим включённым на
+  // сервере при выключенной петле — чат отвечает коротко и вслух, хотя человек «всё выключил»
+  const voiceModeWantedRef = useRef(voiceMode);
+  useEffect(() => { voiceModeWantedRef.current = voiceMode; }, [voiceMode]);
+
+  // Реализации хвостов выхода: пишутся в refs эффектом (не в рендере), чтобы cleanup
+  // размонтирования и колбэки хука всегда дёргали свежую версию — с актуальными
+  // фазой петли и пропсами
+  useEffect(() => {
+    const disableVoiceMode = () => {
+      if (!voiceModeWantedRef.current) return;
+      voiceModeWantedRef.current = false;
+      void Promise.resolve(onToggleVoiceMode?.(false)).catch(() => {
+        // Сервер остался во включённом состоянии — ref обязан это отражать, иначе
+        // следующий тап пошлёт то же самое значение и режим залипнет (тост уже показан)
+        voiceModeWantedRef.current = true;
+      });
+    };
+    exitTalkRef.current = () => {
+      if (isGenerating || handsFree.phase === 'sending' || handsFree.phase === 'waiting') onStop();
+      disableVoiceMode();
+    };
+    quietExitTalkRef.current = disableVoiceMode;
+  }, [isGenerating, handsFree.phase, onStop, onToggleVoiceMode]);
+
+  // Честное гашение режима при уходе из чата/раздела: Composer размонтируется вместе с
+  // петлёй (смена чата — key, другой раздел — уходит вся страница), и без PUT здесь
+  // режим оставался бы «наполовину живым» — кнопка подсвечена, озвучка ходит, а слушает
+  // никто. Гасим ТОЛЬКО живую петлю: режим, включённый без петли (только озвучка),
+  // человек не выключал. Ход при этом НЕ прерываем — см. quietExitTalk. Активность на
+  // момент выхода читается из talkActiveRef: его пишет сам хук петли (useEffect), и на
+  // размонтировании значение ещё живо
+  useEffect(() => {
+    return () => {
+      // eslint-disable-next-line react-hooks/exhaustive-deps -- это не DOM-ref, а булево зеркало фазы петли: хук пишет его useEffect'ом, и при размонтировании (cleanup идёт ДО эффектов хука) значение ещё не сброшено — читать здесь корректно
+      if (talkActiveRef.current) quietExitTalk();
+    };
+  }, [quietExitTalk]);
+
   // Тап по кнопке режима. Синхронная часть жеста (прайминг аудио и старт микрофона) идёт
   // ДО любого await: политика autoplay и разрешение микрофона живут только внутри жеста
   const handleVoiceButton = () => {
@@ -915,22 +955,10 @@ export function Composer({
       // выйти из режима. Разбирать, в какой фазе мы сейчас, человеку на ходу некогда,
       // а других кнопок в этот момент на экране нет
       onStopSpeech?.();
-      // Прерывать ход надо и тогда, когда isGenerating ещё false: между отправкой и
-      // статусом «идёт ответ» есть окно в секунду-две, и клик в него оставлял бы ход
-      // жить — модель отвечала уже после выхода из разговора. Фаза петли знает про
-      // отправку раньше сервера. В speaking не зовём: ход там уже завершён, и
-      // прерывание нарисовало бы в ленте ложную карточку «Ход остановлен»
-      if (isGenerating || handsFree.phase === 'sending' || handsFree.phase === 'waiting') onStop();
       handsFree.stop();
-      // Тап при активной петле выключает и сам голосовой режим (Р3)
-      if (voiceModeWantedRef.current) {
-        voiceModeWantedRef.current = false;
-        void Promise.resolve(onToggleVoiceMode?.(false)).catch(() => {
-          // Сервер остался во включённом состоянии — ref обязан это отражать, иначе
-          // следующий тап пошлёт то же самое значение и режим залипнет (тост уже показан)
-          voiceModeWantedRef.current = true;
-        });
-      }
+      // Тап при активной петле выключает и сам голосовой режим (Р3): прерывание хода
+      // (если идёт) и PUT — общим хвостом выхода
+      exitTalk();
       return;
     }
     if (!hasSpeech || isMicKeyboardFallback()) {
@@ -1789,6 +1817,34 @@ export function Composer({
           anchorRef={textareaRef as React.RefObject<HTMLElement | null>}
           isMobile={isMobile}
         />
+      )}
+      {/* Плашка «разговор на паузе»: голосовой режим включён (ответы озвучиваются),
+          а петли разговора нет — она не переживает смену чата/раздела/F5. Отдельная
+          строка НАД полем ввода, а не замена его: поле обязано оставаться полем —
+          и тесты, и человек продолжают печатать в голосовом режиме без петли */}
+      {voiceMode && !talkActive && !workLoop?.active && !teamMech && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          padding: isMobile ? '7px 10px 0' : '6px 10px 0',
+        }}>
+          <VolumeX size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+          <span style={{ fontSize: FS.sm, color: C.textMuted, fontWeight: 600, flex: 1, minWidth: 0 }}>
+            Разговор на паузе — ответы всё ещё озвучиваются
+          </span>
+          <button
+            type="button"
+            onClick={handleVoiceButton}
+            title="Продолжить разговор без касаний"
+            style={{
+              ...iconBtnGuard,
+              flexShrink: 0, border: 'none', cursor: 'pointer', borderRadius: R.pill,
+              background: C.accentLight, color: C.accent, fontWeight: 600, fontSize: FS.xs,
+              padding: isMobile ? '6px 12px' : '5px 11px', whiteSpace: 'nowrap',
+            }}
+          >
+            Продолжить
+          </button>
+        </div>
       )}
       {/* Чипы вложений */}
       {attachments.length > 0 && (

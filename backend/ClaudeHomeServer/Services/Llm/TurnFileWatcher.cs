@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Enumeration;
-using System.Linq;
 using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Llm;
@@ -26,6 +25,13 @@ public sealed record FileWatcherOptions(
 // от последнего известного состояния. Общий для всех адаптеров.
 public sealed class TurnFileWatcher : IDisposable
 {
+    // Пауза перед вердиктом «правка вне чата»: заявка автора правки подтверждается
+    // только по успешному tool_result (ClaudeSession), который при медленном стриме
+    // приходит ПОЗЖЕ самого файла — debounce-проверки (400мс) на это не хватает, и
+    // правка чужого параллельного хода уезжала в ленту этого чата как «Изменение
+    // вне чата». Один повтор после паузы закрывает окно гонки.
+    private static readonly TimeSpan ExternalRetryDelay = TimeSpan.FromSeconds(1.5);
+
     private readonly string _rootPath;
     private readonly Func<ServerMessage, Task> _onMessage;
     private readonly FileWatcherOptions _options;
@@ -78,6 +84,8 @@ public sealed class TurnFileWatcher : IDisposable
     {
         _watcher?.Dispose();
         _watcher = null;
+        // Отменяем токены ДО Clear: карточка с retry-паузой атрибуции не должна
+        // выстрелить после Stop (конец хода) — токен живёт до конца обработки
         foreach (var cts in _debounce.Values) cts.Cancel();
         _debounce.Clear();
     }
@@ -93,43 +101,72 @@ public sealed class TurnFileWatcher : IDisposable
         if (_debounce.TryRemove(fullPath, out var old)) old.Cancel();
         var cts = new CancellationTokenSource();
         _debounce[fullPath] = cts;
+        _ = ProcessFileEventAsync(fullPath, cts);
+    }
 
-        Task.Delay(400, cts.Token).ContinueWith(t =>
+    // Обработка одного FS-события: debounce → чёрный список/gitignore → diff → атрибуция
+    // → карточка. Запись в _debounce снимается только в finally: токен живёт ДО КОНЦА
+    // обработки, и новое событие того же файла отменяет не только debounce, но и паузу
+    // retry-атрибуции — иначе параллельный цикл дал бы вторую карточку по старому срезу.
+    private async Task ProcessFileEventAsync(string fullPath, CancellationTokenSource cts)
+    {
+        var token = cts.Token;
+        try
         {
-            if (t.IsCanceled) return;
-            _debounce.TryRemove(fullPath, out CancellationTokenSource? _);
-            try
-            {
-                if (!File.Exists(fullPath) && !_fileCache.ContainsKey(fullPath)) return;
-                // .gitignore проверяем после debounce (реже) и до чтения файла
-                if (IsGitIgnored(fullPath)) return;
+            await Task.Delay(400, token);
+            if (!File.Exists(fullPath) && !_fileCache.ContainsKey(fullPath)) return;
+            // .gitignore проверяем после debounce (реже) и до чтения файла
+            if (IsGitIgnored(fullPath)) return;
 
-                var rel = Path.GetRelativePath(_rootPath, fullPath).Replace('\\', '/');
-                var newContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
-                _fileCache.TryGetValue(fullPath, out var oldContent);
-                // Кэш обновляем ДО проверки атрибуции: подавленная карточка не должна оставить
-                // это правку в diff-базе для следующего события своего же хода
-                _fileCache[fullPath] = newContent;
-                // Гасим только реальный no-op (содержимое побайтово то же). Раньше здесь стояла
-                // проверка added==0 && removed==0 от CountLineDiff — из-за неё правка, менявшая
-                // содержимое строки без изменения их числа (замена значения, переименование),
-                // считалась 0/0 и карточка не уходила вовсе.
-                if (newContent == oldContent) return;
-                var (added, removed) = CountLineDiff(oldContent, newContent);
-                // Путь только что заявлен ДРУГОЙ живой сессией (параллельный ход того же
-                // проекта) — карточку покажет её собственный watcher, здесь дублировать не надо
-                var external = false;
-                if (_attributor is not null && _ownerSessionId is not null)
+            var rel = Path.GetRelativePath(_rootPath, fullPath).Replace('\\', '/');
+            var newContent = File.Exists(fullPath) ? File.ReadAllText(fullPath) : null;
+            _fileCache.TryGetValue(fullPath, out var oldContent);
+            // Кэш обновляем ДО проверки атрибуции: подавленная карточка не должна оставить
+            // это правку в diff-базе для следующего события своего же хода
+            _fileCache[fullPath] = newContent;
+            // Гасим только реальный no-op (содержимое побайтово то же). Раньше здесь стояла
+            // проверка added==0 && removed==0 от CountLineDiff — из-за неё правка, менявшая
+            // содержимое строки без изменения их числа (замена значения, переименование),
+            // считалась 0/0 и карточка не уходила вовсе.
+            if (newContent == oldContent) return;
+            var (added, removed) = CountLineDiff(oldContent, newContent);
+            // Атрибуция «чей файл». Чужая активная заявка гасит карточку (её покажет
+            // собственный watcher чата-источника). А вот отсутствие заявок на момент
+            // debounce (400мс) ничего не значит: заявка автора правки подтверждается
+            // только по успешному tool_result, который при медленном стриме приходит
+            // ПОЗЖЕ самого файла — 400мс на это не хватает, и правка чужого
+            // параллельного хода уезжала в ленту этого чата как «Изменение вне чата»
+            // (а через историю — в «файлы этого чата» на панели Изменений). Поэтому
+            // кандидат на «вне чата» перепроверяется после дополнительной паузы
+            // (ExternalRetryDelay = 1.5с): за суммарные ~1.9с опоздавший tool_result
+            // успевает дойти.
+            var external = false;
+            if (_attributor is not null && _ownerSessionId is not null)
+            {
+                if (_attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
+                if (!_attributor.IsClaimedBySelf(_ownerSessionId, fullPath))
                 {
+                    await Task.Delay(ExternalRetryDelay, token);
+                    // За паузу автор определился: чужая заявка — гасим (карточку покажет
+                    // его собственный watcher), своя заявка (опоздавший tool_result) —
+                    // правка нашего хода (external=false), по-прежнему никаких заявок —
+                    // правка извне (человек, форматтер, bash)
                     if (_attributor.IsClaimedByOther(_ownerSessionId, fullPath)) return;
-                    // Нет заявки вообще ни от кого (в т.ч. от своей сессии) — правку сделал
-                    // не Claude Edit/Write, а нечто снаружи процесса (человек, форматтер)
                     external = !_attributor.IsClaimedBySelf(_ownerSessionId, fullPath);
                 }
-                _ = _onMessage(new FileChangedMessage(rel, added, removed, external));
             }
-            catch { /* файл занят/удалён между событиями watcher-а — пропускаем */ }
-        }, TaskScheduler.Default);
+            _ = _onMessage(new FileChangedMessage(rel, added, removed, external));
+        }
+        catch (OperationCanceledException) { /* Stop/новый цикл debounce — карточка не нужна */ }
+        catch { /* файл занят/удалён между событиями watcher-а — пропускаем */ }
+        finally
+        {
+            // Снять свою запись с дебаунса, только если она всё ещё наша: более свежая
+            // гонка событий могла уже заменить её новым CTS — его снимать нельзя.
+            // TryRemove(KeyValuePair) атомарен (снимает ровно эту пару), в отличие от
+            // пары TryGetValue+TryRemoveByKey с окном подмены между ними
+            _debounce.TryRemove(KeyValuePair.Create(fullPath, cts));
+        }
     }
 
     // Игнор по служебным каталогам-сегментам пути и маскам имени файла (из конфига).

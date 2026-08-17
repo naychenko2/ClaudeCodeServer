@@ -96,6 +96,8 @@ public class TurnFileWatcherTests : IDisposable
         // Сценарий "правка вне чата": заявок на путь нет ни у кого (эмулирует bash-команду
         // без Edit/Write). Проверяет, что ветка External=true технически достижима, когда
         // diff вообще замечен (см. следующий тест на случай, когда он НЕ замечен).
+        // Карточка теперь приходит после retry-паузы атрибуции (~400мс + 1.5с) — ожидание
+        // с запасом, CI-раннер слабее локального.
         var path = Path.Combine(_root, "file.txt");
         File.WriteAllText(path, "a\nb");
 
@@ -107,10 +109,75 @@ public class TurnFileWatcherTests : IDisposable
         await Task.Delay(200);
 
         File.WriteAllText(path, "a\nb\nc");
-        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
 
         msg.Should().NotBeNull();
         msg!.External.Should().BeTrue("пути нет ни в чьих заявках — правка сделана не Edit/Write этой сессии");
+    }
+
+    [Fact]
+    public async Task ЗаявкаДругойСессииОпоздала_КарточкаПодавленаПослеПерепроверки()
+    {
+        // Регресс на гонку параллельных ходов: файл правит чат A (Edit/Write), но его
+        // заявка подтверждается по tool_result ПОЗЖЕ самого файла. Ватчер чата B на
+        // момент debounce (400мс) заявок не видит — раньше сразу выносил вердикт
+        // external=true, и правка A уезжала в ленту B как «Изменение вне чата».
+        // Теперь кандидат на «вне чата» перепроверяется после паузы: опоздавшая чужая
+        // заявка гасит карточку (её покажет собственный ватчер A).
+        var path = Path.Combine(_root, "file.txt");
+        File.WriteAllText(path, "a\nb");
+
+        var received = new ConcurrentQueue<FileChangedMessage>();
+        var signal = new SemaphoreSlim(0);
+        var attributor = new FileChangeAttributor();
+        using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-b");
+        watcher.Start();
+        await Task.Delay(200);
+
+        // Прогрев кэша: без него oldContent=null и added считается от нуля
+        File.WriteAllText(path, "a\nb\nc");
+        var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
+        warmup.Should().NotBeNull("прогрев кэша обязателен — иначе тест ничего не проверяет");
+
+        // Правка «чата A»: файл меняется, заявка A приходит ВНУТРИ retry-окна — уже
+        // после debounce (400мс), но до перепроверки (~400мс + 1.5с)
+        File.WriteAllText(path, "a\nb\nc\nd");
+        await Task.Delay(700);
+        attributor.Claim("session-a", path);
+
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(4));
+
+        msg.Should().BeNull("заявка чужой сессии появилась в retry-окне — карточку в этом чате гасим, её покажет ватчер чата-источника");
+    }
+
+    [Fact]
+    public async Task СвояЗаявкаОпоздала_КарточкаНеВнешняя()
+    {
+        // Вторая половина той же гонки: файл правит САМ этот чат, но tool_result (и
+        // заявка) опаздывает относительно файла. После перепроверки заявка своя —
+        // карточка уходит с external=false, а не «Изменение вне чата».
+        var path = Path.Combine(_root, "file.txt");
+        File.WriteAllText(path, "a\nb");
+
+        var received = new ConcurrentQueue<FileChangedMessage>();
+        var signal = new SemaphoreSlim(0);
+        var attributor = new FileChangeAttributor();
+        using var watcher = CreateWatcher(_root, received, signal, attributor, ownerSessionId: "session-a");
+        watcher.Start();
+        await Task.Delay(200);
+
+        File.WriteAllText(path, "a\nb\nc");
+        var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
+        warmup.Should().NotBeNull("прогрев кэша обязателен — иначе тест ничего не проверяет");
+
+        File.WriteAllText(path, "a\nb\nc\nd");
+        await Task.Delay(700);
+        attributor.Claim("session-a", path);
+
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(4));
+
+        msg.Should().NotBeNull("своя опоздавшая заявка не гасит карточку — это правка нашего хода");
+        msg!.External.Should().BeFalse("заявка своей сессии появилась в retry-окне — правка сделана Edit/Write этого чата");
     }
 
     [Fact]
@@ -132,14 +199,15 @@ public class TurnFileWatcherTests : IDisposable
         await Task.Delay(200);
 
         // Прогрев кэша: без него oldContent=null и любое изменение даёт ненулевой diff —
-        // это маскировало бы проверяемый сценарий.
+        // это маскировало бы проверяемый сценарий. Обе карточки здесь с атрибутором,
+        // т.е. идут через retry-паузу (~1.9с) — ожидания с запасом под CI.
         File.WriteAllText(path, "line1\nline2X\nline3");
-        var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
+        var warmup = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
         warmup.Should().NotBeNull("прогрев кэша обязателен — иначе тест ничего не проверяет");
 
         // Реальная проверка: меняем содержимое строки, число строк то же (3 -> 3)
         File.WriteAllText(path, "line1\nline2Y\nline3");
-        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(3));
+        var msg = await WaitForMessageAsync(signal, received, TimeSpan.FromSeconds(5));
 
         msg.Should().NotBeNull("замена содержимого строки — реальная правка, карточка обязана дойти");
         msg!.Added.Should().Be(1, "line2Y — новая строка, которой не было в старом содержимом");

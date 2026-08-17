@@ -1,7 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
-import { Plus, Terminal, Monitor, Circle, Square, Play, RefreshCw } from 'lucide-react'
-import { C, R, FONT } from '../../lib/design'
-import { IconButton, Button, PanelHeaderSlot, useHasPanelHeader } from '../ui'
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { Plus, Terminal, Monitor, Square, Play, RefreshCw, ChevronRight } from 'lucide-react'
+import { C, R, FONT, FS, SP, SHADOW, Z } from '../../lib/design'
+import { Dot, EmptyState, IconButton, Button, PanelHeaderSlot, useHasPanelHeader } from '../ui'
+import { ListDateDivider } from '../ListDateDivider'
+import { ICON_STROKE } from '../ui/icons'
 import { statusColor } from '../preview/PreviewView'
 import { AddServiceDialog } from '../preview/AddServiceDialog'
 import type * as ts from '../../lib/terminalSignalr'
@@ -116,13 +119,11 @@ export function ToolsSidebar({
               onMouseLeave={e => { if (activeTerminalId !== t.id) e.currentTarget.style.background = 'transparent' }}
             >
               {/* Индикатор: зелёный пульс при занятости, зелёный статика когда готов, серый когда остановлен */}
-              <span style={{
-                width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                background: t.status === 'running'
+              <Dot color={
+                t.status === 'running'
                   ? (activeTerminalId === t.id && terminalBusy ? C.warning : C.success)
-                  : C.textMuted,
-                transition: 'background 0.2s',
-              }} />
+                  : C.textMuted
+              } />
               {renaming?.id === t.id ? (
                 <input
                   autoFocus
@@ -154,13 +155,9 @@ export function ToolsSidebar({
               </IconButton>
             </div>
           ))}
-          <button
-            onClick={onCreateTerminal}
-            style={dashedButtonStyle}
-          >
-            <Plus size={14} strokeWidth={2} />
+          <Button variant="dashed" size="sm" fullWidth onClick={onCreateTerminal} leftIcon={<Plus size={14} strokeWidth={ICON_STROKE} />}>
             Новый терминал
-          </button>
+          </Button>
         </div>
       )}
 
@@ -197,6 +194,17 @@ export function PreviewServiceList({
   onSelectPreview: (serviceId: string) => void
 }) {
   const [adding, setAdding] = useState(false)
+  // Свёрнутые группы источников: привязаны к проекту — в разных репозиториях свои
+  // наборы источников, общий список сворачивал бы то, чего в другом проекте нет
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => loadCollapsed(projectId))
+  const toggleGroup = useCallback((source: string) => {
+    setCollapsed(prev => {
+      const next = new Set(prev)
+      if (next.has(source)) next.delete(source); else next.add(source)
+      saveCollapsed(projectId, next)
+      return next
+    })
+  }, [projectId])
   // Панель в новой раскладке живёт в карточке с шапкой — действия уезжают туда.
   // Старый режим (вкладки этого сайдбара) шапки не имеет: там они остаются в теле.
   const inHeader = useHasPanelHeader()
@@ -204,7 +212,7 @@ export function PreviewServiceList({
   const nameById = new Map(groups.flatMap(([, items]) => items).map(s => [s.id, s.name]))
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', padding: '8px 10px' }}>
+    <div style={{ flex: 1, overflowY: 'auto', padding: `${SP.sm}px ${SP.sm}px ${SP.md}px` }}>
       {inHeader ? (
         <>
           <PanelHeaderSlot>
@@ -225,8 +233,8 @@ export function PreviewServiceList({
           </PanelHeaderSlot>
         </>
       ) : (
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '2px 4px 8px' }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `${SP.xxs}px ${SP.xs}px ${SP.sm}px` }}>
+          <span style={{ fontSize: FS.xs, fontWeight: 600, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 }}>
             Сервисы
           </span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -245,30 +253,56 @@ export function PreviewServiceList({
       )}
 
       {!hasAny && (
-        <div style={{ padding: '12px 8px', fontSize: 12, color: C.textMuted, lineHeight: 1.5 }}>
-          Запускаемые сервисы не найдены. Добавьте свой запуск — он сохранится
-          в <code style={{ fontFamily: FONT.mono, fontSize: 11 }}>.claude/launch.json</code>.
-        </div>
+        <EmptyState compact
+          icon={<Monitor size={20} strokeWidth={ICON_STROKE} />}
+          title="Сервисы не найдены"
+          subtitle={<>Добавьте свой запуск — он сохранится в <code style={{ fontFamily: FONT.mono }}>launch.json</code>.</>}
+        />
       )}
 
-      {groups.map(([source, items]) => (
-        <div key={source} style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.textMuted, textTransform: 'uppercase', letterSpacing: 0.4, padding: '4px 6px' }}>
-            {sourceMeta(source).label}
+      {groups.map(([source, items]) => {
+        const isCollapsed = collapsed.has(source)
+        return (
+          <div key={source}>
+            {/* Группа-разделитель — тот же ListDateDivider dense, что рисует разделы
+                «Документации»: шеврон + черта справа, клик сворачивает. Подложка
+                прилипающая — группа не теряется при скролле длинного списка */}
+            <div style={{
+              position: 'sticky', top: -(SP.xs + 5), zIndex: 1,
+              background: C.bgPanel, margin: `0 -${SP.xs}px`, padding: `${SP.xs}px ${SP.xs}px 0 ${SP.sm}px`,
+            }}>
+              <ListDateDivider
+                title={sourceMeta(source).label}
+                align="left" dense
+                onClick={() => toggleGroup(source)}
+                titleAttr={`${sourceMeta(source).label} — ${isCollapsed ? 'показать' : 'скрыть'} сервисы`}
+                leading={
+                  <span style={{ width: 16, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <ChevronRight
+                      size={12} strokeWidth={2.4}
+                      style={{ color: C.textMuted, transform: isCollapsed ? 'none' : 'rotate(90deg)', transition: 'transform .15s ease' }}
+                    />
+                  </span>
+                }
+                trailing={isCollapsed
+                  ? <span style={{ flexShrink: 0, fontSize: 10, color: C.textMuted }}>{items.length}</span>
+                  : undefined}
+              />
+            </div>
+            {!isCollapsed && items.map(svc => (
+              <ServiceRow
+                key={svc.id}
+                svc={svc}
+                memberNames={svc.members?.map(id => nameById.get(id) ?? id)}
+                active={activePreviewId === svc.id}
+                onStart={() => onStartService(svc)}
+                onStop={() => onStopService(svc.id)}
+                onSelect={() => onSelectPreview(svc.id)}
+              />
+            ))}
           </div>
-          {items.map(svc => (
-            <ServiceRow
-              key={svc.id}
-              svc={svc}
-              memberNames={svc.members?.map(id => nameById.get(id) ?? id)}
-              active={activePreviewId === svc.id}
-              onStart={() => onStartService(svc)}
-              onStop={() => onStopService(svc.id)}
-              onSelect={() => onSelectPreview(svc.id)}
-            />
-          ))}
-        </div>
-      ))}
+        )
+      })}
 
       {adding && (
         <AddServiceDialog
@@ -281,6 +315,18 @@ export function PreviewServiceList({
   )
 }
 
+// Свёрнутые группы источников в localStorage: per-project (в другой репе другие источники)
+const collapsedKey = (projectId: string) => `cc_services_collapsed_${projectId}`
+const loadCollapsed = (projectId: string): Set<string> => {
+  try {
+    const raw = localStorage.getItem(collapsedKey(projectId))
+    return new Set(raw ? JSON.parse(raw) as string[] : [])
+  } catch { return new Set() }
+}
+const saveCollapsed = (projectId: string, value: Set<string>) => {
+  try { localStorage.setItem(collapsedKey(projectId), JSON.stringify([...value])) } catch { /* ignore */ }
+}
+
 function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect }: {
   svc: ProjectService
   memberNames?: string[]
@@ -289,6 +335,8 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect }: {
   onStop: () => void
   onSelect: () => void
 }) {
+  const [hover, setHover] = useState(false)
+  const rowRef = useRef<HTMLDivElement>(null)
   // «Стоп» — только у полностью живого сервиса. У частично поднятой группы кнопка
   // остаётся «Запустить»: она доподнимет недостающих участников
   const running = svc.status === 'started' || svc.status === 'starting'
@@ -297,65 +345,189 @@ function ServiceRow({ svc, memberNames, active, onStart, onStop, onSelect }: {
   // нечего (упадёт с «порт занят»), останавливать не наше дело
   const external = svc.status === 'external'
   const port = svc.runningPort ?? svc.suggestedPort
-  // У составной конфигурации команды нет — вместо неё показываем состав
   const cmd = memberNames?.length
     ? memberNames.join(' + ')
     : svc.command ? `${svc.command} ${svc.args.join(' ')}`.trim() : svc.name
+  const note = external ? 'запущен снаружи' : partial ? 'запущена часть' : ''
   const dotColor = statusColor(svc.status)
+  // Словесный статус — из той же таблице смыслов, что цвета: точка мгновенна, но
+  // бессловесна (жёлтое — это запуск или часть?), подпись закрывает неоднозначность
+  const statusLabel = running ? 'запущен' : svc.status === 'starting' ? 'запускается' : svc.status === 'error' ? 'ошибка' : ''
+
+  // Словесный статус для карточки: у точки есть цвет, но нет текста — в карточке
+  // нужен полный смысл, в том числе у зелёного и серого
+  const statusText = running && svc.status === 'started' ? 'запущен'
+    : svc.status === 'starting' ? 'запускается'
+    : svc.status === 'error' ? 'ошибка запуска'
+    : external ? 'запущен снаружи'
+    : partial ? 'запущена часть участников'
+    : 'остановлен'
 
   return (
     <div
+      ref={rowRef}
       onClick={() => { if (running || external || partial) onSelect() }}
-      title={svc.error ?? undefined}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
       style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '7px 8px', borderRadius: R.md,
+        display: 'flex', alignItems: 'center', gap: SP.xs, width: '100%',
+        padding: `${SP.xxs}px ${SP.sm}px`,
+        borderRadius: R.md, border: 'none',
         cursor: running || external || partial ? 'pointer' : 'default',
-        background: active ? C.bgSelected : 'transparent',
-        marginBottom: 2,
+        background: active ? C.bgSelected : hover ? C.bgInset : 'transparent',
       }}
-      onMouseEnter={e => { if (!active) e.currentTarget.style.background = C.bgInset }}
-      onMouseLeave={e => { if (!active) e.currentTarget.style.background = 'transparent' }}
     >
-      <Circle size={8} fill={dotColor} color={dotColor} style={{ flexShrink: 0 }} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: C.textPrimary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {svc.name}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0, flex: 1 }}>
+        {/* Первая строка: статус + имя + порт. Порт всегда справа и не обрезается —
+            это адрес, по которому сервис открывается, он важнее хвоста команды */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, minWidth: 0 }}>
+          <Dot color={dotColor} />
+          <span style={{
+            fontFamily: FONT.sans, fontSize: FS.base, minWidth: 0, flex: 1,
+            color: active || hover ? C.textHeading : C.textPrimary,
+            fontWeight: active ? 600 : 400,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          }}>
+            {svc.name}
+          </span>
+          {statusLabel && (
+            <span style={{
+              fontFamily: FONT.sans, fontSize: FS.xs, flexShrink: 0,
+              // Цветом того же статуса, что точка: «запускается» — жёлтым, «ошибка» — красным
+              color: svc.status === 'error' ? C.danger : C.warning,
+            }}>
+              {statusLabel}
+            </span>
+          )}
+          {port !== null && (
+            <span style={{
+              fontFamily: FONT.mono, fontSize: FS.xs, flexShrink: 0,
+              color: C.textMuted,
+            }}>
+              :{port}
+            </span>
+          )}
         </div>
-        <div style={{ fontSize: 11, color: C.textMuted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontFamily: FONT.mono }}>
-          {cmd}{port ? `  ·  :${port}` : ''}
+        {/* Вторая строка: команда (или состав группы) + нештатные пометки, с ellipsis */}
+        <div style={{
+          fontFamily: FONT.mono, fontSize: FS.xs, color: C.textMuted,
+          paddingLeft: 8 + SP.xs, // под выравнивание по началу имени (ширина Dot)
+          minWidth: 0,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {cmd}{note && (
+            <span style={{ color: external ? C.info : C.warning }}> — {note}</span>
+          )}
         </div>
-        {external && (
-          <div style={{ fontSize: 11, color: C.info }}>запущен снаружи</div>
-        )}
-        {svc.status === 'partial' && (
-          <div style={{ fontSize: 11, color: C.warning }}>запущена часть сервисов</div>
-        )}
       </div>
-      {external ? (
-        <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onSelect() }} title="Показать страницу">
-          <Monitor size={12} />
-        </IconButton>
-      ) : running ? (
-        <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStop() }} title="Остановить">
-          <Square size={10} />
-        </IconButton>
-      ) : (
-        <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStart() }} title="Запустить">
-          <Play size={12} />
-        </IconButton>
+      {hover && (
+        external ? (
+          <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onSelect() }} title="Показать страницу">
+            <Monitor size={12} />
+          </IconButton>
+        ) : running ? (
+          <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStop() }} title="Остановить">
+            <Square size={10} />
+          </IconButton>
+        ) : (
+          <IconButton size="xs" variant="soft" onClick={e => { e.stopPropagation(); onStart() }} title="Запустить">
+            <Play size={12} />
+          </IconButton>
+        )
       )}
+      {hover && <ServiceHoverCard anchorRef={rowRef} svc={svc} cmd={cmd} statusText={statusText} port={port} note={note} external={external} />}
     </div>
   )
 }
 
-// Пунктирная кнопка «Новый терминал» во вкладке терминалов
-const dashedButtonStyle: React.CSSProperties = {
-  width: '100%', padding: '8px 10px', borderRadius: R.md, cursor: 'pointer',
-  border: `1px dashed ${C.border}`, background: 'transparent',
-  color: C.textSecondary, fontSize: 13,
-  display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'center',
-  marginTop: 4,
+// Богатая подсказка строки сервиса: обе строки целиком (то, что режет ellipsis),
+// статус словами, адрес приметно. Порталом — панель с overflow не должна обрезать
+// плашку. Язык тот же, что у HoverCard задачи: белая карточка, dropdown-тень
+function ServiceHoverCard({ anchorRef, svc, cmd, statusText, port, note, external }: {
+  anchorRef: React.RefObject<HTMLDivElement | null>
+  svc: ProjectService
+  cmd: string
+  statusText: string
+  port: number | null
+  note: string
+  external: boolean
+}) {
+  const rect = anchorRef.current?.getBoundingClientRect()
+  if (!rect) return null
+  const WIDTH = 320
+  // Справа от строки, если не влезает — слева (как HoverCard задачи)
+  const fitsRight = rect.right + WIDTH + 20 <= window.innerWidth
+  const left = fitsRight
+    ? rect.right + 10
+    : Math.max(12, rect.left - WIDTH - 10)
+  const top = Math.max(12, Math.min(rect.top, window.innerHeight - 180 - 12))
+  return createPortal(
+    <div style={{
+      position: 'fixed', left, top, width: WIDTH, boxSizing: 'border-box',
+      background: C.bgWhite, border: `1px solid ${C.border}`,
+      borderRadius: R.xl, boxShadow: SHADOW.dropdown,
+      padding: '10px 14px', zIndex: Z.dropdown,
+      pointerEvents: 'none',
+    }}>
+      {/* Заголовок: точка-статус + имя + статус словами */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.xs }}>
+        <Dot color={statusColor(svc.status)} />
+        <span style={{
+          fontFamily: FONT.sans, fontSize: FS.base, fontWeight: 600, flex: 1, minWidth: 0,
+          color: C.textHeading,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        }}>
+          {svc.name}
+        </span>
+        <span style={{
+          fontFamily: FONT.sans, fontSize: FS.xs,
+          color: svc.status === 'error' ? C.danger : svc.status === 'started' ? C.success : external ? C.info : C.warning,
+        }}>
+          {statusText}
+        </span>
+      </div>
+      {/* Адрес: моно, prominently — по нему сервис открывается */}
+      {port !== null && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, marginBottom: SP.xs }}>
+          <span style={{ fontFamily: FONT.mono, fontSize: FS.sm, color: C.textPrimary }}>
+            localhost:{port}
+          </span>
+          {svc.runningPort !== null && svc.suggestedPort !== null && svc.runningPort !== svc.suggestedPort && (
+            <span style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted }}>
+              · вместо :{svc.suggestedPort}
+            </span>
+          )}
+        </div>
+      )}
+      {/* Команда или состав группы целиком */}
+      <div style={{
+        fontFamily: FONT.mono, fontSize: FS.xs, color: C.textSecondary,
+        background: C.bgInset, borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`,
+        overflowWrap: 'anywhere',
+      }}>
+        {cmd}
+      </div>
+      {note && (
+        <div style={{
+          fontFamily: FONT.sans, fontSize: FS.xs, marginTop: SP.xs,
+          color: external ? C.info : C.warning,
+        }}>
+          {note}
+        </div>
+      )}
+      {/* Текст ошибки — целиком: причина падения важнее всего остального */}
+      {svc.error && (
+        <div style={{
+          fontFamily: FONT.mono, fontSize: FS.xs, marginTop: SP.xs, color: C.danger,
+          background: C.bgInset, borderRadius: R.md, padding: `${SP.xs}px ${SP.sm}px`,
+          maxHeight: 80, overflowY: 'auto', overflowWrap: 'anywhere',
+        }}>
+          {svc.error}
+        </div>
+      )}
+    </div>,
+    document.body,
+  )
 }
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {

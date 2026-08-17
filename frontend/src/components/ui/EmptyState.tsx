@@ -4,7 +4,8 @@ import { C, FONT, FS } from '../../lib/design'
 interface EmptyStateProps {
   icon: ReactNode             // SVG или emoji
   title: string
-  subtitle?: string
+  // Обычно строка, но допустима разметка — подсветить имя файла/команду внутри текста
+  subtitle?: ReactNode
   action?: ReactNode          // кнопка или ссылка (можно ряд кнопок во flex-контейнере)
   // Компактный вид (узкие сайдбары, secondary-панели): кружок 44 в нейтральной гамме,
   // заголовок мельче. Иначе — крупный дефолтный empty (центр экрана).

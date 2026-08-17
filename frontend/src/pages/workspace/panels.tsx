@@ -3,9 +3,10 @@
 // сюда приходит пропсами; эти компоненты только рисуют компактный вид под
 // узкую колонку (280-560px): полоса чипов сверху + рабочая область.
 import { useEffect, useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Plus, Terminal, X } from 'lucide-react';
 import type { ProjectService } from '../../types';
 import { C, FONT, R } from '../../lib/design';
+import { Button, EmptyState } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { TerminalView } from '../../components/terminal/TerminalView';
 import { PreviewServiceList, groupServices } from '../../components/tools/ToolsSidebar';
@@ -102,9 +103,12 @@ export function TerminalPanelContent({ terminals, activeTerminalId, onSelect, on
             </div>
           ))
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: C.textMuted, fontFamily: FONT.sans, fontSize: 13 }}>
-            Создайте терминал кнопкой «+»
-          </div>
+          <EmptyState compact
+            icon={<Terminal size={20} strokeWidth={ICON_STROKE} />}
+            title="Терминалов нет"
+            subtitle="Создайте терминал — он откроется в этой панельке."
+            action={<Button variant="dashed" size="sm" onClick={onCreate} leftIcon={<Plus size={14} strokeWidth={ICON_STROKE} />}>Новый терминал</Button>}
+          />
         )}
       </div>
     </div>

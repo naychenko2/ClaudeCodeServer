@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services.Llm;
 
@@ -175,6 +176,72 @@ public sealed class OllamaClient
         {
             _logger.LogDebug(ex, "Ollama (text) недоступен ({BaseUrl}), фолбэк на claude", BaseUrl);
             return null;
+        }
+    }
+
+    // Реплика диалога для метода ChatTurnAsync: role = system|user|assistant.
+    public sealed record ChatMsg(string Role, string Content);
+
+    // Результат разговорного хода: текст ответа (null — пустой/сбойный вызов) и usage
+    // для ResultMessage ленты (токены из счётчиков Ollama; может быть null при их отсутствии).
+    public sealed record ChatTurnResult(string? Text, Protocol.UsageInfo? Usage);
+
+    // Один разговорный ход голосового режима (Session.VoiceMode + место chat-voice на
+    // «Локальная»): полный messages[] (system + история + реплика) → короткий ответ.
+    // Отличия от GenerateTextAsync: диалоговая история, temperature 0.7 (разговор, а не
+    // классификация) и НЕ-null-протокол: вызов знает об отказе сам (фолбэка на claude нет —
+    // тихий 15-секундный старт CLI в разговоре хуже видимой ошибки в ленте).
+    public async Task<ChatTurnResult> ChatTurnAsync(
+        IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
+        int numPredict, int numCtx, string? ownerId, CancellationToken ct = default)
+    {
+        var used = string.IsNullOrWhiteSpace(model) ? TextModel : model!;
+        if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used))
+            return new ChatTurnResult(null, null);
+        try
+        {
+            var client = _http.CreateClient(HttpClientName);
+            client.Timeout = timeout;
+
+            using var resp = await client.PostAsJsonAsync($"{BaseUrl}/api/chat", new
+            {
+                model = used,
+                stream = false,
+                think = false,
+                keep_alive = _keepAlive,
+                options = new { temperature = 0.7, num_predict = numPredict, num_ctx = numCtx },
+                messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
+            }, ct);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                _logger.LogDebug("Ollama /api/chat (voice) вернул {Status}", resp.StatusCode);
+                return new ChatTurnResult(null, null);
+            }
+
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            var answer = json.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var c)
+                ? c.GetString()
+                : null;
+            if (string.IsNullOrWhiteSpace(answer)) return new ChatTurnResult(null, null);
+            RecordSpend(used, json, ownerId, "voice-turn");
+            // Токены для result ленты: input = prompt_eval_count, output = eval_count.
+            // Кеша у локального вызова нет — обе метрики нули.
+            Protocol.UsageInfo? usage = null;
+            if (json.TryGetProperty("prompt_eval_count", out var p) && p.ValueKind == JsonValueKind.Number
+                && json.TryGetProperty("eval_count", out var e) && e.ValueKind == JsonValueKind.Number)
+                usage = new Protocol.UsageInfo(p.GetInt32(), e.GetInt32(), 0, 0);
+            return new ChatTurnResult(answer, usage);
+        }
+        catch (OperationCanceledException)
+        {
+            // «Стоп» пользователя / отмена хода — не ошибка, состояние закроет exited ветки
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Ollama (voice) недоступен ({BaseUrl})", BaseUrl);
+            return new ChatTurnResult(null, null);
         }
     }
 

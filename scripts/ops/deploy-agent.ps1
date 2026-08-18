@@ -33,7 +33,7 @@ param(
     [switch]$SkipSandbox,
     [switch]$AllowDirty,        # ехать при незакоммиченных правках
     [switch]$IgnoreRunner,      # ручной обход guard'а «живой Runner» (из чата не задаётся)
-    [switch]$RequireBuildHeader,# отсутствие X-Build считать провалом health-гейта
+    [switch]$RequireBuildHeader,# требовать X-Build и при откате (в выкатке он требуется всегда)
     [switch]$NoSelfCopy,        # служебный: агент уже работает копией, не копировать себя снова
     [string]$Ref,               # ожидаемая ветка; расхождение = отказ (волна 1 не переключает ref)
     [string]$RepoDir,           # корень репы (по умолчанию — от места скрипта)
@@ -200,15 +200,18 @@ function Complete-Deploy([string]$status, [string]$message, [string]$releaseId) 
                 if ($message) { Add-Member -InputObject $st -NotePropertyName 'message' -NotePropertyValue $message -Force }
             }
         }
-        $script:Current.phase = $status
+        # Через Add-Member -Force, а не присваиванием: закрывать приходится и подхваченную
+        # заявку сервера, а у объекта из ConvertFrom-Json присваивание отсутствующего
+        # свойства падает — тогда заявка так и осталась бы незакрытой.
+        Add-Member -InputObject $script:Current -NotePropertyName 'phase' -NotePropertyValue $status -Force
         # Форма итога — ровно DeployResult бэкенда: ok/status/message/releaseId/finishedAt.
-        $script:Current.result = [pscustomobject]@{
+        Add-Member -InputObject $script:Current -NotePropertyName 'result' -Force -NotePropertyValue ([pscustomobject]@{
             ok         = ($status -eq 'succeeded')
             status     = $status
             message    = $message
             releaseId  = $releaseId
             finishedAt = (Get-Date).ToUniversalTime().ToString('o')
-        }
+        })
         # reported НЕ трогаем: его ставит сервер, когда доложит инициатору (ADR-010).
         Write-Journal
     }
@@ -244,6 +247,27 @@ function Exit-DeployMutex {
         try { $script:Mutex.Dispose() } catch { }
         $script:Mutex = $null
     }
+}
+
+# Единственная дверь наружу: транскрипт и мьютекс отпускаются здесь, а не в каждой ветке.
+# Windows освободил бы их и сам при выходе процесса, но «само рассосётся» не переживает
+# следующую правку — а забытый Stop-Transcript ещё и оставляет обрезанный лог выкатки.
+function Exit-Agent([int]$code) {
+    if ($script:TranscriptOn) {
+        try { Stop-Transcript | Out-Null } catch { }
+        $script:TranscriptOn = $false
+    }
+    Exit-DeployMutex
+    exit $code
+}
+
+# Отказ guard'а ПОСЛЕ подхвата заявки обязан её закрыть. Иначе в журнале навсегда остаётся
+# current с phase=queued и result=null: сервер считает выкатку идущей, отвечает 409 на все
+# следующие заявки и молчит инициатору — до ручной правки файла на боевой машине.
+# Заявки не было (ручной запуск) — Complete-Deploy тихо ничего не пишет.
+function Exit-Guard([string]$message) {
+    Complete-Deploy 'failed' $message ''
+    Exit-Agent 2
 }
 
 function Get-GitState {
@@ -330,22 +354,39 @@ function Copy-BuildTree([string]$src, [string]$dst) {
 }
 
 # --- Процессы -----------------------------------------------------------------------------
+# Только НАШ стек: процессы, чей exe лежит в PublishDir. По одному имени Get-Process ловит
+# любой одноимённый процесс на машине, а на этой же машине штатно живут хостовой дев-стенд
+# (dotnet run), инспекционные копии бэкапа (--inspect) и тестовый инстанс полигона на :8080 —
+# выкатка убивала бы их заодно, а потом ещё и падала на «процессы не умерли за 20 с».
+# Путь недоступен (процесс чужой учётки) — значит и не наш: такие не трогаем.
+function Get-StackProcesses {
+    $root = Get-NormalizedPath $PublishDir
+    $procs = @(Get-Process -Name 'ClaudeHomeServer', 'ClaudeHomeServer.Tray', 'ConPtyBridge' -ErrorAction SilentlyContinue)
+    return @($procs | Where-Object {
+        $exePath = ''
+        try { $exePath = $_.Path } catch { $exePath = '' }
+        if (-not $exePath) { return $false }
+        return ((Get-NormalizedPath (Split-Path -Parent $exePath)) -eq $root)
+    })
+}
+
 function Stop-ServerStack {
     # Трей глушим ПЕРВЫМ, иначе его супервизор поднимет сервер обратно посреди подмены файлов.
     # ConPtyBridge живёт в PublishDir и переживает смерть сервера-родителя — его exe залочит
     # копирование, поэтому он в списке наравне с сервером.
-    Get-Process ClaudeHomeServer.Tray -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    @(Get-StackProcesses | Where-Object { $_.ProcessName -eq 'ClaudeHomeServer.Tray' }) |
+        Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 400
-    Get-Process ClaudeHomeServer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-    Get-Process ConPtyBridge -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    @(Get-StackProcesses | Where-Object { $_.ProcessName -ne 'ClaudeHomeServer.Tray' }) |
+        Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 700
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
-        $alive = @(Get-Process ClaudeHomeServer, ClaudeHomeServer.Tray, ConPtyBridge -ErrorAction SilentlyContinue)
+        $alive = @(Get-StackProcesses)
         if ($alive.Count -eq 0) { break }
         Start-Sleep -Milliseconds 500
     }
-    $alive = @(Get-Process ClaudeHomeServer, ClaudeHomeServer.Tray, ConPtyBridge -ErrorAction SilentlyContinue)
+    $alive = @(Get-StackProcesses)
     if ($alive.Count -gt 0) { throw "процессы не умерли за 20 с: $($alive.ProcessName -join ', ')" }
     # Файловые локи снимаются не мгновенно после Exit процесса — даём Windows дописать.
     Start-Sleep -Milliseconds 800
@@ -404,7 +445,12 @@ function Test-HealthOnce([string]$url) {
     return $res
 }
 
-function Wait-Health([string]$expectedBuild, [int]$timeoutSec, [int]$needSuccess) {
+# В выкатке заголовок обязателен: публикуемая сборка его всегда пишет (Write-BuildMarker +
+# BuildIdProvider), и «204 без заголовка» означает, что на порту отвечает КТО-ТО ДРУГОЙ —
+# старый инстанс под внешним Runner, чужой слушатель или кеширующий прокси, — пока новая
+# сборка крутится в цикле падений. Ровно этот отказ заголовок и заведён ловить.
+# -AllowMissingBuild — поблажка для отката: снимок старого релиза маркера может не нести.
+function Wait-Health([string]$expectedBuild, [int]$timeoutSec, [int]$needSuccess, [switch]$AllowMissingBuild) {
     $deadline = (Get-Date).AddSeconds($timeoutSec)
     $streak = 0
     $last = ''
@@ -418,11 +464,11 @@ function Wait-Health([string]$expectedBuild, [int]$timeoutSec, [int]$needSuccess
                     # заголовок и заведён: файл на диске лежит независимо от того, какой exe жив.
                     $buildOk = ($r.build -eq $expectedBuild)
                     if (-not $buildOk) { $last = "health ok, но X-Build='$($r.build)' вместо '$expectedBuild'" }
-                } elseif ($RequireBuildHeader) {
-                    $buildOk = $false
-                    $last = 'health ok, но заголовка X-Build нет (-RequireBuildHeader)'
+                } elseif ($AllowMissingBuild -and -not $RequireBuildHeader) {
+                    $last = 'health ok, заголовка X-Build нет — снимок релиза его не несёт, засчитываю'
                 } else {
-                    $last = 'health ok, заголовка X-Build нет — сборка его ещё не отдаёт'
+                    $buildOk = $false
+                    $last = 'health ok, но заголовка X-Build нет: отвечает не наша сборка (чужой слушатель или старый процесс)'
                 }
             }
             if ($buildOk) {
@@ -484,12 +530,24 @@ function Write-BuildMarker([string]$dir, $deployId, $sha, $refName, $dirty) {
 # автоотката после провала гейта. Вынесено в функцию не ради красоты — два независимых
 # списка шагов неминуемо разъезжаются, а второй путь проверить руками почти невозможно.
 function Restore-Release([string]$dir, [string]$name) {
+    # Маркер читаем из СНИМКА и ДО копирования. Copy-BuildTree корень не зеркалит (без /MIR),
+    # поэтому build-id.txt провалившейся выкатки из публикации сам не исчезнет: прочитанный
+    # после копирования, он дал бы гейту сравнить чужое значение само с собой. Снимок без
+    # маркера (публикация до появления build-id.txt) — убираем маркер и из PublishDir:
+    # отсутствие заголовка честнее, чем враньё о том, какой код сейчас на проде.
+    $marker = Get-BuildMarker $dir
+    $expect = ''
+    if ($marker) { $expect = "$($marker.deployId)" }
+
     $h = Add-DeployStep 'rollback-stop'
     Stop-ServerStack
     Complete-DeployStep $h 'ok' ''
 
     $h = Add-DeployStep 'rollback-restore'
     Copy-BuildTree $dir $PublishDir
+    if (-not $marker) {
+        Remove-Item -LiteralPath (Join-Path $PublishDir 'build-id.txt') -Force -ErrorAction SilentlyContinue
+    }
     Complete-DeployStep $h 'ok' $name
 
     $h = Add-DeployStep 'rollback-start'
@@ -498,12 +556,8 @@ function Restore-Release([string]$dir, [string]$name) {
 
     Set-DeployPhase 'verifying'
     $h = Add-DeployStep 'rollback-health'
-    # Ожидаемый X-Build берём из вернувшегося маркера: снимок унёс его с собой, поэтому
-    # после отката заголовок обязан снова стать прежним.
-    $marker = Get-BuildMarker $PublishDir
-    $expect = ''
-    if ($marker) { $expect = "$($marker.deployId)" }
-    $hz = Wait-Health $expect $HealthTimeoutSec $HealthSuccesses
+    # Ожидаемый X-Build — из маркера снимка: после отката заголовок обязан стать прежним.
+    $hz = Wait-Health $expect $HealthTimeoutSec $HealthSuccesses -AllowMissingBuild
     if ($hz.ok) { Complete-DeployStep $h 'ok' $hz.message }
     else { Complete-DeployStep $h 'failed' $hz.message }
     return $hz
@@ -556,9 +610,10 @@ $exitCode = 0
 try {
     # --- Guard: один деплой за раз ---
     if (-not (Enter-DeployMutex)) {
+        # Единственный отказ ДО чтения журнала: заявку не подхватывали и закрывать нечего —
+        # ею занят работающий прямо сейчас первый агент.
         Write-Bad 'ОТКАЗ: выкатка уже идёт (мьютекс Global\ccs-deploy занят)'
-        if ($script:TranscriptOn) { Stop-Transcript | Out-Null }
-        exit 2
+        Exit-Agent 2
     }
 
     # --- Заявка из журнала --------------------------------------------------------------
@@ -607,6 +662,9 @@ try {
             if ("$($rq.releaseId)" -and -not $ReleaseId) { $ReleaseId = "$($rq.releaseId)" }
         }
         Write-Info "подхвачена заявка $deployId (kind=$mode)" 'DarkGray'
+        # С этой секунды заявка наша: любой выход обязан закрыть её результатом (Exit-Guard),
+        # иначе сервер до ручной правки журнала будет считать выкатку идущей.
+        $script:Current = $adopted
     }
 
     # --- Guard: git ----------------------------------------------------------------------
@@ -614,26 +672,26 @@ try {
     if ($mode -eq 'deploy') {
         if (-not (Test-Tool 'git')) {
             Write-Bad 'ОТКАЗ: git не найден в PATH'
-            exit 2
+            Exit-Guard 'git не найден в PATH — выкатка не начиналась'
         }
         $git = Get-GitState
         if (-not $git.ok) {
             Write-Bad "ОТКАЗ: $($git.error)"
-            exit 2
+            Exit-Guard "git не отработал: $($git.error). Выкатка не начиналась"
         }
         Write-Info "ветка $($git.branch), HEAD $($git.sha), файлов с правками: $($git.files.Count)" 'DarkGray'
         if ($Ref -and $Ref -ne $git.branch) {
             Write-Bad "ОТКАЗ: запрошен ref '$Ref', а в рабочем дереве ветка '$($git.branch)'"
             Write-Warn '  Первая волна не переключает ветки: checkout при живом проде — отдельная работа.'
             Write-Warn '  Переключи ветку руками и повтори выкатку.'
-            exit 2
+            Exit-Guard "запрошен ref '$Ref', а в рабочем дереве ветка '$($git.branch)' — переключи ветку руками и повтори"
         }
         if ($git.dirty -and -not $AllowDirty) {
             Write-Bad 'ОТКАЗ: рабочее дерево грязное, а -AllowDirty не задан'
             foreach ($f in ($git.files | Select-Object -First 20)) { Write-Warn "  $f" }
             if ($git.files.Count -gt 20) { Write-Warn "  ... и ещё $($git.files.Count - 20)" }
             Write-Warn '  Закоммить или спрячь правки — либо запусти с -AllowDirty осознанно.'
-            exit 2
+            Exit-Guard "рабочее дерево грязное ($($git.files.Count) файлов), а allowDirty не задан — выкатка не начиналась"
         }
         if ($git.dirty) { Write-Warn "едем с грязным деревом ($($git.files.Count) файлов) — так попросили" }
     }
@@ -644,7 +702,7 @@ try {
         Write-Bad "ОТКАЗ: запущен ClaudeCodeServerRunner (ClaudeServerTray.exe), PID $($runner.Id -join ', ')"
         Write-Warn '  Он супервизит продукт и поднимет сервер обратно посреди подмены файлов,'
         Write-Warn '  а в конце на порту окажутся два супервизора. Выйди из Runner и повтори.'
-        exit 2
+        Exit-Guard "запущен ClaudeCodeServerRunner (PID $($runner.Id -join ', ')) — выйди из Runner и повтори выкатку"
     }
     if ($runner.Count -gt 0) { Write-Warn 'Runner жив, но задан -IgnoreRunner: сервер после подмены поднимет он' }
 
@@ -659,7 +717,7 @@ try {
         if ($free -lt $needed) {
             Write-Bad 'ОТКАЗ: на диске не хватит места под staging и снимок релиза'
             Write-Warn '  Освободи место или уменьши KeepReleases — на середине копирования это чинить дороже.'
-            exit 2
+            Exit-Guard ("на диске не хватит места: нужно ~{0:N0} МБ, свободно {1:N0} МБ — выкатка не начиналась" -f ($needed / $mb), ($free / $mb))
         }
     } else {
         Write-Warn 'свободное место определить не удалось — проверка пропущена'
@@ -674,7 +732,7 @@ try {
         if (-not (Test-Tool 'robocopy')) { $missing += 'robocopy' }
         if ($missing.Count -gt 0) {
             Write-Bad "ОТКАЗ: нет инструментов в PATH: $($missing -join ', ')"
-            exit 2
+            Exit-Guard "нет инструментов в PATH: $($missing -join ', ') — выкатка не начиналась"
         }
     }
 
@@ -723,7 +781,7 @@ try {
         }
         Write-Host ''
         Write-Good 'Проверки пройдены, изменений не вносилось (-DryRun).'
-        exit 0
+        Exit-Agent 0
     }
 
     # --- Журнал: заводим текущую выкатку --------------------------------------------------
@@ -778,9 +836,7 @@ try {
             Complete-Deploy 'failed' "откат на $($targetDir.Name) выполнен, но прод не поднялся: $($hz.message). Нужен человек." $targetDir.Name
             $exitCode = 1
         }
-        if ($script:TranscriptOn) { Stop-Transcript | Out-Null }
-        Exit-DeployMutex
-        exit $exitCode
+        Exit-Agent $exitCode
     }
 
     # ======================================================================================
@@ -902,9 +958,7 @@ try {
         Write-Info 'Прод не тронут: подмена бинарников не начиналась.' 'Green'
     }
     Complete-Deploy 'failed' $msg ''
-    if ($script:TranscriptOn) { Stop-Transcript | Out-Null }
-    Exit-DeployMutex
-    exit 1
+    Exit-Agent 1
 }
 
 # ==========================================================================================
@@ -912,6 +966,7 @@ try {
 # ==========================================================================================
 $releaseDir = Join-Path $ReleasesDir $stamp
 $snapshotTaken = $false
+$stopAttempted = $false     # с этой точки прод может лежать — путь назад обязателен
 try {
     Set-DeployPhase 'switching'
 
@@ -920,6 +975,7 @@ try {
     Complete-DeployStep $h 'ok' $note
 
     $h = Add-DeployStep 'stop'
+    $stopAttempted = $true
     Stop-ServerStack
     Complete-DeployStep $h 'ok' ''
 
@@ -998,10 +1054,33 @@ try {
     $reason = $_.Exception.Message
     Write-Bad "ФАЗА переключения провалилась: $reason"
     if (-not $snapshotTaken) {
-        Complete-Deploy 'failed' "$reason. Снимка прошлого релиза нет — откатывать не на что, нужен человек." ''
-        if ($script:TranscriptOn) { Stop-Transcript | Out-Null }
-        Exit-DeployMutex
-        exit 1
+        # Снимка нет — значит упали на стопе или на самом снимке, а подмена бинарников ещё не
+        # начиналась: в PublishDir лежит прежняя, рабочая сборка. Откатывать нечего, но и
+        # оставлять прод лежать нельзя — его достаточно поднять. Инвариант ADR-010: из каждой
+        # точки после стопа есть путь назад.
+        if (-not $stopAttempted) {
+            Complete-Deploy 'failed' "$reason. Прод не тронут: сервер жив, публикация не менялась." ''
+            Exit-Agent 1
+        }
+        Write-Warn 'снимка нет, публикация не менялась — поднимаю прод на прежней сборке'
+        $revived = $false
+        try {
+            # Добиваем недобитое перед стартом: два трея на одном порту — вторая авария поверх первой.
+            try { Stop-ServerStack } catch { Write-Warn "стоп перед подъёмом не дочистил: $($_.Exception.Message)" }
+            Start-ServerStack
+            # X-Build не требуем и не сверяем: на диске СТАРАЯ сборка, наш deployId она не отдаст.
+            $hz = Wait-Health '' $HealthTimeoutSec $HealthSuccesses
+            if ($hz.ok) { $revived = $true } else { Write-Bad "прод не ответил: $($hz.message)" }
+        } catch {
+            Write-Bad "поднять прод не удалось: $($_.Exception.Message)"
+        }
+        if ($revived) {
+            Write-Good 'прод поднят на прежней сборке'
+            Complete-Deploy 'failed' "$reason. Публикация не менялась, прод поднят на ПРЕЖНЕЙ сборке и отвечает." ''
+        } else {
+            Complete-Deploy 'failed' "$reason. Публикация не менялась, но прод НЕ ПОДНЯЛСЯ — нужен человек: $PublishDir." ''
+        }
+        Exit-Agent 1
     }
     Write-Warn "возвращаю релиз $stamp"
     $rolled = $false
@@ -1020,6 +1099,4 @@ try {
     }
 }
 
-if ($script:TranscriptOn) { Stop-Transcript | Out-Null }
-Exit-DeployMutex
-exit $exitCode
+Exit-Agent $exitCode

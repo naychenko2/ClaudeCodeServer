@@ -1,9 +1,12 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Deploy;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
@@ -71,6 +74,46 @@ public class DeployControllerTests(TestWebApplicationFactory factory) : IClassFi
         body.GetProperty("enabled").GetBoolean().Should().BeFalse();
         body.GetProperty("history").GetArrayLength().Should().Be(0);
         body.GetProperty("releases").GetArrayLength().Should().Be(0);
+    }
+
+    // Заявка приходит из ЧАТА, а ход ходит в API сервисным токеном MCP — тот выдаётся с ролью
+    // "user" всегда. С [Authorize(Roles = "admin")] все три инструмента deploy_* получали 403,
+    // то есть фича не работала вовсе. Роль проверяем по стору владельца токена.
+    [Fact]
+    public async Task Сервисный_токен_админа_принимается()
+    {
+        var mcp = ServiceTokenClient(TestWebApplicationFactory.TestUsername);
+
+        var status = await mcp.GetAsync("/api/deploy/status");
+        var start = await mcp.PostAsJsonAsync("/api/deploy/start", new { @ref = "master" });
+
+        status.StatusCode.Should().Be(HttpStatusCode.OK);
+        // Контур в тестовой среде не настроен — но это отказ ПО СУЩЕСТВУ, а не по правам
+        start.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+    }
+
+    [Fact]
+    public async Task Сервисный_токен_не_админа_403()
+    {
+        var mcp = ServiceTokenClient(TestWebApplicationFactory.SecondUsername);
+
+        (await mcp.GetAsync("/api/deploy/status")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await mcp.PostAsJsonAsync("/api/deploy/start", new { }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await mcp.PostAsJsonAsync("/api/deploy/rollback", new { }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    // Клиент с сервисным токеном MCP — ровно тем, что ход получает в конфиге на ход
+    private HttpClient ServiceTokenClient(string username)
+    {
+        var users = factory.Services.GetRequiredService<UserStore>();
+        var jwt = factory.Services.GetRequiredService<JwtService>();
+        var userId = users.FindByUsername(username)!.Id;
+        var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Authorization =
+            new AuthenticationHeaderValue("Bearer", jwt.IssueServiceToken(userId));
+        return client;
     }
 
     // Контракт /api/health не меняется: аноним, 204, пустое тело. Файла build-id.txt рядом

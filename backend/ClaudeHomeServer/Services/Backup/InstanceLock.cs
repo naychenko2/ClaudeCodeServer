@@ -21,6 +21,13 @@ public static class InstanceLock
     public static Mutex? TryAcquireBackup(string dataDir) =>
         TryAcquire($"Global\\ccs-backup-{KeyFor(dataDir)}");
 
+    /// <summary>
+    /// Мьютекс выкатки — ТОТ ЖЕ, что берёт deploy-agent.ps1 на всё время работы (ADR-010).
+    /// Имя фиксировано (не от пути к data): агент про каталог data ничего не знает. Взять его
+    /// удалось = агента больше нет, и журнал выкатки можно править, не столкнувшись с его записью.
+    /// </summary>
+    public static Mutex? TryAcquireDeploy() => TryAcquire("Global\\ccs-deploy");
+
     /// <summary>Занят ли мьютекс инстанса, т.е. работает ли сервер на этом каталоге data.</summary>
     public static bool IsServerRunning(string dataDir)
     {

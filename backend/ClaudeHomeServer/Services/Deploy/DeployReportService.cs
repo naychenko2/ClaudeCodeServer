@@ -5,9 +5,12 @@ namespace ClaudeHomeServer.Services.Deploy;
 
 /// <summary>
 /// Доклад об итоге выкатки (ADR-010). Заказчик спрашивал из чата прода, а этот чат умер
-/// вместе со старым инстансом — поэтому докладывает уже НОВЫЙ процесс: на старте читает
-/// журнал и, если итог есть и не доложен, шлёт уведомление и сообщение в чат-инициатор,
-/// после чего ставит отметку. Без этого «публикация не прошла» узнаётся по молчащему сайту.
+/// вместе со старым инстансом — поэтому докладывает уже НОВЫЙ процесс: читает журнал и,
+/// если итог есть и не доложен, шлёт уведомление и сообщение в чат-инициатор, после чего
+/// ставит отметку. Без этого «публикация не прошла» узнаётся по молчащему сайту.
+///
+/// Читаем не единожды, а поллингом несколько минут: итог агент записывает уже ПОСЛЕ подъёма
+/// нового сервера, так что на старте его в журнале ещё нет.
 /// </summary>
 public sealed class DeployReportService(
     DeployService deploy,
@@ -19,20 +22,34 @@ public sealed class DeployReportService(
     // Пауза на подъём: сообщение в чат запускает ход, а ходу нужен уже поднятый хост
     private static readonly TimeSpan StartupDelay = TimeSpan.FromSeconds(10);
 
+    // Одного чтения журнала на старте мало: агент ставит result ПОСЛЕ того, как поднял новый
+    // сервер (старт → health-гейт до 90 с → ротация снимков → запись итога), поэтому новый
+    // инстанс читает журнал заведомо раньше, чем итог в нём появится. Отсюда короткий поллинг:
+    // ждём итог несколько минут, дальше — не наша выкатка (её доложит следующий рестарт).
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PollWindow = TimeSpan.FromMinutes(5);
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         try
         {
             await Task.Delay(StartupDelay, ct);
-            await ReportPendingAsync(ct);
+            var deadline = DateTime.UtcNow + PollWindow;
+            using var timer = new PeriodicTimer(PollInterval);
+            do
+            {
+                if (await ReportPendingAsync(ct)) return;
+            }
+            while (DateTime.UtcNow < deadline && await timer.WaitForNextTickAsync(ct));
         }
         catch (OperationCanceledException) { /* остановка приложения */ }
         catch (Exception ex) { log.LogError(ex, "Доклад об итоге выкатки сорвался"); }
     }
 
-    internal async Task ReportPendingAsync(CancellationToken ct = default)
+    /// <summary>Доложить итог, если он уже есть. true — доложили (ждать больше нечего).</summary>
+    internal async Task<bool> ReportPendingAsync(CancellationToken ct = default)
     {
-        if (deploy.PendingReport() is not { } record) return;
+        if (deploy.PendingReport() is not { } record) return false;
 
         log.LogInformation("Итог выкатки {Id} ({Status}) ещё не доложен — сообщаем заказчику",
             record.Id, record.Result?.Status);
@@ -78,6 +95,7 @@ public sealed class DeployReportService(
         // Отметка ставится в любом случае: доложить повторно на следующем рестарте
         // хуже, чем не доложить вовсе — устаревший отчёт вводит в заблуждение
         await deploy.MarkReportedAsync(record.Id, ct);
+        return true;
     }
 
     /// <summary>Текст доклада: заголовок и тело. Вынесено ради теста формулировок.</summary>

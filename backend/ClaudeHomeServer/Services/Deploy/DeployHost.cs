@@ -21,6 +21,14 @@ public interface IDeployHost
 
     /// <summary>Разбудить агента. null — задача запущена, иначе текст отказа.</summary>
     Task<string?> WakeAgentAsync(DeployOptions options, CancellationToken ct = default);
+
+    /// <summary>
+    /// Взять мьютекс выкатки Global\ccs-deploy — тот же, что держит агент всё время работы.
+    /// null — занят, агент жив. Под ним (и только под ним) серверу позволено писать в журнал
+    /// после старта агента: иначе записи двух процессов затирают друг друга.
+    /// ВАЖНО: владение мьютексом принадлежит ПОТОКУ — брать и отпускать без await между ними.
+    /// </summary>
+    IDisposable? TryLockAgent();
 }
 
 public sealed class DeployHost(
@@ -108,5 +116,20 @@ public sealed class DeployHost(
             return $"планировщик отказал (код {proc.ExitCode}): {text}";
         }
         finally { proc.Dispose(); }
+    }
+
+    public IDisposable? TryLockAgent() =>
+        Backup.InstanceLock.TryAcquireDeploy() is { } mutex ? new MutexLease(mutex) : null;
+
+    // Отпускаем в try/catch: мьютекс мог быть заброшен умершим агентом (владение перешло
+    // к нам через AbandonedMutexException), и падение на ReleaseMutex не должно ронять
+    // приём заявки — предмет вызова совсем в другом.
+    private sealed class MutexLease(Mutex mutex) : IDisposable
+    {
+        public void Dispose()
+        {
+            try { mutex.ReleaseMutex(); } catch { /* не наш мьютекс или уже отпущен */ }
+            mutex.Dispose();
+        }
     }
 }

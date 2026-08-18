@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Deploy;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,9 +16,13 @@ namespace ClaudeHomeServer.Controllers;
 // проверяет guard'ы, пишет заявку в журнал и будит задачу планировщика; работу делает
 // внешний агент, не состоящий с сервером в родстве (иначе трей убил бы его вместе
 // с деревом процессов при остановке).
+//
+// Права — политикой по стору, а НЕ [Authorize(Roles = "admin")]: заявка приходит из чата
+// сервисным токеном MCP, а он выдаётся с ролью "user" всегда (поднять его до admin нельзя —
+// это открыло бы весь admin-периметр каждому MCP-инструменту). Подробности — AdminByStore.
 [ApiController]
 [Route("api/deploy")]
-[Authorize(Roles = "admin")]
+[Authorize(Policy = AdminByStoreRequirement.PolicyName)]
 public class DeployController(DeployService deploy, SessionManager sessions) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;

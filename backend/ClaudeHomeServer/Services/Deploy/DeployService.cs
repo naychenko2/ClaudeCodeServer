@@ -35,8 +35,12 @@ public sealed record DeployStartResult(
 /// пишет заявку в журнал и будит задачу планировщика — всю работу делает внешний агент,
 /// не состоящий с сервером в родстве (иначе трей убил бы его вместе с деревом процессов).
 ///
-/// Журнал deploy-state.json — шов с агентом: сервер пишет в него только заявку (current)
-/// и отметку «доложено», фазы, шаги, итог и список релизов пишет агент.
+/// Журнал deploy-state.json — шов с агентом: сервер пишет в него только заявку (current),
+/// фазы, шаги, итог и список релизов пишет агент. Отметка «доложено» живёт ОТДЕЛЬНЫМ файлом
+/// (см. DeployOptions.ReportedMarkerPath) — агент переписывает журнал целиком из своей копии
+/// в памяти, и общая запись двух процессов теряется. Единственный случай, когда сервер правит
+/// журнал при возможном живом агенте — закрытие протухшей заявки, и оно идёт под мьютексом
+/// Global\ccs-deploy, который агент держит всё время работы.
 /// </summary>
 public sealed class DeployService(
     IConfiguration config,
@@ -92,8 +96,15 @@ public sealed class DeployService(
         {
             var state = Load();
             if (state.Current is { IsActive: true } running)
-                return new DeployStartResult(DeployStartStatus.AlreadyRunning, running.Id,
-                    $"Выкатка {running.Id} уже идёт (фаза «{running.Phase}»)");
+            {
+                // Заявка могла остаться висеть в «queued» навсегда: агент не приступил
+                // (не стартовала задача планировщика, сработал его собственный guard) и итог
+                // не записал. Без TTL такой призрак отвечает 409 на всё следующее.
+                if (CloseStaleQueued(running, DateTime.UtcNow) is not { } reloaded)
+                    return new DeployStartResult(DeployStartStatus.AlreadyRunning, running.Id,
+                        $"Выкатка {running.Id} уже идёт (фаза «{running.Phase}»)");
+                state = reloaded;
+            }
 
             var record = new DeployRecord
             {
@@ -173,6 +184,52 @@ public sealed class DeployService(
         finally { _gate.Release(); }
     }
 
+    /// <summary>
+    /// Закрыть протухшую заявку: агент не сдвинул её с «queued» дольше TTL и мьютекс выкатки
+    /// свободен — значит агента нет и не будет. Возвращает перечитанный под мьютексом журнал
+    /// (заявка в нём уже закрыта как failed) либо null — заявка живая, отказывать по-прежнему.
+    ///
+    /// Синхронный намеренно: владение мьютексом привязано к потоку, между взятием и Dispose
+    /// не должно быть await.
+    /// </summary>
+    private DeployState? CloseStaleQueued(DeployRecord running, DateTime utcNow)
+    {
+        // Двигавшуюся заявку не трогаем: фазы дальше queued означают живого агента, а его
+        // отказ на середине — его же забота (он закрывает заявку сам).
+        if (running.Phase != DeployPhases.Queued) return null;
+        var age = utcNow - (running.StartedAt ?? utcNow);
+        if (age < TimeSpan.FromMinutes(Options.StaleQueuedMinutes)) return null;
+
+        // Свободный мьютекс и есть доказательство, что агента больше нет: он берёт его первым
+        // делом и держит до конца работы
+        using var lease = host.TryLockAgent();
+        if (lease is null) return null;
+
+        // Под мьютексом перечитываем: агент мог дописать журнал, пока мы решали
+        var state = Load();
+        if (state.Current is not { IsActive: true } current
+            || current.Id != running.Id || current.Phase != DeployPhases.Queued) return null;
+
+        var minutes = (int)age.TotalMinutes;
+        current.Phase = DeployPhases.Failed;
+        current.Result = new DeployResult
+        {
+            Ok = false,
+            Status = DeployPhases.Failed,
+            Message = $"Агент выкатки так и не приступил к работе за {minutes} мин — заявка "
+                + "закрыта как протухшая. Смотри задачу планировщика и её журнал: скорее всего "
+                + "она не стартовала или агент отказался ехать на своём guard'е.",
+            FinishedAt = utcNow,
+        };
+        // Докладывать нечего: заказчика тут никто не ждёт, а тот, кто пришёл с новой заявкой,
+        // получит ответ по ней. Устаревший отчёт о призраке только вводил бы в заблуждение.
+        current.Reported = true;
+        Save(state);
+        log.LogWarning("Заявка на выкатку {Id} висела в «queued» {Minutes} мин и закрыта как "
+            + "протухшая — агент не приступил", current.Id, minutes);
+        return state;
+    }
+
     // Идентификатор — UTC-штамп (он же имя папки снимка). Две заявки в одну секунду
     // получили бы одно имя, поэтому при столкновении добавляем суффикс.
     private static string NextId(DeployState state, DateTime utcNow)
@@ -198,28 +255,70 @@ public sealed class DeployService(
     }
 
     /// <summary>
+    /// Срок годности итога: доклад о выкатке старше суток бессмыслен и вреден — журнал живёт
+    /// на диске месяцами, и без этого предела рестарт через месяц отчитался бы о позавчерашней
+    /// выкатке как о свежей новости.
+    /// </summary>
+    public static readonly TimeSpan ReportMaxAge = TimeSpan.FromDays(1);
+
+    /// <summary>
     /// Незадоложенный итог: выкатка закончилась, но заказчик о ней не узнал — его чат умер
     /// вместе со старым инстансом. Возвращает запись, докладывать её — DeployReportService.
     /// </summary>
-    public DeployRecord? PendingReport()
+    public DeployRecord? PendingReport() => PendingReport(DateTime.UtcNow);
+
+    internal DeployRecord? PendingReport(DateTime utcNow)
     {
-        var current = Load().Current;
-        return current is { Result: not null, Reported: false } ? current : null;
+        if (Load().Current is not { Result: not null } current) return null;
+        // Reported в журнале — только для заявок, не доехавших до агента (их закрывает сам
+        // сервер); доклад состоявшейся выкатки отмечается маркером-файлом
+        if (current.Reported || IsReported(current.Id)) return null;
+
+        // Момент итога знает только агент; нет отметки времени — считаем свежим (пропустить
+        // настоящий доклад хуже, чем прислать один спорный)
+        var finished = current.Result?.FinishedAt;
+        return finished is { } at && utcNow - at > ReportMaxAge ? null : current;
     }
 
-    /// <summary>Отметить итог доложенным и убрать запись из current в историю.</summary>
+    /// <summary>Итог этой выкатки уже доложен (маркер рядом с журналом).</summary>
+    private bool IsReported(string deployId) =>
+        Options.ReportedMarkerPath(deployId) is { } path && File.Exists(path);
+
+    /// <summary>
+    /// Отметить итог доложенным. Пишем ОТДЕЛЬНЫЙ файл, а не поле журнала: журнал в этот момент
+    /// ещё может переписывать живой агент (он ставит result до конца своей работы), и отметка
+    /// в общем файле либо пропала бы — доклад повторился, либо затёрла бы его result.
+    /// </summary>
     public async Task MarkReportedAsync(string deployId, CancellationToken ct = default)
     {
+        if (Options.ReportedMarkerPath(deployId) is not { } path) return;
         await _gate.WaitAsync(ct);
         try
         {
-            var state = Load();
-            if (state.Current is not { } current || current.Id != deployId) return;
-            current.Reported = true;
-            // Выкатка закончена и доложена — её место в истории, current свободен
-            if (!current.IsActive) Archive(state);
-            Save(state);
+            Directory.CreateDirectory(Options.ReleasesDir);
+            await File.WriteAllTextAsync(path,
+                DateTime.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture), ct);
+            PruneMarkers();
+        }
+        catch (Exception ex)
+        {
+            // Не записали отметку — доклад повторится на следующем рестарте. Неприятно,
+            // но ронять фоновый сервис из-за файла нельзя
+            log.LogWarning(ex, "Отметка о докладе выкатки {Id} не записана", deployId);
         }
         finally { _gate.Release(); }
+    }
+
+    // Маркеры доклада копятся по одному на выкатку — держим только свежие: журнал хранит
+    // 30 записей истории, всё старше месяца доложить уже невозможно (см. ReportMaxAge).
+    private void PruneMarkers()
+    {
+        try
+        {
+            var edge = DateTime.UtcNow - TimeSpan.FromDays(30);
+            foreach (var file in Directory.EnumerateFiles(Options.ReleasesDir, "reported-*"))
+                if (File.GetLastWriteTimeUtc(file) < edge) File.Delete(file);
+        }
+        catch (Exception ex) { log.LogDebug(ex, "Уборка маркеров доклада не удалась"); }
     }
 }

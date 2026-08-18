@@ -5,6 +5,7 @@ using System.Threading.RateLimiting;
 using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Auth;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Images;
@@ -14,6 +15,7 @@ using ClaudeHomeServer.Services.TriggerSources;
 using ClaudeHomeServer.Services.Modules;
 using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Authentication.Negotiate;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.StaticFiles;
@@ -565,7 +567,16 @@ builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationSc
             }
         };
     });
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+    // Политика для ручек, которые обязаны быть доступны из ХОДА админа (MCP-инструменты
+    // deploy_*): роль в сервисном токене всегда "user", а проверять надо владельца по стору —
+    // см. AdminByStoreRequirement
+    options.AddPolicy(AdminByStoreRequirement.PolicyName, policy =>
+    {
+        policy.RequireAuthenticatedUser();
+        policy.Requirements.Add(new AdminByStoreRequirement());
+    }));
+builder.Services.AddSingleton<IAuthorizationHandler, AdminByStoreHandler>();
 
 // За reverse-proxy (Caddy/туннель) берём реальный IP клиента из X-Forwarded-For,
 // иначе rate-limit считал бы все запросы с адреса прокси как один

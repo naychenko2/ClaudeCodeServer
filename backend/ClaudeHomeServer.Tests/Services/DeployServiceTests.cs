@@ -31,6 +31,9 @@ public class DeployServiceTests : IDisposable
         public DeployGitSnapshot Snapshot { get; set; } = new("4dc7ddab", [], null);
         public string? WakeError { get; set; }
         public int WakeCalls { get; private set; }
+        /// <summary>Жив ли агент: занятый мьютекс Global\ccs-deploy = ехать некуда.</summary>
+        public bool AgentAlive { get; set; }
+        public int LockAttempts { get; private set; }
 
         public Task<DeployGitSnapshot> GitSnapshotAsync(string repoDir, CancellationToken ct = default) =>
             Task.FromResult(Snapshot);
@@ -39,6 +42,19 @@ public class DeployServiceTests : IDisposable
         {
             WakeCalls++;
             return Task.FromResult(WakeError);
+        }
+
+        // Настоящего именованного мьютекса в тестах не берём: на общем имени тесты цеплялись бы
+        // друг за друга (и за живой агент на машине разработчика)
+        public IDisposable? TryLockAgent()
+        {
+            LockAttempts++;
+            return AgentAlive ? null : new Lease();
+        }
+
+        private sealed class Lease : IDisposable
+        {
+            public void Dispose() { }
         }
     }
 
@@ -164,6 +180,102 @@ public class DeployServiceTests : IDisposable
         second.Status.Should().Be(DeployStartStatus.AlreadyRunning);
         second.DeployId.Should().Be(first.DeployId);
         _host.WakeCalls.Should().Be(1);
+    }
+
+    // Агент мог не приступить вовсе (задача планировщика не стартовала, сработал его guard):
+    // запись навсегда осталась бы в queued и отвечала 409 на всё следующее — до ручной правки
+    // журнала на боевой машине.
+    [Fact]
+    public async Task Протухшая_заявка_в_queued_закрывается_и_пропускает_следующую()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Queued,
+                StartedAt = DateTime.UtcNow.AddHours(-2),
+                InitiatedBy = new DeployInitiator { UserId = "u1", SessionId = "s1" },
+            },
+        });
+        var deploy = Build();
+
+        var result = await deploy.StartAsync(new DeployStartRequest("master"), "u1", "s1");
+
+        result.Status.Should().Be(DeployStartStatus.Accepted);
+        var after = ReadJournal();
+        var stale = after.History.Should().ContainSingle(h => h.Id == "20260818-120000").Subject;
+        stale.Phase.Should().Be(DeployPhases.Failed);
+        stale.Result!.Ok.Should().BeFalse();
+        stale.Result.Message.Should().Contain("протухш");
+        // Призрак закрыт молча: доклад о нём никому не нужен
+        stale.Reported.Should().BeTrue();
+        deploy.PendingReport().Should().BeNull();
+        _host.WakeCalls.Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Свежая_заявка_в_queued_остаётся_идущей()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Queued,
+                StartedAt = DateTime.UtcNow.AddMinutes(-1),
+            },
+        });
+        var deploy = Build();
+
+        (await deploy.StartAsync(new DeployStartRequest("master"), "u1", null))
+            .Status.Should().Be(DeployStartStatus.AlreadyRunning);
+        // Мьютекс даже не трогали: TTL не вышел
+        _host.LockAttempts.Should().Be(0);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Живой_агент_держит_мьютекс_протухшую_заявку_не_закрываем()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Queued,
+                StartedAt = DateTime.UtcNow.AddHours(-2),
+            },
+        });
+        _host.AgentAlive = true;
+        var deploy = Build();
+
+        // Мьютекс занят — агент жив (пусть и медленный): его журнал не наш
+        (await deploy.StartAsync(new DeployStartRequest("master"), "u1", null))
+            .Status.Should().Be(DeployStartStatus.AlreadyRunning);
+        _host.LockAttempts.Should().Be(1);
+        ReadJournal().Current!.Phase.Should().Be(DeployPhases.Queued);
+        _host.WakeCalls.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Заявка_сдвинутая_агентом_по_TTL_не_закрывается()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                // building = агент работает; долгая сборка не повод считать заявку призраком
+                Phase = DeployPhases.Building,
+                StartedAt = DateTime.UtcNow.AddHours(-2),
+            },
+        });
+        var deploy = Build();
+
+        (await deploy.StartAsync(new DeployStartRequest("master"), "u1", null))
+            .Status.Should().Be(DeployStartStatus.AlreadyRunning);
+        _host.LockAttempts.Should().Be(0);
     }
 
     [Fact]
@@ -381,10 +493,78 @@ public class DeployServiceTests : IDisposable
         await deploy.MarkReportedAsync(pending.Id);
 
         deploy.PendingReport().Should().BeNull();
-        var after = ReadJournal();
-        // Доложенная и завершённая выкатка уходит в историю — current свободен
-        after.Current.Should().BeNull();
-        after.History.Should().ContainSingle(h => h.Id == "20260818-141230" && h.Reported);
+    }
+
+    // Отметка «доложено» — ОТДЕЛЬНЫЙ файл: журнал в этот момент ещё может переписывать живой
+    // агент (result он ставит до конца работы), и общая запись двух процессов теряется.
+    [Fact]
+    public async Task Отметка_о_докладе_ложится_маркером_рядом_и_журнал_не_трогает()
+    {
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-141230",
+                Phase = DeployPhases.Succeeded,
+                Result = new DeployResult { Ok = true, Status = DeployPhases.Succeeded },
+            },
+        });
+        var deploy = Build();
+        var before = File.ReadAllText(StatePath);
+
+        await deploy.MarkReportedAsync("20260818-141230");
+
+        File.Exists(Path.Combine(_tempDir, "releases", "reported-20260818-141230")).Should().BeTrue();
+        File.ReadAllText(StatePath).Should().Be(before);
+        deploy.PendingReport().Should().BeNull();
+    }
+
+    // Агент ставит result уже ПОСЛЕ подъёма нового сервера (старт → health-гейт до 90 с →
+    // ротация → запись итога), поэтому доклад ищет итог поллингом: на первом чтении журнала
+    // его нет, на последующих — есть.
+    [Fact]
+    public void Итог_дописанный_агентом_после_старта_поднимается_следующим_чтением()
+    {
+        var record = new DeployRecord
+        {
+            Id = "20260818-141230",
+            Phase = DeployPhases.Verifying,
+            InitiatedBy = new DeployInitiator { UserId = "u1", SessionId = "s1" },
+        };
+        WriteJournal(new DeployState { Current = record });
+        var deploy = Build();
+
+        deploy.PendingReport().Should().BeNull();
+
+        // Агент дописал журнал своей копией — сервер в него не лез
+        record.Phase = DeployPhases.Succeeded;
+        record.Result = new DeployResult { Ok = true, Status = DeployPhases.Succeeded };
+        WriteJournal(new DeployState { Current = record });
+
+        deploy.PendingReport()!.Id.Should().Be("20260818-141230");
+    }
+
+    [Fact]
+    public void Итог_старше_суток_не_докладывается()
+    {
+        var finished = new DateTime(2026, 8, 18, 12, 0, 0, DateTimeKind.Utc);
+        WriteJournal(new DeployState
+        {
+            Current = new DeployRecord
+            {
+                Id = "20260818-120000",
+                Phase = DeployPhases.Succeeded,
+                Result = new DeployResult
+                {
+                    Ok = true, Status = DeployPhases.Succeeded, FinishedAt = finished,
+                },
+            },
+        });
+        var deploy = Build();
+
+        // Через час после выкатки — новость, через месяц — дезинформация
+        deploy.PendingReport(finished.AddHours(1)).Should().NotBeNull();
+        deploy.PendingReport(finished.AddDays(30)).Should().BeNull();
     }
 
     [Fact]

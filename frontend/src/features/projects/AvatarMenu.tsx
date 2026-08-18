@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, Palette, Activity, Plug, SquareDashedMousePointer } from 'lucide-react';
+import { Bell, History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, Palette, Activity, Plug, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -14,6 +14,16 @@ const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'dark', label: 'Тёмная' },
   { value: 'system', label: 'Системная' },
 ];
+
+// Видимый фокус триггера — кольцо по токену SHADOW.focus (как IconButton), пилюля
+// остаётся <div> с role="button", для псевдокласса :focus-visible нужен CSS-класс.
+const FOCUS_CLASS = 'cc-avatarmenu';
+if (typeof document !== 'undefined' && !document.getElementById('cc-avatarmenu-style')) {
+  const el = document.createElement('style');
+  el.id = 'cc-avatarmenu-style';
+  el.textContent = `.${FOCUS_CLASS}:focus-visible{outline:none;box-shadow:${SHADOW.focus};}`;
+  document.head.appendChild(el);
+}
 
 // Разделитель между смысловыми группами пунктов меню
 function MenuDivider() {
@@ -60,14 +70,22 @@ interface Props {
   // «MCP-серверы» (личный реестр внешних инструментов) — соседний пункт; за фич-флагом
   // mcp-registry, поэтому HubHeader передаёт колбэк только при включённом флаге
   onShowMcpServers?: () => void;
+  // «Уведомления» — на планшете колокольчик уходит из шапки в меню аватара,
+  // счётчик непрочитанных — на самом аватаре числом. undefined — пункт не показывать,
+  // бейдж на аватаре не рисуется (десктоп и мобилка: колокольчик остаётся в шапке,
+  // дубля не возникает).
+  onOpenNotifications?: () => void;
+  notifBadge?: number;
+  notifActive?: boolean;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowModelsSpend, onOpenSpend, onOpenTelemetry, onShowMcpServers }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowModelsSpend, onOpenSpend, onOpenTelemetry, onShowMcpServers, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLDivElement>(null);
   const themeMode = useThemeMode();
   // Флаг мог подняться, пока меню закрыто — перечитываем на каждом открытии
   const [micFallback, setMicFallback] = useState(false);
@@ -81,24 +99,53 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
     });
   };
 
+  // Enter/Space открывают меню; Space без preventDefault скроллит страницу
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleOpen();
+    }
+  };
+
   useEffect(() => {
     if (!open) return;
-    const handler = (e: MouseEvent) => {
+    const onMouseDown = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) {
         setOpen(false);
       }
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+        // Возвращаем фокус на триггер — иначе он провалится в body, когда
+        // пользователь нажал Esc, находясь на пункте меню
+        buttonRef.current?.focus();
+      }
+    };
+    document.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onMouseDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
   }, [open]);
 
   return (
     <div ref={ref} style={{ position: 'relative', flexShrink: 0 }}>
       <div
+        ref={buttonRef}
+        className={FOCUS_CLASS}
         onClick={toggleOpen}
+        onKeyDown={handleKeyDown}
+        role="button"
+        tabIndex={0}
+        aria-label={notifBadge > 0
+          ? `Меню пользователя, ${notifBadge > 99 ? '99+' : notifBadge} непрочитанных уведомлений`
+          : 'Меню пользователя'}
         style={{
           display: 'flex', alignItems: 'center', gap: 7, background: C.bgPanel,
-          borderRadius: 20, padding: '5px 11px 5px 7px', cursor: 'pointer',
+          borderRadius: 20, padding: hideStatus ? 5 : '5px 11px 5px 7px', cursor: 'pointer',
           minWidth: 0, maxWidth: 220, overflow: 'hidden',
         }}
       >
@@ -112,8 +159,22 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
         {!hideStatus && <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />}
       </div>
 
-      {/* Сам аватар индикатором новизны не обвешиваем: счётчик «Что нового»
-          показывается только на одноимённом пункте внутри меню */}
+      {/* Бейдж непрочитанных на самом аватаре — числом (планшет, где колокольчик
+          ушёл из шапки). Геометрия как у колокольчика: position:absolute у ВНЕШНЕЙ
+          обёртки (у самой пилюли overflow:hidden под обрезку подписи сервера —
+          бейдж внутри срежется). Показ: передан onOpenNotifications И есть
+          что показать (>0). На десктопе/мобиле, где колокольчик в шапке, onOpenNotifications
+          не передаётся — дубля не возникает. */}
+      {onOpenNotifications && notifBadge > 0 && (
+        <span aria-hidden style={{
+          position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
+          padding: '0 4px', borderRadius: 8, background: C.accent, color: C.onAccent,
+          fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
+          boxSizing: 'border-box', pointerEvents: 'none',
+        }}>
+          {notifBadge > 99 ? '99+' : notifBadge}
+        </span>
+      )}
 
       {open && (
         <div style={{
@@ -135,6 +196,25 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               <div style={{ fontSize: 11, color: C.textMuted, marginTop: 2 }}>{username}</div>
             )}
           </div>
+          {onOpenNotifications && (
+            <button
+              onClick={() => { setOpen(false); onOpenNotifications(); }}
+              style={notifActive ? { ...dropdownItem, color: C.accent } : dropdownItem}
+            >
+              <Bell size={ICON_SIZE.xs} strokeWidth={2} />
+              Уведомления
+              {notifBadge > 0 && (
+                <span style={{
+                  marginLeft: 'auto',
+                  minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
+                  background: C.accent, color: C.onAccent, fontSize: 11, fontWeight: 700,
+                  lineHeight: '18px', textAlign: 'center', boxSizing: 'border-box',
+                }}>
+                  {notifBadge > 99 ? '99+' : notifBadge}
+                </span>
+              )}
+            </button>
+          )}
           {onOpenKnowledge && (
             <button
               onClick={() => { setOpen(false); onOpenKnowledge(); }}

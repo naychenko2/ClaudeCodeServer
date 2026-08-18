@@ -314,6 +314,8 @@ export const TB = {
   heightDesktop: 52,
   heightMobile: 56,
   padX: 16,
+  // Планшет: край плотнее — таббару нужна ширина.
+  padXTablet: 10,
   padXMobile: 14,
   gap: 8,
   // Тон шапок островов и сайдбаров — единая «оправа» интерфейса (см. IslandHeader)

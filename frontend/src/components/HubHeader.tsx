@@ -198,7 +198,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
         // Плашка в тон кнопке аватара, но со скруглением hover-подложки (не пилюля).
         // Левый край выровнен с карточками списка чатов под ней (padX 16 + 9).
         // На планшете текста нет — плашка сжимается до квадратной favicon-кнопки.
-        padding: isTablet ? 6 : '4px 12px 4px 7px', marginLeft: 9, borderRadius: 8,
+        padding: isTablet ? 6 : '4px 12px 4px 7px', marginLeft: isTablet ? 0 : 9, borderRadius: 8,
         background: logoHover ? C.bgSelected : C.bgPanel, transition: 'background 0.15s',
       }}
     >
@@ -239,7 +239,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
     <div style={{
       flexShrink: 0, display: 'flex', alignItems: 'center', gap: 12,
       height: isMobile ? TB.heightMobile : TB.heightDesktop,
-      padding: `0 ${isMobile ? TB.padXMobile : TB.padX}px`,
+      padding: `0 ${isMobile ? TB.padXMobile : isTablet ? TB.padXTablet : TB.padX}px`,
       // Десктоп: шапка сливается с холстом (Islands) — граница не нужна, острова
       // начинаются под ней с зазором. Мобилка: полноэкранные списки без островов,
       // без границы шапка повисла бы в воздухе.
@@ -363,43 +363,48 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           </button>
         )}
 
-        {/* Колокольчик уведомлений — бейдж с числом непрочитанных */}
-        <button
-          onClick={() => onTab('notifications')}
-          aria-label={notifTip}
-          style={{
-            position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
-            background: 'none', color: value === 'notifications' ? C.accent : C.textSecondary,
-            cursor: 'pointer',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-          }}
-          onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; setShowNotifTip(true); }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShowNotifTip(false); }}
-        >
-          <Bell size={17} strokeWidth={2} />
-          {notifBadge > 0 && (
-            <span style={{
-              position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
-              padding: '0 4px', borderRadius: 8, background: C.accent, color: C.onAccent,
-              fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
-              boxSizing: 'border-box', pointerEvents: 'none',
-            }}>
-              {notifBadge > 99 ? '99+' : notifBadge}
-            </span>
-          )}
-          {/* Кастомный tooltip в стиле приложения — как у соседней кнопки «Что нового» */}
-          {showNotifTip && (
-            <span style={{
-              position: 'absolute', top: 'calc(100% + 7px)', right: 0, zIndex: 200,
-              background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8,
-              boxShadow: SHADOW.dropdown, padding: '5px 10px',
-              fontSize: 12, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap',
-              fontFamily: FONT.sans, pointerEvents: 'none',
-            }}>
-              {notifTip}
-            </span>
-          )}
-        </button>
+        {/* Колокольчик уведомлений — бейдж с числом непрочитанных.
+            На планшете уходит: правая секция держит только аватар, а вход в
+            уведомления — пунктом меню аватара; бейдж числом выносится на сам
+            аватар (см. AvatarMenu). На мобиле и десктопе — без изменений. */}
+        {!isTablet && (
+          <button
+            onClick={() => onTab('notifications')}
+            aria-label={notifTip}
+            style={{
+              position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
+              background: 'none', color: value === 'notifications' ? C.accent : C.textSecondary,
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; setShowNotifTip(true); }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; setShowNotifTip(false); }}
+          >
+            <Bell size={17} strokeWidth={2} />
+            {notifBadge > 0 && (
+              <span style={{
+                position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
+                padding: '0 4px', borderRadius: 8, background: C.accent, color: C.onAccent,
+                fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
+                boxSizing: 'border-box', pointerEvents: 'none',
+              }}>
+                {notifBadge > 99 ? '99+' : notifBadge}
+              </span>
+            )}
+            {/* Кастомный tooltip в стиле приложения — как у соседней кнопки «Что нового» */}
+            {showNotifTip && (
+              <span style={{
+                position: 'absolute', top: 'calc(100% + 7px)', right: 0, zIndex: 200,
+                background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: 8,
+                boxShadow: SHADOW.dropdown, padding: '5px 10px',
+                fontSize: 12, fontWeight: 500, color: C.textHeading, whiteSpace: 'nowrap',
+                fontFamily: FONT.sans, pointerEvents: 'none',
+              }}>
+                {notifTip}
+              </span>
+            )}
+          </button>
+        )}
 
         {/* «Единый поиск» и «Утренний бриф» убраны из шапки — теперь только через AI-палитру (⌘/Ctrl+K). */}
         {/* «Что нового» своей кнопки в шапке больше не имеет: на десктопе пункт живёт
@@ -427,6 +432,12 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}
           historyActive={historyActive}
+          // На планшете колокольчик ушёл из шапки: пункт «Уведомления» в меню
+          // аватара, счётчик непрочитанных — на самом аватаре числом. На десктопе
+          // и мобиле проп не передаётся — дубля счётчика и пункта не возникает.
+          onOpenNotifications={isTablet ? () => onTab('notifications') : undefined}
+          notifBadge={isTablet ? notifBadge : 0}
+          notifActive={value === 'notifications'}
         />
       </div>
 

@@ -1324,8 +1324,11 @@ public class ClaudeSession : ILlmSessionAdapter
                     // в логе пусто; наружу уходит только ex.Message — системные падения
                     // по нему неотличимы друг от друга)
                     Console.Error.WriteLine($"[ClaudeSession] Ход упал с исключением (session {Info.Id}): {ex}");
-                    // Статус Error выставит SessionManager по ErrorMessage
-                    await _onMessage(new ErrorMessage(ex.Message));
+                    // Статус Error выставит SessionManager по ErrorMessage. Наружу — человеческая
+                    // формулировка (точечные catch по типам дыру не закрывают: следующее
+                    // исключение всё равно приезжало в ленту сырым .NET-текстом), сырой
+                    // ex.Message живёт под «Подробностями» и в логе выше
+                    await _onMessage(new ErrorMessage(TurnFailureText.ForException(ex), Details: ex.Message));
                 }
                 finally
                 {
@@ -3358,7 +3361,15 @@ public class ClaudeSession : ILlmSessionAdapter
                 if (isErrorFlag
                     && root.TryGetProperty("result", out var resText) && resText.ValueKind == JsonValueKind.String
                     && !string.IsNullOrWhiteSpace(resText.GetString()))
-                    await _onMessage(new ErrorMessage(resText.GetString()!, ExpectResultFollows: true));
+                {
+                    // Распознанную перегрузку («API Error: 529 Overloaded…») человек читает
+                    // по-русски, сырой ответ CLI уходит под «Подробности»; нераспознанный текст
+                    // показываем как есть — выдуманная формулировка ослепила бы диагностику
+                    var rawError = resText.GetString()!;
+                    var humanError = TurnFailureText.ForCliError(rawError);
+                    await _onMessage(new ErrorMessage(humanError ?? rawError, ExpectResultFollows: true,
+                        Details: humanError is null ? null : rawError));
+                }
                 // Статус Error/Active выставит SessionManager по ResultMessage
                 var ctxTokens = _lastContextTokens > 0 ? _lastContextTokens : (int?)null;
                 await _onMessage(new ResultMessage(subtype, durationMs, numTurns, usage, totalCost, apiErr, denials, ctxTokens, ParseUsageModel(root)));

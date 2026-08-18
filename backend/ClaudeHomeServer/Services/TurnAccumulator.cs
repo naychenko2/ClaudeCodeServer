@@ -252,7 +252,11 @@ internal class TurnAccumulator
     // этого хода (провалившаяся попытка успела его прислать). null — пометки не
     // пишем: в начале чата session_started ещё нет, и без PreviousModel пилюля в
     // истории врала бы («Ответила X — была Y»), а Y неизвестна.
-    public void OnModelSwitched(string model, string? previousModel, string? reason)
+    // details — сырой текст погашенной подменой ошибки провайдера: красной карточки в
+    // ленте нет (ход состоялся на другой модели), текст живёт «Подробностями» внутри
+    // самой пометки и обязан пережить F5 — поэтому пишем его в историю.
+    public void OnModelSwitched(string model, string? previousModel, string? reason,
+        string? details = null)
     {
         if (previousModel is null) return;
         lock (_lock)
@@ -263,6 +267,7 @@ internal class TurnAccumulator
                 Model = model,
                 PreviousModel = previousModel,
                 Reason = reason,
+                Details = details,
             });
         }
     }
@@ -464,12 +469,14 @@ internal class TurnAccumulator
         await FlushAsync(svc);
     }
 
-    public async Task OnErrorAsync(string text, ChatHistoryService svc)
+    // text — человекочитаемая формулировка сбоя (Services/Llm/TurnFailureText), details —
+    // сырой технический текст (ответ CLI, ex.Message): в карточке он под «Подробностями».
+    public async Task OnErrorAsync(string text, ChatHistoryService svc, string? details = null)
     {
         lock (_lock)
         {
             FlushBuffers(final: true);
-            _currentTurn.Add(new StoredErrorMessage(text));
+            _currentTurn.Add(new StoredErrorMessage(text) { Details = details });
         }
         await FlushAsync(svc);
     }

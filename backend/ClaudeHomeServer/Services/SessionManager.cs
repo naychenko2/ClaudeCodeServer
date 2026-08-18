@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -64,6 +64,9 @@ public class SessionManager : IDisposable
         // хода — оба матчили `msg is ResultMessage or ErrorMessage` и параллельно дёргали
         // HandleTeamTurnEndAsync, давая гонку с двумя одинаковыми карточками/push. Разбираем
         // ход по ErrorMessage (несёт верный failed=true), а спаренный ResultMessage — глушим.
+        // Под фолбэком пара доезжает только при настоящем провале (FailClosed/FailExhausted):
+        // если попытку сменила подмена, ни её ошибка, ни её result наружу не идут — флаг не
+        // взводится и не виснет, а конец хода разбирается по финальному result.
         public volatile bool SkipNextTeamTurnEnd;
         // Текущий ход штаба поднят сообщением ЧЕЛОВЕКА (M7): авто-подтверждение добавочного
         // плана опирается на «вводная человека и есть точка контроля», поэтому инициатора
@@ -7544,9 +7547,12 @@ public class SessionManager : IDisposable
                     // Пометка автоподмены модели в историю — после F5/рестарта человек видит,
                     // что отвечала не та модель, что был выбран. Уровень 1 (ротация подписок)
                     // модель не трогает — пилюля там не нужна; адаптер шлёт Auto=true без
-                    // Model, OnModelSwitched в таком случае no-op
+                    // Model, OnModelSwitched в таком случае no-op.
+                    // ErrorDetails — сырой текст погашенной подменой ошибки провайдера: красной
+                    // карточки в ленте нет, но текст доступен «Подробностями» внутри пометки,
+                    // поэтому кладём его в историю вместе с ней.
                     if (m.Auto && !string.IsNullOrEmpty(m.Model))
-                        acc.OnModelSwitched(m.Model, acc.LastStartedModel(), m.Reason);
+                        acc.OnModelSwitched(m.Model, acc.LastStartedModel(), m.Reason, m.ErrorDetails);
                     break;
                 case RateLimitMessage m:
                     _usage.Record(m.LimitType, m.Utilization, m.Status, m.IsUsingOverage, m.ResetsAt, m.OverageStatus, m.OverageResetsAt, subscriptionKey: entry?.Info.Provider, source: "turn");
@@ -7605,7 +7611,11 @@ public class SessionManager : IDisposable
                     }
                     break;
                 case ErrorMessage m:
-                    await acc.OnErrorAsync(m.Text, _history);
+                    // Сюда доезжают только настоящие провалы: промежуточную ошибку попытки,
+                    // за которой пошла подмена, адаптер наружу не выпускает (её текст едет
+                    // в ErrorDetails маркера) — значит и LoopTurnFailed на ней не взводится.
+                    // Details — сырой техтекст под «Подробностями» карточки.
+                    await acc.OnErrorAsync(m.Text, _history, m.Details);
                     // Ошибка хода (в т.ч. упавший старт процесса) — цикл «до готово»
                     // не продолжаем; иначе ретрай-шторм до лимита итераций
                     if (entry is not null) entry.LoopTurnFailed = true;
@@ -7733,10 +7743,13 @@ public class SessionManager : IDisposable
             {
                 // Пара ErrorMessage(ExpectResultFollows)+ResultMessage одного хода (см. комментарий
                 // у SessionEntry.SkipNextTeamTurnEnd) — обработали по ErrorMessage, спаренный
-                // ResultMessage только гасит флаг и второй раз ход не разбирает.
-                if (msg is ResultMessage && entry.SkipNextTeamTurnEnd)
+                // ResultMessage только гасит флаг и второй раз ход не разбирает. Между ними может
+                // приехать ещё одна ошибка — итоговый текст исчерпания цепочки (FailExhaustedAsync
+                // шлёт «причина попытки» → «вердикт» → result): её тоже глушим, конец хода у него
+                // один. Флаг снимает только терминальный result, иначе он утёк бы в следующий ход.
+                if (entry.SkipNextTeamTurnEnd)
                 {
-                    entry.SkipNextTeamTurnEnd = false;
+                    if (msg is ResultMessage) entry.SkipNextTeamTurnEnd = false;
                 }
                 else
                 {

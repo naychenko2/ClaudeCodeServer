@@ -125,6 +125,33 @@ interface StoredHistoryMessage {
 // молча пропускаем, чтобы старые чаты открывались без ошибок и мусорных элементов
 const LEGACY_KINDS = new Set(['meeting', 'meeting_phase', 'pipeline', 'pipeline_phase']);
 
+type ModelSwitchedItem = Extract<ChatItem, { kind: 'model_switched' }>;
+
+// Сколько элементов хвоста ленты просматриваем в поисках ошибки, которую погасила подмена
+// модели. Между ошибкой попытки и маркером подмены бывает только служебное (session_started
+// новой попытки, resumed) — окна в три элемента хватает с запасом.
+const SWITCH_COLLAPSE_WINDOW = 3;
+
+// Добавляет маркер подмены модели, схлопывая с ним промежуточную ошибку провайдера (529 и
+// т.п.), если она стоит прямо перед ним: ход состоялся на другой модели, красная карточка —
+// ложная тревога. Сырой текст не теряем — он уезжает в «Подробности» самого маркера.
+// Бэкенд такие ошибки гасит сам (FallbackLlmSessionAdapter), так что это страховка: история
+// старых чатов пару уже хранит, да и непогашенная ошибка не должна пугать зря.
+// Всё, кроме служебных элементов хода, обрывает поиск: текст/ответ или сообщение
+// пользователя между ошибкой и подменой означают, что ошибка была не от этой попытки.
+function appendModelSwitched(items: ChatItem[], pill: ModelSwitchedItem): void {
+  const from = Math.max(0, items.length - SWITCH_COLLAPSE_WINDOW);
+  for (let i = items.length - 1; i >= from; i--) {
+    const it = items[i];
+    if (it.kind === 'session_started' || it.kind === 'resumed') continue;
+    if (it.kind !== 'error') break;
+    items.splice(i, 1);
+    items.push({ ...pill, details: pill.details ?? it.details ?? it.text });
+    return;
+  }
+  items.push(pill);
+}
+
 // Приводит сырую историю к ChatItem[]: проставляет UI-поля дефолтами —
 // thinking свёрнут, error без кнопки повтора (повторять исторические ошибки нельзя).
 // deriveSpeakers (групповой чат): между соседними text-сообщениями с разным personaId
@@ -170,6 +197,9 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
 
     if (m.kind === 'thinking') items.push({ ...m, expanded: false } as unknown as ChatItem);
     else if (m.kind === 'error') items.push({ ...m, canRetry: false } as unknown as ChatItem);
+    // Поля маркера подмены (model/previousModel/reason/details) переносятся как есть,
+    // но пару «ошибка + подмена» из истории старых чатов схлопываем — см. appendModelSwitched
+    else if (m.kind === 'model_switched') appendModelSwitched(items, m as unknown as ModelSwitchedItem);
     else if (m.kind === 'text' || m.kind === 'user_message') {
       // В истории поле называется timestamp (StoredMessage.Timestamp), в ленте — ts:
       // без перекладывания панель поста осталась бы без времени после перезагрузки
@@ -588,7 +618,9 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
         // Компакция могла оборваться этой же ошибкой: её индикатор гасит только
         // compact_status с результатом, и без сброса «Сжимаю…» висело бы до перезагрузки
         isCompacting: false,
-        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true }],
+        // details — сырой технический текст за человекочитаемым msg.text; если следом
+        // придёт подмена модели, элемент схлопнется в её маркер (appendModelSwitched)
+        items: [...prev.items, { kind: 'error', text: msg.text, canRetry: true, ...(msg.details ? { details: msg.details } : {}) }],
       };
 
     case 'exited': {
@@ -650,9 +682,18 @@ export function applyServerMessage<S extends ChatState>(prev: S, msg: ServerMess
       // к этому моменту (провалившаяся попытка перед подменой уже её прислала)
       if (msg.auto && msg.model) {
         const prevModel = lastKnownModel(prev.items);
-        if (prevModel && prevModel !== msg.model)
-          return withItems([...items,
-            { kind: 'model_switched', model: msg.model, previousModel: prevModel, reason: msg.reason, rawLabel: msg.label }]);
+        if (prevModel && prevModel !== msg.model) {
+          // errorDetails — сырой текст погашенной ошибки попытки: карточки в ленте нет,
+          // текст раскрывается «Подробностями» маркера. Если ошибка всё же доехала
+          // элементом ленты (старый бэкенд, неклассифицированный сбой) — appendModelSwitched
+          // схлопнёт её с маркером
+          const next = [...items];
+          appendModelSwitched(next, {
+            kind: 'model_switched', model: msg.model, previousModel: prevModel,
+            reason: msg.reason, rawLabel: msg.label, details: msg.errorDetails,
+          });
+          return withItems(next);
+        }
       }
 
       return withItems(msg.auto || !msg.label

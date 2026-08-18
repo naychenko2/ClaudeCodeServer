@@ -147,7 +147,10 @@ public record RedactedThinkingMessage() : ServerMessage("redacted_thinking");
 // следом БЕЗУСЛОВНО идёт ResultMessage того же хода, поэтому терминальные обработчики
 // «конец хода» (штаб, цикл «до готово») не должны дёргаться на нём дважды — см.
 // SessionManager.OnMessageAsync, SessionEntry.SkipNextTeamTurnEnd.
-public record ErrorMessage(string Text, bool ExpectResultFollows = false)
+// Details — сырой технический текст сбоя (ответ CLI, ex.Message): в ленте он живёт только
+// под «Подробностями», а Text всегда человекочитаемый (Services/Llm/TurnFailureText —
+// единственная точка формулировок). null — деталей нет либо Text и есть исходный текст.
+public record ErrorMessage(string Text, bool ExpectResultFollows = false, string? Details = null)
     : ServerMessage("error");
 
 // Телеметрия лимитов подписки (rate_limit_event, ~каждый ход). Utilization (0..1) — доля
@@ -392,8 +395,11 @@ public record TeamImplementMessage(
 // разделителя, а по Reason фронт показывает каноническую формулировку подсказки
 // («Исчерпан лимит», «Провайдер выключен», «Эндпоинт недоступен») вместо сырого
 // текста маркера. null — подмена не автоматическая либо причина неизвестна.
+// ErrorDetails — сырой текст промежуточной ошибки, которую погасила подмена: красную карточку
+// такой ошибки в ленту не показываем (ход состоялся на другой модели), но текст не теряем —
+// он раскрывается «Подробностями» внутри самого маркера подмены. null — гасить было нечего.
 public record ProviderSwitchedMessage(string Provider, string? Model = null, string? Label = null,
-    bool Auto = false, string? Reason = null)
+    bool Auto = false, string? Reason = null, string? ErrorDetails = null)
     : ServerMessage("provider_switched");
 
 // Лимит подписки исчерпан: предложение продолжить чат карточкой с кнопками в ленте —

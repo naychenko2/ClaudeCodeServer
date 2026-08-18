@@ -59,7 +59,10 @@ public class FallbackLlmSessionAdapterTests
         public void RespondPlan(string requestId, bool approve, string? feedback) { }
         public bool TrySetPermissionModeLive(ClaudeMode mode) => false;
         public bool TrySetModelLive(string model) => false;
-        public void Interrupt() => Interrupts++;
+        // Что CLI досылает при убийстве процесса (уборка прерванной ротацией попытки):
+        // колбэк вызывается из того же места, что и настоящий kill — после решения о ротации
+        public Action? OnInterrupt;
+        public void Interrupt() { Interrupts++; OnInterrupt?.Invoke(); }
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
@@ -2635,5 +2638,103 @@ public class FallbackLlmSessionAdapterTests
                 .Which.Subtype.Should().Be("success");
         }
         finally { if (Directory.Exists(baseDir)) Directory.Delete(baseDir, recursive: true); }
+    }
+
+    // Сырой ответ CLI при перегрузке: ClaudeSession кладёт его в Details, а в Text — человеческую
+    // формулировку. Классификация и «Подробности» работают именно с сырым текстом.
+    private const string RawOverload =
+        "API Error: 529 Overloaded. This is a server-side issue, usually temporary — try again in a moment.";
+
+    // Промежуточная ошибка провайдера + успешная подмена: красной карточки в ленте НЕТ —
+    // ход состоялся на другой модели, человеку хватает спокойного маркера подмены. Сырой
+    // текст не потерян: он переехал в ErrorDetails маркера («Подробности» внутри строки).
+    // Замер по проду: 9 из 16 красных карточек в одном чате были такими «ложными тревогами».
+    [Fact]
+    public async Task ПерегрузкаПровайдера_ПодменаСостоялась_КарточкиОшибкиНет_ТекстВМаркере()
+    {
+        var providers = BuildProviderWithName("glm", "GLM", "glm-5.2");
+        var pool = BuildPool("acc-a");   // одна подписка — уровень 1 недоступен, сразу шаг цепочки
+        var (sut, inner) = BuildSut(pool, providers, model: "sonnet", provider: "acc-a",
+            chain: ["sonnet", "glm-5.2"]);
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage(TurnFailureText.Overloaded, ExpectResultFollows: true,
+                Details: RawOverload));
+            inner.Emit(ApiError("529"));
+        });
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));   // glm-5.2 — успех
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(r => r.Subtype == "success"),
+            "успех на шаге цепочки");
+
+        inner.Attempts.Should().HaveCount(2);
+        Downstream().OfType<ErrorMessage>().Should().BeEmpty(
+            "подмена состоялась — промежуточная ошибка в ленту не идёт");
+        var marker = Downstream().OfType<ProviderSwitchedMessage>().Should().ContainSingle().Subject;
+        marker.Reason.Should().Be("provider_error", "529 → ProviderError");
+        marker.ErrorDetails.Should().Be(RawOverload, "сырой текст доступен под «Подробностями» маркера");
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("success");
+    }
+
+    // Та же ошибка, но подменять не на что (одна подписка, цепочки нет): ход реально не
+    // состоялся — ошибка уходит в ленту как есть и строго ПЕРЕД финальным result (по этой
+    // паре SessionManager разбирает конец хода ровно один раз), финал — error, не finished.
+    [Fact]
+    public async Task ПерегрузкаПровайдера_ПодменыНеБыло_ОшибкаВЛентеПередResult()
+    {
+        var pool = BuildPool("acc-a");
+        var (sut, inner) = BuildSut(pool, provider: "acc-a");
+        inner.Scripts.Enqueue(() =>
+        {
+            inner.Emit(new ErrorMessage(TurnFailureText.Overloaded, ExpectResultFollows: true,
+                Details: RawOverload));
+            inner.Emit(ApiError("529"));
+        });
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал хода");
+
+        inner.Attempts.Should().ContainSingle("повторять не на чем");
+        var msgs = Downstream();
+        var error = msgs.OfType<ErrorMessage>().Should().ContainSingle().Subject;
+        error.Text.Should().Be(TurnFailureText.Overloaded);
+        error.Details.Should().Be(RawOverload);
+        error.ExpectResultFollows.Should().BeTrue();
+        msgs.FindIndex(m => m is ErrorMessage).Should()
+            .BeLessThan(msgs.FindIndex(m => m is ResultMessage), "порядок error→result инвариантен");
+        msgs.OfType<ResultMessage>().Should().ContainSingle().Which.Subtype.Should().Be("error");
+    }
+
+    // Уборка прерванной ротацией попытки: терминалы, которые CLI досылает после kill'а
+    // (ошибка + exited), в ленту не идут — поведение прежнее, задержка ошибки его не меняет.
+    [Fact]
+    public async Task УборкаПрерваннойПопытки_ОшибкаИExitedВЛентуНеУходят()
+    {
+        var pool = BuildPool("acc-a", "acc-b");
+        var (sut, inner) = BuildSut(pool, provider: "acc-a");
+        // Процесс убивают ради снятия паузы rate-limit — терминалы приходят уже после
+        // решения о ротации (SwallowCleanup)
+        inner.OnInterrupt = () =>
+        {
+            inner.Emit(new ErrorMessage(TurnFailureText.Overloaded, ExpectResultFollows: true,
+                Details: RawOverload));
+            inner.Emit(new ExitedMessage(inner.SubmittedTurnSeq));
+        };
+        inner.Scripts.Enqueue(() =>
+            inner.Emit(new RateLimitMessage("five_hour", ResetsAt: null, Status: "rejected")));
+        inner.Scripts.Enqueue(() => inner.Emit(Success()));
+
+        await sut.SendMessageAsync("сделай");
+        await WaitForAsync(() => Downstream().OfType<ResultMessage>().Any(), "финал хода");
+
+        inner.Attempts.Should().HaveCount(2);
+        Downstream().OfType<ErrorMessage>().Should().BeEmpty("терминалы выбывшей попытки — уборка");
+        Downstream().OfType<ExitedMessage>().Should().BeEmpty();
+        // Ротация подписок того же пула остаётся тихой — показывать нечего
+        Downstream().OfType<ProviderSwitchedMessage>().Should().BeEmpty();
+        Downstream().OfType<ResultMessage>().Should().ContainSingle()
+            .Which.Subtype.Should().Be("success");
     }
 }

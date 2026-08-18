@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  formatSubscriptionMeta, splitFallbackOptions, providerSwitchReasonLabel,
+  formatSubscriptionMeta, splitFallbackOptions, providerSwitchReasonLabel, modelSwitchHeadline,
   providerAvailabilityFromBalance, splitByAvailability, nearestReturn,
   providersPlural, fmtReturnTime, invalidateExhaustedVerdict,
 } from '../providerLimit';
@@ -71,8 +71,8 @@ describe('providerSwitchReasonLabel', () => {
     expect(providerSwitchReasonLabel('usage_limit', 'сырой label')).toBe('Исчерпан лимит');
   });
 
-  it('provider_error → «Провайдер выключен», unreachable → «Эндпоинт недоступен»', () => {
-    expect(providerSwitchReasonLabel('provider_error', 'сырой label')).toBe('Провайдер выключен');
+  it('provider_error → «Был перегружен», unreachable → «Эндпоинт недоступен»', () => {
+    expect(providerSwitchReasonLabel('provider_error', 'сырой label')).toBe('Был перегружен');
     expect(providerSwitchReasonLabel('unreachable', 'сырой label')).toBe('Эндпоинт недоступен');
   });
 
@@ -84,6 +84,20 @@ describe('providerSwitchReasonLabel', () => {
 
   it('reason есть, но label тоже нет — undefined (подсказка не рисуется)', () => {
     expect(providerSwitchReasonLabel(undefined, undefined)).toBeUndefined();
+  });
+});
+
+describe('modelSwitchHeadline', () => {
+  it('529 провайдера — «был перегружен», ход состоялся', () => {
+    expect(modelSwitchHeadline('provider_error', 'Claude Opus', 'GLM 5.2'))
+      .toBe('Claude Opus был перегружен — ответ продолжен на GLM 5.2');
+  });
+
+  it('неизвестная причина — нейтральное «был недоступен»', () => {
+    expect(modelSwitchHeadline(undefined, 'Claude Opus', 'GLM 5.2'))
+      .toBe('Claude Opus был недоступен — ответ продолжен на GLM 5.2');
+    expect(modelSwitchHeadline('none', 'Claude Opus', 'GLM 5.2'))
+      .toBe('Claude Opus был недоступен — ответ продолжен на GLM 5.2');
   });
 });
 

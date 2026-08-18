@@ -1,8 +1,8 @@
 import { memo, useState, useContext, useEffect, type ReactNode } from 'react';
-import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, Zap, ChevronDown } from 'lucide-react';
+import { SquareCheck, SquarePen, Check, Copy, AlertCircle, RotateCcw, AlertTriangle, X, Brain, Clock, ScrollText, RefreshCw, ChevronDown } from 'lucide-react';
 import type { ChatItem, Persona, ProviderFallbackOption } from '../../types';
 import {
-  splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel,
+  splitFallbackOptions, formatSubscriptionMeta, providerSwitchReasonLabel, modelSwitchHeadline,
   providerAvailabilityFromBalance, splitByAvailability, nearestReturn,
   providersPlural, fmtReturnTime, invalidateExhaustedVerdict,
 } from '../../lib/providerLimit';
@@ -894,16 +894,19 @@ export function ProviderLimitCard({ item, online, onMigrate }: {
   );
 }
 
-// Разделитель «Ответила X — Y была недоступна»: автоматическая подмена МОДЕЛИ рантайм-
-// фолбэком (см. chatReducer — отдельно от provider_switched, который остаётся тихим или
-// на пилюле «Продолжено на подписке» при ротации внутри провайдера). По клику разворачивается
-// краткое объяснение причины и куска цепочки: «Шаги: {oldLabel} — {reason} → {newLabel}»
-// и пометка, что подмена действует только на этот ход, а не на следующие
+// Разделитель «X был перегружен — ответ продолжен на Y»: автоматическая подмена МОДЕЛИ
+// рантайм-фолбэком (см. chatReducer — отдельно от provider_switched, который остаётся тихим
+// или на пилюле «Продолжено на подписке» при ротации внутри провайдера). Ход состоялся,
+// поэтому строка спокойная, а не красная карточка ошибки. По клику разворачивается краткое
+// объяснение причины и куска цепочки: «Шаги: {oldLabel} — {reason} → {newLabel}», пометка,
+// что подмена действует только на этот ход, и «Подробности» — сырой текст погашенной
+// ошибки провайдера (item.details) для разбора инцидентов
 function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_switched' }> }) {
   const newLabel = useModelLabel(item.model);
   const oldLabel = useModelLabel(item.previousModel);
   const [open, setOpen] = useState(false);
   const reason = providerSwitchReasonLabel(item.reason, item.rawLabel);
+  const headline = modelSwitchHeadline(item.reason, oldLabel, newLabel);
   // Кликабельная пилюля — кнопка, а не div: фокус с клавиатуры и a11y без отдельной обвязки
   return (
     <div style={{ alignSelf: 'center', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 6, maxWidth: '100%', width: '100%' }}>
@@ -920,10 +923,11 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
             padding: '3px 10px', borderRadius: 999, cursor: 'pointer',
             background: C.warningBg, border: `1px solid ${C.warning}`,
           }}
-          title={reason}
+          // строка в одну линию с многоточием — полный текст и причина доступны в подсказке
+          title={reason ? `${headline} · ${reason}` : headline}
         >
-          <Zap size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
-          Ответила {newLabel} — {oldLabel} была недоступна
+          <RefreshCw size={12} strokeWidth={2} style={{ flexShrink: 0 }} />
+          {headline}
           <ChevronDown
             size={11} strokeWidth={2}
             style={{ flexShrink: 0, transition: 'transform 0.15s', transform: open ? 'rotate(180deg)' : 'none', color: C.warningText }}
@@ -946,6 +950,20 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
           <div style={{ marginTop: 4, color: C.textMuted }}>
             Подмена действует только на этот ход: следующие — снова с выбранной моделью.
           </div>
+          {item.details && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 600, color: C.textHeading, marginBottom: 4 }}>Подробности</div>
+              {/* Сырой ответ провайдера — моноширинно и с тем же потолком 180px, что у
+                  карточки ошибки: многострочный JSON/HTML не растягивает ленту */}
+              <div style={{
+                fontFamily: FONT.mono, fontSize: 11, color: C.textSecondary,
+                whiteSpace: 'pre-wrap', overflowWrap: 'break-word',
+                maxHeight: 180, overflow: 'auto',
+                padding: '6px 8px', borderRadius: R.md,
+                background: C.bgWhite, border: `1px solid ${C.borderLight}`,
+              }}>{item.details}</div>
+            </div>
+          )}
         </div>
       )}
     </div>

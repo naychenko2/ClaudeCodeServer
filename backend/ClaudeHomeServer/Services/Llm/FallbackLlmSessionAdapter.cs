@@ -23,7 +23,12 @@ namespace ClaudeHomeServer.Services.Llm;
 // истории и наблюдатели задач видят ход одним целым. При исчерпании цепочки финал
 // всегда ошибочный result: у задачи исполнителя существующий путь TaskExecutionService
 // помечает сбой и уведомляет постановщика, а след перепробованных пар остаётся
-// в ленте чата (ErrorMessage + маркеры provider_switched).
+// в ленте чата (финальный ErrorMessage + маркеры provider_switched).
+//
+// Промежуточные ошибки провайдера (529 и т.п.) задерживаются вместе с result попытки:
+// подмена состоялась — красной карточки в ленте нет вовсе, сырой текст переезжает в
+// ProviderSwitchedMessage.ErrorDetails; подмены не было — ошибка уходит downstream перед
+// финальным result. Красная карточка остаётся только там, где ход реально не состоялся.
 public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
 {
     private readonly ILlmSessionAdapter _inner;
@@ -275,25 +280,30 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 }
 
             case ErrorMessage { ExpectResultFollows: true } em:
-                // Текст API-ошибки провайдера ПЕРЕД result: показываем в ленте честно
-                // (пользователь видит, что случилось) и запоминаем для классификации.
-                // Подавлять сырой «Prompt is too long» при overflow-исчерпании НЕ будем (Nit 6
-                // ревью): класс ошибки становится известен лишь после result, а задерживать текст
-                // до классификации значило бы скрыть честный сигнал «контекст велик» и при успешном
-                // фолбэке — в ущерб диагностике. Дубль с финальным русским текстом при исчерпании —
-                // известный косметический нюанс, он менее вреден, чем невидимая причина переключения.
+                // Текст API-ошибки провайдера ПЕРЕД result. Раньше он уходил в ленту сразу, ДО
+                // классификации: при успешной подмене человек видел красную карточку сбоя, за
+                // которой шёл нормальный ответ (замер по проду: 9 таких «ложных тревог» из 16
+                // карточек в одном чате). Теперь ошибка ЗАДЕРЖИВАЕТСЯ так же, как result попытки,
+                // а показывать её решает оркестратор:
+                //   • подмена состоялась → карточки в ленте нет вовсе, сырой текст едет в
+                //     ProviderSwitchedMessage.ErrorDetails («Подробности» внутри маркера);
+                //   • подмены не было (FailClosedAsync/FailExhaustedAsync) → ошибка уходит
+                //     downstream как есть, строго ПЕРЕД финальным result.
                 lock (turn.Sync)
                 {
                     if (turn.Settled) return _downstream(msg);
-                    turn.NoteErrorText(em.Text);
+                    turn.NoteErrorText(RawErrorText(em));
+                    // Уборка прерванной ротацией попытки — глотаем, как и прочие её терминалы
+                    if (turn.SwallowCleanup) return Task.CompletedTask;
+                    turn.Hold(msg);
+                    return Task.CompletedTask;
                 }
-                return _downstream(msg);
 
             case ErrorMessage em:
                 lock (turn.Sync)
                 {
                     if (turn.Settled) return _downstream(msg);
-                    turn.NoteErrorText(em.Text);
+                    turn.NoteErrorText(RawErrorText(em));
                     if (turn.SwallowCleanup) return Task.CompletedTask; // уборка прерванной ротацией попытки
                     turn.Hold(msg);
                     turn.ResolveAttempt(AttemptEndKind.FatalError);
@@ -339,6 +349,25 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             default:
                 return _downstream(msg);
         }
+    }
+
+    // Сырой технический текст ошибки. С 18.08.2026 ClaudeSession кладёт в Text человеческую
+    // формулировку («Модель перегружена…»), а ответ CLI — в Details. Классификатор
+    // (TurnErrorClassifier) и «Подробности» маркера работают ТОЛЬКО с сырым текстом: по
+    // русской формулировке ни «overloaded», ни «429» не распознаются, и ход, который должен
+    // был уйти на подмену, завершился бы честной ошибкой (класс None).
+    private static string RawErrorText(ErrorMessage em) =>
+        string.IsNullOrWhiteSpace(em.Details) ? em.Text : em.Details!;
+
+    // Сырые тексты задержанных ошибок попытки — в «Подробности» маркера подмены.
+    // null — гасить было нечего (ошибка не приходила).
+    private static string? HeldErrorDetails(IEnumerable<ServerMessage> held)
+    {
+        var parts = held.OfType<ErrorMessage>()
+            .Select(RawErrorText)
+            .Where(s => !string.IsNullOrWhiteSpace(s))
+            .ToArray();
+        return parts.Length == 0 ? null : string.Join("\n", parts);
     }
 
     // Основной цикл: попытка → исход → классификация → ротация → повтор.
@@ -592,9 +621,14 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                     return;
                 }
 
-                // Терминальные сообщения провальной попытки наружу не идут — ход продолжается
+                // Терминальные сообщения провальной попытки наружу не идут — ход продолжается.
+                // Сырой текст задержанной ошибки забираем ДО очистки: красной карточки в ленте
+                // не будет (ход состоится на другой паре), но текст не теряется — он поедет в
+                // ErrorDetails маркера подмены и в лог ниже.
+                string? swallowedError;
                 lock (turn.Sync)
                 {
+                    swallowedError = HeldErrorDetails(turn.Held);
                     turn.Held.Clear();
                     // Attempt прерван ротацией: последующие Exited/ErrorMessage — уборка, глотать
                     // (выставляем ВСЕГДА, не только на RateLimited — уборка нужна и после
@@ -610,19 +644,25 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
                 // ТОЛЬКО при смене ТИПА поставщика (сторонний провайдер / шаг цепочки): переход
                 // между аккаунтами ОДНОГО пула Claude проходит тихо (Label=null), пользователь
                 // видит ровно один ход без служебных переключений. Reason — wire-имя класса
-                // ошибки, чтобы фронт показал каноническую формулировку подсказки.
+                // ошибки, чтобы фронт показал каноническую формулировку подсказки. ErrorDetails —
+                // погашенная ошибка попытки: в маркере она живёт под «Подробностями».
                 if (next.Label is not null)
                 {
                     var reason = TurnErrorClassifier.WireName(cls);
-                    await _downstream(new ProviderSwitchedMessage(next.Key, next.Model, next.Label, Auto: true, Reason: reason));
-                    LogInfo($"Подмена: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» / «{next.Model ?? currentModel}» (причина {reason ?? "неизвестно"})");
+                    await _downstream(new ProviderSwitchedMessage(next.Key, next.Model, next.Label,
+                        Auto: true, Reason: reason, ErrorDetails: swallowedError));
+                    LogInfo($"Подмена: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» / «{next.Model ?? currentModel}» (причина {reason ?? "неизвестно"}). "
+                        + $"Погашенная ошибка: {Truncate(swallowedError ?? "нет", 300)}");
                 }
                 else
                 {
-                    // Тихая подмена (смена подписки того же пула): в ленту не идёт, для разбора
-                    // пишем конкретную причину — LogDetail ротации, иначе общий текст
-                    LogInfo(next.LogDetail
-                        ?? $"Подмена без маркера: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» (маркер уже был от SessionManager)");
+                    // Тихая подмена (смена подписки того же пула): в ленту не идёт — ни маркера,
+                    // ни карточки ошибки, показывать человеку нечего. Для разбора пишем причину
+                    // (LogDetail ротации, иначе общий текст) и погашенный текст ошибки — иначе
+                    // после тихой ротации от него не осталось бы следа нигде.
+                    LogInfo((next.LogDetail
+                        ?? $"Подмена без маркера: {TraceLine(currentModel, currentKey, cls)} → «{KeyLabel(next.Key)}» (маркер уже был от SessionManager)")
+                        + $". Погашенная ошибка: {Truncate(swallowedError ?? "нет", 300)}");
                 }
 
                 ApplyTarget(next);
@@ -1107,8 +1147,8 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // Финал ошибки, когда запасных вариантов не нашлось с первой попытки (нет пула и цепочки —
     // одиночная подписка/провайдер): задержанный result уходит как error, а не как есть. Иначе
     // провал маскируется finished: CLI при API-ошибке отдаёт subtype=success + is_error, и
-    // SessionManager по нему ставил Active (исходная половина P29). Текст причины уже в ленте —
-    // его принёс ErrorMessage(ExpectResultFollows) при получении, здесь только терминал-статус.
+    // SessionManager по нему ставил Active (исходная половина P29). Причину ход не состоялся —
+    // выпускаем сами: задержанный ErrorMessage(ExpectResultFollows) идёт ПЕРЕД result.
     // Используется только когда attempted.Count == 1: перепробованы несколько пар → FailExhausted
     // (там список попыток и общий текст «ни одна не ответила»). Usage/cost сохраняем из реального
     // result — отказный запрос мог потратить токены (биллинг).
@@ -1127,8 +1167,18 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             : new ResultMessage("error", orig?.DurationMs ?? 0, orig?.NumTurns ?? 0,
                 orig?.Usage, orig?.TotalCostUsd,
                 ApiErrorStatus: orig?.ApiErrorStatus ?? end.Result?.ApiErrorStatus);
+        // Ход реально не состоялся — задержанную ошибку показываем, и строго ПЕРЕД финальным
+        // result. Порядок инвариантен: SessionManager по паре ErrorMessage{ExpectResultFollows}
+        // → ResultMessage разбирает конец хода ровно один раз (SessionEntry.SkipNextTeamTurnEnd
+        // выставляется ошибкой и гасится спаренным result). Тот же порядок был и раньше, когда
+        // ошибка уходила downstream в момент получения.
+        // ТРЕБОВАНИЕ К СЛЕДУЮЩЕЙ ПОД-ЗАДАЧЕ (SessionManager, его тут не правим): парная логика
+        // остаётся корректной — при подмене НИ ошибка, НИ result попытки downstream не идут,
+        // так что флаг не выставляется и не остаётся висеть.
+        foreach (var m in held.OfType<ErrorMessage>().Where(e => e.ExpectResultFollows))
+            await _downstream(m);
         await _downstream(result);
-        foreach (var m in held.Where(m => m is not ResultMessage))
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage { ExpectResultFollows: true }))
             await _downstream(m);
     }
 
@@ -1144,6 +1194,19 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
         // «модели не ответили»: причина иная (контекст слишком велик, а не эндпоинты лежат).
         // Формулировка согласована с продуктовым аналитиком (Софья): честнее «ни одна из
         // доступных моделей не смогла», т.к. фолбэк мог пройти через 2–3 модели до отказа.
+        // Задержанные терминалы забираем СРАЗУ: подмены за последней попыткой не последовало,
+        // исход хода решён — и её ошибка (если была) уходит в ленту перед итоговым текстом,
+        // сохраняя хронологию «причина → вердикт → result».
+        List<ServerMessage> held;
+        lock (turn.Sync)
+        {
+            held = [.. turn.Held];
+            turn.Held.Clear();
+            turn.Settled = true;
+        }
+        foreach (var m in held.OfType<ErrorMessage>().Where(e => e.ExpectResultFollows))
+            await _downstream(m);
+
         var overflow = trace.Count > 0 && trace[^1].Class == FallbackErrorClass.ContextOverflow;
         if (overflow)
         {
@@ -1171,19 +1234,13 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
             + $"Пары: {string.Join("; ", trace.Select(t => TraceLine(t.Model, t.Key, t.Class)))}. "
             + $"Последняя ошибка: {Truncate(reason, 300)}");
 
-        List<ServerMessage> held;
-        lock (turn.Sync)
-        {
-            held = [.. turn.Held];
-            turn.Held.Clear();
-            turn.Settled = true;
-        }
         // Реальный result последней попытки со subtype=error выпускаем как есть;
         // success-с-API-ошибкой заменяем ошибочным — иначе сбой выглядел бы успехом
         var result = held.OfType<ResultMessage>().FirstOrDefault(r => r.Subtype == "error")
             ?? new ResultMessage("error", 0, 0, null, null, ApiErrorStatus: lastEnd.Result?.ApiErrorStatus);
         await _downstream(result);
-        foreach (var m in held.Where(m => m is not ResultMessage))
+        // Ошибки попытки уже ушли выше — здесь только остальные терминалы (exited и т.п.)
+        foreach (var m in held.Where(m => m is not ResultMessage and not ErrorMessage { ExpectResultFollows: true }))
             await _downstream(m);
     }
 

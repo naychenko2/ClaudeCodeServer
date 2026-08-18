@@ -108,6 +108,40 @@ public class TurnAccumulatorTests : IDisposable
                 && m.Reason == "rate_limit");
     }
 
+    // Подмена гасит промежуточную ошибку провайдера: красной карточки в ленте нет, но
+    // сырой текст едет в пометке под «Подробностями» и обязан пережить F5 — значит лежит
+    // в истории вместе с самой пометкой.
+    [Fact]
+    public async Task OnModelSwitched_СДеталями_ПишетИхВИсторию()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+        acc.OnSessionStarted("claude-opus-4-8", "auto");
+        acc.OnModelSwitched("glm-5.2", acc.LastStartedModel(), "provider_error",
+            "API Error: 529 Overloaded");
+        await acc.OnResultAsync("success", 10, 1, null, null, null, null, _histSvc);
+
+        var loaded = await _histSvc.LoadAsync(sessionId);
+        loaded.OfType<StoredModelSwitchedMessage>().Should().ContainSingle()
+            .Which.Should().Match<StoredModelSwitchedMessage>(m =>
+                m.Model == "glm-5.2"
+                && m.PreviousModel == "claude-opus-4-8"
+                && m.Reason == "provider_error"
+                && m.Details == "API Error: 529 Overloaded");
+    }
+
+    // Подмена без погашенной ошибки (ротация по лимиту) — прежнее поведение: деталей нет
+    [Fact]
+    public void OnModelSwitched_БезДеталей_ПрежнееПоведение()
+    {
+        var acc = new TurnAccumulator([]);
+        acc.OnSessionStarted("claude-opus-4-8", "auto");
+        acc.OnModelSwitched("deepseek-chat", acc.LastStartedModel(), "rate_limit");
+
+        acc.GetAll().OfType<StoredModelSwitchedMessage>().Should().ContainSingle()
+            .Which.Details.Should().BeNull();
+    }
+
     // Без PreviousModel (в начале чата ещё не было session_started) пилюля не пишется —
     // иначе в истории «Ответила X — была Y», а Y неизвестна
     [Fact]
@@ -403,6 +437,38 @@ public class TurnAccumulatorTests : IDisposable
         loaded.Should().HaveCount(2);
         loaded[0].Should().BeOfType<StoredTextMessage>();
         loaded[1].Should().BeOfType<StoredErrorMessage>().Which.Text.Should().Be("something went wrong");
+    }
+
+    // Настоящий провал хода: человеку — формулировка из TurnFailureText, сырой техтекст
+    // остаётся в карточке под «Подробностями» и переживает перезагрузку истории
+    [Fact]
+    public async Task OnErrorAsync_СДеталями_ХранитСыройТекстОтдельно()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+
+        await acc.OnErrorAsync("Ход прервался — что-то пошло не так на стороне сервера. Отправьте сообщение ещё раз.",
+            _histSvc, "System.IO.IOException: Идет закрытие канала.");
+
+        var loaded = await _histSvc.LoadAsync(sessionId);
+        loaded.Should().ContainSingle()
+            .Which.Should().BeOfType<StoredErrorMessage>()
+            .Which.Details.Should().Be("System.IO.IOException: Идет закрытие канала.");
+    }
+
+    // Ошибка без деталей — прежнее поведение (в т.ч. старые записи истории)
+    [Fact]
+    public async Task OnErrorAsync_БезДеталей_ПрежнееПоведение()
+    {
+        var sessionId = Guid.NewGuid().ToString();
+        var acc = new TurnAccumulator([], sessionId);
+
+        await acc.OnErrorAsync("Ход прерван", _histSvc);
+
+        var loaded = await _histSvc.LoadAsync(sessionId);
+        loaded.Should().ContainSingle()
+            .Which.Should().BeOfType<StoredErrorMessage>()
+            .Which.Details.Should().BeNull();
     }
 
     [Fact]

@@ -139,6 +139,9 @@ public class StoredResultMessage(string subtype, long durationMs, int numTurns,
 public class StoredErrorMessage(string text) : StoredMessage
 {
     public string Text { get; init; } = text;
+    // Сырой технический текст сбоя (ErrorMessage.Details): в карточке живёт под
+    // «Подробностями» и переживает F5. null — деталей нет (старые записи в том числе).
+    public string? Details { get; init; }
 }
 
 // Явная остановка цикла «до готово» (B5): лимит итераций/ошибка хода/ручной стоп — иначе в
@@ -269,4 +272,7 @@ public class StoredModelSwitchedMessage : StoredMessage
     public string Model { get; init; } = "";
     public string PreviousModel { get; init; } = "";
     public string? Reason { get; init; }
+    // Сырой текст промежуточной ошибки, погашенной этой подменой (ProviderSwitchedMessage.
+    // ErrorDetails): без записи в историю после F5 «Подробности» маркера опустели бы.
+    public string? Details { get; init; }
 }

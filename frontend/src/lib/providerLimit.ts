@@ -29,15 +29,16 @@ export function formatSubscriptionMeta(option: ProviderFallbackOption): string {
   return parts.join(' · ');
 }
 
-// Канонические формулировки причины автофолбэка для подсказки «Ответила X — Y
-// была недоступна» (ModelSwitchedPill). Значения — wire-имена backend TurnErrorClassifier
+// Канонические формулировки причины автофолбэка для строки «Шаги: …» внутри маркера
+// подмены (ModelSwitchedPill). Значения — wire-имена backend TurnErrorClassifier
 // (rate_limit/usage_limit/provider_error/unreachable/context_overflow); rate_limit и usage_limit
 // сведены к одной формулировке «Исчерпан лимит» — обе означают исчерпанную квоту, различие
-// не для пользователя.
+// не для пользователя. provider_error — это в первую очередь 529/500 перегруженного
+// эндпоинта, а не выключенный провайдер: формулировка согласована с текстом маркера.
 const REASON_LABEL: Record<string, string> = {
   rate_limit: 'Исчерпан лимит',
   usage_limit: 'Исчерпан лимит',
-  provider_error: 'Провайдер выключен',
+  provider_error: 'Был перегружен',
   unreachable: 'Эндпоинт недоступен',
   context_overflow: 'Контекст не поместился',
   auth_failure: 'Ошибка авторизации',
@@ -46,6 +47,23 @@ const REASON_LABEL: Record<string, string> = {
 export function providerSwitchReasonLabel(reason: string | undefined, fallback: string | undefined): string | undefined {
   if (reason && REASON_LABEL[reason]) return REASON_LABEL[reason];
   return fallback;
+}
+
+// Спокойная строка маркера подмены: «{старая модель} был перегружен — ответ продолжен на
+// {новая модель}». Ход состоялся, извиняться и пугать красным незачем — сообщаем факт.
+// Причина неизвестна/не распознана — нейтральное «был недоступен».
+const SWITCH_CAUSE: Record<string, string> = {
+  rate_limit: 'исчерпал лимит',
+  usage_limit: 'исчерпал лимит',
+  provider_error: 'был перегружен',
+  unreachable: 'не отвечал',
+  context_overflow: 'не вместил контекст',
+  auth_failure: 'не пустил по авторизации',
+};
+
+export function modelSwitchHeadline(reason: string | undefined, previousLabel: string, modelLabel: string): string {
+  const cause = (reason && SWITCH_CAUSE[reason]) ?? 'был недоступен';
+  return `${previousLabel} ${cause} — ответ продолжен на ${modelLabel}`;
 }
 
 // === Доступность провайдеров для карточки ===

@@ -758,6 +758,48 @@ describe('normalizeHistory', () => {
     ]);
   });
 
+  // Details с диска (StoredModelSwitchedMessage.Details) — «Подробности» маркера
+  // переживают F5 вместе с самой пометкой
+  it('model_switched из истории несёт details погашенной ошибки', () => {
+    const raw = [
+      { kind: 'model_switched', model: 'glm-5.2', previousModel: 'claude-opus-4-8', reason: 'provider_error', details: 'API Error: 529 Overloaded' },
+    ];
+    expect(normalizeHistory(raw)).toEqual([
+      { kind: 'model_switched', model: 'glm-5.2', previousModel: 'claude-opus-4-8', reason: 'provider_error', details: 'API Error: 529 Overloaded' },
+    ]);
+  });
+
+  // История старых чатов хранит пару «ошибка провайдера + подмена»: карточку не рисуем,
+  // сырой текст уводим в «Подробности» маркера
+  it('пара «ошибка + подмена» из истории схлопывается в один маркер', () => {
+    const raw = [
+      { kind: 'user_message', text: 'вопрос' },
+      { kind: 'error', text: 'API Error: 529 Overloaded' },
+      // session_started новой попытки между ошибкой и маркером окно поиска не рвёт
+      { kind: 'session_started', model: 'glm-5.2', mode: 'default' },
+      { kind: 'model_switched', model: 'glm-5.2', previousModel: 'claude-opus-4-8', reason: 'provider_error' },
+      { kind: 'text', text: 'ответ' },
+    ];
+    expect(normalizeHistory(raw)).toEqual([
+      { kind: 'user_message', text: 'вопрос' },
+      { kind: 'session_started', model: 'glm-5.2', mode: 'default' },
+      { kind: 'model_switched', model: 'glm-5.2', previousModel: 'claude-opus-4-8', reason: 'provider_error', details: 'API Error: 529 Overloaded' },
+      { kind: 'text', text: 'ответ' },
+    ]);
+  });
+
+  // Подмены следом не было — ход не состоялся, красная карточка из истории остаётся
+  it('ошибка без подмены следом остаётся в истории карточкой', () => {
+    const raw = [
+      { kind: 'error', text: 'Ход прервался — что-то пошло не так на стороне сервера.' },
+      { kind: 'text', text: 'ответ' },
+    ];
+    expect(normalizeHistory(raw)).toEqual([
+      { kind: 'error', text: 'Ход прервался — что-то пошло не так на стороне сервера.', canRetry: false },
+      { kind: 'text', text: 'ответ' },
+    ]);
+  });
+
   // В истории поле зовётся timestamp, в ленте — ts. Без перекладывания панель поста
   // после перезагрузки оставалась бы без времени, хотя на диске оно есть
   it('timestamp из истории становится ts, модель переносится как есть', () => {
@@ -895,6 +937,72 @@ describe('пометка подмены модели (провалившийся
       { type: 'provider_switched', provider: 'acc-b', model: 'claude-opus-4-8', auto: true },
     ]);
     expect(next.items.some(it => it.kind === 'model_switched' || it.kind === 'provider_switched')).toBe(false);
+  });
+
+  // Бэкенд гасит промежуточную ошибку сам и отдаёт её сырой текст в errorDetails —
+  // он живёт под «Подробностями» маркера, красной карточки в ленте нет
+  it('errorDetails с провода едет в details пометки, карточки ошибки не появляется', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      {
+        type: 'provider_switched', provider: 'glm', model: 'glm-5.2', label: 'Автофолбэк: смена провайдера → «GLM»',
+        auto: true, reason: 'provider_error', errorDetails: 'API Error: 529 Overloaded',
+      },
+    ]);
+    expect(next.items.some(it => it.kind === 'error')).toBe(false);
+    expect(next.items[1]).toEqual({
+      kind: 'model_switched', model: 'glm-5.2', previousModel: 'claude-opus-4-8',
+      reason: 'provider_error', rawLabel: 'Автофолбэк: смена провайдера → «GLM»',
+      details: 'API Error: 529 Overloaded',
+    });
+  });
+
+  // Страховка для непогашенной ошибки: доехала карточкой — схлопываем в маркер подмены
+  it('ошибка перед подменой схлопывается: карточки нет, текст ушёл в details', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'error', text: 'Модель перегружена — сервис временно не справляется.', details: 'API Error: 529 Overloaded' },
+      { type: 'provider_switched', provider: 'glm', model: 'glm-5.2', label: 'Автофолбэк', auto: true, reason: 'provider_error' },
+    ]);
+    expect(next.items.some(it => it.kind === 'error')).toBe(false);
+    expect(next.items[next.items.length - 1]).toEqual({
+      kind: 'model_switched', model: 'glm-5.2', previousModel: 'claude-opus-4-8',
+      reason: 'provider_error', rawLabel: 'Автофолбэк', details: 'API Error: 529 Overloaded',
+    });
+  });
+
+  // Ошибка без сырых деталей: в «Подробности» уезжает её собственный текст
+  it('ошибка без details схлопывается по своему тексту', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'error', text: 'API Error: 529 Overloaded' },
+      { type: 'provider_switched', provider: 'glm', model: 'glm-5.2', label: 'Автофолбэк', auto: true },
+    ]);
+    expect(next.items.filter(it => it.kind === 'error')).toHaveLength(0);
+    expect(next.items[1]).toMatchObject({ kind: 'model_switched', details: 'API Error: 529 Overloaded' });
+  });
+
+  // Ход реально не состоялся — подмены следом нет, красная карточка остаётся на месте
+  it('ошибка без подмены остаётся красной карточкой', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'error', text: 'Ход прервался — что-то пошло не так на стороне сервера.' },
+    ]);
+    expect(next.items[1]).toEqual({
+      kind: 'error', text: 'Ход прервался — что-то пошло не так на стороне сервера.', canRetry: true,
+    });
+  });
+
+  // Ответ между ошибкой и подменой = ошибка была от другого хода: гасить её нельзя
+  it('ошибка не схлопывается, если между ней и подменой был ответ', () => {
+    const next = run([
+      started('claude-opus-4-8'),
+      { type: 'error', text: 'старая ошибка' },
+      { type: 'text_delta', text: 'ответ' },
+      { type: 'provider_switched', provider: 'glm', model: 'glm-5.2', label: 'Автофолбэк', auto: true },
+    ]);
+    expect(next.items.some(it => it.kind === 'error')).toBe(true);
+    expect(next.items.some(it => it.kind === 'model_switched')).toBe(true);
   });
 });
 

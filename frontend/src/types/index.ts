@@ -869,7 +869,9 @@ export type ServerMessage = { sessionId: string } & (
   | { type: 'fal_cost'; requestId: string; endpointId?: string; costUsd: number; outputUnits?: number; unitPrice?: number }
   // Завершённая генерация glif: счётчик + кредиты (если billing доехал в payload). Дедуп по jobId.
   | { type: 'glif_cost'; jobId: string; outputType?: string; mediaCount: number; credits?: number; model?: string }
-  | { type: 'error'; text: string }
+  // text — человекочитаемая формулировка сбоя, details — сырой технический текст
+  // (ответ CLI, .NET-исключение): в ленте он живёт только под «Подробностями»
+  | { type: 'error'; text: string; details?: string }
   | { type: 'rate_limit'; limitType: string; resetsAt?: string; status?: string; utilization?: number; isUsingOverage?: boolean; overageStatus?: string; overageResetsAt?: string }
   | { type: 'compact_boundary'; trigger: string; preTokens?: number; postTokens?: number }
   | { type: 'compact_status'; status?: string; compactResult?: string; compactError?: string }
@@ -902,8 +904,11 @@ export type ServerMessage = { sessionId: string } & (
   // (в ленту не попадает); label — разделитель «Продолжено на …» явной миграции.
   // reason — классификация причины фолбэка с бэкенда (TurnErrorClassifier.WireName:
   // rate_limit|usage_limit|provider_error|unreachable|context_overflow) для подсказки «Ответила … — … была
-  // недоступна» (см. providerSwitchReasonLabel в lib/providerLimit.ts)
-  | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean; reason?: string }
+  // недоступна» (см. providerSwitchReasonLabel в lib/providerLimit.ts).
+  // errorDetails — сырой текст промежуточной ошибки, которую погасила эта подмена: красной
+  // карточки в ленте нет (ход состоялся на другой модели), текст живёт под «Подробностями»
+  // внутри маркера подмены
+  | { type: 'provider_switched'; provider: string; model?: string; label?: string; auto?: boolean; reason?: string; errorDetails?: string }
   // Лимит подписки исчерпан, в пуле переключиться некуда — предложение продолжить
   // чат на стороннем провайдере (карточка с кнопками)
   | { type: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[] }
@@ -1538,7 +1543,10 @@ export type ChatItem =
   // персистится в StoredModelSwitchedMessage.Reason). rawLabel — сырой label маркера
   // provider_switched, фолбэк подсказки, когда reason не пришёл или не распознан
   // (см. providerSwitchReasonLabel в lib/providerLimit.ts)
-  | { kind: 'model_switched'; model: string; previousModel: string; reason?: string; rawLabel?: string }
+  // details — сырой текст промежуточной ошибки, погашенной этой подменой (провод:
+  // provider_switched.errorDetails, история: StoredModelSwitchedMessage.Details):
+  // раскрывается «Подробностями» внутри маркера
+  | { kind: 'model_switched'; model: string; previousModel: string; reason?: string; rawLabel?: string; details?: string }
   // Карточка-предложение: лимит подписки исчерпан — продолжить на стороннем провайдере.
   // resolved — миграция состоялась (карточка гаснет)
   | { kind: 'provider_limit'; resetsAt?: string; providers: ProviderFallbackOption[]; resolved?: boolean }
@@ -1546,7 +1554,8 @@ export type ChatItem =
   // Остановка цикла «до готово»: текст готов на сервере (лимит/ошибка/ручной стоп),
   // фронт его не собирает — иначе разъедется с сервером при смене лимита
   | { kind: 'work_loop_stopped'; reason: string; text: string }
-  | { kind: 'error'; text: string; canRetry?: boolean };
+  // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error)
+  | { kind: 'error'; text: string; canRetry?: boolean; details?: string };
 
 // Скиллы и агенты
 export interface SkillInfo {

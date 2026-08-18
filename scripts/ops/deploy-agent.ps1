@@ -48,7 +48,9 @@ param(
     [string]$HealthUrl,         # по умолчанию http://127.0.0.1:<Port>/api/health
     [int]$KeepReleases    = 3,
     [int]$HealthTimeoutSec = 90,
-    [int]$HealthSuccesses  = 3
+    [int]$HealthSuccesses  = 3,
+    [int]$BackupTimeoutSec = 900   # бэкап данных полигона — секунды, прода (~19 ГБ) — 4+ минуты;
+                                   # жёсткие 2 минуты из deploy80 роняли первую же боевую выкатку
 )
 # НЕ 'Stop' глобально: npm/dotnet пишут предупреждения в stderr, а на Windows PowerShell это
 # со 'Stop' ложно роняет скрипт. Нативные проверяем по $LASTEXITCODE, критичным командлетам
@@ -411,19 +413,19 @@ function Start-ServerStack {
 }
 
 function Invoke-DataBackup {
-    # Самая дешёвая страховка перед подменой бинарников: снимок данных секунды и пара мегабайт.
-    # Делаем ДО остановки — при живом сервере это безопасно (json-сторы атомарны, SQLite
-    # снимается online-backup API). Провал снимка останавливает выкатку: молча отказавшая
-    # страховка хуже отсутствующей.
+    # Самая дешёвая страховка перед подменой бинарников: на полигоне — секунды, на проде
+    # (19 ГБ данных) — 4+ минуты, потолок задаёт -BackupTimeoutSec. Делаем ДО остановки —
+    # при живом сервере это безопасно (json-сторы атомарны, SQLite снимается online-backup
+    # API). Провал снимка останавливает выкатку: молча отказавшая страховка хуже отсутствующей.
     $serverExe = Join-Path $PublishDir 'ClaudeHomeServer.exe'
     if (-not (Test-Path $serverExe)) { return 'первый деплой: сервер ещё не опубликован' }
     $proc = Start-Process -FilePath $serverExe -ArgumentList '--backup' -WorkingDirectory $PublishDir -NoNewWindow -PassThru
     # Обращение к Handle кеширует дескриптор: без него ExitCode у завершившегося процесса
     # приходит ПУСТЫМ, и удачный снимок читается как провал.
     $null = $proc.Handle
-    if (-not $proc.WaitForExit(120000)) {
+    if (-not $proc.WaitForExit($BackupTimeoutSec * 1000)) {
         try { $proc.Kill() } catch { }
-        throw 'бэкап не уложился в 2 минуты и был прерван (опубликованная сборка может не знать флага --backup)'
+        throw "бэкап не уложился в $BackupTimeoutSec с и был прерван (замер: 19 ГБ прода — около 250 с; зависание дольше — повод смотреть, а не ждать)"
     }
     if ($proc.ExitCode -ne 0) { throw "бэкап вернул код $($proc.ExitCode)" }
     return ''

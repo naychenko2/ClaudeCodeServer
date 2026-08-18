@@ -76,9 +76,13 @@ public class SessionManager : IDisposable
         // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
         // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
         public volatile Llm.Claude.SubagentRunPassport? TruncatedSubagent;
-        // Сколько добиваний подряд уже отправлено в этот чат (потолок — MaxSubagentNudges).
-        // Обнуляется штатным отчётом сабагента и любым ходом человека: две попытки — на серию.
+        // Сколько добиваний подряд отправлено ЗА ОДНОГО агента (потолок — MaxSubagentNudges).
+        // Обнуляется штатным отчётом ТОГО ЖЕ агента и любым ходом человека: две попытки — на серию.
         public int SubagentNudges;
+        // Агент, чью серию добиваний считает SubagentNudges. Без привязки к agentId потолок
+        // не достигался вовсе: в ходе с двумя агентами штатный отчёт агента B обнулял счётчик
+        // оборвавшегося агента A, и добивание уходило с attempt=1 по кругу.
+        public volatile string? NudgeAgentId;
         // Ход завершился ошибкой (result error / error) — цикл не продолжаем
         public bool LoopTurnFailed;
         // Текущий ход нёс протокол цикла «до готово» (выставляет BuildCliTurnText):
@@ -1275,8 +1279,14 @@ public class SessionManager : IDisposable
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
             if (passport.Truncated) entry.TruncatedSubagent = passport;
             // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
-            // на серию подряд, а не на всю жизнь чата
-            else entry.SubagentNudges = 0;
+            // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
+            // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
+            // добили — иначе потолок не достигается никогда (добивание уходит с attempt=1 по кругу).
+            else if (ResetsNudgeSeries(entry.NudgeAgentId, passport.AgentId))
+            {
+                entry.SubagentNudges = 0;
+                entry.NudgeAgentId = null;
+            }
         };
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
@@ -2895,7 +2905,11 @@ public class SessionManager : IDisposable
 
         // Человек вмешался в чат — счётчик добиваний сабагента начинается заново
         // (потолок в две попытки считается на серию подряд, а не на всю жизнь чата)
-        if (!auto && !systemDirective) entry.SubagentNudges = 0;
+        if (!auto && !systemDirective)
+        {
+            entry.SubagentNudges = 0;
+            entry.NudgeAgentId = null;
+        }
 
         // Групповой чат: @упоминание участника в тексте переключает активного спикера
         // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
@@ -7013,6 +7027,22 @@ public class SessionManager : IDisposable
         bool hasPending, bool loopTurnInFlight) =>
         nudgesSent < MaxSubagentNudges && !workLoopActive && !teamActive && !hasPending && !loopTurnInFlight;
 
+    /// <summary>
+    /// Снимает ли штатный отчёт агента серию добиваний. Счётчик общий на сессию, а агентов
+    /// в ходе несколько — поэтому серию закрывает ТОТ ЖЕ агент, которого добивали (либо любой,
+    /// пока серии нет). Чужой отчёт счётчик не трогает: иначе потолок MaxSubagentNudges
+    /// не достигается вовсе и чат крутит системные директивы автономно.
+    /// </summary>
+    internal static bool ResetsNudgeSeries(string? nudgeAgentId, string reportedAgentId) =>
+        nudgeAgentId is null || nudgeAgentId == reportedAgentId;
+
+    /// <summary>
+    /// Начинает ли оборвавшийся агент новую серию: попытки считаются per-agentId, поэтому
+    /// другой агент получает свои две, а не остаток чужих.
+    /// </summary>
+    internal static bool StartsNudgeSeries(string? nudgeAgentId, string truncatedAgentId) =>
+        nudgeAgentId != truncatedAgentId;
+
     // Добивание: директива координатору дослать оборванному сабагенту продолжение. Тем же
     // способом, что и цикл «до готово» (systemDirective-ход после result), и с тем же
     // потолком попыток — см. SubagentPrompts.ResumeTruncated.
@@ -7746,10 +7776,13 @@ public class SessionManager : IDisposable
             if (msg is ResultMessage or ErrorMessage && entry.TruncatedSubagent is { } cutAgent)
             {
                 entry.TruncatedSubagent = null;
+                // Оборвался другой агент — у него своя серия попыток (счётчик per-agentId)
+                if (StartsNudgeSeries(entry.NudgeAgentId, cutAgent.AgentId)) entry.SubagentNudges = 0;
                 if (msg is ResultMessage && ShouldNudgeSubagent(entry.SubagentNudges,
                         entry.Info.WorkLoop is not null, entry.Info.TeamImplement is not null,
                         HasPending(entry), entry.LoopTurnInFlight))
                 {
+                    entry.NudgeAgentId = cutAgent.AgentId;
                     var attempt = ++entry.SubagentNudges;
                     _ = Task.Run(async () =>
                     {

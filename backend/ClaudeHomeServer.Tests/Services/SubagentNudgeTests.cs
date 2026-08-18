@@ -59,6 +59,52 @@ public class SubagentNudgeTests : IDisposable
             .Should().BeFalse();
     }
 
+    // ─── Привязка счётчика к агенту ──────────────────────────────────────────
+
+    [Fact]
+    public void СериюДобиванийЗакрываетТолькоТотЖеАгент()
+    {
+        // Серия ещё не начата — любой штатный отчёт годится
+        SessionManager.ResetsNudgeSeries(null, "agent-B").Should().BeTrue();
+        // Добивали A — только его отчёт значит «добили»
+        SessionManager.ResetsNudgeSeries("agent-A", "agent-A").Should().BeTrue();
+        SessionManager.ResetsNudgeSeries("agent-A", "agent-B").Should().BeFalse();
+        // Оборвался другой агент — у него своя серия попыток
+        SessionManager.StartsNudgeSeries("agent-A", "agent-B").Should().BeTrue();
+        SessionManager.StartsNudgeSeries("agent-A", "agent-A").Should().BeFalse();
+    }
+
+    // Дефект был не в политике, а в том, чем её кормили: счётчик и отметка общие на сессию,
+    // а агентов в ходе двое. Оборвался A, штатно доложился B — счётчик обнулялся, отметка от A
+    // жила, и добивание уходило с attempt=1 бесконечно (чат крутил системные директивы сам).
+    [Fact]
+    public void ДваАгентаВХоде_ОтчётЧужого_ПотолокВсёРавноДостигается()
+    {
+        string? nudgeAgent = null;
+        var nudges = 0;
+        var sent = 0;
+
+        // Четыре хода подряд: A обрывается, B в том же ходе докладывается штатно (его паспорт
+        // приходит в сток последним), по result уходит добивание A
+        for (var turn = 0; turn < 4; turn++)
+        {
+            // Сток паспортов: штатный отчёт B
+            if (SessionManager.ResetsNudgeSeries(nudgeAgent, "agent-B"))
+            {
+                nudges = 0;
+                nudgeAgent = null;
+            }
+            // Конец хода: оборванный A
+            if (SessionManager.StartsNudgeSeries(nudgeAgent, "agent-A")) nudges = 0;
+            if (!SessionManager.ShouldNudgeSubagent(nudges, false, false, false, false)) continue;
+            nudgeAgent = "agent-A";
+            nudges++;
+            sent++;
+        }
+
+        sent.Should().Be(SessionManager.MaxSubagentNudges);
+    }
+
     // ─── Категории остановки исполнителя ─────────────────────────────────────
 
     [Fact]
@@ -94,7 +140,15 @@ public class SubagentNudgeTests : IDisposable
     public void IsTerminal_НеизвестнаяПричина_СчитаетсяТерминальной()
     {
         ExecutorStopClassifier.IsTerminal("что-то новое").Should().BeTrue();
-        ExecutorStopClassifier.IsTerminal(null).Should().BeTrue();
+    }
+
+    [Fact]
+    public void IsTerminal_ПричиныНет_ЭтоОбычныйХод()
+    {
+        // null = остановки не было: задача без пометки не должна читаться как «работа встала»
+        ExecutorStopClassifier.IsTerminal(null).Should().BeFalse();
+        ExecutorStopClassifier.IsTerminal(
+            ExecutorStopClassifier.Classify(Result(), null)).Should().BeFalse();
     }
 
     // ─── Пометка на задаче ───────────────────────────────────────────────────

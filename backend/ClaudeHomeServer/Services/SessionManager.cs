@@ -2282,6 +2282,15 @@ public class SessionManager : IDisposable
             && persona?.Access != PersonaAccess.ReadOnly
             && _bindings.EffectiveToolEnabled(ownerId, persona, "destructive"))
             sections.Add("destructive");
+        // Выкатка прода из чата (ADR-010): секция монтируется только там, где контур реально
+        // настроен, и только владельцу-админу — REST всё равно admin-only, а держать три схемы
+        // в контексте у всех незачем. Профиль «Только чтение» её не получает: выкатка меняет
+        // прод. Все три условия постоянны в рамках сессии (конфиг машины, роль пользователя,
+        // профиль персоны), поэтому состав tools/list между ходами не мерцает.
+        if (Deploy.DeployOptions.From(_config).Enabled
+            && persona?.Access != PersonaAccess.ReadOnly
+            && string.Equals(_users.GetById(ownerId)?.Role, "admin", StringComparison.OrdinalIgnoreCase))
+            sections.Add("deploy");
         sections.Add("search");
 
         IReadOnlyList<string>? allowedIds = null;

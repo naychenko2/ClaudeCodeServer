@@ -378,6 +378,14 @@ builder.Services.AddSingleton<PersonaAutomationService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Backup.BackupService>();
 AddHostedFrom(sp =>
     sp.GetRequiredService<ClaudeHomeServer.Services.Backup.BackupService>());
+// Выкатка прода из чата (ADR-010): приём заявок + доклад об итоге прошлой выкатки, который
+// делает уже новый инстанс (чат-заказчик умер вместе со старым). BuildIdProvider читает
+// идентификатор сборки один раз на старте — он уезжает в X-Build ответа /api/health.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.BuildIdProvider>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.IDeployHost,
+    ClaudeHomeServer.Services.Deploy.DeployHost>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.DeployService>();
+AddHosted<ClaudeHomeServer.Services.Deploy.DeployReportService>();
 AddHosted<TaskSchedulerService>();
 AddHosted<ChatExpiryService>();
 AddHosted<ChatTurnLoggerService>();

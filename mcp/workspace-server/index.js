@@ -7,10 +7,12 @@
 //   WORKSPACE_API_TOKEN       — сервисный JWT владельца сессии
 //   WORKSPACE_PROJECT_ID      — id проекта текущей сессии; пусто = чат вне проекта
 //   WORKSPACE_SECTIONS        — csv включённых секций (projects,files,knowledge,search[,chats,
-//                               git,git_write,knowledge_bases,destructive]). git — чтение истории
+//                               git,git_write,knowledge_bases,destructive,deploy]). git — чтение истории
 //                               (status/diff/log), git_write — её запись (stage/commit): секцию
 //                               записи даёт только явно включённый персоне ключ git, пресет
 //                               по роли оставляет чтение (см. SessionManager.BuildWorkspaceContext)
+//                               deploy — выкатка прода (ADR-010): только на машине с настроенным
+//                               контуром Deploy и только владельцу-админу
 //   WORKSPACE_PROJECT_IDS     — csv разрешённых projectId; пусто = все проекты владельца
 //   WORKSPACE_SELF_SESSION_ID — id самой сессии: запрет chats_send самому себе + заголовок
 //                               X-Caller-Session-Id (по нему бэкенд сам определяет глубину
@@ -180,6 +182,40 @@ async function parseBody(res) {
   if (!text) return null;
   try { return JSON.parse(text); }
   catch { return text; }
+}
+
+// Заявка на выкатку/откат прода: POST + расшифровка отказа (ADR-010). Коды /api/deploy
+// содержательны и требуют РАЗНЫХ действий человека, а общий describeError свёл бы их к
+// «сейчас занято» и «отказ». Модель не должна принять отказ за принятую заявку, поэтому
+// причина и следующий шаг проговариваются явно, а ошибка остаётся ошибкой (isError).
+async function deployCall(path, body, action) {
+  try {
+    return await api(path, { method: 'POST', body: JSON.stringify(body) });
+  } catch (err) {
+    let parsed = null;
+    try { parsed = err?.bodyText ? JSON.parse(err.bodyText) : null; } catch { /* тело не JSON */ }
+    const reason = parsed?.error ?? (err?.bodyText || '');
+    if (err?.status === 409)
+      throw new Error(`${action} НЕ запущена: ${reason || 'на сервере уже идёт другая выкатка'}. `
+        + 'Двух одновременно не бывает — посмотри deploy_status и дождись конца текущей.');
+    if (err?.status === 400 && Array.isArray(parsed?.files))
+      throw new Error(`${action} НЕ запущена: в рабочем дереве незакоммиченные изменения `
+        + `(${parsed.files.length}): ${parsed.files.slice(0, 20).join(', ')}`
+        + (parsed.files.length > 20 ? ', …' : '') + '. Покажи список пользователю и спроси, '
+        + 'коммитить ли их. Ехать как есть — только по его явному согласию, повторным вызовом '
+        + 'с allowDirty=true: тогда в прод уедет ровно то, что лежит в дереве.');
+    if (err?.status === 400)
+      throw new Error(`${action} НЕ запущена: ${reason || 'запрос отклонён сервером'}. `
+        + 'Повторять тот же вызов бессмысленно — исправь параметры или спроси пользователя.');
+    if (err?.status === 503)
+      throw new Error(`${action} НЕ запущена: механизм выкатки на этой машине не настроен `
+        + `(${reason}). Это не временный сбой и не занятость — включить контур может только `
+        + 'администратор в appsettings.Local.json. Сообщи это пользователю и не повторяй вызов.');
+    if (err?.status === 403)
+      throw new Error(`${action} НЕ запущена: нужны права администратора. ${reason} `
+        + 'Повторять вызов бессмысленно — сообщи пользователю.');
+    throw err;
+  }
 }
 
 // Валидация projectId ДО похода в REST: сужение зоны через WORKSPACE_PROJECT_IDS
@@ -733,6 +769,51 @@ const SECTION_TOOLS = {
       },
     },
   ],
+  // Секция deploy — пересборка и переопубликация ПРОДА из чата (ADR-010). Монтируется только
+  // на машине с настроенным контуром и только владельцу-админу; и то, и другое постоянно
+  // в рамках сессии, поэтому состав tools/list не мерцает между ходами.
+  // Сервер тут тонкий: вся валидация, guard'ы (грязное дерево, «один деплой за раз») и права
+  // живут на бэкенде, инструменты только передают параметры и излагают ответ.
+  deploy: [
+    {
+      name: 'deploy_start',
+      description: 'Запустить выкатку прода: собрать фронт и бэк и переопубликовать сервер. ' +
+        'ВАЖНО: выкатка ПЕРЕЗАПУСКАЕТ сервер — этот чат и все идущие ходы оборвутся на несколько ' +
+        'секунд, а итог придёт отдельным сообщением уже от нового процесса. Зови ТОЛЬКО по явной ' +
+        'просьбе пользователя выкатить или опубликовать прод, никогда по своей инициативе и никогда ' +
+        'после правок кода «на всякий случай». Собирает и переключает внешний агент: ответ приходит ' +
+        'сразу и означает приём заявки, а не результат выкатки.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          ref: { type: 'string', description: 'Ветка или коммит git (пусто — текущая ветка рабочего дерева)' },
+          skipFrontend: { type: 'boolean', description: 'Не пересобирать фронт (только бэк)' },
+          skipSandbox: { type: 'boolean', description: 'Не пересобирать образ песочницы' },
+          allowDirty: { type: 'boolean', description: 'Ехать с незакоммиченными изменениями в рабочем дереве. По умолчанию такая выкатка отклоняется — ставь только после явного согласия пользователя' },
+        },
+      },
+    },
+    {
+      name: 'deploy_status',
+      description: 'Ход текущей выкатки прода, история прошлых и список снимков релизов, на которые ' +
+        'можно откатиться. Ничего не запускает и сервер не трогает — безопасно звать в любой момент, ' +
+        'в том числе чтобы узнать, чем закончилась прошлая выкатка.',
+      inputSchema: { type: 'object', properties: {} },
+    },
+    {
+      name: 'deploy_rollback',
+      description: 'Вернуть прод на прошлый снимок релиза (по умолчанию предыдущий). ВАЖНО: как и ' +
+        'выкатка, ПЕРЕЗАПУСКАЕТ сервер — этот чат и идущие ходы оборвутся. Данные (чаты, задачи, ' +
+        'заметки) при этом НЕ откатываются, возвращается только код. Зови ТОЛЬКО по явной просьбе ' +
+        'пользователя откатить прод. Список доступных снимков — deploy_status.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          releaseId: { type: 'string', description: 'ID снимка релиза из deploy_status (пусто — предыдущий)' },
+        },
+      },
+    },
+  ],
 };
 
 const TOOLS = Object.entries(SECTION_TOOLS)
@@ -1282,6 +1363,76 @@ async function callTool(name, args) {
         projectId: projectId ?? task?.projectId ?? null,
         labels: mergedLabels,
         ...(registryAdded.length ? { registryAdded } : {}),
+      });
+    }
+
+    // --- Выкатка прода (ADR-010) ---
+    // Обёртки тонкие: параметры уходят в REST как есть, решения принимает бэкенд.
+    // Наша единственная задача сверх этого — изложить ответ так, чтобы отказ не выглядел
+    // успехом: коды 409/400/503 здесь содержательны и требуют разных действий человека.
+
+    case 'deploy_start': {
+      const res = await deployCall('/api/deploy/start', {
+        ref: args.ref ? String(args.ref) : null,
+        skipFrontend: args.skipFrontend === true,
+        skipSandbox: args.skipSandbox === true,
+        allowDirty: args.allowDirty === true,
+      }, 'Выкатка');
+      const active = Number(res?.activeTurns ?? 0);
+      return json({
+        accepted: true,
+        deployId: res?.deployId ?? null,
+        activeTurns: active,
+        warning: 'Выкатка принята и пойдёт своим ходом. Сервер будет перезапущен: этот чат '
+          + `прервётся, а вместе с ним оборвутся идущие сейчас ходы (${active}). Скажи об этом пользователю.`,
+        next: 'Итог выкатки придёт отдельным сообщением от уже нового процесса. '
+          + 'Ход выкатки виден через deploy_status, пока сервер жив.',
+      });
+    }
+
+    case 'deploy_rollback': {
+      const res = await deployCall('/api/deploy/rollback', {
+        releaseId: args.releaseId ? String(args.releaseId) : null,
+      }, 'Откат');
+      const active = Number(res?.activeTurns ?? 0);
+      return json({
+        accepted: true,
+        deployId: res?.deployId ?? null,
+        activeTurns: active,
+        warning: 'Откат принят. Сервер будет перезапущен: этот чат прервётся, вместе с ним '
+          + `оборвутся идущие сейчас ходы (${active}). Данные не откатываются — возвращается только код.`,
+        next: 'Итог придёт отдельным сообщением от нового процесса.',
+      });
+    }
+
+    case 'deploy_status': {
+      const state = await api('/api/deploy/status');
+      if (state?.enabled === false)
+        return json({
+          enabled: false,
+          note: 'Механизм выкатки на этой машине не настроен (секция Deploy выключена). '
+            + 'deploy_start и deploy_rollback здесь работать не будут — это настройка администратора, а не сбой.',
+        });
+      const brief = rec => rec && {
+        deployId: rec.id,
+        kind: rec.kind,
+        phase: rec.phase,
+        ref: rec.ref ?? null,
+        sha: rec.sha ?? null,
+        dirty: rec.dirty === true || undefined,
+        steps: (rec.steps ?? []).map(s => `${s.name}: ${s.status}`),
+        result: rec.result
+          ? { ok: rec.result.ok === true, status: rec.result.status, message: rec.result.message ?? null }
+          : null,
+        reported: rec.reported === true || undefined,
+      };
+      return json({
+        enabled: true,
+        current: brief(state?.current) ?? null,
+        running: state?.current ? !state.current.result : false,
+        history: (state?.history ?? []).slice(0, 5).map(brief),
+        releases: (state?.releases ?? []).slice(0, 10)
+          .map(r => ({ releaseId: r.id, sha: r.sha ?? null, createdAt: r.createdAt ?? null })),
       });
     }
 

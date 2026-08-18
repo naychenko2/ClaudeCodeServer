@@ -35,6 +35,7 @@ param(
     [switch]$IgnoreRunner,      # ручной обход guard'а «живой Runner» (из чата не задаётся)
     [switch]$RequireBuildHeader,# требовать X-Build и при откате (в выкатке он требуется всегда)
     [switch]$NoSelfCopy,        # служебный: агент уже работает копией, не копировать себя снова
+    [switch]$DirectServer,      # запускать сервер напрямую без трея (для полигона, чтобы избежать мьютекса)
     [string]$Ref,               # ожидаемая ветка; расхождение = отказ (волна 1 не переключает ref)
     [string]$RepoDir,           # корень репы (по умолчанию — от места скрипта)
     [string]$PublishDir   = 'C:\deploy\claude',
@@ -393,9 +394,20 @@ function Stop-ServerStack {
 }
 
 function Start-ServerStack {
-    $trayExe = Join-Path $PublishDir 'ClaudeHomeServer.Tray.exe'
-    if (-not (Test-Path $trayExe)) { throw "не найден трей-супервизор: $trayExe" }
-    Start-Process -FilePath $trayExe -WorkingDirectory $PublishDir | Out-Null
+    if ($DirectServer) {
+        $serverExe = Join-Path $PublishDir 'ClaudeHomeServer.exe'
+        if (-not (Test-Path $serverExe)) { throw "не найден сервер: $serverExe" }
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $serverExe
+        $psi.WorkingDirectory = $PublishDir
+        $psi.UseShellExecute = $false
+        $psi.Environment["ASPNETCORE_ENVIRONMENT"] = $Environment
+        [System.Diagnostics.Process]::Start($psi) | Out-Null
+    } else {
+        $trayExe = Join-Path $PublishDir 'ClaudeHomeServer.Tray.exe'
+        if (-not (Test-Path $trayExe)) { throw "не найден трей-супервизор: $trayExe" }
+        Start-Process -FilePath $trayExe -WorkingDirectory $PublishDir | Out-Null
+    }
 }
 
 function Invoke-DataBackup {

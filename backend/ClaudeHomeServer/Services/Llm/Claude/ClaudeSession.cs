@@ -483,6 +483,8 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<PromptSnapshotDraft, string?>? _promptSnapshotSink;
     // Дозапись в снимок состава инструментов из system/init (он приходит после старта)
     private readonly Action<string, IReadOnlyList<string>, IReadOnlyList<McpServerInfo>>? _promptSnapshotToolsSink;
+    // Паспорт прогона сабагента на его завершении (диагностика обрывов). null — не ведутся.
+    private readonly Action<SubagentRunPassport>? _subagentRunSink;
     // Корень профиля CLI этого хода (CLAUDE_CONFIG_DIR) — для блока «слой CLI»
     private readonly string? _cliConfigRoot;
     // Id снимка текущего хода: пишет поток хода (RunTurnAsync), читает поток stdout-ридера,
@@ -570,6 +572,7 @@ public class ClaudeSession : ILlmSessionAdapter
         _codeGraphProvider = context.CodeGraphProvider;
         _promptSnapshotSink = context.PromptSnapshotSink;
         _promptSnapshotToolsSink = context.PromptSnapshotToolsSink;
+        _subagentRunSink = context.SubagentRunSink;
         _cliConfigRoot = context.CliConfigRoot;
         _personasMcp = context.PersonasMcp;
         _workspaceMcp = context.WorkspaceMcp;
@@ -3198,7 +3201,8 @@ public class ClaudeSession : ILlmSessionAdapter
                             await _subagentWatcher.DrainAsync();
                             _subagentWatcher.Dispose();
                         }
-                        _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage);
+                        _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage,
+                            Info.Id, _subagentRunSink);
                         _subagentWatcher.Start();
                     }
 
@@ -3534,6 +3538,12 @@ public class ClaudeSession : ILlmSessionAdapter
             // это сигнал её завершения (Kimi и др. не ждут task-notification)
             if (!isError) HandleTaskOutputCompletion(run, resultContent);
 
+            // Синхронный Task: его tool_result и есть конец агента — снимаем паспорт прогона.
+            // Фоновый запуск сюда не попадает (TrackBgLaunch выше уже взял его на учёт) —
+            // у него конец объявляет task-notification, а паспорт на старте был бы пустым.
+            if (_subagentWatcher is { IsDisposed: false } doneWatcher && !IsBgPending(run, toolUseId))
+                await doneWatcher.FinalizeAsync([toolUseId], "tool_result");
+
             // Если это результат Workflow с транскриптом — запускаем watcher
             if (!isError && resultContent.Contains("Transcript dir:"))
             {
@@ -3651,6 +3661,16 @@ public class ClaudeSession : ILlmSessionAdapter
         }
     }
 
+    // Этот tool_use — фоновый агент, который только запустился и ещё работает? Учёт ведут
+    // и структурное событие task_started, и текстовый TrackBgLaunch, и кандидаты запуска.
+    private static bool IsBgPending(CliRun run, string toolUseId)
+    {
+        lock (run.PendingBg)
+            return run.PendingBg.ContainsValue(toolUseId)
+                || run.UnknownBgToolUses.Contains(toolUseId)
+                || run.BgLaunchCandidates.Contains(toolUseId);
+    }
+
     // Общая точка завершения фоновой(ых) задачи(задач): дочитывает хвост сабагента (финальный
     // текст должен лечь в ленту РАНЬШЕ индикатора завершения) и шлёт клиентам bg_agent_done.
     // Переиспользуется всеми путями завершения: task-notification (текстовый и структурный),
@@ -3662,7 +3682,11 @@ public class ClaudeSession : ILlmSessionAdapter
     private async Task CompleteBgTasksAsync(IReadOnlyList<string> toolUseIds, bool aborted, bool drainSubagent = true)
     {
         if (toolUseIds.Count == 0) return;
-        if (drainSubagent && _subagentWatcher is { IsDisposed: false } watcher) await watcher.DrainAsync();
+        // Паспорт прогона снимаем ровно здесь: это и есть момент, когда продукт объявляет
+        // результат агента готовым (диагностика обрывов — см. SubagentRunLog). FinalizeAsync
+        // дренирует ватчер сам, поэтому отдельный DrainAsync ему не нужен.
+        if (drainSubagent && _subagentWatcher is { IsDisposed: false } watcher)
+            await watcher.FinalizeAsync(toolUseIds, aborted ? "bg_aborted" : "bg_done");
         await _onMessage(new BgAgentDoneMessage(toolUseIds, Aborted: aborted));
     }
 

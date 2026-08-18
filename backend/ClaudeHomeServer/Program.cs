@@ -330,6 +330,8 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.ILlmSessionAdapterFa
     ClaudeHomeServer.Services.Llm.LlmSessionAdapterFactory>();
 // Наблюдаемость вызовов продуктовых MCP-серверов (счётчики + последние сбои, только в памяти)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpCallLog>();
+// Паспорта прогонов сабагентов: отчёт или обрыв на середине, цена прогона (только в памяти)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Llm.Claude.SubagentRunLog>();
 // Личный реестр MCP-серверов владельца: записи без секретов (data/mcp-servers.json)
 // и значения ключей/токенов отдельным стором (data/mcp-secrets.json — не едет в облачный архив)
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Mcp.McpSecretStore>();

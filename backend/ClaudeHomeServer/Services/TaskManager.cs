@@ -351,10 +351,14 @@ public class TaskManager
     // Исполнитель встал насовсем (терминальный отказ хода — см. ExecutorStopClassifier):
     // статус НЕ трогаем (доска, фильтры, MCP и напоминания держатся за todo/inProgress/done),
     // пометка живёт отдельными полями и снимается перезапуском (MarkClaudeStarted).
+    //
+    // Только ТЕРМИНАЛЬНЫЕ причины: пометка означает «работа не идёт, задача ждёт человека»,
+    // и восстановимой остановке (обрыв сабагента на середине — его добивают продолжением)
+    // здесь места нет. Гард, а не соглашение: пометка видна в UI и гасит задачу для человека.
     public TaskItem? MarkExecutorStopped(string id, DateTime atUtc, string reason)
     {
         var task = _tasks.GetValueOrDefault(id);
-        if (task is null) return null;
+        if (task is null || !ExecutorStopClassifier.IsTerminal(reason)) return task;
         task.ExecutorStoppedAt = atUtc;
         task.ExecutorStopReason = reason;
         task.UpdatedAt = DateTime.UtcNow;

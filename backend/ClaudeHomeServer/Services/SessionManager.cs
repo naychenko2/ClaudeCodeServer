@@ -72,6 +72,13 @@ public class SessionManager : IDisposable
         public bool TeamTurnFromHuman;
         // Счётчики бюджета итерации правит и раздача волны, и гейт запуска на ходу-реакции
         public readonly object TeamLock = new();
+        // Сабагент этого хода оборвался на середине (паспорт прогона с Truncated) — по концу
+        // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
+        // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
+        public volatile Llm.Claude.SubagentRunPassport? TruncatedSubagent;
+        // Сколько добиваний подряд уже отправлено в этот чат (потолок — MaxSubagentNudges).
+        // Обнуляется штатным отчётом сабагента и любым ходом человека: две попытки — на серию.
+        public int SubagentNudges;
         // Ход завершился ошибкой (result error / error) — цикл не продолжаем
         public bool LoopTurnFailed;
         // Текущий ход нёс протокол цикла «до готово» (выставляет BuildCliTurnText):
@@ -203,6 +210,7 @@ public class SessionManager : IDisposable
         QueueAgent,     // fromQueue — агентское сообщение из Pending (в т.ч. обход байпаса)
         Direct,         // auto — прямая отправка (SendOrEnqueueAsync при свободном чате: доклад исполнителя и пр.)
         WorkLoop,       // auto — цикл «до готово» (верификация/продолжение)
+        SubagentNudge,  // auto — добивание сабагента, оборвавшегося на середине
         Unknown,        // auto — точка не помечена (диагностика: проставить cause)
     }
 
@@ -238,6 +246,8 @@ public class SessionManager : IDisposable
     private readonly ChatHistoryService _history;
     // Снимки промпта ходов (кнопка «какой промпт ушёл»); null — в тестах
     private readonly PromptSnapshotStore? _promptSnapshots;
+    // Паспорта прогонов сабагентов (диагностика обрывов + сигнал для автодобивания); null — в тестах
+    private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
     // Автосохранение сессий каждые 30с
@@ -421,8 +431,12 @@ public class SessionManager : IDisposable
         Mcp.McpOAuthService? mcpOAuth = null,
         // Опционально (в тестах не передаётся): recall паспортов изменений (этап 2,
         // ADR-004 §5) — пассивная секция промпта персоны; без него ходы идут как раньше
-        Dossiers.DossierRecallService? dossierRecall = null)
+        Dossiers.DossierRecallService? dossierRecall = null,
+        // Опционально (в тестах не передаётся): паспорта прогонов сабагентов. Без него
+        // диагностики обрывов нет и автодобивание молчит — ходы идут как раньше.
+        Llm.Claude.SubagentRunLog? subagentRuns = null)
     {
+        _subagentRuns = subagentRuns;
         _skills = skills;
         _mcpRegistry = mcpRegistry;
         _mcpSecrets = mcpSecrets;
@@ -1249,6 +1263,21 @@ public class SessionManager : IDisposable
                     && ResolveOwnerId(entry.Info) is { } ownerId)
                     _mcpStatus.RecordFromInit(ownerId, sessionId, servers);
             };
+
+    // Приёмник паспортов прогонов сабагентов: пишет диагностику и, если агент оборвался на
+    // середине (последнее его сообщение — tool_use, отчёта нет), взводит отметку на сессии —
+    // добивание уходит по концу хода (см. NudgeTruncatedSubagentAsync).
+    // null — стор не подключён (тесты): ходы идут как раньше, просто без паспортов.
+    private Action<Llm.Claude.SubagentRunPassport>? SubagentRunSinkFor(string sessionId) =>
+        _subagentRuns is null ? null : passport =>
+        {
+            _subagentRuns.Record(passport);
+            if (!_sessions.TryGetValue(sessionId, out var entry)) return;
+            if (passport.Truncated) entry.TruncatedSubagent = passport;
+            // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
+            // на серию подряд, а не на всю жизнь чата
+            else entry.SubagentNudges = 0;
+        };
 
     // Рабочая папка сессии: отдельное worktree чата приоритетнее корня проекта.
     // Единая точка подмены cwd — через неё идут обе funnel-точки LlmSessionContext.
@@ -2663,6 +2692,7 @@ public class SessionManager : IDisposable
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             PromptSnapshotSink: PromptSinkFor(session.Id),
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
+            SubagentRunSink: SubagentRunSinkFor(session.Id),
             CliConfigRoot: ConfigRootFor(ownerId, session.Provider),
             ExternalMcpProvider: BuildExternalMcpProvider(ownerId, session.ProjectId, persona.Persona),
             DossierTrailerHint: BuildDossierTrailerHint(ownerId, session),
@@ -2862,6 +2892,10 @@ public class SessionManager : IDisposable
         // M7: помечаем инициатора хода для добавочного авто-подтверждения — ход человека
         // (не авто и не директива) является контрольной точкой, агентский — нет.
         entry.TeamTurnFromHuman = !auto && !systemDirective;
+
+        // Человек вмешался в чат — счётчик добиваний сабагента начинается заново
+        // (потолок в две попытки считается на серию подряд, а не на всю жизнь чата)
+        if (!auto && !systemDirective) entry.SubagentNudges = 0;
 
         // Групповой чат: @упоминание участника в тексте переключает активного спикера
         // ДО пересоздания процесса — новый персона-слой применяется уже к этому ходу
@@ -3770,7 +3804,8 @@ public class SessionManager : IDisposable
                 ExternalMcpProvider: BuildExternalMcpProvider(entry.Info.OwnerId, null, persona.Persona),
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
-                OrchestrationDone: BuildOrchestrationDone(sessionId));
+                OrchestrationDone: BuildOrchestrationDone(sessionId),
+                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id));
                 // Чат вне проекта: session.ProjectId==null → BuildDossierTrailerHint всегда null
         }
         else
@@ -3809,7 +3844,8 @@ public class SessionManager : IDisposable
                 DossierTrailerHint: BuildDossierTrailerHint(project.OwnerId, entry.Info),
                 PersistSessions: SaveSessions,
                 EnqueueBypass: BuildEnqueueBypass(sessionId),
-                OrchestrationDone: BuildOrchestrationDone(sessionId));
+                OrchestrationDone: BuildOrchestrationDone(sessionId),
+                SubagentRunSink: SubagentRunSinkFor(entry.Info.Id));
         }
         var adapter = _adapters.Create(entry.Info, context);
         entry.Process = adapter;
@@ -6963,6 +6999,36 @@ public class SessionManager : IDisposable
         return true;
     }
 
+    // Потолок добиваний подряд. Две попытки — сознательный предел: бесконечный цикл добивания
+    // хуже честного отказа, после него судьбу работы решает человек.
+    internal const int MaxSubagentNudges = 2;
+
+    /// <summary>
+    /// Слать ли добивание оборванного сабагента. Чистая функция — вся политика в одном месте
+    /// (под тестом). Уступаем всем, у кого свой протокол продолжения: цикл «до готово» и штаб
+    /// продолжат ход сами, непустая очередь продолжит его сообщением, а параллельный ход цикла
+    /// (LoopTurnInFlight) уже в пути — второй systemDirective ушёл бы в тот же процесс.
+    /// </summary>
+    internal static bool ShouldNudgeSubagent(int nudgesSent, bool workLoopActive, bool teamActive,
+        bool hasPending, bool loopTurnInFlight) =>
+        nudgesSent < MaxSubagentNudges && !workLoopActive && !teamActive && !hasPending && !loopTurnInFlight;
+
+    // Добивание: директива координатору дослать оборванному сабагенту продолжение. Тем же
+    // способом, что и цикл «до готово» (systemDirective-ход после result), и с тем же
+    // потолком попыток — см. SubagentPrompts.ResumeTruncated.
+    private async Task NudgeTruncatedSubagentAsync(string sessionId,
+        Llm.Claude.SubagentRunPassport run, int attempt)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
+        _subagentRuns?.NoteNudge(run.AgentId);
+        _log.LogWarning("Сабагент {AgentId} ({AgentType}) оборвался на {Tool} после {Tools} вызовов " +
+            "и {Seconds} с (контекст {Context} токенов) — добивание {Attempt}/{Max}, чат {SessionId}",
+            run.AgentId, run.AgentType, run.LastTool, run.ToolUses, run.DurationSeconds,
+            run.ContextTokens, attempt, MaxSubagentNudges, sessionId);
+        await SendMessageAsync(sessionId, Prompts.SubagentPrompts.ResumeTruncated(run, attempt, MaxSubagentNudges),
+            [], systemDirective: true, cause: DeliveryCause.SubagentNudge);
+    }
+
     // Автопродолжение цикла «до готово»: вызывается по result хода, нёсшего протокол цикла.
     // Маркер найден → верификационный ход, затем стоп; нет → продолжение до лимита итераций.
     private async Task ContinueWorkLoopAsync(string sessionId)
@@ -7671,6 +7737,29 @@ public class SessionManager : IDisposable
                             Console.Error.WriteLine($"[SessionManager] Цикл «до готово» ({sessionId}): {ex.Message}");
                         }
                     });
+            }
+
+            // Сабагент этого хода оборвался на середине — добиваем его продолжением. Строго по
+            // result (ход в процесс уже не идёт): systemDirective-отправка очередь не проходит
+            // и запустила бы второй ход параллельно живому. Ошибочный ход добивать нечем —
+            // сначала разбирается ошибка, поэтому ErrorMessage только гасит отметку.
+            if (msg is ResultMessage or ErrorMessage && entry.TruncatedSubagent is { } cutAgent)
+            {
+                entry.TruncatedSubagent = null;
+                if (msg is ResultMessage && ShouldNudgeSubagent(entry.SubagentNudges,
+                        entry.Info.WorkLoop is not null, entry.Info.TeamImplement is not null,
+                        HasPending(entry), entry.LoopTurnInFlight))
+                {
+                    var attempt = ++entry.SubagentNudges;
+                    _ = Task.Run(async () =>
+                    {
+                        try { await NudgeTruncatedSubagentAsync(sessionId, cutAgent, attempt); }
+                        catch (Exception ex)
+                        {
+                            Console.Error.WriteLine($"[SessionManager] Добивание сабагента ({sessionId}): {ex.Message}");
+                        }
+                    });
+                }
             }
 
             // Ход закончился — выпускаем следующее сообщение из очереди (и агентские chats_send,

@@ -9,6 +9,11 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 // а agent-*.meta.json рядом несёт toolUseId родительского вызова. Ватчер поллит эти файлы
 // на протяжении хода и эмитит AgentTextMessage/AgentThinkingMessage(parentToolUseId, text).
 // Файлы, существовавшие на старте хода, пропускаются целиком — их содержимое уже в истории.
+//
+// Попутно с чтением копится паспорт прогона каждого агента (SubagentRunTally): расследование
+// «сабагент замолчал посреди работы» упиралось в отсутствие любых цифр — см. факты в
+// SubagentRunLog. Паспорт уходит в runSink на завершении агента (Finalize) — там же, где
+// продукт объявляет его результат готовым.
 internal sealed class SubagentStreamWatcher : IDisposable
 {
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(1500);
@@ -16,11 +21,18 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly string _cwd;
     private readonly string _claudeSessionId;
     private readonly Func<ServerMessage, Task> _onMessage;
+    private readonly string? _sessionId;
+    private readonly Action<SubagentRunPassport>? _runSink;
     private readonly CancellationTokenSource _cts = new();
     // Смещение прочитанного по каждому файлу (продвигается только по целым строкам)
     private readonly Dictionary<string, long> _offsets = [];
     // toolUseId родителя по файлу транскрипта (из agent-*.meta.json; null — меты ещё нет)
     private readonly Dictionary<string, string?> _toolIdByFile = [];
+    // Паспорт прогона по файлу транскрипта (копится по мере чтения)
+    private readonly Dictionary<string, SubagentRunTally> _tallies = [];
+    // Момент последней активности, с которым паспорт уже отдан наружу: агент, которого добили,
+    // дописывает ТОТ ЖЕ транскрипт и завершается повторно — второй одинаковый паспорт не нужен
+    private readonly Dictionary<string, DateTime> _reported = [];
     // Скан зовётся из цикла поллинга и из DrainAsync (перед tool_result) — не параллелим
     private readonly SemaphoreSlim _scanLock = new(1, 1);
     private string? _dir;               // папка subagents появляется при первом сабагенте
@@ -33,11 +45,14 @@ internal sealed class SubagentStreamWatcher : IDisposable
     public bool Matches(string cwd, string claudeSessionId) =>
         !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId;
 
-    public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage)
+    public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage,
+        string? sessionId = null, Action<SubagentRunPassport>? runSink = null)
     {
         _cwd = cwd;
         _claudeSessionId = claudeSessionId;
         _onMessage = onMessage;
+        _sessionId = sessionId;
+        _runSink = runSink;
     }
 
     public void Start()
@@ -49,7 +64,11 @@ internal sealed class SubagentStreamWatcher : IDisposable
             _dir = ResolveDir();
             if (_dir is not null)
                 foreach (var f in Directory.GetFiles(_dir, "agent-*.jsonl", SearchOption.TopDirectoryOnly))
+                {
                     _offsets[f] = new FileInfo(f).Length;
+                    // Начало транскрипта не прочитано — паспорт такого агента считается неполным
+                    TallyFor(f).Partial = true;
+                }
         }
         catch (Exception ex)
         {
@@ -93,6 +112,58 @@ internal sealed class SubagentStreamWatcher : IDisposable
         }
     }
 
+    /// <summary>
+    /// Прогон агента(ов) объявлен завершённым: дочитываем хвост транскрипта и отдаём паспорта
+    /// наружу. Зовётся оттуда, где продукт считает результат агента готовым — bg_agent_done
+    /// и tool_result синхронного Task. finishedBy идёт в паспорт как есть.
+    /// </summary>
+    public async Task FinalizeAsync(IReadOnlyList<string> toolUseIds, string finishedBy)
+    {
+        if (IsDisposed) return;
+        // Дренаж — безусловный: текст сабагента обязан лечь в ленту раньше индикатора
+        // завершения, даже когда паспорта не ведутся (тесты/сессии без стора)
+        await DrainAsync();
+        if (_runSink is null || toolUseIds.Count == 0) return;
+        // Под тем же локом, что и скан: словари файлов пишет поток поллинга
+        await _scanLock.WaitAsync();
+        try
+        {
+            foreach (var (file, toolId) in _toolIdByFile)
+                if (toolId is not null && toolUseIds.Contains(toolId)) Emit(file, finishedBy);
+        }
+        finally { _scanLock.Release(); }
+    }
+
+    // Паспорт наружу. Повторный вызов без новой активности агента ничего не шлёт: у фонового
+    // агента завершение приходит и структурным событием, и текстовым, а добитый агент
+    // завершается ещё раз тем же транскриптом.
+    private void Emit(string file, string finishedBy)
+    {
+        if (_runSink is null || !_tallies.TryGetValue(file, out var tally)) return;
+        if (_reported.TryGetValue(file, out var at) && at == tally.LastActivityAt) return;
+        _reported[file] = tally.LastActivityAt;
+
+        long size = 0;
+        try { size = new FileInfo(file).Length; } catch (Exception) { /* файл мог исчезнуть */ }
+        try { _runSink(tally.Build(_sessionId, finishedBy, size)); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SubagentWatcher] Паспорт прогона не записан: {ex.Message}");
+        }
+    }
+
+    private SubagentRunTally TallyFor(string file)
+    {
+        if (_tallies.TryGetValue(file, out var tally)) return tally;
+        // id агента — в имени транскрипта (agent-<id>.jsonl), он же в строках файла
+        var id = Path.GetFileNameWithoutExtension(file);
+        if (id.StartsWith("agent-", StringComparison.Ordinal)) id = id["agent-".Length..];
+        return _tallies[file] = new SubagentRunTally(id);
+    }
+
+    private static string? StringProp(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
     private async Task ScanAsync()
     {
         await _scanLock.WaitAsync();
@@ -132,20 +203,24 @@ internal sealed class SubagentStreamWatcher : IDisposable
         if (lastNewline < 0) return;
         _offsets[file] = offset + System.Text.Encoding.UTF8.GetByteCount(chunk[..(lastNewline + 1)]);
 
+        var tally = TallyFor(file);
         foreach (var line in chunk[..lastNewline].Split('\n'))
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-            try { await EmitBlocksAsync(line, toolId); }
+            try
+            {
+                using var doc = JsonDocument.Parse(line);
+                tally.Feed(doc.RootElement);
+                await EmitBlocksAsync(doc.RootElement, toolId);
+            }
             catch (JsonException) { /* битая строка — норма для дописываемого файла */ }
         }
     }
 
     // Блоки assistant-строки транскрипта: text/thinking эмитим, tool_use пропускаем —
     // их CLI уже транслирует в основной стрим с parent_tool_use_id
-    private async Task EmitBlocksAsync(string line, string toolId)
+    private async Task EmitBlocksAsync(JsonElement root, string toolId)
     {
-        using var doc = JsonDocument.Parse(line);
-        var root = doc.RootElement;
         if (!root.TryGetProperty("type", out var t) || t.GetString() != "assistant") return;
         if (!root.TryGetProperty("message", out var msg)) return;
         if (!msg.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array) return;
@@ -180,6 +255,11 @@ internal sealed class SubagentStreamWatcher : IDisposable
             var toolId = doc.RootElement.TryGetProperty("toolUseId", out var tid)
                 && tid.ValueKind == JsonValueKind.String ? tid.GetString() : null;
             _toolIdByFile[agentFile] = toolId;
+            // Тип и описание агента есть ТОЛЬКО в мете — в самом транскрипте их нет
+            var tally = TallyFor(agentFile);
+            tally.ToolUseId = toolId;
+            tally.AgentType = StringProp(doc.RootElement, "agentType");
+            tally.Description = StringProp(doc.RootElement, "description");
             return toolId;
         }
         catch (Exception)
@@ -215,6 +295,15 @@ internal sealed class SubagentStreamWatcher : IDisposable
         if (IsDisposed) return;
         IsDisposed = true;
         _cts.Cancel();
+        // Паспорта агентов, чьё завершение продукт так и не объявил (прогон умер, ход
+        // закончился раньше агента): без них самый интересный класс обрывов был бы не виден.
+        // Хвост транскрипта тут уже дочитан — вызывающий дренирует ватчер перед Dispose.
+        // Ждём конца возможного скана: те же словари пишет поток поллинга (лок берём ПОСЛЕ
+        // отмены — иначе ждали бы полный тик). Не дождались — паспорта пропускаем, ронять
+        // остановку ватчера из-за диагностики нельзя.
+        if (_scanLock.Wait(TimeSpan.FromSeconds(2)))
+            try { foreach (var file in _tallies.Keys.ToList()) Emit(file, "run_end"); }
+            finally { _scanLock.Release(); }
         _cts.Dispose();
     }
 }

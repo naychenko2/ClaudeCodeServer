@@ -233,4 +233,7 @@ public sealed record LlmSessionContext(
     // Сигнал «оркестрация хода завершена» (finally фолбэк-адаптера, _turn сброшен): SessionManager
     // запускает разбор Pending-очереди — ходы, накопленные через EnqueueBypass во время
     // оркестрации, доставляются штатно (теперь уже в свободный адаптер). null (тесты) — no-op.
-    Action<string>? OrchestrationDone = null);
+    Action<string>? OrchestrationDone = null,
+    // Приёмник паспортов прогонов сабагентов (диагностика обрывов, SubagentRunLog): вызывается
+    // на завершении каждого агента хода. null (тесты, сессия без стора) — паспорта не ведутся.
+    Action<Claude.SubagentRunPassport>? SubagentRunSink = null);

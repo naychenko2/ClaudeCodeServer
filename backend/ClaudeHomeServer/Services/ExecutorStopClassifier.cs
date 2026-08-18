@@ -2,25 +2,64 @@ using ClaudeHomeServer.Protocol;
 
 namespace ClaudeHomeServer.Services;
 
-// Терминальный отказ хода исполнителя — «дальше работать нечем», а не «ход не удался».
-// Отдельно от TurnErrorClassifier намеренно: там классы ФОЛБЭКа (что имеет шанс пройти на
-// другой паре «модель × подписка»), и авторизация туда не входит по определению — ротация
-// её не лечит. Здесь ровно обратное: причина, при которой перезапускать бессмысленно и
-// нужно сказать человеку. Сегодня категория одна (авторизация), поэтому Classify —
-// одна точка расширения: появится «модель удалена» и т.п. — добавляется рядом.
+// Остановка хода исполнителя — «работа не идёт», а не «ход не удался». Отдельно от
+// TurnErrorClassifier намеренно: там классы ФОЛБЭКа (что имеет шанс пройти на другой паре
+// «модель × подписка»), и авторизация туда не входит по определению — ротация её не лечит.
+// Здесь ровно обратное: причины, при которых ход считать выполненным нельзя.
+//
+// Категории делятся по РЕАКЦИИ, и это различие обязано быть явным у каждого потребителя:
+//  • терминальные (IsTerminal) — перезапускать бессмысленно, нужно решение человека
+//    (сегодня одна: авторизация);
+//  • восстановимые — работа не закончена, но продолжается сама: обрыв сабагента на середине
+//    лечится добиванием (SessionManager.NudgeTruncatedSubagentAsync), а не звонком человеку.
+// Новая категория добавляется сюда же и обязательно попадает в IsTerminal.
 public static class ExecutorStopClassifier
 {
     // Причина на проводе (TaskItem.ExecutorStopReason): стиль как у api_error_status CLI — snake_case
     public const string AuthFailedReason = "auth_failed";
 
     /// <summary>
-    /// Причина терминальной остановки исполнителя либо null — обычный ход (успех или
-    /// рабочая ошибка). errorText — текст ошибки хода (ErrorMessage перед result):
-    /// у 401 CLI регулярно отдаёт subtype=success с пустым api_error_status, и текст
-    /// оказывается единственным сигналом.
+    /// Сабагент хода замолчал посреди работы (последнее его сообщение — tool_use, отчёта нет).
+    /// НЕ терминальная причина: ход не провалился и исполнитель жив — итог просто не готов,
+    /// и выдавать обрывок за результат нельзя. Диагностика обрыва — SubagentRunLog.
     /// </summary>
-    public static string? Classify(ResultMessage result, string? errorText) =>
-        IsTerminalAuthFailure(result.ApiErrorStatus, errorText) ? AuthFailedReason : null;
+    public const string SubagentTruncatedReason = "subagent_truncated";
+
+    /// <summary>
+    /// Обрывы сабагентов повторяются, а добивания исчерпаны (потолок — две попытки).
+    /// Терминальная причина: продолжение не помогает, дальше решает человек.
+    /// </summary>
+    public const string SubagentStuckReason = "subagent_stuck";
+
+    /// <summary>
+    /// Сабагенты хода: None — обрывов не было; Truncated — оборвался, добивание в пути;
+    /// Stuck — обрывается раз за разом, попытки добивания исчерпаны.
+    /// </summary>
+    public enum SubagentTurnState { None, Truncated, Stuck }
+
+    /// <summary>
+    /// Причина остановки исполнителя либо null — обычный ход (успех или рабочая ошибка).
+    /// errorText — текст ошибки хода (ErrorMessage перед result): у 401 CLI регулярно отдаёт
+    /// subtype=success с пустым api_error_status, и текст оказывается единственным сигналом.
+    /// subagent — судьба сабагентов хода (паспорта прогонов, SubagentRunLog).
+    /// Отказ авторизации сильнее: не авторизовавшись, добивать нечего.
+    /// </summary>
+    public static string? Classify(ResultMessage result, string? errorText,
+        SubagentTurnState subagent = SubagentTurnState.None) =>
+        IsTerminalAuthFailure(result.ApiErrorStatus, errorText) ? AuthFailedReason
+        : subagent switch
+        {
+            SubagentTurnState.Truncated => SubagentTruncatedReason,
+            SubagentTurnState.Stuck => SubagentStuckReason,
+            _ => null,
+        };
+
+    /// <summary>
+    /// Работа встала насовсем — звать человека (true), или продолжится сама (false).
+    /// Неизвестная причина (пометку поставил более новый код) считается терминальной:
+    /// лишний зов человека безопаснее молчаливо брошенной задачи.
+    /// </summary>
+    public static bool IsTerminal(string? reason) => reason != SubagentTruncatedReason;
 
     // Отказ авторизации у провайдера модели: 401 в статусе ЛИБО канонические формулировки
     // в тексте ошибки. Только по статусу проверять нельзя — на этом перекосе уже стояли

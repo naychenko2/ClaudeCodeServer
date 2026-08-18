@@ -83,6 +83,13 @@ public class TaskExecutionService
     // реакция-решение вместо пересказа). null — сервис не подключён (тесты без DI),
     // считаем флаг выключенным, то есть работает прежний доклад.
     private readonly FeatureFlagService? _flags;
+    // Паспорта прогонов сабагентов: отсюда исполнитель узнаёт, что сабагент его хода замолчал
+    // на середине. null — стор не подключён (тесты без DI): ходы разбираются как раньше.
+    private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
+    // Сколько ходов подряд оборвалось сабагентом по этой сессии-исполнителю. Продукт добивает
+    // агента не более двух раз (SessionManager.MaxSubagentNudges) — дальше молчать нельзя:
+    // работа реально встала, и это уже случай «зовите человека».
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _truncations = new();
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
@@ -95,8 +102,10 @@ public class TaskExecutionService
         SpecialtySettingsStore? specialtySettings = null,
         Llm.ModelAssignmentResolver? assignments = null,
         Spend.TaskPromptMetricsStore? promptMetrics = null,
-        FeatureFlagService? flags = null)
+        FeatureFlagService? flags = null,
+        Llm.Claude.SubagentRunLog? subagentRuns = null)
     {
+        _subagentRuns = subagentRuns;
         _flags = flags;
         _promptMetrics = promptMetrics;
         _tiers = tiers;
@@ -116,7 +125,11 @@ public class TaskExecutionService
         _sessions.OnSessionMessage += OnSessionMessageAsync;
         // Чат-исполнитель удалён/протух по TTL, не дождавшись result — снимаем накопленный
         // текст ошибки, чтобы буфер не жил дольше самой сессии
-        _sessions.OnSessionDeleted += s => _turnErrors.TryRemove(s.Id, out _);
+        _sessions.OnSessionDeleted += s =>
+        {
+            _turnErrors.TryRemove(s.Id, out _);
+            _truncations.TryRemove(s.Id, out _);
+        };
         // Точка B join-а (CT-8): D-сигнал (Status=Done из tasks_complete/PUT/UI) может прийти
         // раньше или позже R-сигнала (ResultMessage хода, точка A ниже) — TaskManager.Update
         // единственный путь в Done, поднимает событие ровно на переходе
@@ -568,7 +581,18 @@ public class TaskExecutionService
                     var errorText = TakeTurnError(session.Id);
                     // Терминальный отказ («дальше работать нечем») сильнее subtype: 401 у CLI
                     // регулярно приходит как формально успешный ход
-                    var stopReason = ExecutorStopClassifier.Classify(result, errorText);
+                    var stopReason = ExecutorStopClassifier.Classify(result, errorText,
+                        TakeSubagentState(session.Id));
+                    // Восстановимая остановка (сабагент оборвался на середине): работа НЕ
+                    // закончена, но и человека звать рано — продолжение уже ушло добиванием.
+                    // Молчим: ни итога задаче, ни уведомления, ход досчитается следующим result.
+                    if (stopReason is not null && !ExecutorStopClassifier.IsTerminal(stopReason))
+                    {
+                        _log.LogWarning("Ход исполнителя задачи {TaskId} оборван сабагентом ({Reason}) — " +
+                            "итог не принимаем, ждём продолжения (попытка {Attempt})",
+                            task.Id, stopReason, _truncations.GetValueOrDefault(session.Id));
+                        break;
+                    }
                     var ok = IsSuccess(result) && stopReason is null;
                     var updated = _tasks.MarkClaudeResult(task.Id, ok ? "success" : "error");
                     if (updated is null) return;
@@ -619,6 +643,28 @@ public class TaskExecutionService
                 }
         }
     }
+
+    // Судьба сабагентов только что закончившегося хода. Отметку об обрыве ставит приёмник
+    // паспортов и снимаем её здесь одноразово; серию считаем сами: пока добивания не исчерпаны
+    // (потолок SessionManager.MaxSubagentNudges) — обрыв восстановим, после — работа встала
+    // и это уже случай «зовите человека». Ход без обрыва обрывает серию.
+    internal ExecutorStopClassifier.SubagentTurnState TakeSubagentState(string sessionId)
+    {
+        if (_subagentRuns?.TakeTruncated(sessionId) is null)
+        {
+            _truncations.TryRemove(sessionId, out _);
+            return SubagentStateFor(0);
+        }
+        return SubagentStateFor(_truncations.AddOrUpdate(sessionId, 1, (_, n) => n + 1));
+    }
+
+    // Правило эскалации отдельной функцией: пока добивания не исчерпаны — обрыв восстановим,
+    // после потолка — работа встала (терминальная причина, зовём человека).
+    internal static ExecutorStopClassifier.SubagentTurnState SubagentStateFor(int consecutiveTruncations) =>
+        consecutiveTruncations <= 0 ? ExecutorStopClassifier.SubagentTurnState.None
+        : consecutiveTruncations <= SessionManager.MaxSubagentNudges
+            ? ExecutorStopClassifier.SubagentTurnState.Truncated
+            : ExecutorStopClassifier.SubagentTurnState.Stuck;
 
     // Копим текст ошибок хода до его result (их может быть несколько — напр. ошибка API
     // и следом обрыв потока)
@@ -674,11 +720,15 @@ public class TaskExecutionService
         TaskId: task.Id,
         Tag: "Исполнитель");
 
-    // Причина человеческим языком. Категория пока одна; неизвестная (пометку поставил более
-    // новый код) — общая формулировка вместо служебного ключа в глазах пользователя.
-    internal static string ExecutorStopText(string? reason) => reason == ExecutorStopClassifier.AuthFailedReason
-        ? "не удалось авторизоваться у провайдера модели"
-        : "исполнение прервано";
+    // Причина человеческим языком. Неизвестная (пометку поставил более новый код) — общая
+    // формулировка вместо служебного ключа в глазах пользователя.
+    internal static string ExecutorStopText(string? reason) => reason switch
+    {
+        ExecutorStopClassifier.AuthFailedReason => "не удалось авторизоваться у провайдера модели",
+        ExecutorStopClassifier.SubagentStuckReason =>
+            "сабагент раз за разом обрывается посреди работы, добить его не удалось",
+        _ => "исполнение прервано",
+    };
 
     // Текст доклада постановщику-персоне: факт, причина и что делать (перезапуск — его решение)
     internal static string BuildExecutorStoppedReport(TaskItem task, string reason) =>

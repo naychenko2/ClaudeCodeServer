@@ -45,7 +45,7 @@ param(
     [string]$Environment  = 'Production80',
     [string]$AppUrl       = 'https://naychenko.me',
     [int]$Port            = 80,
-    [string]$HealthUrl,         # по умолчанию http://127.0.0.1:<Port>/api/health
+    [string]$HealthUrl,         # по умолчанию http://localhost:<Port>/api/health
     [int]$KeepReleases    = 3,
     [int]$HealthTimeoutSec = 90,
     [int]$HealthSuccesses  = 3,
@@ -116,7 +116,10 @@ if (-not $RepoDir) {
     if (Test-Path $srcMarker) { $RepoDir = (Get-Content $srcMarker -Raw).Trim() }
 }
 if (-not $RepoDir) { $RepoDir = (Resolve-Path (Join-Path $selfDir '..\..')).Path }
-if (-not $HealthUrl) { $HealthUrl = "http://127.0.0.1:$Port/api/health" }
+# localhost, а не 127.0.0.1: host-фильтр прода (AllowedHosts в appsettings.Production.json)
+# пускает localhost, но режет 127.0.0.1 как чужой Host — первая боевая выкатка ушла
+# в автооткат и «не подняла» прод именно из-за 400 на каждый health-запрос
+if (-not $HealthUrl) { $HealthUrl = "http://localhost:$Port/api/health" }
 
 $env:ASPNETCORE_ENVIRONMENT = $Environment
 $script:JournalPath = Join-Path $ReleasesDir 'deploy-state.json'

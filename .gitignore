@@ -105,3 +105,12 @@ docs/plans/
 # Они синкаются в базу знаний и между машинами конфликтуют — в репозитории им не место
 notes/
 !notes/Доработки.md
+
+# Спайк браузерного канала: сырые дампы срезов (результаты — в отчёте и summary)
+tools/browser-spike/results/raw/
+
+# Сгенерированный манифест native messaging host (абсолютные пути — при установке)
+tools/browser-spike/host/com.ccs.browser_spike.json
+# Chrome for Testing: сборка и лог спайка
+tools/browser-spike/cft/
+tools/browser-spike/cft.zip

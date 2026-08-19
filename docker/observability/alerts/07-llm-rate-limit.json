@@ -1,0 +1,59 @@
+{
+  "alert": "Лимиты провайдера жмут",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Больше 15 срабатываний rate-limit за полчаса. Метрика писалась с самого начала, но правила по ней не было ни одного — и это оказалось дырой: разбор 2026-08-19 показал 24 хита за полтора часа при НУЛЕ ошибок LLM. Ходы не падали (пул тихо ротирует подписки, как и задумано), поэтому «Всплеск ошибок LLM» молчал по существу — до ccs.llm.errors дело просто не доходило. Наблюдаемым было только следствие (ходы дольше обычного), а причина не видна нигде. Порог взят вдвое выше наблюдавшегося темпа активной работы (~8 за полчаса): в норме правило молчит, а зажигается, когда лимиты жмут по-настоящему. Это ранний признак: когда ротировать станет некуда, ходы начнут падать и следом загорится правило 02. matchType in_total — нужна сумма за окно, а не отдельный минутный шаг.",
+  "evalWindow": "30m",
+  "frequency": "10m",
+  "labels": {
+    "severity": "warning"
+  },
+  "annotations": {
+    "description": "За полчаса больше 15 срабатываний rate-limit. Ходы пока не падают — пул ротирует подписки, — но они ждут и потому идут дольше. Разрез по provider покажет, чьи лимиты кончились.",
+    "summary": "Упираемся в лимиты провайдера"
+  },
+  "preferredChannels": [
+    "ccs-alerts-email"
+  ],
+  "condition": {
+    "selectedQueryName": "A",
+    "op": "above",
+    "matchType": "in_total",
+    "target": 15,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": false,
+            "aggregations": [
+              {
+                "metricName": "ccs.llm.rate_limit_hits",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment",
+                "fieldDataType": "string"
+              },
+              {
+                "name": "provider",
+                "fieldDataType": "string"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

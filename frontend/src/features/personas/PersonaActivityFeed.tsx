@@ -34,7 +34,7 @@ function describeItem(item: ActivityItem): { Icon: LucideIcon; label: string; de
 const REVEAL_STEP = 8;
 const REVEAL_INITIAL = 6;
 
-export function PersonaActivityFeed({ personas, items, loading, expanded, onToggleExpanded, onOpenSession, onOpenPersonaView }: {
+export function PersonaActivityFeed({ personas, items, loading, expanded, onToggleExpanded, onOpenSession, onOpenPersonaView, scrollMaxHeight }: {
   personas: Persona[];
   items: ActivityItem[];
   loading: boolean;
@@ -42,6 +42,9 @@ export function PersonaActivityFeed({ personas, items, loading, expanded, onTogg
   onToggleExpanded: () => void;
   onOpenSession: (s: Session) => void;
   onOpenPersonaView: (id: string, view?: 'memory') => void;
+  // Потолок ленты со скроллом (планшет/мобила: «Активность» под витриной во всю ширину,
+  // иначе она вытеснит остальной контент за нижнюю кромку экрана). undefined — без потолка.
+  scrollMaxHeight?: number;
 }) {
   const [filterId, setFilterId] = useState<string>('all');
   const [revealCount, setRevealCount] = useState(REVEAL_INITIAL);
@@ -92,47 +95,55 @@ export function PersonaActivityFeed({ personas, items, loading, expanded, onTogg
           {items.length === 0 ? 'Пока нет активности — начните разговор с помощником.' : 'У этого помощника пока нет активности.'}
         </div>
       ) : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {grouped.map(g => (
-            <div key={g.bucket}>
-              <div style={dayLabel}>{g.bucket}</div>
-              <div style={{ position: 'relative', paddingLeft: 26 }}>
-                <div style={trackLine} />
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                  {g.items.map(item => {
-                    const persona = getPersonaById(item.personaId);
-                    const { Icon, label, detail } = describeItem(item);
-                    return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => handleClick(item)}
-                        onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
-                        onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                        style={itemRow}
-                      >
-                        <span style={marker}><Icon size={11} strokeWidth={2.2} /></span>
-                        <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
-                            <span style={itemWho}>
-                              {persona ? personaLabel(persona) : 'Помощник'} <span style={itemAction}>· {label}</span>
-                            </span>
-                            <span style={itemTime}>{relativeTime(item.at)}</span>
+        // Потолок ленты на планшете/мобиле: лента «Активности» идёт под витриной во всю
+        // ширину, и без лимита вытеснила бы остальной контент за нижнюю кромку. Скролл
+        // переезжает к нам от родителя — родительский .cc-hide-scrollbar тут не помогает,
+        // рамка и потолок дают явный потолок + стандартный scrollbar.
+        <div style={scrollMaxHeight ? {
+          maxHeight: scrollMaxHeight, overflowY: 'auto', paddingRight: 4,
+        } : undefined}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {grouped.map(g => (
+              <div key={g.bucket}>
+                <div style={dayLabel}>{g.bucket}</div>
+                <div style={{ position: 'relative', paddingLeft: 26 }}>
+                  <div style={trackLine} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {g.items.map(item => {
+                      const persona = getPersonaById(item.personaId);
+                      const { Icon, label, detail } = describeItem(item);
+                      return (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => handleClick(item)}
+                          onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+                          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                          style={itemRow}
+                        >
+                          <span style={marker}><Icon size={11} strokeWidth={2.2} /></span>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+                              <span style={itemWho}>
+                                {persona ? personaLabel(persona) : 'Помощник'} <span style={itemAction}>· {label}</span>
+                              </span>
+                              <span style={itemTime}>{relativeTime(item.at)}</span>
+                            </div>
+                            {detail && <div style={itemDetail}>{detail}</div>}
                           </div>
-                          {detail && <div style={itemDetail}>{detail}</div>}
-                        </div>
-                      </button>
-                    );
-                  })}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-          {more > 0 && (
-            <button type="button" onClick={() => setRevealCount(c => c + REVEAL_STEP)} style={moreBtn}>
-              Показать ещё {Math.min(more, REVEAL_STEP)}
-            </button>
-          )}
+            ))}
+            {more > 0 && (
+              <button type="button" onClick={() => setRevealCount(c => c + REVEAL_STEP)} style={moreBtn}>
+                Показать ещё {Math.min(more, REVEAL_STEP)}
+              </button>
+            )}
+          </div>
         </div>
       )}
     </div>

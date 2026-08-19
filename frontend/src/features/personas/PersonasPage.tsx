@@ -31,6 +31,8 @@ import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
 import { PersonasHub } from './PersonasHub';
+import { PersonaActivityFeed } from './PersonaActivityFeed';
+import { usePersonasActivity } from './personasActivity';
 import { DeletePersonaDialog } from './DeletePersonaDialog';
 
 export function PersonasPage({ auth, onLogout, onHubTab }: {
@@ -263,6 +265,14 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
 
   const hasContent = creating || !!selected;
 
+  // «Активность» на мобиле (QA Fold 8 round 2, F2): PersonasHub в мобильную ветку не
+  // попадает, и лента активности там пропадала совсем. Рисуем её отдельной карточкой
+  // под витриной (на мобиле витрина — сам список персон), во всю ширину и со своим
+  // потолком прокрутки: без потолка лента вытесняет список за нижнюю кромку экрана.
+  // Хук зовём всегда (правило хуков), фетч дешёвый и общий с хабом.
+  const { items: mobileActivityItems, loading: mobileActivityLoading } = usePersonasActivity(personas);
+  const [mobileActivityOpen, setMobileActivityOpen] = useState(false);
+
   const body = isMobile ? (
     (mobileView === 'card' && hasContent)
       ? <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>{centerPane}</div>
@@ -285,14 +295,28 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
               <Button variant="ghost" size="md" fullWidth onClick={focusMobileList}>Выбрать другого ассистента</Button>
             </div>
           )}
-          <div style={{
-            flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
-            // Рамка всегда 2px (outline не двигает layout), анимируется только её цвет —
-            // переход берём из PANEL_ANIM, новых значений в шкалы не заводим
-            outline: `2px solid ${listHighlight ? C.accent : 'transparent'}`,
-            outlineOffset: -2,
-            transition: `outline-color ${PANEL_ANIM}`,
-          }}>{sidebar}</div>
+          {!mobileActivityOpen && (
+            <div style={{
+              flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column',
+              // Рамка всегда 2px (outline не двигает layout), анимируется только её цвет —
+              // переход берём из PANEL_ANIM, новых значений в шкалы не заводим
+              outline: `2px solid ${listHighlight ? C.accent : 'transparent'}`,
+              outlineOffset: -2,
+              transition: `outline-color ${PANEL_ANIM}`,
+            }}>{sidebar}</div>
+          )}
+          <div style={mobileActivityOpen ? mobileActivityCardOpen : mobileActivityCard}>
+            <PersonaActivityFeed
+              personas={personas}
+              items={mobileActivityItems}
+              loading={mobileActivityLoading}
+              expanded={mobileActivityOpen}
+              onToggleExpanded={() => setMobileActivityOpen(v => !v)}
+              onOpenSession={openSession}
+              onOpenPersonaView={selectPersona}
+              scrollMaxHeight={mobileActivityOpen ? undefined : MOBILE_ACTIVITY_FEED_H}
+            />
+          </div>
         </div>
       )
   ) : (
@@ -526,3 +550,19 @@ const mobileInviteTitle: React.CSSProperties = {
   fontFamily: FONT.serif, fontSize: FS.md, fontWeight: 600, color: C.textHeading, lineHeight: 1.3,
 };
 const mobileInviteText: React.CSSProperties = { fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 };
+
+// «Активность» на мобиле (F2): своя карточка под списком персон, во всю ширину.
+// Потолок ленты 220 — по спеке; выше ленты живёт её шапка с фильтрами, поэтому карточка
+// сама по себе получается ощутимо выше и в поток встаёт фиксированным блоком (flex: none).
+const MOBILE_ACTIVITY_FEED_H = 220;
+const mobileActivityCard: React.CSSProperties = {
+  flex: 'none', background: C.bgCard, border: `1px solid ${C.borderLight}`,
+  borderRadius: R.xl, padding: SP.md, margin: SP.md,
+};
+// Раскрытая «Активность» («Показать всё») забирает пространство списка — так же, как в
+// хабе разворот ленты вытесняет витрину. Прокрутка тут своя, потолок ленты снимается.
+const mobileActivityCardOpen: React.CSSProperties = {
+  flex: 1, minHeight: 0, overflowY: 'auto',
+  background: C.bgCard, border: `1px solid ${C.borderLight}`,
+  borderRadius: R.xl, padding: SP.md, margin: SP.md,
+};

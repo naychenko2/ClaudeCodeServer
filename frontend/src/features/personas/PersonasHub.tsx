@@ -2,12 +2,13 @@ import { useRef, useState } from 'react';
 import { Plus, Sparkles, MessageSquare, Brain, ListChecks, Zap, Users, AtSign } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { Persona, Session } from '../../types';
-import { C, FONT, FS, R, SP, CONTENT_MAX_W } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW, SP, CONTENT_MAX_W } from '../../lib/design';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, IntroDot } from '../../components/ui';
 import { personaTitleLines, usePersonas } from '../../lib/personas';
 import { useMe } from '../../lib/defaultPersona';
 import { useFeature, FLAGS } from '../../lib/featureFlags';
+import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../../lib/breakpoints';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { PersonaAvatar } from './PersonaAvatar';
 import { PersonaActivityFeed } from './PersonaActivityFeed';
@@ -48,6 +49,14 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
   const assistantsSectionRef = useRef<HTMLElement>(null);
   const goToAssistantsList = () => assistantsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
+  // QA Fold 8: на планшете и мобиле двухколоночный макет «300px сайдбар» наезжает на
+  // витрину (тонкая колонка воюет с шириной карточек персон). Переходим на одну
+  // колонку — «Активность» после витрины во всю ширину, в собственной карточке.
+  const windowWidth = useWindowWidth();
+  const isStack = windowWidth <= TABLET_MAX;
+  // На мобиле ещё компактнее — потолок ленты 220, на планшете 300 (см. PersonaActivityFeed).
+  const feedMaxHeight = windowWidth <= MOBILE_MAX ? 220 : 300;
+
   return (
     // Фон прозрачный: под центром виден дудл-фон страницы (CanvasBackdrop)
     <div ref={scrollRef} style={{ height: '100%', overflowY: 'auto', padding: '0 32px' }}>
@@ -74,7 +83,7 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
           </div>
         </div>
 
-        <div style={activityExpanded ? undefined : hubGrid}>
+        <div style={activityExpanded ? undefined : (isStack ? stackGrid : hubGrid)}>
           {!activityExpanded && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 34, minWidth: 0 }}>
 
@@ -149,17 +158,35 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
             </div>
           )}
 
-          <aside style={activityExpanded ? { maxWidth: 760, margin: '0 auto', width: '100%' } : { minWidth: 0 }}>
-            <PersonaActivityFeed
-              personas={personas}
-              items={activityItems}
-              loading={activityLoading}
-              expanded={activityExpanded}
-              onToggleExpanded={toggleActivity}
-              onOpenSession={onOpenSession}
-              onOpenPersonaView={onOpenPersonaView}
-            />
-          </aside>
+          {/* «Активность» во всю ширину на планшете/мобиле — отдельная карточка (C.bgCard
+              + R.xxl + SHADOW.card), чтобы не сливалась с витриной. Лента живёт
+              внутри со своим maxHeight, иначе вытеснит остальной контент за экран. */}
+          {isStack && !activityExpanded ? (
+            <aside style={activityCard}>
+              <PersonaActivityFeed
+                personas={personas}
+                items={activityItems}
+                loading={activityLoading}
+                expanded={false}
+                onToggleExpanded={toggleActivity}
+                onOpenSession={onOpenSession}
+                onOpenPersonaView={onOpenPersonaView}
+                scrollMaxHeight={feedMaxHeight}
+              />
+            </aside>
+          ) : (
+            <aside style={activityExpanded ? { maxWidth: 760, margin: '0 auto', width: '100%' } : { minWidth: 0, minHeight: 0 }}>
+              <PersonaActivityFeed
+                personas={personas}
+                items={activityItems}
+                loading={activityLoading}
+                expanded={activityExpanded}
+                onToggleExpanded={toggleActivity}
+                onOpenSession={onOpenSession}
+                onOpenPersonaView={onOpenPersonaView}
+              />
+            </aside>
+          )}
         </div>
       </div>
     </div>
@@ -185,7 +212,7 @@ function AssistantCard({ persona, talking, onOpen, onTalk }: {
       onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); } }}
       onMouseEnter={e => { e.currentTarget.style.borderColor = C.accentMuted; }}
       onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; }}
-      style={assistantCard}
+      style={{ ...assistantCard, minWidth: 0 }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <PersonaAvatar persona={persona} size={40} />
@@ -239,9 +266,19 @@ const capsIcon: React.CSSProperties = {
   display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
 };
 const hubGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) 300px', gap: 28, alignItems: 'start' };
+// На планшете и мобиле витрина и «Активность» идут одной колонкой — общий гэп ниже,
+// секция «Активность» добавляет собственную карточку-обёртку (activityCard).
+const stackGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'minmax(0,1fr)', gap: 20, alignItems: 'start' };
+const activityCard: React.CSSProperties = {
+  background: C.bgCard, border: `1px solid ${C.borderLight}`,
+  borderRadius: R.xxl, padding: '18px 20px 16px', boxShadow: SHADOW.card,
+};
 const heading: React.CSSProperties = { fontFamily: FONT.serif, fontSize: 19, fontWeight: 700, color: C.textHeading };
 const subheading: React.CSSProperties = { fontSize: 12.5, color: C.textSecondary, marginTop: 4 };
-const showcaseGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 12 };
+// minmax(180px, 1fr) — нижний предел держит карточки читабельными, 1fr сжимает
+// треки до фактической ширины контейнера. Иначе (minmax(200px, 1fr)) витрина
+// пробивала родителя в ширину и обрезала правую карточку на 832 (round 2, N1)
+const showcaseGrid: React.CSSProperties = { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 };
 const assistantCard: React.CSSProperties = {
   display: 'flex', flexDirection: 'column', gap: 9, background: C.bgWhite, border: `1px solid ${C.border}`,
   borderRadius: R.xxl, padding: 14, cursor: 'pointer', transition: 'border-color 0.15s',

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Виртуализированный список (windowed) — browser spike</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 0; }
+    header { position: sticky; top: 0; background: #1f6feb; color: #fff; padding: 8px 16px; }
+    #scroll { height: 70vh; overflow-y: auto; border: 1px solid #ccc; }
+    #spacer { position: relative; }
+    .row { position: absolute; left: 0; right: 0; height: 29px; box-sizing: border-box;
+           padding: 6px 12px; border-bottom: 1px solid #eee; cursor: pointer; }
+    .row:nth-child(odd) { background: #fafafa; }
+  </style>
+</head>
+<body>
+  <header>Виртуализированный список — 1500 строк данных, в DOM только видимое окно</header>
+  <p style="padding:4px 16px">Настоящая DOM-виртуализация (как react-window): при скролле строки пересоздаются.</p>
+  <div id="scroll"><div id="spacer"><div id="pool"></div></div></div>
+  <script>
+    // Данные отделены от DOM: строка i существует в DOM только пока попадает в окно ±overscan.
+    const DATA = Array.from({ length: 1500 }, (_, i) => `Строка №${i + 1} — значение ${Math.random().toString(36).slice(2, 8)}`);
+    const ROW_H = 29, OVERSCAN = 5;
+    const scroller = document.getElementById('scroll');
+    const spacer = document.getElementById('spacer');
+    const pool = document.getElementById('pool');
+    spacer.style.height = (DATA.length * ROW_H) + 'px';
+
+    function render() {
+      const start = Math.max(0, Math.floor(scroller.scrollTop / ROW_H) - OVERSCAN);
+      const end = Math.min(DATA.length, Math.ceil((scroller.scrollTop + scroller.clientHeight) / ROW_H) + OVERSCAN);
+      // Пересоздание узлов окна — каждое обновление скролла строит НОВЫЕ div.
+      const frag = document.createDocumentFragment();
+      for (let i = start; i < end; i++) {
+        const d = document.createElement('div');
+        d.className = 'row';
+        d.setAttribute('role', 'listitem');
+        d.tabIndex = 0;
+        d.style.top = (i * ROW_H) + 'px';
+        d.textContent = DATA[i];
+        frag.appendChild(d);
+      }
+      pool.replaceChildren(frag);
+      document.getElementById('dbg').textContent = `окно ${start}..${end} (${end - start} узлов)`;
+    }
+    scroller.addEventListener('scroll', () => requestAnimationFrame(render), { passive: true });
+    render();
+  </script>
+  <p id="dbg" style="padding:4px 16px;color:#888"></p>
+</body>
+</html>

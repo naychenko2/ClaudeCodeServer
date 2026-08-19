@@ -1,6 +1,8 @@
 # .NET
 backend/**/bin/
 backend/**/obj/
+tools/**/bin/
+tools/**/obj/
 *.user
 .vs/
 data/
@@ -117,3 +119,12 @@ test-results/
 
 # Планы plan-mode сессий (выход из планирования пишет сюда); итог работы живёт в коммитах
 .claude/plans/
+
+# Спайк браузерного канала: сырые дампы срезов (результаты — в отчёте и summary)
+tools/browser-spike/results/raw/
+
+# Сгенерированный манифест native messaging host (абсолютные пути — при установке)
+tools/browser-spike/host/com.ccs.browser_spike.json
+# Chrome for Testing: сборка и лог спайка
+tools/browser-spike/cft/
+tools/browser-spike/cft.zip

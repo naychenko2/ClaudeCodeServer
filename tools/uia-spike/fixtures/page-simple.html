@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Обычная страница — UIA spike</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; max-width: 720px; margin: 24px auto; padding: 0 16px; }
+    h1 { font-size: 22px; }
+    form { display: grid; gap: 10px; margin: 16px 0; }
+    label { display: block; }
+    button, input, select { font: inherit; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: left; }
+    a { color: #06c; }
+  </style>
+</head>
+<body>
+  <h1>Обычная страница для замера UIA</h1>
+  <p>Контрольная страница: форма, таблица, ссылки, чекбоксы.</p>
+
+  <form>
+    <label>Имя <input type="text" value="" placeholder="Введите имя"></label>
+    <label>Email <input type="email" placeholder="user@example.com"></label>
+    <label>Город
+      <select>
+        <option>Москва</option>
+        <option>Санкт-Петербург</option>
+        <option>Новосибирск</option>
+        <option>Казань</option>
+      </select>
+    </label>
+    <fieldset>
+      <legend>Подписки</legend>
+      <label><input type="checkbox" checked> Новости</label>
+      <label><input type="checkbox"> Акции</label>
+      <label><input type="radio" name="t" checked> Ежедневно</label>
+      <label><input type="radio" name="t"> Еженедельно</label>
+    </fieldset>
+    <div>
+      <button type="button">Сохранить</button>
+      <button type="reset">Сбросить</button>
+      <button type="button" disabled>Недоступно</button>
+    </div>
+  </form>
+
+  <nav>
+    <a href="#">Главная</a> · <a href="#">Документация</a> · <a href="#">Настройки</a> · <a href="#">Выход</a>
+  </nav>
+
+  <table>
+    <caption>Тарифы</caption>
+    <thead><tr><th>Тариф</th><th>Цена</th><th>Срок</th></tr></thead>
+    <tbody>
+      <tr><td>Базовый</td><td>490</td><td>1 мес</td></tr>
+      <tr><td>Стандарт</td><td>890</td><td>1 мес</td></tr>
+      <tr><td>Премиум</td><td>1490</td><td>1 мес</td></tr>
+    </tbody>
+  </table>
+
+  <details>
+    <summary>Дополнительные параметры</summary>
+    <p>Текст внутри свернутого блока.</p>
+  </details>
+</body>
+</html>

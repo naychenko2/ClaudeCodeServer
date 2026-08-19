@@ -63,8 +63,43 @@ public class PiiLogSanitizerTests
             "Временный чат {SessionId} «{Name}» удалён", "ses-abc", "Отчёт по клиенту Иванову"));
 
         captured.Message.Should().NotContain("Иванову", "имя чата — пользовательские данные");
-        captured.Message.Should().Be("Временный чат {SessionId} «{Name}» удалён",
-            "тело должно вернуться к шаблону, событие при этом остаётся понятным");
+        captured.Message.Should().Be("Временный чат ses-abc «{Name}» удалён",
+            "тело собирается из шаблона и ОЧИЩЕННЫХ атрибутов: разрешённый идентификатор "
+            + "виден, а имя чата остаётся плейсхолдером");
+    }
+
+    [Fact]
+    public void Render_KeepsDroppedPlaceholders_ButSubstitutesAllowed()
+    {
+        // Ровно та строка, ради которой рендер и заводился: без него в ленте SigNoz
+        // читалось «действие {Action} — {Reason}», то есть ничего.
+        var captured = Log(l => l.LogWarning(
+            "cheap-runner: действие {Action} — {Reason}; текст {Message}",
+            "team-memory-consolidate", "AI не ответил (лимит 180 с)", "пользовательский текст"));
+
+        captured.Message.Should().Be(
+            "cheap-runner: действие team-memory-consolidate — AI не ответил (лимит 180 с); текст {Message}");
+        captured.Message.Should().NotContain("пользовательский текст");
+    }
+
+    [Fact]
+    public void Render_AppliesFormat_WithInvariantCulture()
+    {
+        // {Idle:0.0} из DevServerService. Культура ВСЕГДА инвариантная: на ru-RU дробное
+        // значение дало бы запятую, и одинаковые события перестали бы грепаться.
+        var captured = Log(l => l.LogInformation("DevServer {Key}: простой {Idle:0.0} мин", "web", 12.5));
+
+        captured.Message.Should().Be("DevServer {Key}: простой 12.5 мин",
+            "{Key} закрыт намеренно — под ним может уехать секрет");
+    }
+
+    [Fact]
+    public void Render_PutsHash_IntoMessage_NotRawPath()
+    {
+        var captured = Log(l => l.LogWarning("Не удалось записать {Path}", @"C:\Users\grisha\secret.json"));
+
+        captured.Message.Should().NotContain("grisha");
+        captured.Message.Should().NotContain("{Path}", "путь не дропается, а хэшируется — хэш и попадает в тело");
     }
 
     [Fact]

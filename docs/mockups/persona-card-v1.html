@@ -1,0 +1,579 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Карточка персоны — хедер и контентная зона (v1)</title>
+<style>
+:root{
+  --c-bg-main:#F4F0E8; --c-bg-card:#FBF8F2; --c-bg-white:#FFFFFF;
+  --c-bg-selected:#E8E1D4; --c-bg-inset:#E7E0D2;
+  --c-text-heading:#2A251F; --c-text-primary:#39332B;
+  --c-text-secondary:#756B5E; --c-text-muted:#9A8F7E; --c-on-accent:#FFFFFF;
+  --c-accent:#D97757; --c-accent-light:#F4ECE1;
+  --c-border:#E0D7C8; --c-border-light:#E8E1D4; --c-divider:#DDD4C4;
+  --shadow-card:0 2px 8px rgba(60,50,35,.05);
+  --persona:#3E7CA6; --bad:#C4553D; --good:#3F7A4F;
+}
+html[data-theme="dark"]{
+  --c-bg-main:#201C18; --c-bg-card:#2E2A25; --c-bg-white:#2E2A25;
+  --c-bg-selected:#38332D; --c-bg-inset:#1B1815;
+  --c-text-heading:#F2ECE1; --c-text-primary:#EDE6DB;
+  --c-text-secondary:#B3A897; --c-text-muted:#8A8072; --c-on-accent:#241C17;
+  --c-accent:#E38A6A; --c-accent-light:#3A2E27;
+  --c-border:#3D3830; --c-border-light:#34302A; --c-divider:#454037;
+  --shadow-card:0 2px 10px rgba(0,0,0,.35);
+  --persona:#6FA8CE; --bad:#E38A6A; --good:#7FB98F;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--c-bg-main);color:var(--c-text-primary);
+  font-family:"Hanken Grotesk",-apple-system,"Segoe UI",sans-serif;font-size:13px}
+.serif{font-family:"PT Serif",Georgia,serif}
+.page{max-width:1200px;margin:0 auto;padding:20px 20px 64px}
+.top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;position:sticky;top:0;z-index:9;
+  background:var(--c-bg-main);padding:14px 0;border-bottom:1px solid var(--c-border);margin-bottom:20px}
+.top h1{font-family:"PT Serif",Georgia,serif;font-size:22px;margin:0;flex:1;min-width:220px;
+  color:var(--c-text-heading);font-weight:600}
+.tbtn{background:var(--c-bg-card);border:1px solid var(--c-border);color:var(--c-text-secondary);
+  border-radius:10px;padding:8px 14px;font:600 13px inherit;cursor:pointer}
+.tbtn[aria-pressed="true"]{background:var(--c-accent);color:var(--c-on-accent);border-color:transparent}
+h2{font-family:"PT Serif",Georgia,serif;font-size:19px;color:var(--c-text-heading);
+  margin:38px 0 6px;font-weight:600}
+.lead{color:var(--c-text-secondary);margin:0 0 16px;max-width:74ch;line-height:1.6}
+.frames{display:flex;gap:20px;flex-wrap:wrap;align-items:flex-start}
+.frame{border:1px solid var(--c-border);border-radius:14px;background:var(--c-bg-main);
+  overflow:hidden;box-shadow:var(--shadow-card)}
+.cap{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--c-text-muted);padding:8px 12px;background:var(--c-bg-inset);
+  border-bottom:1px solid var(--c-border);display:flex;justify-content:space-between;gap:10px}
+.cap .bad{color:var(--bad)}.cap .good{color:var(--good)}
+
+.tb{display:flex;align-items:center;gap:8px;min-height:52px;padding:0 16px;
+  background:var(--c-bg-main);border-left:3px solid var(--persona)}
+.tb.wrap{flex-wrap:wrap;padding:9px 12px;min-height:auto;row-gap:9px}
+.tb.clip{overflow:hidden}
+.ava{width:32px;height:32px;border-radius:50%;background:var(--persona);flex-shrink:0;color:#fff;
+  display:flex;align-items:center;justify-content:center;font:700 12px inherit}
+.ava.lg{width:80px;height:80px;font-size:26px}
+.ava.sm{width:26px;height:26px;font-size:10px}
+.ident{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.ident.floor{min-width:140px}
+.ident .r{font-family:"PT Serif",Georgia,serif;font-size:15px;font-weight:600;color:var(--persona);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ident .s{display:flex;align-items:center;gap:6px;min-width:0}
+.ident .s .n{font-size:11.5px;color:var(--c-text-muted);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.badge{font-size:10.5px;font-weight:600;padding:1px 7px;border-radius:999px;white-space:nowrap;
+  flex-shrink:0;background:color-mix(in srgb,var(--persona) 14%,transparent);color:var(--persona)}
+.badge.star{background:var(--c-accent-light);color:var(--c-accent)}
+.ib{width:32px;height:32px;border-radius:8px;border:none;background:none;color:var(--c-text-secondary);
+  display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;font-size:15px}
+.ib:hover{background:var(--c-bg-selected)}
+.ib.hit{width:40px;height:40px}
+.gbtn{background:none;border:1px solid var(--c-border);color:var(--c-text-secondary);border-radius:8px;
+  height:32px;padding:0 12px;font:600 13px inherit;cursor:pointer;display:flex;align-items:center;
+  gap:6px;flex-shrink:0;white-space:nowrap}
+.pills{display:flex;gap:2px;background:var(--c-bg-selected);border-radius:9px;padding:3px;flex-shrink:0}
+.pills.row2{flex:1 0 100%;overflow-x:auto}
+.pill{border:none;background:none;color:var(--c-text-secondary);border-radius:7px;padding:5px 11px;
+  font:600 12.5px inherit;cursor:pointer;white-space:nowrap;display:flex;align-items:center;gap:5px}
+.pill[aria-selected="true"]{background:var(--c-bg-white);color:var(--c-text-heading);box-shadow:var(--shadow-card)}
+.stripe{height:2px;background:color-mix(in srgb,var(--persona) 40%,transparent)}
+
+.body{padding:22px;background:var(--c-bg-main)}
+.grid{display:flex;gap:26px;align-items:flex-start}
+.grid.fix>.aside{width:300px;flex-shrink:0}
+.grid.fix>.main{flex:1;min-width:0}
+.grid.fluid{flex-wrap:wrap}
+.grid.fluid>.main{flex:1 1 380px;min-width:0}
+.grid.fluid>.aside{flex:1 1 300px;min-width:0}
+.hero{display:flex;gap:18px;align-items:flex-start}
+.hero.col{flex-direction:column;align-items:center;text-align:center}
+.role{font-family:"PT Serif",Georgia,serif;font-size:26px;font-weight:600;color:var(--persona);
+  line-height:1.25;overflow-wrap:break-word}
+.role.sm{font-size:22px}
+.who{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;margin-top:4px}
+.who b{font-size:15px;color:var(--c-text-heading)}
+.who i{font-style:normal;font-size:12.5px;color:var(--c-text-muted)}
+.desc{margin:6px 0 0;font-size:13.5px;color:var(--c-text-secondary);line-height:1.5}
+.cta{width:100%;display:flex;align-items:center;justify-content:center;gap:8px;margin-top:18px;border:none;border-radius:12px;background:var(--c-accent);
+  color:var(--c-on-accent);height:42px;font:600 14px inherit;cursor:pointer}
+.greet{display:flex;gap:10px;align-items:flex-start;margin-top:18px}
+.bub{background:color-mix(in srgb,var(--persona) 8%,transparent);
+  border:1px solid color-mix(in srgb,var(--persona) 18%,transparent);
+  border-radius:4px 20px 20px 20px;padding:9px 14px;font-size:13.5px;line-height:1.5}
+.sec{border-top:1px solid var(--c-border-light);padding-top:20px;margin-top:24px}
+.sl{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--c-text-muted);margin-bottom:12px;display:flex;justify-content:space-between;gap:10px}
+.chips{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px}
+.chips.old{display:flex;flex-wrap:wrap}
+.chip{background:var(--c-bg-white);border:1px solid var(--c-border);border-radius:10px;
+  padding:8px 13px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.chip .k{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--c-text-muted)}
+.chip .v{font-size:13px;font-weight:600;color:var(--c-text-heading);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.nav{display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px}
+.navc{display:flex;align-items:center;gap:10px;background:var(--c-bg-white);border:1px solid var(--c-border);
+  border-radius:12px;padding:11px 13px;cursor:pointer;text-align:left;font:inherit;color:inherit}
+.navc:hover{border-color:var(--persona)}
+.navc .ic{width:30px;height:30px;border-radius:8px;flex-shrink:0;display:flex;align-items:center;
+  justify-content:center;font-size:14px;background:var(--c-bg-selected)}
+.navc .tx{flex:1;min-width:0}
+.navc .tx b{display:block;font-size:13px;color:var(--c-text-heading)}
+.navc .tx u{display:block;text-decoration:none;font-size:11.5px;color:var(--c-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.navc .ar{color:var(--c-text-muted);flex-shrink:0}
+.prose{font-size:13.5px;line-height:1.55;color:var(--c-text-primary)}
+.feed{background:var(--c-bg-card);border:1px solid var(--c-border-light);border-radius:14px;
+  padding:16px 18px;box-shadow:var(--shadow-card)}
+.feed h3{font-family:"PT Serif",Georgia,serif;margin:0;font-size:19px;color:var(--c-text-heading);font-weight:600}
+.fsub{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin:2px 0 12px}
+.fsub span{font-size:12.5px;color:var(--c-text-muted)}
+.fsub a{font-size:12.5px;font-weight:600;color:var(--c-accent);text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;gap:2px}
+.cap2{font-size:10.5px;font-weight:700;letter-spacing:.06em;color:var(--c-text-muted);margin:12px 0 6px}
+.ev{display:flex;gap:9px;padding:6px 0}
+.ev .d{width:22px;height:22px;border-radius:7px;flex-shrink:0;background:var(--c-bg-selected);
+  display:flex;align-items:center;justify-content:center;font-size:11px}
+.ev .t{min-width:0}
+.ev .t b{font-size:12.5px;color:var(--c-text-heading);font-weight:600}
+.ev .t i{font-style:normal;font-size:12.5px;color:var(--persona)}
+.ev .t u{display:block;text-decoration:none;font-size:11.5px;color:var(--c-text-muted);margin-top:2px}
+.ev .t p{margin:2px 0 0;font-size:12px;color:var(--c-text-secondary);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.scrollcap{max-height:280px;overflow:hidden;position:relative}
+.scrollcap::after{content:"";position:absolute;inset:auto 0 0 0;height:40px;
+  background:linear-gradient(transparent,var(--c-bg-card))}
+.note{border-left:3px solid var(--c-accent);background:var(--c-accent-light);border-radius:0 10px 10px 0;
+  padding:11px 14px;margin:14px 0;font-size:13px;line-height:1.55;color:var(--c-text-primary);max-width:78ch}
+.note b{color:var(--c-text-heading)}
+.fab{position:absolute;right:14px;bottom:14px;width:48px;height:48px;border-radius:50%;
+  background:var(--persona);color:#fff;border:none;display:flex;align-items:center;justify-content:center;
+  font-size:18px;box-shadow:0 6px 18px rgba(0,0,0,.22)}
+.ic-l{width:16px;height:16px;flex-shrink:0;fill:none;stroke:currentColor;
+  stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ic-l.s14{width:14px;height:14px}.ic-l.s12{width:12px;height:12px}
+.ic-l.s11{width:11px;height:11px;stroke-width:2.2}
+.ic-l.s18{width:18px;height:18px}
+.empty{padding:26px 10px;text-align:center;color:var(--c-text-muted);font-size:12.5px}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+<g id="i-chevron-left"><path d="m15 18-6-6 6-6"/></g>
+<g id="i-chevron-right"><path d="m9 18 6-6-6-6"/></g>
+<g id="i-x"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></g>
+<g id="i-pencil"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></g>
+<g id="i-ellipsis-vertical"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></g>
+<g id="i-user"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g>
+<g id="i-book"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></g>
+<g id="i-zap"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></g>
+<g id="i-layers"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></g>
+<g id="i-check-square"><path d="M21 10.656V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.344"/><path d="m9 11 3 3L22 4"/></g>
+<g id="i-star"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></g>
+<g id="i-message-square"><path d="M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z"/></g>
+<g id="i-brain"><path d="M12 18V5"/><path d="M15 13a4.17 4.17 0 0 1-3-4 4.17 4.17 0 0 1-3 4"/><path d="M17.598 6.5A3 3 0 1 0 12 5a3 3 0 1 0-5.598 1.5"/><path d="M17.997 5.125a4 4 0 0 1 2.526 5.77"/><path d="M18 18a4 4 0 0 0 2-7.464"/><path d="M19.967 17.483A4 4 0 1 1 12 18a4 4 0 1 1-7.967-.517"/><path d="M6 18a4 4 0 0 1-2-7.464"/><path d="M6.003 5.125a4 4 0 0 0-2.526 5.77"/></g>
+</defs></svg>
+<div class="page">
+<div class="top">
+  <h1>Карточка персоны — хедер и контентная зона</h1>
+  <button class="tbtn" id="th" aria-pressed="false">Тёмная тема</button>
+</div>
+
+<h2>1. Хедер: что происходит сейчас</h2>
+<p class="lead">Тулбар — одна строка <code>display:flex</code> без переноса и с фиксированной высотой 52px.
+Всё, кроме блока идентичности, стоит <code>flexShrink:0</code>, поэтому сужение съедает только имя —
+до нуля, а остальное выдавливается за правый край. Крестика «Закрыть» в вызове нет вовсе, стрелка
+«Назад» отдана только мобиле: на этой ширине из карточки не выйти.</p>
+
+<div class="frames">
+  <div class="frame" style="width:560px">
+    <div class="cap"><span>Сейчас · контейнер 560 (панели открыты)</span><span class="bad">сломано</span></div>
+    <div class="tb clip">
+      <div class="ava">МК</div>
+      <div class="ident" style="min-width:0">
+        <div class="r">Координатор программы</div>
+        <div class="s"><span class="n">Марк · Здоровье</span><span class="badge star"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-star"/></svg> по умолч.</span></div>
+      </div>
+      <button class="gbtn"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-pencil"/></svg> Редактировать</button>
+      <button class="ib"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-ellipsis-vertical"/></svg></button>
+      <div class="pills">
+        <button class="pill" aria-selected="true">Профиль</button>
+        <button class="pill">Умения</button>
+        <button class="pill">Проактивность</button>
+        <button class="pill">Память</button>
+        <button class="pill">Задачи</button>
+      </div>
+      <button class="ib"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-x"/></svg></button>
+    </div>
+    <div class="stripe"></div>
+    <div style="padding:12px 16px;font-size:12px;color:var(--bad);line-height:1.6">
+      Имя сжато в ноль, вторая строка легла под кнопку · «Память», «Задачи»
+      и крестик «Закрыть» — за правым краем, недостижимы
+    </div>
+  </div>
+</div>
+
+<h2>2. Хедер: предложение</h2>
+<p class="lead">Приоритетная деградация вместо равномерного сжатия. Порядок важности задан явно:
+выход из карточки не исчезает никогда, имя обрезается многоточием но не в ноль, вкладки при нехватке
+места уходят своей строкой, а «Редактировать» схлопывается в карандаш. Перенос — через
+<code>flexWrap</code> и <code>minHeight</code>, без JS-порогов по ширине окна: окно врёт, контейнер
+режут боковые панели.</p>
+
+<div class="frames">
+  <div class="frame" style="width:560px">
+    <div class="cap"><span>Стало · контейнер 560</span><span class="good">две строки</span></div>
+    <div class="tb wrap">
+      <button class="ib" title="Назад к списку"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-chevron-left"/></svg></button>
+      <div class="ava">МК</div>
+      <div class="ident floor">
+        <div class="r">Координатор программы</div>
+        <div class="s"><span class="n">Марк</span><span class="badge">Проект</span><span class="badge star"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-star"/></svg></span></div>
+      </div>
+      <button class="ib" title="Редактировать"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-pencil"/></svg></button>
+      <button class="ib" title="Ещё"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-ellipsis-vertical"/></svg></button>
+      <div class="pills row2">
+        <button class="pill" aria-selected="true">Профиль</button>
+        <button class="pill">Умения</button>
+        <button class="pill">Проактивность</button>
+        <button class="pill">Память</button>
+        <button class="pill">Задачи</button>
+      </div>
+    </div>
+    <div class="stripe"></div>
+    <div style="padding:12px 16px;font-size:12px;color:var(--good);line-height:1.6">
+      Выход — первым слева · имя с многоточием, но не в ноль ·
+      вкладки своей строкой со скроллом, ничего не срезано
+    </div>
+  </div>
+
+  <div class="frame" style="width:832px">
+    <div class="cap"><span>Стало · 832 (Fold 8)</span><span class="good">две строки</span></div>
+    <div class="tb wrap">
+      <button class="ib" title="Назад к списку"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-chevron-left"/></svg></button>
+      <div class="ava">МК</div>
+      <div class="ident floor">
+        <div class="r">Координатор программы</div>
+        <div class="s"><span class="n">Марк · Проект «Здоровье»</span><span class="badge">Проект</span><span class="badge star"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-star"/></svg> по умолчанию</span></div>
+      </div>
+      <button class="ib" title="Редактировать"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-pencil"/></svg></button>
+      <button class="ib" title="Ещё"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-ellipsis-vertical"/></svg></button>
+      <div class="pills row2">
+        <button class="pill" aria-selected="true">Профиль</button>
+        <button class="pill">Умения</button>
+        <button class="pill">Проактивность</button>
+        <button class="pill">Память</button>
+        <button class="pill">Задачи</button>
+      </div>
+    </div>
+    <div class="stripe"></div>
+  </div>
+
+  <div class="frame" style="width:1100px">
+    <div class="cap"><span>Стало · ≥900 — одна строка, как раньше</span><span class="good">без изменений</span></div>
+    <div class="tb">
+      <button class="ib" title="Назад к списку"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-chevron-left"/></svg></button>
+      <div class="ava">МК</div>
+      <div class="ident floor">
+        <div class="r">Координатор программы</div>
+        <div class="s"><span class="n">Марк · Проект «Здоровье»</span><span class="badge">Проект</span><span class="badge star"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-star"/></svg> по умолчанию</span></div>
+      </div>
+      <button class="gbtn"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-pencil"/></svg> Редактировать</button>
+      <button class="ib"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-ellipsis-vertical"/></svg></button>
+      <div class="pills">
+        <button class="pill" aria-selected="true">Профиль</button>
+        <button class="pill">Умения</button>
+        <button class="pill">Проактивность</button>
+        <button class="pill">Память</button>
+        <button class="pill">Задачи</button>
+      </div>
+    </div>
+    <div class="stripe"></div>
+  </div>
+</div>
+
+<div class="note"><b>Порядок исчезновения при сужении.</b> 1) «Редактировать» теряет подпись → карандаш.
+2) Вкладки уходят во вторую строку. 3) Имя обрезается многоточием до пола 140px. 4) Бейджи «Проект» и
+«Star по умолчанию» сокращаются до иконок. Выход (ChevronLeft или X) и EllipsisVertical не исчезают ни при какой ширине.</div>
+
+<h2>3. Контентная зона: что происходит сейчас</h2>
+<p class="lead">Лента активности прибита к 300px и не сжимается, визитке остаётся остаток —
+на узком контейнере это ~110px, и заголовок рвётся по слогам. Отдельно от раскладки: вкладка
+«Профиль» показывает превью четырёх других вкладок, а те же сущности ещё раз перечислены в чипах
+фактов. Одно и то же — трижды: чип, секция-превью, собственная вкладка.</p>
+
+<div class="frames">
+  <div class="frame" style="width:560px">
+    <div class="cap"><span>Сейчас · контейнер 560</span><span class="bad">сломано</span></div>
+    <div class="body">
+      <div class="grid fix">
+        <div class="main">
+          <div class="hero">
+            <div class="ava lg">МК</div>
+            <div style="min-width:0">
+              <div class="role">Коорди&shy;натор програ&shy;ммы</div>
+              <div class="who"><b>Марк</b><i>@koordinator</i></div>
+              <p class="desc">Ключевой координатор программы снижения веса: статус проекта, контроль задач.</p>
+            </div>
+          </div>
+        </div>
+        <div class="aside">
+          <div class="feed">
+            <h3>Активность</h3>
+            <div class="fsub"><span>Что происходило недавно</span><a>Показать всё<svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></a></div>
+            <div class="cap2">СЕГОДНЯ</div>
+            <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-message-square"/></svg></div><div class="t"><b>Координатор</b> <i>· Разговор</i><u>3 часа назад</u></div></div>
+            <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-message-square"/></svg></div><div class="t"><b>Координатор</b> <i>· Разговор</i><u>4 часа назад</u></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="padding:0 16px 14px;font-size:12px;color:var(--bad);line-height:1.6">
+      Лента забрала 300 из 516 · визитке осталось ~110px · заголовок рвётся по слогам
+    </div>
+  </div>
+</div>
+
+<h2>4. Контентная зона: предложение</h2>
+<p class="lead">Раскладка — по месту, а не по ширине окна: колонки получают базис
+(<code>1 1 380px</code> у визитки, <code>1 1 300px</code> у ленты) и переносятся сами, когда обе
+не помещаются. Иерархия — по вопросу «за чем человек сюда пришёл»: сверху кто это и кнопка
+разговора, ниже факты, у которых нет своей вкладки, затем один компактный навигатор в остальные
+вкладки, и только потом длинные тексты характера и правил.</p>
+
+<div class="frames">
+  <div class="frame" style="width:560px;position:relative">
+    <div class="cap"><span>Стало · контейнер 560 — одна колонка</span><span class="good">лента внизу</span></div>
+    <div class="body">
+      <div class="grid fluid">
+        <div class="main">
+          <div class="hero">
+            <div class="ava lg">МК</div>
+            <div style="min-width:0">
+              <div class="role">Координатор программы</div>
+              <div class="who"><b>Марк</b><i>@koordinator</i></div>
+              <p class="desc">Ключевой координатор программы снижения веса: статус проекта, контроль
+                задач и pending-действий, организация консилиумов.</p>
+            </div>
+          </div>
+          <button class="cta"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-message-square"/></svg> Поговорить</button>
+          <div class="greet">
+            <div class="ava sm">МК</div>
+            <div class="bub">Привет! Держу статус программы. Спроси, что горит сегодня.</div>
+          </div>
+
+          <div class="sec">
+            <div class="sl"><span>Настройки</span></div>
+            <div class="chips">
+              <div class="chip"><span class="k">Модель</span><span class="v">Opus 5 · высокое</span></div>
+              <div class="chip"><span class="k">Доступ</span><span class="v">Только чтение</span></div>
+              <div class="chip"><span class="k">Возможности</span><span class="v">Задачи, заметки</span></div>
+              <div class="chip"><span class="k">Зона</span><span class="v">Проект «Здоровье»</span></div>
+            </div>
+          </div>
+
+          <div class="sec">
+            <div class="sl"><span>Разделы персоны</span></div>
+            <div class="nav">
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-book"/></svg></span><span class="tx"><b>Умения</b><u>12 привязок · 3 правила</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-zap"/></svg></span><span class="tx"><b>Проактивность</b><u>3 правила · 2 активно</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-layers"/></svg></span><span class="tx"><b>Память</b><u>47 записей</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-check-square"/></svg></span><span class="tx"><b>Задачи</b><u>5 в работе · 18 всего</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+            </div>
+          </div>
+
+          <div class="sec">
+            <div class="sl"><span>Характер</span><a style="color:var(--c-accent);font-weight:600;text-transform:none;letter-spacing:0;font-size:12px">Показать полностью</a></div>
+            <div class="prose">Ты — Марк, координатор программы. Говоришь коротко и по делу, всегда
+              начинаешь со статуса: что сделано, что горит, что ждёт решения…</div>
+          </div>
+        </div>
+
+        <div class="aside">
+          <div class="feed">
+            <h3>Активность</h3>
+            <div class="fsub"><span>Что происходило недавно</span><a>Показать всё<svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></a></div>
+            <div class="scrollcap">
+              <div class="cap2">СЕГОДНЯ</div>
+              <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-message-square"/></svg></div><div class="t"><b>Координатор программы</b> <i>· Разговор</i><u>3 часа назад</u><p>проверил снова, на безымянном упало с 96 до…</p></div></div>
+              <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-message-square"/></svg></div><div class="t"><b>Координатор программы</b> <i>· Разговор</i><u>4 часа назад</u><p>Сработало правило автоматизации…</p></div></div>
+              <div class="cap2">ВЧЕРА</div>
+              <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-brain"/></svg></div><div class="t"><b>Координатор программы</b> <i>· Новый факт</i><u>1 день назад</u><p>Цепочка просроченных медицинских задач…</p></div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div style="padding:0 16px 14px;font-size:12px;color:var(--good);line-height:1.6">
+      Визитка во всю ширину, заголовок целиком · лента ушла вниз с потолком 280px
+    </div>
+  </div>
+
+  <div class="frame" style="width:1100px">
+    <div class="cap"><span>Стало · ≥708 — две колонки, как раньше</span><span class="good">без изменений</span></div>
+    <div class="body">
+      <div class="grid fluid">
+        <div class="main">
+          <div class="hero">
+            <div class="ava lg">МК</div>
+            <div style="min-width:0">
+              <div class="role">Координатор программы</div>
+              <div class="who"><b>Марк</b><i>@koordinator</i></div>
+              <p class="desc">Ключевой координатор программы снижения веса: статус проекта, контроль
+                задач и pending-действий, организация консилиумов, связка специалистов в единый процесс.</p>
+            </div>
+          </div>
+          <button class="cta"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-message-square"/></svg> Поговорить</button>
+          <div class="greet">
+            <div class="ava sm">МК</div>
+            <div class="bub">Привет! Держу статус программы. Спроси, что горит сегодня.</div>
+          </div>
+          <div class="sec">
+            <div class="sl"><span>Настройки</span></div>
+            <div class="chips">
+              <div class="chip"><span class="k">Модель</span><span class="v">Opus 5 · высокое</span></div>
+              <div class="chip"><span class="k">Доступ</span><span class="v">Только чтение</span></div>
+              <div class="chip"><span class="k">Возможности</span><span class="v">Задачи, заметки</span></div>
+              <div class="chip"><span class="k">Зона</span><span class="v">Проект «Здоровье»</span></div>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sl"><span>Разделы персоны</span></div>
+            <div class="nav">
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-book"/></svg></span><span class="tx"><b>Умения</b><u>12 привязок · 3 правила</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-zap"/></svg></span><span class="tx"><b>Проактивность</b><u>3 правила · 2 активно</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-layers"/></svg></span><span class="tx"><b>Память</b><u>47 записей</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+              <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-check-square"/></svg></span><span class="tx"><b>Задачи</b><u>5 в работе · 18 всего</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+            </div>
+          </div>
+          <div class="sec">
+            <div class="sl"><span>Характер</span><a style="color:var(--c-accent);font-weight:600;text-transform:none;letter-spacing:0;font-size:12px">Показать полностью</a></div>
+            <div class="prose">Ты — Марк, координатор программы. Говоришь коротко и по делу, всегда
+              начинаешь со статуса: что сделано, что горит, что ждёт решения. Не пересказываешь
+              чужие отчёты — сводишь их в одну картину.</div>
+          </div>
+          <div class="sec">
+            <div class="sl"><span>Правила</span></div>
+            <div class="prose">Всегда: сверяться с задачами проекта перед ответом · Никогда: не
+              назначать медицинские дозировки самостоятельно</div>
+          </div>
+        </div>
+        <div class="aside">
+          <div class="feed">
+            <h3>Активность</h3>
+            <div class="fsub"><span>Что происходило недавно</span><a>Показать всё<svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></a></div>
+            <div class="cap2">СЕГОДНЯ</div>
+            <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-message-square"/></svg></div><div class="t"><b>Координатор программы</b> <i>· Разговор</i><u>3 часа назад</u><p>проверил снова, на безымянном упало с 96 до…</p></div></div>
+            <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-message-square"/></svg></div><div class="t"><b>Координатор программы</b> <i>· Разговор</i><u>4 часа назад</u><p>Сработало правило автоматизации…</p></div></div>
+            <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-message-square"/></svg></div><div class="t"><b>Координатор программы</b> <i>· Разговор</i><u>9 часов назад</u><p>Напиши мне в чат сюда самую важную выжимку…</p></div></div>
+            <div class="cap2">ВЧЕРА</div>
+            <div class="ev"><div class="d"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-brain"/></svg></div><div class="t"><b>Координатор программы</b> <i>· Новый факт</i><u>1 день назад</u><p>Цепочка просроченных медицинских задач…</p></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2>5. Мобила 390 и пустые состояния</h2>
+<p class="lead">Мобильная ветка не меняется по составу: вкладки иконками, «Редактировать» —
+плавающей кнопкой, лента активности своей карточкой. Меняется одно — выход из карточки был и
+остаётся стрелкой слева. Справа — как выглядят те же блоки, когда данных нет.</p>
+
+<div class="frames">
+  <div class="frame" style="width:390px;position:relative">
+    <div class="cap"><span>390 · мобила</span><span class="good">как сейчас + выход</span></div>
+    <div class="tb wrap" style="padding:8px 12px">
+      <button class="ib hit" title="Назад"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-chevron-left"/></svg></button>
+      <div class="ava">МК</div>
+      <div class="ident floor">
+        <div class="r" style="font-size:14px">Координатор программы</div>
+        <div class="s"><span class="n">Марк</span><span class="badge star"><svg class="ic-l s11" viewBox="0 0 24 24"><use href="#i-star"/></svg></span></div>
+      </div>
+      <button class="ib hit"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-ellipsis-vertical"/></svg></button>
+      <div class="pills row2">
+        <button class="pill" aria-selected="true"><svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-user"/></svg> Профиль</button>
+        <button class="pill"><svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-book"/></svg></button>
+        <button class="pill"><svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-zap"/></svg></button>
+        <button class="pill"><svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-layers"/></svg></button>
+        <button class="pill"><svg class="ic-l s12" viewBox="0 0 24 24"><use href="#i-check-square"/></svg></button>
+      </div>
+    </div>
+    <div class="stripe"></div>
+    <div class="body" style="padding:18px 16px 70px">
+      <div class="hero col">
+        <div class="ava lg">МК</div>
+        <div>
+          <div class="role sm">Координатор программы</div>
+          <div class="who" style="justify-content:center"><b>Марк</b><i>@koordinator</i></div>
+          <p class="desc">Ключевой координатор программы снижения веса.</p>
+        </div>
+      </div>
+      <button class="cta"><svg class="ic-l s18" viewBox="0 0 24 24"><use href="#i-message-square"/></svg> Поговорить</button>
+      <div class="sec">
+        <div class="sl"><span>Настройки</span></div>
+        <div class="chips">
+          <div class="chip"><span class="k">Модель</span><span class="v">Opus 5</span></div>
+          <div class="chip"><span class="k">Доступ</span><span class="v">Чтение</span></div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="sl"><span>Разделы персоны</span></div>
+        <div class="nav">
+          <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-book"/></svg></span><span class="tx"><b>Умения</b><u>12 привязок</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+          <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-check-square"/></svg></span><span class="tx"><b>Задачи</b><u>5 в работе</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+        </div>
+      </div>
+    </div>
+    <button class="fab"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-pencil"/></svg></button>
+  </div>
+
+  <div class="frame" style="width:390px">
+    <div class="cap"><span>Пусто · новая персона</span><span>состояния</span></div>
+    <div class="body" style="padding:18px 16px">
+      <div class="sec" style="border-top:none;margin-top:0;padding-top:0">
+        <div class="sl"><span>Разделы персоны</span></div>
+        <div class="nav">
+          <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-book"/></svg></span><span class="tx"><b>Умения</b><u>нет привязок</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+          <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-zap"/></svg></span><span class="tx"><b>Проактивность</b><u>нет правил</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+          <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-layers"/></svg></span><span class="tx"><b>Память</b><u>пока пусто</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+          <button class="navc"><span class="ic"><svg class="ic-l" viewBox="0 0 24 24"><use href="#i-check-square"/></svg></span><span class="tx"><b>Задачи</b><u>нет поручений</u></span><span class="ar"><svg class="ic-l s14" viewBox="0 0 24 24"><use href="#i-chevron-right"/></svg></span></button>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="feed">
+          <h3>Активность</h3>
+          <div class="fsub"><span>Что происходило недавно</span></div>
+          <div class="empty">Персона ещё ничего не делала.<br>Начните разговор — события появятся здесь.</div>
+        </div>
+      </div>
+      <div class="sec">
+        <div class="feed">
+          <h3>Активность</h3>
+          <div class="fsub"><span>Загружаю…</span></div>
+          <div class="ev"><div class="d"></div><div class="t" style="flex:1"><div style="height:9px;width:60%;background:var(--c-bg-selected);border-radius:4px"></div><div style="height:8px;width:40%;background:var(--c-bg-selected);border-radius:4px;margin-top:6px"></div></div></div>
+          <div class="ev"><div class="d"></div><div class="t" style="flex:1"><div style="height:9px;width:75%;background:var(--c-bg-selected);border-radius:4px"></div><div style="height:8px;width:35%;background:var(--c-bg-selected);border-radius:4px;margin-top:6px"></div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="note"><b>Что уходит с вкладки «Профиль».</b> Развёрнутые превью «Умения и правила»,
+«Проактивность», «Память», «Задачи» — у каждого есть собственная вкладка, и в визитке они
+занимали четыре экрана прокрутки. Вместо них — четыре карточки навигатора со счётчиком.
+Чипы фактов сокращаются с семи до четырёх: остаются только те, у которых своей вкладки нет
+(Модель, Доступ, Возможности, Зона). «Что выключено» (gates) остаётся секцией — это
+предупреждение, а не раздел.</div>
+
+<script>
+document.getElementById("th").addEventListener("click", function () {
+  var d = document.documentElement.dataset.theme === "dark";
+  document.documentElement.dataset.theme = d ? "light" : "dark";
+  this.setAttribute("aria-pressed", String(!d));
+  this.textContent = d ? "Тёмная тема" : "Светлая тема";
+});
+</script>
+</div>
+</body>
+</html>

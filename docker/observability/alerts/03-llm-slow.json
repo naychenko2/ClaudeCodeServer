@@ -2,21 +2,24 @@
   "alert": "Ходы стали медленнее",
   "alertType": "METRIC_BASED_ALERT",
   "ruleType": "threshold_rule",
-  "description": "p99 длительности хода выше 10 минут. Агентный ход с tool-use routinely занимает 2–5 мин — это норма, а не беда, поэтому порог поднят с 5 до 10 минут, а окно расширено с 15 до 30 мин, чтобы одиночный большой ход реже попадал в выборку. Раньше правило (порог 5 мин, окно 15 мин, at_least_once) срабатывало почти на каждый длинный ход и размыло доверие к алертам. Одиночного превышения мало по самой природе выборки: при 7 ходах за полчаса p99 — это просто самый долгий из них, и правило зажигалось от одного тяжёлого хода. Значения at_least_n_times, которого тут хотелось, не существует ни в одной версии SigNoz (matchType знает только at_least_once, all_the_times, on_average, in_total, last), поэтому стоит all_the_times: превышение обязано держаться во ВСЕХ точках окна. Если при скользящем окне rate это окажется слишком залипчивым, следующий шаг — считать не квантиль, а число ходов дольше 10 минут (ccs.llm.duration.count минус бакет le=600000 формулой). Правило по-прежнему «к сведению»: ловит зависание, но не воет на штатную работу.",
+  "description": "Два и более хода дольше 20 минут за полчаса. Индикатор «к сведению»: одиночный длинный ход для агентной работы норма (ход с tool-use routinely занимает 2–5 минут), а вот 20 минут — уже похоже на зависание, и два таких подряд стоит заметить. Массовость ловит соседнее правило «Ходы массово встали» (три и более дольше 10 минут). История формы этого правила — история отказа от квантилей. Сначала был p99 > 5 мин за 15 мин, и он звенел почти на каждый длинный ход. Потом порог подняли до 10 мин, а окно до 30. Потом сменили matchType на all_the_times в надежде отсечь одиночный всплеск — не помогло: правило залипло в firing, потому что SigNoz оценивает условие на своей, более грубой сетке, где p99 оказывается выше порога во всех точках, хотя по минутным точкам он скачет от 0,5 до 20 минут. Корень в том, что ходов в окне бывает ОДИН-ДВА, и на такой выборке p99 — это просто самый долгий ход; никакой matchType этого не лечит. Поэтому считается ЧИСЛО ходов: A (все завершённые) минус B (бакет le=1200000, уложившиеся в 20 минут). Тонкости те же, что у правила 06: matchType обязан быть in_total (increase даёт по минутным шагам максимум 1, и порог 2 при at_least_once недостижим), значения le — целые строки без научной нотации, а A берётся из ccs.llm.duration.count, а НЕ из бакета le='+Inf' той же метрики — при двух фильтрах по одной метрике вычитание молча не выполняется и F1 возвращает само A. Имя правила оставлено прежним намеренно: оно не врёт, а переименование порвало бы связку с разрезом досье (IncidentDossierService.BreakdownByRule) и оставило бы висеть дубль в SigNoz.",
   "evalWindow": "30m",
   "frequency": "10m",
-  "labels": { "severity": "info" },
-  "annotations": {
-    "description": "p99 длительности хода выше 10 минут в окне 30 мин. Если это не разовая аномалия — проверь, не деградировал ли провайдер или не встал ли контур.",
-    "summary": "Замедление ходов (p99)"
+  "labels": {
+    "severity": "info"
   },
-  "preferredChannels": ["ccs-alerts-email"],
+  "annotations": {
+    "description": "За полчаса два и более хода заняли больше 20 минут. Похоже на зависание, а не на тяжёлую задачу: проверь, не деградировал ли провайдер и не встал ли контур.",
+    "summary": "Ходы висят по 20 минут"
+  },
+  "preferredChannels": [
+    "ccs-alerts-email"
+  ],
   "condition": {
-    "selectedQueryName": "A",
+    "selectedQueryName": "F1",
     "op": "above",
-    "matchType": "all_the_times",
-    "target": 600000,
-    "targetUnit": "ms",
+    "matchType": "in_total",
+    "target": 1,
     "compositeQuery": {
       "queryType": "builder",
       "panelType": "graph",
@@ -26,16 +29,56 @@
           "spec": {
             "name": "A",
             "signal": "metrics",
-            "disabled": false,
+            "disabled": true,
+            "aggregations": [
+              {
+                "metricName": "ccs.llm.duration.count",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment",
+                "fieldDataType": "string"
+              }
+            ]
+          }
+        },
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "B",
+            "signal": "metrics",
+            "disabled": true,
             "aggregations": [
               {
                 "metricName": "ccs.llm.duration.bucket",
                 "temporality": "Cumulative",
-                "timeAggregation": "rate",
-                "spaceAggregation": "p99"
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
               }
             ],
-            "groupBy": [ { "name": "deployment.environment", "fieldDataType": "string" } ]
+            "filter": {
+              "expression": "le = '1200000'"
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment",
+                "fieldDataType": "string"
+              }
+            ]
+          }
+        },
+        {
+          "type": "builder_formula",
+          "spec": {
+            "name": "F1",
+            "expression": "A - B"
           }
         }
       ]

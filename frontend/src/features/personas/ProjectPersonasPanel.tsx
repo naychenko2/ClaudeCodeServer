@@ -234,6 +234,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
             <PersonaPreview
               persona={persona}
               accent={accent}
+              zoneLabel={`Проект · ${project.name}`}
               talking={talking}
               onTalk={() => talk(persona)}
               onOpenSession={onOpenChat}

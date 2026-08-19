@@ -76,6 +76,28 @@ public class PiiSanitizerTests
         activity.GetTagItem("session_id").Should().Be(guid);
     }
 
+    /// <summary>
+    /// Сторож связки «инцидент → чат»: тег <c>chat_id</c> обязан ПРОЙТИ санитайзер.
+    ///
+    /// Проверяем исполнением, а не наличием строки в <c>KeepTags</c>: правила работают
+    /// по default-deny, поэтому при удалении строки тег выбросится МОЛЧА — ни ошибки,
+    /// ни лога, просто разбор инцидента перестанет находить чаты. Тест обязан падать
+    /// ровно в этом случае.
+    /// </summary>
+    [Fact]
+    public void ChatId_IsKept()
+    {
+        var chatId = Guid.NewGuid().ToString();
+        using var activity = CreateActivity(("chat_id", chatId), ("persona_name", "Вера"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("chat_id").Should().Be(chatId,
+            "по chat_id инцидент связывается с чатом — без него связка умирает молча");
+        activity.GetTagItem("persona_name").Should().BeNull("соседний PII-тег по-прежнему дропается");
+    }
+
     [Fact]
     public void UserId_IsDropped()
     {

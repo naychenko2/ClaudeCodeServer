@@ -104,8 +104,14 @@ public sealed class AlertPollingService(
 
         foreach (var alert in started)
         {
-            state.Remember(alert.Fingerprint,
-                new AlertMemo(AlertDigest.Describe(alert).Title, alert.StartsAt ?? DateTimeOffset.UtcNow));
+            // Памятка несёт всё, что нужно карточке инцидента после того, как алерт погас:
+            // важность, контур и ruleId для ссылки в SigNoz (самого алерта тогда уже нет).
+            state.Remember(alert.Fingerprint, new AlertMemo(
+                AlertDigest.Describe(alert).Title,
+                alert.StartsAt ?? DateTimeOffset.UtcNow,
+                Severity: alert.Severity,
+                Environment: alert.Environment,
+                RuleId: alert.RuleId));
         }
     }
 
@@ -127,7 +133,9 @@ public sealed class AlertPollingService(
                 tag: fingerprint, environment: null, sendPush: false);
         }
 
-        state.Forget(resolved);
+        // Не забываем, а помечаем погасшим: запись остаётся историей для раздела
+        // «Инциденты» (разобрать инцидент часто хочется уже после того, как он погас).
+        state.MarkResolved(resolved);
     }
 
     private async Task FanOutAsync(List<User> admins, string kind, string type,

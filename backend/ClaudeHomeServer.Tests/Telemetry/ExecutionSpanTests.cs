@@ -46,13 +46,15 @@ public class ExecutionSpanTests
         using var capture = new ActivityCapture();
 
         using var span = TurnTelemetry.StartTurnSpan(
-            sessionId: "sess-123",
+            chatId: "chat-42",
+            claudeSessionId: "sess-123",
             turnId: "turn-abc",
             model: "claude-sonnet-4",
             provider: "claude");
 
         span.Should().NotBeNull("ActivitySource слушается — Activity должна создаться");
         span!.OperationName.Should().Be(ServerActivitySource.SpanNames.ChatTurn);
+        span.GetTagItem("chat_id").Should().Be("chat-42");
         span.GetTagItem("session_id").Should().Be("sess-123");
         span.GetTagItem("turn_id").Should().Be("turn-abc");
         span.GetTagItem("model").Should().Be("claude-sonnet-4");
@@ -64,9 +66,39 @@ public class ExecutionSpanTests
     {
         using var capture = new ActivityCapture();
 
-        using var span = TurnTelemetry.StartTurnSpan("s", "t", model: null, "claude");
+        using var span = TurnTelemetry.StartTurnSpan("chat", "s", "t", model: null, "claude");
 
         span!.GetTagItem("model").Should().Be("unknown");
+    }
+
+    /// <summary>
+    /// Без csid CLI тег session_id не ставится вовсе. Прежний фолбэк
+    /// <c>?? Info.Id.ToString()</c> смешивал в одном теге два пространства id: на первом
+    /// ходу туда попадал id чата CCS, дальше — csid, и связать инцидент с чатом было нечем.
+    /// </summary>
+    [Fact]
+    public void StartTurnSpan_NoClaudeSessionId_SkipsSessionTagInsteadOfFakingIt()
+    {
+        using var capture = new ActivityCapture();
+
+        using var span = TurnTelemetry.StartTurnSpan(
+            chatId: "chat-42", claudeSessionId: null, turnId: "t", model: "m", provider: "claude");
+
+        span!.GetTagItem("chat_id").Should().Be("chat-42");
+        span.GetTagItem("session_id").Should().BeNull("id чата в session_id подставлять нельзя");
+    }
+
+    [Fact]
+    public void StartProcessSpan_NoClaudeSessionId_SkipsSessionTag()
+    {
+        using var capture = new ActivityCapture();
+
+        using var span = TurnTelemetry.StartProcessSpan(
+            kind: "local", command: "claude", chatId: "chat-42",
+            claudeSessionId: null, mcpConfigHash: "abc123");
+
+        span!.GetTagItem("chat_id").Should().Be("chat-42");
+        span.GetTagItem("session_id").Should().BeNull();
     }
 
     [Fact]
@@ -74,9 +106,10 @@ public class ExecutionSpanTests
     {
         using var capture = new ActivityCapture();
 
-        using var turnSpan = TurnTelemetry.StartTurnSpan("sess", "turn", "model", "claude");
+        using var turnSpan = TurnTelemetry.StartTurnSpan("chat", "sess", "turn", "model", "claude");
         using var procSpan = TurnTelemetry.StartProcessSpan(
-            kind: "local", command: "claude", sessionId: "sess", mcpConfigHash: "abc123");
+            kind: "local", command: "claude", chatId: "chat",
+            claudeSessionId: "sess", mcpConfigHash: "abc123");
 
         procSpan.Should().NotBeNull();
         procSpan!.OperationName.Should().Be(ServerActivitySource.SpanNames.ProcessStart);
@@ -96,7 +129,7 @@ public class ExecutionSpanTests
         using var capture = new ActivityCapture();
 
         using var procSpan = TurnTelemetry.StartProcessSpan(
-            "docker", "claude", "sess", "hash");
+            "docker", "claude", "chat", "sess", "hash");
 
         procSpan.Should().NotBeNull();
         procSpan!.ParentId.Should().BeNull();
@@ -108,7 +141,7 @@ public class ExecutionSpanTests
         using var capture = new ActivityCapture();
 
         Activity? span;
-        using (span = TurnTelemetry.StartTurnSpan("s", "t", "m", "claude"))
+        using (span = TurnTelemetry.StartTurnSpan("chat", "s", "t", "m", "claude"))
         {
             span!.Status.Should().Be(ActivityStatusCode.Unset);
         }

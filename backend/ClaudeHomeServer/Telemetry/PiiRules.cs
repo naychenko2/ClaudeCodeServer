@@ -46,8 +46,12 @@ public static class PiiRules
     /// <summary>Атрибуты, которые ОСТАЮТСЯ как есть (operational metadata, не PII).</summary>
     private static readonly HashSet<string> KeepTags = Normalize(
     [
-        // Идентификаторы (не PII — opaque GUIDs)
-        "session_id", "turn_id", "trace_id", "span_id",
+        // Идентификаторы (не PII — opaque GUIDs).
+        // chat_id держит связку «инцидент → чат» (Telemetry/Incidents): правила здесь
+        // работают по default-deny, поэтому без этой строки тег выбрасывался бы МОЛЧА,
+        // а разбор инцидента переставал бы находить чаты — без единой ошибки в логе.
+        // Сторож — PiiSanitizerTests.ChatId_IsKept (падает, если строку убрать).
+        "session_id", "chat_id", "turn_id", "trace_id", "span_id",
         // Operational
         "provider", "model", "direction", "tool_name", "outcome",
         "error_type", "reason", "kind", "command",

@@ -1,5 +1,6 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Telemetry;
 using ClaudeHomeServer.Telemetry.Incidents;
 using Microsoft.AspNetCore.Authorization;
@@ -219,6 +220,7 @@ public class TelemetryController : ControllerBase
         startedAt = i.StartedAt,
         resolvedAt = i.ResolvedAt,
         isFiring = i.IsFiring,
+        isMuted = i.IsMuted,
     };
 
     private static object ToDto(IncidentDossier d) => new

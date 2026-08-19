@@ -74,10 +74,26 @@ public sealed class IncidentDossierService(
     /// Досье по отпечатку. <c>null</c> — такого инцидента нет ни среди горящих, ни в истории
     /// (типичный случай — протухший диплинк из уведомления).
     /// </summary>
+    /// <summary>
+    /// Короткий кэш собранных досье. Сборка — это ТРИ живых запроса в SigNoz (разрез,
+    /// ходы, логи), секунды при спокойном стеке и до минуты при медленном. А карточка
+    /// собирает его по кругу: открыл инцидент, нажал «Обсудить» — ещё раз, «Завести
+    /// задачу» — ещё раз, «Объяснить» — ещё. Человек при этом видел долгую паузу на
+    /// каждое нажатие, хотя данные у него уже на экране.
+    ///
+    /// Минута — шаг опроса алертов: чаще картина всё равно не меняется.
+    /// </summary>
+    private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(1);
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTimeOffset At, IncidentDossier Dossier)> _cache = new(StringComparer.Ordinal);
+
     public async Task<IncidentDossier?> BuildAsync(string fingerprint, CancellationToken ct)
     {
         if (!options.IsConfigured)
             return Placeholder(fingerprint, IncidentStatus.NotConfigured);
+
+        if (_cache.TryGetValue(fingerprint, out var cached)
+            && DateTimeOffset.UtcNow - cached.At < CacheTtl)
+            return cached.Dossier;
 
         var fetched = await client.FetchAlertsAsync(ct);
         if (fetched is null)
@@ -120,7 +136,7 @@ public sealed class IncidentDossierService(
             ? IncidentStatus.Unavailable
             : IncidentStatus.Ok;
 
-        return new IncidentDossier
+        var dossier = new IncidentDossier
         {
             Incident = summary,
             Status = status,

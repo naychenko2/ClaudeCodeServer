@@ -240,6 +240,37 @@ public class LlmProviderRegistryTests
         env.Should().NotContainKey("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
     }
 
+    // ─── Окно контекста родного Claude (подписка) ────────────────────────────
+    // Суффикс [1m] живёт только во флаге --model и внутрь сабагента не передаётся: без
+    // явного объявления CLI ведёт сабагента в предполагаемых 200k, и обрывы жмутся к этой
+    // границе. Значение считается по модели, которая РЕАЛЬНО уедет в --model.
+
+    [Fact]
+    public void ClaudeContextWindow_МодельССуффиксом_Окно1M()
+    {
+        LlmProviderRegistry.ClaudeContextWindow("opus[1m]").Should().Be(1_000_000);
+        LlmProviderRegistry.ClaudeContextWindow("claude-opus-5[1m]").Should().Be(1_000_000);
+        LlmProviderRegistry.ClaudeContextWindowValue("opus[1m]").Should().Be("1000000");
+    }
+
+    [Fact]
+    public void ClaudeContextWindow_БезСуффикса_Штатные200k()
+    {
+        LlmProviderRegistry.ClaudeContextWindow("opus").Should().Be(200_000);
+        LlmProviderRegistry.ClaudeContextWindow("claude-opus-5").Should().Be(200_000);
+        // Модель не задана (слот пуст, решает CLI) — безопасное 200k
+        LlmProviderRegistry.ClaudeContextWindow(null).Should().Be(200_000);
+    }
+
+    // Ключ уже в ProviderEnvKeys — значение с машины (мастер-рубильник, забытый setx)
+    // вычищается на каждом запуске и не подменяет наше объявление
+    [Fact]
+    public void ProviderEnvKeys_СодержитОкноКонтекста()
+    {
+        LlmProviderRegistry.ProviderEnvKeys.Should().Contain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+        Create().EnvKeysToClear.Should().Contain("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+    }
+
     [Fact]
     public void BuildCliEnv_ПровайдерБезКлюча_Исключение()
     {

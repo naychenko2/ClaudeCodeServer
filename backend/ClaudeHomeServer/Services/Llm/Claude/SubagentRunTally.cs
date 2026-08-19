@@ -88,7 +88,8 @@ internal sealed class SubagentRunTally(string agentId)
         }
     }
 
-    public SubagentRunPassport Build(string? sessionId, string finishedBy, long transcriptBytes) => new(
+    public SubagentRunPassport Build(string? sessionId, string finishedBy, long transcriptBytes,
+        int cliContextWindow = 0) => new(
         AgentId: AgentId,
         AgentType: AgentType,
         Description: Description,
@@ -111,7 +112,8 @@ internal sealed class SubagentRunTally(string agentId)
         NudgeAttempts: 0,
         Partial: Partial,
         FinishedBy: finishedBy,
-        RecordedAt: DateTime.UtcNow);
+        RecordedAt: DateTime.UtcNow,
+        CliContextWindow: cliContextWindow);
 
     private static long Num(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n) ? n : 0;

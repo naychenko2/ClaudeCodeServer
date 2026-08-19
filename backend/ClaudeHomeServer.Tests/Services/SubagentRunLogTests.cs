@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm.Claude;
 using FluentAssertions;
@@ -110,6 +111,93 @@ public class SubagentRunLogTests
 
         log.Recent().Should().HaveCount(1);
         log.TakeTruncated("sess-1").Should().BeNull();
+    }
+
+    // ─── Паспорта на диске ───────────────────────────────────────────────────
+    // Прод перезапускается по нескольку раз в день, а разбор обрывов идёт по серии прогонов
+    // за вчера-сегодня: в памяти от них не остаётся ничего. Формат и место — по конвенции
+    // файлового лога (data/logs, дневная ротация, удержание Logging:File:RetainDays).
+
+    private static string TempDir()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "subagent_runs_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        return dir;
+    }
+
+    [Fact]
+    public void Record_ПишетДневнойJsonlСОкномКонтекста()
+    {
+        var dir = TempDir();
+        try
+        {
+            var log = new SubagentRunLog(dir, retainDays: 14);
+            log.Record(Passport("a1", truncated: true) with { CliContextWindow = 1_000_000 });
+
+            var file = Path.Combine(dir, $"subagent-runs-{DateTime.UtcNow:yyyyMMdd}.jsonl");
+            File.Exists(file).Should().BeTrue();
+
+            var lines = File.ReadAllLines(file);
+            lines.Should().HaveCount(1);
+            var row = JsonDocument.Parse(lines[0]).RootElement;
+            row.GetProperty("agentId").GetString().Should().Be("a1");
+            row.GetProperty("truncated").GetBoolean().Should().BeTrue();
+            // Без окна разбор обрыва упирается в догадки: 198k в окне 200k и в окне 1M —
+            // совершенно разные истории
+            row.GetProperty("cliContextWindow").GetInt32().Should().Be(1_000_000);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void Record_ПовторноеЗавершениеАгента_ДописываетСтроку_АНеПерезаписывает()
+    {
+        var dir = TempDir();
+        try
+        {
+            var log = new SubagentRunLog(dir, retainDays: 14);
+            // Добитый агент дописывает ТОТ ЖЕ транскрипт и завершается повторно: в памяти
+            // паспорт один (дедуп по AgentId), на диске нужна история попыток
+            log.Record(Passport("a1", truncated: true));
+            log.Record(Passport("a1", truncated: false));
+
+            log.Recent().Should().HaveCount(1);
+            File.ReadAllLines(Path.Combine(dir, $"subagent-runs-{DateTime.UtcNow:yyyyMMdd}.jsonl"))
+                .Should().HaveCount(2);
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void Record_Удержание_СтарыеДневныеФайлыУходят()
+    {
+        var dir = TempDir();
+        try
+        {
+            var stale = Path.Combine(dir, $"subagent-runs-{DateTime.UtcNow.AddDays(-30):yyyyMMdd}.jsonl");
+            var fresh = Path.Combine(dir, $"subagent-runs-{DateTime.UtcNow.AddDays(-3):yyyyMMdd}.jsonl");
+            File.WriteAllText(stale, "{}\n");
+            File.WriteAllText(fresh, "{}\n");
+            // Чужие файлы каталога логов (серверный лог) чистка не трогает
+            var alien = Path.Combine(dir, "server-20200101.log");
+            File.WriteAllText(alien, "log");
+
+            new SubagentRunLog(dir, retainDays: 14).Record(Passport("a1"));
+
+            File.Exists(stale).Should().BeFalse();
+            File.Exists(fresh).Should().BeTrue();
+            File.Exists(alien).Should().BeTrue();
+        }
+        finally { Directory.Delete(dir, recursive: true); }
+    }
+
+    [Fact]
+    public void Record_БезПапки_ТолькоПамять()
+    {
+        // Конструктор без каталога (тесты, вызовы без конфига) — файлов не создаём и не падаем
+        var log = new SubagentRunLog();
+        log.Record(Passport("a1"));
+        log.Recent().Should().HaveCount(1);
     }
 
     [Fact]

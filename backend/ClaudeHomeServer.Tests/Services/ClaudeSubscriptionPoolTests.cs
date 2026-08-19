@@ -1,4 +1,5 @@
 using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 
@@ -541,6 +542,21 @@ public class ClaudeSubscriptionPoolTests : IDisposable
         pool.MarkExhausted("full", DateTime.UtcNow.AddHours(2));
 
         pool.ResolveWindowAlias("opus[1m]").Should().Be("opus");
+    }
+
+    // Окно, объявляемое CLI, считается ПОСЛЕ резолва по способности пула: срезанный алиас
+    // обязан дать 200k. Объявить 1M там, где его нет, — хуже, чем не объявлять вовсе:
+    // CLI не сожмёт контекст вовремя и ход упадёт «Prompt is too long» вместо компакта.
+    [Fact]
+    public void ОкноКонтекста_СчитаетсяПоМоделиПослеРезолваПула()
+    {
+        var live1M = new ClaudeSubscriptionPool(ConfigWith200KPlan("lim", "full"));
+        LlmProviderRegistry.ClaudeContextWindow(live1M.ResolveWindowAlias("opus[1m]"))
+            .Should().Be(1_000_000);
+
+        live1M.MarkExhausted("full", DateTime.UtcNow.AddHours(2));
+        LlmProviderRegistry.ClaudeContextWindow(live1M.ResolveWindowAlias("opus[1m]"))
+            .Should().Be(200_000);
     }
 
     [Theory]

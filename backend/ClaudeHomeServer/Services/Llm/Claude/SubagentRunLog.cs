@@ -26,6 +26,12 @@ namespace ClaudeHomeServer.Services.Llm.Claude;
 /// счётчики неполны, паспорт годен только для факта завершения.
 /// </param>
 /// <param name="FinishedBy">чем закрыт прогон: bg_done | bg_aborted | tool_result | run_end.</param>
+/// <param name="CliContextWindow">
+/// окно контекста, объявленное CLI на запуске прогона (CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+/// 0 — не объявлялось. Без него разбор обрывов упирается в догадки: суффикс [1m] живёт
+/// только во флаге --model и внутрь сабагента не передаётся, поэтому «контекст 198k при
+/// обрыве» читается совсем по-разному в окне 200k и в окне 1M.
+/// </param>
 public sealed record SubagentRunPassport(
     string AgentId,
     string? AgentType,
@@ -48,7 +54,17 @@ public sealed record SubagentRunPassport(
     int NudgeAttempts,
     bool Partial,
     string FinishedBy,
-    DateTime RecordedAt);
+    DateTime RecordedAt,
+    int CliContextWindow = 0)
+{
+    /// <summary>
+    /// Прогон закрыт как ФОНОВЫЙ агент (bg_done/bg_aborted): его результат продукт объявил
+    /// готовым сам, посреди хода координатора — конец хода при этом не наступает, и разбор
+    /// «по result» может не наступить вовсе. У tool_result (синхронный Task) и run_end
+    /// (смерть прогона) конец хода рядом, там разбора по result достаточно.
+    /// </summary>
+    public bool FinishedInBackground => FinishedBy is "bg_done" or "bg_aborted";
+}
 
 /// <summary>
 /// Паспорта прогонов сабагентов: последние N штук в памяти, отдаются через GET /api/subagents/runs.
@@ -73,16 +89,53 @@ public sealed record SubagentRunPassport(
 /// Паспорта нужны, чтобы на десятке прогонов увидеть, есть ли общая граница (токены/вызовы/
 /// время/тип агента) — поэтому в записи лежат все четыре измерения разом.
 ///
-/// Хранение — только в памяти, как у McpCallLog: данные диагностические, переживать рестарт
-/// им незачем, а стор в data/ потянул бы за собой бэкапы (см. «Новое хранилище → сверься
-/// с бэкапом» в CLAUDE.md).
+/// Отдача через API — из памяти (последние MaxRuns), но паспорта ДУБЛИРУЮТСЯ на диск:
+/// боевой инстанс перезапускается по нескольку раз в день, а разбор обрывов идёт как раз
+/// по серии прогонов за вчера-сегодня — в памяти от них не остаётся ничего, и расследование
+/// сваливается в ручное чтение agent-*.jsonl. Формат и место — по конвенции файлового лога
+/// (<see cref="Diagnostics.FileLog"/>): data/logs/subagent-runs-YYYYMMDD.jsonl, дневная
+/// ротация, удержание Logging:File:RetainDays.
+///
+/// Бэкап: data/logs целиком исключён из архива (BackupPaths, корень "logs") — так и надо,
+/// это диагностика, а не пользовательские данные; восстанавливать её неоткуда и незачем
+/// (см. «Новое хранилище → сверься с бэкапом» в CLAUDE.md).
 /// </summary>
 public sealed class SubagentRunLog
 {
     // Хватает на разбор серии прогонов и не растёт бесконечно на долгоживущем процессе
     private const int MaxRuns = 200;
 
+    private static readonly System.Text.Json.JsonSerializerOptions JsonOpts = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    private readonly string? _dir;
+    private readonly int _retainDays;
+    private readonly Lock _ioLock = new();
     private readonly Lock _lock = new();
+
+    /// <summary>Только память (тесты и вызовы без конфига).</summary>
+    public SubagentRunLog() { }
+
+    /// <summary>Память + дневной jsonl в <paramref name="dir"/> (обычно data/logs).</summary>
+    public SubagentRunLog(string? dir, int retainDays)
+    {
+        _dir = string.IsNullOrWhiteSpace(dir) ? null : dir;
+        _retainDays = Math.Max(1, retainDays);
+    }
+
+    /// <summary>Приёмник паспортов по конфигу: data/logs рядом с серверным логом.</summary>
+    public static SubagentRunLog Create(IConfiguration config)
+    {
+        var dataDir = Path.GetDirectoryName(
+            config["DataPath"] ?? Path.Combine(AppContext.BaseDirectory, "data", "projects.json"))
+            ?? Path.Combine(AppContext.BaseDirectory, "data");
+        return new SubagentRunLog(
+            Path.Combine(dataDir, "logs"),
+            config.GetValue("Logging:File:RetainDays", 14));
+    }
     // Свежие — в конце; ключ дедупликации — AgentId (добитый агент дописывает ТОТ ЖЕ транскрипт,
     // и его паспорт обновляется, а не задваивается)
     private readonly List<SubagentRunPassport> _runs = [];
@@ -105,10 +158,61 @@ public sealed class SubagentRunLog
             _runs.Add(passport);
             while (_runs.Count > MaxRuns) _runs.RemoveAt(0);
 
-            if (passport.SessionId is not { Length: > 0 } sid) return;
-            if (passport.Truncated) _truncatedBySession[sid] = passport;
-            else _truncatedBySession.Remove(sid);
+            if (passport.SessionId is { Length: > 0 } sid)
+            {
+                if (passport.Truncated) _truncatedBySession[sid] = passport;
+                else _truncatedBySession.Remove(sid);
+            }
         }
+        AppendToFile(passport);
+    }
+
+    // Дневной jsonl рядом с серверным логом. Паспорт дописывается КАЖДЫМ обновлением (добитый
+    // агент завершается повторно тем же AgentId) — дедуп в памяти, а на диске нужна как раз
+    // история: строки одного AgentId показывают, чем кончилась каждая попытка. Сбой записи
+    // тушим: диагностика не имеет права ронять ход (и уходить в stderr — там свой файл).
+    private void AppendToFile(SubagentRunPassport passport)
+    {
+        if (_dir is null) return;
+        try
+        {
+            lock (_ioLock)
+            {
+                Directory.CreateDirectory(_dir);
+                File.AppendAllText(
+                    Path.Combine(_dir, $"subagent-runs-{DateTime.UtcNow:yyyyMMdd}.jsonl"),
+                    System.Text.Json.JsonSerializer.Serialize(passport, JsonOpts) + Environment.NewLine);
+                DeleteStaleFiles();
+            }
+        }
+        catch (Exception ex)
+        {
+            System.Diagnostics.Debug.WriteLine($"[SubagentRunLog] паспорт не записан: {ex.Message}");
+        }
+    }
+
+    // Удержание — как у FileLog: дату берём из имени файла, а не из mtime (копирование
+    // каталога ломает mtime, имя стабильно). Чистка вспомогательная, ошибки глотаем.
+    private void DeleteStaleFiles()
+    {
+        try
+        {
+            foreach (var path in Directory.EnumerateFiles(_dir!, "subagent-runs-*.jsonl"))
+            {
+                var stamp = Path.GetFileNameWithoutExtension(path)["subagent-runs-".Length..];
+                if (!DateTime.TryParseExact(stamp, "yyyyMMdd", null,
+                        System.Globalization.DateTimeStyles.AssumeUniversal
+                        | System.Globalization.DateTimeStyles.AdjustToUniversal,
+                        out var fileDate))
+                    continue;
+                if ((DateTime.UtcNow - fileDate).TotalDays > _retainDays)
+                {
+                    try { File.Delete(path); }
+                    catch { /* занят/нет прав — уйдёт на следующей чистке */ }
+                }
+            }
+        }
+        catch { /* чистка вспомогательная */ }
     }
 
     /// <summary>

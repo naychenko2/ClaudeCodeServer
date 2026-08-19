@@ -78,6 +78,11 @@ public class SessionManager : IDisposable
         // хода уходит добивание. Пишет приёмник паспортов (поток ватчера сабагентов), читает
         // обработчик result — отсюда volatile. null — обрывов не было либо уже добили.
         public volatile Llm.Claude.SubagentRunPassport? TruncatedSubagent;
+        // Пометка координатору: ФОНОВЫЙ агент оборвался на tool_use, а CLI выдал координатору
+        // его последнюю реплику за готовый результат. Своего хода на пометку не тратим (второй
+        // systemDirective в идущий процесс слать нельзя) — она уезжает префиксом ближайшего
+        // хода, см. BuildCliTurnText. null — пометки нет либо она уже уехала.
+        public volatile Llm.Claude.SubagentRunPassport? TruncatedBgNote;
         // Сколько добиваний подряд отправлено ЗА ОДНОГО агента (потолок — MaxSubagentNudges).
         // Обнуляется штатным отчётом ТОГО ЖЕ агента и любым ходом человека: две попытки — на серию.
         public int SubagentNudges;
@@ -1317,7 +1322,17 @@ public class SessionManager : IDisposable
         {
             _subagentRuns.Record(passport);
             if (!_sessions.TryGetValue(sessionId, out var entry)) return;
-            if (passport.Truncated) entry.TruncatedSubagent = passport;
+            if (passport.Truncated)
+            {
+                entry.TruncatedSubagent = passport;
+                // Фоновый агент: продукт ТОЛЬКО ЧТО объявил его результат готовым посреди хода
+                // координатора (bg_agent_done), и координатор принял обрывок последней реплики
+                // за итог. Ждать result здесь нельзя: ход координатора не заканчивается, а сам
+                // фоновый агент часто дозавершается уже ПОСЛЕ конца хода — тогда отметку не
+                // разбирает никто и чат стоит до сообщения человека (ровно то, что видно в логе:
+                // у исполнителей задач добивание срабатывало, в обычном чате — ни разу).
+                if (passport.FinishedInBackground) NoteTruncatedBgAgent(sessionId, entry, passport);
+            }
             // Агент, доложившийся штатно, снимает счётчик добиваний: потолок в две попытки —
             // на серию подряд, а не на всю жизнь чата. Но снимает ТОЛЬКО СВОЙ счётчик: в ходе
             // работают несколько агентов, и штатный отчёт соседа не значит, что оборвавшегося
@@ -3060,6 +3075,16 @@ public class SessionManager : IDisposable
     private string BuildCliTurnText(SessionEntry entry, string text)
     {
         var result = text;
+
+        // Обрыв фонового агента (см. NoteTruncatedBgAgent): CLI объявил его прогон
+        // завершённым и отдал координатору последнюю реплику как результат. Пометка едет
+        // префиксом ближайшего хода — своего хода на неё не тратим, а координатор обязан
+        // знать, что итог по обрывку подводить нельзя. Одноразовая: уехала — снята.
+        if (entry.TruncatedBgNote is { } cutBgAgent)
+        {
+            entry.TruncatedBgNote = null;
+            result = SubagentPrompts.TruncatedBgAgent(cutBgAgent) + "\n\n" + result;
+        }
 
         if (entry.Info.WorkLoop is { } loop)
         {
@@ -7298,6 +7323,58 @@ public class SessionManager : IDisposable
         nudgesSent < MaxSubagentNudges && !workLoopActive && !teamActive && !hasPending && !loopTurnInFlight;
 
     /// <summary>
+    /// Ход координатора в полёте: сообщение ему уже отдано в процесс и result ещё не пришёл.
+    /// Пока это так, второй systemDirective-ход слать нельзя (он уйдёт в тот же процесс) —
+    /// добивание ждёт конца хода, координатору достаётся только пометка.
+    /// </summary>
+    internal static bool TurnInFlight(SessionStatus status) =>
+        status is SessionStatus.Starting or SessionStatus.Working or SessionStatus.Waiting;
+
+    /// <summary>
+    /// Обрыв ФОНОВОГО агента: пометка координатору обязательна всегда, добивание — только
+    /// если ход координатора не идёт (иначе ждём result, как раньше).
+    /// </summary>
+    private void NoteTruncatedBgAgent(string sessionId, SessionEntry entry,
+        Llm.Claude.SubagentRunPassport run)
+    {
+        // Пометка уедет префиксом ближайшего хода — чем бы он ни был поднят (человеком,
+        // очередью, добиванием): координатор обязан узнать, что обрывок не итог, даже когда
+        // добивать мы не стали.
+        entry.TruncatedBgNote = run;
+
+        if (entry.Process is null || TurnInFlight(entry.Info.Status)) return;
+        // Оборвался другой агент — у него своя серия попыток (счётчик per-agentId)
+        if (StartsNudgeSeries(entry.NudgeAgentId, run.AgentId)) entry.SubagentNudges = 0;
+        if (!ShouldNudgeSubagent(entry.SubagentNudges, entry.Info.WorkLoop is not null,
+                entry.Info.TeamImplement is not null, HasPending(entry), entry.LoopTurnInFlight)) return;
+
+        // Разбираем отметку здесь — иначе по ближайшему result добивание ушло бы вторым разом
+        entry.TruncatedSubagent = null;
+        entry.NudgeAgentId = run.AgentId;
+        var attempt = ++entry.SubagentNudges;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // Ход мог стартовать, пока планировалась отправка (очередь, автоматизация,
+                // цикл): откатываем попытку и возвращаем отметку — добивание уедет по его
+                // result, штатным путём. Второй ход в живой процесс не отправляем никогда.
+                if (TurnInFlight(entry.Info.Status))
+                {
+                    entry.SubagentNudges = Math.Max(0, entry.SubagentNudges - 1);
+                    entry.TruncatedSubagent = run;
+                    return;
+                }
+                await NudgeTruncatedSubagentAsync(sessionId, run, attempt);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[SessionManager] Добивание фонового сабагента ({sessionId}): {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>
     /// Снимает ли штатный отчёт агента серию добиваний. Счётчик общий на сессию, а агентов
     /// в ходе несколько — поэтому серию закрывает ТОТ ЖЕ агент, которого добивали (либо любой,
     /// пока серии нет). Чужой отчёт счётчик не трогает: иначе потолок MaxSubagentNudges
@@ -7320,6 +7397,9 @@ public class SessionManager : IDisposable
         Llm.Claude.SubagentRunPassport run, int attempt)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry) || entry.Process is null) return;
+        // Директива добивания уже несёт все факты обрыва — дублировать их пометкой
+        // в том же ходе незачем (пометка чужого агента остаётся ждать своего хода)
+        if (entry.TruncatedBgNote?.AgentId == run.AgentId) entry.TruncatedBgNote = null;
         _subagentRuns?.NoteNudge(run.AgentId);
         _log.LogWarning("Сабагент {AgentId} ({AgentType}) оборвался на {Tool} после {Tools} вызовов " +
             "и {Seconds} с (контекст {Context} токенов) — добивание {Attempt}/{Max}, чат {SessionId}",

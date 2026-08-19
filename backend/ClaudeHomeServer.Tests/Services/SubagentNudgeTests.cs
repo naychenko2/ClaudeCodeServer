@@ -1,3 +1,4 @@
+using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm.Claude;
@@ -103,6 +104,53 @@ public class SubagentNudgeTests : IDisposable
         }
 
         sent.Should().Be(SessionManager.MaxSubagentNudges);
+    }
+
+    // ─── Обрыв ФОНОВОГО агента (внутри хода координатора) ────────────────────
+
+    private static SubagentRunPassport BgRun(string agentId = "a1", string finishedBy = "bg_done") =>
+        new(agentId, "mark", "Волна 1: агент деплоя", "sess-1", "toolu_1",
+            DateTime.UtcNow.AddMinutes(-8), DateTime.UtcNow, 495, 34, 90, 1, 146_000, 4000,
+            "tool_use", true, "Bash", "claude-opus-5", 1024, 0, false, finishedBy, DateTime.UtcNow);
+
+    [Fact]
+    public void FinishedInBackground_ОтличаетФоновыйПрогонОтСинхронного()
+    {
+        // Фоновый: результат объявлен готовым посреди хода координатора — конец хода
+        // может не наступить вовсе, и разбора «по result» недостаточно
+        BgRun(finishedBy: "bg_done").FinishedInBackground.Should().BeTrue();
+        BgRun(finishedBy: "bg_aborted").FinishedInBackground.Should().BeTrue();
+        // Синхронный Task и смерть прогона — конец хода рядом, разбор по result отрабатывает
+        BgRun(finishedBy: "tool_result").FinishedInBackground.Should().BeFalse();
+        BgRun(finishedBy: "run_end").FinishedInBackground.Should().BeFalse();
+    }
+
+    [Theory]
+    // Ход отдан в процесс и result ещё не пришёл — второй systemDirective туда слать нельзя
+    [InlineData(SessionStatus.Starting, true)]
+    [InlineData(SessionStatus.Working, true)]
+    [InlineData(SessionStatus.Waiting, true)]
+    // Чат свободен — добивание уходит сразу, не дожидаясь result, которого может не быть
+    [InlineData(SessionStatus.Active, false)]
+    [InlineData(SessionStatus.Finished, false)]
+    [InlineData(SessionStatus.Error, false)]
+    [InlineData(SessionStatus.Orphaned, false)]
+    public void TurnInFlight_ДобиваемТолькоКогдаХодаНет(SessionStatus status, bool inFlight)
+    {
+        SessionManager.TurnInFlight(status).Should().Be(inFlight);
+    }
+
+    [Fact]
+    public void TruncatedBgAgent_ПометкаНазываетОбрывокНеИтогом()
+    {
+        var text = SubagentPrompts.TruncatedBgAgent(BgRun());
+
+        text.Should().Contain("a1");
+        text.Should().Contain("Волна 1: агент деплоя");
+        text.Should().Contain("Bash");
+        // Главное: то, что пришло как результат, — не итог работы
+        text.Should().Contain("обрывок");
+        text.Should().Contain("НЕ итог");
     }
 
     // ─── Категории остановки исполнителя ─────────────────────────────────────

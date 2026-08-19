@@ -185,6 +185,26 @@ public class LlmProviderRegistry
     public static bool IsClaudeTierWindowAlias(string? model) =>
         !string.IsNullOrWhiteSpace(model) && ClaudeTierWindowAlias.IsMatch(model.Trim());
 
+    // Окно контекста РОДНОГО Claude, которое объявляем CLI (CLAUDE_CODE_MAX_CONTEXT_TOKENS).
+    // Считается по модели, КОТОРАЯ РЕАЛЬНО УЕДЕТ В --model, т.е. уже после
+    // ClaudeSubscriptionPool.ResolveWindowAlias: суффикс [1m] у тир-алиаса срезается, когда
+    // в пуле нет живого кандидата с доступом к 1M, и объявить в этом случае 1M хуже, чем не
+    // объявлять ничего — CLI не сожмёт контекст вовремя и ход упадёт «Prompt is too long»
+    // вместо компакта. Зачем объявлять вообще: суффикс окна живёт только во флаге --model и
+    // внутрь сабагента не передаётся (в транскрипте agent-*.jsonl модель идёт без суффикса) —
+    // CLI ведёт сабагента в предполагаемых 200k, и точки его обрывов жмутся к этой границе.
+    // Значение env наследуется всеми ходами процесса, включая сабагентов.
+    public const int ClaudeWindow1M = 1_000_000;
+    public const int ClaudeWindowDefault = 200_000;
+
+    public static int ClaudeContextWindow(string? cliModel) =>
+        !string.IsNullOrWhiteSpace(cliModel)
+        && cliModel.Contains("[1m]", StringComparison.OrdinalIgnoreCase)
+            ? ClaudeWindow1M : ClaudeWindowDefault;
+
+    public static string ClaudeContextWindowValue(string? cliModel) =>
+        ClaudeContextWindow(cliModel).ToString(CultureInfo.InvariantCulture);
+
     public LlmCapabilities CapabilitiesFor(string? model) =>
         ResolveByModel(model) is { } p ? CapabilitiesOf(p) : LlmCapabilitiesCatalog.Claude;
 

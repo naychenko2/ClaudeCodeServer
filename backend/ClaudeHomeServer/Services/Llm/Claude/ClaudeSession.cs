@@ -172,6 +172,10 @@ public class ClaudeSession : ILlmSessionAdapter
     // Полный поток inline-сабагентов из их транскриптов (CLI шлёт в stdout только tool_use);
     // создаётся на system/init каждого хода, диспозится по завершении процесса
     private SubagentStreamWatcher? _subagentWatcher;
+    // Окно контекста, объявленное CLI на запуске прогона (CLAUDE_CODE_MAX_CONTEXT_TOKENS);
+    // 0 — не объявляли. Уходит в паспорта сабагентов: без него «контекст 198k при обрыве»
+    // читается по-разному в окне 200k и в окне 1M. Считается при сборке env хода.
+    private int _turnContextWindow;
 
     // Максимальная тишина stdout активного хода: при живой работе (генерация, инструмент,
     // субагент, компакция, ожидание пользователя) CLI шлёт события регулярно; полное молчание
@@ -2338,6 +2342,23 @@ public class ClaudeSession : ILlmSessionAdapter
             }
         }
 
+        // Родной Claude (подписка — основной аккаунт или аккаунт пула): объявляем окно
+        // контекста сами, как сторонним провайдерам это делает BuildCliEnv. Считаем по модели
+        // ПОСЛЕ ResolveModelForCli — ровно по той, что уедет в --model: срезанный по
+        // способности пула алиас обязан дать 200k, иначе CLI не сожмёт контекст вовремя.
+        // Ветка cliEnv is null = модель не принадлежит стороннему провайдеру (там ключ уже
+        // стоит по каталогу, перетирать его нельзя).
+        if (cliEnv is null)
+            envOverrides["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] =
+                LlmProviderRegistry.ClaudeContextWindowValue(ResolveModelForCli(EffectiveModel));
+
+        // Что именно объявили CLI — в паспорта сабагентов этого прогона (у стороннего
+        // провайдера значение поставил BuildCliEnv по каталогу, у родного — строка выше;
+        // fail-open у неизвестной модели провайдера оставляет 0 = «не объявляли»)
+        _turnContextWindow = envOverrides.TryGetValue("CLAUDE_CODE_MAX_CONTEXT_TOKENS", out var declaredWindow)
+            && int.TryParse(declaredWindow, NumberStyles.Integer, CultureInfo.InvariantCulture, out var windowValue)
+            ? windowValue : 0;
+
         // Сообщение хода: с картинками content — массив блоков (text + image base64), иначе строка
         var imageBlocks = BuildImageBlocks(imagePaths);
         object content;
@@ -3206,7 +3227,7 @@ public class ClaudeSession : ILlmSessionAdapter
                             _subagentWatcher.Dispose();
                         }
                         _subagentWatcher = new SubagentStreamWatcher(cwd ?? _rootPath, Info.ClaudeSessionId!, _onMessage,
-                            Info.Id, _subagentRunSink);
+                            Info.Id, _subagentRunSink, _turnContextWindow);
                         _subagentWatcher.Start();
                     }
 

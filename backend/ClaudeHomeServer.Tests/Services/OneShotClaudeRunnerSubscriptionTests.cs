@@ -4,7 +4,6 @@ using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 
@@ -50,14 +49,31 @@ public class OneShotClaudeRunnerSubscriptionTests : IDisposable
     // --- ResolveEnv: выбор аккаунта пула для родной модели Claude ---
 
     [Fact]
-    public void ПулПуст_EnvНеСтроится_ПоведениеКакРаньше()
+    public void ПулПуст_АккаунтНеВыбирается_ОстаётсяТолькоОкноКонтекста()
     {
         var (runner, _) = MkRunner();
 
         var (env, poolSubKey) = runner.ResolveEnv("sonnet");
 
-        env.Should().BeNull();
         poolSubKey.Should().BeNull();
+        // Маршрут не переопределяем (основной аккаунт), но окно родной модели объявляем сами
+        env.Should().NotBeNull();
+        env!.Keys.Should().Equal("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("200000");
+    }
+
+    // Окно считается по модели, которая уедет в --model (ResolveWindowAlias отработал раньше):
+    // без объявления CLI ведёт вызов в предполагаемых 200k
+    [Fact]
+    public void ПулСАккаунтом_ОкноКонтекстаЕдетВместеСOAuth()
+    {
+        var (runner, _) = MkRunner("second");
+
+        var (env, poolSubKey) = runner.ResolveEnv("opus[1m]");
+
+        poolSubKey.Should().Be("second");
+        env!["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1000000");
+        env.Should().ContainKey("CLAUDE_CODE_OAUTH_TOKEN");
     }
 
     [Fact]
@@ -112,8 +128,8 @@ public class OneShotClaudeRunnerSubscriptionTests : IDisposable
 
         var (env, poolSubKey) = runner.ResolveEnv("sonnet");
 
-        env.Should().BeNull();
         poolSubKey.Should().BeNull();
+        env!.Keys.Should().Equal("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
     }
 
     // --- RecordSpend: атрибуция расхода выбранной подписке, а не всегда "claude" ---

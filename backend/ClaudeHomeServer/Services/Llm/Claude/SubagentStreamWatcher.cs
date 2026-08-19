@@ -23,6 +23,9 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly Func<ServerMessage, Task> _onMessage;
     private readonly string? _sessionId;
     private readonly Action<SubagentRunPassport>? _runSink;
+    // Окно контекста, объявленное CLI на запуске прогона (0 — не объявляли): env наследуют
+    // и сабагенты, поэтому оно относится к ним так же, как к основному ходу
+    private readonly int _cliContextWindow;
     private readonly CancellationTokenSource _cts = new();
     // Смещение прочитанного по каждому файлу (продвигается только по целым строкам)
     private readonly Dictionary<string, long> _offsets = [];
@@ -46,13 +49,14 @@ internal sealed class SubagentStreamWatcher : IDisposable
         !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId;
 
     public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage,
-        string? sessionId = null, Action<SubagentRunPassport>? runSink = null)
+        string? sessionId = null, Action<SubagentRunPassport>? runSink = null, int cliContextWindow = 0)
     {
         _cwd = cwd;
         _claudeSessionId = claudeSessionId;
         _onMessage = onMessage;
         _sessionId = sessionId;
         _runSink = runSink;
+        _cliContextWindow = cliContextWindow;
     }
 
     public void Start()
@@ -145,7 +149,7 @@ internal sealed class SubagentStreamWatcher : IDisposable
 
         long size = 0;
         try { size = new FileInfo(file).Length; } catch (Exception) { /* файл мог исчезнуть */ }
-        try { _runSink(tally.Build(_sessionId, finishedBy, size)); }
+        try { _runSink(tally.Build(_sessionId, finishedBy, size, _cliContextWindow)); }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[SubagentWatcher] Паспорт прогона не записан: {ex.Message}");

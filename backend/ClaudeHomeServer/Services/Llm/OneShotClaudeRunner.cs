@@ -106,24 +106,35 @@ public sealed class OneShotClaudeRunner(LlmProviderRegistry llmProviders, ILaunc
     private string? ResolveWindowAlias(string? model) =>
         subscriptionPool?.ResolveWindowAlias(model) ?? LlmProviderRegistry.StripClaudeWindowAlias(model);
 
-    // Env процесса + ключ аккаунта пула, которым реально пойдёт вызов (null — сторонний
-    // провайдер ИЛИ пул пуст/недоступен, тогда возвращённый Env тоже null — CLI наследует
-    // окружение сервера, как раньше). Родная модель Claude (BuildCliEnv не нашёл стороннего
-    // провайдера) при непустом пуле подписок выбирает аккаунт так же, как это делает живой
-    // чат (ClaudeSession) — иначе фон всегда бил бы в основной аккаунт мимо пула (диагноз
+    // Env процесса + ключ аккаунта пула, которым реально пойдёт вызов (PoolSubKey = null —
+    // сторонний провайдер ИЛИ пул пуст/недоступен). Родная модель Claude (BuildCliEnv не нашёл
+    // стороннего провайдера) при непустом пуле подписок выбирает аккаунт так же, как это делает
+    // живой чат (ClaudeSession) — иначе фон всегда бил бы в основной аккаунт мимо пула (диагноз
     // задачи). internal — тестируется без запуска процесса (подменить его в тестах нечем).
+    //
+    // У РОДНОГО Claude (обе ветки: основной аккаунт и аккаунт пула) добавляем окно контекста
+    // фактической модели — сторонним его уже поставил BuildCliEnv по каталогу. Модель сюда
+    // приходит после ResolveWindowAlias, т.е. ровно та, что уедет в --model.
     internal (IReadOnlyDictionary<string, string>? Env, string? PoolSubKey) ResolveEnv(string? model)
     {
         var env = llmProviders.BuildCliEnv(model);
-        if (env is not null || subscriptionPool?.HasExtra != true)
-            return (env, null);
+        if (env is not null) return (env, null);
+
+        var native = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = LlmProviderRegistry.ClaudeContextWindowValue(model),
+        };
+        if (subscriptionPool?.HasExtra != true) return (native, null);
 
         var subKey = subscriptionPool.Pick(model);
         var sub = subscriptionPool.All.FirstOrDefault(s => s.Key == subKey);
         var oauthEnv = sub is not null
             ? llmProviders.BuildOAuthCliEnv(sub.Key, sub.OAuthToken, sub.ApiKey, model)
             : null;
-        return oauthEnv is not null ? (oauthEnv, sub!.Key) : (null, null);
+        if (oauthEnv is null) return (native, null);
+
+        foreach (var (k, v) in oauthEnv) native[k] = v;
+        return (native, sub!.Key);
     }
 
     public async Task<string> RunAsync(string prompt, string? model = null,

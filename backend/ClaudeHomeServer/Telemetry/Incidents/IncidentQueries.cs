@@ -341,8 +341,19 @@ public static class IncidentQueries
                 foreach (var item in labels.EnumerateArray())
                 {
                     if (item.ValueKind != JsonValueKind.Object) continue;
-                    var key = item.TryGetProperty("key", out var k) && k.ValueKind == JsonValueKind.String
-                        ? k.GetString() : null;
+                    // key приходит ДВУМЯ формами: строкой ("provider") и объектом
+                    // ({"name":"provider","fieldDataType":...}). Живой SigNoz v0.134
+                    // отдаёт вторую — на ней разбор молча возвращал «—», и разрез
+                    // выглядел пустым при исправных данных.
+                    var key = item.TryGetProperty("key", out var k)
+                        ? k.ValueKind switch
+                        {
+                            JsonValueKind.String => k.GetString(),
+                            JsonValueKind.Object when k.TryGetProperty("name", out var n)
+                                && n.ValueKind == JsonValueKind.String => n.GetString(),
+                            _ => null,
+                        }
+                        : null;
                     if (!string.Equals(key, groupByTag, StringComparison.Ordinal)) continue;
                     if (item.TryGetProperty("value", out var val) && val.ValueKind == JsonValueKind.String)
                         return val.GetString() ?? "—";

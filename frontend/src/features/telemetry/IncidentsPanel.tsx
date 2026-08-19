@@ -437,7 +437,13 @@ function DossierCard({ dossier, isMobile, onOpenChat }: {
       )}
 
       {dossier.breakdown.length > 0 && (
-        <Section title={`Разрез по ${dossier.breakdownTag}`}>
+        <Section title={breakdownTitle(dossier.breakdownTag)}>
+          {/* Что именно посчитано: без этой строки «claude 51» читается как что угодно —
+              от числа чатов до секунд. Тег-первоисточник тоже показываем: по нему
+              инцидент ищется в SigNoz руками. */}
+          <div style={{ fontSize: FS.xs, color: C.textMuted, marginBottom: SP.xs }}>
+            Сколько раз сработало за окно инцидента, в разбивке по «{dossier.breakdownTag}»
+          </div>
           {dossier.breakdown.map(row => (
             <div key={row.label} style={rowStyle}>
               <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -500,14 +506,39 @@ function DossierCard({ dossier, isMobile, onOpenChat }: {
         </Section>
       )}
 
-      {dossier.ruleUrl && (
-        <a href={dossier.ruleUrl} target="_blank" rel="noopener noreferrer"
-          style={{ fontSize: FS.sm, color: C.textSecondary, textDecoration: 'underline', width: 'fit-content' }}>
+      {dossier.rulePath && onOpenInSignoz && (
+        // Не внешняя ссылка: адрес SigNoz у бэкенда — localhost, и на боевом инстансе
+        // такая ссылка вела в никуда. Открываем правило на соседней вкладке раздела,
+        // через наш же проброс — работает на любом origin.
+        <button
+          type="button"
+          onClick={() => onOpenInSignoz(dossier.rulePath!)}
+          style={{
+            fontSize: FS.sm, color: C.textSecondary, textDecoration: 'underline',
+            width: 'fit-content', background: 'none', border: 'none', padding: 0,
+            cursor: 'pointer', fontFamily: 'inherit',
+          }}
+        >
           Правило в SigNoz
-        </a>
+        </button>
       )}
     </div>
   );
+}
+
+
+// Человеческое имя разреза. В досье приходит СЫРОЙ тег метрики (provider, error_type…) —
+// он нужен для поиска в SigNoz, но в заголовке «Разрез по provider» ничего не объясняет.
+function breakdownTitle(tag: string): string {
+  switch (tag) {
+    case 'provider': return 'По поставщикам моделей'
+    case 'error_type': return 'По типам ошибок'
+    case 'tool_name': return 'По инструментам'
+    case 'reason': return 'По причинам'
+    case 'model': return 'По моделям'
+    case 'deployment.environment': return 'По контурам'
+    default: return `По «${tag}»`
+  }
 }
 
 // Строка затронутого чата. Заголовку — flex: 1 + minWidth: 0, иначе на 320px первым

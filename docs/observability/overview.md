@@ -135,16 +135,33 @@ truth для billing/accounting — метрики токенов и стоим�
 
 | Attribute | Action | Почему |
 |---|---|---|
-| `file_path`, `*.path`, `url.path` | Hash → `sha256(value)[..8]` | Путь может содержать имя проекта/пользователя/файла |
+| `file_path`, `*.path`, `url.path`, `root`, `dir`, `file` | Hash → `sha256(value)[..8]` | Путь может содержать имя проекта/пользователя/файла |
 | `persona_name`, `persona.id` | DROP | Идентификатор персоны = PII |
 | `user_id`, `owner_id` | DROP | Идентификатор пользователя = PII |
 | `prompt`, `text`, `content`, `body`, `message` | DROP | Тело запроса/ответа = PII |
 | `url.full`, `url.query` | DROP | В query-строке уезжают API-ключи (Dify, OpenRouter) — **C6** |
-| `session_id`, `turn_id` (GUIDs) | KEEP | Неидентифицирующие, нужны для корреляции трейсов |
+| `session_id`, `turn_id`, `session`, `sid`, `task_id`, `project_id`, `plan_id`, `note_id`, `service_id`, `terminal_id`, `id` (GUIDs) | KEEP | Неидентифицирующие, нужны для корреляции трейсов |
+| `count`, `attempt`, `wave`, `total`, `nodes`, `edges`, `skipped`, `merged`, `size`, `ms`, `idle`, `timeout`… | KEEP | Числа и длительности — PII невозможен по типу значения |
+| `version`, `file_version`, `code`, `sha`, `ref` | KEEP | Версии схем, git-ревизии, коды ответов |
+| `action`, `label`, `type`, `route`, `tier`, `skill`, `base_url`, `tool`, `mode`, `stage`, `src`, `cause`, `place`… | KEEP | Ярлыки, значение которых задаёт код, а не пользователь (полный список — `PiiRules`) |
+| `error`, `err` | KEEP | Текст отказа — родня `reason`; без него warning нечитаем |
 | `provider`, `model`, `direction` | KEEP | Операционные, не PII |
 | `tool_name`, `outcome`, `error_type`, `reason` | KEEP | Операционные, не PII |
 | `http.request.method`, `http.response.status_code`, `http.route`, `server.address` | KEEP | Стабильные semconv-имена, без пользовательских данных |
 | Unknown tags | DROP (default deny) | Белый список — всё незнакомое отбрасывается |
+
+**Синонимы надо перечислять руками.** Нормализация схлопывает регистр и разделители, но не
+смысл: `{Session}` и `session_id`, `{ProjectId}` и `project`, `{Tool}` и `tool_name`, `{Root}`
+и `root_path` — одни и те же значения под разными именами. Пока синонимы не были внесены,
+одна половина событий приезжала читаемой, а вторая обезличенной без всякой системы (аудит
+2026-08-19: стиралось 612 из 848 употреблений плейсхолдеров, и настоящий PII был там
+меньшинством). Добавляя логирование, сверяйся с этим списком, а не с догадкой.
+
+**Generic-имена не открываются — переименовывается место.** `{Message}`, `{Key}`, `{Source}`,
+`{Name}`, `{Title}`, `{Value}`, `{Raw}` остаются закрытыми: правило действует на имя навсегда
+и во всём коде, включая места, которых ещё нет, а под этими именами уезжает что угодно — от
+названия проекта до API-ключа. Месту, которому нужен видимый текст, полагается назвать свой
+параметр конкретно (`Reason`, `Error`, `Host`) — тем же приёмом, что `Endpoint` → `Host`.
 
 **Спаны** (`PiiSanitizingProcessor`): дополнительно очищается `StatusDescription` —
 инструментация кладёт туда текст исключения с URL и путями сборки. По той же причине

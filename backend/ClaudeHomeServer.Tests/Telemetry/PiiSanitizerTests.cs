@@ -131,6 +131,57 @@ public class PiiSanitizerTests
     }
 
     [Fact]
+    public void IdSynonyms_AreKept()
+    {
+        // Нормализация схлопывает регистр и разделители, но НЕ синонимы: {Session} — тот же
+        // идентификатор, что session_id, а {ProjectId} — что project. Пока их не было в списке,
+        // одна половина событий приезжала читаемой, вторая обезличенной.
+        using var activity = CreateActivity(
+            ("Session", "s-42"), ("ProjectId", "p-7"), ("Tool", "notes_create"), ("TaskId", "t-9"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Session").Should().Be("s-42");
+        activity.GetTagItem("ProjectId").Should().Be("p-7");
+        activity.GetTagItem("Tool").Should().Be("notes_create");
+        activity.GetTagItem("TaskId").Should().Be("t-9");
+    }
+
+    [Fact]
+    public void RootAndDir_AreHashed_NotDropped()
+    {
+        // {Root} — это RootPath проекта: не Keep (путь на диске), но и не дроп — хэш держит
+        // корреляцию «одна и та же папка в разных событиях».
+        using var activity = CreateActivity(("Root", @"C:\GIT\ClaudeCodeServer"), ("Dir", @"D:\notes"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Root")?.ToString().Should().NotBe(@"C:\GIT\ClaudeCodeServer").And.HaveLength(8);
+        activity.GetTagItem("Dir")?.ToString().Should().NotBe(@"D:\notes").And.HaveLength(8);
+    }
+
+    [Fact]
+    public void Action_IsKept_WhileGenericMessageStaysDropped()
+    {
+        // Ключ действия каталога — операционка, а generic-имя {Message} закрыто намеренно:
+        // под ним по коду уезжает что угодно, включая текст пользователя. Место, которому
+        // нужен видимый текст отказа, называет свой параметр Reason/Error (CheapTextRunner).
+        using var activity = CreateActivity(
+            ("Action", "team-memory-consolidate"),
+            ("Reason", "AI не ответил за отведённое время (лимит 180 с, ждали 180 с)"),
+            ("Message", "любой пользовательский текст"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Action").Should().Be("team-memory-consolidate");
+        activity.GetTagItem("Reason").Should().NotBeNull();
+        activity.GetTagItem("Message").Should().BeNull();
+    }
+
+    [Fact]
     public void UserId_IsDropped()
     {
         using var activity = CreateActivity(("user_id", "grisha@example.com"));

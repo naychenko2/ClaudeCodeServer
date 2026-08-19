@@ -41,6 +41,14 @@ public static class PiiRules
     [
         "file_path", "file.name", "filepath", "path",
         "working_dir", "working.directory", "root_path", "cwd",
+        // Те же сущности под именами из структурных логов: {Root} — это RootPath проекта,
+        // {Dir} — папка, {File} — имя файла. Нормализация схлопывает регистр и разделители,
+        // но НЕ синонимы, поэтому root_path выше от {Root} не спасал: путь уходил в
+        // default-deny и дропался. Дроп безопасен, но корреляция «одна и та же папка
+        // в разных событиях» терялась молча — а ради неё хэш и заведён.
+        "root", "dir", "file",
+        // Хвост аудита: {Repo} и {Worktree} — тоже пути на диске.
+        "repo", "worktree",
     ]);
 
     /// <summary>Атрибуты, которые ОСТАЮТСЯ как есть (operational metadata, не PII).</summary>
@@ -67,6 +75,55 @@ public static class PiiRules
         // ВАЖНО: endpoint сюда НЕ входит. Под этим именем PushService логирует адрес
         // push-подписки — идентификатор устройства пользователя (Services/PushService.cs).
         "subject", "consequence", "host", "status", "connectionid",
+        // Идентификаторы сущностей из структурных логов — тот же класс, что session_id и
+        // chat_id выше: opaque-значения без пользовательских данных. Перечислены явно,
+        // потому что нормализация схлопывает регистр и разделители, но не синонимы:
+        // {Session} и session_id, {ProjectId} и project, {Tool} и tool_name — одни и те же
+        // значения под разными именами, и до этой строки одна половина событий приезжала
+        // читаемой, а вторая обезличенной без всякой системы.
+        "task_id", "plan_id", "note_id", "service_id", "terminal_id",
+        "session", "sid", "project_id", "tool", "id",
+        // Счётчики и объёмы — PII невозможен по типу значения.
+        "count", "attempt", "wave", "total", "nodes", "edges", "skipped",
+        // Версии, ревизии и коды: {Sha}/{Ref} — git, {Code} — код процесса или HTTP,
+        // {Version}/{FileVersion} — версия схемы стора.
+        "version", "file_version", "code", "sha", "ref",
+        // Операционные ярлыки: {Action} — ключ действия LocalActionCatalog, {Label} — цель
+        // reconcile, {Route} — маршрут места, {Tier} — слот модели, {BaseUrl} — адрес
+        // сервиса (тот же класс, что host).
+        "action", "label", "type", "route", "base_url", "tier", "skill",
+        // Хвост аудита 2026-08-19: единичные счётчики и ярлыки, из-за которых половина
+        // фоновых событий («сброшено {Count} хешей», «{Merged} записей слито») читалась
+        // без единой цифры. Числа и длительности — PII невозможен по типу значения.
+        "merged", "evicted", "before", "changed", "generated", "failed", "candidates",
+        "migrated", "updated", "added", "orphans", "attempts", "hist_count", "total_chars",
+        "total_tokens", "max_tokens", "len", "size", "files", "max", "min", "cap", "ceiling",
+        "threshold", "number", "days", "day", "date", "minutes", "seconds", "sec", "ms",
+        "elapsed_ms", "idle", "interval", "timeout", "ttl", "port", "places", "line",
+        "major", "minor", "first", "second", "next", "current",
+        // Ярлыки, значения которых задаёт КОД, а не пользователь: место применения модели,
+        // причина и источник доставки хода, стадия, тип агента, opaque-идентификаторы джоб.
+        "place", "job_id", "mode", "stage", "scope", "module", "preset", "slot", "src",
+        "cause", "origin", "trigger", "verdict", "decision", "state", "op", "method",
+        "glyph", "extension", "dataset", "agent_type", "agent_id", "card_id",
+        "claude_session_id", "kid", "callsite", "interaction", "winner", "fixed_provider",
+        "fingerprint", "layer", "tools", "tile", "bg", "alive", "dirty", "stuck", "stopped",
+        "deferred", "cont", "expected", "db", "image", "entity", "target",
+        // Тексты отказов — родня разрешённого reason. Без них warning читается как
+        // «действие {Action} — {Message}», то есть не читается вовсе. Сюда идут ex.Message
+        // и ответ провайдера.
+        //
+        // ВАЖНО: generic-имена сюда НЕ входят намеренно — ни при каком аудите. Кроме
+        // перечисленных ниже, закрытыми осознанно оставлены {Rule}/{RuleName} (имя правила
+        // автоматизации сочиняет пользователь), {Task}, {Query}, {Note}, {Summary}, {Problem},
+        // {Result}, {Entry}, {Handle}, {Login}, {Domain}, {Url}, {Old}/{New} и {Dump}.
+        // {Message} закрыт паттерном ниже
+        // (под ним по коду уезжает что угодно, включая текст пользователя), {Key} может
+        // притянуть секрет, {Source} в skills add несёт пользовательский ввод, а {Name}
+        // и {Title} — это названия проектов и заметок. Место, которому нужен видимый
+        // текст отказа, переименовывает свой параметр в Reason/Error, а не открывает
+        // generic-имя всему коду разом — тем же приёмом, что Endpoint → Host.
+        "error", "err",
         // Operational
         "provider", "model", "direction", "tool_name", "outcome",
         "error_type", "reason", "kind", "command",

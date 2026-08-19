@@ -58,6 +58,15 @@ public static class PiiRules
         // выглядело как «Консолидация памяти команды проекта {Project}» — событие видно,
         // а какого проекта касается, непонятно.
         "project",
+        // Диагностика опциональных зависимостей и Kestrel: subject/consequence — наши
+        // же тексты из профиля клиента, host — схема+хост+порт вызываемого сервиса,
+        // status — код ответа, connectionid — opaque-идентификатор соединения.
+        // Пользовательских данных ни в одном нет, а без них строки логов в SigNoz
+        // читались как «Ошибка на стороне {Subject} ({Host}): HTTP {Status}».
+        //
+        // ВАЖНО: endpoint сюда НЕ входит. Под этим именем PushService логирует адрес
+        // push-подписки — идентификатор устройства пользователя (Services/PushService.cs).
+        "subject", "consequence", "host", "status", "connectionid",
         // Operational
         "provider", "model", "direction", "tool_name", "outcome",
         "error_type", "reason", "kind", "command",

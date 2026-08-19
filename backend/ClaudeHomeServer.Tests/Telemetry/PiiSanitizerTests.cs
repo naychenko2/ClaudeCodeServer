@@ -115,6 +115,22 @@ public class PiiSanitizerTests
     }
 
     [Fact]
+    public void PushEndpoint_IsDropped_WhileServiceHostIsKept()
+    {
+        using var activity = CreateActivity(
+            ("Host", "https://localhost:3301"),
+            ("Endpoint", "https://fcm.googleapis.com/fcm/send/cX9k…токен-устройства"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Host").Should().Be("https://localhost:3301",
+            "адрес вызываемого сервиса — операционная информация, по ней читаются логи сбоев");
+        activity.GetTagItem("Endpoint").Should().BeNull(
+            "под {Endpoint} PushService логирует адрес push-подписки — это идентификатор устройства");
+    }
+
+    [Fact]
     public void UserId_IsDropped()
     {
         using var activity = CreateActivity(("user_id", "grisha@example.com"));

@@ -70,7 +70,7 @@ public sealed class QuietHttpLogger : IHttpClientLogger
 
         // Хост жив, но отказал (503 при перезапуске SigNoz, 500 от модели) — тот же класс проблемы.
         if (ShouldReport())
-            _log.LogWarning("Ошибка на стороне {Subject} ({Endpoint}): HTTP {Status}. {Consequence}",
+            _log.LogWarning("Ошибка на стороне {Subject} ({Host}): HTTP {Status}. {Consequence}",
                 _profile.Subject, Endpoint(request), (int)response.StatusCode, _profile.Consequence);
     }
 
@@ -80,7 +80,7 @@ public sealed class QuietHttpLogger : IHttpClientLogger
     {
         if (!ShouldReport()) return;
 
-        _log.LogWarning("Нет связи с {Subject} ({Endpoint}): {Reason}. {Consequence}",
+        _log.LogWarning("Нет связи с {Subject} ({Host}): {Reason}. {Consequence}",
             _profile.Subject, Endpoint(request), Reason(exception), _profile.Consequence);
     }
 
@@ -89,6 +89,13 @@ public sealed class QuietHttpLogger : IHttpClientLogger
     private static string Reason(Exception exception) =>
         exception.GetBaseException().Message.TrimEnd(' ', '.');
 
+    /// <summary>
+    /// Схема+хост+порт вызываемого сервиса. Имя параметра — {Host}, а НЕ {Endpoint}:
+    /// под {Endpoint} в PushService логируется адрес push-подписки, то есть
+    /// идентификатор устройства пользователя. Одно имя на две сущности означало бы, что
+    /// правило приватности для них тоже одно — и разрешив адрес SigNoz, мы бы заодно
+    /// выпустили наружу токены устройств.
+    /// </summary>
     private static string Endpoint(HttpRequestMessage request) =>
         request.RequestUri?.GetLeftPart(UriPartial.Authority) ?? "адрес неизвестен";
 

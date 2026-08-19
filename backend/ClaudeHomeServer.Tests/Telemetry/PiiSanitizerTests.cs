@@ -99,6 +99,22 @@ public class PiiSanitizerTests
     }
 
     [Fact]
+    public void Project_IsKept_ButProjectNameIsNot()
+    {
+        var projectId = Guid.NewGuid().ToString();
+        using var activity = CreateActivity(("Project", projectId), ("Name", "Секретный проект"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Project").Should().Be(projectId,
+            "в {Project} структурных логов уходит id проекта — без него тело лога в SigNoz " +
+            "остаётся с голым плейсхолдером и не говорит, о каком проекте речь");
+        activity.GetTagItem("Name").Should().BeNull(
+            "а вот НАЗВАНИЕ проекта — пользовательские данные, оно дропается как прежде");
+    }
+
+    [Fact]
     public void UserId_IsDropped()
     {
         using var activity = CreateActivity(("user_id", "grisha@example.com"));

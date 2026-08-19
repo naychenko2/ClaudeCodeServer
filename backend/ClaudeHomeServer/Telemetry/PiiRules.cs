@@ -52,6 +52,12 @@ public static class PiiRules
         // а разбор инцидента переставал бы находить чаты — без единой ошибки в логе.
         // Сторож — PiiSanitizerTests.ChatId_IsKept (падает, если строку убрать).
         "session_id", "chat_id", "turn_id", "trace_id", "span_id",
+        // project — ИДЕНТИФИКАТОР проекта из структурных логов ({Project}), а не название:
+        // по всем ~36 местам туда уходит project.Id/projectId, а имя живёт отдельным
+        // плейсхолдером {Name} и продолжает дропаться. Без этой строки тело лога в SigNoz
+        // выглядело как «Консолидация памяти команды проекта {Project}» — событие видно,
+        // а какого проекта касается, непонятно.
+        "project",
         // Operational
         "provider", "model", "direction", "tool_name", "outcome",
         "error_type", "reason", "kind", "command",

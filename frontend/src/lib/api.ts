@@ -18,6 +18,30 @@ export interface GlyphCandidate {
 }
 
 
+// Итог выкатки, как его пишет трей-раннер в deploy-status.json. Формат чужой — читаем как есть.
+// result: running | ok | blocked | build-failed | rolled-back | failed | error.
+// Времена — локальные строки «yyyy-MM-dd HH:mm:ss» без смещения.
+export interface DeployStatusFile {
+  startedAt: string | null;
+  finishedAt: string | null;
+  mode: string | null;
+  branch: string | null;
+  dirtyFiles: number;
+  head: string | null;
+  deployExitCode: number | null;
+  result: string | null;
+  productUp: boolean | null;
+  note: string | null;
+}
+
+// Ответ GET /api/admin/deploy/status: доступность выкатки плюс последний известный итог
+export interface DeployState {
+  enabled: boolean;
+  canLaunch: boolean;
+  reason: string | null;
+  status: DeployStatusFile | null;
+}
+
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
 // Метаданные внешнего модуля из GET /api/modules (контракт §2/§7)
@@ -278,6 +302,21 @@ export const api = {
     // Места, где выбран пресет (диалог удаления)
     presetUsage: (id: string) =>
       request<PresetUsageResponse>(`/models/presets/${encodeURIComponent(id)}/usage`),
+  },
+
+  // Выкатка боевого продукта трей-раннером (только админам и только при Deploy:Enabled).
+  // status отвечает всегда, в том числе при выключенной фиче (enabled: false) — по нему
+  // шапка решает, показывать ли пункт меню, и 404 здесь шумел бы в консоли у всех.
+  deploy: {
+    // live: true — НЕ подставлять ответ из офлайн-кэша (IndexedDB), даже когда сервер не
+    // отвечает. Для этого запроса важно не только содержимое, но и сам факт ответа: продукт на
+    // время публикации гаснет, и подставленный прошлый ответ выдавал бы «сервер отвечает,
+    // ничего не происходит» — окно выкатки объявляло «трей команду не принял» поверх успешной
+    // публикации. cache: 'no-store' закрывает то же самое со стороны браузера.
+    status: () => request<DeployState>('/admin/deploy/status', { cache: 'no-store', live: true }),
+    // 202: команда ушла трею. previousStartedAt — начало ПРОШЛОЙ выкатки: только по смене
+    // этого времени видно, что трей команду принял и начал новую (см. DeployModal).
+    launch: () => request<{ previousStartedAt: string | null }>('/admin/deploy', { method: 'POST' }),
   },
 
   featureFlags: {

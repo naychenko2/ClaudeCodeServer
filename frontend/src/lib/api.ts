@@ -1027,6 +1027,13 @@ export const api = {
     // «Задачи из чата» (флаг chat-extract-tasks): извлечь кандидатов (не создаёт)
     extractTasks: (sessionId: string) =>
       request<ExtractTasksResponse>(`/sessions/${sessionId}/extract-tasks`, { method: 'POST' }),
+    // Снять постоянное разрешение инструмента в чате («Всегда разрешать …»).
+    // Маршрут по id сессии — работает и для проектных чатов, и для чатов вне проекта.
+    // Отдаёт обновлённую сессию (как смена режима) — доборный GET не нужен
+    revokeAutoAllow: (sessionId: string, tool: string) =>
+      request<Session>(
+        `/sessions/${encodeURIComponent(sessionId)}/auto-allow?tool=${encodeURIComponent(tool)}`,
+        { method: 'DELETE' }),
     // Снять сообщение из очереди занятого чата (крестик на карточке-призраке).
     // Очередь живёт в памяти сервера — актуальный состав приходит событием pending_messages
     cancelPending: (sessionId: string, messageId: string) =>

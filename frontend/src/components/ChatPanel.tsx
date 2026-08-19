@@ -588,6 +588,39 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         showToast('Режим чата', err instanceof Error ? err.message : 'Не удалось сменить режим');
       });
   }, [mode, session.id, onSessionUpdated]);
+
+  // Постоянные разрешения чата («Всегда разрешать Bash в этом чате»). Источник правды —
+  // сессия с бэка; локальная копия нужна, чтобы список менялся сразу по нажатию, не дожидаясь
+  // перезапроса сессии. Поле может отсутствовать вовсе (старый ответ/бэкенд без правки) —
+  // тогда список пуст и блок не рисуется.
+  const [autoAllowTools, setAutoAllowTools] = useState<string[]>(session.autoAllowTools ?? []);
+  const serverAutoAllow = (session.autoAllowTools ?? []).join('\n');
+  useEffect(() => {
+    setAutoAllowTools(session.autoAllowTools ?? []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- сверяемся со СТРОКОЙ состава: массив приходит новым объектом на каждый перезапрос сессии и сбрасывал бы список без нужды
+  }, [session.id, serverAutoAllow]);
+
+  // «Всегда разрешать X» из карточки запроса: имя инструмента знает только карточка,
+  // поэтому она его и передаёт — иначе пришлось бы искать пункт ленты по requestId
+  const handleAllowAlways = useCallback((requestId: string, toolName: string) => {
+    setAutoAllowTools(prev => (prev.includes(toolName) ? prev : [...prev, toolName]));
+    allowAlways(requestId);
+  }, [allowAlways]);
+
+  const handleRevokeAutoAllow = useCallback(async (tool: string) => {
+    const prev = autoAllowTools;
+    setAutoAllowTools(prev.filter(t => t !== tool));
+    try {
+      // Ответ — обновлённая сессия: отдаём её родителю, иначе он вернёт в пропсе
+      // старый список при следующем возврате в чат (та же логика, что у смены режима)
+      const updated = await api.sessions.revokeAutoAllow(session.id, tool);
+      onSessionUpdated?.(updated);
+    } catch (err) {
+      setAutoAllowTools(prev);
+      showToast('Разрешения чата', err instanceof Error ? err.message : 'Не удалось снять разрешение');
+    }
+  }, [autoAllowTools, session.id, onSessionUpdated]);
+
   const [showAttachPicker, setShowAttachPicker] = useState(false);
   // Скролл-механика ленты (прилипание к низу, восстановление позиции, кнопка «вниз») — hooks/useChatScroll
   const {
@@ -1462,7 +1495,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onToggleThinking={toggleThinking}
       onAllowPermission={allowPermission}
       onDenyPermission={denyPermission}
-      onAllowAlways={allowAlways}
+      onAllowAlways={handleAllowAlways}
       onAnswerQuestion={answerQuestion}
       onRespondPlan={handleRespondPlan}
       planVersion={planVersions.get(i)?.version}
@@ -1503,7 +1536,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     />
   ), [
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
-    denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
+    denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedMechanics, declinedMechanicOffers, runTeamMechanic,
@@ -2212,6 +2245,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             mode={mode}
             onModeChange={changeMode}
             planAvailable={caps.supportsPlanMode}
+            autoAllowTools={autoAllowTools}
+            onRevokeAutoAllow={handleRevokeAutoAllow}
             attachments={attachedFiles}
             onRemoveAttachment={path => onAttachedFilesChange(attachedFiles.filter(p => p !== path))}
             onAttachFiles={files => void handleComposerFiles(files)}

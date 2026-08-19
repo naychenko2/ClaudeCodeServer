@@ -369,6 +369,21 @@ public class SessionMessagesController(SessionManager sessions, ProjectManager p
             : Conflict(new { error = "Прерывать нечего: ход уже завершился или очередь пуста" });
     }
 
+    // DELETE /api/sessions/{sid}/auto-allow?tool=Bash — снять инструмент с «Разрешать всегда»
+    // этого чата (список — Session.AutoAllowTools). Отдаёт обновлённую сессию, как соседние
+    // точки смены настроек чата (PUT /mode, /loop): фронту не нужен доборный GET.
+    // Идемпотентно: инструмента в списке не было — та же 200 с текущей сессией.
+    [HttpDelete("auto-allow")]
+    public IActionResult RemoveAutoAllow(string sessionId, [FromQuery] string? tool)
+    {
+        var session = OwnedSession(sessionId);
+        if (session is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(tool)) return BadRequest(new { error = "Не указан инструмент" });
+        // Работаем по id РЕЗОЛВНУТОЙ сессии, а не по строке из URL (как в снимках промпта)
+        var updated = sessions.RemoveAutoAllowTool(session.Id, tool.Trim());
+        return updated is null ? NotFound() : Ok(updated);
+    }
+
     // Компактное представление сообщения истории; служебные записи (thinking, file_changed,
     // стоимость, границы компакции) в выдачу не попадают
     private static object? ToItem(StoredMessage m) => m switch

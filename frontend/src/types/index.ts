@@ -577,6 +577,11 @@ export interface Session {
   isPinned?: boolean;
   claudeSessionId?: string;
   mode: Mode;
+  // Инструменты, разрешённые в этом чате без вопроса («Всегда разрешать …»). Скоуп —
+  // инструмент целиком: «Bash» = любые команды этого чата. Разрешение постоянное
+  // (переживает рестарт), снимается через api.sessions.revokeAutoAllow.
+  // Необязательное: старые ответы и бэкенд без этой правки поля не присылают
+  autoAllowTools?: string[];
   status: 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error';
   lastMessage?: string;
   messageCount: number;

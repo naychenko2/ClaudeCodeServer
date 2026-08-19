@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback, type CSSProperties, type ReactNode } from 'react';
-import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, Users, VolumeX, WifiOff, X } from 'lucide-react';
-import { C, R, FS, FONT, MODAL_W, SHADOW, Z } from '../lib/design';
+import { AlertTriangle, AudioLines, Ban, ArrowUp, Check, ChevronDown, FolderGit2, Lock, Mic, Paperclip, Plus, RefreshCw, ShieldCheck, Users, VolumeX, WifiOff, X } from 'lucide-react';
+import { C, R, FS, FONT, MODAL_W, SHADOW, SP, Z } from '../lib/design';
 import { type RateWindow, RATE_COLORS, windowLabel, fmtReset } from '../lib/rateLimit';
 import { SkillsDropdown } from './SkillsDropdown';
 import { MentionsDropdown } from './MentionsDropdown';
@@ -23,7 +23,7 @@ import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { showToast } from '../lib/toast';
-import { Modal } from './ui';
+import { IconButton, Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -44,6 +44,11 @@ export interface ComposerProps {
   onModeChange: (mode: Mode) => void;
   // false → провайдер модели не поддерживает режим «План» — прячем его из списка
   planAvailable?: boolean;
+  // Постоянные разрешения чата: инструменты, которые выполняются без вопроса
+  // («Всегда разрешать …» в карточке запроса). Живут в меню режима прав — там же,
+  // где выбирают, о чём вообще спрашивать. Пустой список — блока в меню нет вовсе
+  autoAllowTools?: string[];
+  onRevokeAutoAllow?: (tool: string) => void | Promise<void>;
   attachments: string[];
   onRemoveAttachment: (path: string) => void;
   // Вставка/перетаскивание любых файлов (скриншот, pdf, документ) — File-объекты
@@ -420,6 +425,8 @@ export function Composer({
   mode,
   onModeChange,
   planAvailable = true,
+  autoAllowTools,
+  onRevokeAutoAllow,
   attachments,
   onRemoveAttachment,
   onAttachFiles,
@@ -1393,6 +1400,12 @@ export function Composer({
     </div>
   );
 
+  // Постоянные разрешения чата. Живут в меню режима прав: там человек решает, о чём
+  // его спрашивают, — значит и «уже не спрашивают про Bash» должно быть видно здесь,
+  // а не в отдельном закутке. Пустой список = блока нет и счётчика на плашке нет.
+  const autoAllow = autoAllowTools ?? [];
+  const autoAllowTitle = autoAllow.length > 0 ? ` · без вопроса: ${autoAllow.join(', ')}` : '';
+
   const modeButton = (
     <div ref={modeRef} style={{ position: 'relative', flexShrink: 0 }}>
       <button
@@ -1403,7 +1416,7 @@ export function Composer({
           setModeMenuOpen(o => !o);
         }}
         // В сжатом виде подпись скрыта — значение уносим в тултип, как у модели и усилия
-        title={modeLocked ? TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP : `Режим работы: ${MODE_META[displayMode].label}`}
+        title={modeLocked ? TEAM_IMPLEMENT_MODE_LOCKED_TOOLTIP : `Режим работы: ${MODE_META[displayMode].label}${autoAllowTitle}`}
         // Фон только на наведении/открытии: полоса лежит на тени карточки композера,
         // и залитые плашки разрезали бы её пятнами
         onMouseEnter={e => { if (!modeMenuOpen && !modeLocked) e.currentTarget.style.background = C.accentLight; }}
@@ -1426,6 +1439,18 @@ export function Composer({
         {/* В сжатом виде прячем только подпись (длинные названия распирают строку) —
             шеврон остаётся, как у модели, усилия и собеседника. Название — в тултипе. */}
         {!compactStrip && MODE_META[displayMode].label}
+        {/* Счётчик постоянных разрешений: без него «Bash разрешён навсегда» виден
+            только тому, кто откроет меню, — то есть невидим. Показываем и в сжатом
+            виде: это не подпись, а состояние прав чата */}
+        {autoAllow.length > 0 && (
+          <span style={{
+            flexShrink: 0, padding: '0 5px', borderRadius: R.max,
+            background: C.accentLight, color: C.accent,
+            fontSize: FS.xs, fontWeight: 700, lineHeight: '16px',
+          }}>
+            {autoAllow.length}
+          </span>
+        )}
         {modeLocked ? (
           <Lock size={10} strokeWidth={ICON_STROKE} style={{ flexShrink: 0, opacity: 0.6 }} />
         ) : (
@@ -1442,6 +1467,9 @@ export function Composer({
             ? { position: 'fixed' as const, left: 16, right: 16, bottom: modeMenuBottom }
             : { position: 'absolute' as const, bottom: 'calc(100% + 6px)', left: 0, minWidth: 248 }),
           maxWidth: 'calc(100vw - 32px)',
+          // Список постоянных разрешений может быть длинным — меню не должно
+          // вырастать за экран (особенно на мобиле, где оно прижато к композеру)
+          maxHeight: '60vh', overflowY: 'auto',
           background: C.bgWhite, border: `1px solid ${C.border}`, borderRadius: R.xl,
           boxShadow: SHADOW.dropdown, padding: 5, zIndex: Z.dropdown,
         }}>
@@ -1473,6 +1501,45 @@ export function Composer({
               </button>
             );
           })}
+          {autoAllow.length > 0 && (
+            <div style={{ marginTop: SP.xs, paddingTop: SP.xs, borderTop: `1px solid ${C.borderLight}` }}>
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 5, padding: '7px 9px 0',
+                fontFamily: FONT.sans, fontSize: FS.xs, fontWeight: 700, color: C.textMuted,
+                textTransform: 'uppercase', letterSpacing: 0.4,
+              }}>
+                <ShieldCheck size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+                Всегда разрешено в этом чате
+              </div>
+              <div style={{ padding: '3px 9px 0', fontSize: FS.xs, color: C.textMuted, lineHeight: 1.35 }}>
+                Эти инструменты выполняются без вопроса, пока разрешение не снять.
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: SP.xs, padding: `${SP.sm}px 9px ${SP.xs}px` }}>
+                {autoAllow.map(tool => (
+                  <span key={tool} style={{
+                    display: 'inline-flex', alignItems: 'center', gap: SP.xs, maxWidth: '100%',
+                    padding: '2px 3px 2px 9px', borderRadius: R.max,
+                    background: C.bgPanel, border: `1px solid ${C.border}`,
+                  }}>
+                    <span style={{
+                      minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                      fontFamily: FONT.mono, fontSize: FS.sm, color: C.textPrimary,
+                    }}>
+                      {tool}
+                    </span>
+                    <IconButton
+                      size={isMobile ? 'sm' : 'xs'}
+                      tone="danger"
+                      title={`Снять разрешение для «${tool}»`}
+                      onClick={() => { void onRevokeAutoAllow?.(tool); }}
+                    >
+                      <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+                    </IconButton>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {/* Пояснение лока (Э8), мобила — нижняя шторка: hover недоступен на тач, поэтому

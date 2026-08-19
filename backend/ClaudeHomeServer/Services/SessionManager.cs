@@ -4412,10 +4412,40 @@ public class SessionManager : IDisposable
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return;
         if (IsStaleInteractionAnswer(sessionId, entry, $"permission {requestId}")) return;
+        // «Разрешать всегда» запоминаем НА СЕССИИ, а не в памяти адаптера: тот пересоздаётся
+        // рестартом сервера, ленивым восстановлением чата и сменой собеседника, и человеку
+        // приходилось жать «всегда» заново. Имя инструмента берём из висящей карточки —
+        // в ответе клиента его нет. Сверяем requestId: у одного хода карточек может быть
+        // несколько (параллельные tool_use), и ответ на неактуальную законен — но запомнить
+        // «всегда» по чужой карточке значило бы выдать бессрочные права инструменту, которому
+        // их не давали. Карточка не та (или имя пустое) — просто не запоминаем, ход идёт
+        // своим чередом.
+        if (behavior == "allow_always"
+            && entry.PendingInteraction is PermissionRequestMessage
+                { ToolName: { Length: > 0 } tool } pending
+            && pending.RequestId == requestId
+            && !entry.Info.AutoAllowTools.Contains(tool, StringComparer.OrdinalIgnoreCase))
+        {
+            entry.Info.AutoAllowTools.Add(tool);
+            SaveSessions();
+        }
         entry.Process?.RespondPermission(requestId, behavior);
         entry.PendingInteraction = null;
         FireAndForget(ApplyStatusAsync(sessionId, entry, SessionStatus.Working),
             $"смена статуса после permission ({sessionId})");
+    }
+
+    // Снять инструмент с «Разрешать всегда» этого чата: следующий его вызов снова спросит.
+    // Идемпотентно — инструмента в списке нет, отдаём сессию как есть (диск не трогаем).
+    // Сравнение имён — OrdinalIgnoreCase, как при проверке в ClaudeSession.
+    // null — сессии нет (владение проверяет контроллер, как у соседних эндпоинтов).
+    // UpdatedAt не двигаем: настройка чата — не активность (см. соглашение о настройках).
+    public Session? RemoveAutoAllowTool(string sessionId, string tool)
+    {
+        if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
+        if (entry.Info.AutoAllowTools.RemoveAll(t => string.Equals(t, tool, StringComparison.OrdinalIgnoreCase)) > 0)
+            SaveSessions();
+        return entry.Info;
     }
 
     public void Interrupt(string sessionId)

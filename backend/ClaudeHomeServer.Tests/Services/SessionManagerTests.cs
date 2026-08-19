@@ -1357,6 +1357,89 @@ public class SessionManagerTests : IDisposable
         _sut.GetById(session.Id)!.Status.Should().Be(SessionStatus.Working);
     }
 
+    // --- «Разрешать всегда»: список живёт на сессии, а не в памяти адаптера ---
+
+    // Инструменты «всегда разрешать» из стора для сессии session (PascalCase, как _jsonOpts)
+    private async Task<List<string?>> StoredAutoAllowAsync(string sessionId)
+    {
+        using var doc = JsonDocument.Parse(
+            await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json")));
+        return doc.RootElement.EnumerateArray()
+            .Single(e => e.GetProperty("Id").GetString() == sessionId)
+            .GetProperty("AutoAllowTools").EnumerateArray().Select(e => e.GetString()).ToList();
+    }
+
+    [Fact]
+    public async Task RespondPermission_AllowAlways_КладётИнструментНаСессиюИСохраняетСтор()
+    {
+        // До фикса список жил в ConcurrentDictionary адаптера и обнулялся рестартом сервера,
+        // ленивым восстановлением чата и сменой собеседника — человек жал «всегда» заново
+        var session = await MkBusySessionAsync("always-perm", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        var adapter = StubAdapter(entry);
+        SetProcess(entry, adapter.Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+
+        _sut.GetById(session.Id)!.AutoAllowTools.Should().BeEquivalentTo(["Bash"]);
+        (await StoredAutoAllowAsync(session.Id)).Should().BeEquivalentTo(["Bash"],
+            "решение обязано пережить рестарт сервера");
+        // Само решение уходит адаптеру как есть — «allow» из allow_always делает ClaudeSession
+        adapter.Verify(a => a.RespondPermission("req-1", "allow_always"), Times.Once());
+    }
+
+    [Fact]
+    public async Task RespondPermission_AllowAlwaysПовторно_НеДублируетИнструмент()
+    {
+        var session = await MkBusySessionAsync("always-dup", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-2", "bash", new { }));
+        _sut.RespondPermission(session.Id, "req-2", "allow_always");
+
+        _sut.GetById(session.Id)!.AutoAllowTools.Should().BeEquivalentTo(["Bash"],
+            "сравнение имён — OrdinalIgnoreCase");
+    }
+
+    [Fact]
+    public async Task RespondPermission_AllowAlwaysПоЧужойКарточке_НичегоНеЗапоминает()
+    {
+        // У одного хода карточек может быть несколько (параллельные tool_use). Запомнить
+        // «всегда» по чужой карточке значило бы выдать бессрочные права не тому инструменту
+        var session = await MkBusySessionAsync("always-mismatch", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-2", "Write", new { }));
+
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+
+        _sut.GetById(session.Id)!.AutoAllowTools.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task RemoveAutoAllowTool_УбираетИнструментИСохраняетСтор()
+    {
+        var session = await MkBusySessionAsync("always-remove", SessionStatus.Waiting);
+        var entry = GetEntry(session.Id);
+        SetProcess(entry, StubAdapter(entry).Object);
+        SetPendingInteraction(entry, new PermissionRequestMessage("req-1", "Bash", new { }));
+        _sut.RespondPermission(session.Id, "req-1", "allow_always");
+        var updatedBefore = _sut.GetById(session.Id)!.UpdatedAt;
+
+        // Регистр иной — снятие всё равно обязано сработать
+        var updated = _sut.RemoveAutoAllowTool(session.Id, "bash");
+
+        updated!.AutoAllowTools.Should().BeEmpty();
+        (await StoredAutoAllowAsync(session.Id)).Should().BeEmpty();
+        updated.UpdatedAt.Should().Be(updatedBefore, "смена настройки чата — не активность");
+        _sut.RemoveAutoAllowTool(session.Id, "bash").Should().NotBeNull("снятие идемпотентно");
+        _sut.RemoveAutoAllowTool("no-such-session", "Bash").Should().BeNull();
+    }
+
     [Fact]
     public async Task Interrupt_ЗанятыйЧатБезЖивогоПрогона_РеанимируетЧат()
     {

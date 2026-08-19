@@ -66,8 +66,8 @@ public class ClaudeSession : ILlmSessionAdapter
     // Словари ниже — Concurrent: их мутируют и памп stdout, и SignalR-вызовы
     // (RespondPermission/AnswerQuestion/RespondPlan/Interrupt) параллельно
     private readonly ConcurrentDictionary<string, TaskCompletionSource<string>> _permissionWaiters = new();
-    // Инструменты, для которых пользователь выбрал «всегда разрешать» в этой сессии (значение не используется)
-    private readonly ConcurrentDictionary<string, byte> _autoAllowTools = new();
+    // «Всегда разрешать» больше не живёт в адаптере: список инструментов хранится на сессии
+    // (Session.AutoAllowTools) и переживает пересоздание адаптера — см. DecidePermissionAsync.
     // tool_use_id → request_id вопросов AskUserQuestion (приходят как control_request can_use_tool, ждут control_response)
     private readonly ConcurrentDictionary<string, string> _pendingQuestions = new();
     // request_id → исходный input ожидающего согласования ExitPlanMode (режим «План»)
@@ -1528,7 +1528,12 @@ public class ClaudeSession : ILlmSessionAdapter
         // Свои MCP-серверы — без карточки, см. комментарий у BuiltInMcpServerPrefixes.
         if (ruleDecision == null && Array.Exists(BuiltInMcpServerPrefixes, p => toolName.StartsWith(p, StringComparison.Ordinal)))
             return "allow";
-        if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
+        // «Всегда разрешать» этого чата: читаем с ЖИВОЙ сессии (Info — тот же объект, что
+        // держит SessionManager), поэтому список свежий на каждый запрос и переживает
+        // рестарт сервера. Копию на старте адаптера делать нельзя: RespondPermission
+        // дописывает список по ходу разговора.
+        if (ruleDecision == "allow"
+            || Info.AutoAllowTools.Contains(toolName, StringComparer.OrdinalIgnoreCase)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();
         _permissionWaiters[requestId] = tcs;
@@ -1557,13 +1562,9 @@ public class ClaudeSession : ILlmSessionAdapter
         }
         _permissionWaiters.TryRemove(requestId, out _);
 
-        // «Всегда разрешать»: запоминаем инструмент и отвечаем обычным allow
-        if (behavior == "allow_always")
-        {
-            _autoAllowTools.TryAdd(toolName, 0);
-            behavior = "allow";
-        }
-        return behavior;
+        // «Всегда разрешать» для CLI — обычный allow; сам инструмент в Session.AutoAllowTools
+        // положил SessionManager.RespondPermission (он же сохранил стор).
+        return behavior == "allow_always" ? "allow" : behavior;
     }
 
     private void SendControlResponse(string requestId, object responsePayload, Process? target = null)

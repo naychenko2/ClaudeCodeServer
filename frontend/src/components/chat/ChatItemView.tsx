@@ -119,7 +119,9 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
   online: boolean;
   onAllow: (requestId: string) => void;
   onDeny: (requestId: string) => void;
-  onAllowAlways: (requestId: string) => void;
+  // Имя инструмента идёт вторым аргументом: скоуп разрешения — инструмент целиком,
+  // и владелец списка постоянных разрешений узнаёт его только отсюда
+  onAllowAlways: (requestId: string, toolName: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const project = useContext(ChatProjectContext);
@@ -154,7 +156,7 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
   if (item.resolved) {
     const denied = item.decision === 'denied';
     const verdict = item.decision === 'allowed' ? 'разрешено'
-      : item.decision === 'always' ? 'разрешено всегда'
+      : item.decision === 'always' ? 'разрешено всегда в этом чате'
       : denied ? 'отклонено' : 'решение принято';
     return (
       <div style={{ border: `1px solid ${C.borderLight}`, borderRadius: 12, background: C.bgWhite }}>
@@ -216,7 +218,10 @@ function PermissionRequestView({ item, online, onAllow, onDeny, onAllowAlways }:
             </button>
           </div>
           <button
-            onClick={() => onAllowAlways(item.requestId)}
+            onClick={() => onAllowAlways(item.requestId, item.toolName)}
+            // Разрешение постоянное (переживает перезапуск) — где его снять, говорим сразу,
+            // чтобы «навсегда» не оказалось дорогой в один конец
+            title={`«${item.toolName}» будет выполняться в этом чате без вопроса. Снять — в меню режима прав над полем ввода`}
             style={{
               marginTop: 8, width: '100%', background: 'none', border: 'none',
               cursor: 'pointer', fontSize: 12, color: C.accent, padding: '4px 0',
@@ -616,7 +621,7 @@ interface ItemProps {
   onToggleThinking: (i: number) => void;
   onAllowPermission: (id: string) => void;
   onDenyPermission: (id: string) => void;
-  onAllowAlways: (id: string) => void;
+  onAllowAlways: (id: string, toolName: string) => void;
   onAnswerQuestion: (toolUseId: string, answerText: string) => void;
   onRespondPlan: (requestId: string, approve: boolean, feedback?: string) => void;
   planVersion?: number;

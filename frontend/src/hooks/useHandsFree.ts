@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { speak, stopSpeaking, isSpeaking } from '../lib/tts';
 import { beep, primeBeep, closeBeep, startThinking, stopThinking, startListening, stopListening, NEED_ANSWER_DURATION_MS } from '../lib/beep';
-import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
+import { requestWakeLock, releaseWakeLock, setWakeLockExclusive } from '../lib/wakeLock';
 import { showToast } from '../lib/toast';
 import { talkDiag, talkMark } from '../lib/talkDiag';
 import { describeSpeechError } from '../lib/voiceInput';
@@ -361,11 +361,14 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     else if (phase === 'waiting') talkMark('turn-start');
   }, [phase, seq]);
 
-  // Экран не должен гаснуть, пока идёт разговор: вместе с ним встаёт распознавание
+  // Экран не должен гаснуть, пока идёт разговор: вместе с ним встаёт распознавание.
+  // Пока петля жива, экраном распоряжается ТОЛЬКО она (эксклюзив): иначе владелец «ход»
+  // из реестра сессий отменил бы отпускание экрана на затянувшемся ходе (ниже)
   useEffect(() => {
     if (!active) return;
-    requestWakeLock();
-    return () => releaseWakeLock();
+    setWakeLockExclusive('voice', true);
+    requestWakeLock('voice');
+    return () => { releaseWakeLock('voice'); setWakeLockExclusive('voice', false); };
   }, [active]);
 
   // Пока ход идёт, человек смотрит не на экран, а под ноги: тихая пульсация — его
@@ -383,8 +386,8 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
   // в любую другую фазу берёт её заново
   useEffect(() => {
     if (!active) return;
-    if (phase !== 'waiting') { requestWakeLock(); return; }
-    const id = setTimeout(() => releaseWakeLock(), WAITING_WAKE_MS);
+    if (phase !== 'waiting') { requestWakeLock('voice'); return; }
+    const id = setTimeout(() => releaseWakeLock('voice'), WAITING_WAKE_MS);
     return () => clearTimeout(id);
   }, [active, phase, seq]);
 
@@ -533,7 +536,8 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
       mountedRef.current = false;
       try { o.current.stopMic(false); } catch { /* noop */ }
       if (!ownsGlobalsRef.current) return;
-      releaseWakeLock();
+      releaseWakeLock('voice');
+      setWakeLockExclusive('voice', false);
       closeBeep();
     };
   }, []);

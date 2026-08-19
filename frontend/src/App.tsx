@@ -668,6 +668,61 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
+  // Синхронизация раздела с URL при внешней смене hash. Внутренняя навигация (navPush/
+  // navReplace) идёт через pushState/replaceState и сама НЕ диспатчит hashchange → рекурсии
+  // нет. Этот обработчик ловит остальные источники смены URL — ручную вставку hash в
+  // адресную строку, location.hash = '…' из консоли, клик по якорной ссылке (#/personas и
+  // т.п.). Без него hubTab остаётся прежним и React продолжает рендерить предыдущий раздел
+  // даже после смены URL (находка N2/F8 — на 390 помогал только клик через меню «Ещё»).
+  useEffect(() => {
+    const onHash = () => {
+      const target = parseHash()
+      if (!target) return
+      // Overlay'ы (#/history, #/intro) — собственная логика выше в onPop
+      if (target.history || target.intro) return
+      if (target.screen === 'project' && target.projectId) {
+        // Диплинк на проект из внешнего источника (вставка URL в адресную строку).
+        // Уже открытый этот же проект — выходим, чтобы не гонять api.projects.list.
+        if (project?.id !== target.projectId) {
+          api.projects.list()
+            .then(list => {
+              const p = list.find(x => x.id === target.projectId)
+              if (p) openProjectFromHome(p)
+            })
+            .catch(() => { /* офлайн/нет доступа — оставляем текущий экран */ })
+        }
+        return
+      }
+      if (target.screen === 'projects') {
+        // #/projects — закрыть открытый проект и уйти к списку (та же логика, что
+        // у switchHubTab('projects') при повторном клике по активной пилюле «Проекты»).
+        if (hubTab !== 'projects' || project) switchHubTab('projects')
+        return
+      }
+      // Маппинг экранов хаба → HubTabValue
+      let next: HubTabValue | null = null
+      switch (target.screen) {
+        case 'home': next = 'home'; break
+        case 'chats': next = 'chats'; break
+        case 'wall': next = 'wall'; break
+        case 'calendar': next = 'calendar'; break
+        case 'notes': next = 'notes'; break
+        case 'personas': next = 'personas'; break
+        case 'knowledge': next = 'knowledge'; break
+        case 'spend': next = 'spend'; break
+        case 'telemetry': next = 'telemetry'; break
+        case 'notifications': next = 'notifications'; break
+        case 'module':
+          if (target.moduleId) next = `module:${target.moduleId}` as HubTabValue
+          break
+      }
+      if (next && next !== hubTab) switchHubTab(next)
+    };
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- нужен свежий hubTab/project при срабатывании; switchHubTab/openProjectFromHome стабильны между рендерами
+  }, [hubTab, project]);
+
   const openProject = (p: Project) => {
     recordRecentProject(p.id)
     localStorage.setItem(OPEN_PROJECT_KEY, JSON.stringify(p))

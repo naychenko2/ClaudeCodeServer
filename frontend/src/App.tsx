@@ -1030,6 +1030,40 @@ export default function App() {
     // Не диплинк (абсолютный внешний URL) — полная загрузка, как раньше
     window.location.assign(url)
   }
+  // Переход из карточки инцидента в затронутый чат. Каналы разные, и подменять их
+  // нельзя: раздел «Чаты» показывает ТОЛЬКО внепроектные (ChatsController.GetAll →
+  // GetProjectlessChats), поэтому проектный чат, открытый через него, просто не нашёлся
+  // бы в списке и экран остался бы пустым. Проектный идём открывать штатным каналом
+  // диплинка #/project/{id}/chat/{chatId}.
+  const openChatFromIncident = (chatId: string, projectId?: string | null) => {
+    if (!projectId) {
+      localStorage.setItem('cc_open_chat', chatId)
+      if (effectiveHubTab === 'chats') {
+        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId } }))
+      } else {
+        switchHubTab('chats')
+      }
+      return
+    }
+    sessionStorage.setItem('cc_pending_project_chat', `${projectId}|${chatId}`)
+    if (effectiveHubTab === 'projects' && project?.id === projectId) {
+      window.dispatchEvent(new Event('cc-pending-project-chat'))
+    } else if (project?.id === projectId) {
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setHubTab('projects')
+    } else {
+      api.projects.list()
+        .then(list => {
+          const p = list.find(x => x.id === projectId)
+          if (p) {
+            localStorage.setItem(HUB_TAB_KEY, 'projects')
+            setHubTab('projects')
+            openProject(p)
+          }
+        })
+        .catch(() => {})
+    }
+  }
   // Открытие задачи по её hash-URL из любого раздела (вкладка «Задачи» персоны и т.п.) —
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).
   // Listener ставится один раз; свежее замыкание openNotificationUrl — через ref.
@@ -1124,7 +1158,7 @@ export default function App() {
             : effectiveHubTab === 'spend'
               ? <SpendPage auth={auth} onLogout={logout} onHubTab={switchHubTab} ctx={spendCtx ?? {}} onClose={() => switchHubTab('home')} />
             : effectiveHubTab === 'telemetry'
-              ? <TelemetryPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onClose={() => switchHubTab('home')} />
+              ? <TelemetryPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onClose={() => switchHubTab('home')} onOpenChat={openChatFromIncident} />
               : effectiveHubTab === 'notifications'
                 ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : moduleIdOf(effectiveHubTab)

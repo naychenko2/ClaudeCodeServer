@@ -1339,6 +1339,10 @@ export const api = {
     // Досье markdown'ом — описание задачи и черновик сообщения в чат
     incidentText: (fingerprint: string) =>
       request<{ text: string }>(`/telemetry/incidents/${encodeURIComponent(fingerprint)}/text`),
+    // Разбор моделью — единственное место фичи, где участвует LLM, и только по кнопке
+    incidentExplain: (fingerprint: string) =>
+      request<{ text: string }>(
+        `/telemetry/incidents/${encodeURIComponent(fingerprint)}/explain`, { method: 'POST' }),
   },
 
   files: {

@@ -32,6 +32,9 @@ interface Props {
   // Крестик/Esc — уйти с раздела (возврат на дашборд). Раздел заполняет экран, отдельного
   // крестика нет: выход через таб или логотип «Домой», как у «Аналитики токенов».
   onClose: () => void;
+  // Переход в затронутый чат из карточки инцидента (каналы проектного и внепроектного
+  // чата разные — решает App)
+  onOpenChat?: (chatId: string, projectId?: string | null) => void;
 }
 
 // Проброс /telemetry-proxy/* аутентифицируется по cookie cc_telemetry (iframe и его
@@ -57,7 +60,7 @@ function ensureSignozLightDefault() {
 type Status = { configured: boolean; reachable: boolean; proxyPath: string };
 type Tab = 'incidents' | 'signoz';
 
-export function TelemetryPage({ auth, onLogout, onHubTab }: Props) {
+export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
   const isMobile = useIsMobile();
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
@@ -192,6 +195,7 @@ export function TelemetryPage({ auth, onLogout, onHubTab }: Props) {
               status={status ? { configured: status.configured, reachable: status.reachable } : null}
               statusLoading={loading}
               initialFingerprint={pendingIncident}
+              onOpenChat={onOpenChat}
             />
           )
           : signoz}

@@ -7,10 +7,10 @@
 // приземляется в середину чужого досье.
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, Flame, Gauge, MessageSquare, RefreshCw, ScrollText, Unplug,
+  AlertTriangle, Flame, Gauge, ListPlus, MessageSquare, RefreshCw, ScrollText, Sparkles, Unplug,
 } from 'lucide-react';
 import type {
-  IncidentChat, IncidentDossier, IncidentStatus, IncidentSummary,
+  IncidentChat, IncidentDossier, IncidentStatus, IncidentSummary, Task,
 } from '../../types';
 import { api } from '../../lib/api';
 import { C, FONT, FS, R, SP } from '../../lib/design';
@@ -18,6 +18,10 @@ import { useIsMobile } from '../../lib/breakpoints';
 import { Badge, BackButton, Button, EmptyState, SidebarSection, WaitingIndicator } from '../../components/ui';
 import type { BadgeTone } from '../../components/ui/Badge';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
+import { NewTaskDialog } from '../tasks/NewTaskDialog';
+import { startChatFromPanel } from '../../lib/ai/startChat';
+import { updateTask } from '../../lib/tasks';
+import { showToast } from '../../lib/toast';
 
 // Ширина колонки списка на десктопе — как у соседних разделов с деревом слева
 const LIST_W = 320;
@@ -33,11 +37,14 @@ interface Props {
   statusLoading: boolean;
   // Отпечаток из диплинка уведомления — открыть сразу карточку
   initialFingerprint?: string | null;
+  // Переход в затронутый чат: проектный и внепроектный открываются разными каналами,
+  // поэтому решает App — панель отдаёт только пару id
+  onOpenChat?: (chatId: string, projectId?: string | null) => void;
 }
 
 type DossierError = { kind: 'notFound' | 'network' };
 
-export function IncidentsPanel({ status, statusLoading, initialFingerprint }: Props) {
+export function IncidentsPanel({ status, statusLoading, initialFingerprint, onOpenChat }: Props) {
   const isMobile = useIsMobile();
 
   const [items, setItems] = useState<IncidentSummary[]>([]);
@@ -184,7 +191,7 @@ export function IncidentsPanel({ status, statusLoading, initialFingerprint }: Pr
             onClick={() => setCardTick(t => t + 1)}>Повторить</Button>}
         />
       ) : dossier ? (
-        <DossierCard dossier={dossier} isMobile={isMobile} />
+        <DossierCard dossier={dossier} isMobile={isMobile} onOpenChat={onOpenChat} />
       ) : (
         <EmptyState
           compact
@@ -290,9 +297,53 @@ function IncidentRow({ incident, active, onClick }: {
   );
 }
 
-function DossierCard({ dossier, isMobile }: { dossier: IncidentDossier; isMobile: boolean }) {
+function DossierCard({ dossier, isMobile, onOpenChat }: {
+  dossier: IncidentDossier;
+  isMobile: boolean;
+  onOpenChat?: (chatId: string, projectId?: string | null) => void;
+}) {
   const { incident } = dossier;
   const chatsCount = dossier.chats.length;
+
+  const [explain, setExplain] = useState<string | null>(null);
+  const [explainLoading, setExplainLoading] = useState(false);
+  const [explainError, setExplainError] = useState(false);
+  const [taskDialog, setTaskDialog] = useState(false);
+
+  const runExplain = () => {
+    setExplainLoading(true);
+    setExplainError(false);
+    api.telemetry.incidentExplain(incident.fingerprint)
+      .then(r => setExplain(r.text))
+      .catch(() => setExplainError(true))
+      .finally(() => setExplainLoading(false));
+  };
+
+  // «Обсудить»: досье уходит ЧЕРНОВИКОМ в композер — отправку начинает человек.
+  // Ход по такому тексту стоит денег, и решать, нужен ли он, должен не интерфейс.
+  const discuss = async () => {
+    try {
+      const { text } = await api.telemetry.incidentText(incident.fingerprint);
+      await startChatFromPanel(`${text}\n\nЧто тут происходит и с чего начать разбор?`);
+    } catch {
+      showToast('Не удалось открыть чат', 'Досье не собралось', 'info');
+    }
+  };
+
+  // «Завести задачу»: диалог обычный (проект, срок, исполнителя выбирает человек),
+  // а досье дописывается в описание уже созданной задачи — своего поля описания у
+  // быстрого диалога нет, и заводить его ради одного места незачем
+  const attachDossier = async (task: Task) => {
+    try {
+      const { text } = await api.telemetry.incidentText(incident.fingerprint);
+      await updateTask(task.id, { description: text });
+      showToast('Задача заведена', 'Досье инцидента — в описании');
+    } catch {
+      showToast('Задача заведена', 'Досье приложить не удалось', 'info');
+    }
+  };
+
+  const actionSize = isMobile ? 'md' : 'sm';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: SP.lg, minWidth: 0 }}>
@@ -332,6 +383,50 @@ function DossierCard({ dossier, isMobile }: { dossier: IncidentDossier; isMobile
         </div>
       )}
 
+      {/* Три действия — все по кнопке: модель сама ничего не делает и никуда не пишет */}
+      <div style={{ display: 'flex', gap: SP.sm, flexWrap: 'wrap' }}>
+        <Button size={actionSize} variant="primary" loading={explainLoading}
+          leftIcon={<Sparkles size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          onClick={runExplain}>
+          Объяснить
+        </Button>
+        <Button size={actionSize} variant="ghost"
+          leftIcon={<ListPlus size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          onClick={() => setTaskDialog(true)}>
+          Завести задачу
+        </Button>
+        <Button size={actionSize} variant="ghost"
+          leftIcon={<MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          onClick={discuss}>
+          Обсудить
+        </Button>
+      </div>
+
+      {explainLoading && <WaitingIndicator hint="Модель разбирает досье" />}
+      {explainError && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: SP.sm, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: FS.sm, color: C.dangerText }}>Не удалось получить разбор.</span>
+          <Button size={actionSize} variant="ghost"
+            leftIcon={<RefreshCw size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+            onClick={runExplain}>Повторить</Button>
+        </div>
+      )}
+      {explain && (
+        <Section title="Разбор модели">
+          <div style={{ fontSize: FS.base, color: C.textPrimary, lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>
+            {explain}
+          </div>
+        </Section>
+      )}
+
+      {taskDialog && (
+        <NewTaskDialog
+          defaultTitle={`Инцидент: ${incident.title}`}
+          onCreated={task => { setTaskDialog(false); void attachDossier(task); }}
+          onClose={() => setTaskDialog(false)}
+        />
+      )}
+
       {dossier.status === 'notConfigured' && (
         <EmptyState compact icon={<Gauge size={ICON_SIZE.lg} strokeWidth={ICON_STROKE} />}
           title="Телеметрия не настроена" subtitle="Данных для разбора нет." />
@@ -359,7 +454,8 @@ function DossierCard({ dossier, isMobile }: { dossier: IncidentDossier; isMobile
       {dossier.chats.length > 0 && (
         <Section title="Затронутые чаты">
           {dossier.chats.map(chat => (
-            <ChatRow key={chat.chatId} chat={chat} isMobile={isMobile} />
+            <ChatRow key={chat.chatId} chat={chat} isMobile={isMobile}
+              onOpen={onOpenChat ? () => onOpenChat(chat.chatId, chat.projectId) : undefined} />
           ))}
         </Section>
       )}
@@ -416,7 +512,11 @@ function DossierCard({ dossier, isMobile }: { dossier: IncidentDossier; isMobile
 
 // Строка затронутого чата. Заголовку — flex: 1 + minWidth: 0, иначе на 320px первым
 // до нуля сжимается именно название, ради которого строку и открывают.
-function ChatRow({ chat, isMobile }: { chat: IncidentChat; isMobile: boolean }) {
+function ChatRow({ chat, isMobile, onOpen }: {
+  chat: IncidentChat;
+  isMobile: boolean;
+  onOpen?: () => void;
+}) {
   const meta = [
     `падений ${chat.failures}`,
     chat.totalTokens > 0 ? `${chat.totalTokens} токенов` : null,
@@ -429,11 +529,25 @@ function ChatRow({ chat, isMobile }: { chat: IncidentChat; isMobile: boolean }) 
       flexDirection: isMobile ? 'column' : 'row',
       alignItems: isMobile ? 'flex-start' : 'center',
       gap: isMobile ? SP.xxs : SP.sm,
+      // Тач-цель строки-ссылки: у пальца нет пиксельной точности
+      minHeight: isMobile && onOpen ? 40 : undefined,
     }}>
-      <span style={{
-        flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        display: 'flex', alignItems: 'center', gap: SP.xs, maxWidth: '100%',
-      }}>
+      <span
+        role={onOpen ? 'button' : undefined}
+        tabIndex={onOpen ? 0 : undefined}
+        onClick={onOpen}
+        onKeyDown={onOpen ? e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onOpen(); }
+        } : undefined}
+        title={chat.title ?? undefined}
+        style={{
+          flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          display: 'flex', alignItems: 'center', gap: SP.xs, maxWidth: '100%',
+          cursor: onOpen ? 'pointer' : 'default',
+          color: onOpen ? C.textHeading : undefined,
+          textDecoration: onOpen ? 'underline' : undefined,
+        }}
+      >
         <MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
           style={{ flexShrink: 0, color: C.textMuted }} />
         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>

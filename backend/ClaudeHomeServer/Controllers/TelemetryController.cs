@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Telemetry;
 using ClaudeHomeServer.Telemetry.Incidents;
 using Microsoft.AspNetCore.Authorization;
@@ -102,6 +104,44 @@ public class TelemetryController : ControllerBase
     {
         var dossier = await _incidents.BuildAsync(fingerprint, ct);
         return dossier is null ? NotFound() : Ok(new { text = IncidentDossierText.Render(dossier) });
+    }
+
+    /// <summary>
+    /// Разбор инцидента моделью — ЕДИНСТВЕННОЕ место фичи, где участвует LLM, и только по
+    /// явному нажатию человека. В промпт уходит ровно то досье, что видно в карточке
+    /// (состав зафиксирован таблицей приватности в docs/observability/incident-queries.md);
+    /// маршрут — место каталога <c>incident-explain</c>, то есть админ может увести его на
+    /// стороннего провайдера, и это надо понимать.
+    ///
+    /// 502 при отказе модели: раздел остаётся живым, карточка показывает ошибку с
+    /// «Повторить» — качество разбора не стоит того, чтобы ронять экран.
+    /// </summary>
+    [HttpPost("incidents/{fingerprint}/explain")]
+    public async Task<IActionResult> Explain(
+        string fingerprint,
+        [FromServices] Services.Llm.ICheapTextRunner cheap,
+        [FromServices] ILogger<TelemetryController> log,
+        CancellationToken ct)
+    {
+        var dossier = await _incidents.BuildAsync(fingerprint, ct);
+        if (dossier is null) return NotFound();
+
+        var ownerId = User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? "";
+        try
+        {
+            var text = await cheap.RunAsync(
+                Services.Llm.LocalActionCatalog.IncidentExplain,
+                IncidentDossierText.ExplainPrompt(dossier),
+                ownerId: ownerId, ct: ct);
+            if (string.IsNullOrWhiteSpace(text))
+                return StatusCode(502, new { error = "Модель не дала разбора" });
+            return Ok(new { text });
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Разбор инцидента {Fingerprint} не удался", fingerprint);
+            return StatusCode(502, new { error = "Не удалось получить разбор" });
+        }
     }
 
     private static string StatusName(IncidentStatus status) => status switch

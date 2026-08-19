@@ -103,6 +103,9 @@ public static class LocalActionCatalog
     public const string PersonaAiTeam = "persona-ai-team";
     public const string Changelog = "changelog";
     public const string PromptAudit = "prompt-audit";
+    // Разбор инцидента телеметрии по кнопке «Объяснить» — ЕДИНСТВЕННОЕ место, где в этой
+    // фиче участвует модель: само досье собирается детерминированным кодом
+    public const string IncidentExplain = "incident-explain";
     // Паспорта изменений (ADR-004, этап 1): выжимка «зачем/решения/отказы/грабли» на коммит
     public const string DossierSummary = "dossier-summary";
     // Фон проекта (ADR-008): JSON со списком фигур дудла и ключом цвета палитры
@@ -164,6 +167,12 @@ public static class LocalActionCatalog
         // рассуждения, слабая модель выдаёт общие слова вместо конкретных сокращений.
         new(PromptAudit, "Разбор промпта хода", "Чаты", CheapProfile.Large,
             DefaultLocal: false, Tier: ModelTier.Medium),
+        // Разбор инцидента: вызывается человеком по кнопке, не фоном. Large — в промпт
+        // уходит всё досье (разрез, ходы, чаты, логи), на Small/Text num_ctx обрежет хвост
+        // и модель досочинит причину. Локаль выключена по той же причине, что у разбора
+        // промпта: нужно рассуждение по данным, а не пересказ.
+        new(IncidentExplain, "Разбор инцидента", "Телеметрия", CheapProfile.Large,
+            DefaultLocal: false),
         // Планировщик режима «Командная реализация»: декомпозиция вводной и подбор
         // исполнителей по компетенциям. Локаль намеренно выключена — слабая модель
         // раздаёт работу случайно, а весь смысл места в осмысленном выборе персоны.

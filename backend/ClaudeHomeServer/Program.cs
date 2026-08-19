@@ -216,6 +216,8 @@ AddHostedFrom(sp => sp.GetRequiredService<TeamMemoryConsolidationService>());
 AddHosted<TeamMemoryAutolearnService>();
 // Разовый backfill дефолтных привязок существующим проектным персонам (файлы/заметки/знания)
 AddHosted<PersonaProjectBindingsMigration>();
+// Разовая переадресация закреплённых моделей GLM на действующий каталог (алиасы z.ai)
+AddHosted<ClaudeHomeServer.Services.Llm.GlmModelAliasMigration>();
 builder.Services.AddSingleton<TaskManager>();
 builder.Services.AddSingleton<TaskAiService>();
 builder.Services.AddSingleton<FileService>();

@@ -269,6 +269,59 @@ public sealed class SpecialtySettingsStore
 
     // --- Запись ---
 
+    // Разовая переадресация закреплённых моделей (миграция каталога провайдера): id из карты
+    // заменяется в шагах пресетов-цепочек и в ячейках матриц уровней — во ВСЕХ слоях
+    // (глобальный, пользовательские, личные), включая запись «любая специальность».
+    // Значения не-модели («preset:{id}», «tier:*», local/claude/default) и незнакомые id
+    // остаются как были: карта адресуется точным совпадением. Возвращает число изменённых
+    // записей (шаг цепочки и ячейка считаются по отдельности); 0 — файл не переписывается.
+    public int RemapModels(IReadOnlyDictionary<string, string> map)
+    {
+        lock (_writeLock)
+        {
+            // Мутируем клон, не Snapshot (он отдаёт живой объект читателям)
+            var next = Clone(_file);
+            var changed = 0;
+            foreach (var layer in Layers(next)) changed += RemapLayer(layer, map);
+            if (changed == 0) return 0;
+            next.Version = FormatVersion;
+            Persist(next);
+            return changed;
+        }
+    }
+
+    private static IEnumerable<SpecialtySettingsLayer> Layers(SpecialtySettingsFile file)
+    {
+        yield return file.Global;
+        foreach (var layer in file.Users.Values) yield return layer;
+        foreach (var layer in file.Owners.Values) yield return layer;
+    }
+
+    private static int RemapLayer(SpecialtySettingsLayer layer, IReadOnlyDictionary<string, string> map)
+    {
+        var changed = 0;
+        foreach (var preset in layer.Presets)
+            for (var i = 0; i < preset.Steps.Count; i++)
+                if (map.TryGetValue(preset.Steps[i].Trim(), out var step))
+                {
+                    preset.Steps[i] = step;
+                    changed++;
+                }
+
+        foreach (var record in layer.Specialties.Values.Append(layer.DefaultSpecialty))
+        {
+            if (record is null) continue;
+            if (Remapped(record.TierStrong, map) is { } strong) { record.TierStrong = strong; changed++; }
+            if (Remapped(record.TierMedium, map) is { } medium) { record.TierMedium = medium; changed++; }
+            if (Remapped(record.TierWeak, map) is { } weak) { record.TierWeak = weak; changed++; }
+        }
+        return changed;
+    }
+
+    // Новое значение ячейки либо null — менять нечего (пусто, не модель, не из карты)
+    private static string? Remapped(string? cell, IReadOnlyDictionary<string, string> map) =>
+        cell is not null && map.TryGetValue(cell.Trim(), out var next) ? next : null;
+
     // Заменить глобальный слой. null-ошибка = слой валиден.
     public string? SetGlobal(SpecialtySettingsLayer layer)
     {

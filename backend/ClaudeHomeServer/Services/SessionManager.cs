@@ -1167,6 +1167,23 @@ public class SessionManager : IDisposable
     public IReadOnlyCollection<Session> GetAll() =>
         _sessions.Values.Select(e => e.Info).ToList();
 
+    // Разовая переадресация закреплённых моделей (миграция каталога провайдера): id из карты
+    // заменяется, всё остальное — включая незнакомые модели и «preset:{id}» — остаётся как есть.
+    // Возвращает число изменённых чатов; 0 — стор на диск не переписывается.
+    // Идёт через живой реестр, а не файл: иначе первый же SaveSessions вернул бы старые id.
+    public int RemapModels(IReadOnlyDictionary<string, string> map)
+    {
+        var changed = 0;
+        foreach (var info in _sessions.Values.Select(e => e.Info))
+        {
+            if (info.Model is null || !map.TryGetValue(info.Model.Trim(), out var next)) continue;
+            info.Model = next;
+            changed++;
+        }
+        if (changed > 0) SaveSessions();
+        return changed;
+    }
+
     // Рабочая папка чата, принадлежащего пользователю (для загрузки вложений): у чата вне
     // проекта — {дом}/Chats, у проектного — рабочая папка сессии (worktree, иначе корень
     // проекта), чтобы Claude нашёл вложение по относительному пути из своего cwd.

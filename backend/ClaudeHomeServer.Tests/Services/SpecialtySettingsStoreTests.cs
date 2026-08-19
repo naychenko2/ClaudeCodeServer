@@ -503,4 +503,67 @@ public class SpecialtySettingsStoreTests : IDisposable
         ClaudeHomeServer.Services.Backup.BackupPaths.ShouldInclude("specialty-settings.json")
             .Should().BeTrue();
     }
+
+    // --- Переадресация закреплённых моделей (миграция каталога провайдера) ---
+
+    private static readonly Dictionary<string, string> GlmMap = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["glm-5.2[1m]"] = "glm-5.3[1m]",
+        ["glm-5.2"] = "glm-5.3",
+        ["glm-4.5-air"] = "glm-4.7",
+    };
+
+    [Fact]
+    public void RemapModels_ПерепиcываетШагиЦепочекИЯчейкиВоВсехСлоях()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(
+            specialties: new() { ["backendExecutor"] = Tmpl(strong: "glm-5.2[1m]", weak: "glm-4.5-air") },
+            presets: [Preset("Каскад", "glm-5.2[1m]", "tier:medium", "glm-4.5-air")],
+            defaultSpecialty: Tmpl(medium: "glm-5.2")));
+        store.SetOwner(Owner, Layer(specialties: new() { ["frontendExecutor"] = Tmpl(medium: "glm-5.2") }));
+        store.SetUser("user-1", Layer(presets: [Preset("Пользовательский", "glm-4.5-air")]));
+
+        // 4 ячейки (strong+weak+default medium+owner medium) + 3 шага цепочек
+        store.RemapModels(GlmMap).Should().Be(7);
+
+        var global = store.Snapshot.Global;
+        global.Specialties["backendExecutor"].TierStrong.Should().Be("glm-5.3[1m]");
+        global.Specialties["backendExecutor"].TierWeak.Should().Be("glm-4.7");
+        global.DefaultSpecialty!.TierMedium.Should().Be("glm-5.3");
+        global.Presets[0].Steps.Should().Equal("glm-5.3[1m]", "tier:medium", "glm-4.7");
+        store.Snapshot.Owners[Owner].Specialties["frontendExecutor"].TierMedium.Should().Be("glm-5.3");
+        store.Snapshot.Users["user-1"].Presets[0].Steps.Should().Equal("glm-4.7");
+
+        // Значение доехало до диска — иначе миграция не пережила бы рестарт
+        NewStore().Snapshot.Global.Presets[0].Steps.Should().Equal("glm-5.3[1m]", "tier:medium", "glm-4.7");
+    }
+
+    [Fact]
+    public void RemapModels_НеТрогаетСсылкиНаПресетыИНезнакомыеМодели()
+    {
+        var store = NewStore();
+        var presetRef = "preset:" + Guid.NewGuid();
+        store.SetGlobal(Layer(
+            specialties: new() { ["backendExecutor"] = Tmpl(strong: presetRef, medium: "glm-5-turbo") },
+            presets: [Preset("Каскад", "tier:strong", "local", "opus", "glm-4.6")]));
+
+        store.RemapModels(GlmMap).Should().Be(0, "адресуемся точным совпадением id");
+
+        var global = store.Snapshot.Global;
+        global.Specialties["backendExecutor"].TierStrong.Should().Be(presetRef);
+        global.Specialties["backendExecutor"].TierMedium.Should().Be("glm-5-turbo");
+        global.Presets[0].Steps.Should().Equal("tier:strong", "local", "opus", "glm-4.6");
+    }
+
+    [Fact]
+    public void RemapModels_ПовторныйПрогон_НичегоНеМеняет()
+    {
+        var store = NewStore();
+        store.SetGlobal(Layer(presets: [Preset("Каскад", "glm-5.2")]));
+
+        store.RemapModels(GlmMap).Should().Be(1);
+        store.RemapModels(GlmMap).Should().Be(0, "новых id в карте нет — переписывать нечего");
+        store.Snapshot.Global.Presets[0].Steps.Should().Equal("glm-5.3");
+    }
 }

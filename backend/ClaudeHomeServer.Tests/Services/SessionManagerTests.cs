@@ -1440,6 +1440,79 @@ public class SessionManagerTests : IDisposable
         _sut.RemoveAutoAllowTool("no-such-session", "Bash").Should().BeNull();
     }
 
+    // --- Разовая переадресация закреплённых моделей GLM (миграция каталога провайдера) ---
+
+    private IConfiguration GlmMigrationConfig() => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+        }).Build();
+
+    private GlmModelAliasMigration NewGlmMigration()
+    {
+        var config = GlmMigrationConfig();
+        return new GlmModelAliasMigration(_sut,
+            new SpecialtySettingsStore(config, NullLogger<SpecialtySettingsStore>.Instance),
+            config, NullLogger<GlmModelAliasMigration>.Instance);
+    }
+
+    private async Task<Session> MkSessionWithModelAsync(string suffix, string? model)
+    {
+        var dir = MkProjectDir("glm_" + suffix);
+        var project = _projectManager.Create("GLM-" + suffix, dir, TestUserId, TestUsername);
+        var session = await _sut.CreateAsync(project.Id, ClaudeMode.Auto);
+        session.Model = model;
+        return session;
+    }
+
+    [Fact]
+    public async Task RemapModels_ПерепиcываетТолькоМоделиИзКарты()
+    {
+        var stale = await MkSessionWithModelAsync("stale", "glm-5.2[1m]");
+        var air = await MkSessionWithModelAsync("air", "glm-4.5-air");
+        var preset = await MkSessionWithModelAsync("preset", "preset:" + Guid.NewGuid());
+        var unknown = await MkSessionWithModelAsync("unknown", "glm-5-turbo");
+        var empty = await MkSessionWithModelAsync("empty", null);
+        var presetBefore = preset.Model;
+
+        _sut.RemapModels(GlmModelAliasMigration.Map).Should().Be(2);
+
+        stale.Model.Should().Be("glm-5.3[1m]");
+        air.Model.Should().Be("glm-4.7");
+        preset.Model.Should().Be(presetBefore, "ссылка на пресет — не id модели");
+        unknown.Model.Should().Be("glm-5-turbo", "незнакомая модель остаётся как была");
+        empty.Model.Should().BeNull();
+        (await File.ReadAllTextAsync(Path.Combine(_tempDir, "sessions.json")))
+            .Should().Contain("glm-5.3[1m]").And.NotContain("glm-5.2[1m]");
+    }
+
+    [Fact]
+    public async Task МиграцияGlm_ПереписываетЧатыСнимаетКопиюИСтавитМаркер()
+    {
+        var session = await MkSessionWithModelAsync("hosted", "glm-5.2[1m]");
+        // Стор на диске должен существовать до миграции — иначе копию снимать не с чего
+        _sut.SetVoiceMode(session.Id, false);
+
+        await NewGlmMigration().StartAsync(CancellationToken.None);
+
+        session.Model.Should().Be("glm-5.3[1m]");
+        File.Exists(Path.Combine(_tempDir, ".glm-model-aliases-migrated")).Should().BeTrue();
+        Directory.GetFiles(_tempDir, "sessions.json.bak-*").Should().ContainSingle(
+            "боевой стор перезаписывается только после снимка");
+    }
+
+    [Fact]
+    public async Task МиграцияGlm_ПовторныйСтарт_НичегоНеТрогает()
+    {
+        await NewGlmMigration().StartAsync(CancellationToken.None);
+        var session = await MkSessionWithModelAsync("second-run", "glm-5.2[1m]");
+
+        await NewGlmMigration().StartAsync(CancellationToken.None);
+
+        session.Model.Should().Be("glm-5.2[1m]",
+            "маркер уже стоит — повторный проход не перебивает выбор пользователя");
+    }
+
     [Fact]
     public async Task Interrupt_ЗанятыйЧатБезЖивогоПрогона_РеанимируетЧат()
     {

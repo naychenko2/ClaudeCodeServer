@@ -3,7 +3,7 @@ import { Check, FileText, FolderPlus, MessageCircle, Timer, X } from 'lucide-rea
 import type { NoteSummary } from '../../types';
 import { api } from '../../lib/api';
 import { bumpNotes, useNoteFolders } from '../../lib/notes';
-import { C, FONT, R, SHADOW } from '../../lib/design';
+import { C, FONT, FS, R, SHADOW } from '../../lib/design';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { ConfirmDialog, IconButton } from '../../components/ui';
 import { CollapseGroup, SourceDot, IconFolder, IconFolderMove, IconPencil, IconPlus, IconTrash } from './shared';
@@ -23,6 +23,22 @@ const expiryTimeLeft = (expiresAt?: string): { label: string; urgent: boolean } 
 const IconFolderPlus = () => (
   <FolderPlus size={ICON_SIZE.sm} strokeWidth={2} style={{ flexShrink: 0 }} />
 );
+
+// Метка даты в шапке ctxMenu: «сегодня» (свежее суток), «12 авг» (в этом году),
+// иначе «12.08.2026». Время суток не показываем — пользователь смотрит на дату
+// последнего изменения, а не час.
+function formatCtxMenuDate(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  if (sameDay) return 'сегодня';
+  const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  const sameYear = d.getFullYear() === now.getFullYear();
+  const day = d.getDate();
+  const month = months[d.getMonth()];
+  return sameYear ? `${day} ${month}` : `${day}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}
 
 interface Group { source: string; label: string; root: FolderNode; docGroups: DocGroup[] }
 
@@ -613,13 +629,15 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
         </div>
       ))}
 
-      {/* Контекстное меню (right-click): заметка / папка; move — выбор целевой папки */}
+      {/* Контекстное меню (right-click): заметка / папка; move — выбор целевой папки.
+          Шапка вверху — полное название + мета (источник · дата), чтобы на таче было
+          видно, на что нажал; иначе длинный заголовок обрезался в строке и был недостижим. */}
       {ctxMenu && (
         <div
           onMouseDown={e => e.stopPropagation()}
           onContextMenu={e => e.preventDefault()}
           style={{
-            position: 'fixed', top: Math.min(ctxMenu.y, window.innerHeight - 240), left: Math.min(ctxMenu.x, window.innerWidth - 210),
+            position: 'fixed', top: Math.min(ctxMenu.y, window.innerHeight - 280), left: Math.min(ctxMenu.x, window.innerWidth - 210),
             zIndex: 1000, background: C.bgWhite, border: `1px solid ${C.border}`,
             borderRadius: R.lg, boxShadow: SHADOW.dropdown, padding: 4, minWidth: 190,
             maxHeight: 320, overflowY: 'auto',
@@ -637,34 +655,65 @@ export function NotesList({ notes: notesInput, selectedId, onSelect, onMoved, on
                   else if (ctxMenu.kind === 'folder') void moveFolderTo(ctxMenu.source, ctxMenu.node.path, d.path);
                 }))}
             </>
-          ) : ctxMenu.kind === 'source' ? (
-            <>
-              {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ''))}
-              {menuItem(<IconFolderPlus />, 'Новая папка', () => {
-                const k = `${ctxMenu.source}|`;
-                setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });
-                setCreatingFolder(k); setNewFolderValue('');
-              })}
-            </>
-          ) : ctxMenu.kind === 'note' ? (
-            <>
-              {menuItem(<IconPencil />, 'Открыть', () => onSelect(ctxMenu.note.id))}
-              {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
-              {menuDivider}
-              {menuItem(<IconTrash />, 'Удалить', () => deleteNote(ctxMenu.note), true)}
-            </>
           ) : (
             <>
-              {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ctxMenu.node.path))}
-              {menuItem(<IconFolderPlus />, 'Новая папка', () => {
-                const k = `${ctxMenu.source}|${ctxMenu.node.path}`;
-                setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });   // раскрыть, чтобы ввод был виден
-                setCreatingFolder(k); setNewFolderValue('');
-              })}
-              {menuItem(<IconPencil />, 'Переименовать', () => { setRenaming(`${ctxMenu.source}|${ctxMenu.node.path}`); setRenameValue(ctxMenu.node.path); })}
-              {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
-              {menuDivider}
-              {menuItem(<IconTrash />, 'Удалить папку', () => deleteFolder(ctxMenu.source, ctxMenu.node), true)}
+              {/* Шапка с полным названием и метой — pointerEvents:none, чтобы клик
+                  по тексту не закрывал меню. Для заметки: title + источник · updatedAt;
+                  для папки: имя + источник. На таче без шапки длинный заголовок
+                  оставался недостижим, а на десктопе tooltip `title=` хватает не всегда. */}
+              {ctxMenu.kind === 'note' && (
+                <div style={{ padding: '7px 10px 6px', pointerEvents: 'none' }}>
+                  <div style={{
+                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+                    whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.35,
+                  }}>{ctxMenu.note.title || 'Без названия'}</div>
+                  <div style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
+                    {ctxMenu.note.sourceLabel}{ctxMenu.note.updatedAt ? ` · ${formatCtxMenuDate(ctxMenu.note.updatedAt)}` : ''}
+                  </div>
+                </div>
+              )}
+              {ctxMenu.kind === 'folder' && (
+                <div style={{ padding: '7px 10px 6px', pointerEvents: 'none' }}>
+                  <div style={{
+                    fontFamily: FONT.sans, fontSize: FS.sm, fontWeight: 600, color: C.textHeading,
+                    whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: 1.35,
+                  }}>{ctxMenu.node.path || 'Корень'}</div>
+                  <div style={{ fontFamily: FONT.sans, fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
+                    {ctxMenu.source === 'personal' ? 'Личные' : (notes.find(n => n.source === ctxMenu.source)?.sourceLabel ?? ctxMenu.source)}
+                  </div>
+                </div>
+              )}
+              {(ctxMenu.kind === 'note' || ctxMenu.kind === 'folder') && menuDivider}
+              {ctxMenu.kind === 'source' ? (
+                <>
+                  {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ''))}
+                  {menuItem(<IconFolderPlus />, 'Новая папка', () => {
+                    const k = `${ctxMenu.source}|`;
+                    setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });
+                    setCreatingFolder(k); setNewFolderValue('');
+                  })}
+                </>
+              ) : ctxMenu.kind === 'note' ? (
+                <>
+                  {menuItem(<IconPencil />, 'Открыть', () => onSelect(ctxMenu.note.id))}
+                  {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
+                  {menuDivider}
+                  {menuItem(<IconTrash />, 'Удалить', () => deleteNote(ctxMenu.note), true)}
+                </>
+              ) : (
+                <>
+                  {onCreateInFolder && menuItem(<IconPlus />, 'Новая заметка', () => onCreateInFolder(ctxMenu.source, ctxMenu.node.path))}
+                  {menuItem(<IconFolderPlus />, 'Новая папка', () => {
+                    const k = `${ctxMenu.source}|${ctxMenu.node.path}`;
+                    setCollapsed(prev => { const n = new Set(prev); n.delete(k); return n; });   // раскрыть, чтобы ввод был виден
+                    setCreatingFolder(k); setNewFolderValue('');
+                  })}
+                  {menuItem(<IconPencil />, 'Переименовать', () => { setRenaming(`${ctxMenu.source}|${ctxMenu.node.path}`); setRenameValue(ctxMenu.node.path); })}
+                  {menuItem(<IconFolderMove />, 'Переместить в...', () => setCtxMenu({ ...ctxMenu, move: true }))}
+                  {menuDivider}
+                  {menuItem(<IconTrash />, 'Удалить папку', () => deleteFolder(ctxMenu.source, ctxMenu.node), true)}
+                </>
+              )}
             </>
           )}
         </div>

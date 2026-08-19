@@ -19,7 +19,7 @@ import { HubHeader } from '../../components/HubHeader';
 import { PageCanvas } from '../../components/ui/PageCanvas';
 import { EmptyState } from '../../components/ui/EmptyState';
 import { MiniSegment } from '../home/WidgetCard';
-import { C, CONTENT_MAX_W, FONT, FS, ISLAND, SHADOW, SP } from '../../lib/design';
+import { C, FONT, FS, ISLAND, SHADOW, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { api } from '../../lib/api';
 import { IncidentsPanel } from './IncidentsPanel';
@@ -183,8 +183,12 @@ export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
         // Остров — только вкладке «Инциденты»: iframe рисует свою страницу целиком,
         // скруглять и утапливать её незачем (как «Сервисы»)
         ...(isMobile ? {} : {
+          // Ширину НЕ режем сеткой CONTENT_MAX_W: раздел двухколоночный (список
+          // инцидентов + досье), и на широком экране 1180px оставляли карточку
+          // тесной при пустых полях по краям. Дашбордам лимит нужен, рабочему
+          // экрану — нет.
           margin: `0 ${ISLAND.pad}px ${ISLAND.pad}px`,
-          maxWidth: CONTENT_MAX_W, width: '100%', alignSelf: 'center',
+          width: 'auto',
         }),
         ...(isMobile || tab === 'signoz' ? {} : {
           background: C.bgPanel, border: `1px solid ${ISLAND.border}`,

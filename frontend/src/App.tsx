@@ -25,6 +25,7 @@ import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
 import { showToast } from './lib/toast'
+import { isDeployInProgress } from './lib/deployState'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged, onMessage } from './lib/signalr'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
@@ -399,12 +400,16 @@ export default function App() {
   // не озвучиваем — это фоновый разрыв сокета (планшет заморозил вкладку при
   // переключении приложений), пользователь его не видел, и тост на каждый возврат
   // в приложение был бы спамом.
+  // Выкатка — тоже «тихое окно», и по той же причине: обрыв там не аварийный, а
+  // запланированный, пользователь смотрит на заставку публикации. Тост «Связь восстановлена»
+  // посреди неё сообщал бы о беде, которой не было. Флаг снимается вместе с концом выкатки,
+  // так что настоящий разрыв после неё озвучится как обычно.
   const wasOfflineRef = useRef(false)
   useEffect(() => {
     if (!online) { wasOfflineRef.current = true; return }
     if (wasOfflineRef.current) {
       wasOfflineRef.current = false
-      if (!becameVisibleRecently()) showToast('Связь восстановлена', 'Обновляем…')
+      if (!becameVisibleRecently() && !isDeployInProgress()) showToast('Связь восстановлена', 'Обновляем…')
     }
   }, [online])
 

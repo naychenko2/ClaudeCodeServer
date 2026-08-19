@@ -132,17 +132,19 @@ if ($SkipBackup) {
     Write-Host '[0.5/9] Бэкап пропущен: первый деплой (сервер ещё не опубликован)' -ForegroundColor DarkGray
 }
 
-# --- 1. Остановка запущенных процессов (снять локи файлов ДО публикации) ---
-# Трей глушим ПЕРВЫМ, чтобы его супервизор не перезапустил сервер, пока мы его убиваем.
-Write-Host '[1/9] Остановка запущенных процессов...' -ForegroundColor Yellow
-Get-Process ClaudeHomeServer.Tray -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Milliseconds 400
-Get-Process ClaudeHomeServer -ErrorAction SilentlyContinue | Stop-Process -Force
-Start-Sleep -Milliseconds 700
-
-# --- 2. Сборка фронта ---
+# --- 1. Сборка (ДО остановки сервера) ---
+# Порядок здесь принципиален: собираем на живом сервере и гасим его, только когда собралось.
+# Раньше остановка шла первой, и продукт лежал всю сборку — почти две минуты вместо секунд
+# копирования. Хуже того, упавшая компиляция (незавершённая правка в рабочем дереве — обычное
+# дело при выкатке «как есть») роняла бой ни за что: он ждал сборку, которой не суждено
+# случиться, и поднимался обратно на прежней версии.
+#
+# Фронт сюда переносится без оговорок: npm пишет в frontend/dist, боевой папки не касается.
+# Бэк собираем ПРОБНЫМ `dotnet build` — publish писать в $PublishDir нельзя, там файлы держит
+# живой сервер. Зато build ловит ровно те же ошибки компиляции, а publish после него проходит
+# по прогретому obj/ за секунды.
 if (-not $SkipFrontend) {
-    Write-Host '[2/9] Сборка фронта (npm run build)...' -ForegroundColor Yellow
+    Write-Host '[1/9] Сборка фронта (npm run build)...' -ForegroundColor Yellow
     Push-Location $frontendDir
     if (-not (Test-Path 'node_modules')) { npm ci }
     # build:quiet = vite build --logLevel warn: без простыни ассетов в логах раннера,
@@ -151,10 +153,22 @@ if (-not $SkipFrontend) {
     npm run build:quiet
     $code = $LASTEXITCODE
     Pop-Location
-    if ($code -ne 0) { throw "Сборка фронта упала (exit $code)" }
+    if ($code -ne 0) { throw "Сборка фронта упала (exit $code) — сервер не тронут" }
 } else {
-    Write-Host '[2/9] Фронт пропущен (-SkipFrontend)' -ForegroundColor DarkGray
+    Write-Host '[1/9] Фронт пропущен (-SkipFrontend)' -ForegroundColor DarkGray
 }
+
+Write-Host '[1.5/9] Проверочная сборка бэка (dotnet build -c Release)...' -ForegroundColor Yellow
+dotnet build $csproj -c Release --nologo -v quiet
+if ($LASTEXITCODE -ne 0) { throw "Сборка бэка упала (exit $LASTEXITCODE) — сервер не тронут" }
+
+# --- 2. Остановка запущенных процессов (снять локи файлов ДО публикации) ---
+# Трей глушим ПЕРВЫМ, чтобы его супервизор не перезапустил сервер, пока мы его убиваем.
+Write-Host '[2/9] Остановка запущенных процессов...' -ForegroundColor Yellow
+Get-Process ClaudeHomeServer.Tray -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 400
+Get-Process ClaudeHomeServer -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Milliseconds 700
 
 # --- 3. Публикация бэка ---
 Write-Host '[3/9] Публикация бэка (dotnet publish -c Release)...' -ForegroundColor Yellow

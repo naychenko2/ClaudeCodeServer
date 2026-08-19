@@ -36,6 +36,7 @@ import { setAllFlags, getFlag, FLAGS } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
+import { useWallFocusProject } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -159,8 +160,18 @@ export default function App() {
   // проекта — фирменный цвет проекта, вне — акцент текущей темы. «Спящий»
   // проект (уход в «Чаты»/«Заметки» без выхода) НЕ красит: красим только когда
   // WorkspacePage реально на экране, т.е. вкладка хаба — 'projects'.
+  // На «Стене» шапка идёт за ФОКУСНОЙ колонкой (её проект); внепроектный чат в
+  // фокусе — акцент, как и везде вне проекта. Хук зовём отсюда, а не из WallPage:
+  // meta один на документ, второй useThemeColor за него дрался бы (эффекты детей
+  // отрабатывают раньше родителя, и App затирал бы цвет стены).
   const inProjectScreen = effectiveHubTab === 'projects' && !!project;
-  useThemeColor(inProjectScreen ? projectMainColor(project!) : C.accent);
+  const wallFocusProject = useWallFocusProject();
+  const wallProject = effectiveHubTab === 'wall' ? wallFocusProject : null;
+  useThemeColor(
+    inProjectScreen ? projectMainColor(project!)
+      : wallProject ? projectMainColor(wallProject)
+        : C.accent
+  );
 
   // Витрина дизайн-системы #/ui-kit — переключается по hash без перезагрузки,
   // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,

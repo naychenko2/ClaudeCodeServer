@@ -266,6 +266,25 @@ body {
 }
 .cc-hide-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
+/* Доска календаря (QA Fold 8): видна тонкая полоса 6px — на планшете/мобиле
+   колонки 240px × 3 влезают без скролла; при переполнении (4+ колонок, телефон)
+   полоса нужна как ориентир, а edge-fade со стрелкой подсказывает «можно скроллить».
+   Бегунок — C.divider, трек прозрачный, высота 6px под горизонтальный скролл. */
+.cc-board-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--c-divider) transparent;
+}
+.cc-board-scroll::-webkit-scrollbar {
+  height: 6px;
+}
+.cc-board-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.cc-board-scroll::-webkit-scrollbar-thumb {
+  background-color: var(--c-divider);
+  border-radius: 3px;
+}
+
 .tool-spinner {
   width: 18px;
   height: 18px;

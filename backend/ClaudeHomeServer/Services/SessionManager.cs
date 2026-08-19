@@ -3200,11 +3200,22 @@ public class SessionManager : IDisposable
         entry.LocalVoiceCts = cts;
         Llm.OllamaClient.ChatTurnResult? turn = null;
         var cancelled = false;
+        // Сколько текста уже ушло в ленту потоком: по нему решается, слать ли ответ
+        // целиком в конце (страховка на случай, если поток не дал ни куска)
+        var streamed = 0;
         try
         {
             turn = await _ollama!.ChatTurnAsync(messages, _router.LocalModel,
                 TimeSpan.FromMilliseconds(_router.TimeoutMsFor(Llm.LocalActionCatalog.ChatVoice)),
-                spec.NumPredict, spec.NumCtx, ResolveOwnerId(entry.Info), cts.Token);
+                spec.NumPredict, spec.NumCtx, ResolveOwnerId(entry.Info),
+                // Поток: куски ответа уходят в ленту (и в озвучку разговора) по мере
+                // генерации — иначе первый звук ждал бы конца всего ответа
+                onDelta: async chunk =>
+                {
+                    streamed += chunk.Length;
+                    await OnMessageAsync(sessionId, acc, new TextDeltaMessage(chunk), runId);
+                },
+                ct: cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -3223,7 +3234,10 @@ public class SessionManager : IDisposable
 
         if (turn?.Text is { Length: > 0 } answer)
         {
-            await OnMessageAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
+            // Обычный путь: текст уже ушёл кусками из onDelta. Целиком шлём только если
+            // поток не дал ничего (не-потоковый ответ, сбой до первого куска)
+            if (streamed == 0)
+                await OnMessageAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
             await OnMessageAsync(sessionId, acc, new ResultMessage(
                 Subtype: "success", DurationMs: sw.ElapsedMilliseconds, NumTurns: 1,
                 Usage: turn.Usage, TotalCostUsd: 0), runId);

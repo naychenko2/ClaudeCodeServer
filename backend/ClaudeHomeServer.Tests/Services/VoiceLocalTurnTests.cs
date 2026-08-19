@@ -176,9 +176,9 @@ public class VoiceLocalTurnTests : IDisposable
             .Should().ContainSingle("локальный ход стартует как обычный");
         (await WaitForAsync(() => Sent<ResultMessage>(), TimeSpan.FromSeconds(5)))
             .Should().ContainSingle().Which.Subtype.Should().Be("success");
-        // text_delta одним куском + exited закрывает ход
-        (await WaitForAsync(() => Sent<TextDeltaMessage>(), TimeSpan.FromSeconds(5)))
-            .Should().ContainSingle().Which.Text.Should().Be("Привет, я на связи.");
+        // text_delta потоком + exited закрывает ход: склейка кусков = ответ модели
+        var deltas = await WaitForAsync(() => Sent<TextDeltaMessage>(), TimeSpan.FromSeconds(5));
+        string.Concat(deltas.Select(d => d.Text)).Should().Be("Привет, я на связи.");
         (await WaitForAsync(() => Sent<ExitedMessage>(), TimeSpan.FromSeconds(5)))
             .Should().ContainSingle("exited закрывает ход и возвращает статус Active");
 
@@ -197,6 +197,47 @@ public class VoiceLocalTurnTests : IDisposable
         var history = await _historyService.LoadAsync(session.Id);
         history.OfType<StoredTextMessage>().Should().ContainSingle(t => t.Text == "Привет, я на связи.",
             "ответ разговора попадает в общую ленту");
+    }
+
+    [Fact]
+    public async Task ЛокальныйХод_ИдётПотокомИОтдаётКускиПоПредложениям()
+    {
+        // Ради озвучки: первый кусок ответа должен уходить в ленту ДО конца генерации,
+        // а границей куска служит предложение (фронт режет речь по ним же)
+        var session = await MakeVoiceChatAsync();
+        _ollamaHttp.NextResponse = """{"message":{"role":"assistant","content":"Первое. Второе."},"prompt_eval_count":9,"eval_count":4}""";
+        _ollamaHttp.NextChunks = ["Первое", ".", " Второе", "."];
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+        await WaitForAsync(() => Sent<ExitedMessage>(), TimeSpan.FromSeconds(5));
+
+        _ollamaHttp.LastBody.Should().Contain("\"stream\":true", "разговорный ход ходит потоком");
+        var deltas = Sent<TextDeltaMessage>();
+        deltas.Should().HaveCount(2, "куски копятся до конца предложения, а не шлются по токену");
+        deltas[0].Text.Should().Be("Первое.");
+        deltas[1].Text.Should().Be(" Второе.");
+        string.Concat(deltas.Select(d => d.Text)).Should().Be("Первое. Второе.");
+
+        // Токены из финального чанка done:true — учёт расхода не теряется на потоке
+        Sent<ResultMessage>().Should().ContainSingle()
+            .Which.Usage!.InputTokens.Should().Be(9);
+    }
+
+    [Fact]
+    public async Task ЛокальныйХод_ХвостБезТочки_ДоезжаетПоследнимКуском()
+    {
+        // Модель кончила ответ без терминальной пунктуации — накопленный хвост обязан
+        // уйти в ленту, иначе фраза потерялась бы вместе с озвучкой
+        var session = await MakeVoiceChatAsync();
+        _ollamaHttp.NextResponse = """{"message":{"role":"assistant","content":"ага"},"prompt_eval_count":3,"eval_count":1}""";
+        _ollamaHttp.NextChunks = ["а", "га"];
+
+        await _sut.SendMessageAsync(session.Id, "привет", []);
+        await WaitForAsync(() => Sent<ExitedMessage>(), TimeSpan.FromSeconds(5));
+
+        string.Concat(Sent<TextDeltaMessage>().Select(d => d.Text)).Should().Be("ага");
+        var history = await _historyService.LoadAsync(session.Id);
+        history.OfType<StoredTextMessage>().Should().ContainSingle(t => t.Text == "ага");
     }
 
     [Fact]
@@ -394,10 +435,17 @@ public class VoiceLocalTurnTests : IDisposable
     }
 
     // Перехватчик HTTP Ollama: отвечает заготовленным телом, запоминает тело запроса.
-    // Hold — держит ответ, пока тест не отпустит (проверка «Стоп» на висящем ходе)
+    // Hold — держит ответ, пока тест не отпустит (проверка «Стоп» на висящем ходе).
+    //
+    // Разговорный ход ходит потоком (stream:true) — тогда фейк отдаёт NDJSON: строка на
+    // кусок плюс финальная done:true со счётчиками токенов. Заготовка задаётся привычным
+    // цельным JSON (NextResponse), а разбивку на куски — NextChunks: так тесты, которым
+    // важен только результат, разбирать протокол не обязаны.
     private sealed class FakeOllamaHttp : IHttpClientFactory
     {
         public string? NextResponse { get; set; }
+        // Куски потока (текст). null — весь ответ придёт одной строкой NDJSON
+        public string[]? NextChunks { get; set; }
         public string? LastBody { get; private set; }
         public int RequestCount { get; private set; }
         public bool Hold { get; set; }
@@ -411,6 +459,25 @@ public class VoiceLocalTurnTests : IDisposable
 
         public void Release() => _holdGate.TrySetResult();
 
+        // Цельный ответ Ollama → NDJSON-поток
+        private static string ToNdjson(string whole, string[]? chunks)
+        {
+            using var doc = JsonDocument.Parse(whole);
+            var root = doc.RootElement;
+            var content = root.TryGetProperty("message", out var m) && m.TryGetProperty("content", out var c)
+                ? c.GetString() ?? "" : "";
+            var pieces = chunks ?? (content.Length > 0 ? [content] : System.Array.Empty<string>());
+
+            var lines = pieces
+                .Select(p => JsonSerializer.Serialize(new { message = new { role = "assistant", content = p }, done = false }))
+                .ToList();
+            var final = new Dictionary<string, object> { ["done"] = true };
+            if (root.TryGetProperty("prompt_eval_count", out var pe)) final["prompt_eval_count"] = pe.GetInt32();
+            if (root.TryGetProperty("eval_count", out var ec)) final["eval_count"] = ec.GetInt32();
+            lines.Add(JsonSerializer.Serialize(final));
+            return string.Join("\n", lines) + "\n";
+        }
+
         private sealed class StubHandler(FakeOllamaHttp owner) : HttpMessageHandler
         {
             protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
@@ -423,6 +490,8 @@ public class VoiceLocalTurnTests : IDisposable
                 if (owner.Hold)
                     await owner._holdGate.Task.WaitAsync(cancellationToken);
                 var body = owner.NextResponse ?? """{"message":{"role":"assistant","content":""}}""";
+                if (owner.LastBody?.Contains("\"stream\":true") == true)
+                    body = ToNdjson(body, owner.NextChunks);
                 return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
                 {
                     Content = new StringContent(body),

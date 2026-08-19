@@ -2794,6 +2794,8 @@ export interface IncidentSummary {
   startedAt?: string | null;
   resolvedAt?: string | null;
   isFiring: boolean;
+  // Заглушён человеком: виден в списке, но не идёт в счётчик и не будит push
+  isMuted?: boolean;
 }
 
 export interface IncidentBreakdownRow {

@@ -16,7 +16,10 @@ public sealed record AlertMemo(
     string? Severity = null,
     string? Environment = null,
     string? RuleId = null,
-    DateTimeOffset? ResolvedAt = null);
+    DateTimeOffset? ResolvedAt = null,
+    // Заглушён человеком: инцидент остаётся видимым в разделе, но не идёт в счётчик
+    // и не будит push. Поле необязательное — файлы прошлых версий читаются как есть.
+    DateTimeOffset? MutedAt = null);
 
 /// <summary>Запись истории: отпечаток и памятка по нему.</summary>
 public sealed record AlertHistoryEntry(string Fingerprint, AlertMemo Memo)
@@ -86,6 +89,10 @@ public sealed class AlertStateStore
     {
         lock (_lock)
         {
+            // Заглушку переносим на новую памятку: опрос зовёт Remember на каждом тике,
+            // и без этого «Заглушить» слетало бы через минуту после нажатия — молча.
+            if (_known.TryGetValue(fingerprint, out var prev) && prev.MutedAt is not null)
+                memo = memo with { MutedAt = prev.MutedAt };
             _known[fingerprint] = memo;
             Trim();
             Save();
@@ -112,6 +119,36 @@ public sealed class AlertStateStore
             Trim();
             Save();
         }
+    }
+
+    /// <summary>
+    /// Заглушить/вернуть звук по отпечатку. Заглушённый инцидент ОСТАЁТСЯ в списке и
+    /// открывается как обычно — глушится только шум: счётчик на кнопке и push.
+    ///
+    /// Памятка заводится при необходимости: заглушить можно и то, о чём мы ещё не
+    /// уведомляли (рассылка выключена на этом инстансе — <c>Telemetry:Alerts:Enabled</c>),
+    /// иначе кнопка «Заглушить» молча ничего не делала бы именно там, где шумит.
+    /// </summary>
+    public void SetMuted(string fingerprint, bool muted, AlertMemo? fallback = null)
+    {
+        lock (_lock)
+        {
+            if (!_known.TryGetValue(fingerprint, out var memo))
+            {
+                if (!muted) return;                    // нечего возвращать
+                memo = fallback ?? new AlertMemo("Инцидент", DateTimeOffset.UtcNow);
+            }
+            var next = memo with { MutedAt = muted ? DateTimeOffset.UtcNow : null };
+            if (next == memo) return;
+            _known[fingerprint] = next;
+            Trim();
+            Save();
+        }
+    }
+
+    public bool IsMuted(string fingerprint)
+    {
+        lock (_lock) return _known.GetValueOrDefault(fingerprint)?.MutedAt is not null;
     }
 
     /// <summary>

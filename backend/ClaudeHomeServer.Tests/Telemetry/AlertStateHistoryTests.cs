@@ -146,4 +146,40 @@ public class AlertStateHistoryTests : IDisposable
         memo.ResolvedAt.Should().BeNull("старая запись считается горящей, как и раньше");
         store.KnownFingerprints.Should().Contain("fp-legacy");
     }
+
+    [Fact]
+    public void Mute_SurvivesRepeatedRemember()
+    {
+        var store = NewStore();
+        store.Remember("fp-1", new AlertMemo("Всплеск ошибок LLM", DateTimeOffset.UtcNow));
+
+        store.SetMuted("fp-1", muted: true);
+        // Опрос зовёт Remember на КАЖДОМ тике — заглушка обязана пережить это,
+        // иначе кнопка «Заглушить» слетала бы через минуту после нажатия, молча
+        store.Remember("fp-1", new AlertMemo("Всплеск ошибок LLM", DateTimeOffset.UtcNow));
+
+        store.IsMuted("fp-1").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Mute_WorksWithoutEarlierMemo()
+    {
+        var store = NewStore();
+
+        // Глушить приходится как раз там, где рассылка выключена и памятки нет
+        store.SetMuted("fp-new", muted: true);
+
+        store.IsMuted("fp-new").Should().BeTrue();
+    }
+
+    [Fact]
+    public void Unmute_ReturnsSound()
+    {
+        var store = NewStore();
+        store.SetMuted("fp-1", muted: true);
+
+        store.SetMuted("fp-1", muted: false);
+
+        store.IsMuted("fp-1").Should().BeFalse();
+    }
 }

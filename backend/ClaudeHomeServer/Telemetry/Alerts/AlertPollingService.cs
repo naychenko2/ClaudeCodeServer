@@ -89,6 +89,13 @@ public sealed class AlertPollingService(
     {
         if (started.Count == 0) return;
 
+        // Заглушённые человеком не будят: их видно в разделе, но уведомления по ним
+        // выключены сознательно. Запомнить всё равно надо — памятку берёт карточка
+        // инцидента после того, как алерт погас.
+        RememberAll(started);
+        started = [.. started.Where(a => !state.IsMuted(a.Fingerprint))];
+        if (started.Count == 0) return;
+
         if (started.Count > BurstLimit)
         {
             var names = string.Join(", ", started.Take(BurstLimit).Select(a => AlertDigest.Describe(a).Title));
@@ -114,7 +121,11 @@ public sealed class AlertPollingService(
             }
         }
 
-        foreach (var alert in started)
+    }
+
+    private void RememberAll(IEnumerable<SignozAlert> alerts)
+    {
+        foreach (var alert in alerts)
         {
             // Памятка несёт всё, что нужно карточке инцидента после того, как алерт погас:
             // важность, контур и ruleId для ссылки в SigNoz (самого алерта тогда уже нет).

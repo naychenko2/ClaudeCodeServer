@@ -22,7 +22,9 @@ public sealed record IncidentSummary(
     string? Environment,
     DateTimeOffset? StartedAt,
     DateTimeOffset? ResolvedAt,
-    bool IsFiring);
+    bool IsFiring,
+    // Заглушён человеком: в списке остаётся, в счётчик и в push не идёт
+    bool IsMuted = false);
 
 /// <summary>Строка разреза: значение тега и число срабатываний за окно.</summary>
 public sealed record IncidentBreakdownRow(string Label, double Count);

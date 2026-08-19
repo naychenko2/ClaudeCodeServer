@@ -1369,7 +1369,7 @@ export const api = {
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку
   telemetry: {
     status: () =>
-      request<{ configured: boolean; reachable: boolean; proxyPath: string }>('/telemetry/status'),
+      request<{ configured: boolean; reachable: boolean; proxyPath: string; discussProjectId?: string | null }>('/telemetry/status'),
     // Вкладка «Инциденты»: список отдаёт статус телеметрии ОТДЕЛЬНО от элементов —
     // пустой список при выключенном SigNoz нельзя показывать как «всё тихо»
     incidents: () => request<IncidentListResponse>('/telemetry/incidents'),
@@ -1382,6 +1382,11 @@ export const api = {
     incidentExplain: (fingerprint: string) =>
       request<{ text: string }>(
         `/telemetry/incidents/${encodeURIComponent(fingerprint)}/explain`, { method: 'POST' }),
+    // Заглушить/вернуть звук: инцидент остаётся в списке, но уходит из счётчика и из push
+    muteIncident: (fingerprint: string, muted: boolean) =>
+      request<void>(
+        `/telemetry/incidents/${encodeURIComponent(fingerprint)}/mute?muted=${muted}`,
+        { method: 'POST' }),
   },
 
   files: {

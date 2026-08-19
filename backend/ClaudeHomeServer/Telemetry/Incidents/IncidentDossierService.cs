@@ -135,14 +135,39 @@ public sealed class IncidentDossierService(
             Chats = foreign ? [] : localContext.Describe(turns, from, to),
             RulePath = AlertDigest.RulePath(alert?.RuleId ?? state.Recall(fingerprint)?.RuleId),
         };
+
+        // Неудачную сборку не кэшируем: SigNoz мог просто моргнуть, и на следующем
+        // нажатии человек должен получить данные, а не минуту помнить пустоту.
+        if (status == IncidentStatus.Ok) _cache[fingerprint] = (DateTimeOffset.UtcNow, dossier);
+        return dossier;
     }
 
-    private static IncidentSummary Summarize(SignozAlert alert, bool isFiring)
+    private IncidentSummary Summarize(SignozAlert alert, bool isFiring)
     {
         var (title, body) = AlertDigest.Describe(alert);
         return new IncidentSummary(
             alert.Fingerprint, title, body, alert.Severity, alert.Environment,
-            alert.StartsAt, ResolvedAt: null, IsFiring: isFiring);
+            alert.StartsAt, ResolvedAt: null, IsFiring: isFiring,
+            IsMuted: state.IsMuted(alert.Fingerprint));
+    }
+
+    /// <summary>
+    /// Заглушить инцидент или вернуть ему звук. Памятка заводится из живого алерта, если
+    /// её ещё нет: глушить приходится как раз то, о чём уведомления не приходили.
+    /// </summary>
+    public async Task SetMutedAsync(string fingerprint, bool muted, CancellationToken ct)
+    {
+        AlertMemo? fallback = null;
+        if (muted && state.Recall(fingerprint) is null)
+        {
+            var alert = (await client.FetchAlertsAsync(ct))?
+                .FirstOrDefault(a => a.Fingerprint == fingerprint);
+            if (alert is not null)
+                fallback = new AlertMemo(AlertDigest.Describe(alert).Title,
+                    alert.StartsAt ?? DateTimeOffset.UtcNow,
+                    alert.Severity, alert.Environment, alert.RuleId);
+        }
+        state.SetMuted(fingerprint, muted, fallback);
     }
 
     /// <summary>Инцидент, которого уже нет в выдаче SigNoz, — из истории состояния алертов.</summary>
@@ -152,7 +177,8 @@ public sealed class IncidentDossierService(
         if (memo is null) return null;
         return new IncidentSummary(
             fingerprint, memo.Title, null, memo.Severity, memo.Environment,
-            memo.FiredAt, memo.ResolvedAt, IsFiring: memo.ResolvedAt is null);
+            memo.FiredAt, memo.ResolvedAt, IsFiring: memo.ResolvedAt is null,
+            IsMuted: memo.MutedAt is not null);
     }
 
     /// <summary>Имя правила: из меток алерта, иначе из заголовка памятки (там оно первым словом).</summary>

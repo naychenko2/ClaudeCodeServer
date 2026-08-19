@@ -107,6 +107,20 @@ public class TelemetryController : ControllerBase
     }
 
     /// <summary>
+    /// Заглушить инцидент или вернуть ему звук. Заглушённый ОСТАЁТСЯ в списке и
+    /// открывается как обычно: глушится шум, а не сам факт проблемы — счётчик на кнопке
+    /// и push. Заглушка живёт у нас, а не в SigNoz намеренно: silence там выключил бы
+    /// правило целиком (в том числе для другого инстанса), а тут решение персональное
+    /// и снимается одним кликом.
+    /// </summary>
+    [HttpPost("incidents/{fingerprint}/mute")]
+    public async Task<IActionResult> Mute(string fingerprint, [FromQuery] bool muted, CancellationToken ct)
+    {
+        await _incidents.SetMutedAsync(fingerprint, muted, ct);
+        return NoContent();
+    }
+
+    /// <summary>
     /// Разбор инцидента моделью — ЕДИНСТВЕННОЕ место фичи, где участвует LLM, и только по
     /// явному нажатию человека. В промпт уходит ровно то досье, что видно в карточке
     /// (состав зафиксирован таблицей приватности в docs/observability/incident-queries.md);

@@ -7,19 +7,23 @@
 // приземляется в середину чужого досье.
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertTriangle, Flame, Gauge, ListPlus, MessageSquare, RefreshCw, ScrollText, Sparkles, Unplug,
+  AlertTriangle, Bell, BellOff, Flame, Gauge, ListPlus, MessageSquare, RefreshCw, ScrollText, Sparkles, Unplug,
 } from 'lucide-react';
 import type {
-  IncidentChat, IncidentDossier, IncidentStatus, IncidentSummary, Task,
+  IncidentChat, IncidentDossier, IncidentStatus, IncidentSummary, Project, Task,
 } from '../../types';
 import { api } from '../../lib/api';
+import { invalidateIncidentBadge } from './incidentBadge';
 import { C, FONT, FS, R, SP } from '../../lib/design';
 import { useIsMobile } from '../../lib/breakpoints';
 import { Badge, BackButton, Button, EmptyState, SidebarSection, WaitingIndicator } from '../../components/ui';
 import type { BadgeTone } from '../../components/ui/Badge';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { NewTaskDialog } from '../tasks/NewTaskDialog';
-import { startChatFromPanel } from '../../lib/ai/startChat';
+import { startChatInProject, startChatWithPrompt } from '../../lib/ai/startChat';
+import { openProjectViaEvent } from '../projects/useAllProjects';
+import { getNav } from '../../lib/nav';
+import { getFlag } from '../../lib/featureFlags';
 import { updateTask } from '../../lib/tasks';
 import { showToast } from '../../lib/toast';
 
@@ -280,10 +284,13 @@ function IncidentRow({ incident, active, onClick }: {
         transition: 'background 0.15s',
       }}
     >
-      <Flame
-        size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
-        style={{ marginTop: 3, flexShrink: 0, color: incident.isFiring ? C.danger : C.textMuted }}
-      />
+      {/* Заглушённый горящий инцидент — перечёркнутый колокольчик вместо огонька:
+          он всё ещё горит, но по нашему решению молчит. Красный огонёк тут врал бы. */}
+      {incident.isMuted && incident.isFiring
+        ? <BellOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+            style={{ marginTop: 3, flexShrink: 0, color: C.textMuted }} />
+        : <Flame size={ICON_SIZE.xs} strokeWidth={ICON_STROKE}
+            style={{ marginTop: 3, flexShrink: 0, color: incident.isFiring ? C.danger : C.textMuted }} />}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{
           fontSize: FS.base, fontWeight: active ? 600 : 500, color: C.textHeading,
@@ -294,17 +301,20 @@ function IncidentRow({ incident, active, onClick }: {
         <div style={{ fontSize: FS.xs, color: C.textMuted, marginTop: 2 }}>
           {formatTime(incident.isFiring ? incident.startedAt : incident.resolvedAt)}
           {incident.environment ? ` · ${incident.environment}` : ''}
+          {incident.isMuted ? ' · заглушён' : ''}
         </div>
       </div>
     </div>
   );
 }
 
-function DossierCard({ dossier, isMobile, onOpenChat, onOpenInSignoz }: {
+function DossierCard({ dossier, isMobile, onOpenChat, onOpenInSignoz, discussProjectId, onMutedChange }: {
   dossier: IncidentDossier;
   isMobile: boolean;
   onOpenChat?: (chatId: string, projectId?: string | null) => void;
   onOpenInSignoz?: (path: string) => void;
+  discussProjectId?: string | null;
+  onMutedChange?: (fingerprint: string, muted: boolean) => void;
 }) {
   const { incident } = dossier;
   const chatsCount = dossier.chats.length;
@@ -323,14 +333,73 @@ function DossierCard({ dossier, isMobile, onOpenChat, onOpenInSignoz }: {
       .finally(() => setExplainLoading(false));
   };
 
+  // Заглушка: состояние местное, чтобы кнопка отвечала сразу, а не ждала следующего
+  // опроса. Счётчик в шапке живёт своим кэшем и подхватит перемену в течение минуты.
+  const [muted, setMuted] = useState(!!dossier.incident.isMuted);
+  const [muteLoading, setMuteLoading] = useState(false);
+  // Досье для действий собирается запросом — без индикатора кнопка выглядит зависшей
+  const [actionBusy, setActionBusy] = useState<'discuss' | 'task' | null>(null);
+  // Проект обсуждения резолвим заранее и ПОКАЗЫВАЕМ: иначе «куда уедет разбор»
+  // выясняется только нажатием, а при пустом ответе сервера человек молча попадает
+  // в чат вне проектов и считает это поломкой.
+  const [discussProject, setDiscussProject] = useState<Project | null>(null);
+  useEffect(() => {
+    if (!discussProjectId) { setDiscussProject(null); return; }
+    let alive = true;
+    api.projects.list()
+      .then(list => { if (alive) setDiscussProject(list.find(p => p.id === discussProjectId) ?? null); })
+      .catch(() => { if (alive) setDiscussProject(null); });
+    return () => { alive = false; };
+  }, [discussProjectId]);
+  useEffect(() => { setMuted(!!dossier.incident.isMuted); }, [dossier.incident.fingerprint, dossier.incident.isMuted]);
+
+  const toggleMute = async () => {
+    const next = !muted;
+    setMuteLoading(true);
+    try {
+      await api.telemetry.muteIncident(incident.fingerprint, next);
+      setMuted(next);
+      onMutedChange?.(incident.fingerprint, next);
+      invalidateIncidentBadge();
+      showToast(next ? 'Инцидент заглушён' : 'Звук возвращён',
+        next ? 'Не считается в счётчике и не будит push' : 'Снова считается и уведомляет');
+    } catch {
+      showToast('Не удалось изменить', 'Попробуй ещё раз', 'info');
+    } finally {
+      setMuteLoading(false);
+    }
+  };
+
   // «Обсудить»: досье уходит ЧЕРНОВИКОМ в композер — отправку начинает человек.
   // Ход по такому тексту стоит денег, и решать, нужен ли он, должен не интерфейс.
   const discuss = async () => {
+    setActionBusy('discuss');
     try {
       const { text } = await api.telemetry.incidentText(incident.fingerprint);
-      await startChatFromPanel(`${text}\n\nЧто тут происходит и с чего начать разбор?`);
+      const prompt = `${text}
+
+Что тут происходит и с чего начать разбор?`;
+      // Разбор инцидента кончается правкой кода, поэтому разговор идёт в проекте
+      // продукта — там, где этот код лежит. Проект задаётся настройкой инстанса
+      // (Telemetry:Incidents:DiscussProjectId); не задан или не нашёлся — обычный
+      // чат вне проектов, как у прочих глобальных действий.
+      const project = discussProject;
+      if (project) {
+        await startChatInProject(prompt, project, openProjectViaEvent);
+      } else {
+        // ВСЕГДА новый чат, а не startChatFromPanel: тот при смонтированном композере
+        // просто дописывает текст в ОТКРЫТЫЙ чат (ветка cc-compose-prefill). Для
+        // досье инцидента это неверно — оно уезжало в случайный чужой разговор,
+        // а человек видел, что «открылось не туда».
+        await startChatWithPrompt(prompt, {
+          nav: getNav(), online: true, flag: getFlag, caps: { semantic: false },
+          chat: { active: false, hasMessages: false },
+        });
+      }
     } catch {
       showToast('Не удалось открыть чат', 'Досье не собралось', 'info');
+    } finally {
+      setActionBusy(null);
     }
   };
 
@@ -399,11 +468,27 @@ function DossierCard({ dossier, isMobile, onOpenChat, onOpenInSignoz }: {
           onClick={() => setTaskDialog(true)}>
           Завести задачу
         </Button>
-        <Button size={actionSize} variant="ghost"
+        <Button size={actionSize} variant="ghost" loading={actionBusy === 'discuss'}
           leftIcon={<MessageSquare size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
           onClick={discuss}>
           Обсудить
         </Button>
+        {/* Заглушка — не разбор, а работа с шумом: инцидент остаётся видимым, но
+            перестаёт считаться в цифре на кнопке шапки и будить push. Снимается тем
+            же кликом, поэтому решение необратимым не выглядит. */}
+        <Button size={actionSize} variant="ghost" loading={muteLoading}
+          leftIcon={muted
+            ? <Bell size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+            : <BellOff size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />}
+          onClick={toggleMute}>
+          {muted ? 'Вернуть звук' : 'Заглушить'}
+        </Button>
+      </div>
+
+      <div style={{ fontSize: FS.xs, color: C.textMuted }}>
+        {discussProject
+          ? `«Обсудить» откроет чат в проекте «${discussProject.name}»`
+          : '«Обсудить» откроет чат вне проектов: проект с исходниками продукта не найден'}
       </div>
 
       {explainLoading && <WaitingIndicator hint="Модель разбирает досье" />}

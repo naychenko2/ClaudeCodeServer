@@ -3,7 +3,6 @@ using ClaudeHomeServer.Tests.Helpers;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
 using FluentAssertions;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Tests.Services;
 

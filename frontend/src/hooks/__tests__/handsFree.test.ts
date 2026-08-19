@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   handsFreeReducer, HANDS_FREE_INITIAL, BARREN_WARN, BARREN_OFF, isStopCommand,
+  pendingDelayFor, PENDING_FAST_MS, PENDING_MS, PENDING_SLOW_MS,
   type HandsFreeState, type HandsFreeEvent,
 } from '../useHandsFree';
 
@@ -254,5 +255,43 @@ describe('handsFreeReducer', () => {
     const s = handsFreeReducer(listening(), { type: 'idleTimeout' });
     expect(s.phase).toBe('off');
     expect(s.notice).toBe('idleOff');
+  });
+});
+
+describe('pendingDelayFor — адаптивное окно отправки', () => {
+  it.each([
+    ['ну вот смотри я тут подумал и'],
+    ['надо бы починить это потому'],
+    ['а'],
+    ['слушай э'],
+  ])('«%s» — мысль оборвана, ждём дольше', (text) => {
+    expect(pendingDelayFor(text)).toBe(PENDING_SLOW_MS);
+  });
+
+  it.each([
+    ['посмотри что там с тестами'],
+    ['почему сборка упала на линуксе'],
+    ['да'],
+    ['погнали'],
+    ['готово.'],
+  ])('«%s» — реплика дозрела, отправляем быстро', (text) => {
+    expect(pendingDelayFor(text)).toBe(PENDING_FAST_MS);
+  });
+
+  it.each([
+    ['открой файл настроек'],
+    [''],
+  ])('«%s» — непонятно, прежняя пауза', (text) => {
+    expect(pendingDelayFor(text)).toBe(PENDING_MS);
+  });
+
+  it('быстрый порог строго короче прежнего, медленный — длиннее', () => {
+    expect(PENDING_FAST_MS).toBeLessThan(PENDING_MS);
+    expect(PENDING_SLOW_MS).toBeGreaterThan(PENDING_MS);
+  });
+
+  it('регистр и пунктуация не мешают распознать хвост', () => {
+    expect(pendingDelayFor('Значит, надо сделать И')).toBe(PENDING_SLOW_MS);
+    expect(pendingDelayFor('Да!')).toBe(PENDING_FAST_MS);
   });
 });

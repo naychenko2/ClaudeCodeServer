@@ -252,7 +252,7 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
         onDelete={() => onDelete(selected)}
         onTalk={() => talk(selected)}
         onOpenSession={openSession}
-        onBack={isMobile ? clearSelection : undefined}
+        onBack={clearSelection}
         hero={!isMobile}
         isMobile={isMobile} />
     : <PersonasHub
@@ -474,7 +474,7 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
       </div>
     // Профиль — read-only визитка со сводкой и недавними разговорами
     : <div style={{ flex: 1, minHeight: 0 }}>
-        <PersonaPreview persona={persona} accent={accent} talking={talking}
+        <PersonaPreview persona={persona} accent={accent} talking={talking} zoneLabel={zoneLabel}
           onTalk={onTalk} onOpenSession={onOpenSession}
           onEditProfile={() => setEditing(true)}
           onOpenKnowledge={() => goView('knowledge')}

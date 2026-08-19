@@ -1,5 +1,5 @@
-import type { CSSProperties, ReactNode, MouseEvent } from 'react';
-import { C, TB } from '../lib/design';
+import type { CSSProperties, ReactNode, MouseEvent, RefCallback } from 'react';
+import { C, TB, SP } from '../lib/design';
 import { IconButton } from './ui/IconButton';
 
 // PillSwitch переехал в ui/PillSwitch.tsx (вошёл в design-kit для внешних модулей);
@@ -19,18 +19,27 @@ export const tbBtnGhost: CSSProperties = {
 };
 
 // === Контейнер тулбара: единая высота, фон, бордер ===
-export function Toolbar({ isMobile, noBorder, bg, children, style }: {
+// Содержимое ПЕРЕНОСИТСЯ (flexWrap): в зажатом панелями контейнере одна строка
+// выдавливает крайние элементы за правый край — вместо этого они уходят на вторую
+// строку. Отсюда же minHeight вместо фиксированной height и вертикальный padding:
+// в одну строку высота прежняя (32px контрол + 16 паддинга < TB.height), в две —
+// тулбар честно вырастает.
+export function Toolbar({ isMobile, noBorder, bg, children, style, rootRef }: {
   isMobile?: boolean;
   noBorder?: boolean;
   bg?: string;
   children: ReactNode;
   style?: CSSProperties;
+  // Ref на корень — для замера ширины КОНТЕЙНЕРА (useContainerWidth), когда
+  // раскладка тулбара зависит от места, а не от ширины окна
+  rootRef?: RefCallback<HTMLDivElement>;
 }) {
   return (
-    <div style={{
+    <div ref={rootRef} style={{
       display: 'flex', alignItems: 'center', gap: TB.gap,
-      height: isMobile ? TB.heightMobile : TB.heightDesktop,
-      padding: `0 ${isMobile ? TB.padXMobile : TB.padX}px`,
+      flexWrap: 'wrap', rowGap: SP.sm,
+      minHeight: isMobile ? TB.heightMobile : TB.heightDesktop,
+      padding: `${SP.sm}px ${isMobile ? TB.padXMobile : TB.padX}px`,
       background: bg ?? TB.bg,
       borderBottom: noBorder ? 'none' : TB.borderBottom,
       boxSizing: 'border-box', flexShrink: 0,

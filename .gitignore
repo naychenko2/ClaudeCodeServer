@@ -13,8 +13,10 @@ backend/publish_staging/
 certs/
 domain/
 
-# Собранный фронтенд внутри backend (копируется при публикации)
-backend/ClaudeHomeServer/wwwroot/assets/
+# Собранный фронтенд — артефакт сборки, в репо не живет: прод получает wwwroot из
+# frontend/dist агент выкатки (deploy-agent.ps1) или docker-образ; дев-стенд (dotnet run)
+# отдаёт frontend/dist напрямую. Слепок в репе однажды уже приняли за «фикс не выкатан».
+backend/ClaudeHomeServer/wwwroot/
 backend/wwwroot/
 
 # Node / Frontend

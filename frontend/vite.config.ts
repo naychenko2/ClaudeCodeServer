@@ -4,6 +4,17 @@ import babel from '@rolldown/plugin-babel';
 import { VitePWA } from 'vite-plugin-pwa';
 import { federation } from '@module-federation/vite';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
+
+// Метка сборки (lib/buildInfo.ts): sha вычисляем на машине сборки. В docker-контексте
+// .git недоступен (исключён в .dockerignore) — там остаётся только время сборки.
+function gitSha(): string {
+  try {
+    return execSync('git rev-parse --short HEAD').toString().trim();
+  } catch {
+    return '';
+  }
+}
 
 // Плагин UI-инспектора (data-cc-src на host-элементах JSX). plugin-react v6 babel не
 // запускает (JSX-трансформ делает oxc) — официальная связка из его README: отдельный
@@ -20,6 +31,12 @@ const backendPort = process.env.BACKEND_PORT || '5000';
 const backendUrl = `http://127.0.0.1:${backendPort}`;
 
 export default defineConfig({
+  // Подстановка метки сборки (читает src/lib/buildInfo.ts): время — момент запуска
+  // vite build/dev, sha — HEAD на машине сборки. QA сверяет с временем своих правок.
+  define: {
+    __BUILD_SHA__: JSON.stringify(gitSha()),
+    __BUILD_AT__: JSON.stringify(new Date().toISOString()),
+  },
   plugins: [
     react(),
     // Инъекция data-cc-src всегда (dev и prod) — решение по плану UI-инспектора.

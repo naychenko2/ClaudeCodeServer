@@ -33,7 +33,9 @@ cd backend; dotnet build
 cd backend; dotnet run --project ClaudeHomeServer   # порт 5000
 cd frontend; npm run dev       # порт 5173
 cd frontend; npm run build     # production-сборка (tsc -b + vite)
-# Vite проксирует /api и /hubs (WebSocket) на :5000
+# Vite (:5173) проксирует /api и /hubs (WebSocket) на :5000. Стенд :5000 раздаёт именно
+# frontend/dist ПОСЛЕДНЕЙ сборки: после правок .tsx нужен npm run build (или сиди на :5173);
+# wwwroot в репо не живёт — прод получает его из dist агентом выкатки. Детали: docs/operations/dev-stand-host.md
 ```
 
 Хостовый дев-стенд поднимаем **только через `dotnet run`** (или с явным

@@ -8,6 +8,7 @@ import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
 import { toggleUiInspector, useUiInspector } from '../../lib/uiInspector';
+import { buildStamp } from '../../lib/buildInfo';
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: 'Светлая' },
@@ -370,6 +371,17 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             <LogOut size={ICON_SIZE.xs} strokeWidth={2} />
             Выйти
           </button>
+          {/* Метка сборки: чтобы «старый бандл» не приняли за «фикс не сделан» —
+              сравнивается со временем правки исходников (lib/buildInfo.ts) */}
+          <div style={{
+            padding: '8px 14px 10px',
+            fontSize: 11,
+            color: C.textMuted,
+            textAlign: 'center',
+            userSelect: 'text',
+          }}>
+            {buildStamp()}
+          </div>
         </div>
       )}
     </div>

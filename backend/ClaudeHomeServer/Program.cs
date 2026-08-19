@@ -1123,6 +1123,9 @@ var devDistPath = Path.GetFullPath(Path.Combine(
 var distPath = Directory.Exists(wwwrootPath) ? wwwrootPath : devDistPath;
 if (Directory.Exists(distPath))
 {
+    // Откуда реально раздаётся фронт — главный вопрос при «на стенде старый дизайн»;
+    // wwwroot в репо не живет (артефакт сборки), деву нужен свежий frontend/dist
+    app.Logger.LogInformation("Фронтенд раздаётся из {Path}", distPath);
     var fp = new Microsoft.Extensions.FileProviders.PhysicalFileProvider(distPath);
 
     // index.html и SW-файлы — no-store: браузер всегда берёт свежую версию с сервера.
@@ -1151,6 +1154,13 @@ if (Directory.Exists(distPath))
     // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
     app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
+}
+else
+{
+    app.Logger.LogWarning(
+        "Фронтенд не найден: нет ни {Wwwroot} (рядом с exe), ни {Dist} (дев). " +
+        "Сервер поднимется без статики — собери фронт (cd frontend; npm run build) или выложи wwwroot",
+        wwwrootPath, devDistPath);
 }
 
 // JWKS модульных токенов (контракт §5.3) — публичный well-known, модули валидируют

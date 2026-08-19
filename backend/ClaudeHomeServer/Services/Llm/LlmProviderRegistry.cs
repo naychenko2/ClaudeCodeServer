@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ClaudeHomeServer.Models;
@@ -227,6 +228,7 @@ public class LlmProviderRegistry
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
         "CLAUDE_CODE_AUTO_COMPACT_WINDOW", // окно автокомпакта задают вместе с моделью 1M
+        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",  // окно контекста модели, ставим сами (см. BuildCliEnv)
     ];
 
     // Что реально вычищаем на запуске. Аварийный выключатель Claude:InheritSystemEnv=true
@@ -267,6 +269,20 @@ public class LlmProviderRegistry
             ["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small,
             ["CLAUDE_CODE_SUBAGENT_MODEL"] = small,
         };
+        // Реальное окно контекста модели. Id сторонних моделей CLI не знает и тогда считает
+        // окно равным 200k, запуская auto-compact на ~167k при реальном окне до 1M; сам он об
+        // этом и предупреждает: «"kimi-k3" is not a model this version of Claude Code
+        // recognizes, so auto-compact will keep this session within 200k tokens (the context
+        // window it assumes). If the model accepts more, append [1m] to the model name for 1M,
+        // or set CLAUDE_CODE_MAX_CONTEXT_TOKENS to its real window». Берём окно из каталога
+        // провайдера — системно, вместо суффикса [1m] у каждой модели. Модели в каталоге нет
+        // или окно не задано — ключ НЕ ставим (fail-open: пусть CLI решает сам, как раньше).
+        // Завышать значение нельзя: тогда CLI не сожмёт контекст вовремя и ход упадёт с
+        // ошибкой лимита вместо компакта — числа каталога проверяются живой пробой.
+        var contextWindow = p.FindModel(main)?.ContextWindow ?? 0;
+        if (contextWindow > 0)
+            env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = contextWindow.ToString(CultureInfo.InvariantCulture);
+
         foreach (var (k, v) in p.ExtraEnv)
             env[k] = v;
         return env;

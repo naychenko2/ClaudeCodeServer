@@ -206,6 +206,41 @@ public class LlmProviderRegistryTests
         env["CLAUDE_CODE_SUBAGENT_MODEL"].Should().Be("deepseek-v4-flash");
     }
 
+    // Окно контекста уходит в CLI явно: id сторонних моделей он не знает и без этого
+    // держит сессию в 200k (ранний auto-compact при реальном окне до 1M)
+    [Fact]
+    public void BuildCliEnv_МодельИзКаталога_СтавитОкноКонтекста()
+    {
+        var env = Create(new() { ["LlmProviders:deepseek:Models:0:ContextWindow"] = "1048576" })
+            .BuildCliEnv("deepseek-v4-pro")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
+    }
+
+    // Id с суффиксом окна (glm-5.2[1m], MiniMax-M3[1m]) — обычная запись каталога,
+    // матчится как есть
+    [Fact]
+    public void BuildCliEnv_МодельССуффиксомОкна_СтавитОкноКонтекста()
+    {
+        var env = Create(new()
+        {
+            ["LlmProviders:glm:ApiKey"] = "zai-key",
+            ["LlmProviders:glm:Models:0:ContextWindow"] = "200000",
+            ["LlmProviders:glm:Models:1:Id"] = "glm-5.2[1m]",
+            ["LlmProviders:glm:Models:1:ContextWindow"] = "1048576",
+        }).BuildCliEnv("glm-5.2[1m]")!;
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"].Should().Be("1048576");
+    }
+
+    // Модель не из каталога (резолв по префиксу, окно неизвестно) — fail-open,
+    // ключа нет и окно определяет сам CLI
+    [Fact]
+    public void BuildCliEnv_МодельНеИзКаталога_БезОкнаКонтекста()
+    {
+        var env = Create().BuildCliEnv("deepseek-reasoner-next")!;
+        env["ANTHROPIC_MODEL"].Should().Be("deepseek-reasoner-next");
+        env.Should().NotContainKey("CLAUDE_CODE_MAX_CONTEXT_TOKENS");
+    }
+
     [Fact]
     public void BuildCliEnv_ПровайдерБезКлюча_Исключение()
     {

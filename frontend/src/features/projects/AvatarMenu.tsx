@@ -3,7 +3,7 @@ import { C, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
-import { Bell, History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, Palette, Activity, Plug, SquareDashedMousePointer } from 'lucide-react';
+import { Bell, History, Book, Gauge, Users, Lock, FlaskConical, LogOut, Mic, Coins, Palette, Plug, Rocket, SquareDashedMousePointer } from 'lucide-react';
 import { ICON_SIZE } from '../../components/ui/icons';
 import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voiceInput';
 import { showToast } from '../../lib/toast';
@@ -64,11 +64,6 @@ interface Props {
   // «Аналитика токенов» (расход по ходам/моделям/проектам) — раздел-таб без вкладки,
   // вызов из меню аватара. undefined — пункт не показывать
   onOpenSpend?: () => void;
-  // «Телеметрия» (встроенный SigNoz UI) — раздел-таб без вкладки, только для админов.
-  // HubHeader передаёт колбэк лишь админу, поэтому здесь достаточно проверки на undefined.
-  onOpenTelemetry?: () => void;
-  // Сколько инцидентов телеметрии горит сейчас (0 — плашки нет)
-  incidentBadge?: number;
   // «MCP-серверы» (личный реестр внешних инструментов) — соседний пункт; за фич-флагом
   // mcp-registry, поэтому HubHeader передаёт колбэк только при включённом флаге
   onShowMcpServers?: () => void;
@@ -79,9 +74,12 @@ interface Props {
   onOpenNotifications?: () => void;
   notifBadge?: number;
   notifActive?: boolean;
+  // «Выкатить на бой» — публикация продукта трей-раннером. Пункт только для админов И только
+  // когда фича включена в конфиге сервера, поэтому HubHeader передаёт колбэк не всегда
+  onShowDeploy?: () => void;
 }
 
-export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowModelsSpend, onOpenSpend, onOpenTelemetry, incidentBadge = 0, onShowMcpServers, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
+export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout, onShowChangePassword, onShowFeatureFlags, onShowUserManagement, hideStatus, onShowHistory, historyBadge = 0, historyNeverSeen = false, historyActive = false, onOpenKnowledge, onShowModelsSpend, onOpenSpend, onShowMcpServers, onShowDeploy, onOpenNotifications, notifBadge = 0, notifActive = false }: Props) {
   // Как обращаемся к пользователю; логин остаётся видимым отдельной строкой,
   // чтобы было понятно, под каким аккаунтом сидишь
   const name = displayName?.trim() || username;
@@ -244,27 +242,6 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
               Аналитика токенов
             </button>
           )}
-          {onOpenTelemetry && (
-            <button
-              onClick={() => { setOpen(false); onOpenTelemetry(); }}
-              style={dropdownItem}
-            >
-              <Activity size={ICON_SIZE.xs} strokeWidth={2} />
-              Телеметрия
-              {/* Сколько инцидентов горит прямо сейчас: раздел лежит в меню, и без
-                  счётчика узнать о тревоге можно только зайдя туда. Плашка нарисована
-                  так же, как у «Что нового» ниже — примитив ради двух мест не заводим */}
-              {incidentBadge > 0 && (
-                <span style={{
-                  marginLeft: 'auto', minWidth: 18, height: 18, padding: '0 5px', borderRadius: 9,
-                  background: C.danger, color: C.onAccent, fontSize: 11, fontWeight: 700,
-                  lineHeight: '18px', textAlign: 'center', boxSizing: 'border-box',
-                }}>
-                  {incidentBadge > 99 ? '99+' : incidentBadge}
-                </span>
-              )}
-            </button>
-          )}
           <MenuDivider />
           {isAdmin && (
             <button
@@ -291,6 +268,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
             <Lock size={ICON_SIZE.xs} strokeWidth={2} />
             Сменить пароль
           </button>
+          {onShowDeploy && (
+            <button
+              onClick={() => { setOpen(false); onShowDeploy(); }}
+              style={dropdownItem}
+            >
+              <Rocket size={ICON_SIZE.xs} strokeWidth={2} />
+              Выкатить на бой
+            </button>
+          )}
           <MenuDivider />
           <button
             onClick={() => { setOpen(false); onShowFeatureFlags(); }}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Bell, ChevronRight, ExternalLink, House, Settings, Share2, Users } from 'lucide-react';
+import { Activity, Bell, ChevronRight, ExternalLink, House, Settings, Share2, Users } from 'lucide-react';
 import type { AuthState, Project } from '../types';
 import { C, FONT, R, TB, SHADOW } from '../lib/design';
 import { useIsMobile, useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
@@ -14,10 +14,11 @@ import { ChangePasswordDialog } from './ChangePasswordDialog';
 import { FeatureFlagsModal } from './FeatureFlagsModal';
 import { ModelsSpendModal } from '../features/modelsSpend/ModelsSpendModal';
 import { McpServersModal } from '../features/mcp/McpServersModal';
+import { DeployModal } from './DeployModal';
 import { api } from '../lib/api';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
-import { loadIncidentBadge } from '../features/telemetry/incidentBadge';
+import { BADGE_EVENT, loadIncidentBadge } from '../features/telemetry/incidentBadge';
 
 interface Props {
   value: HubTabValue;
@@ -61,6 +62,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   const [showFeatureFlags, setShowFeatureFlags] = useState(false);
   const [showModelsSpend, setShowModelsSpend] = useState(false);
   const [showMcpServers, setShowMcpServers] = useState(false);
+  const [showDeploy, setShowDeploy] = useState(false);
   // «Даже компактный ряд табов не влезает в центр таббара» — на планшете
   // переключаем набор с полного (5 разделов) на сокращённый (3 primary + «⋯ Разделы»).
   // Замер делаем сами, по ПОСТОЯННОМУ скрытому эталону полного набора 5 табов —
@@ -158,7 +160,24 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   useEffect(() => {
     if (!isAdmin) return;
     let alive = true;
-    void loadIncidentBadge().then(n => { if (alive) setIncidentBadge(n); });
+    const refresh = () => { void loadIncidentBadge().then(n => { if (alive) setIncidentBadge(n); }); };
+    refresh();
+    // Заглушение инцидента должно убирать цифру СРАЗУ: шапка смонтирована постоянно,
+    // и без этого события она показывала бы старое значение до конца кэша (минута)
+    window.addEventListener(BADGE_EVENT, refresh);
+    return () => { alive = false; window.removeEventListener(BADGE_EVENT, refresh); };
+  }, [isAdmin]);
+
+  // Доступна ли выкатка на бой. Спрашиваем только у админа: фича admin-only и вдобавок
+  // выключена в конфиге по умолчанию — на машинах, где раннера нет, пункта быть не должно.
+  // Эндпоинт отвечает 200 и при выключенной фиче, поэтому ошибок в консоли это не даёт.
+  const [deployEnabled, setDeployEnabled] = useState(false);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let alive = true;
+    api.deploy.status()
+      .then(s => { if (alive) setDeployEnabled(s.enabled); })
+      .catch(() => { /* нет ответа — считаем, что фичи нет */ });
     return () => { alive = false; };
   }, [isAdmin]);
 
@@ -375,6 +394,39 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           </button>
         )}
 
+        {/* «Телеметрия» — вход в раздел инцидентов, только админу. Раньше пункт жил
+            в меню аватара, но тревога, спрятанная за два клика, теряет смысл: счётчик
+            горящих должен быть виден с любого экрана, как непрочитанные у колокольчика.
+            Бейдж красный (C.danger), а не accent — он про состояние системы, а не про
+            «есть новое», и не должен спорить с акцентом главного действия. */}
+        {isAdmin && (
+          <button
+            onClick={() => onTab('telemetry')}
+            aria-label={incidentBadge > 0 ? `Телеметрия — горит инцидентов: ${incidentBadge}` : 'Телеметрия'}
+            title={incidentBadge > 0 ? `Горит инцидентов: ${incidentBadge}` : 'Телеметрия'}
+            style={{
+              position: 'relative', width: 32, height: 32, borderRadius: 8, border: 'none',
+              background: 'none', color: value === 'telemetry' ? C.accent : C.textSecondary,
+              cursor: 'pointer',
+              display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.background = C.bgSelected; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'none'; }}
+          >
+            <Activity size={17} strokeWidth={2} />
+            {incidentBadge > 0 && (
+              <span style={{
+                position: 'absolute', top: -3, right: -5, minWidth: 15, height: 15,
+                padding: '0 4px', borderRadius: 8, background: C.danger, color: C.onAccent,
+                fontSize: 9.5, fontWeight: 700, lineHeight: '15px', textAlign: 'center',
+                boxSizing: 'border-box', pointerEvents: 'none',
+              }}>
+                {incidentBadge > 99 ? '99+' : incidentBadge}
+              </span>
+            )}
+          </button>
+        )}
+
         {/* Колокольчик уведомлений — бейдж с числом непрочитанных.
             На планшете уходит: правая секция держит только аватар, а вход в
             уведомления — пунктом меню аватара; бейдж числом выносится на сам
@@ -439,8 +491,9 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onOpenKnowledge={() => onTab('knowledge')}
           onOpenSpend={() => onTab('spend')}
           // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
-          onOpenTelemetry={isAdmin ? () => onTab('telemetry') : undefined}
-          incidentBadge={incidentBadge}
+          // Выкатка на бой: админ И включённая в конфиге сервера фича. Одного isAdmin мало —
+          // на машине, где своего раннера нет, пункт был бы кнопкой в никуда
+          onShowDeploy={isAdmin && deployEnabled ? () => setShowDeploy(true) : undefined}
           onShowHistory={openHistory}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}
@@ -459,6 +512,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
       {showFeatureFlags && <FeatureFlagsModal onClose={() => setShowFeatureFlags(false)} />}
       {showModelsSpend && <ModelsSpendModal onClose={() => setShowModelsSpend(false)} />}
       {showMcpServers && <McpServersModal isAdmin={isAdmin} onClose={() => setShowMcpServers(false)} />}
+      {showDeploy && <DeployModal onClose={() => setShowDeploy(false)} />}
     </div>
   );
 }

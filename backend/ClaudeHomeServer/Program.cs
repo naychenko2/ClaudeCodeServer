@@ -6,6 +6,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
+using ClaudeHomeServer.Services.Deploy;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Images;
@@ -515,6 +516,10 @@ builder.Services.AddSingleton<Yarp.ReverseProxy.Configuration.IProxyConfigProvid
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.HostLlmConcurrencyLimiter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Modules.ModuleLlmUsageStore>();
 builder.Services.Configure<DifyOptions>(builder.Configuration.GetSection(DifyOptions.Section));
+// Выкатка на бой пунктом меню: сигнал трею-раннеру. По умолчанию выключена — см. TrayDeployOptions.
+builder.Services.Configure<TrayDeployOptions>(builder.Configuration.GetSection(TrayDeployOptions.Section));
+builder.Services.AddSingleton<ITrayGate, WindowsTrayGate>();
+builder.Services.AddSingleton<DeployLauncher>();
 builder.Services.AddSingleton<KnowledgeService>();
 // Синк «файл проекта ↔ документ БЗ»: singleton + hosted-мост событий хода Claude
 // (мост заодно гарантирует инстанцирование синка — подписку на FileService.OnMutated)

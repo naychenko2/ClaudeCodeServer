@@ -33,7 +33,8 @@ public sealed class IncidentDossierService(
             ["Отказы MCP-инструментов"] = ("ccs.mcp.errors", "tool_name"),
             ["Сбой синхронизации знаний"] = ("ccs.dify.sync.errors", "reason"),
             ["Ходы стали медленнее"] = ("ccs.llm.duration.count", "provider"),
-            ["Медиана ходов поползла"] = ("ccs.llm.duration.count", "provider"),
+            ["Ходы массово встали"] = ("ccs.llm.duration.count", "provider"),
+            ["Лимиты провайдера жмут"] = ("ccs.llm.rate_limit_hits", "provider"),
             ["Пульс телеметрии пропал"] = ("ccs.telemetry.heartbeat", "deployment.environment"),
         };
 

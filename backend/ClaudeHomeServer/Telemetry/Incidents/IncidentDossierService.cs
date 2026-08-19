@@ -133,9 +133,7 @@ public sealed class IncidentDossierService(
             // Чужой контур: локальных чатов по нему нет и быть не может — карточка скажет
             // это плашкой, а не покажет пустой список как факт «чаты не пострадали».
             Chats = foreign ? [] : localContext.Describe(turns, from, to),
-            RuleUrl = alert is not null
-                ? AlertDigest.RuleUrl(options.SignozUrl, alert)
-                : RuleUrlFromMemo(fingerprint),
+            RulePath = AlertDigest.RulePath(alert?.RuleId ?? state.Recall(fingerprint)?.RuleId),
         };
     }
 
@@ -156,11 +154,6 @@ public sealed class IncidentDossierService(
             fingerprint, memo.Title, null, memo.Severity, memo.Environment,
             memo.FiredAt, memo.ResolvedAt, IsFiring: memo.ResolvedAt is null);
     }
-
-    private string? RuleUrlFromMemo(string fingerprint)
-        => state.Recall(fingerprint)?.RuleId is { } ruleId
-            ? AlertDigest.RuleUrl(options.SignozUrl, ruleId)
-            : null;
 
     /// <summary>Имя правила: из меток алерта, иначе из заголовка памятки (там оно первым словом).</summary>
     private static string RuleNameOf(SignozAlert? alert, IncidentSummary summary)

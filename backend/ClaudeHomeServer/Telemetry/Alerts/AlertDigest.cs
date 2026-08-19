@@ -148,6 +148,16 @@ public static class AlertDigest
         return $"{publicBaseUrl.TrimEnd('/')}/alerts/overview?ruleId={Uri.EscapeDataString(ruleId)}";
     }
 
+    /// <summary>
+    /// Тот же адрес правила, но БЕЗ базы — для интерфейса, который открывает SigNoz
+    /// своим пробросом. Уведомлениям нужна абсолютная ссылка (их читают вне приложения),
+    /// карточке — относительная: базой у бэкенда служит localhost, недостижимый у клиента.
+    /// </summary>
+    public static string? RulePath(string? ruleId)
+        => string.IsNullOrWhiteSpace(ruleId)
+            ? null
+            : $"/alerts/overview?ruleId={Uri.EscapeDataString(ruleId)}";
+
     /// <summary>«production» в заголовке уведомления слишком длинно для телефона.</summary>
     private static string ShortEnv(string env)
         => env.Equals("production", StringComparison.OrdinalIgnoreCase) ? "прод" : env;

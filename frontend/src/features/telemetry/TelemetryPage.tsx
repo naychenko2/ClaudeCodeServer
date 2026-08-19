@@ -65,6 +65,9 @@ export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
   const [status, setStatus] = useState<Status | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>('incidents');
+  // Путь внутри SigNoz, на который открывают вкладку (например правило алерта).
+  // Живёт здесь, а не в панели: iframe принадлежит странице, а переход инициирует карточка.
+  const [signozPath, setSignozPath] = useState<string | null>(null);
   const [pendingIncident, setPendingIncident] = useState<string | null>(() => takePendingIncident());
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -131,7 +134,7 @@ export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
   ) : ready ? (
     <iframe
       ref={iframeRef}
-      src={proxyPath}
+      src={signozPath ? proxyPath.replace(/[/]$/, '') + signozPath : proxyPath}
       style={{
         flex: 1, border: 'none', width: '100%',
         // SigNoz UI рендерится как самостоятельная страница в iframe — нашей темой
@@ -196,6 +199,7 @@ export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
               statusLoading={loading}
               initialFingerprint={pendingIncident}
               onOpenChat={onOpenChat}
+              onOpenInSignoz={path => { setSignozPath(path); setTab('signoz'); }}
             />
           )
           : signoz}

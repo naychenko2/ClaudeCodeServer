@@ -89,6 +89,12 @@ public sealed record IncidentDossier
 
     public IReadOnlyList<IncidentChat> Chats { get; init; } = [];
 
-    /// <summary>Ссылка на правило в UI SigNoz — вторичный, а не основной путь разбора.</summary>
-    public string? RuleUrl { get; init; }
+    /// <summary>
+    /// Путь правила ВНУТРИ SigNoz, относительный: <c>/alerts/overview?ruleId=…</c>.
+    /// Абсолютной ссылки здесь нет намеренно — <c>SignozUrl</c> это адрес, по которому
+    /// в SigNoz ходит БЭКЕНД (обычно localhost), и в браузере пользователя он не
+    /// открывается: на боевом инстансе такая ссылка вела в никуда. Фронт клеит этот
+    /// путь со своим пробросом и открывает правило на соседней вкладке раздела.
+    /// </summary>
+    public string? RulePath { get; init; }
 }

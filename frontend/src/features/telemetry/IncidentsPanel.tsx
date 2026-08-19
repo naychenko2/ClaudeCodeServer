@@ -40,11 +40,14 @@ interface Props {
   // Переход в затронутый чат: проектный и внепроектный открываются разными каналами,
   // поэтому решает App — панель отдаёт только пару id
   onOpenChat?: (chatId: string, projectId?: string | null) => void;
+  // Открыть путь внутри встроенного SigNoz (соседняя вкладка раздела). Абсолютной
+  // ссылкой это сделать нельзя: адрес SigNoz у бэкенда — localhost.
+  onOpenInSignoz?: (path: string) => void;
 }
 
 type DossierError = { kind: 'notFound' | 'network' };
 
-export function IncidentsPanel({ status, statusLoading, initialFingerprint, onOpenChat }: Props) {
+export function IncidentsPanel({ status, statusLoading, initialFingerprint, onOpenChat, onOpenInSignoz }: Props) {
   const isMobile = useIsMobile();
 
   const [items, setItems] = useState<IncidentSummary[]>([]);
@@ -191,7 +194,7 @@ export function IncidentsPanel({ status, statusLoading, initialFingerprint, onOp
             onClick={() => setCardTick(t => t + 1)}>Повторить</Button>}
         />
       ) : dossier ? (
-        <DossierCard dossier={dossier} isMobile={isMobile} onOpenChat={onOpenChat} />
+        <DossierCard dossier={dossier} isMobile={isMobile} onOpenChat={onOpenChat} onOpenInSignoz={onOpenInSignoz} />
       ) : (
         <EmptyState
           compact
@@ -297,10 +300,11 @@ function IncidentRow({ incident, active, onClick }: {
   );
 }
 
-function DossierCard({ dossier, isMobile, onOpenChat }: {
+function DossierCard({ dossier, isMobile, onOpenChat, onOpenInSignoz }: {
   dossier: IncidentDossier;
   isMobile: boolean;
   onOpenChat?: (chatId: string, projectId?: string | null) => void;
+  onOpenInSignoz?: (path: string) => void;
 }) {
   const { incident } = dossier;
   const chatsCount = dossier.chats.length;

@@ -127,7 +127,7 @@ public class IncidentDossierServiceTests : IDisposable
         dossier.Turns.Should().HaveCount(2);
         dossier.Chats.Should().ContainSingle().Which.ChatId.Should().Be("chat-1");
         dossier.Logs.Should().ContainSingle();
-        dossier.RuleUrl.Should().Contain("ruleId=rule-7");
+        dossier.RulePath.Should().Be("/alerts/overview?ruleId=rule-7", "путь относительный: базу подставит фронт своим пробросом");
         local.Seen.Should().HaveCount(2, "локальный контекст получает те же ходы, что и карточка");
     }
 
@@ -200,7 +200,7 @@ public class IncidentDossierServiceTests : IDisposable
         dossier!.Incident.IsFiring.Should().BeFalse();
         dossier.Incident.ResolvedAt.Should().NotBeNull();
         dossier.BreakdownTag.Should().Be("tool_name", "разрез выбирается по имени правила");
-        dossier.RuleUrl.Should().Contain("ruleId=rule-4", "ссылка строится из памятки, алерта уже нет");
+        dossier.RulePath.Should().Contain("ruleId=rule-4", "путь строится из памятки, алерта уже нет");
     }
 
     [Fact]

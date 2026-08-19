@@ -194,6 +194,6 @@ public class TelemetryController : ControllerBase
             totalTokens = c.TotalTokens,
             mcpFailures = c.McpFailures,
         }),
-        ruleUrl = d.RuleUrl,
+        rulePath = d.RulePath,
     };
 }

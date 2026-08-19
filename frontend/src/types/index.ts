@@ -2840,7 +2840,9 @@ export interface IncidentDossier {
   logs: IncidentLogLine[];
   logsTotal: number;
   chats: IncidentChat[];
-  ruleUrl?: string | null;
+  // Путь правила ВНУТРИ SigNoz (/alerts/overview?ruleId=…). Относительный:
+  // базой служит проброс /telemetry-proxy, а не localhost бэкенда.
+  rulePath?: string | null;
 }
 
 export interface IncidentListResponse {

@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Персоны: блок «Активность» на планшете — макет (F2)</title>
+<style>
+  /* Токены — точная копия frontend/src/lib/theme.css (обе темы), макет самодостаточен */
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-bg-inset:    #E7E0D2;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-on-accent:      #FBF8F2;
+    --c-accent:       #D97757;
+    --c-accent-light: #F4ECE1;
+    --c-accent-muted: #EAD3C5;
+    --c-accent-soft:  #E8A990;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-divider:      #DDD4C4;
+    --c-dashed:       #D0C6B4;
+    --c-track:        #D8CFBE;
+    --c-success:      #5E8B4E;
+    --c-success-bg:   #E9F1E8;
+    --c-success-text: #3F7A4F;
+    --c-warning:      #C9923E;
+    --c-warning-bg:   #FBEFE0;
+    --c-warning-text: #8A6A28;
+    --c-danger:        #B4452F;
+    --c-danger-bg:     #FBF1EC;
+    --c-danger-text:   #B4452F;
+    --c-danger-border: #F5C6BF;
+    --c-info:          #3E7CA6;
+    --c-info-bg:       #E8F0F6;
+    --c-overlay: rgba(23, 19, 15, 0.42);
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-bg-inset:    #1B1815;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-on-accent:      #201C18;
+    --c-accent:       #E38A6A;
+    --c-accent-light: #3A2E27;
+    --c-accent-muted: #4A362C;
+    --c-accent-soft:  #9A5E48;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-divider:      #454037;
+    --c-dashed:       #4A443B;
+    --c-track:        #453F37;
+    --c-success:      #7CB86A;
+    --c-success-bg:   #232E20;
+    --c-success-text: #8FCB79;
+    --c-warning:      #E0AC5A;
+    --c-warning-bg:   #322717;
+    --c-warning-text: #E7B96E;
+    --c-danger:        #E8785E;
+    --c-danger-bg:     #331F1B;
+    --c-danger-text:   #EE8A72;
+    --c-danger-border: #5A302A;
+    --c-info:          #6FA3CC;
+    --c-info-bg:       #1F2830;
+    --c-overlay: rgba(0, 0, 0, 0.62);
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px 16px 64px;
+    background: var(--c-bg-main); color: var(--c-text-primary);
+    font-family: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .page { max-width: 1180px; margin: 0 auto; }
+  h1.doc { font-family: 'PT Serif', Georgia, serif; font-size: 28px; color: var(--c-text-heading); margin: 0 0 6px; }
+  p.lead { color: var(--c-text-secondary); margin: 0 0 20px; max-width: 860px; line-height: 1.6; }
+  h2.sec {
+    font-family: 'PT Serif', Georgia, serif; font-size: 22px; color: var(--c-text-heading);
+    margin: 44px 0 6px; padding-top: 20px; border-top: 1px solid var(--c-border);
+  }
+  p.note { color: var(--c-text-secondary); margin: 0 0 16px; max-width: 860px; line-height: 1.6; }
+  code.tok { font-family: 'JetBrains Mono', monospace; font-size: 12px; background: var(--c-bg-selected); padding: 1px 5px; border-radius: 6px; color: var(--c-text-heading); }
+  .bad  { color: var(--c-danger-text); font-weight: 600; }
+  .good { color: var(--c-success-text); font-weight: 600; }
+
+  .themebar { position: sticky; top: 0; z-index: 30; display: flex; gap: 8px; align-items: center;
+    background: var(--c-bg-main); padding: 8px 0 14px; margin-bottom: 6px; }
+  .tbtn {
+    font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+    padding: 6px 12px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-white); color: var(--c-text-secondary);
+  }
+  .tbtn.on { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); }
+
+  .device { border: 1px solid var(--c-divider); border-radius: 20px; overflow: hidden;
+    background: var(--c-bg-main); box-shadow: var(--shadow-island); margin: 0 auto; }
+  .device .devbar { height: 26px; display: flex; align-items: center; justify-content: center;
+    background: var(--c-bg-inset); color: var(--c-text-muted); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+  .screen { padding: 12px 16px 16px; display: flex; gap: 10px; }
+
+  /* Левая навигационная панель (drawer, открыта на таблете) */
+  .nav { flex: none; width: 148px; background: var(--c-bg-panel); border: 1px solid var(--c-border-light);
+    border-radius: 14px; padding: 8px; }
+  .nav .ni { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--c-text-secondary);
+    padding: 7px 8px; border-radius: 8px; }
+  .nav .ni.on { background: var(--c-bg-selected); color: var(--c-text-heading); font-weight: 600; }
+  .nav .ni .ic { width: 14px; height: 14px; border-radius: 4px; background: var(--c-divider); flex: none; }
+  .nav .ni.on .ic { background: var(--c-accent); }
+
+  .hub { flex: 1; min-width: 0; }
+  .hubhead { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+  .hubhead h3 { font-family: 'PT Serif', Georgia, serif; font-size: 19px; margin: 0; color: var(--c-text-heading); font-weight: 500; }
+  .hubhead .btn { margin-left: auto; font-size: 12px; font-weight: 600; color: var(--c-on-accent);
+    background: var(--c-accent); border: none; border-radius: 8px; padding: 7px 12px; font-family: inherit; }
+
+  /* Витрина персон */
+  .pgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
+  .pcard { background: var(--c-bg-card); border: 1px solid var(--c-border-light); border-radius: 14px;
+    padding: 12px; box-shadow: var(--shadow-card); }
+  .pcard .top { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
+  .ava { width: 36px; height: 36px; border-radius: 50%; flex: none; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 14px; }
+  .pcard .nm { font-size: 13px; font-weight: 600; color: var(--c-text-heading); }
+  .pcard .rl { font-size: 11px; color: var(--c-text-muted); }
+  .pcard .ds { font-size: 11.5px; color: var(--c-text-secondary); line-height: 1.4; display: -webkit-box;
+    -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* Блок «Активность» */
+  .activity { margin-top: 20px; background: var(--c-bg-card); border: 1px solid var(--c-border-light);
+    border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow-card); }
+  .activity h4 { font-family: 'PT Serif', Georgia, serif; font-size: 17px; margin: 0 0 10px; color: var(--c-text-heading); font-weight: 600; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+  .fchip { font-size: 11.5px; padding: 4px 11px; border-radius: 999px; border: 1px solid var(--c-border);
+    background: var(--c-bg-white); color: var(--c-text-secondary); font-weight: 500; }
+  .fchip.on { background: var(--c-accent); border-color: var(--c-accent); color: var(--c-on-accent); font-weight: 600; }
+
+  .feed { max-height: 300px; overflow-y: auto; padding-right: 4px; }
+  .ev { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--c-border-light); }
+  .ev:last-child { border-bottom: none; }
+  .ev .mk { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; }
+  .ev .tx { flex: 1; min-width: 0; font-size: 12.5px; color: var(--c-text-primary); line-height: 1.4; }
+  .ev .tx b { color: var(--c-text-heading); }
+  .ev .tm { flex: none; font-size: 10.5px; color: var(--c-text-muted); font-family: 'JetBrains Mono', monospace; margin-top: 2px; }
+  .expand { display: block; margin: 10px auto 0; font: inherit; font-size: 12px; font-weight: 600;
+    color: var(--c-accent); background: none; border: none; cursor: pointer; }
+
+  /* Сломанная раскладка «до»: две колонки в ~390px */
+  .broken { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 28px; }
+  .broken .bcol { min-width: 0; }
+  .broken .aside { background: var(--c-bg-card); border: 1px solid var(--c-danger-border);
+    border-radius: 14px; padding: 10px; position: relative; }
+  .squeezed { overflow: hidden; }
+  .squeezed .pcard { white-space: nowrap; }
+
+  .anno { display: flex; gap: 8px; align-items: flex-start; margin: 10px 2px 0; font-size: 12px; color: var(--c-text-secondary); line-height: 1.5; }
+  .anno .dot { flex: none; width: 18px; height: 18px; border-radius: 50%; background: var(--c-accent);
+    color: var(--c-on-accent); font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; margin-top: 1px; }
+  .anno.bad .dot { background: var(--c-danger); color: #fff; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="themebar">
+    <b style="font-size:12px; color:var(--c-text-muted)">Тема:</b>
+    <button class="tbtn on" data-t="">Светлая</button>
+    <button class="tbtn" data-t="dark">Тёмная</button>
+  </div>
+
+  <h1 class="doc">Персоны: «Активность» перестаёт драться с витриной</h1>
+  <p class="lead">Дефект <b>F2</b> QA-прогона Galaxy Fold 8 (832×2280, левая панель открыта): сетка <code class="tok">hubGrid = minmax(0,1fr) 300px</code> из <code class="tok">PersonasHub.tsx</code> не имеет брейкпоинта. На ~390px контента левая колонке достаётся ~62px: карточки персон переливаются поверх aside «Активность», чипы фильтров наложены на ленту, инвайт-карточка поверх всего. Скриншот <code class="tok">14-personas-list.png</code>.</p>
+
+  <!-- ================= ДО ================= -->
+  <h2 class="sec">До (прод, скриншот <code class="tok">14-personas-list.png</code>)</h2>
+  <p class="note">Две колонки силой удерживаются в 390px: левая сжата до 62px и переливается вправо, лента «Активности» накрыта чипами и персонами. Схематично, как на скриншоте:</p>
+
+  <div class="device" style="width: 480px;">
+    <div class="devbar">832 × 2280 · до · левая панель открыта</div>
+    <div class="screen">
+      <div class="nav">
+        <div class="ni"><span class="ic"></span>Чаты</div>
+        <div class="ni"><span class="ic"></span>Задачи</div>
+        <div class="ni on"><span class="ic"></span>Персоны</div>
+        <div class="ni"><span class="ic"></span>Заметки</div>
+      </div>
+      <div class="hub">
+        <div class="hubhead"><h3>Персоны</h3><button class="btn">+ Создать</button></div>
+        <div class="broken">
+          <div class="bcol squeezed">
+            <div class="pcard" style="width: 220px;">
+              <div class="top"><span class="ava" style="background:#B4452F">В</span>
+                <span><span class="nm">Вера</span><br/><span class="rl">QA-тестер</span></span></div>
+              <div class="ds">Ручная проверка фич через Playwright, регрессии…</div>
+            </div>
+            <div class="pcard" style="width: 220px; margin-top: 10px;">
+              <div class="top"><span class="ava" style="background:#3E7CA6">К</span>
+                <span><span class="nm">Кира</span><br/><span class="rl">Frontend</span></span></div>
+            </div>
+          </div>
+          <div class="aside">
+            <h4 style="font-family:'PT Serif',serif; margin: 0 0 6px; font-size: 15px; color: var(--c-text-heading);">Активность</h4>
+            <div class="chips" style="margin-bottom: 6px;">
+              <span class="fchip on">Все</span><span class="fchip">Задачи</span><span class="fchip">Чаты</span>
+            </div>
+            <div class="ev"><span class="mk" style="background:var(--c-success)"></span>
+              <span class="tx"><b>Вера</b> завершила прогон Fold 8</span><span class="tm">12:41</span></div>
+            <div class="ev"><span class="mk" style="background:var(--c-accent)"></span>
+              <span class="tx"><b>Кира</b> взяла задачу «Пилюли v4»</span><span class="tm">11:07</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="anno bad"><span class="dot">✕</span><span>Карточки персон шире своей колонки (220px при колонке ~62px) и рисуются поверх «Активности»; справа всё срезано краем экрана. Пользователь не может ни прочитать ленту, ни открыть персону уверенно.</span></div>
+
+  <!-- ================= ПОСЛЕ ================= -->
+  <h2 class="sec">После — одна колонка на планшете <span class="good">(рекомендую)</span></h2>
+  <p class="note">На <code class="tok">isTablet || isMobile</code> сетка становится <code class="tok">1fr</code>: сначала витрина персон во всю ширину (3 карточки в ряд по <code class="tok">minmax(200px, 1fr)</code>), ниже — «Активность» как полноценный блок во всю ширину. Это тот же паттерн, что у существующего режима <code class="tok">activityExpanded</code> — пользователь уже видел ленту широкой, новых метафор не вводим. Лента получает собственный скролл (max-height ~300px), чтобы не растягивать страницу бесконечно.</p>
+
+  <div class="device" style="width: 480px;">
+    <div class="devbar">832 × 2280 · после · левая панель открыта</div>
+    <div class="screen">
+      <div class="nav">
+        <div class="ni"><span class="ic"></span>Чаты</div>
+        <div class="ni"><span class="ic"></span>Задачи</div>
+        <div class="ni on"><span class="ic"></span>Персоны</div>
+        <div class="ni"><span class="ic"></span>Заметки</div>
+      </div>
+      <div class="hub">
+        <div class="hubhead"><h3>Персоны</h3><button class="btn">+ Создать</button></div>
+        <div class="pgrid">
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#B4452F">В</span>
+              <span><span class="nm">Вера</span><br/><span class="rl">QA-тестер</span></span></div>
+            <div class="ds">Ручная проверка фич через Playwright, регрессии, краевые случаи UI</div>
+          </div>
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#3E7CA6">К</span>
+              <span><span class="nm">Кира</span><br/><span class="rl">Frontend</span></span></div>
+            <div class="ds">React 18 + TypeScript, дизайн-система проекта</div>
+          </div>
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#5E8B4E">Д</span>
+              <span><span class="nm">Денис</span><br/><span class="rl">Backend .NET</span></span></div>
+            <div class="ds">C#/ASP.NET Core, Services/Llm, MCP-серверы</div>
+          </div>
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#C9923E">М</span>
+              <span><span class="nm">Марк</span><br/><span class="rl">DevOps</span></span></div>
+            <div class="ds">Сборки и релизы на проде и деве</div>
+          </div>
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#8A6A28">С</span>
+              <span><span class="nm">Софья</span><br/><span class="rl">Продакт</span></span></div>
+            <div class="ds">Польза фич, UX-формулировки, «Что нового»</div>
+          </div>
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#D97757">А</span>
+              <span><span class="nm">Александр</span><br/><span class="rl">Тимлид</span></span></div>
+            <div class="ds">Кросс-слойный дизайн, ADR, инварианты</div>
+          </div>
+        </div>
+
+        <div class="activity">
+          <h4>Активность</h4>
+          <div class="chips">
+            <span class="fchip on">Все</span><span class="fchip">Задачи</span><span class="fchip">Чаты</span><span class="fchip">Память</span>
+          </div>
+          <div class="feed">
+            <div class="ev"><span class="mk" style="background:var(--c-success)"></span>
+              <span class="tx"><b>Вера</b> завершила прогон Fold 8 — отчёт передан на сверку</span><span class="tm">12:41</span></div>
+            <div class="ev"><span class="mk" style="background:var(--c-accent)"></span>
+              <span class="tx"><b>Кира</b> взяла в работу «Пилюли v4 — ранний compact»</span><span class="tm">11:07</span></div>
+            <div class="ev"><span class="mk" style="background:var(--c-info)"></span>
+              <span class="tx"><b>Денис</b> прокомментировал ADR-009 по глифам значков</span><span class="tm">10:52</span></div>
+            <div class="ev"><span class="mk" style="background:var(--c-warning)"></span>
+              <span class="tx"><b>Марк</b> выкатил дев-стенд, сборка 4.2.117</span><span class="tm">09:30</span></div>
+            <div class="ev"><span class="mk" style="background:var(--c-success)"></span>
+              <span class="tx"><b>Софья</b> обновила черновик «Что нового» за неделю</span><span class="tm">09:12</span></div>
+          </div>
+          <button class="expand">Показать всё</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="anno"><span class="dot">✓</span><span>Каждый блок получил свою ширину: персоны читаются карточками 200px+, «Активность» — полноценная секция с чипами в один ряд и лентой без наложений. Ничего не перекрыто, инвайт-карточке места достаётся в потоке.</span></div>
+
+  <h2 class="sec">Закрытая левая панель и телефон</h2>
+  <p class="note">С закрытой панелью на 832 контент ~768px — но и там двухколоночная схема даёт витрине ~440px на фоне aside 300px: две карточки в ряд с натягом. Одноколоночная раскладка выигрывает и тут, поэтому брейкпоинт один: <code class="tok">isTablet || isMobile</code>, без исключений по состоянию панели. На телефоне (≤600px) — та же одна колонка, витрина в одну карточку в ряд, «Активность» под ней.</p>
+
+  <div class="device" style="width: 320px;">
+    <div class="devbar">390 · телефон</div>
+    <div class="screen" style="padding: 10px 12px 14px; display: block;">
+      <div class="hub">
+        <div class="hubhead"><h3 style="font-size:17px">Персоны</h3><button class="btn">+ Создать</button></div>
+        <div class="pgrid" style="grid-template-columns: 1fr;">
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#B4452F">В</span>
+              <span><span class="nm">Вера</span><br/><span class="rl">QA-тестер</span></span></div>
+            <div class="ds">Ручная проверка фич через Playwright, регрессии</div>
+          </div>
+          <div class="pcard">
+            <div class="top"><span class="ava" style="background:#3E7CA6">К</span>
+              <span><span class="nm">Кира</span><br/><span class="rl">Frontend</span></span></div>
+            <div class="ds">React 18 + TypeScript, дизайн-система</div>
+          </div>
+        </div>
+        <div class="activity" style="margin-top: 14px;">
+          <h4 style="font-size:15px">Активность</h4>
+          <div class="chips"><span class="fchip on">Все</span><span class="fchip">Задачи</span><span class="fchip">Чаты</span></div>
+          <div class="feed" style="max-height: 220px;">
+            <div class="ev"><span class="mk" style="background:var(--c-success)"></span>
+              <span class="tx"><b>Вера</b> завершила прогон Fold 8</span><span class="tm">12:41</span></div>
+            <div class="ev"><span class="mk" style="background:var(--c-accent)"></span>
+              <span class="tx"><b>Кира</b> взяла «Пилюли v4»</span><span class="tm">11:07</span></div>
+          </div>
+          <button class="expand">Показать всё</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h2 class="sec">Спецификация для Киры</h2>
+  <p class="note">
+    <b>1.</b> <code class="tok">PersonasHub.tsx</code>, стиль <code class="tok">hubGrid</code>: <code class="tok">gridTemplateColumns: isTablet || isMobile ? '1fr' : 'minmax(0,1fr) 300px'</code>, <code class="tok">gap: isTablet || isMobile ? 20 : 28</code>. Aside «Активность» в одноколоночном режиме рендерится <b>после</b> витрины (order или перенос в JSX — по месту).<br/>
+    <b>2.</b> Витрина: <code class="tok">repeat(auto-fill, minmax(200px, 1fr))</code> уже держит ширину — проверить, что карточке не задан <code class="tok">min-width</code>/фиксированная ширина больше колонки (источник перелива на скриншоте). Если задан — убрать, карточка обязана сжиматься до 200px.<br/>
+    <b>3.</b> «Активность» на всю ширину: тот же компонент <code class="tok">PersonaActivityFeed</code>, обёртка-карточка <code class="tok">C.bgCard</code>, радиус <code class="tok">R.xxl</code>, тень <code class="tok">SHADOW.card</code>. Лента: <code class="tok">maxHeight: 300</code>, <code class="tok">overflowY: 'auto'</code> (на телефоне 220). Кнопка «Показать всё» включает существующий <code class="tok">activityExpanded</code> — механику не трогаем.<br/>
+    <b>4.</b> Инвайт-карточка («Познакомиться») в одноколоночном режиме — в потоке после шапки, не поверх витрины.<br/>
+    <b>5.</b> Десктоп ≥1200px — без изменений: две колонки, aside справа. Тёмная тема: новых цветов нет.
+  </p>
+
+</div>
+
+<script>
+  const btns = document.querySelectorAll('.tbtn');
+  btns.forEach(b => b.addEventListener('click', () => {
+    document.documentElement.dataset.theme = b.dataset.t;
+    btns.forEach(x => x.classList.toggle('on', x === b));
+  }));
+</script>
+</body>
+</html>

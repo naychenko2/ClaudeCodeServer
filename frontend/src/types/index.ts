@@ -2778,3 +2778,72 @@ export interface McpCallsResponse {
   tools: McpToolStat[];
   recentFailures: McpCallFailure[];
 }
+
+// === Инциденты телеметрии (вкладка «Инциденты» раздела «Телеметрия», только админ) ===
+
+// Состояние сбора: ok — данные собраны; notConfigured — телеметрия выключена
+// (это НЕ «всё тихо»); unavailable — SigNoz не ответил.
+export type IncidentStatus = 'ok' | 'notConfigured' | 'unavailable';
+
+export interface IncidentSummary {
+  fingerprint: string;
+  title: string;
+  description?: string | null;
+  severity?: string | null;
+  environment?: string | null;
+  startedAt?: string | null;
+  resolvedAt?: string | null;
+  isFiring: boolean;
+}
+
+export interface IncidentBreakdownRow {
+  label: string;
+  count: number;
+}
+
+export interface IncidentTurn {
+  traceId: string;
+  chatId?: string | null;
+  at?: string | null;
+  model?: string | null;
+  provider?: string | null;
+  errorType?: string | null;
+  durationMs: number;
+}
+
+export interface IncidentLogLine {
+  at?: string | null;
+  severity: string;
+  message: string;
+}
+
+export interface IncidentChat {
+  chatId: string;
+  projectId?: string | null;
+  title?: string | null;
+  failures: number;
+  totalTokens: number;
+  mcpFailures: string[];
+}
+
+export interface IncidentDossier {
+  incident: IncidentSummary;
+  status: IncidentStatus;
+  from: string;
+  to: string;
+  // Алерт другого контура: локальных чатов по нему нет и быть не может
+  isForeignEnvironment: boolean;
+  breakdownTag: string;
+  breakdown: IncidentBreakdownRow[];
+  turns: IncidentTurn[];
+  turnsTotal: number;
+  logs: IncidentLogLine[];
+  logsTotal: number;
+  chats: IncidentChat[];
+  ruleUrl?: string | null;
+}
+
+export interface IncidentListResponse {
+  status: IncidentStatus;
+  items: IncidentSummary[];
+}

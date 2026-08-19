@@ -86,7 +86,9 @@
 
 **research/** — материалы с датой: [feature-parity.md](research/feature-parity.md),
 [messenger-integration.md](research/messenger-integration.md) (не реализовано),
-[roadmap-team-zone.md](research/roadmap-team-zone.md). Читать как «так было тогда».
+[roadmap-team-zone.md](research/roadmap-team-zone.md),
+[voice-mode-benchmark.md](research/voice-mode-benchmark.md) (режим диалога против ChatGPT
+и Claude: разрывы и план P0/P1/P2). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

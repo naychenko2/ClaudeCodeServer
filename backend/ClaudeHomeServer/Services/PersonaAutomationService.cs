@@ -106,7 +106,7 @@ public sealed class PersonaAutomationService : IDisposable
                 try { events = await source.EvaluateAsync(ctx, ct); }
                 catch (Exception ex)
                 {
-                    _log.LogWarning(ex, "Ошибка источника {Type} правила {Rule}", rule.Trigger.Type, rule.Id);
+                    _log.LogWarning(ex, "Ошибка источника {Type} правила {RuleId}", rule.Trigger.Type, rule.Id);
                     continue;
                 }
                 if (events.Count == 0) continue;
@@ -198,18 +198,18 @@ public sealed class PersonaAutomationService : IDisposable
         var user = _users.GetById(freshPersona.OwnerId);   // для резолва «папка без проекта»
         string prompt;
         try { prompt = await BuildAutomationPromptAsync(freshRule, ev, user); }
-        catch (Exception ex) { _log.LogWarning(ex, "build-prompt правило {Rule}", rule.Id); MarkResult(state, "error"); return; }
+        catch (Exception ex) { _log.LogWarning(ex, "build-prompt правило {RuleId}", rule.Id); MarkResult(state, "error"); return; }
 
         // 3. Закреплённый чат правила (acceptEdits — персона может править файлы/заводить задачи)
         string targetSessionId;
         try { targetSessionId = await EnsureRuleChatAsync(freshPersona, freshRule, state); }
-        catch (Exception ex) { _log.LogWarning(ex, "создание чата правила {Rule}", rule.Id); MarkResult(state, "error"); return; }
+        catch (Exception ex) { _log.LogWarning(ex, "создание чата правила {RuleId}", rule.Id); MarkResult(state, "error"); return; }
 
         // 4. Промпт → ход от лица персоны (контекст срабатывания — внутри сообщения чата)
         try { await _sessions.SendMessageAsync(targetSessionId, prompt, [], auto: true, senderPersonaId: freshPersona.Id); }
         catch (Exception ex)
         {
-            _log.LogWarning(ex, "send правило {Rule}", rule.Id);
+            _log.LogWarning(ex, "send правило {RuleId}", rule.Id);
             // Чат мог быть удалён/сломан — сбросим ссылку, чтобы следующий ход создал свежий
             if (state.SessionId == targetSessionId) { state.SessionId = null; _state.Save(); }
             MarkResult(state, "error");
@@ -235,7 +235,7 @@ public sealed class PersonaAutomationService : IDisposable
             var yes = ans.StartsWith("yes") || ans.Contains("да");
             return no && !yes;   // отсекаем только при явном «нет»
         }
-        catch (Exception ex) { _log.LogDebug(ex, "gate правило {Rule}", rule.Id); return false; }
+        catch (Exception ex) { _log.LogDebug(ex, "gate правило {RuleId}", rule.Id); return false; }
     }
 
     // Создать/переиспользовать закреплённый чат правила (один на правило, брендирован персоной).

@@ -172,7 +172,7 @@ public sealed class CloudCheapClient
             {
                 // 429 — исчерпан суточный/минутный лимит бесплатных моделей: штатный сценарий,
                 // не шумим ошибкой, вызывающий уходит на следующий маршрут
-                _logger.LogDebug("{Source} /chat/completions вернул {Status} для {Model}",
+                _logger.LogDebug("{Route} /chat/completions вернул {Status} для {Model}",
                     source.Key, resp.StatusCode, model);
                 return new CloudTextResult(null, false);
             }
@@ -196,7 +196,7 @@ public sealed class CloudCheapClient
                 truncated = IsTruncatedFinish(choices[0]);
                 if (truncated)
                     _logger.LogWarning(
-                        "{Source} ответ обрезан по лимиту {MaxTokens} токенов (модель {Model}, label={Label})",
+                        "{Route} ответ обрезан по лимиту {MaxTokens} токенов (модель {Model}, label={Label})",
                         source.Key, maxTokens, model, label ?? "-");
             }
             if (string.IsNullOrWhiteSpace(content)) return new CloudTextResult(null, truncated);
@@ -205,7 +205,7 @@ public sealed class CloudCheapClient
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "{Source} недоступен, фолбэк на следующий маршрут", source.Key);
+            _logger.LogDebug(ex, "{Route} недоступен, фолбэк на следующий маршрут", source.Key);
             return new CloudTextResult(null, false);
         }
     }

@@ -700,7 +700,7 @@ public class TaskExecutionService
         {
             var result = await _sessions.ReportUpAsync(stopped.LinkedSessionId,
                 BuildExecutorStoppedReport(stopped, reason), stopped.OwnerId!, withTurn: true);
-            _log.LogInformation("Остановка исполнителя задачи {TaskId}: доклад постановщику — {Result}",
+            _log.LogInformation("Остановка исполнителя задачи {TaskId}: доклад постановщику — {Outcome}",
                 stopped.Id, result);
         }
         catch (Exception ex)

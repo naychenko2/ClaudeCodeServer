@@ -105,7 +105,7 @@ public sealed class LocalActionOverridesStore
                 return false;
             }
         }
-        _log?.LogInformation("Маршрут действия «{Key}» задан админом: {Route}", actionKey, value);
+        _log?.LogInformation("Маршрут действия «{Action}» задан админом: {Route}", actionKey, value);
         return true;
     }
 
@@ -156,7 +156,7 @@ public sealed class LocalActionOverridesStore
             _overrides = next;
             Persist(next);
         }
-        _log?.LogInformation("Оверрайд маршрута действия «{Key}» снят админом", actionKey);
+        _log?.LogInformation("Оверрайд маршрута действия «{Action}» снят админом", actionKey);
         return true;
     }
 
@@ -196,7 +196,7 @@ public sealed class LocalActionOverridesStore
             {
                 if (LocalActionCatalog.Find(key) is not { } a)
                 {
-                    _log?.LogWarning("local-actions.json: действие «{Key}» отсутствует в каталоге, игнорирую", key);
+                    _log?.LogWarning("local-actions.json: действие «{Action}» отсутствует в каталоге, игнорирую", key);
                     continue;
                 }
                 // Формат до появления выбора модели: true = локаль, false = claude. Молча мигрируем.

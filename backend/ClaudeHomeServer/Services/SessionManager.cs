@@ -1,8 +1,7 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
-using System.Threading;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services.Llm;
@@ -167,6 +166,14 @@ public class SessionManager : IDisposable
         // ставит сюда «своя глубина + 1». Гасит лавину «отчёт → реакция → отчёт выше»:
         // человек в переписке её не создаёт, поэтому его ход счётчик обнуляет.
         public volatile int ReportChainDepth;
+        // Живой локальный голосовой ход (место chat-voice на «Локальная»): отмена для
+        // «Стоп». Ставится RunLocalVoiceTurnAsync, гасится в её finally. volatile:
+        // Interrupt читает из другого потока. null — локального хода нет.
+        public volatile CancellationTokenSource? LocalVoiceCts;
+        // Сколько локальных голосовых ходов прошло с последнего CLI-хода: при возврате
+        // на CLI BuildCliTurnText допишет сводку разговора (транскрипт CLI этих реплик
+        // не знает). Не персистится — рестарт сервера сводку теряет (v1, редкий кейс).
+        public int LocalTurnsSinceCli;
     }
 
     // Дальше какой глубины цепочка автоотчётов не идёт. 3 — как у делегирования задач:
@@ -245,6 +252,11 @@ public class SessionManager : IDisposable
     private readonly ProjectManager _projects;
     private readonly IHubContext<Hubs.SessionHub> _hub;
     private readonly Llm.ICheapTextRunner? _cheap;
+    // Маршруты мест каталога (локаль/слот/модель) и параметры профилей — для ветки
+    // локального голосового хода (chat-voice). null — в тестах без локали.
+    private readonly Llm.LocalActionRouter? _router;
+    // Прямой HTTP-клиент Ollama для локальных голосовых ходов; null — в тестах.
+    private readonly Llm.OllamaClient? _ollama;
     // Планировщик режима «Командная реализация» (Э2); null — режим без планирования
     private readonly TeamPlanningService? _teamPlanning;
     // Платформа внешних модулей: реестр манифестов + выпуск модульных токенов (R7)
@@ -441,9 +453,17 @@ public class SessionManager : IDisposable
         Dossiers.DossierRecallService? dossierRecall = null,
         // Опционально (в тестах не передаётся): паспорта прогонов сабагентов. Без него
         // диагностики обрывов нет и автодобивание молчит — ходы идут как раньше.
-        Llm.Claude.SubagentRunLog? subagentRuns = null)
+        Llm.Claude.SubagentRunLog? subagentRuns = null,
+        // Опционально (в тестах не передаётся): маршрутизатор мест и клиент локальной
+        // модели — ветка локального голосового хода (chat-voice). Без них разговор
+        // идёт через claude CLI как раньше.
+        Llm.LocalActionRouter? router = null,
+        Llm.OllamaClient? ollama = null)
     {
         _subagentRuns = subagentRuns;
+        _router = router;
+        _ollama = ollama;
+
         _skills = skills;
         _mcpRegistry = mcpRegistry;
         _mcpSecrets = mcpSecrets;
@@ -2931,7 +2951,16 @@ public class SessionManager : IDisposable
             await BroadcastAsync(sessionId,
                 new UserMessageMessage(text, attachedPaths.Count > 0 ? attachedPaths : null, senderPersonaId, auto, senderOrigin, StaffNote: staffNote));
 
-        await EnsureProcessAsync(sessionId, entry);
+        // Локальный голосовой ход (место chat-voice на «Локальная»): CLI-процесс не нужен,
+        // достаточно аккумулятора истории — ответ принесёт RunLocalVoiceTurnAsync. Гейт
+        // обязан быть детерминирован на протяжении всего SendDirectAsync (второй вызов
+        // ниже, перед диспетчеризацией): все его входы — константы вызова плюс ручной
+        // тумблер VoiceMode, между вызовами они не меняются.
+        var localVoice = ShouldRunLocalVoice(entry, auto, systemDirective, attachedPaths);
+        if (localVoice)
+            await EnsureAccumulatorAsync(entry);
+        else
+            await EnsureProcessAsync(sessionId, entry);
 
         // Авторство реплик хода: text-сообщения истории получают персону на момент хода
         // (после смены собеседника старые реплики сохраняют прежний аватар)
@@ -2981,8 +3010,25 @@ public class SessionManager : IDisposable
         entry.CurrentTurnSnapshot = !auto && !systemDirective
             ? new UserTurnSnapshot(text, attachedPaths, mode)
             : null;
-        await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
-            suppressTasksExecute: suppressTasksExecute);
+        // Диспетчеризация: локальный голосовой ход идёт мимо CLI (fire-and-forget — как
+        // CLI-ветка, где SendMessageAsync лишь ставит ход в процесс; ответ приходит
+        // событиями через OnMessageAsync). Реплика уже в аккумуляторе (OnUserMessage выше).
+        if (localVoice)
+        {
+            _ = Task.Run(async () =>
+            {
+                try { await RunLocalVoiceTurnAsync(sessionId, entry); }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[SessionManager] Локальный голосовой ход ({sessionId}): {ex.Message}");
+                }
+            });
+        }
+        else
+        {
+            await entry.Process!.SendMessageAsync(BuildCliTurnText(entry, text), attachedPaths,
+                suppressTasksExecute: suppressTasksExecute);
+        }
         // Превью чата (LastMessage выставляет адаптер из текста для CLI) — исходным сообщением.
         // Служебные директивы цикла (verifying/continuation) пропускаем: их сырой текст
         // («[СИСТЕМНАЯ ДИРЕКТИВА — …]») человеку в списке чатов не адресован (MINOR B-п.5) —
@@ -3031,7 +3077,167 @@ public class SessionManager : IDisposable
                 result += "\n\n" + routingHint;
         }
 
+        // Возврат на CLI после локальных голосовых ходов: транскрипт CLI реплик разговора
+        // не знает, без сводки модель отвечала бы так, будто разговора не было. Берём
+        // хвост истории (лента едина) тем же лимитом, что и разговорный контекст.
+        if (entry.LocalTurnsSinceCli > 0 && entry.Accumulator is { } voiceAcc)
+        {
+            var summary = BuildVoiceContextBlock(voiceAcc);
+            if (!string.IsNullOrEmpty(summary))
+                result = summary + "\n\n" + result;
+            entry.LocalTurnsSinceCli = 0;
+        }
+
         return result;
+    }
+
+    // Сводка локального разговора для CLI-хода: «Пользователь: … / Ассистент: …» из
+    // хвоста истории. null/пусто — реплик не нашлось (тогда и блок не нужен).
+    private static string? BuildVoiceContextBlock(TurnAccumulator acc)
+    {
+        var lines = acc.GetAll()
+            .Where(m => m is StoredUserMessage { SystemDirective: not true, Text: { Length: > 0 } }
+                        or StoredTextMessage { Text: { Length: > 0 } })
+            .TakeLast(VoiceHistoryMessages)
+            .Select(m => m switch
+            {
+                StoredUserMessage u => $"Пользователь: {TrimVoiceMessage(u.Text!)}",
+                StoredTextMessage t => $"Ассистент: {TrimVoiceMessage(t.Text!)}",
+                _ => null,
+            })
+            .Where(l => l is not null)
+            .ToList();
+        if (lines.Count == 0) return null;
+        return "[Контекст: до этого пользователь разговаривал голосом с локальной моделью " +
+               "(краткие реплики, без инструментов). Последние реплики разговора:\n" +
+               string.Join("\n", lines) + "\n]";
+    }
+
+    // Гейт локального голосового хода: разговор (Session.VoiceMode) на локальной модели
+    // (место chat-voice маршрутизировано на «Локальная»). Только ходы человека без
+    // вложений и без протоколов CLI (цикл «до готово»/штаб свои маркеры локаль не
+    // воспроизведёт); авто-ходы и доклады автоматизаций — через CLI как раньше.
+    // Персона не блокирует: её характер подмешивается в system-промпт разговора.
+    private bool ShouldRunLocalVoice(SessionEntry entry, bool auto, bool systemDirective,
+        IReadOnlyList<string> attachedPaths) =>
+        entry.Info.VoiceMode
+        && _router is not null && _ollama is not null
+        && _router.UsesLocal(Llm.LocalActionCatalog.ChatVoice)
+        && !auto && !systemDirective
+        && entry.Info.WorkLoop is null
+        && entry.Info.TeamImplement is null
+        && attachedPaths.Count == 0;
+
+    // messages[] для разговорного вызова Ollama: system-промпт собеседника (+ характер
+    // персоны при чате с персоной — дёшево, без полного слоя персоны: инструменты, память
+    // и привязки локальному ходу всё равно недоступны) + хвост истории. Текущая реплика
+    // уже лежит в аккумуляторе (OnUserMessage общего хвоста SendDirectAsync) — отдельно
+    // не добавляется, иначе продублировалась бы. GetAll() сам берёт лок аккумулятора.
+    private List<Llm.OllamaClient.ChatMsg> BuildVoiceMessages(SessionEntry entry, TurnAccumulator acc)
+    {
+        var system = Prompts.VoicePrompts.LocalCompanionSection;
+        if (entry.Info.PersonaId is { } pid
+            && _personas.GetByIdInternal(pid)?.Contract is { } contract)
+        {
+            var character = new List<string>(2);
+            if (!string.IsNullOrWhiteSpace(contract.Character)) character.Add(contract.Character);
+            if (!string.IsNullOrWhiteSpace(contract.Tone)) character.Add($"Тон: {contract.Tone}.");
+            if (character.Count > 0)
+                system += "\n\nТы говоришь от лица персонажа: " + string.Join(" ", character) +
+                          "\nЭто сокращённый характер — полный образ и память недоступны в этом режиме.";
+        }
+
+        var history = acc.GetAll()
+            .Where(m => m is StoredUserMessage { SystemDirective: not true, Text: { Length: > 0 } }
+                        or StoredTextMessage { Text: { Length: > 0 } })
+            .TakeLast(VoiceHistoryMessages)
+            .Select(m => m switch
+            {
+                StoredUserMessage u => new Llm.OllamaClient.ChatMsg("user", TrimVoiceMessage(u.Text!)),
+                StoredTextMessage t => new Llm.OllamaClient.ChatMsg("assistant", TrimVoiceMessage(t.Text!)),
+                _ => null,
+            })
+            .Where(m => m is not null)
+            .Cast<Llm.OllamaClient.ChatMsg>()
+            .ToList();
+
+        var result = new List<Llm.OllamaClient.ChatMsg>(history.Count + 1) { new("system", system) };
+        result.AddRange(history);
+        return result;
+    }
+
+    // Лимиты разговорного контекста: хвост истории и усечение одной реплики. Разговор
+    // короткий, а num_ctx профиля Text — 8192 токенов: без усечения длинный старый ход
+    // молча вытеснил бы свежие реплики.
+    internal const int VoiceHistoryMessages = 16;
+    internal static string TrimVoiceMessage(string text) =>
+        text.Length <= 1500 ? text : text[..1500] + "…";
+
+    // Локальный голосовой ход: прямой вызов Ollama мимо claude CLI. Ответ приходит
+    // синтетическими ServerMessage через OnMessageAsync — тот же конвейер, что у CLI
+    // (аккумулятор, статусы Working→Active→Finished, разбор очереди, бродкаст).
+    // Фолбэка на CLI нет: тихий 15-секундный старт подпроцесса в разговоре хуже
+    // видимой ошибки в ленте.
+    private async Task RunLocalVoiceTurnAsync(string sessionId, SessionEntry entry)
+    {
+        var runId = Interlocked.Increment(ref _runSeq);
+        entry.RunId = runId;
+        var acc = entry.Accumulator!;
+        // Ключ истории: транскрипт CLI, если чат уже начат (лента едина), иначе id чата.
+        // Info.ClaudeSessionId ветка НЕ ставит — его ставит CLI штатно при первом CLI-ходе.
+        acc.SetSaveKey(entry.Info.ClaudeSessionId ?? sessionId);
+
+        // Provider не заполняем (дефолт claude): фронт модель из каталога не знает и
+        // деградирует в Claude-облик — бейдж не ломается, фронт не трогаем.
+        await OnMessageAsync(sessionId, acc, new SessionStartedMessage(
+            entry.Info.ClaudeSessionId ?? sessionId, IsResume: false,
+            Model: _router!.LocalModel, Mode: entry.Info.Mode.ToString().ToLowerInvariant()), runId);
+
+        var spec = _router.ProfileSpec(Llm.CheapProfile.Text);
+        var messages = BuildVoiceMessages(entry, acc);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        using var cts = new CancellationTokenSource();
+        entry.LocalVoiceCts = cts;
+        Llm.OllamaClient.ChatTurnResult? turn = null;
+        var cancelled = false;
+        try
+        {
+            turn = await _ollama!.ChatTurnAsync(messages, _router.LocalModel,
+                TimeSpan.FromMilliseconds(_router.TimeoutMsFor(Llm.LocalActionCatalog.ChatVoice)),
+                spec.NumPredict, spec.NumCtx, ResolveOwnerId(entry.Info), cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            // «Стоп» пользователя: сообщения не шлём, exited ниже закроет ход (Working→Active)
+            cancelled = true;
+        }
+        catch (Exception ex)
+        {
+            await OnMessageAsync(sessionId, acc, new ErrorMessage($"Локальная модель: {ex.Message}"), runId);
+        }
+        finally
+        {
+            entry.LocalVoiceCts = null;
+            entry.LocalTurnsSinceCli++;
+        }
+
+        if (turn?.Text is { Length: > 0 } answer)
+        {
+            await OnMessageAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
+            await OnMessageAsync(sessionId, acc, new ResultMessage(
+                Subtype: "success", DurationMs: sw.ElapsedMilliseconds, NumTurns: 1,
+                Usage: turn.Usage, TotalCostUsd: 0), runId);
+        }
+        else if (!cancelled)
+        {
+            // Пустой ответ/сбой HTTP — честная ошибка без фолбэка на CLI
+            // (ErrorMessage исключения уже ушёл выше — второй не дублируем).
+            if (turn is not null)
+                await OnMessageAsync(sessionId, acc,
+                    new ErrorMessage("Локальная модель не ответила"), runId);
+        }
+
+        await OnMessageAsync(sessionId, acc, new ExitedMessage(), runId);
     }
 
 
@@ -3724,6 +3930,29 @@ public class SessionManager : IDisposable
     }
 
     // После перезапуска сервера Process может быть null — восстанавливаем сессию
+    // Создание/переиспользование аккумулятора истории (без CLI-процесса). Вырезано из
+    // EnsureProcessCoreAsync: локальному голосовому ходу (chat-voice) процесс не нужен,
+    // а аккумулятор — да (реплики разговора пишутся в ту же историю). Ключ: ClaudeSessionId
+    // чата, а при его отсутствии (ходов CLI ещё не было) — id чата: локальные ходы пишут
+    // историю в data/sessions/{id чата}/history.json, и после рестарта сервера, и при
+    // возврате на CLI она подхватывается отсюда же.
+    private async Task EnsureAccumulatorAsync(SessionEntry entry)
+    {
+        if (entry.Accumulator is not null) return;
+        // Оживление под _falPersistLock — сериализуем с прямой записью fal-стоимости в
+        // историю неактивной сессии (PublishFalCostAsync): иначе LoadAsync тут и запись там
+        // теряли бы друг друга (lost update). Повторная проверка под локом.
+        await _falPersistLock.WaitAsync();
+        try
+        {
+            if (entry.Accumulator is not null) return;
+            var key = entry.Info.ClaudeSessionId ?? entry.Info.Id.ToString();
+            var existingHistory = await _history.LoadAsync(key);
+            entry.Accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
+        }
+        finally { _falPersistLock.Release(); }
+    }
+
     private async Task EnsureProcessAsync(string sessionId, SessionEntry entry)
     {
         // Сериализуем весь check-then-act под per-entry локом: иначе два конкурентных хода
@@ -3757,27 +3986,8 @@ public class SessionManager : IDisposable
         // сменой собеседника — SwitchSpeaker; его состояние, включая ещё не сохранённые
         // внеходовые карточки конвейера/совещания, нельзя терять). Новый создаём только
         // при ленивом восстановлении сессии после рестарта сервера (Accumulator == null).
-        var accumulator = entry.Accumulator;
-        if (accumulator is null)
-        {
-            // Оживление под _falPersistLock — сериализуем с прямой записью fal-стоимости в
-            // историю неактивной сессии (PublishFalCostAsync): иначе LoadAsync тут и запись там
-            // теряли бы друг друга (lost update). Повторная проверка под локом.
-            await _falPersistLock.WaitAsync();
-            try
-            {
-                accumulator = entry.Accumulator;
-                if (accumulator is null)
-                {
-                    var existingHistory = entry.Info.ClaudeSessionId != null
-                        ? await _history.LoadAsync(entry.Info.ClaudeSessionId)
-                        : [];
-                    accumulator = new TurnAccumulator(existingHistory, entry.Info.ClaudeSessionId);
-                    entry.Accumulator = accumulator;
-                }
-            }
-            finally { _falPersistLock.Release(); }
-        }
+        await EnsureAccumulatorAsync(entry);
+        var accumulator = entry.Accumulator!;
 
         // Чат вне проекта — рабочая папка Chats, без проектного промпта и правил;
         // проектная сессия — RootPath/SystemPrompt/PermissionRules из проекта.
@@ -4212,6 +4422,16 @@ public class SessionManager : IDisposable
     {
         if (_sessions.TryGetValue(sessionId, out var entry))
         {
+            // Живой локальный голосовой ход: отменяем и выходим ДО stuck-детекта и
+            // заморозки очереди — exited придёт из самой ветки (RunLocalVoiceTurnAsync),
+            // вернёт статус Active и разберёт очередь (drainOnDeadRun). Ход короткий
+            // (1-3 с), composer_restore для него не нужен.
+            if (entry.LocalVoiceCts is { } localCts)
+            {
+                localCts.Cancel();
+                return;
+            }
+
             // Стоп пользователя прерывает и цикл «до готово»: снимаем СИНХРОННО,
             // чтобы exited прерванного хода не запустил автопродолжение
             if (entry.Info.WorkLoop is not null)
@@ -7255,6 +7475,15 @@ public class SessionManager : IDisposable
         // Снимки промпта ключуются id ЧАТА, а не транскриптом, — гейт общего разговора выше
         // к ним не относится: у чата-двойника свои снимки, и его лента их не потеряет
         _promptSnapshots?.DeleteAll(sessionId);
+        // История ЛОКАЛЬНЫХ голосовых ходов пишется под id чата (до первого CLI-хода у чата
+        // нет ClaudeSessionId) — чистим всегда: id чата уникален, общим с другим чатом быть
+        // не может. Убиратся и файл-дубль после перехода локаль→CLI (история тогда уже
+        // пишется под csid, а старая папка оставалась бы мусором до удаления чата). Гейт
+        // снизу — единственный экзотический случай:resume-чата с ClaudeSessionId, равным
+        // id ЭТОГО чата (resumeSessionId валидируется белым списком, но может совпадать).
+        var localHistoryKey = entry.Info.Id.ToString();
+        if (!_sessions.Values.Any(e => e.Info.ClaudeSessionId == localHistoryKey))
+            _history.Delete(localHistoryKey);
 
         // Отдельное worktree чата сносим вместе с чатом (best-effort; ветка остаётся в репе)
         if (entry.Info.WorktreePath is string wt && entry.Info.ProjectId is string wpid && _git is not null)

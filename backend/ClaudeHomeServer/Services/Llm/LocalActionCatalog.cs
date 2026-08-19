@@ -52,6 +52,9 @@ public static class LocalActionCatalog
     // Группа «Чаты и персоны» (Agentic): места, где раньше модель выбиралась неявно.
     public const string ChatNew = "chat-new";
     public const string ChatPersona = "chat-persona";
+    // Голосовой режим чата (Session.VoiceMode): разговор без инструментов. Единственное
+    // чатовое место с НЕагентной семантикой — локаль для него пригодна.
+    public const string ChatVoice = "chat-voice";
     public const string TasksExecutor = "tasks-executor";
     public const string SubagentConsultant = "subagent-consultant";
     public const string ModulesLlm = "modules-llm";
@@ -139,6 +142,12 @@ public static class LocalActionCatalog
             DefaultLocal: false, Agentic: true, Tier: ModelTier.Medium),
         new(ModulesLlm, "LLM-канал внешних модулей", "Чаты и персоны", CheapProfile.Large,
             DefaultLocal: false, Agentic: true, Tier: ModelTier.Medium),
+        // Голосовой режим: ходы разговора (Session.VoiceMode) без инструментов — прямой вызов
+        // локальной модели мимо claude CLI (ответ за секунды, а не старт подпроцесса). Место
+        // рулит ТОЛЬКО веткой «Локальная»: любой другой выбор (слот/модель) — обычный CLI-путь.
+        // На создание чата место не влияет (не участвует в ResolveDefaultModel).
+        new(ChatVoice, "Голосовой чат (разговор)", "Чаты и персоны", CheapProfile.Text,
+            DefaultLocal: false),
 
         new(ActionRank, "Ранжир действий AI-хаба", "AI-хаб", CheapProfile.Small, DefaultLocal: true),
         new(NotesTags, "Теги заметок", "Заметки", CheapProfile.Small, DefaultLocal: true),

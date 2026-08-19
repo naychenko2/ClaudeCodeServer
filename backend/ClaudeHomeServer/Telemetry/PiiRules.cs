@@ -109,6 +109,19 @@ public static class PiiRules
         "claude_session_id", "kid", "callsite", "interaction", "winner", "fixed_provider",
         "fingerprint", "layer", "tools", "tile", "bg", "alive", "dirty", "stuck", "stopped",
         "deferred", "cont", "expected", "db", "image", "entity", "target",
+        // Узкие имена вместо generic-собратьев (аудит 2026-08-19, доводка 2026-08-20).
+        // Каждое заведено под КОНКРЕТНОЕ значение, а место логирования переименовано под него:
+        // rule_id — идентификатор правила автоматизации (в {Rule} везде лежал rule.Id, а имя
+        // намекало на название, которое сочиняет пользователь); specialty — ключ специальности
+        // из enum; entry — составной операционный ключ записи (label:entryKey карантина,
+        // id записи памяти); fallback_step — текст шага фолбэка моделей.
+        //
+        // fallback_step стоит особняком: три обёртки FallbackLlmSessionAdapter (LogWarn, LogInfo,
+        // LogDebug) складывали ВСЮ диагностику подмен в {Message}, то есть в имя, закрытое
+        // паттерном. Наружу это выглядело как «[ModelFallback] {Message}» — предупреждения о
+        // подменах, переполнении и исчерпании цепочки приезжали пустыми, причём именно они
+        // попадают в досье инцидента.
+        "rule_id", "specialty", "entry", "fallback_step",
         // Тексты отказов — родня разрешённого reason. Без них warning читается как
         // «действие {Action} — {Message}», то есть не читается вовсе. Сюда идут ex.Message
         // и ответ провайдера.

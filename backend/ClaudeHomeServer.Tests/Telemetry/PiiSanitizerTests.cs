@@ -149,6 +149,31 @@ public class PiiSanitizerTests
     }
 
     [Fact]
+    public void NarrowNames_AreKept_WhileGenericSiblingsStayDropped()
+    {
+        // Приём вместо открытия generic-имени: место логирования переименовывает свой
+        // параметр в конкретный. {Rule} нёс rule.Id, но имя намекало на название от
+        // пользователя; {Message} в обёртках ModelFallback прятал всю диагностику подмен.
+        using var activity = CreateActivity(
+            ("RuleId", "rule-7"), ("Specialty", "analyst"), ("Entry", "team:abc:doc-1"),
+            ("FallbackStep", "Подмена: opus-5 -> fable-5"), ("ServiceId", "web"),
+            ("Rule", "Следить за релизами"), ("Key", "sk-секрет"), ("Message", "текст пользователя"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("RuleId").Should().Be("rule-7");
+        activity.GetTagItem("Specialty").Should().Be("analyst");
+        activity.GetTagItem("Entry").Should().Be("team:abc:doc-1");
+        activity.GetTagItem("FallbackStep").Should().Be("Подмена: opus-5 -> fable-5");
+        activity.GetTagItem("ServiceId").Should().Be("web");
+
+        activity.GetTagItem("Rule").Should().BeNull("имя правила автоматизации сочиняет пользователь");
+        activity.GetTagItem("Key").Should().BeNull("под generic-именем однажды уедет секрет");
+        activity.GetTagItem("Message").Should().BeNull();
+    }
+
+    [Fact]
     public void RootAndDir_AreHashed_NotDropped()
     {
         // {Root} — это RootPath проекта: не Keep (путь на диске), но и не дроп — хэш держит

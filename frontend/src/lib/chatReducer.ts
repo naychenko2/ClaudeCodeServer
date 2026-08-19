@@ -164,11 +164,20 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
   // Автор последней виденной text-реплики (undefined — реплик ещё не было)
   let lastPersonaId: string | undefined;
   let sawText = false;
+  // Дата последнего сообщения, у которого она вообще была (user_message/text/error).
+  // Нужна ошибкам: StoredErrorMessage.Timestamp появился поздно, и в историях до него
+  // у error нет даты вовсе — тогда берём дату хода, к которому ошибка относится
+  // (сообщение пользователя стоит прямо перед ней). Без этого фронт считает такую
+  // ошибку сегодняшней и рисует красный баннер вместо кат-группы прошлых дней.
+  let lastTs: number | undefined;
 
   for (const msg of raw) {
     const m = msg as StoredHistoryMessage;
 
     if (LEGACY_KINDS.has(m.kind as string)) continue;
+
+    const ownTs = (m as unknown as { timestamp?: number }).timestamp;
+    if (typeof ownTs === 'number') lastTs = ownTs;
 
     if (m.kind === 'workflow_progress') {
       // Снапшот прогресса workflow из истории → в карточку tool_use (bgDone у tool_use
@@ -196,7 +205,13 @@ export function normalizeHistory(raw: unknown[], opts?: { deriveSpeakers?: boole
     }
 
     if (m.kind === 'thinking') items.push({ ...m, expanded: false } as unknown as ChatItem);
-    else if (m.kind === 'error') items.push({ ...m, canRetry: false } as unknown as ChatItem);
+    // В истории дата называется timestamp, в ленте — ts (как у text/user_message ниже).
+    // Фолбэк на дату хода — для историй до StoredErrorMessage.Timestamp
+    else if (m.kind === 'error') {
+      const { timestamp, ...rest } = m as unknown as Record<string, unknown> & { timestamp?: number };
+      const ts = timestamp ?? lastTs;
+      items.push({ ...rest, canRetry: false, ...(ts !== undefined ? { ts } : {}) } as unknown as ChatItem);
+    }
     // Поля маркера подмены (model/previousModel/reason/details) переносятся как есть,
     // но пару «ошибка + подмена» из истории старых чатов схлопываем — см. appendModelSwitched
     else if (m.kind === 'model_switched') appendModelSwitched(items, m as unknown as ModelSwitchedItem);

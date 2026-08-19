@@ -476,7 +476,7 @@ internal class TurnAccumulator
         lock (_lock)
         {
             FlushBuffers(final: true);
-            _currentTurn.Add(new StoredErrorMessage(text) { Details = details });
+            _currentTurn.Add(new StoredErrorMessage(text) { Details = details, Timestamp = NowMs() });
         }
         await FlushAsync(svc);
     }

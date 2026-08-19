@@ -1025,6 +1025,30 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // с бейджем механики (пользователь сам его инициировал темой из композера)
       const teamMech = detectTeamMechanic(item.text);
       const teamInfo = teamMech ? describeTeamTurn(item.text) : null;
+      // QA Fold 8: авто-слэш-команды (`item.auto && !teamMech`, текст начинается с `/`)
+      // больше не рисуем тяжёлой карточкой AgentMessageView — рендерим компактным
+      // разделителем по образцу ветки systemDirective. Отличаем cancel от прочих
+      // команд по подстроке (cancel-варианты семейства oh-my-claudecode:cancel*).
+      const cmdMatch = item.auto && !teamMech ? /^(\S+)/.exec(item.text.trim()) : null;
+      const isCmd = !!cmdMatch;
+      const isCancelCmd = isCmd && /cancel|stop|abort|прервать/i.test(cmdMatch![1]);
+      if (isCmd) {
+        const cmd = cmdMatch![1];
+        const label = isCancelCmd ? `Цикл прерван · команда «${cmd}»` : `Команда · «${cmd}»`;
+        return (
+          <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>
+            <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+            <span style={{
+              fontSize: 12, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+              textOverflow: 'ellipsis', padding: '3px 10px', borderRadius: 999,
+              background: C.bgSelected, border: `1px solid ${C.border}`,
+            }}>
+              {isCancelCmd ? '⟳' : '⚙'} {label}
+            </span>
+            <div style={{ flex: 1, minWidth: 24, height: 1, background: C.border }} />
+          </div>
+        );
+      }
       // Сообщение не от человека — показываем источник карточкой с лицом автора:
       //  • viaAgent — прислано персоной/агентом из другого чата (chats_send)
       //  • auto — авто-публикация (задача, автоматизация)
@@ -1711,6 +1735,14 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         </div>
       );
 
+    case 'error_group': {
+      // QA Fold 8: «Завершённые с ошибкой (N)» с катом по дням. Локальный стейт
+      // раскрытия — useState по индексу (item не имеет id, и по ref на сам объект
+      // состояние пережило бы перерисовки ленты). Кат показывает число ошибок в
+      // группе; внутри — строки-компакты с `↻` при canRetry && online.
+      return <ErrorGroupView item={item} online={online} onRetry={onRetry} />;
+    }
+
     case 'error':
       return (
         <div style={{
@@ -1752,3 +1784,143 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       return null;
   }
 });
+
+// Кат «Завершённые с ошибкой (N)» (QA Fold 8): список прошлых ошибок под катом. Локальный
+// useState раскрытия — на весь жизненный цикл компонента, переживает ремоунт чата.
+// Одиночная ошибка прошлого дня ката не получает: раскрывать нечего, показываем сразу
+// ту же компактную строку (по критерию приёмки — строка, а не полный баннер).
+function ErrorGroupView({ item, online, onRetry }: {
+  item: Extract<ChatItem, { kind: 'error_group' }>;
+  online: boolean;
+  onRetry: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const dateLabel = formatErrorGroupDate(item.date);
+  const rows = (
+    <div style={{ display: 'flex', flexDirection: 'column' }}>
+      {item.items.map((err, i) => (
+        <ErrorGroupRow key={i} err={err} online={online} onRetry={onRetry} topBorder={i > 0} />
+      ))}
+    </div>
+  );
+
+  if (item.items.length === 1) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        background: C.dangerBg, border: `1px solid ${C.dangerBorder}`,
+        borderRadius: R.lg, padding: '5px 12px', fontFamily: FONT.sans,
+      }}>
+        <AlertTriangle size={13} strokeWidth={2} style={{ flexShrink: 0, color: C.dangerText }} />
+        <span
+          style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: C.dangerText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+          title={item.items[0].text}
+        >
+          {item.items[0].text}
+        </span>
+        <span style={{ flexShrink: 0, fontSize: 11.5, color: C.textMuted }}>{dateLabel}</span>
+        {!!item.items[0].canRetry && online && (
+          <ErrorRetryButton onRetry={onRetry} />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      background: C.bgCard, border: `1px solid ${C.borderLight}`,
+      borderRadius: R.lg, overflow: 'hidden',
+    }}>
+      <button
+        type="button"
+        onClick={() => setOpen(v => !v)}
+        aria-expanded={open}
+        style={{
+          width: '100%', display: 'flex', alignItems: 'center', gap: 10,
+          padding: '8px 12px', background: 'transparent', border: 'none',
+          cursor: 'pointer', textAlign: 'left', fontFamily: FONT.sans,
+        }}
+      >
+        <ChevronDown
+          size={14} strokeWidth={2}
+          style={{ transform: open ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s ease', flexShrink: 0, color: C.textSecondary }}
+        />
+        <span style={{ fontSize: 13, color: C.textHeading, fontWeight: 600 }}>
+          Завершённые с ошибкой
+        </span>
+        <span style={{
+          flexShrink: 0, fontFamily: FONT.mono, fontSize: 10.5, fontWeight: 600,
+          letterSpacing: '0.04em', textTransform: 'uppercase',
+          color: C.dangerText, background: C.dangerBg,
+          border: `1px solid ${C.dangerBorder}`,
+          borderRadius: 999, padding: '1px 7px',
+        }}>{item.items.length}</span>
+        <span style={{ marginLeft: 'auto', fontSize: 11.5, color: C.textMuted, flexShrink: 0 }}>
+          {dateLabel}
+        </span>
+      </button>
+      {open && (
+        <div style={{ borderTop: `1px solid ${C.borderLight}` }}>{rows}</div>
+      )}
+    </div>
+  );
+}
+
+// Строка ошибки внутри группы: текст с ellipsis + тихое «↻», если повтор ещё возможен
+function ErrorGroupRow({ err, online, onRetry, topBorder }: {
+  err: Extract<ChatItem, { kind: 'error' }>;
+  online: boolean;
+  onRetry: () => void;
+  topBorder: boolean;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 10,
+      padding: '6px 12px',
+      background: C.dangerBg, borderTop: topBorder ? `1px solid ${C.dangerBorder}` : 'none',
+      fontFamily: FONT.sans,
+    }}>
+      <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, color: C.dangerText, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={err.text}>
+        {err.text}
+      </span>
+      {!!err.canRetry && online && <ErrorRetryButton onRetry={onRetry} />}
+    </div>
+  );
+}
+
+function ErrorRetryButton({ onRetry }: { onRetry: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onRetry}
+      aria-label="Повторить"
+      style={{
+        width: 26, height: 26, flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        background: C.bgWhite, color: C.dangerText,
+        border: `1px solid ${C.dangerBorder}`,
+        borderRadius: R.md, cursor: 'pointer', padding: 0,
+      }}
+    >
+      <RotateCcw size={13} strokeWidth={2.2} />
+    </button>
+  );
+}
+
+// Метка даты в шапке error_group: «сегодня» (такого быть не может — сегодняшние идут
+// баннерами), «вчера», «12 авг» (в этом году), иначе «12.08.2026». Дробление по дням
+// идёт в ChatPanel, а тут только человеческое представление.
+function formatErrorGroupDate(dayStart: number): string {
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const dayMs = 24 * 60 * 60 * 1000;
+  const diff = Math.round((today.getTime() - dayStart) / dayMs);
+  if (diff === 0) return 'сегодня';
+  if (diff === 1) return 'вчера';
+  if (diff > 1 && diff < 7) return `${diff} дн назад`;
+  const d = new Date(dayStart);
+  const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  const sameYear = d.getFullYear() === today.getFullYear();
+  const day = d.getDate();
+  const month = months[d.getMonth()];
+  return sameYear ? `${day} ${month}` : `${day}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}

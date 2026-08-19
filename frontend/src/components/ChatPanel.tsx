@@ -612,6 +612,21 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // composerH в зависимостях — им ловим момент, когда композер уже в DOM
     // (первый замер высоты) и ref наконец не пустой
   }, [embedded, composerH]);
+  // QA Fold 8: на планшете FAB прижимался к композеру и ужимался (54→36), причём
+  // пилюля «Собеседник» резалась сверху. Поднимаем кнопку над композером вместо
+  // ужимания — `--cc-fab-bottom = composerH + 12` (12 = зазор). Сбрасывается на 20px
+  // при уходе композера. На Стене (embedded) поведение прежнее: глобальный
+  // --cc-fab-bottom трогать нельзя — колонки перебивают друг друга.
+  useEffect(() => {
+    if (embedded) return;
+    const root = document.documentElement;
+    if (composerH > 0) {
+      root.style.setProperty('--cc-fab-bottom', `${composerH + 12}px`);
+    } else {
+      root.style.setProperty('--cc-fab-bottom', '20px');
+    }
+    return () => { root.style.setProperty('--cc-fab-bottom', '20px'); };
+  }, [composerH, embedded]);
   // Контекст проекта для резолва локальных путей картинок в сообщениях
   const projectCtx = useMemo(() => project ? { id: project.id, rootPath: project.rootPath } : null, [project]);
 
@@ -1506,8 +1521,55 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Extract кэширован по ссылке на элемент, поэтому пересчёт на стрим-дельту дёшев
   const mediaVisibility = useMemo(() => buildMediaVisibility(items), [items]);
 
+  // QA Fold 8: ошибки прошлых дней (ts < сегодня) склеиваем в error_group ПО ДНЯМ —
+  // иначе красные баннеры «Session failed 13.08» плодятся в ленте и теснят живое.
+  // Сегодняшние проходят как раньше (полноразмерный баннер). Одиночная ошибка
+  // прошлого дня — тоже группа, но ErrorGroupView рисует её одной компактной строкой
+  // без ката. «День» считаем по локальному времени (то, что видит пользователь в шапке
+  // ленты). Ошибка без ts считается свежей (сегодняшней) — на бэкенде он должен быть,
+  // но на всякий случай не теряем её.
+  //
+  // Группируем ВСЕ ошибки дня, а не только идущие подряд: каждая падает своим ходом, и
+  // между ними всегда стоят сообщение пользователя и result следующего хода — по соседству
+  // серия не собиралась бы никогда (round 2: 3 ошибки 13.08 остались тремя баннерами).
+  // Карточка группы встаёт на место ПЕРВОЙ ошибки дня, остальные из ленты уходят в кат.
+  //
+  // Схлопывать массив ленты НЕЛЬЗЯ: индексы элементов — ключ к turnMeta, turnBoundaries,
+  // lastTaskIdx и execZone, и укороченный display сдвинул бы всю метаинформацию после
+  // первой же группы. Поэтому группа живёт картой «индекс первой ошибки дня → группа»,
+  // а остальные ошибки гасятся набором индексов — как suppressedByWorkflow.
+  const errorGroups = useMemo(() => {
+    const startOfToday = (() => {
+      const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime();
+    })();
+    const dayKey = (ms: number) => {
+      const d = new Date(ms); d.setHours(0, 0, 0, 0); return d.getTime();
+    };
+    // День → индекс первой ошибки этого дня в ленте
+    const anchorByDay = new Map<number, number>();
+    const at = new Map<number, Extract<ChatItem, { kind: 'error_group' }>>();
+    const suppressed = new Set<number>();
+    items.forEach((it, idx) => {
+      if (it.kind !== 'error' || typeof it.ts !== 'number' || it.ts >= startOfToday) return;
+      const dk = dayKey(it.ts);
+      const anchor = anchorByDay.get(dk);
+      if (anchor === undefined) {
+        anchorByDay.set(dk, idx);
+        at.set(idx, { kind: 'error_group', date: dk, items: [it] });
+      } else {
+        at.get(anchor)!.items.push(it);
+        suppressed.add(idx);
+      }
+    });
+    return { at, suppressed };
+  }, [items]);
+
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
+    // Display-лента = сама items: индексы обязаны совпадать с items (по ним ходят
+    // turnMeta, turnBoundaries, lastTaskIdx, execZone). Ошибки прошлых дней рисуются
+    // группой через errorGroups — карту «индекс → error_group» и набор гашеных индексов.
+    const display = items;
     // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
     // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
     const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
@@ -1553,11 +1615,19 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     const pushNode = (node: React.ReactNode, start: number) => nodes.push({ node, start });
     let i = 0;
     let prevNodeWasBlock = false;
-    while (i < items.length) {
+    while (i < display.length) {
+      // Ошибки прошлых дней: все ошибки одного дня рисуются одной группой на месте
+      // первой из них, остальные пропускаем (индексы при этом не съезжают)
+      if (errorGroups.suppressed.has(i)) { i++; continue; }
+      const errGroup = errorGroups.at.get(i);
+      if (errGroup) {
+        pushNode(<div key={`sp-${i}`} style={{ marginTop: 3 }}>{renderItem(errGroup, i)}</div>, i);
+        i++; prevNodeWasBlock = false; continue;
+      }
       // Workflow-блок рендерим специальным компонентом. agents — стрим-субагенты
       // (tool_use-дети воркфлоу); их полный поток отдаёт карта childrenByParentId
-      if (items[i].kind === 'tool_use' && (items[i] as ToolUseItem).name.toLowerCase() === 'workflow') {
-        const wf = items[i] as ToolUseItem;
+      if (display[i].kind === 'tool_use' && (display[i] as ToolUseItem).name.toLowerCase() === 'workflow') {
+        const wf = display[i] as ToolUseItem;
         const wfAgents = (childrenByParentId.get(wf.id) ?? [])
           .filter(e => e.item.kind === 'tool_use').map(e => e.item as ToolUseItem);
         pushNode(<WorkflowBlockView key={`wf-${wf.id}`} workflow={wf} agents={wfAgents} childrenByParentId={childrenByParentId} onOpenFile={onOpenFile} />, i);
@@ -1565,13 +1635,13 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
       // в основной ленте пропускаем (любой kind: инструменты, текст, thinking)
-      if (suppressedByWorkflow.has(items[i]) || suppressedByAgentParent.has(items[i])) {
+      if (suppressedByWorkflow.has(display[i]) || suppressedByAgentParent.has(display[i])) {
         i++; continue;
       }
-      if (isSubItem(items[i])) {
+      if (isSubItem(display[i])) {
         const start = i;
         const sub: Array<[ChatItem, number]> = [];
-        while (i < items.length && isSubItem(items[i])) { sub.push([items[i], i]); i++; }
+        while (i < display.length && isSubItem(display[i])) { sub.push([display[i], i]); i++; }
         // Один контейнер с borderLeft на всю стопку дочерних → линия не прерывается gap'ом ленты
         const subDiv = (
           <div key={`sub-${itemKey(sub[0][0], start)}`} style={{ marginLeft: 8, paddingLeft: 14, borderLeft: `2px solid ${C.border}` }}>
@@ -1591,7 +1661,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           pushNode(subDiv, start);
         }
         prevNodeWasBlock = false;
-      } else if (inBlock(items[i], i)) {
+      } else if (inBlock(display[i], i)) {
         const start = i;
         const slice: Array<[ChatItem, number]> = [];
         // Прозрачные для группировки: рендерятся в null и не должны рвать стопку действий.
@@ -1603,16 +1673,16 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // Размышления верхнего уровня прячем внутрь группы, если они стоят МЕЖДУ действиями
         const isThought = (it: ChatItem) => (it.kind === 'thinking' && !it.parentToolUseId) || it.kind === 'redacted_thinking';
         const isSuppressed = (it: ChatItem) => suppressedByWorkflow.has(it) || suppressedByAgentParent.has(it);
-        while (i < items.length) {
-          if (isSuppressed(items[i]) || isInvisible(items[i], i)) { i++; continue; }
-          if (inBlock(items[i], i)) { slice.push([items[i], i]); i++; continue; }
-          if (isThought(items[i])) {
+        while (i < display.length) {
+          if (isSuppressed(display[i]) || isInvisible(display[i], i)) { i++; continue; }
+          if (inBlock(display[i], i)) { slice.push([display[i], i]); i++; continue; }
+          if (isThought(display[i])) {
             // Lookahead: впитываем размышления, только если дальше идёт ещё действие —
             // размышление перед финальным ответом остаётся видимой строкой над ним
             let j = i;
-            while (j < items.length && (isThought(items[j]) || isInvisible(items[j], j) || isSuppressed(items[j]))) j++;
-            if (j < items.length && inBlock(items[j], j)) {
-              for (; i < j; i++) if (isThought(items[i])) slice.push([items[i], i]);
+            while (j < display.length && (isThought(display[j]) || isInvisible(display[j], j) || isSuppressed(display[j]))) j++;
+            if (j < display.length && inBlock(display[j], j)) {
+              for (; i < j; i++) if (isThought(display[i])) slice.push([display[i], i]);
               continue;
             }
           }
@@ -1648,11 +1718,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         // Хвостовые размышления не сигнал: они могут впитаться в группу при следующем
         // действии, и группа мигала бы свернулась/раскрылась на каждом межшаговом thinking.
         let after = i;
-        while (after < items.length && (isThought(items[after]) || isInvisible(items[after], after) || isSuppressed(items[after]))) after++;
+        while (after < display.length && (isThought(display[after]) || isInvisible(display[after], after) || isSuppressed(display[after]))) after++;
         // Последняя группа сворачивается и когда после неё ещё нет видимого элемента,
         // но ход уже завершён (сессия не работает): иначе действия последнего диалога
         // оставались бы раскрытыми в отличие от всех предыдущих групп.
-        const isGroupDone = after < items.length || !sessionBusy;
+        const isGroupDone = after < display.length || !sessionBusy;
         // Изменения файлов не теряются при сворачивании: в свёрнутой шапке — те же плашки
         // (дедуп по пути, +N/−N событий суммируются), при раскрытии они на своих местах
         const fileAgg = new Map<string, Extract<ChatItem, { kind: 'file_changed' }>>();
@@ -1714,9 +1784,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         );
         prevNodeWasBlock = true;
       } else {
-        const kind = items[i].kind;
-        const node = renderItem(items[i], i);
-        const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error';
+        const kind = display[i].kind;
+        const node = renderItem(display[i], i);
+        const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error' || kind === 'error_group';
         pushNode(
           kind === 'user_message'
             ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
@@ -1756,7 +1826,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility]);
+  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups]);
 
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
   // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге

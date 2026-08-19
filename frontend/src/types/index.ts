@@ -1555,7 +1555,10 @@ export type ChatItem =
   // фронт его не собирает — иначе разъедется с сервером при смене лимита
   | { kind: 'work_loop_stopped'; reason: string; text: string }
   // details — сырой технический текст сбоя за человекочитаемым text (см. wire-событие error)
-  | { kind: 'error'; text: string; canRetry?: boolean; details?: string };
+  | { kind: 'error'; text: string; canRetry?: boolean; details?: string; ts?: number }
+  // Группа ошибок прошлых дней (QA Fold 8): строится на фронте в ChatPanel из
+  // последовательно идущих error с ts < сегодня. Кат/раскрытие на стороне ChatItemView.
+  | { kind: 'error_group'; date: number; items: Extract<ChatItem, { kind: 'error' }>[] };
 
 // Скиллы и агенты
 export interface SkillInfo {

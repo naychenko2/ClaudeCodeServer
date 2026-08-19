@@ -105,7 +105,10 @@ public class ChatHistoryService
             if (messages[i] is StoredResultMessage or StoredErrorMessage) return;
             if (messages[i] is StoredUserMessage) break;
         }
-        messages.Add(new StoredErrorMessage("Сервер был перезапущен во время хода — ход прерван"));
+        messages.Add(new StoredErrorMessage("Сервер был перезапущен во время хода — ход прерван")
+        {
+            Timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        });
         await SaveAsync(claudeSessionId, messages);
     }
 

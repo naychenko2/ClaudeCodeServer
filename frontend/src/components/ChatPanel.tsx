@@ -1784,13 +1784,22 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         );
         prevNodeWasBlock = true;
       } else {
-        const kind = display[i].kind;
-        const node = renderItem(display[i], i);
+        const item = display[i];
+        const kind = item.kind;
+        const node = renderItem(item, i);
         const needsTopSpacing = kind === 'text' || kind === 'user_message' || kind === 'result' || kind === 'error' || kind === 'error_group';
+        // Вправо идёт ТОЛЬКО настоящий пузырь пользователя. Плашки-разделители
+        // (staffNote, systemDirective, авто-слэш-команды) и карточки viaAgent/auto
+        // центрируются по колонке — как и result-узлы рядом.
+        const isUserBubble = kind === 'user_message'
+          && !item.staffNote
+          && !item.systemDirective
+          && !item.viaAgent
+          && !item.auto;
         pushNode(
-          kind === 'user_message'
+          isUserBubble
             ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
-            : kind === 'result'
+            : (kind === 'user_message' || kind === 'result')
               ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'center' }}>{node}</div>
               : needsTopSpacing
                 ? <div key={`sp-${i}`} style={{ marginTop: 3 }}>{node}</div>

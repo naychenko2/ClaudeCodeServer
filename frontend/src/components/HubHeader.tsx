@@ -17,6 +17,7 @@ import { McpServersModal } from '../features/mcp/McpServersModal';
 import { api } from '../lib/api';
 import { subscribeModelProvidersNav } from '../lib/modelProvidersNav';
 import { getUnreadCount, subscribeToNotifications, ensureNotificationsSubscribed, ensureUnreadCountLoaded } from '../lib/notifications';
+import { loadIncidentBadge } from '../features/telemetry/incidentBadge';
 
 interface Props {
   value: HubTabValue;
@@ -149,6 +150,17 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
   }, [auth.id]);
 
   const openHistory = () => window.dispatchEvent(new Event(PRODUCT_HISTORY_EVENT));
+
+  // Счётчик горящих инцидентов у пункта «Телеметрия». Опрашиваем ТОЛЬКО у админа
+  // (раздел admin-only) и через кэш с TTL — шапка монтируется на каждой навигации,
+  // а запрос уходит живым обращением в SigNoz
+  const [incidentBadge, setIncidentBadge] = useState(0);
+  useEffect(() => {
+    if (!isAdmin) return;
+    let alive = true;
+    void loadIncidentBadge().then(n => { if (alive) setIncidentBadge(n); });
+    return () => { alive = false; };
+  }, [isAdmin]);
 
   // Мобильный хаб: в таббаре три primary-раздела, «Домой», «Заметки» и «Персоны» —
   // в «⋯ Разделы», иначе вкладки лезут под обрез экрана. «Знания» и «Что нового»
@@ -428,6 +440,7 @@ export function HubHeader({ value, onTab, auth, onLogout, historyActive, onOpenE
           onOpenSpend={() => onTab('spend')}
           // Телеметрия — только админам (проброс SigNoz под [Authorize(Roles=admin)])
           onOpenTelemetry={isAdmin ? () => onTab('telemetry') : undefined}
+          incidentBadge={incidentBadge}
           onShowHistory={openHistory}
           historyBadge={historyBadge}
           historyNeverSeen={neverSeen}

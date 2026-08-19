@@ -53,7 +53,9 @@
 знакомства v2).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
-[audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md) и
+[audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),
+[incident-queries.md](observability/incident-queries.md) (раздел «Инциденты»: форма
+запросов к SigNoz, состав досье и ограничения связки) и
 [signoz-setup.md](observability/signoz-setup.md) подчинены ему.
 
 **modules/** — [integration-contract.md](modules/integration-contract.md) — источник правды;

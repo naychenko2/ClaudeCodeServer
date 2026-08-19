@@ -50,6 +50,7 @@ import { HomePage } from './pages/HomePage'
 import { WallPage } from './pages/WallPage'
 import { SpendPage } from './features/spend/SpendPage'
 import { TelemetryPage } from './features/telemetry/TelemetryPage'
+import { setPendingIncident, INCIDENT_OPEN_EVENT } from './features/telemetry/incidentLink'
 import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
 import { useUiInspector, setUiInspectorAdmin, wireUiInspectorHotkey } from './lib/uiInspector'
 import { UiInspectorOverlay } from './features/inspector/UiInspectorOverlay'
@@ -105,6 +106,11 @@ if (initialHash?.screen === 'calendar' && initialHash.taskId) {
 // из nav-снимка или localStorage при монтировании
 if (initialHash?.screen === 'chats' && initialHash.chatId) {
   localStorage.setItem('cc_open_chat', initialHash.chatId)
+}
+// Диплинк #/telemetry/incident/{fingerprint} — карточка инцидента из уведомления
+// об алерте: TelemetryPage забирает отпечаток при монтировании
+if (initialHash?.screen === 'telemetry' && initialHash.incidentFingerprint) {
+  setPendingIncident(initialHash.incidentFingerprint)
 }
 
 export default function App() {
@@ -999,6 +1005,16 @@ export default function App() {
       sessionStorage.setItem('cc_pending_knowledge', target.knowledgeId)
       if (effectiveHubTab === 'knowledge') window.dispatchEvent(new Event('cc-open-knowledge'))
       else switchHubTab('knowledge')
+      return
+    }
+    // Диплинк в раздел «Телеметрия»: карточка инцидента (#/telemetry/incident/{fp}) или
+    // просто вкладка «Инциденты» (#/telemetry/incidents — сводное уведомление о лавине).
+    // Раздел может быть УЖЕ открыт: switchHubTab его не перемонтирует, поэтому там, где
+    // соседи шлют событие, шлём и мы — иначе тап по уведомлению не делал бы ничего.
+    if (target?.screen === 'telemetry' && (target.incidentFingerprint || target.telemetryIncidents)) {
+      if (target.incidentFingerprint) setPendingIncident(target.incidentFingerprint)
+      if (effectiveHubTab === 'telemetry') window.dispatchEvent(new Event(INCIDENT_OPEN_EVENT))
+      else switchHubTab('telemetry')
       return
     }
     // Диплинк #/history — это overlay «Что нового», а не раздел: parseHash отдаёт его как

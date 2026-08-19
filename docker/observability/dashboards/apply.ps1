@@ -15,7 +15,9 @@
     POST если нового. Re-run безопасен, дашборды не дублируются.
 
 .PARAMETER SignozUrl
-    Базовый URL SigNoz. По умолчанию http://localhost:3301.
+    Базовый URL SigNoz ВМЕСТЕ с base-path. По умолчанию http://localhost:3301/telemetry-proxy:
+    с v0.134 SigNoz поднимает весь HTTP-сервер под префиксом из SIGNOZ_GLOBAL_EXTERNAL__URL,
+    и URL без него отвечает 404 на всё, кроме /api/v1/health.
 
 .PARAMETER Jwt
     Готовый JWT access-токен. Если не задан — берётся из $env:SIGNOZ_JWT.
@@ -50,7 +52,7 @@
 #>
 [CmdletBinding(DefaultParameterSetName = 'Jwt')]
 param(
-    [string]$SignozUrl = $(if ($env:SIGNOZ_URL) { $env:SIGNOZ_URL } else { 'http://localhost:3301' }),
+    [string]$SignozUrl = $(if ($env:SIGNOZ_URL) { $env:SIGNOZ_URL } else { 'http://localhost:3301/telemetry-proxy' }),
 
     [Parameter(ParameterSetName = 'Jwt')]
     [string]$Jwt = $env:SIGNOZ_JWT,
@@ -144,7 +146,7 @@ try {
     $existing = Invoke-RestMethod -Uri "$SignozUrl/api/v1/dashboards" -Headers $headers -TimeoutSec 10
 }
 catch {
-    throw "GET /api/v1/dashboards не удался: $($_.Exception.Message). Проверь JWT и URL."
+    throw "GET /api/v1/dashboards не удался: $($_.Exception.Message). Проверь JWT и URL. Если это 404 — URL нужен С base-path (по умолчанию /telemetry-proxy): с v0.134 SigNoz поднимает под ним ВЕСЬ API, в корне живёт только /api/v1/health."
 }
 
 # SigNoz v0.71 возвращает { status, data: [...] } или массив напрямую

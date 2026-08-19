@@ -15,7 +15,9 @@
     сообщает, если нет — иначе ошибка приходит на каждом файле по отдельности.
 
 .PARAMETER SignozUrl
-    Базовый URL SigNoz. По умолчанию http://localhost:3301.
+    Базовый URL SigNoz ВМЕСТЕ с base-path. По умолчанию http://localhost:3301/telemetry-proxy:
+    с v0.134 SigNoz поднимает весь HTTP-сервер под префиксом из SIGNOZ_GLOBAL_EXTERNAL__URL,
+    и URL без него отвечает 404 на всё, кроме /api/v1/health.
 
 .PARAMETER Jwt
     Service Account key / PAT / JWT. По умолчанию $env:SIGNOZ_JWT (или файл кред).
@@ -31,7 +33,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$SignozUrl = $(if ($env:SIGNOZ_URL) { $env:SIGNOZ_URL } else { 'http://localhost:3301' }),
+    [string]$SignozUrl = $(if ($env:SIGNOZ_URL) { $env:SIGNOZ_URL } else { 'http://localhost:3301/telemetry-proxy' }),
     [string]$Jwt = $env:SIGNOZ_JWT,
     [string]$AlertsDir = $PSScriptRoot
 )
@@ -88,7 +90,7 @@ try {
     $existing = Invoke-RestMethod -Uri "$SignozUrl/api/v1/rules" -Headers $headers -TimeoutSec 10
 }
 catch {
-    throw "GET /api/v1/rules не удался: $($_.Exception.Message). Проверь ключ и URL."
+    throw "GET /api/v1/rules не удался: $($_.Exception.Message). Проверь ключ и URL. Если это 404 — URL нужен С base-path (по умолчанию /telemetry-proxy): с v0.134 SigNoz поднимает под ним ВЕСЬ API, в корне живёт только /api/v1/health."
 }
 $existingRules = @($existing.data.rules)
 Write-Host "✓ Правил в SigNoz: $($existingRules.Count)" -ForegroundColor Green

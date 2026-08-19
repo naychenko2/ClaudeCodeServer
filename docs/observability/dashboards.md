@@ -207,7 +207,7 @@ $env:SIGNOZ_JWT = "signoz-pat-..."
 # $env:SIGNOZ_PASSWORD = "your-password"
 
 # опционально:
-# $env:SIGNOZ_URL = "http://localhost:3301"
+# $env:SIGNOZ_URL = "http://localhost:3301/telemetry-proxy"
 ```
 
 ## Применение

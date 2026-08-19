@@ -27,13 +27,54 @@ public class TelemetryController : ControllerBase
     private readonly TelemetryUiOptions _options;
     private readonly IHttpClientFactory _httpFactory;
     private readonly IncidentDossierService _incidents;
+    private readonly ProjectManager _projects;
 
     public TelemetryController(
-        TelemetryUiOptions options, IHttpClientFactory httpFactory, IncidentDossierService incidents)
+        TelemetryUiOptions options, IHttpClientFactory httpFactory,
+        IncidentDossierService incidents, ProjectManager projects)
     {
         _options = options;
         _httpFactory = httpFactory;
         _incidents = incidents;
+        _projects = projects;
+    }
+
+    /// <summary>Маркер репозитория продукта: по нему узнаём «свой» проект среди чужих.</summary>
+    private static readonly string[] SelfMarker =
+        ["backend", "ClaudeHomeServer", "ClaudeHomeServer.csproj"];
+
+    /// <summary>
+    /// В каком проекте открывать «Обсудить». Разбор инцидента кончается правкой кода
+    /// продукта, поэтому разговор идёт там, где этот код лежит.
+    ///
+    /// Ищем САМИ, а не спрашиваем настройку: id проекта у каждой инсталляции свой, и
+    /// требовать его в конфиге — значит, что у всех, кроме автора, кнопка молча вела бы
+    /// в безымянный чат. Признак «своего» проекта — файл проекта бэкенда в корне; имя
+    /// для этого не годится, его переименовывают.
+    ///
+    /// Настройка <c>Telemetry:Incidents:DiscussProjectId</c> остаётся как перебивка для
+    /// нестандартной раскладки. Ничего не нашли — null, и чат откроется вне проектов.
+    /// </summary>
+    private string? ResolveDiscussProject(string ownerId)
+    {
+        if (!string.IsNullOrWhiteSpace(_incidents.DiscussProjectId))
+            return _incidents.DiscussProjectId;
+
+        // Порядок детерминированный: сначала СВОИ проекты, потом ничьи, внутри — по id.
+        // Одна папка может быть заведена у нескольких владельцев (это разрешено), и без
+        // порядка кнопка вела бы то в один проект, то в другой — от перезапуска к перезапуску.
+        var candidates = _projects.GetAll()
+            .Where(p => p.OwnerId is null || p.OwnerId == ownerId)
+            .Where(p => !string.IsNullOrWhiteSpace(p.RootPath))
+            .OrderBy(p => p.OwnerId == ownerId ? 0 : 1)
+            .ThenBy(p => p.Id, StringComparer.Ordinal);
+
+        foreach (var project in candidates)
+        {
+            var marker = Path.Combine([project.RootPath, .. SelfMarker]);
+            if (System.IO.File.Exists(marker)) return project.Id;
+        }
+        return null;
     }
 
     /// <summary>
@@ -67,6 +108,9 @@ public class TelemetryController : ControllerBase
             configured = _options.Enabled,
             reachable,
             proxyPath = "/telemetry-proxy/",
+            // Проект, в котором открывать «Обсудить». Отдаём в статусе, а не в досье:
+            // значение одно на инстанс и нужно ещё до того, как выбран инцидент.
+            discussProjectId = ResolveDiscussProject(User.FindFirstValue(JwtRegisteredClaimNames.Sub) ?? ""),
         });
     }
 

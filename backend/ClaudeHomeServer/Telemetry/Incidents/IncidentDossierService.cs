@@ -41,6 +41,9 @@ public sealed class IncidentDossierService(
 
     public bool IsConfigured => options.IsConfigured;
 
+    /// <summary>Проект для обсуждения инцидента; null — чат вне проектов.</summary>
+    public string? DiscussProjectId => options.DiscussProjectId;
+
     /// <summary>
     /// Список инцидентов: горящие сейчас + недавно погасшие (история в
     /// <see cref="AlertStateStore"/>). Порядок — свежие первыми, горящие выше погасших.

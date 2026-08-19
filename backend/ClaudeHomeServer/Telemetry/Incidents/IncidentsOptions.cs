@@ -32,6 +32,17 @@ public sealed record IncidentsOptions
     /// </summary>
     public int WindowMinutes { get; init; } = 60;
 
+    /// <summary>
+    /// Проект, в котором открывать обсуждение инцидента («Обсудить»).
+    ///
+    /// Обычно задавать НЕ НАДО: продукт сам находит проект со своими исходниками
+    /// (см. <c>TelemetryController.ResolveDiscussProject</c>) — маркером служит
+    /// <c>backend/ClaudeHomeServer/ClaudeHomeServer.csproj</c> в корне проекта.
+    /// Настройка нужна лишь там, где раскладка нестандартная или проектов-копий
+    /// несколько: она перебивает автопоиск.
+    /// </summary>
+    public string? DiscussProjectId { get; init; }
+
     /// <summary>Потолок ожидания одного запроса к SigNoz. Раздел открывается человеком — висеть нельзя.</summary>
     public int TimeoutSeconds { get; init; } = 20;
 
@@ -53,6 +64,7 @@ public sealed record IncidentsOptions
             SignozUrl = string.IsNullOrWhiteSpace(url) ? "http://localhost:3301/telemetry-proxy" : url,
             ApiKey = section.GetValue<string>("ApiKey") ?? alerts.GetValue<string>("ApiKey"),
             Environment = config.GetValue<string>("Telemetry:Mode") ?? "dev",
+            DiscussProjectId = section.GetValue<string>("DiscussProjectId"),
             WindowMinutes = section.GetValue<int?>("WindowMinutes") ?? 60,
             TimeoutSeconds = section.GetValue<int?>("TimeoutSeconds") ?? 20,
         };

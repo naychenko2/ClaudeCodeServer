@@ -47,6 +47,9 @@ interface Props {
   // Открыть путь внутри встроенного SigNoz (соседняя вкладка раздела). Абсолютной
   // ссылкой это сделать нельзя: адрес SigNoz у бэкенда — localhost.
   onOpenInSignoz?: (path: string) => void;
+  // Проект, в котором открывать «Обсудить» (Telemetry:Incidents:DiscussProjectId).
+  // null — чат вне проектов, как у прочих глобальных действий.
+  discussProjectId?: string | null;
 }
 
 type DossierError = { kind: 'notFound' | 'network' };

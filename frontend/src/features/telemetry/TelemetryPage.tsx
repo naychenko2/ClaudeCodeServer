@@ -57,7 +57,7 @@ function ensureSignozLightDefault() {
   } catch { /* localStorage недоступен — не критично */ }
 }
 
-type Status = { configured: boolean; reachable: boolean; proxyPath: string };
+type Status = { configured: boolean; reachable: boolean; proxyPath: string; discussProjectId?: string | null };
 type Tab = 'incidents' | 'signoz';
 
 export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
@@ -200,6 +200,7 @@ export function TelemetryPage({ auth, onLogout, onHubTab, onOpenChat }: Props) {
           ? (
             <IncidentsPanel
               status={status ? { configured: status.configured, reachable: status.reachable } : null}
+              discussProjectId={status?.discussProjectId ?? null}
               statusLoading={loading}
               initialFingerprint={pendingIncident}
               onOpenChat={onOpenChat}

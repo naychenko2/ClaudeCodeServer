@@ -22,7 +22,9 @@ public class ProjectIconCatalogTests
         Assert.Equal("Проекты", action.Group);
         Assert.Equal(CheapProfile.Large, action.Profile);
         Assert.False(action.DefaultLocal);
-        Assert.Equal(ModelTier.Strong, LocalActionCatalog.EffectiveDefaultTier(action!));
+        // Medium: после вырезания генерации path'ов задача — назвать имя из набора
+        // (Strong поднимался 2026-08-17 под рисование)
+        Assert.Equal(ModelTier.Medium, LocalActionCatalog.EffectiveDefaultTier(action!));
         Assert.True(LocalActionCatalog.IsKnown("project-icon"));
     }
 
@@ -40,56 +42,30 @@ public class ProjectIconCatalogTests
 }
 
 
-// Разбор и валидация ответа модели по контракту ADR-009: имя только из белого списка,
-// пути — алфавит/форма чисел/синтаксис/габарит, взаимоисключительность видов и сборка
-// SVG только на сервере. Критерий задачи: подставной ответ с сырой разметкой или именем
-// вне белого списка = пустой результат, а не значок.
+// Разбор и валидация ответа модели по контракту ADR-009: имя только из белого списка.
+// Рисованные пути вырезаны: ответ с paths вместо имени — негодный кандидат, при нуле
+// годных — пустой результат (фолбэк на инициалы), а не значок.
 public class ProjectIconGlyphServiceTests
 {
-    // Нарисованные пути — в габарите контракта [-4, 28]: пример из ADR-009 §2.2 с
-    // координатами -5/-6 его же лимиту §3.4 не удовлетворяет, здесь данные годные
-    private const string ValidPathsJson =
-        """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"paths":["M3 21h18","M6 21V9l6-4 6 4v12","M10 21v-4h4v4"]},{"paths":["M4 18l5-4 4 4 7-4","M16 8h4v4"]}]}""";
+    private const string ValidNamesJson =
+        """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"name":"wallet"},{"name":"rocket"}]}""";
 
     [Fact]
-    public void ГодныйОтвет_ДаДоЧетырёхКандидатовВперемешку()
+    public void ГодныйОтвет_ДоЧетырёхИмён()
     {
-        var result = ProjectIconGlyphService.Parse(ValidPathsJson);
+        var result = ProjectIconGlyphService.Parse(ValidNamesJson);
 
         Assert.True(result.Ok);
         Assert.Equal(4, result.Candidates.Count);
-        // Виды вперемешку: два имени + два нарисованных, порядок модели сохранён
-        Assert.Equal(["piggy-bank", "chart-line"],
-            result.Candidates.Take(2).Select(c => c.Name));
-        Assert.All(result.Candidates.Skip(2), c => Assert.False(c.IsNamed));
-        Assert.All(result.Candidates.Skip(2), c => Assert.NotNull(c.Paths));
-    }
-
-    // Габарит считается по фактическим точкам, а не по каждому числу: модель законно
-    // пишет отрицательные сдвиги относительных команд (l6-5), пока точки в холсте —
-    // живая выборка сильной модели 17.08 показала, что «каждое число [-4,28]» выкашивало
-    // до половины рисунков целиком
-    [Theory]
-    [InlineData("M6 21V9l6-5 6 5v12")]          // пример из ADR-009 §2.2 (дельта -5)
-    [InlineData("M12 14c0-2 1-4 3-5")]          // кривая с отрицательными дельтами
-    [InlineData("M12 22v-8")]
-    [InlineData("M12 12l-6-4")]
-    [InlineData("M0 0c.5 1 1.5 1 2 0")]         // ведущая точка — форма SVG
-    [InlineData("M4 12a8 8 0 0 1 16 0")]        // дуга с флагами 0/1
-    [InlineData("M2 2 20 2 20 20")]             // повторная пара M = неявный L
-    [InlineData("M0 0L10 10L0 10Z")]            // Z-возврат к старту субпоя
-    [InlineData("M0 0c1 1 2 1 3 0s2-1 3 0")]    // S после C с отражением
-    public void ОтрицательныеСдвигиИДробиБезНуля_ВалидныПоФактическимТочкам(string d)
-    {
-        Assert.True(ProjectIconGlyphService.IsValidPath(d));
-        Assert.True(ProjectIconGlyphService.Parse(
-            "{\"glyphs\":[{\"paths\":[\"" + d + "\"]}]}").Ok);
+        Assert.Equal(["piggy-bank", "chart-line", "wallet", "rocket"],
+            result.Candidates.Select(c => c.Name));
+        Assert.Null(result.FailReason);
     }
 
     [Fact]
     public void ОтветВМаркдаунЗаборе_Разбирается()
     {
-        var result = ProjectIconGlyphService.Parse("```json\n" + ValidPathsJson + "\n```");
+        var result = ProjectIconGlyphService.Parse("```json\n" + ValidNamesJson + "\n```");
 
         Assert.True(result.Ok);
         Assert.Equal(4, result.Candidates.Count);
@@ -128,8 +104,32 @@ public class ProjectIconGlyphServiceTests
 
         Assert.True(result.Ok);
         Assert.Equal(["haze", "x"], result.Candidates.Select(c => c.Name).ToList());
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("haze", null));
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("x", null));
+        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("haze"));
+        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("x"));
+    }
+
+    // Модель ещё может слать рисованные пути (ветка вырезана) — они отбрасываются как
+    // негодные кандидаты, годные имена из того же ответа остаются
+    [Fact]
+    public void ПутиВместоИмени_НегодныйКандидатГодныеИменаОстаются()
+    {
+        var result = ProjectIconGlyphService.Parse(
+            """{"glyphs":[{"paths":["M3 21h18"]},{"name":"wallet"},{"name":"nope"}]}""");
+
+        Assert.True(result.Ok);
+        var candidate = Assert.Single(result.Candidates);
+        Assert.Equal("wallet", candidate.Name);
+    }
+
+    [Fact]
+    public void ТолькоПути_ОтказПустымРезультатом()
+    {
+        var result = ProjectIconGlyphService.Parse(
+            """{"glyphs":[{"paths":["M3 21h18","M6 21V9l6-4 6 4v12"]}]}""");
+
+        Assert.False(result.Ok);
+        Assert.Empty(result.Candidates);
+        Assert.Equal("glyph-shape:paths", result.FailReason);
     }
 
     [Fact]
@@ -143,61 +143,15 @@ public class ProjectIconGlyphServiceTests
     }
 
     [Theory]
-    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""")]      // оба поля сразу
-    [InlineData("""{"glyphs":[{}]}""")]                                          // ни одного
-    [InlineData("""{"glyphs":[{"paths":[]}]}""")]                                // пустой список путей
-    [InlineData("""{"glyphs":[{"paths":["M0 0","M2 2","M4 4","M6 6","M8 8","M10 10","M12 12","M14 14","M16 16","M18 18","M20 20","M22 22","M23 23"]}]}""")] // больше 12 путей
-    [InlineData("""{"glyphs":[{"paths":["M0 0e5 5"]}]}""")]                      // экспонента
-    [InlineData("""{"glyphs":[{"paths":["M100 100h1"]}]}""")]                    // габарит: 100 вне [-4, 28]
-    [InlineData("""{"glyphs":[{"paths":["L0 0h1"]}]}""")]                        // первая команда не M
-    [InlineData("""{"glyphs":[{"paths":["M0 0h"]}]}""")]                         // арность H не соблюдена
-    [InlineData("""{"glyphs":[{"paths":["M0 0h1.234"]}]}""")]                    // три знака после точки
+    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""")]   // paths и имя вместе
+    [InlineData("""{"glyphs":[{}]}""")]                                       // ни одного поля
+    [InlineData("""{"glyphs":[{"paths":[]}]}""")]                             // пустой список путей
     public void НегодныеКандидаты_Отбрасываются(string raw)
     {
         var result = ProjectIconGlyphService.Parse(raw);
 
         Assert.False(result.Ok);
         Assert.Empty(result.Candidates);
-    }
-
-    [Fact]
-    public void ПутьДлиннееЛимита_КандидатОтброшен()
-    {
-        // Алфавит валиден (M/l и цифры), но строка длиннее 256 символов
-        var longPath = "M0 0" + new string('l', 260);
-        var result = ProjectIconGlyphService.Parse(
-            "{\"glyphs\":[{\"paths\":[\"" + longPath + "\"]}]}");
-
-        Assert.False(result.Ok);
-        Assert.Empty(result.Candidates);
-        Assert.Equal($"path-length:264>{ProjectIconGlyphService.MaxPathLength}", result.FailReason);
-    }
-
-    [Fact]
-    public void СуммарнаяДлинаПутейСверхЛимита_ПричинаСЛимитомИЗначением()
-    {
-        // Пилообразное движение (точки в холсте, команды в лимите) даёт 224 символа на
-        // путь × 4 = 896 > 768: ни один путь по отдельности лимит не ломает — только сумма
-        var d = "M0 0" + string.Concat(Enumerable.Repeat("l10.5 10.5l-10.5 -10.5", 10));
-        Assert.Equal(224, d.Length);
-        Assert.True(ProjectIconGlyphService.IsValidPath(d));
-        var result = ProjectIconGlyphService.Parse(
-            "{\"glyphs\":[{\"paths\":[\"" + d + "\",\"" + d + "\",\"" + d + "\",\"" + d + "\"]}]}");
-
-        Assert.False(result.Ok);
-        Assert.Equal($"path-total:896>{ProjectIconGlyphService.MaxPathsTotalLength}", result.FailReason);
-    }
-
-    [Fact]
-    public void НеОтданНиОдинГодный_ПорогОдин()
-    {
-        // Один годный из смеси с мусором — уже успех (ADR-009 §3: порог годности один)
-        var result = ProjectIconGlyphService.Parse(
-            """{"glyphs":[{"paths":["<script>"]},{"name":"wallet"},{"name":"nope"}]}""");
-
-        Assert.True(result.Ok);
-        var candidate = Assert.Single(result.Candidates);
-        Assert.Equal("wallet", candidate.Name);
     }
 
     [Fact]
@@ -225,29 +179,13 @@ public class ProjectIconGlyphServiceTests
     }
 
     // Причины отказа различимы по классам (задача «логи причин отказа»): код называет,
-    // что именно не прошло; по лимитам — ещё и значение с границей
+    // что именно не прошло
     [Theory]
     [InlineData("""{"glyphs":[]}""", "no-glyphs")]
-    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""", "glyph-shape:both")]
     [InlineData("""{"glyphs":[{}]}""", "glyph-shape:none")]
     [InlineData("""{"glyphs":[{"name":"nope"}]}""", "name-out:nope")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0","M2 2","M4 4","M6 6","M8 8","M10 10","M12 12","M14 14","M16 16","M18 18","M20 20","M22 22","M23 23"]}]}""", "path-count:13>12")]
-    [InlineData("""{"glyphs":[{"paths":["M29 0h1"]}]}""", "path-coord:29>28")]
-    [InlineData("""{"glyphs":[{"paths":["M-5 0h1"]}]}""", "path-coord:-5<-4")]
-    // габарит — по фактическим точкам: дельта относительной команды, уводящая точку за холст
-    [InlineData("""{"glyphs":[{"paths":["M0 0l30 0"]}]}""", "path-coord:30>28")]
-    [InlineData("""{"glyphs":[{"paths":["M20 20l0 -30"]}]}""", "path-coord:-10<-4")]
-    // контрольная точка C за допуском
-    [InlineData("""{"glyphs":[{"paths":["M0 0C30 0 2 2 2 2"]}]}""", "path-coord:30>28")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0a-1 1 0 0 1 2 0"]}]}""", "path-radius:-1<0")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0a29 29 0 0 1 2 0"]}]}""", "path-radius:29>28")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0a1 1 0 2 1 2 0"]}]}""", "path-arc-flag:2")]
-    [InlineData("""{"glyphs":[{"paths":["M100 100h1"]}]}""", "path-number:100")]   // 3 цифры ломают форму раньше габарита
-    [InlineData("""{"glyphs":[{"paths":["M0 0e5 5"]}]}""", "path-char:e")]
-    [InlineData("""{"glyphs":[{"paths":["L0 0h1"]}]}""", "path-start:L")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0h"]}]}""", "path-arity:h")]
-    [InlineData("""{"glyphs":[{"paths":["M0 0h1.234"]}]}""", "path-number:1.234")]
-    [InlineData("""{"glyphs":[{"paths":[]}]}""", "no-paths")]
+    [InlineData("""{"glyphs":[{"paths":["M0 0h1"]}]}""", "glyph-shape:paths")]
+    [InlineData("""{"glyphs":[{"name":"house","paths":["M3 21h18"]}]}""", "glyph-shape:paths")]
     public void ПричинаОтказа_КлассИЗначение(string raw, string expected)
     {
         var result = ProjectIconGlyphService.Parse(raw);
@@ -260,32 +198,10 @@ public class ProjectIconGlyphServiceTests
     public void ValidateGlyph_ПовторнаяВалидацияТойЖеТочкойВхода()
     {
         // icon/select присылает значок телом — валидация та же, что для модели (ADR-009 §8)
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("wallet", null));
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph("нет-такого", null));
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph("wallet", ["M3 21h18"]));   // оба вида
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph(null, null));
-        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph(null, new[] { "M3 21h18", "M4 4h6v6" }));
-        Assert.Null(ProjectIconGlyphService.ValidateGlyph(null, new[] { "M3 21h18", "<b>" }));
-    }
-
-    [Fact]
-    public void GlyphSvg_СобираетсяБезРазметкиОтМодели()
-    {
-        var svg = GlyphSvg.Build(["M3 21h18", "M6 21V9l6-5 6 5v12"]);
-
-        // Шаблонные атрибуты совпадают с ICON_PROPS фронта: штрих, толщина 2, currentColor.
-        // Порядок атрибутов у XmlWriter не гарантирован (xmlns может уехать не первым) —
-        // проверяем состав, а не последовательность
-        Assert.StartsWith("<svg ", svg);
-        Assert.Contains("xmlns=\"http://www.w3.org/2000/svg\"", svg);
-        Assert.Contains("viewBox=\"0 0 24 24\"", svg);
-        Assert.Contains("fill=\"none\"", svg);
-        Assert.Contains("stroke=\"currentColor\"", svg);
-        Assert.Contains("stroke-width=\"2\"", svg);
-        Assert.Contains("stroke-linecap=\"round\"", svg);
-        Assert.Contains("stroke-linejoin=\"round\"", svg);
-        Assert.Equal(2, svg.Split("<path").Length - 1);
-        Assert.DoesNotContain("<text", svg);
+        Assert.NotNull(ProjectIconGlyphService.ValidateGlyph("wallet"));
+        Assert.Null(ProjectIconGlyphService.ValidateGlyph("нет-такого"));
+        Assert.Null(ProjectIconGlyphService.ValidateGlyph(null));
+        Assert.Null(ProjectIconGlyphService.ValidateGlyph("  "));
     }
 
     [Fact]
@@ -486,8 +402,8 @@ public class ProjectIconGlyphLoggingTests
         // (3) имя вне белого списка
         await Service(logger, _ => """{"glyphs":[{"name":"super-kitty"}]}""")
             .SuggestAsync("Проект Гамма", null, owner);
-        // (4) путь не прошёл лимит: габарит 29 при границе 28
-        await Service(logger, _ => """{"glyphs":[{"paths":["M29 0h1"]}]}""")
+        // (4) ответ с путями вместо имени — ветка рисования вырезана
+        await Service(logger, _ => """{"glyphs":[{"paths":["M3 21h18"]}]}""")
             .SuggestAsync("Проект Дельта", null, owner);
 
         Assert.Equal(4, logger.Entries.Count);
@@ -499,7 +415,7 @@ public class ProjectIconGlyphLoggingTests
         Assert.Contains("«Проект Гамма»", logger.Entries[2].Message);
         Assert.Contains("name-out:super-kitty", logger.Entries[2].Message);
         Assert.Contains("«Проект Дельта»", logger.Entries[3].Message);
-        Assert.Contains("path-coord:29>28", logger.Entries[3].Message);
+        Assert.Contains("glyph-shape:paths", logger.Entries[3].Message);
     }
 
     [Fact]

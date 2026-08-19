@@ -67,11 +67,10 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
       // же валидатор на входе, тот же контракт. Сбой не отменяет создание — значок
       // можно подобрать в «Редактировать проект» (как раньше с генеративной иконкой).
       let created = p;
-      if (draftGlyph && (draftGlyph.name || (draftGlyph.paths && draftGlyph.paths.length))) {
+      if (draftGlyph && draftGlyph.name) {
         try {
           created = await api.projects.selectIcon(p.id, {
-            name: draftGlyph.name ?? null,
-            paths: draftGlyph.paths ?? null,
+            name: draftGlyph.name,
           });
         } catch { /* проект создан, иконку можно доставить в настройках проекта */ }
       }
@@ -106,7 +105,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
       />
 
       {/* Иконка + название проекта (тот же блок, что в «Редактировать проект»). В режиме
-          создания значок держится в draftGlyph (name/paths) и крепится через selectIcon
+          создания значок держится в draftGlyph (name lucide) и крепится через selectIcon
           после create(). Черновой Project несёт актуальные name/color для превью. */}
       <ProjectIconSection
         creating
@@ -115,7 +114,7 @@ export function AddProjectDialog({ groups, defaultGroupId, onSuccess, onClose }:
           icon: {
             kind: 'glyph',
             color: color ?? undefined,
-            glyph: draftGlyph ? { name: draftGlyph.name ?? null, paths: draftGlyph.paths ?? null } : null,
+            glyph: draftGlyph ? { name: draftGlyph.name ?? null } : null,
           },
         }}
         name={name}

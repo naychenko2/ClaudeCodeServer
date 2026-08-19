@@ -25,15 +25,13 @@ public class ProjectIcon
     public ProjectGlyph? Glyph { get; set; }
 }
 
-// Значок (ADR-009 §6): имя иконки из белого списка lucide ЛИБО нарисованные моделью
-// пути — заполнено ровно одно (инвариант §11.4 держит валидатор на входе в стор,
-// ProjectIconGlyphService.ValidateGlyph). Разметку из путей собирает GlyphSvg.Build.
+// Значок (ADR-009 §6): имя иконки из белого списка lucide. Рисованные моделью пути
+// вырезаны — значок всегда называется именем (инвариант держит валидатор на входе
+// в стор, ProjectIconGlyphService.ValidateGlyph).
 public sealed class ProjectGlyph
 {
-    // Имя из белого списка; взаимоисключительно с Paths
+    // Имя из белого списка lucide
     public string? Name { get; set; }
-    // 1–4 провалидированные строки d (ADR-009 §3)
-    public List<string>? Paths { get; set; }
     public DateTime SetAt { get; set; }
 }
 

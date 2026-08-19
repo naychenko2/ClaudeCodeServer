@@ -222,7 +222,7 @@ public class ProjectManager
         return project;
     }
 
-    // Установить подобранный значок (ADR-009 §6): Kind = Glyph, Glyph = {Name|Paths, SetAt}.
+    // Установить подобранный значок (ADR-009 §6): Kind = Glyph, Glyph = {Name, SetAt}.
     // Значок обязан пройти валидацию ДО вызова (контроллер, ProjectIconGlyphService.ValidateGlyph) —
     // инвариант «валидация на входе в стор» (§11.3).
     public Project SetIconGlyph(string id, ProjectGlyph glyph)

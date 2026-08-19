@@ -72,18 +72,17 @@ export interface Project {
   background?: ProjectBackground | null;
 }
 
-// Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — SVG-значок
-// из белого списка lucide (name) либо нарисованный моделью (paths). Проверка показа
-// значка — СТРОГО положительная (`kind === 'glyph'`, не `kind !== 'initials'`): старая
-// запись с числовым Kind = 1 (бывший Image) должна тихо деградировать в инициалы,
-// а не притворяться глифом. color — ключ палитры AGENT_COLORS, красит плитку и глиф
-// через currentColor.
+// Иконка проекта (ADR-009): initials — две буквы на цветной плитке; glyph — значок из
+// белого списка lucide (только name). Проверка показа значка — СТРОГО положительная
+// (`kind === 'glyph'`, не `kind !== 'initials'`): старая запись с числовым Kind = 1
+// (бывший Image) должна тихо деградировать в инициалы, а не притворяться глифом.
+// color — ключ палитры AGENT_COLORS, красит плитку и глиф через currentColor.
 export interface ProjectIcon {
   kind: 'initials' | 'glyph';
   color?: string;
-  // Значок: заполнено ровно одно из name/paths. Проверка на клиенте: glyph присутствует
-  // и (name есть ИЛИ paths непустой). Иначе — рисуем инициалы (§7 ADR-009).
-  glyph?: { name?: string | null; paths?: string[] | null } | null;
+  // Имя lucide-значка. Проверка на клиенте: glyph присутствует и name непустой.
+  // Иначе — рисуем инициалы (§7 ADR-009).
+  glyph?: { name?: string | null } | null;
 }
 
 // Колонка Kanban-доски проекта. category — семантическая категория статуса

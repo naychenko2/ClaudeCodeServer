@@ -38,9 +38,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return new { p.Id, p.Name, p.RootPath, RelativePath = relativePath, p.CreatedAt, p.UpdatedAt, p.GroupId, p.SystemPrompt, p.ShowHiddenFiles, p.PermissionRules, p.BoardColumns, p.TagRegistry, Icon = ProjectIconDto(p.Icon), p.McpServersOn, Background = Services.Backgrounds.ProjectBackgroundView.Of(p), BuiltInSystemPrompt = ProjectManager.BuiltInSystemPrompt, SessionCount = sessions.CountByProject(p.Id), DefaultPersonaId = defaultPersonaId, p.OnboardingSessionId, p.PresetKey };
     }
 
-    // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ (имя либо пути), разметку фронт не
-    // получает — имя рисует компонент lucide, пути уходят значением атрибута d. Поле v —
-    // версия содержимого значка для cache-busting у icon.svg (ADR-009 §8).
+    // DTO иконки (ADR-009 §4): значок едет ДАННЫМИ — имя рисует компонент lucide фронта,
+    // разметки фронт не получает. Поле v — версия содержимого значка (ADR-009 §8).
     private static object ProjectIconDto(ProjectIcon icon) => new
     {
         icon.Kind,
@@ -48,21 +47,15 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         Glyph = icon.Glyph is null ? null : new
         {
             icon.Glyph.Name,
-            icon.Glyph.Paths,
             icon.Glyph.SetAt,
             V = GlyphVersion(icon.Glyph),
         },
     };
 
     // Первые 8 hex от SHA-256 содержимого значка: меняется вместе со значком,
-    // стабильна между рестартами (ADR-009 §8, параметр ?v= у icon.svg)
-    private static string GlyphVersion(ProjectGlyph glyph)
-    {
-        var payload = glyph.Name is not null
-            ? "n:" + glyph.Name
-            : "p:" + string.Join('\n', glyph.Paths ?? []);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(payload)))[..8].ToLowerInvariant();
-    }
+    // стабильна между рестартами (ADR-009 §8)
+    private static string GlyphVersion(ProjectGlyph glyph) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("n:" + glyph.Name)))[..8].ToLowerInvariant();
 
     [HttpGet("builtin-prompt")]
     public IActionResult GetBuiltinPrompt() => Ok(new { content = ProjectManager.BuiltInSystemPrompt });
@@ -415,18 +408,16 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         return Ok(IconSuggestView(result));
     }
 
-    // Форма ответа подбора — общая для suggest и suggest-preview: кандидаты
-    // (имя либо пути) плюс причина пустого набора.
+    // Форма ответа подбора — общая для suggest и suggest-preview: кандидаты (имена из
+    // набора lucide) плюс причина пустого набора.
     private static object IconSuggestView(Services.ProjectIcons.ProjectIconGlyphResult result) => new
     {
-        candidates = result.Candidates.Select(c => c.IsNamed
-            ? (object)new { name = c.Name }
-            : new { paths = c.Paths }),
+        candidates = result.Candidates.Select(c => new { name = c.Name }),
         result.FailReason,
     };
 
-    // Принять значок: Kind = Glyph, Glyph = {Name|Paths}. Тело валидируется ЦЕЛИКОМ заново
-    // тем же валидатором, что и ответ модели, — клиент такой же недоверенный источник
+    // Принять значок: Kind = Glyph, Glyph = {Name, SetAt}. Имя валидируется заново тем же
+    // валидатором, что и ответ модели, — клиент такой же недоверенный источник
     // (ADR-009 §8, инвариант «валидация на входе в стор» §11.3).
     [HttpPost("{id}/icon/select")]
     public ActionResult SelectIcon(string id, [FromBody] SelectIconRequest req)
@@ -434,17 +425,18 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         var p = projects.GetById(id);
         if (p is null || p.OwnerId != UserId) return NotFound();
 
-        var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(req.Name, req.Paths);
-        if (candidate is null)
+        var candidate = Services.ProjectIcons.ProjectIconGlyphService.ValidateGlyph(req.Name);
+        // Paths в теле — пережиток вырезанной ветки рисования: неоднозначное тело (имя
+        // вместе с путями или только пути) отвергаем, как и прежде «ровно одно поле»
+        if (candidate is null || req.Paths is { Count: > 0 })
             return BadRequest(new
             {
-                error = "Негодный значок: нужно ровно одно поле — name из набора либо 1–4 корректные строки d",
+                error = "Негодный значок: нужно имя иконки из набора lucide",
             });
 
         return Ok(WithCount(projects.SetIconGlyph(id, new ProjectGlyph
         {
             Name = candidate.Name,
-            Paths = candidate.Paths?.ToList(),
             SetAt = DateTime.UtcNow,
         })));
     }
@@ -469,31 +461,15 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
 
         return Ok(WithCount(projects.SetIconKind(id, kind.Value)));
     }
-
-    // Собранный сервером SVG значка — единственная разрешённая форма значка как
-    // самостоятельного ресурса (ADR-009 §4). Только Paths-вид: Name-значок рисует фронт
-    // компонентом lucide, файла для него не существует. access_token в query — для <img>.
-    [HttpGet("{id}/icon.svg")]
-    public IActionResult IconSvg(string id)
-    {
-        var p = projects.GetById(id);
-        if (p is null || p.OwnerId != UserId
-            || p.Icon.Kind != ProjectIconKind.Glyph
-            || p.Icon.Glyph?.Paths is not { Count: > 0 } paths)
-            return NotFound();
-
-        Response.Headers.CacheControl = "private, max-age=604800, immutable";
-        Response.Headers.XContentTypeOptions = "nosniff";
-        Response.Headers.ContentSecurityPolicy = "default-src 'none'";
-        return Content(Services.ProjectIcons.GlyphSvg.Build(paths), "image/svg+xml");
-    }
 }
 
 // Контракт — «prompt», как шлёт фронт (api.ts); без атрибута поле молча терялось (QA 2026-08-17)
 public record SuggestIconRequest([property: JsonPropertyName("prompt")] string? Hint);
 // Preview-подбор до создания проекта: name — черновик названия, prompt — та же подсказка
 public record SuggestIconPreviewRequest(string? Name, [property: JsonPropertyName("prompt")] string? Hint);
-public record SelectIconRequest(string? Name, List<string>? Paths);
+// Paths в select больше не принимается — поле читается только чтобы отвергнуть
+// пережиточное тело старого фронта явным 400 вместо молчаливой установки имени
+public record SelectIconRequest(string? Name, List<string>? Paths = null);
 public record SetIconModeRequest(string? Kind);
 
 public record CreateProjectRequest(string Name, string? RootPath, bool CreateDirectory = false, string? GroupId = null,

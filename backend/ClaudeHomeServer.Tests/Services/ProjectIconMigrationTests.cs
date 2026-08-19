@@ -84,13 +84,11 @@ public class ProjectIconMigrationTests : IDisposable
         var summary = await Migration(cheap).RunAsync();
 
         Assert.Equal(new IconMigrationSummary(2, 0), summary);
-        // Вид «имя» предпочтительнее рисованного пути (ADR-009 §1)
         foreach (var project in new[] { first, second })
         {
             var icon = _projects.GetById(project.Id)!.Icon;
             Assert.Equal(ProjectIconKind.Glyph, icon.Kind);
             Assert.Equal("wallet", icon.Glyph!.Name);
-            Assert.Null(icon.Glyph.Paths);
         }
         // Бэкап снят штатным механизмом — в папке архивов появился zip
         Assert.NotEmpty(Directory.EnumerateFiles(Path.Combine(_tempDir, "archives"), "*.zip"));

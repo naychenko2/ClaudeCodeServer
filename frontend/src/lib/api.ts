@@ -9,12 +9,10 @@ export interface ModelTiers {
   weak: string | null;
 }
 
-// Кандидат значка проекта (ADR-009 §2.2): заполнено ровно одно из полей.
-// name — имя lucide-иконки из белого списка; paths — нарисованные моделью строки d.
-// Сервер валидирует оба варианта; на фронте достаточно хранить как есть.
+// Кандидат значка проекта (ADR-009 §2.2): name — имя lucide-иконки из белого списка.
+// Сервер валидирует на входе; на фронте достаточно хранить как есть.
 export interface GlyphCandidate {
   name?: string | null;
-  paths?: string[] | null;
 }
 
 
@@ -412,7 +410,7 @@ export const api = {
       ),
     // Принять кандидата: сервер валидирует тело целиком (источник не доверен, ADR-009 §8),
     // проставляет Kind=Glyph и Glyph, возвращает обновлённый проект.
-    selectIcon: (id: string, candidate: { name?: string | null; paths?: string[] | null }) =>
+    selectIcon: (id: string, candidate: { name?: string | null }) =>
       request<Project>(`/projects/${encodeURIComponent(id)}/icon/select`, {
         method: 'POST', body: JSON.stringify(candidate),
       }),

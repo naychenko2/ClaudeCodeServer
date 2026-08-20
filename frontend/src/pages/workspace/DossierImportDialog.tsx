@@ -34,7 +34,7 @@ const T = {
   body: 'Из ветки ccs/dossiers/v1 подтянутся записи, которых у вас ещё нет. Ваши записи не изменятся: если по коммиту есть и ваша, и приехавшая — в списке будут обе.',
   successPrefix: 'Загружено записей: ',
   nothing: 'Новых записей нет — всё, что есть в ветке, уже в истории решений.',
-  noBranch: 'В репозитории нет ветки ccs/dossiers/v1. Если её уже выгрузили и отправили — обновите репозиторий (git fetch) и повторите.',
+  noBranch: 'Загружать пока нечего: выгруженной истории решений в репозитории не нашлось. Возможно, её ещё ни разу не выгружали — или выгрузил коллега, но к вам она ещё не приехала: обновите репозиторий (git fetch) и повторите.',
   error: 'Не удалось загрузить историю решений. Ничего не изменилось — попробуйте ещё раз.',
   btnImport: 'Загрузить',
   btnCancel: 'Отмена',
@@ -134,8 +134,10 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
   };
 
   const busy = phase === 'loading';
-  // no-op пока идёт запрос: закрытие посреди git-операции оставило бы без ответа.
-  const guardedClose = busy ? () => {} : onClose;
+  // Закрытие разрешено в любой фазе, включая loading: запрос уже ушёл, его UI не
+  // отменит, но диалог запирать нельзя (QA фиксировал «не закрывается»). При ошибке
+  // catch выше переводит phase в 'error', busy сбрасывается, и закрытие работает штатно.
+  const handleClose = onClose;
 
   return (
     <Modal
@@ -144,7 +146,7 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
       // closeOnBackdrop=false во время запроса — иначе клик по оверлею посреди
       // git-чтения оставил бы пользователя без ответа.
       closeOnBackdrop={!busy}
-      onClose={guardedClose}
+      onClose={handleClose}
     >
       {(phase === 'confirm' || phase === 'loading') && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
@@ -201,7 +203,11 @@ export function DossierImportDialog({ open, onClose, projectId, onSuccess }: Pro
         {(phase === 'confirm' || phase === 'loading') && (
           <>
             <div style={{ flex: 1 }}>
-              <Button variant="ghost" size="md" fullWidth disabled={busy} onClick={onClose}>
+              {/* «Отмена» не блокируется на loading — кнопка остаётся рабочим способом
+                  выхода из диалога (второй — крестик Modal). Действие само по себе не
+                  прерывает git-операцию: Promise в run() дойдёт до конца и переведёт
+                  фазу уже на размонтированном компоненте, что безопасно. */}
+              <Button variant="ghost" size="md" fullWidth onClick={onClose}>
                 {T.btnCancel}
               </Button>
             </div>

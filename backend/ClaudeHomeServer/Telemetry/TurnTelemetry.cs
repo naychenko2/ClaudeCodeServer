@@ -16,16 +16,28 @@ internal static class TurnTelemetry
     /// <summary>
     /// Запуск корневого спана хода. Возвращает Activity (null, если ни один
     /// listener не присоединён). Caller распоряжается Dispose через using.
+    ///
+    /// Два разных идентификатора, и путать их нельзя:
+    /// <list type="bullet">
+    /// <item><c>chat_id</c> — стабильный id чата CCS. По нему и только по нему инцидент
+    /// связывается с чатом (см. IncidentDossierService).</item>
+    /// <item><c>session_id</c> — csid claude CLI. Его нет на первом ходу и он
+    /// перезаписывается на каждом <c>system/init</c>, поэтому фолбэка «подставить id чата»
+    /// здесь НЕТ: без csid тег просто не ставится, а не врёт двумя пространствами id.</item>
+    /// </list>
     /// </summary>
-    public static Activity? StartTurnSpan(string sessionId, string turnId, string? model, string provider)
+    public static Activity? StartTurnSpan(
+        string chatId, string? claudeSessionId, string turnId, string? model, string provider)
     {
         var activity = ServerActivitySource.Instance.StartActivity(ServerActivitySource.SpanNames.ChatTurn);
         if (activity is null) return null;
         activity
-            .SetTag("session_id", sessionId)
+            .SetTag("chat_id", chatId)
             .SetTag("turn_id", turnId)
             .SetTag("model", model ?? "unknown")
             .SetTag("provider", provider);
+        if (!string.IsNullOrEmpty(claudeSessionId))
+            activity.SetTag("session_id", claudeSessionId);
         return activity;
     }
 
@@ -58,17 +70,22 @@ internal static class TurnTelemetry
     /// <summary>
     /// Дочерний спан запуска процесса claude CLI. Родитель — активный chat.turn
     /// (Activity.Current на момент вызова). kind: "local" | "docker".
+    ///
+    /// Пара идентификаторов та же, что у спана хода: <c>chat_id</c> обязателен,
+    /// <c>session_id</c> ставится только когда csid CLI реально есть.
     /// </summary>
     public static Activity? StartProcessSpan(
-        string kind, string command, string sessionId, string mcpConfigHash)
+        string kind, string command, string chatId, string? claudeSessionId, string mcpConfigHash)
     {
         var activity = ServerActivitySource.Instance.StartActivity(ServerActivitySource.SpanNames.ProcessStart);
         if (activity is null) return null;
         activity
             .SetTag("kind", kind)
             .SetTag("command", ExecutableName(command))
-            .SetTag("session_id", sessionId)
+            .SetTag("chat_id", chatId)
             .SetTag("mcp_config_hash", mcpConfigHash);
+        if (!string.IsNullOrEmpty(claudeSessionId))
+            activity.SetTag("session_id", claudeSessionId);
         return activity;
     }
 

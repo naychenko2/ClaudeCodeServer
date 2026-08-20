@@ -8,6 +8,7 @@
 // пока играет текущий, — иначе между фразами повисали бы паузы на круг до сервера.
 
 import { request, subscribeOnline, isOnline } from './offline';
+import { talkMark } from './talkDiag';
 
 // Максимум символов, который отдаём на озвучку: лимит контроллера — 3000, но слушать
 // простыню всё равно никто не станет — режем раньше и честно предупреждаем
@@ -396,6 +397,8 @@ function playBlob(blob: Blob, token: number): Promise<void> {
     };
     audio.onended = done;
     audio.onerror = done;
+    // Метка круга разговора: звук пошёл на самом деле, а не «фаза озвучки выставлена»
+    audio.onplaying = () => talkMark('first-audio');
     void audio.play().catch(() => {
       // Autoplay не пустил — дальше нет смысла играть очередь
       if (token === speakToken) speakToken++;
@@ -585,6 +588,7 @@ function speakWithBrowser(text: string, token: number): Promise<void> {
     const finish = () => { if (done) return; done = true; resolve(); };
     utter.onend = finish;
     utter.onerror = finish;
+    utter.onstart = () => talkMark('first-audio'); // тот же замер, что у серверного пути
 
     // Список голосов приезжает асинхронно, и к этому моменту озвучку могли прервать —
     // без сверки токена браузер зачитал бы ответ покинутого чата

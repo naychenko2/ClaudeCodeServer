@@ -114,6 +114,37 @@ describe('beep и wakeLock без браузерных API', () => {
     expect(released).toBe(true);
   });
 
+  it('wakeLock: живёт, пока её хочет хоть один владелец', async () => {
+    const wl = mockWakeLock();
+    const { requestWakeLock, releaseWakeLock } = await import('../wakeLock');
+    requestWakeLock('voice');
+    requestWakeLock('turn');
+    await tick();
+    releaseWakeLock('turn');
+    await tick();
+    expect(wl.released, 'конец хода не гасит экран посреди разговора').toBe(false);
+    releaseWakeLock('voice');
+    await tick();
+    expect(wl.released).toBe(true);
+  });
+
+  it('wakeLock: эксклюзивный владелец отменяет чужие заявки', async () => {
+    const wl = mockWakeLock();
+    const { requestWakeLock, releaseWakeLock, setWakeLockExclusive } = await import('../wakeLock');
+    setWakeLockExclusive('voice', true);
+    requestWakeLock('voice');
+    requestWakeLock('turn');
+    await tick();
+    // Петля отпускает экран на затянувшемся ходе — владелец «ход» её не переспорит
+    releaseWakeLock('voice');
+    await tick();
+    expect(wl.released).toBe(true);
+    // Петля кончилась — заявка хода снова работает
+    setWakeLockExclusive('voice', false);
+    await tick();
+    expect(wl.requests, 'блокировка взята заново уже по заявке хода').toBe(2);
+  });
+
   it('wakeLock: отказ API (не жест/фон) не роняет вызов', async () => {
     Object.assign(globalThis, {
       navigator: { wakeLock: { request: async () => { throw new Error('NotAllowedError'); } } },
@@ -124,4 +155,23 @@ describe('beep и wakeLock без браузерных API', () => {
     await new Promise(r => setTimeout(r, 5));
     expect(() => releaseWakeLock()).not.toThrow();
   });
+  // Мок Wake Lock API: считает выданные блокировки и факт отпускания последней
+  function mockWakeLock() {
+    const state = { released: false, requests: 0 };
+    Object.assign(globalThis, {
+      navigator: {
+        wakeLock: {
+          request: async () => {
+            state.requests++;
+            state.released = false;
+            return { released: false, release: async () => { state.released = true; }, addEventListener: () => {} };
+          },
+        },
+      },
+      document: { visibilityState: 'visible', addEventListener: () => {}, removeEventListener: () => {} },
+    });
+    return state;
+  }
+
+  const tick = () => new Promise(r => setTimeout(r, 5));
 });

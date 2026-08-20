@@ -283,7 +283,7 @@ public sealed class KnowledgeIndexReconciler : BackgroundService
                 if (attempts >= limit)
                 {
                     _quarantine.Add(qk);
-                    _log.LogWarning("reconcile: запись {Key} в карантине после {Attempts} попыток (ошибка: {Error})",
+                    _log.LogWarning("reconcile: запись {Entry} в карантине после {Attempts} попыток (ошибка: {Error})",
                         qk, attempts, errorByDoc.GetValueOrDefault(pair.DocId, "—"));
                     continue;
                 }

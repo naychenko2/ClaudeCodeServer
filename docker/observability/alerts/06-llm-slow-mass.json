@@ -1,0 +1,87 @@
+{
+  "alert": "Ходы массово встали",
+  "alertType": "METRIC_BASED_ALERT",
+  "ruleType": "threshold_rule",
+  "description": "Три и более хода дольше 10 минут за полчаса. Считается НЕ квантиль, а число медленных ходов: A (все завершённые ходы) минус B (бакет le=600000, то есть уложившиеся в 10 минут). Разбор инцидента 2026-08-19 показал, почему прежняя редакция (p50 > 5 мин, окно 15 мин) не работала: ходов в окне бывает ОДИН-ДВА, а медиана из одного значения равна этому значению — «половина ходов встала» означало «один ход был долгим». Мерить массовость квантилем на такой выборке нельзя в принципе, а порог в штуках лечит это без всякого гейта по count: три медленных хода — это три хода, сколько бы их ни было всего. Граница взята 10 минут, а не 5: агентный ход с tool-use routinely занимает 2–5 минут, и первая редакция правила с порогом в 5 минут зажглась сразу же на обычной работе (за полчаса 3 хода из 7). Ходов дольше 10 минут в норме около одного в час — три за полчаса это уже аномалия. Три тонкости формы, все проверены на живых данных. matchType обязан быть in_total: increase считает по минутным шагам и в каждой точке даёт максимум 1, поэтому at_least_once с порогом 3 не сработал бы никогда — нужна СУММА за окно. Значения тега le — целые строки («300000», «600000», «+Inf»), без научной нотации; промах строкой обнулил бы B, и медленными считались бы ВСЕ ходы разом. И главное: A берётся из ccs.llm.duration.count, а НЕ из бакета le='+Inf' той же метрики — при двух фильтрах по одной метрике вычитание молча не выполняется, F1 возвращает само A (проверено запросом: суммы 8 и 31 совпали с A точка в точку).",
+  "evalWindow": "30m",
+  "frequency": "10m",
+  "labels": {
+    "severity": "warning"
+  },
+  "annotations": {
+    "description": "За полчаса три и более хода заняли больше 10 минут. Это уже не одиночная тяжёлая задача: ищи причину — деградация провайдера, упёрлись в лимиты, истощение контекста, песочница на CPU.",
+    "summary": "Ходы массово встали"
+  },
+  "preferredChannels": [
+    "ccs-alerts-email"
+  ],
+  "condition": {
+    "selectedQueryName": "F1",
+    "op": "above",
+    "matchType": "in_total",
+    "target": 2,
+    "compositeQuery": {
+      "queryType": "builder",
+      "panelType": "graph",
+      "queries": [
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "A",
+            "signal": "metrics",
+            "disabled": true,
+            "aggregations": [
+              {
+                "metricName": "ccs.llm.duration.count",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": ""
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment",
+                "fieldDataType": "string"
+              }
+            ]
+          }
+        },
+        {
+          "type": "builder_query",
+          "spec": {
+            "name": "B",
+            "signal": "metrics",
+            "disabled": true,
+            "aggregations": [
+              {
+                "metricName": "ccs.llm.duration.bucket",
+                "temporality": "Cumulative",
+                "timeAggregation": "increase",
+                "spaceAggregation": "sum"
+              }
+            ],
+            "filter": {
+              "expression": "le = '600000'"
+            },
+            "groupBy": [
+              {
+                "name": "deployment.environment",
+                "fieldDataType": "string"
+              }
+            ]
+          }
+        },
+        {
+          "type": "builder_formula",
+          "spec": {
+            "name": "F1",
+            "expression": "A - B"
+          }
+        }
+      ]
+    }
+  }
+}

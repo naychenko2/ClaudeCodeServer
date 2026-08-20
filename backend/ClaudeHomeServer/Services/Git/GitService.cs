@@ -760,6 +760,15 @@ public sealed class GitService(ILauncherFactory launchers)
     // (репо стянули fetch'ем/клонировали, но ветку у себя не создавали)
     private static string DossiersRemoteRef => $"refs/remotes/origin/{DossiersRef["refs/heads/".Length..]}";
 
+    // Есть ли ЛОКАЛЬНАЯ ветка паспортов: один дешёвый вызов проверки рефа —
+    // признак hasDossierBranch для exportStatus (гейт кнопки «Загрузить» в UI).
+    public async Task<bool> HasDossiersBranchAsync(string? ownerId, string root, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return false;
+        var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+        return r.Ok && IsValidSha(r.Stdout.Trim());
+    }
+
     // Резолв рефа ветки паспортов: локальная ветка, при её отсутствии — remote-tracking
     // того же имени. Возвращает имя существующего рефа либо null (ветки нет нигде).
     // --verify --quiet: отсутствующий реф — exit 1 без вывода (без --verify rev-parse

@@ -134,10 +134,29 @@ public static class AlertDigest
     /// снаружи он не открывается.
     /// </summary>
     public static string? RuleUrl(string? publicBaseUrl, SignozAlert alert)
+        => RuleUrl(publicBaseUrl, alert.RuleId);
+
+    /// <summary>
+    /// То же по голому ruleId — для случая, когда самого алерта на руках уже нет
+    /// (погасший инцидент разбирается по памятке из <see cref="AlertStateStore"/>).
+    /// Перегрузка, а не второй формат ссылки по месту: два таких формата разъезжаются
+    /// при первой же правке.
+    /// </summary>
+    public static string? RuleUrl(string? publicBaseUrl, string? ruleId)
     {
-        if (string.IsNullOrWhiteSpace(publicBaseUrl) || alert.RuleId is not { } id) return null;
-        return $"{publicBaseUrl.TrimEnd('/')}/alerts/overview?ruleId={Uri.EscapeDataString(id)}";
+        if (string.IsNullOrWhiteSpace(publicBaseUrl) || string.IsNullOrWhiteSpace(ruleId)) return null;
+        return $"{publicBaseUrl.TrimEnd('/')}/alerts/overview?ruleId={Uri.EscapeDataString(ruleId)}";
     }
+
+    /// <summary>
+    /// Тот же адрес правила, но БЕЗ базы — для интерфейса, который открывает SigNoz
+    /// своим пробросом. Уведомлениям нужна абсолютная ссылка (их читают вне приложения),
+    /// карточке — относительная: базой у бэкенда служит localhost, недостижимый у клиента.
+    /// </summary>
+    public static string? RulePath(string? ruleId)
+        => string.IsNullOrWhiteSpace(ruleId)
+            ? null
+            : $"/alerts/overview?ruleId={Uri.EscapeDataString(ruleId)}";
 
     /// <summary>«production» в заголовке уведомления слишком длинно для телефона.</summary>
     private static string ShortEnv(string env)

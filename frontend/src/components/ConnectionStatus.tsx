@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from 'react';
 import { useOnline } from '../hooks/useOnline';
+import { useDeployInProgress } from '../lib/deployState';
 import { getSyncProgress, subscribeSyncProgress, syncLabel, syncCount } from '../lib/sync';
 import { C, R, FONT } from '../lib/design';
 
@@ -65,8 +66,12 @@ type Props = FooterProps | BadgeProps;
 export function ConnectionStatus(props: Props) {
   const online = useOnline();
   const progress = useSyncProgress();
+  // Во время выкатки сервер остановлен НАМЕРЕННО, и «Офлайн» здесь — не новость, а шум:
+  // пользователь смотрит на заставку выкатки и знает, что продукт перезапускается. Считаем
+  // связь живой, пока идёт публикация; настоящий обрыв покажется сразу после неё.
+  const deploying = useDeployInProgress();
 
-  const state: ConnState = progress.active ? 'syncing' : online ? 'online' : 'offline';
+  const state: ConnState = progress.active ? 'syncing' : (online || deploying) ? 'online' : 'offline';
 
   // Цвет точки-статуса: онлайн = зелёный, офлайн = приглушённый серый
   const dotColor = state === 'offline' ? C.textMuted : C.success;

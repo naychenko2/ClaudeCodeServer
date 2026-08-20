@@ -176,7 +176,7 @@ test.describe('режим разговора', () => {
     await page.evaluate((t: string) => (window as unknown as { __say: (t: string) => void }).__say(t), phrase);
     await expect(page.getByText(phrase).first()).toBeVisible();
 
-    // Через 2 секунды уходит отправка и начинается ход
+    // По истечении окна отмены (pendingDelayFor) уходит отправка и начинается ход
     await expect(page.getByText('думает…')).toBeVisible({ timeout: 8_000 });
     // Микрофон на время хода закрыт
     const recsWhileThinking = await page.evaluate(() => (window as unknown as { __recs: unknown[] }).__recs.length);

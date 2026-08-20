@@ -13,7 +13,9 @@
     PUT если найдено, POST если новое.
 
 .PARAMETER SignozUrl
-    Базовый URL SigNoz. По умолчанию http://localhost:3301.
+    Базовый URL SigNoz ВМЕСТЕ с base-path. По умолчанию http://localhost:3301/telemetry-proxy:
+    с v0.134 SigNoz поднимает весь HTTP-сервер под префиксом из SIGNOZ_GLOBAL_EXTERNAL__URL,
+    и URL без него отвечает 404 на всё, кроме /api/v1/health.
 
 .PARAMETER Jwt
     Service Account key / PAT / JWT. По умолчанию $env:SIGNOZ_JWT (или файл кред).
@@ -30,7 +32,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$SignozUrl = $(if ($env:SIGNOZ_URL) { $env:SIGNOZ_URL } else { 'http://localhost:3301' }),
+    [string]$SignozUrl = $(if ($env:SIGNOZ_URL) { $env:SIGNOZ_URL } else { 'http://localhost:3301/telemetry-proxy' }),
     [string]$Jwt = $env:SIGNOZ_JWT,
     [string]$ViewsDir = $PSScriptRoot
 )
@@ -90,7 +92,7 @@ function Get-Existing([string]$SourcePage) {
                 -Headers $headers -TimeoutSec 10
             $cache[$SourcePage] = @($r.data)
         }
-        catch { throw "GET /api/v1/explorer/views?sourcePage=$SourcePage не удался: $($_.Exception.Message)" }
+        catch { throw "GET /api/v1/explorer/views?sourcePage=$SourcePage не удался: $($_.Exception.Message). Если это 404 — URL нужен С base-path (по умолчанию /telemetry-proxy): с v0.134 SigNoz поднимает под ним ВЕСЬ API, в корне живёт только /api/v1/health." }
     }
     return $cache[$SourcePage]
 }

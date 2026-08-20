@@ -66,6 +66,7 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    [Trait("Category", "Dns")]  // нужен настоящий DNS — см. remarks ReaderServiceTests
     [Fact]
     public async Task Read_ВозвращаетMarkdown()
     {
@@ -81,6 +82,7 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
         body.GetProperty("markdown").GetString().Should().Contain("Заголовок статьи");
     }
 
+    [Trait("Category", "Dns")]  // нужен настоящий DNS — см. remarks ReaderServiceTests
     [Fact]
     public async Task Image_ВозвращаетБайтыКартинки()
     {
@@ -132,6 +134,7 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
         resp.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
+    [Trait("Category", "Dns")]  // нужен настоящий DNS — см. remarks ReaderServiceTests
     [Fact]
     public async Task EmbedCheck_ВстраиваемБезReason()
     {
@@ -147,6 +150,7 @@ public class ReaderControllerTests(TestWebApplicationFactory factory) : IClassFi
         body.TryGetProperty("reason", out _).Should().BeFalse("у embeddable: true причины нет");
     }
 
+    [Trait("Category", "Dns")]  // нужен настоящий DNS — см. remarks ReaderServiceTests
     [Fact]
     public async Task EmbedCheck_XfoDeny_ИдётОбщимХендлеромСRead()
     {

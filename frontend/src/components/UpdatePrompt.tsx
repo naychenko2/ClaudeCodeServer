@@ -1,10 +1,17 @@
+import { useState } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
+import { LoadingOverlay } from './ui'
+import { useDeployInProgress } from '../lib/deployState'
 import { C, FONT, R, SHADOW } from '../lib/design'
 
 // Как часто спрашивать сервер о новой версии SW (браузер сам делает это только при навигации)
 const UPDATE_CHECK_INTERVAL_MS = 60_000
 
 export function UpdatePrompt() {
+  // Между нажатием и перезагрузкой проходит заметная пауза: воркер активируется, страница ждёт
+  // controllerchange. Без экрана это выглядит как «кнопка не сработала», и её жмут повторно.
+  const [applying, setApplying] = useState(false)
+  const deploying = useDeployInProgress()
   const {
     needRefresh: [needRefresh],
     updateServiceWorker,
@@ -21,6 +28,14 @@ export function UpdatePrompt() {
       })
     },
   })
+
+  if (applying) return <LoadingOverlay hint="Перехожу на новую версию" />
+
+  // Пока идёт выкатка — молчим. Новый service worker приезжает ровно этой выкаткой, так что
+  // плашка всплывает поверх заставки публикации и предлагает обновиться посреди процесса.
+  // Дождёмся конца: после выкатки предложение никуда не денется, а в модалке выкатки есть
+  // своя кнопка перехода на новую версию.
+  if (deploying) return null
 
   if (!needRefresh) return null
 
@@ -46,7 +61,7 @@ export function UpdatePrompt() {
     }}>
       <span>Доступно обновление приложения</span>
       <button
-        onClick={() => updateServiceWorker(true)}
+        onClick={() => { setApplying(true); void updateServiceWorker(true) }}
         style={{
           background: C.accent,
           color: C.onAccent,

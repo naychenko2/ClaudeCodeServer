@@ -1554,6 +1554,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
+        // Режим «Авто» обещает «действует сам»: shell-команды разрешаем без карточки,
+        // необратимые (стоп-список IrreversibleCommandGuard) — как раньше спрашивают.
+        // Строго ПОСЛЕ deny-правил проекта: явный запрет сильнее авто-разрешения.
+        if (ruleDecision == null
+            && Info.Mode == ClaudeMode.Auto
+            && IrreversibleCommandGuard.IsShellTool(toolName)
+            && inputEl.ValueKind == JsonValueKind.Object
+            && inputEl.TryGetProperty("command", out var autoCmdEl)
+            && autoCmdEl.ValueKind == JsonValueKind.String
+            && !IrreversibleCommandGuard.LooksIrreversible(autoCmdEl.GetString()))
+            return "allow";
         // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
         // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель
         // вязнет в первом же permission-запросе (status=Waiting до таймаута в 60 мин) и не может
@@ -1816,7 +1827,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // спану для всех путей (включая same-process, где _launcher.Start не идёт).
         _currentTurnId = Guid.NewGuid().ToString("N")[..12];
         using var turnActivity = TurnTelemetry.StartTurnSpan(
-            sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
+            chatId: Info.Id,
+            claudeSessionId: Info.ClaudeSessionId,
             turnId: _currentTurnId,
             model: EffectiveModel,
             provider: Info.Provider);
@@ -2494,7 +2506,8 @@ public class ClaudeSession : ILlmSessionAdapter
         using (var procActivity = TurnTelemetry.StartProcessSpan(
                    kind: TurnTelemetry.ExecutionKind(_launcher.IsSandboxed),
                    command: _launcher.ClaudeCliCommand,
-                   sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
+                   chatId: Info.Id,
+                   claudeSessionId: Info.ClaudeSessionId,
                    mcpConfigHash: TurnTelemetry.McpConfigHash(effectiveMcpConfig)))
         {
             process = _launcher.Start(new Execution.ProcessSpec

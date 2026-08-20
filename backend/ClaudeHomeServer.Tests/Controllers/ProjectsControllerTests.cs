@@ -340,27 +340,33 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
 
     // === Значок проекта (ADR-009 §8): suggest/select/mode ===
 
-    // Стаб места модели: отвечает заготовленным JSON на любой вызов — как будто
-    // «Поставщики моделей» настроены и модель ответила по контракту ADR-009 §2.2
-    private sealed class StubCheapRunner(string reply) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
+    // Стаб места модели для двухходовой схемы (ревизия 20.08.2026): ход различается
+    // контрактным ключом в промпте — ходу слов свой ответ, ходу выбора свой
+    private sealed class StubCheapRunner(string wordsReply, string pickReply) : ClaudeHomeServer.Services.Llm.ICheapTextRunner
     {
+        private string ReplyFor(string prompt) => prompt.Contains("\"words\"") ? wordsReply : pickReply;
+
         public bool UsesLocal(string actionKey) => false;
         public string DescribeRoute(string actionKey, string? fallbackModel) => "stub";
         public Task<string> RunAsync(string actionKey, string prompt, string? fallbackModel = null,
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult(reply);
+            => Task.FromResult(ReplyFor(prompt));
         public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
-            CancellationToken ct = default) => Task.FromResult<string?>(reply);
+            CancellationToken ct = default) => Task.FromResult<string?>(pickReply);
         public Task<string?> RunLocalOnlyAsync(string actionKey, string prompt, CancellationToken ct = default)
-            => Task.FromResult<string?>(reply);
+            => Task.FromResult<string?>(pickReply);
         public Task<ClaudeHomeServer.Services.Llm.OneShotResult> RunDetailedAsync(string actionKey,
             string prompt, string? fallbackModel = null, string? ownerId = null, TimeSpan? timeout = null,
             int? maxTokens = null, object? jsonFormat = null, CancellationToken ct = default)
-            => Task.FromResult(new ClaudeHomeServer.Services.Llm.OneShotResult(reply, null, 0));
+            => Task.FromResult(new ClaudeHomeServer.Services.Llm.OneShotResult(pickReply, null, 0));
     }
 
-    // Годный ответ модели по контракту: 2 имени; paths-элементы модель ещё может слать —
-    // парсер отбрасывает их как негодных кандидатов
+    // Годный ответ хода слов: понятия, по которым сервер находит piggy-bank и chart-line
+    // точным совпадением (ADR-009 §2.2)
+    private const string ModelWordsReply = """{"words":["piggy-bank","chart-line","savings"]}""";
+
+    // Годный ответ хода выбора по контракту: 2 имени из меню; paths-элементы модель ещё
+    // может слать — парсер отбрасывает их как негодных кандидатов
     private const string ModelGlyphsReply =
         """{"glyphs":[{"name":"piggy-bank"},{"name":"chart-line"},{"paths":["M3 21h18"]},{"paths":["M4 18l5-4 4 4 7-4"]}]}""";
 
@@ -390,7 +396,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         using var factory = new TestWebApplicationFactory
         {
             ExtraServices = s => s.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(
-                new StubCheapRunner(ModelGlyphsReply)),
+                new StubCheapRunner(ModelWordsReply, ModelGlyphsReply)),
         };
         var client = factory.CreateAuthenticatedClient();
         var dir = Path.Combine(factory.TempDir, "glyph-project");
@@ -431,7 +437,11 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
             string? ownerId = null, object? jsonFormat = null, CancellationToken ct = default)
         {
             LastPrompt = prompt;
-            return Task.FromResult(prompt.Contains(hintMarker, StringComparison.Ordinal) ? ModelGlyphsReply : "");
+            // Годные ответы — только если пожелание дошло до промпта (на обоих ходах);
+            // иначе модель «отвечает мусором» и парсер отвергает
+            var hintReached = prompt.Contains(hintMarker, StringComparison.Ordinal);
+            if (!hintReached) return Task.FromResult("");
+            return Task.FromResult(prompt.Contains("\"words\"") ? ModelWordsReply : ModelGlyphsReply);
         }
         public Task<string?> RunFreeAsync(string actionKey, string prompt, object? jsonFormat = null,
             CancellationToken ct = default) => Task.FromResult<string?>(null);
@@ -482,7 +492,7 @@ public class ProjectsControllerTests : IClassFixture<TestWebApplicationFactory>
         using var factory = new TestWebApplicationFactory
         {
             ExtraServices = s => s.AddSingleton<ClaudeHomeServer.Services.Llm.ICheapTextRunner>(
-                new StubCheapRunner(ModelGlyphsReply)),
+                new StubCheapRunner(ModelWordsReply, ModelGlyphsReply)),
         };
         var client = factory.CreateAuthenticatedClient();
 

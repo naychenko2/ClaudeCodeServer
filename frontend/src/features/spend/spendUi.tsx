@@ -1,7 +1,7 @@
 // Общие примитивы раздела «Аналитика токенов»: пустые состояния, скелетоны,
 // чипы, иконки узлов. Только токены design.ts, инлайн-стили.
 import type { ReactNode, CSSProperties } from 'react';
-import { C, FONT, GROUP_COLORS, R } from '../../lib/design';
+import { C, FONT, GROUP_COLORS, R, SP } from '../../lib/design';
 import { Dot } from '../../components/ui';
 import type { SpendDim } from '../../lib/spend';
 
@@ -111,35 +111,50 @@ export function GhostBtn({ onClick, children, style }: { onClick: () => void; ch
   );
 }
 
-// Чип (фильтр/действие): filter — активный accent-чип с крестиком
-export function Chip({ children, onClick, filter, dashed, title }: {
+// Чип (фильтр/действие): filter — активный accent-чип с крестиком.
+// maxW — потолок ширины: длинное имя чата иначе выдавливает бар за край острова;
+// подпись при этом обрезается, а крестик остаётся снаружи и достижим.
+// touch — тач-цель (планшет/мобила): та же форма, но ≥32px по высоте.
+export function Chip({ children, onClick, filter, dashed, title, maxW, touch }: {
   children: ReactNode; onClick?: () => void; filter?: boolean; dashed?: boolean; title?: string;
+  maxW?: number | string; touch?: boolean;
 }) {
   return (
     <span
       onClick={onClick}
       title={title}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, padding: '3px 10px',
+        display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11,
+        padding: touch ? `${SP.sm}px 10px` : '3px 10px',
         borderRadius: R.max, whiteSpace: 'nowrap', fontFamily: FONT.sans, flexShrink: 0,
         border: `1px ${dashed ? 'dashed' : 'solid'} ${filter ? C.accentMuted : C.border}`,
         background: filter ? C.accentLight : C.bgCard,
         color: filter ? C.accent : C.textSecondary,
         fontWeight: filter ? 600 : 400,
         cursor: onClick ? 'pointer' : 'default',
+        ...(maxW !== undefined ? { maxWidth: maxW, overflow: 'hidden' } : null),
       }}
     >
-      {children}
+      {maxW !== undefined
+        ? <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{children}</span>
+        : children}
     </span>
   );
 }
 
-// Крестик внутри чипа/уровня
-export function ChipX({ onClick }: { onClick: () => void }) {
+// Крестик внутри чипа/уровня. touch — тач-площадь: без неё цель 8×14px,
+// пальцем в неё не попасть (замер на планшете)
+export function ChipX({ onClick, touch }: { onClick: () => void; touch?: boolean }) {
   return (
     <span
       onClick={e => { e.stopPropagation(); onClick(); }}
-      style={{ fontWeight: 700, opacity: 0.8, cursor: 'pointer', padding: '0 1px' }}
+      style={touch
+        ? {
+            fontWeight: 700, opacity: 0.8, cursor: 'pointer', flexShrink: 0,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            minWidth: SP.xxl, minHeight: SP.xxl, margin: `-${SP.sm}px -${SP.sm}px -${SP.sm}px 0`,
+          }
+        : { fontWeight: 700, opacity: 0.8, cursor: 'pointer', padding: '0 1px' }}
     >
       ×
     </span>
@@ -147,14 +162,17 @@ export function ChipX({ onClick }: { onClick: () => void }) {
 }
 
 // Горизонтальная полоса-доля (топ моделей, состав хода)
-export function HBar({ label, value, share, color, icon }: {
-  label: string; value: string; share: number; color: string; icon?: ReactNode;
+// grow — подписи разрешено расти вместо жёстких 112px: на широкой панели полное имя
+// модели помещается целиком, обрезать его при свободном месте справа незачем
+export function HBar({ label, value, share, color, icon, grow }: {
+  label: string; value: string; share: number; color: string; icon?: ReactNode; grow?: boolean;
 }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 7 }}>
       <span style={{
-        width: 112, fontSize: 11, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
-        textOverflow: 'ellipsis', flexShrink: 0, display: 'flex', alignItems: 'center', gap: 5, fontFamily: FONT.sans,
+        ...(grow ? { flex: '0 1 auto', minWidth: 112, maxWidth: '55%' } : { width: 112, flexShrink: 0 }),
+        fontSize: 11, color: C.textSecondary, whiteSpace: 'nowrap', overflow: 'hidden',
+        textOverflow: 'ellipsis', display: 'flex', alignItems: 'center', gap: 5, fontFamily: FONT.sans,
       }}>
         {icon}{label}
       </span>
@@ -166,10 +184,12 @@ export function HBar({ label, value, share, color, icon }: {
   );
 }
 
-// Выпадающее меню (в стиле .menu прототипа); привязка — родитель с position:relative
+// Выпадающее меню (в стиле .menu прототипа); привязка — родитель с position:relative.
+// Клик внутри меню не всплывает: снаружи он ловится как «клик мимо» и закрывает меню,
+// из-за чего переход в подменю («+ фильтр» → разрез) не доживал до рендера
 export function DropMenu({ children, width = 240 }: { children: ReactNode; width?: number }) {
   return (
-    <div style={{
+    <div onClick={e => e.stopPropagation()} style={{
       position: 'absolute', top: 'calc(100% + 4px)', left: 0, zIndex: 60, width,
       background: C.bgCard, border: `1px solid ${C.border}`, borderRadius: R.xl,
       boxShadow: 'var(--shadow-dropdown)', padding: 6, fontSize: 12, fontFamily: FONT.sans,

@@ -141,4 +141,40 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
         result.GetProperty("added").GetInt32().Should().Be(0);
         result.GetProperty("skipped").GetInt32().Should().Be(0);
     }
+
+    // Признак наличия ветки паспортов в exportStatus: им фронт гейтит кнопку «Загрузить».
+    // Ветку пишет фикстура WriteDossiersBranchAsync — проверяем только отражение в ответе.
+    private async Task<JsonElement> ExportStatusAsync(string projectId)
+    {
+        var response = await _client.GetAsync($"/api/projects/{projectId}/dossiers/export/status");
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        return JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+    }
+
+    [Fact]
+    public async Task ExportStatus_ОтражаетНаличиеВеткиПаспортов()
+    {
+        (await _client.PutAsJsonAsync(
+            $"/api/feature-flags/{FeatureFlagKeys.ChangeDossiersRecall}", new { enabled = true }))
+            .EnsureSuccessStatusCode();
+
+        // Репозиторий с веткой: фикстура уже записала refs/heads/ccs/dossiers/v1
+        var withBranch = await ExportStatusAsync(await CreateGitProjectAsync());
+        withBranch.GetProperty("isGitRepo").GetBoolean().Should().BeTrue();
+        withBranch.GetProperty("hasDossierBranch").GetBoolean()
+            .Should().BeTrue("ветка ccs/dossiers/v1 существует");
+
+        // Репозиторий без ветки паспортов
+        var dir = Path.Combine(_factory.TempDir, "dossier_status_nobranch_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        await new GitService(TestLauncherFactory.Instance).InitAsync(null, dir);
+        var response = await _client.PostAsJsonAsync("/api/projects", new { name = "DossierStatusNoBranch", rootPath = dir });
+        response.EnsureSuccessStatusCode();
+        var projectId = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync())
+            .GetProperty("id").GetString()!;
+
+        var noBranch = await ExportStatusAsync(projectId);
+        noBranch.GetProperty("hasDossierBranch").GetBoolean()
+            .Should().BeFalse("ветки ccs/dossiers/v1 нет");
+    }
 }

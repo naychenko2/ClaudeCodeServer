@@ -153,15 +153,15 @@ public sealed class FallbackLlmSessionAdapter : ILlmSessionAdapter
     // адаптера) — Console.Error, чтобы диагностика не пропадала совсем
     private void LogWarn(string message)
     {
-        if (_log is not null) _log.LogWarning("[ModelFallback] {Message}", message);
+        if (_log is not null) _log.LogWarning("[ModelFallback] {FallbackStep}", message);
         else Console.Error.WriteLine($"[ModelFallback] {message}");
     }
 
     // sid сессии — при двух параллельных фолбэк-сагах (два чата одновременно) лог без него
     // нечитаем: строки Подмена/Переполнение/Исчерпание перемешиваются без признака владельца.
-    private void LogInfo(string message) => _log?.LogInformation("[ModelFallback] sid={Sid} {Message}", Info.Id, message);
+    private void LogInfo(string message) => _log?.LogInformation("[ModelFallback] sid={Sid} {FallbackStep}", Info.Id, message);
 
-    private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {Message}", message);
+    private void LogDebug(string message) => _log?.LogDebug("[ModelFallback] {FallbackStep}", message);
 
     // Эффективный потолок подмен для владельца сессии: per-owner → global → дефолт 3
     // (FallbackSettingsStore.ClampMaxSubstitutions). Info.OwnerId может быть пуст у

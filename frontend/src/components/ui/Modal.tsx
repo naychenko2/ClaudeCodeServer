@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode, CSSProperties } from 'react';
-import { C, R, FONT, SHADOW, Z } from '../../lib/design';
+import { X } from 'lucide-react';
+import { C, R, FONT, SHADOW, SP, Z } from '../../lib/design';
 import { MOBILE_MAX } from '../../lib/breakpoints';
 import { getPopupDepth } from '../../lib/popupEscape';
+import { IconButton } from './IconButton';
+import { ICON_SIZE, ICON_STROKE } from './icons';
 
 interface ModalProps {
   width?: number;
@@ -12,6 +15,9 @@ interface ModalProps {
   footer?: ReactNode;        // зона действий (кнопки) — единообразно во всех диалогах
   onClose: () => void;
   closeOnBackdrop?: boolean;
+  // Спрятать встроенный крестик — потребитель рисует свой (например, в ConfirmDialog,
+  // где вся навигация живёт в футере и лишняя иконка в шапке только мешает).
+  hideCloseButton?: boolean;
   children?: ReactNode;
   cardStyle?: CSSProperties;
 }
@@ -46,10 +52,12 @@ function useIsMobile() {
 //  • Десктоп/планшет (>=768): центрированная карточка с мягким появлением.
 //  • Мобила (<768): bottom-sheet — выезжает снизу, drag-handle сверху,
 //    контент скроллится, действия (footer) прижаты к низу, учтён safe-area.
-// Закрытие по Escape и по клику на оверлей. API обратно совместимо.
+// Закрытие по Escape, по клику на оверлей и по крестику в углу карточки.
+// API обратно совместимо: потребители, рисующие свою шапку без крестика,
+// могут спрятать встроенный через hideCloseButton.
 export function Modal({
   width = 440, title, subtitle, footer, onClose,
-  closeOnBackdrop = true, children, cardStyle,
+  closeOnBackdrop = true, hideCloseButton = false, children, cardStyle,
 }: ModalProps) {
   const isMobile = useIsMobile();
 
@@ -69,9 +77,29 @@ export function Modal({
     return () => document.removeEventListener('keydown', handler);
   }, [onClose]);
 
-  // Шапка: заголовок + опциональный подзаголовок
-  const header = (title || subtitle) && (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flexShrink: 0 }}>
+  // Крестик в углу карточки. Внутри карточки (currentTarget у оверлея — другой),
+  // поэтому клик по нему НЕ сработает как closeOnBackdrop, и stopPropagation не нужен.
+  // Размер sm: не вылезает за кромку и не перекрывает заголовок. На loading-фазе
+  // диалог может подменить onClose на no-op — крестик честно отдаст это, и тогда
+  // закрытие не сработает (это и есть защита «не закрывай меня посреди запроса»).
+  const closeButton = hideCloseButton ? null : (
+    <IconButton
+      size="sm"
+      tone="muted"
+      variant="ghost"
+      ariaLabel="Закрыть"
+      onClick={onClose}
+      style={{ flexShrink: 0, marginTop: -4, marginRight: -4 }}
+    >
+      <X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />
+    </IconButton>
+  );
+
+  // Шапка: заголовок + опциональный подзаголовок. Жмётся во flex-колонку слева,
+  // крестик — справа; если заголовка нет, крестик всё равно показывается
+  // (success/error-фазы диалогов скрывают заголовок, но крестик нужен).
+  const titleBlock = (title || subtitle) && (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, flexShrink: 1, flex: 1, minWidth: 0 }}>
       {title && (
         <h2 style={{
           fontFamily: FONT.serif, fontWeight: 500, fontSize: isMobile ? 21 : 22, margin: 0,
@@ -85,6 +113,14 @@ export function Modal({
           {subtitle}
         </div>
       )}
+    </div>
+  );
+
+  // Ряд шапки с крестиком. На десктопе — встроен в верхнюю секцию карточки.
+  const headerRow = (titleBlock || closeButton) && (
+    <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, flexShrink: 0 }}>
+      {titleBlock}
+      {closeButton}
     </div>
   );
 
@@ -111,16 +147,21 @@ export function Modal({
             ...cardStyle,
           }}
         >
-          {/* Drag-handle */}
-          <div style={{ display: 'flex', justifyContent: 'center', padding: '10px 0 4px', flexShrink: 0 }}>
+          {/* Drag-handle слева + крестик справа — оба вне скролл-зоны.
+              Заголовок и контент живут в скролл-блоке ниже. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            padding: '10px 12px 4px 16px', flexShrink: 0,
+          }}>
             <div style={{ width: 38, height: 4, borderRadius: 2, background: C.track }} />
+            {closeButton}
           </div>
           {/* Скроллируемый контент */}
           <div style={{
             padding: '8px 18px 16px', display: 'flex', flexDirection: 'column', gap: 16,
             overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch',
           }}>
-            {header}
+            {headerRow}
             {children}
           </div>
           {/* Действия — прижаты к низу, учитываем safe-area iOS */}
@@ -165,7 +206,7 @@ export function Modal({
           // Карточке по контенту это ничего не меняет — расти всё равно не от чего.
           overflowY: 'auto', flex: 1, minHeight: 0,
         }}>
-          {header}
+          {headerRow}
           {children}
         </div>
         {footer && (

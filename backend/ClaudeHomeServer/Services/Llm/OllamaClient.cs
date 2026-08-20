@@ -186,32 +186,55 @@ public sealed class OllamaClient
     // для ResultMessage ленты (токены из счётчиков Ollama; может быть null при их отсутствии).
     public sealed record ChatTurnResult(string? Text, Protocol.UsageInfo? Usage);
 
+    // Порог принудительного флаша потоковых кусков: копить до конца предложения дёшево,
+    // но модель, пишущая длинный период без точки, держала бы ленту и озвучку в тишине.
+    private const int StreamFlushChars = 40;
+
     // Один разговорный ход голосового режима (Session.VoiceMode + место chat-voice на
     // «Локальная»): полный messages[] (system + история + реплика) → короткий ответ.
     // Отличия от GenerateTextAsync: диалоговая история, temperature 0.7 (разговор, а не
     // классификация) и НЕ-null-протокол: вызов знает об отказе сам (фолбэка на claude нет —
     // тихий 15-секундный старт CLI в разговоре хуже видимой ошибки в ленте).
+    //
+    // onDelta != null — ПОТОКОВЫЙ режим (Ollama отдаёт NDJSON): куски текста уходят
+    // вызывающему по мере генерации, и озвучка первого предложения начинается, не дожидаясь
+    // конца ответа. Куски копятся до границы предложения (или StreamFlushChars) — фронт
+    // всё равно режет речь по предложениям, а слать каждый токен отдельным SignalR-событием
+    // незачем. Без onDelta поведение прежнее: один ответ целиком.
     public async Task<ChatTurnResult> ChatTurnAsync(
         IReadOnlyList<ChatMsg> messages, string? model, TimeSpan timeout,
-        int numPredict, int numCtx, string? ownerId, CancellationToken ct = default)
+        int numPredict, int numCtx, string? ownerId,
+        Func<string, Task>? onDelta = null, CancellationToken ct = default)
     {
         var used = string.IsNullOrWhiteSpace(model) ? TextModel : model!;
         if (string.IsNullOrWhiteSpace(BaseUrl) || string.IsNullOrWhiteSpace(used))
             return new ChatTurnResult(null, null);
+        var streaming = onDelta is not null;
         try
         {
             var client = _http.CreateClient(HttpClientName);
-            client.Timeout = timeout;
+            // В потоковом режиме HttpClient.Timeout покрывает только заголовки ответа —
+            // общий потолок хода держит связанный CTS ниже (иначе стрим висел бы вечно)
+            client.Timeout = streaming ? Timeout.InfiniteTimeSpan : timeout;
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            if (streaming) cts.CancelAfter(timeout);
+            var token = streaming ? cts.Token : ct;
 
-            using var resp = await client.PostAsJsonAsync($"{BaseUrl}/api/chat", new
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{BaseUrl}/api/chat")
             {
-                model = used,
-                stream = false,
-                think = false,
-                keep_alive = _keepAlive,
-                options = new { temperature = 0.7, num_predict = numPredict, num_ctx = numCtx },
-                messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
-            }, ct);
+                Content = JsonContent.Create(new
+                {
+                    model = used,
+                    stream = streaming,
+                    think = false,
+                    keep_alive = _keepAlive,
+                    options = new { temperature = 0.7, num_predict = numPredict, num_ctx = numCtx },
+                    messages = messages.Select(m => new { role = m.Role, content = m.Content }).ToArray(),
+                }),
+            };
+            using var resp = await client.SendAsync(req,
+                streaming ? HttpCompletionOption.ResponseHeadersRead : HttpCompletionOption.ResponseContentRead,
+                token);
 
             if (!resp.IsSuccessStatusCode)
             {
@@ -219,24 +242,27 @@ public sealed class OllamaClient
                 return new ChatTurnResult(null, null);
             }
 
-            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: ct);
+            if (streaming)
+                return await ReadChatStreamAsync(resp, used, ownerId, onDelta!, ct, token);
+
+            var json = await resp.Content.ReadFromJsonAsync<JsonElement>(cancellationToken: token);
             var answer = json.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var c)
                 ? c.GetString()
                 : null;
             if (string.IsNullOrWhiteSpace(answer)) return new ChatTurnResult(null, null);
             RecordSpend(used, json, ownerId, "voice-turn");
-            // Токены для result ленты: input = prompt_eval_count, output = eval_count.
-            // Кеша у локального вызова нет — обе метрики нули.
-            Protocol.UsageInfo? usage = null;
-            if (json.TryGetProperty("prompt_eval_count", out var p) && p.ValueKind == JsonValueKind.Number
-                && json.TryGetProperty("eval_count", out var e) && e.ValueKind == JsonValueKind.Number)
-                usage = new Protocol.UsageInfo(p.GetInt32(), e.GetInt32(), 0, 0);
-            return new ChatTurnResult(answer, usage);
+            return new ChatTurnResult(answer, ReadUsage(json));
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             // «Стоп» пользователя / отмена хода — не ошибка, состояние закроет exited ветки
             throw;
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Потолок времени хода (linked CTS) — для вызывающего это обычная недоступность
+            _logger.LogDebug(ex, "Ollama (voice) не уложился в {Timeout}", timeout);
+            return new ChatTurnResult(null, null);
         }
         catch (Exception ex)
         {
@@ -244,6 +270,100 @@ public sealed class OllamaClient
             return new ChatTurnResult(null, null);
         }
     }
+
+    // Чтение NDJSON-потока /api/chat: строка = чанк вида
+    // {"message":{"content":"…"},"done":false}, последняя — done:true со счётчиками токенов.
+    // hardCt — отмена пользователя («Стоп»), её пробрасываем наружу; token — она же плюс
+    // потолок времени: по нему отдаём уже накопленный текст, а не теряем ход целиком.
+    private async Task<ChatTurnResult> ReadChatStreamAsync(
+        HttpResponseMessage resp, string model, string? ownerId,
+        Func<string, Task> onDelta, CancellationToken hardCt, CancellationToken token)
+    {
+        var full = new System.Text.StringBuilder();
+        var pending = new System.Text.StringBuilder();
+        Protocol.UsageInfo? usage = null;
+
+        async Task FlushAsync()
+        {
+            if (pending.Length == 0) return;
+            var chunk = pending.ToString();
+            pending.Clear();
+            await onDelta(chunk);
+        }
+
+        try
+        {
+            await using var stream = await resp.Content.ReadAsStreamAsync(token);
+            using var reader = new StreamReader(stream);
+            while (await reader.ReadLineAsync(token) is { } line)
+            {
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                using var doc = SafeParse(line);
+                if (doc is null) continue;
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("message", out var msg)
+                    && msg.TryGetProperty("content", out var c)
+                    && c.GetString() is { Length: > 0 } piece)
+                {
+                    full.Append(piece);
+                    pending.Append(piece);
+                    if (pending.Length >= StreamFlushChars || EndsSentence(pending))
+                        await FlushAsync();
+                }
+
+                if (root.TryGetProperty("done", out var d) && d.ValueKind == JsonValueKind.True)
+                {
+                    RecordSpend(model, root, ownerId, "voice-turn");
+                    usage = ReadUsage(root);
+                    break;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (hardCt.IsCancellationRequested)
+        {
+            throw; // «Стоп»: накопленное не отдаём, ход отменён целиком
+        }
+        catch (OperationCanceledException ex)
+        {
+            _logger.LogDebug(ex, "Ollama (voice): поток оборван по таймауту, отдаём накопленное");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Ollama (voice): сбой чтения потока, отдаём накопленное");
+        }
+
+        await FlushAsync();
+        var text = full.ToString();
+        return new ChatTurnResult(string.IsNullOrWhiteSpace(text) ? null : text, usage);
+    }
+
+    // Битую строку потока пропускаем молча: терять из-за неё весь ход незачем
+    private static JsonDocument? SafeParse(string line)
+    {
+        try { return JsonDocument.Parse(line); }
+        catch (JsonException) { return null; }
+    }
+
+    // Конец предложения по последнему непробельному символу накопленного куска
+    private static bool EndsSentence(System.Text.StringBuilder sb)
+    {
+        for (var i = sb.Length - 1; i >= 0; i--)
+        {
+            var ch = sb[i];
+            if (char.IsWhiteSpace(ch)) continue;
+            return ch is '.' or '!' or '?' or '…';
+        }
+        return false;
+    }
+
+    // Токены для result ленты: input = prompt_eval_count, output = eval_count.
+    // Кеша у локального вызова нет — обе метрики нули.
+    private static Protocol.UsageInfo? ReadUsage(JsonElement json) =>
+        json.TryGetProperty("prompt_eval_count", out var p) && p.ValueKind == JsonValueKind.Number
+        && json.TryGetProperty("eval_count", out var e) && e.ValueKind == JsonValueKind.Number
+            ? new Protocol.UsageInfo(p.GetInt32(), e.GetInt32(), 0, 0)
+            : null;
 
     // Прогрев: холостой вызов, чтобы модель загрузилась в память заранее (keep_alive из конфига).
     // Best-effort — ошибки глушим.

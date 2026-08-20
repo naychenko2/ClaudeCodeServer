@@ -8,9 +8,12 @@
 //
 // ВХОДЫ в offline (три факта, эвристики нет):
 //   1. window 'offline' — ОС потеряла сеть.
-//   2. Сетевая ошибка fetch в catch-ветке request() — бэкенд недостижим.
-//   3. SignalR: окончательный обрыв (onclose) ИЛИ ветки reject ожидания
-//      подключения в ensureConnected() — таймаут 8с / переход в Disconnected.
+//   2. Сетевая ошибка fetch в catch-ветке request(), ПОДТВЕРЖДЁННАЯ пингом
+//      /api/health (см. pingSharedFlight) — бэкенд недостижим. Одиночный провал
+//      fetch сам по себе входом не является.
+//   3. SignalR: окончательный обрыв (onclose) — сразу, ИЛИ ветки reject ожидания
+//      подключения в ensureConnected() (таймаут 8с / переход в Disconnected) —
+//      через то же подтверждение confirmOffline().
 //      Ветки reject нужны, потому что текущий делегат ретраев nextRetryDelayInMilliseconds
 //      всегда возвращает число → onclose практически недостижим, и единственный
 //      реальный сигнал «хаб не поднялся» приходит именно отсюда.
@@ -94,7 +97,7 @@ const PING_TIMEOUT_MS = 3_000;
 const MIN_FORCED_PROBE_INTERVAL_MS = 2_000;
 let _lastForcedProbeAt = 0;
 let _probeTimer: ReturnType<typeof setTimeout> | null = null;
-let _probeInFlight: Promise<void> | null = null;
+let _probeInFlight: Promise<boolean> | null = null;
 
 function scheduleNextProbe() {
   if (_probeTimer !== null || typeof window === 'undefined') return;
@@ -120,7 +123,11 @@ function fireProbeNow() {
   void runProbeTick();
 }
 
-async function probeHealth(): Promise<void> {
+// Возвращает вердикт «сервер ответил». При успехе флаг online поднимается прямо тут —
+// обоим потребителям нужно именно это. А вот ЧТО делать с провалом, решает потребитель:
+// для зонда возврата провал не значит ничего, для подтверждающего пинга из request() —
+// это санкция уводить в офлайн.
+async function probeHealth(): Promise<boolean> {
   const token = typeof localStorage !== 'undefined'
     ? (localStorage.getItem('cc_token') || sessionStorage.getItem('cc_token'))
     : null;
@@ -134,14 +141,39 @@ async function probeHealth(): Promise<void> {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
     });
     // 502/503/504 от реверс-прокси при мёртвом бэкенде — НЕ «сервер достижим»
-    if (res.status === 502 || res.status === 503 || res.status === 504) return;
+    if (res.status === 502 || res.status === 503 || res.status === 504) return false;
     // Любой другой HTTP-ответ = сервер живой → поднимаем флаг.
     setOnline(true);
+    return true;
   } catch {
-    // Сетевой сбой или таймаут — провал зонда НЕ меняет состояние
+    // Сетевой сбой или таймаут — сам по себе состояние не меняет
+    return false;
   } finally {
     clearTimeout(timer);
   }
+}
+
+// Один полёт пинга на всех потребителей. Зонд возврата и подтверждение из request()
+// живут в разных фазах (offline / online) и наперегонки не бегают, но внутри одной
+// фазы поводов много: разморозка вкладки реджектит ВСЕ in-flight запросы разом, и
+// каждый из них приходит в catch за подтверждением. Пачка провалов обязана дать
+// ОДИН /api/health, поэтому опоздавшие ждут уже летящий пинг и берут его вердикт.
+function pingSharedFlight(): Promise<boolean> {
+  if (_probeInFlight === null) {
+    _probeInFlight = probeHealth().finally(() => { _probeInFlight = null; });
+  }
+  return _probeInFlight;
+}
+
+// Подтверждение разрыва для тех, кто судит о связи по СВОЕМУ каналу: сейчас это
+// ветки reject ensureConnected() в signalr.ts. Судья один и тот же, что у request(), —
+// молчание /api/health, и решение принимается только о флаге: вызывающий волен
+// реджектить свою операцию независимо от вердикта (хаб не поднялся — это его беда,
+// даже если REST жив).
+export async function confirmOffline(): Promise<void> {
+  // Из офлайна подтверждать нечего — мы уже там, а лишний пинг только шумит.
+  if (!_online) return;
+  if (!await pingSharedFlight()) setOnline(false);
 }
 
 async function runProbeTick() {
@@ -156,8 +188,7 @@ async function runProbeTick() {
     scheduleNextProbe();
     return;
   }
-  _probeInFlight = probeHealth().finally(() => { _probeInFlight = null; });
-  await _probeInFlight;
+  await pingSharedFlight();
   // Если за время полёта подняли флаг — больше не тикаем
   if (_online) return;
   scheduleNextProbe();
@@ -201,9 +232,15 @@ function isNetworkError(e: unknown): boolean {
 // parse: 'blob' — бинарный ответ (mp3 озвучки) отдаётся как Blob, минуя JSON.parse и кэш
 // IndexedDB. Ошибочные ветки (401, !res.ok, офлайн, таймаут) общие с JSON-путём: тело ошибки
 // сервер шлёт JSON'ом и при бинарном запросе — на полях status/body держится фолбэк озвучки.
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' }): Promise<T>;
-export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob' }): Promise<Blob>;
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob' }): Promise<T | Blob> {
+//
+// live: true — запрос, которому офлайн-кэш ВРЕДЕН: ответ не сохраняется в IndexedDB и не
+// достаётся оттуда при обрыве. Нужно там, где значение имеет не только содержимое ответа, но и
+// сам факт «сервер сейчас отвечает». Пример — статус выкатки: продукт на время публикации
+// гаснет, и подставленный из кэша прошлый ответ превращает «сервер лежит, значит выкатка идёт»
+// в «сервер отвечает, ничего не происходит». Окно выкатки на этом различии и построено.
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean }): Promise<T>;
+export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob'; live?: boolean }): Promise<Blob>;
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean }): Promise<T | Blob> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const isGet = method === 'GET';
 
@@ -219,7 +256,9 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
-  const { timeoutMs, parse, ...fetchOptions } = options ?? {};
+  const { timeoutMs, parse, live, ...fetchOptions } = options ?? {};
+  // Кэшируем и достаём из кэша только те GET, которым это на пользу (см. комментарий к live)
+  const useOfflineCache = isGet && !live;
   const controller = new AbortController();
   const effectiveTimeout = timeoutMs ?? FETCH_TIMEOUT_MS;
   // Признак «прервали мы сами по таймауту»: AbortError от нашего таймера неотличим от
@@ -279,7 +318,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     // Тело может быть пустым (Ok() без контента у мутаций) — не парсим пустую строку как JSON
     const text = res.status === 204 ? '' : await res.text();
     const data = (text ? JSON.parse(text) : undefined) as T;
-    if (isGet) {
+    if (useOfflineCache) {
       idbSet(url, { data, savedAt: Date.now() }).catch(() => { /* кэш недоступен — не критично */ });
     }
     return data;
@@ -292,13 +331,23 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // иначе успешная, но медленная операция уводила бы приложение в офлайн.
       const ourTimeout = timedOut && timeoutMs !== undefined;
       if (!ourTimeout) {
-        // Сетевая ошибка запроса — сразу офлайн. Эвристики нет: единственный способ
-        // узнать, что связи нет, — это не получить ответ; мутации блокируются,
-        // IDB-fallback для GET ловит OfflineError по instanceof (taskOutbox/notesOffline).
-        setOnline(false);
+        // Одиночный провал fetch — ещё не доказательство разрыва. Планшет размораживает
+        // вкладку и реджектит все висевшие в полёте запросы разом при живом сервере и
+        // нерванном сокете: прежний немедленный setOnline(false) давал ровно то мигание
+        // «Офлайн → через пару секунд снова онлайн», которым заканчивал зонд возврата.
+        // Асимметрия была в том, что провал ЗОНДА состояние не менял, а провал одного
+        // fetch менял его единолично. Теперь оба канала судят по одному факту — молчанию
+        // /api/health, — и REST становится настолько же терпелив, насколько WS
+        // (withServerTimeout 60с, onreconnecting — сознательный noop).
+        // Мутации по-прежнему блокируются, а IDB-fallback для GET ниже ловят по
+        // instanceof OfflineError (taskOutbox/notesOffline) — контракт не меняется.
+        // Гард «только из online» и сам пинг — внутри confirmOffline().
+        await confirmOffline();
       }
-      // Кэш выручает GET независимо от причины обрыва — сначала пробуем его
-      if (isGet) {
+      // Кэш выручает GET независимо от причины обрыва — сначала пробуем его.
+      // Кроме live-запросов: там подстановка прошлого ответа выдала бы лежащий сервер за
+      // работающий, а вызывающему нужен именно факт обрыва.
+      if (useOfflineCache) {
         const cached = await idbGet<T>(url).catch(() => undefined);
         if (cached) return cached.data;
       }

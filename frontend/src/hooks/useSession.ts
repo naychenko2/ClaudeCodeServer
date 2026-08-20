@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import type { ChatItem, ServerMessage, RateLimitInfo, WorkLoopState, TeamImplementState, TeamPlanDecision } from '../types';
 import { joinSession, joinProject, leaveSession, onMessage, onReconnected, sendMessage, respondPermission, interruptSession, compactSession, answerQuestion as sendAnswer, respondPlan as sendPlanDecision, respondTeamPlan as sendTeamPlanDecision, respondTeamEscalation as sendTeamEscalationDecision, setMode as sendSetMode } from '../lib/signalr';
 import { setRecallManifest } from '../lib/recallManifest';
+import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
 import { api } from '../lib/api';
 import { applyServerMessage, normalizeHistory, serverHistoryNewer, initialChatState, consumeComposerRestore, teamImplementSnapshot, turnAlreadyEnded, type ChatState, type PendingChatMessage, type ComposerRestore } from '../lib/chatReducer';
 
@@ -200,6 +201,11 @@ function syncWaitPoll() {
   }
   if (busy && _pollTimer === null) _pollTimer = setInterval(pollWaiting, RECONCILE_POLL_MS);
   else if (!busy && _pollTimer !== null) { clearInterval(_pollTimer); _pollTimer = null; }
+  // Тот же признак держит экран: планшет с открытым чатом засыпал посреди ответа, и
+  // человек возвращался к погасшему экрану вместо ленты. Условие ровно то же, что у
+  // poll — ход идёт И чат кто-то смотрит, поэтому фоновые чаты экран не жгут. Владелец
+  // отдельный: петля разговора держит блокировку своим (см. lib/wakeLock)
+  if (busy) requestWakeLock('turn'); else releaseWakeLock('turn');
 }
 
 // Диагностика расхождения: сверяем клиентский флаг с replay-статусом, пришедшим в ответ

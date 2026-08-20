@@ -59,6 +59,10 @@ export interface HashTarget {
   personaView?: 'automation'; // сразу открыть вкладку студии персоны (бэйдж автоматизации в чате)
   knowledgeId?: string;
   chatId?: string;   // диплинк на конкретный чат: #/chats/{id} — глобальный, #/project/{id}/chat/{chatId} — проектный
+  // #/telemetry/incident/{fingerprint} — карточка инцидента (уведомление об алерте);
+  // #/telemetry/incidents — вкладка со списком (сводное уведомление о лавине)
+  incidentFingerprint?: string;
+  telemetryIncidents?: boolean;
   history?: boolean; // #/history — открыть overlay «Что нового» (поверх дашборда)
   intro?: boolean;   // #/intro — открыть overlay знакомства (фича default-personas-onboarding)
 }
@@ -107,7 +111,14 @@ export function parseHash(hash: string = window.location.hash): HashTarget | nul
     // «Стена» — экран без параметров; гейт ширины стоит в самом WallPage
     case 'wall': return { screen: 'wall' };
     case 'spend': return { screen: 'spend' };
-    case 'telemetry': return { screen: 'telemetry' };
+    case 'telemetry': {
+      const target: HashTarget = { screen: 'telemetry' };
+      // #/telemetry/incident/{fingerprint} — карточка конкретного инцидента,
+      // #/telemetry/incidents — просто вкладка со списком
+      if (parts[1] === 'incident' && parts[2]) target.incidentFingerprint = decodeURIComponent(parts[2]);
+      else if (parts[1] === 'incidents') target.telemetryIncidents = true;
+      return target;
+    }
     case 'module': {
       if (!parts[1]) return { screen: 'home' };
       return { screen: 'module', moduleId: decodeURIComponent(parts[1]) };

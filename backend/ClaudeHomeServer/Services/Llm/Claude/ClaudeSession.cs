@@ -3489,7 +3489,7 @@ public class ClaudeSession : ILlmSessionAdapter
     // Разбор вынесен в ClaudeRateLimitParser (общий со стартовым прогревом подписок).
     private async Task HandleRateLimitAsync(JsonElement root)
     {
-        TurnTelemetry.RecordRateLimit(Info.Provider);
+        TurnTelemetry.RecordRateLimit(Info.Provider, ClaudeRateLimitParser.ReadStatus(root));
         if (ClaudeRateLimitParser.TryParse(root, out var msg))
             await _onMessage(msg);
     }

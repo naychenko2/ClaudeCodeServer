@@ -61,4 +61,26 @@ public class ClaudeRateLimitParserTests
         var root = Root("""{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}""");
         ClaudeRateLimitParser.TryParse(root, out _).Should().BeFalse();
     }
+
+    /// <summary>
+    /// Телеметрия пишется на КАЖДОЕ событие, в том числе на то, что TryParse отвергает —
+    /// иначе метрика молча теряла бы часть отказов.
+    /// </summary>
+    [Fact]
+    public void ReadStatus_СобытиеОтвергнутоеTryParse_ВсёРавноОтдаётСтатус()
+    {
+        var root = Root("""{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}""");
+
+        ClaudeRateLimitParser.TryParse(root, out _).Should().BeFalse();
+        ClaudeRateLimitParser.ReadStatus(root).Should().Be("rejected");
+    }
+
+    [Fact]
+    public void ReadStatus_БезПоляСтатуса_Null()
+    {
+        ClaudeRateLimitParser.ReadStatus(Root("""{"type":"rate_limit_event"}"""))
+            .Should().BeNull();
+        ClaudeRateLimitParser.ReadStatus(Root("""{"type":"rate_limit_event","rate_limit_info":{"utilization":0.5}}"""))
+            .Should().BeNull();
+    }
 }

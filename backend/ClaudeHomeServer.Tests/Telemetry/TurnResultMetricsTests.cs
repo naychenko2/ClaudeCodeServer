@@ -190,6 +190,33 @@ public class TurnResultMetricsTests
         act.Should().NotThrow();
     }
 
+    /// <summary>
+    /// Событие лимитов подписки размечается статусом.
+    ///
+    /// Регрессия: без тега счётчик <c>ccs.llm.rate_limit_hits</c> складывал обычную
+    /// телеметрию использования (<c>status=allowed</c>, приходит ~на каждый ход) и реальные
+    /// отказы в одно число — на этом 2026-08-20 впустую зажглось правило «Лимиты провайдера
+    /// жмут»: 29 «срабатываний» при нуле отклонённых ходов.
+    /// </summary>
+    [Theory]
+    [InlineData("rejected", "rejected")]
+    [InlineData("allowed", "allowed")]
+    [InlineData("allowed_warning", "allowed_warning")]
+    [InlineData(null, "unknown")]
+    [InlineData("новый статус от CLI", "unknown")]
+    public void RateLimit_WritesStatusTag(string? status, string expected)
+    {
+        var provider = NewProvider();
+
+        var samples = Capture(provider, () => TurnTelemetry.RecordRateLimit(provider, status));
+
+        var sample = samples.Should().ContainSingle().Subject;
+        sample.Instrument.Should().Be("ccs.llm.rate_limit_hits");
+        sample.Value.Should().Be(1);
+        sample.Tags["status"].Should().Be(expected);
+        sample.Tags.Keys.Should().OnlyContain(tag => ServerMetrics.AllowedTags.Contains(tag));
+    }
+
     [Fact]
     public void AllRecordedTags_AreInAllowlist()
     {

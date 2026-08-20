@@ -38,6 +38,7 @@ public static class ServerMetrics
         "tool_name",   // идентификатор MCP-инструмента (≤80-90 значений)
         "outcome",     // success, error, timeout
         "error_type",  // rate_limit, network, auth, ...
+        "status",      // событие лимитов: allowed | allowed_warning | rejected | unknown
         "reason",      // ошибки Dify-синхронизации: 401, 404, 429, timeout, other
         "dataset_type",// тип датасета Dify: notes | persona | team | dossiers | project
         "healability", // healable | unhealable — сопоставим ли error-документ с записью стора
@@ -79,10 +80,16 @@ public static class ServerMetrics
         unit: "{error}",
         description: "Ошибки LLM-провайдеров");
 
+    /// <summary>
+    /// События лимитов подписки. Считает ВСЕ <c>rate_limit_event</c>, поэтому смысл несёт
+    /// только разрез по тегу <c>status</c>: <c>rejected</c> — ход отклонён по исчерпанному
+    /// окну, <c>allowed</c> — обычная телеметрия использования (приходит ~на каждый ход).
+    /// Сумма по всем статусам ≈ число ходов, а НЕ число упоров в лимит.
+    /// </summary>
     public static readonly Counter<long> LlmRateLimitHits = _meter.CreateCounter<long>(
         "ccs.llm.rate_limit_hits",
         unit: "{hit}",
-        description: "Срабатывания rate-limit");
+        description: "События лимитов подписки (status: allowed | allowed_warning | rejected)");
 
     public static readonly Counter<long> McpCalls = _meter.CreateCounter<long>(
         "ccs.mcp.calls",
@@ -163,10 +170,11 @@ public static class ServerMetrics
             new KeyValuePair<string, object?>("execution", execution));
     }
 
-    public static void RecordRateLimitHit(string provider)
+    public static void RecordRateLimitHit(string provider, string status)
     {
         LlmRateLimitHits.Add(1,
-            new KeyValuePair<string, object?>("provider", provider));
+            new KeyValuePair<string, object?>("provider", provider),
+            new KeyValuePair<string, object?>("status", status));
     }
 
     public static void RecordMcpCall(string toolName, string outcome)

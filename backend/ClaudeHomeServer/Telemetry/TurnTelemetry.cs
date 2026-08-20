@@ -199,10 +199,26 @@ internal static class TurnTelemetry
         subtype == "error" || isErrorFlag;
 
     /// <summary>
-    /// Срабатывание мягкого rate-limit (rate_limit_event от CLI).
+    /// Событие лимитов подписки (<c>rate_limit_event</c> от CLI).
+    ///
+    /// CLI шлёт его ~на каждый ход, в том числе со <c>status="allowed"</c>: без разреза по
+    /// статусу счётчик меряет активность, а не упор в лимиты. Так и вышло 2026-08-20 —
+    /// правило «Лимиты провайдера жмут» зажглось на 29 событиях, среди которых отклонённых
+    /// ходов не было вовсе. Поэтому статус — обязательный аргумент, а не опция.
     /// </summary>
-    public static void RecordRateLimit(string provider) =>
-        ServerMetrics.RecordRateLimitHit(provider);
+    public static void RecordRateLimit(string provider, string? status) =>
+        ServerMetrics.RecordRateLimitHit(provider, ClassifyRateLimitStatus(status));
+
+    /// <summary>
+    /// Значение тега <c>status</c>. Множество замкнуто протоколом CLI
+    /// (allowed | allowed_warning | rejected), поэтому лимитер <see cref="MetricTagGuard"/>
+    /// не нужен — хватает белого списка, а незнакомое значение схлопывается в <c>unknown</c>.
+    /// </summary>
+    internal static string ClassifyRateLimitStatus(string? status) => status switch
+    {
+        "allowed" or "allowed_warning" or "rejected" => status,
+        _ => "unknown",
+    };
 
     /// <summary>
     /// Прямая запись ошибки — когда категория известна заранее (process_exit и т.д.).

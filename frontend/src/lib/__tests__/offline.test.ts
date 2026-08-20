@@ -28,6 +28,11 @@ function jsonResponse(data: unknown, status = 200) {
   };
 }
 
+// Ответ /api/health — NoContent, как реальный HealthController
+function healthResponse(status = 204) {
+  return { ok: status >= 200 && status < 300, status, statusText: `HTTP ${status}`, json: async () => ({}), text: async () => '' };
+}
+
 let offline: typeof import('../offline');
 let fetchMock: ReturnType<typeof vi.fn>;
 let dispatched: string[];
@@ -81,7 +86,7 @@ describe('request: network-first', () => {
 
     expect(data).toEqual({ cached: true });
     expect(idbGet).toHaveBeenCalledWith('/projects');
-    // Сетевая ошибка → сразу офлайн, без промежуточных состояний
+    // Сеть молчит и на запросе, и на подтверждающем пинге → офлайн
     expect(offline.isOnline()).toBe(false);
   });
 
@@ -147,10 +152,90 @@ describe('request: свой таймаут', () => {
     const promise = offline.request('/projects', { method: 'POST', body: '{}' });
     const assertion = expect(promise).rejects.toThrowError(offline.OfflineError);
     await vi.advanceTimersByTimeAsync(30_000);
+    // Подтверждающий пинг тоже висит до своего abort'а (PING_TIMEOUT_MS=3с) — сервер молчит
+    await vi.advanceTimersByTimeAsync(3_000);
     await assertion;
 
     // 30-сек дефолтный таймаут без явного timeoutMs — зависший запрос это пропажа связи
     expect(offline.isOnline()).toBe(false);
+  });
+});
+
+// --- Подтверждающий пинг перед уходом в офлайн ---
+// Раньше ЛЮБОЙ единичный провал fetch единолично ставил офлайн, а зонд через
+// секунды возвращал онлайн — на планшете это давало мигание индикатора при
+// разморозке вкладки (браузер реджектит все in-flight запросы разом).
+describe('request: подтверждение офлайна пингом', () => {
+  // /api/health отвечает, всё остальное — сетевая ошибка
+  function serverAliveButRequestFails() {
+    fetchMock.mockImplementation((url: string) =>
+      url === '/api/health'
+        ? Promise.resolve(healthResponse(204))
+        : Promise.reject(new TypeError('failed to fetch')));
+  }
+
+  it('одиночный провал fetch при живом сервере НЕ уводит в офлайн', async () => {
+    serverAliveButRequestFails();
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
+
+    const data = await offline.request('/projects');
+
+    // Кэш всё равно выручает (ответа-то не было), но состояние связи не мигает
+    expect(data).toEqual({ cached: true });
+    expect(fetchMock).toHaveBeenCalledWith('/api/health', expect.objectContaining({ method: 'GET' }));
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('мутация при живом сервере: OfflineError отдаётся, но офлайн не включается', async () => {
+    serverAliveButRequestFails();
+
+    await expect(offline.request('/projects', { method: 'POST', body: '{}' }))
+      .rejects.toThrowError(offline.OfflineError);
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('пачка параллельных провалов даёт ОДИН пинг (общий полёт)', async () => {
+    let pings = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/health') { pings++; return Promise.resolve(healthResponse(204)); }
+      return Promise.reject(new TypeError('failed to fetch'));
+    });
+    idbGet.mockResolvedValue({ data: {}, savedAt: 1 });
+
+    await Promise.all([offline.request('/a'), offline.request('/b'), offline.request('/c')]);
+
+    expect(pings).toBe(1);
+    expect(offline.isOnline()).toBe(true);
+  });
+
+  it('молчит и пинг — уходим в офлайн (прежнее поведение при реальном разрыве)', async () => {
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    idbGet.mockResolvedValue(undefined);
+
+    await expect(offline.request('/projects')).rejects.toThrowError(offline.OfflineError);
+    expect(offline.isOnline()).toBe(false);
+  });
+
+  it('502 от прокси на пинге = бэкенд мёртв → офлайн', async () => {
+    fetchMock.mockImplementation((url: string) =>
+      url === '/api/health'
+        ? Promise.resolve(healthResponse(502))
+        : Promise.reject(new TypeError('failed to fetch')));
+    idbGet.mockResolvedValue(undefined);
+
+    await expect(offline.request('/projects')).rejects.toThrowError(offline.OfflineError);
+    expect(offline.isOnline()).toBe(false);
+  });
+
+  it('в офлайне провалившийся GET пинг не шлёт (подтверждать нечего)', async () => {
+    offline.setOnline(false);
+    fetchMock.mockRejectedValue(new TypeError('failed to fetch'));
+    idbGet.mockResolvedValue({ data: { cached: true }, savedAt: 1 });
+
+    await offline.request('/projects');
+
+    // Ровно один fetch — сам запрос; /api/health не дёргался
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -306,11 +391,6 @@ describe('initConnectivity: ОС-события без пинга', () => {
 // из них не сработало (хаб не стартован, экран логина, авиарежим включился
 // без window-события) — поднимает флаг зонд.
 describe('зонд возврата', () => {
-  // fetch-заглушка для /api/health — NoContent как реальный HealthController
-  function healthResponse(status = 204) {
-    return { ok: status >= 200 && status < 300, status, statusText: `HTTP ${status}`, json: async () => ({}), text: async () => '' };
-  }
-
   it('из офлайна успешный GET через request() поднимает флаг', async () => {
     offline.setOnline(false);
     expect(offline.isOnline()).toBe(false);

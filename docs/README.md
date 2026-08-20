@@ -44,6 +44,8 @@
 (тексты README ветки `ccs/dossiers/v1` и подписей импорта в панели «История решений»),
 [desktop-agent.md](features/desktop-agent.md) (десктопный агент: что сделано серверной
 половиной первой волны, эндпоинты и чего ещё нет),
+[desktop-agent-client.md](features/desktop-agent-client.md) (десктопный клиент второй волны:
+устройство решения, сопряжение и токен, фазы вызова в канале, запуск и отладка),
 [image-generation.md](features/image-generation.md) (выбор генератора картинок:
 иконка проекта, аватар персоны), [model-presets-and-tiers.md](features/model-presets-and-tiers.md),
 [model-providers-rework.md](features/model-providers-rework.md),

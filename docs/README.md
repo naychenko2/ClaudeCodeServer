@@ -50,7 +50,9 @@
 [project-icon-glyphs.md](features/project-icon-glyphs.md) (значок проекта вместо картинки:
 тексты интерфейса и «Что нового»),
 [project-onboarding-v2.md](features/project-onboarding-v2.md) (критерии снятия флага
-знакомства v2).
+знакомства v2),
+[voice-barge-in.md](features/voice-barge-in.md) (перебивание голосом в разговоре:
+устройство, ограничения, критерии снятия флага).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),
@@ -88,7 +90,9 @@
 [messenger-integration.md](research/messenger-integration.md) (не реализовано),
 [roadmap-team-zone.md](research/roadmap-team-zone.md),
 [voice-mode-benchmark.md](research/voice-mode-benchmark.md) (режим диалога против ChatGPT
-и Claude: разрывы и план P0/P1/P2). Читать как «так было тогда».
+и Claude: разрывы и план P0/P1/P2),
+[speechkit-pricing.md](research/speechkit-pricing.md) (биллинг Yandex SpeechKit: цены STT/TTS,
+правила округления, расчёт голосового режима, v1 против v3). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

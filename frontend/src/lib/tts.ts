@@ -262,6 +262,25 @@ export function isSpeaking(): boolean {
   if (typeof speechSynthesis !== 'undefined' && (speechSynthesis.speaking || speechSynthesis.pending)) return true;
   return false;
 }
+// Громкость озвучки: 1 — обычная, меньше — приглушение под барж-ин (первая ступень
+// перебивания, см. lib/bargeDetect). Приглушение обратимо и потому дёшево: чужая реплика
+// рядом стоит полусекундной тишины, а не потерянного ответа.
+let speechVolume = 1;
+
+// Ставится на играющий кусок И на все следующие в очереди: между кусками элемент
+// пересоздаётся, и без общего значения приглушение слетало бы на первой же точке
+export function setSpeechVolume(v: number): void {
+  speechVolume = Math.min(1, Math.max(0, v));
+  if (currentAudio) currentAudio.volume = speechVolume;
+  // У speechSynthesis громкость на лету не меняется (она свойство реплики, а не движка) —
+  // приглушаем паузой: для фолбэка это тот же смысл «замолчи, но не насовсем»
+  if (typeof speechSynthesis === 'undefined') return;
+  try {
+    if (speechVolume < 1) speechSynthesis.pause();
+    else speechSynthesis.resume();
+  } catch { /* движок не поддержал — озвучка просто доиграет как есть */ }
+}
+
 // Показать разовое сообщение о фолбэке (Р4): «на прогулке замолчало» не должно выглядеть багом
 let toastFn: ((text: string) => void) | null = null;
 
@@ -286,6 +305,8 @@ export function primeAudio() {
 
 export function stopSpeaking() {
   speakToken++;
+  // Приглушение живёт ровно в пределах одной озвучки: следующая начинается в полный голос
+  speechVolume = 1;
   if (currentAudio) {
     currentAudio.pause();
     currentAudio.src = '';
@@ -384,6 +405,7 @@ function playBlob(blob: Blob, token: number): Promise<void> {
     if (typeof Audio === 'undefined') { resolve(); return; }
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
+    audio.volume = speechVolume; // приглушены барж-ином — следующий кусок тоже тихий
     currentAudio = audio;
     currentUrl = url;
 

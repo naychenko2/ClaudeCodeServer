@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import babel from '@rolldown/plugin-babel';
 import { VitePWA } from 'vite-plugin-pwa';
 import { federation } from '@module-federation/vite';
+import { viteStaticCopy } from 'vite-plugin-static-copy';
 import { fileURLToPath } from 'node:url';
 
 // Плагин UI-инспектора (data-cc-src на host-элементах JSX). plugin-react v6 babel не
@@ -57,6 +58,20 @@ export default defineConfig({
         'react-dom': { singleton: true, eager: true, requiredVersion: '^19.2.0' },
       },
     }),
+    // Ассеты барж-ина (lib/bargeVad) — со СВОЕГО хоста под /vad/: CDN у vad-web/onnxruntime
+    // дефолтный, а у пользователей DPI-блокировки — фича молча не работала бы. Копируются
+    // модель Silero v5, аудио-ворклет и однопоточный WASM onnxruntime (loader .mjs + бинарь);
+    // jsep/jspi/asyncify-варианты не нужны (ortConfig ставит numThreads=1)
+    viteStaticCopy({
+      // stripBase:true — файлы кладутся ПЛОСКО в dist/vad/ (иначе плагин
+      // воспроизводит весь путь node_modules/... внутри dest)
+      targets: [
+        { src: 'node_modules/@ricky0123/vad-web/dist/silero_vad_v5.onnx', dest: 'vad', rename: { stripBase: true } },
+        { src: 'node_modules/@ricky0123/vad-web/dist/vad.worklet.bundle.min.js', dest: 'vad', rename: { stripBase: true } },
+        { src: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm', dest: 'vad', rename: { stripBase: true } },
+        { src: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs', dest: 'vad', rename: { stripBase: true } },
+      ],
+    }),
     VitePWA({
       registerType: 'prompt',
       // Свой sw (src/sw.ts): прежний precache/SPA-fallback + обработчики web push.
@@ -72,6 +87,9 @@ export default defineConfig({
       // .mjs включён в precache — иначе pdf.worker.min.mjs выпадает и PDF не работает офлайн
       injectManifest: {
         globPatterns: ['**/*.{js,mjs,css,html,ico,png,svg,webmanifest}'],
+        // Ассеты барж-ина офлайн не нужны (петля разговора в офлайне гаснет),
+        // а worklet и ort-loader попали бы в precache по маске выше
+        globIgnores: ['vad/**'],
         // Основной бандл перевалил дефолтный лимит precache (2 MiB); с инъекцией
         // data-cc-src (UI-инспектор) вырос до ~4.4 MiB — держим лимит с запасом
         maximumFileSizeToCacheInBytes: 6 * 1024 * 1024,

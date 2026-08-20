@@ -92,6 +92,15 @@ public sealed record WidgetsMcpContext;
 public sealed record CodeGraphMcpContext(string ApiUrl, string Token, string ProjectId,
     string? SessionId = null, string? RootPath = null);
 
+// Контекст MCP-сервера десктопной грани (ADR-008): адрес API, capability-токен хода
+// и id чата. Токен отдельный — сервисный JWT владельца эндпоинты /api/devices/* не
+// принимают вовсе (иначе руками ходил бы любой чат владельца, включая ночной
+// tasks-executor): audience desktop, claims ownerId + sessionId + deviceId, TTL — минуты.
+// Чат-вызыватель бэкенд выводит ИЗ ТОКЕНА; DESKTOP_SESSION_ID уезжает в X-Caller-Session-Id
+// и служит только диагностикой (GET /api/mcp/calls) — в решении об авторизации он не
+// участвует (спуфится). null — грань чату не доставляется.
+public sealed record DesktopMcpContext(string ApiUrl, string Token, string SessionId);
+
 // Один MCP-сервер внешнего модуля (контракт docs/modules/integration-contract.md §6):
 // Key — ключ сервера в mcp-конфиге хода, Command/Args — запуск из манифеста (args уже
 // резолвнуты от каталога модуля), ModuleId — id модуля, ApiUrl — адрес модуля ЧЕРЕЗ gateway
@@ -236,4 +245,9 @@ public sealed record LlmSessionContext(
     Action<string>? OrchestrationDone = null,
     // Приёмник паспортов прогонов сабагентов (диагностика обрывов, SubagentRunLog): вызывается
     // на завершении каждого агента хода. null (тесты, сессия без стора) — паспорта не ведутся.
-    Action<Claude.SubagentRunPassport>? SubagentRunSink = null);
+    Action<Claude.SubagentRunPassport>? SubagentRunSink = null,
+    // MCP-сервер десктопной грани (ADR-008): руки на машине пользователя.
+    // null — грань чату не положена (не десктопный чат, выключена в проекте, нет флага,
+    // чат-исполнитель задачи / автоматизации / групповой). Решается по КОНФИГУРАЦИИ
+    // на момент запуска CLI — от свойств хода состав не зависит.
+    DesktopMcpContext? DesktopMcp = null);

@@ -13,7 +13,7 @@
 //                        (заголовок спуфится — доказано красной командой).
 //
 // Инструменты (состав постоянен и от хода не зависит — см. ниже):
-//   desktop_devices — список устройств: имя, онлайн, экраны, статус сеанса рук
+//   desktop_devices — список устройств: имя, онлайн, статус сеанса рук в этом чате
 //   desktop_screen  — кадр: scope=window|screen|region, по умолчанию window
 //   desktop_ui      — плоский снапшот интерактивных элементов окна
 //   desktop_act     — батч шагов click|type|key|scroll|focus по snapshotId+ref (≤10)
@@ -86,6 +86,18 @@ const TIMEOUT_MS = {
 // подсказки «повтори»: клик, ввод и запуск команды не идемпотентны, а неизвестный исход не
 // означает «не применилось».
 const MUTATING = new Set(['desktop_act', 'desktop_open', 'desktop_run']);
+
+// Имя инструмента → вид вызова канала (DesktopCallKinds на бэкенде). Разные словари не
+// прихоть: инструмент — это имя в tools/list, вид вызова — поле протокола, которое читает
+// устройство. Бэкенд принимает ТОЛЬКО kind и на чужом поле отвечает 400 protocol_error,
+// поэтому перевод живёт здесь, одной таблицей. Сторож — DesktopMcpCallContractTests.
+const CALL_KINDS = {
+  desktop_screen: 'screen',
+  desktop_ui: 'ui',
+  desktop_act: 'act',
+  desktop_open: 'open',
+  desktop_run: 'run',
+};
 
 async function api(path, { timeoutMs = 30_000, retry = false, ...options } = {}, attempt = 0) {
   try {
@@ -204,10 +216,13 @@ function untrusted(kind, deviceName, body) {
 
 // Общая шапка любого исхода вызова. Индекс последнего применённого шага печатается ВСЕГДА —
 // правило протокола: без него после обрыва неизвестно, где остановились.
-function outcomeHeader(res) {
+// Имя устройства в результате бэкенда не приезжает (DesktopCallResult его не несёт) —
+// подставляем то, что назвал сам вызов; опущено — руки на устройстве сеанса, и имени
+// у нас нет, поэтому строки просто не будет.
+function outcomeHeader(res, device) {
   const lines = [`Исход: ${res?.outcome ?? 'unknown'}`];
   if (res?.callId) lines.push(`callId: ${res.callId}`);
-  if (res?.device) lines.push(`Устройство: ${res.device}`);
+  if (device) lines.push(`Устройство: ${device}`);
   const step = res?.lastAppliedStep;
   const noStep = step === null || step === undefined || step < 0;
   lines.push(`Последний применённый шаг: ${noStep ? 'ни одного' : step}`);
@@ -217,12 +232,12 @@ function outcomeHeader(res) {
   return lines.join('\n');
 }
 
-// Полезная нагрузка исхода. Кадр (base64) вытаскиваем в image-блок: в JSON он раздул бы текст
+// Полезная нагрузка исхода. Приезжает в поле payload — так называется JSON устройства в
+// DesktopCallResult; кадр (base64) вытаскиваем из неё в image-блок: в JSON он раздул бы текст
 // вдвое и остался бы для модели нечитаемым. Форма кадра мягкая: не распознали — отдаём как есть.
-function outcomeContent(tool, res) {
+function outcomeContent(tool, res, device) {
   const content = [];
-  const result = res?.result;
-  const device = res?.device ?? null;
+  const result = res?.payload;
   const image = result && typeof result === 'object' && !Array.isArray(result) ? (result.image ?? null) : null;
   const rest = image ? { ...result, image: undefined } : result;
 
@@ -245,8 +260,10 @@ function outcomeContent(tool, res) {
   return content;
 }
 
-function callResult(id, tool, res) {
-  respond(id, { content: [{ type: 'text', text: outcomeHeader(res) }, ...outcomeContent(tool, res)] });
+function callResult(id, tool, res, device = null) {
+  respond(id, {
+    content: [{ type: 'text', text: outcomeHeader(res, device) }, ...outcomeContent(tool, res, device)],
+  });
 }
 
 // --- Состав инструментов (константа: ни от env, ни от хода не зависит) ---
@@ -393,18 +410,23 @@ async function listDevices(id) {
       + 'приложение AI Home Desktop на своей машине и одноразовый код из веб-морды.');
     return;
   }
+  // Форма ответа — DesktopAgentController.List: у устройства handsHere («руки ЭТОГО чата
+  // здесь») и busyWith («занято сеансом другого чата»), а сеанс самого чата лежит рядом,
+  // в hands. Скрытого «активного устройства» у владельца не существует — руки всегда
+  // вопрос чата, поэтому и печатаем от чата.
   const lines = devices.map(d => {
     const state = d.online ? 'на связи' : 'офлайн';
-    const screens = d.screens ? `, экранов: ${d.screens}` : '';
-    const hands = d.handsSession?.active
-      ? `, идёт сеанс рук в чате «${d.handsSession.chatName ?? 'без названия'}»`
-      : ', сеанса рук нет';
-    return `- ${d.name} — ${state}${screens}${hands}`;
+    const hands = d.handsHere
+      ? ', руки этого чата здесь'
+      : d.busyWith
+        ? `, занято сеансом чата «${d.busyWith}»`
+        : ', сеанса рук нет';
+    return `- ${d.name} — ${state}${hands}`;
   });
-  if (!devices.some(d => d.handsSession?.active)) {
+  if (!data?.hands) {
     lines.push('');
-    lines.push('Ни на одном устройстве сеанс рук не идёт. Запустить его может только человек '
-      + 'с самого устройства — из окна клиента AI Home, приняв заявку от этого чата.');
+    lines.push('В этом чате сеанса рук нет. Начать его может только человек с самого '
+      + 'устройства — из окна клиента AI Home, приняв заявку от этого чата.');
   }
   textResult(id, lines.join('\n'));
 }
@@ -417,9 +439,9 @@ async function callDevice(id, tool, args) {
     const res = await api('/api/devices/agent/call', {
       method: 'POST',
       timeoutMs: TIMEOUT_MS[tool] ?? 60_000,
-      body: JSON.stringify({ device: device ?? null, tool, args: rest }),
+      body: JSON.stringify({ device: device ?? null, kind: CALL_KINDS[tool], args: rest }),
     });
-    callResult(id, tool, res);
+    callResult(id, tool, res, device ?? null);
   } catch (err) {
     // 409 — гейт: нет сеанса, чужое устройство, офлайн, грань выключена в проекте.
     // Это штатный ответ инструмента с честным текстом, а не красная карточка.
@@ -428,8 +450,7 @@ async function callDevice(id, tool, args) {
         outcome: err.payload?.outcome ?? 'denied',
         message: err.payload?.message ?? err.bodyText,
         lastAppliedStep: err.payload?.lastAppliedStep ?? null,
-        device: err.payload?.device ?? device ?? null,
-      });
+      }, device ?? null);
       return;
     }
     throw err;

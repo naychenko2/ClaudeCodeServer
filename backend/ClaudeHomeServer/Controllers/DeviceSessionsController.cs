@@ -1,6 +1,7 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Protocol;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Desktop;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -27,7 +28,8 @@ public sealed record DesktopHandsStopRequest(string? Reason = null);
 [Route("api/devices/hands")]
 public sealed class DeviceSessionsController(
     DesktopHandsSessionService hands,
-    IDesktopDeviceDirectory devices) : ControllerBase
+    IDesktopDeviceDirectory devices,
+    IDesktopChatDirectory chats) : ControllerBase
 {
     // Токен устройства и capability-токен канала называют claims по-разному (sub/did против
     // ownerId/deviceId) — читаем оба имени, решение от этого не зависит.
@@ -101,6 +103,56 @@ public sealed class DeviceSessionsController(
     }
 
     /// <summary>
+    /// Статус сеанса для шапки чата — под обычным JWT владельца. Отдельная ручка нужна
+    /// потому, что событие desktop_session эфемерное: перезагрузив страницу, веб-морда о
+    /// живом сеансе больше ниоткуда не узнает и бейдж «руки на home» погас бы на глазах у
+    /// работающих рук. Чужой чат — 404: подтверждать его существование незачем.
+    /// </summary>
+    [HttpGet("chat/{chatSessionId}")]
+    [Authorize]
+    public IActionResult ChatStatus(string chatSessionId)
+    {
+        if (ServiceTokenRefusal() is { } refusal) return refusal;
+        if (OwnedChat(chatSessionId) is not { } chat) return NotFound();
+
+        var session = hands.ForChat(chatSessionId);
+        var request = hands.RequestsFor(chat.OwnerId).FirstOrDefault(r => r.ChatSessionId == chatSessionId);
+
+        return Ok(new
+        {
+            active = session is not null,
+            session = Describe(session),
+            // Заявка в очереди — то, что человек видит в окне клиента. Бейдж этим объясняет
+            // ожидание («примите заявку на устройстве»), а не молчит.
+            requestedAt = request?.RequestedAt,
+            // Почему грань не выдана — та же формулировка, что получает модель; null — выдана
+            facetRefusal = chat.FacetRefusal()
+        });
+    }
+
+    /// <summary>
+    /// Заявка на сеанс из веб-морды. Веб может ТОЛЬКО попросить: сеанс стартует лишь с
+    /// самого устройства (ADR-008), поэтому ветки, создающей сеанс, здесь нет и быть не
+    /// может. Ровно ту же заявку ставит гейт, когда вызов пришёл в чат без рук.
+    /// </summary>
+    [HttpPost("chat/{chatSessionId}/request")]
+    [Authorize]
+    public IActionResult RequestFromChat(string chatSessionId)
+    {
+        if (ServiceTokenRefusal() is { } refusal) return refusal;
+        if (OwnedChat(chatSessionId) is not { } chat) return NotFound();
+        if (chat.FacetRefusal() is string facetOff)
+            return Conflict(new { outcome = DesktopGateOutcomes.FacetOff, message = facetOff });
+
+        // Сеанс уже идёт — просить нечего, отвечаем текущим состоянием
+        if (hands.ForChat(chatSessionId) is { } active)
+            return Ok(new { requested = false, active = true, session = Describe(active) });
+
+        var request = hands.Enqueue(chat);
+        return Ok(new { requested = true, active = false, requestedAt = request.RequestedAt });
+    }
+
+    /// <summary>
     /// «Стоп» из шапки чата — вне канала агента, под обычным JWT владельца. Разрыв делает
     /// сервер: клиента об этом уведомляет отмена вызовов и статус сеанса.
     /// </summary>
@@ -108,6 +160,8 @@ public sealed class DeviceSessionsController(
     [Authorize]
     public async Task<IActionResult> StopFromChat(string chatSessionId, CancellationToken ct)
     {
+        if (ServiceTokenRefusal() is { } refusal) return refusal;
+
         var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
         var session = hands.ForChat(chatSessionId);
         // Чужой сеанс — 404, а не 403: подтверждать его существование незачем.
@@ -115,6 +169,24 @@ public sealed class DeviceSessionsController(
 
         await hands.StopAsync(chatSessionId, DesktopHandsEndReasons.Stopped, ct);
         return Ok(new { stopped = true });
+    }
+
+    // Сервисный JWT владельца лежит в env КАЖДОГО хода, включая ночной tasks-executor.
+    // Веб-половина грани — статус, заявка и «Стоп» — работа человека в браузере: ход не
+    // должен уметь ни просить руки, ни гасить чужой сеанс.
+    private IActionResult? ServiceTokenRefusal() =>
+        User.FindFirstValue(JwtService.TokenKindClaim) == JwtService.ServiceTokenKind
+            ? StatusCode(StatusCodes.Status403Forbidden,
+                new { error = "Сеансом рук распоряжается только веб-сессия владельца" })
+            : null;
+
+    // Чат владельца, либо null: чужой и исчезнувший чат снаружи неразличимы — оба дают 404.
+    private DesktopChatInfo? OwnedChat(string chatSessionId)
+    {
+        var userId = User.FindFirstValue(JwtRegisteredClaimNames.Sub);
+        if (string.IsNullOrEmpty(userId)) return null;
+        var chat = chats.Find(chatSessionId);
+        return chat is not null && chat.OwnerId == userId ? chat : null;
     }
 
     private static object? Describe(DesktopHandsSession? s) => s is null ? null : new

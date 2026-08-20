@@ -39,8 +39,23 @@ public sealed record DevicePairingResult(
 /// только истечением окна.
 /// </summary>
 public sealed class DevicePairingService(
-    DeviceRegistry registry, UserStore users, ILogger<DevicePairingService>? logger = null)
+    DeviceRegistry registry, UserStore users, ILogger<DevicePairingService>? logger = null,
+    IConfiguration? config = null, IHostEnvironment? env = null)
 {
+    /// <summary>
+    /// ОТЛАДОЧНАЯ ДЫРА, и другого названия у неё нет: `Desktop:AllowSameHostPairing` снимает
+    /// отказ на сопряжение с машиной самого бэкенда. В бою это обход изоляции песочницы —
+    /// руки на машине сервера грань не выдаёт вовсе (ADR-008). Держится на двух замках сразу:
+    /// ключ выключен по умолчанию и действует ТОЛЬКО в Development, то есть на боевом
+    /// инстансе не сработает, даже если ключ туда попадёт.
+    ///
+    /// Зачем вообще: у разработчика продукт и десктопный клиент живут на одном компьютере, и
+    /// без этого люка сквозной путь «сервер ↔ живой клиент» нечем проверить.
+    /// </summary>
+    private readonly bool _allowSameHost =
+        (env?.IsDevelopment() ?? false)
+        && (config?.GetValue("Desktop:AllowSameHostPairing", false) ?? false);
+
     public const int CodeLength = 8;
     public const int MaxAttempts = 5;
     public static readonly TimeSpan CodeLifetime = TimeSpan.FromMinutes(5);
@@ -139,8 +154,17 @@ public sealed class DevicePairingService(
             }
 
             if (string.Equals(fingerprint, MachineFingerprint.OfHost(), StringComparison.OrdinalIgnoreCase))
-                return new DevicePairingResult(DevicePairingStatus.SameHost,
-                    Error: "Это та же машина, где работает сервер: на ней грань десктопа не нужна");
+            {
+                if (!_allowSameHost)
+                    return new DevicePairingResult(DevicePairingStatus.SameHost,
+                        Error: "Это та же машина, где работает сервер: на ней грань десктопа не нужна");
+
+                // Люк открыт — говорим об этом вслух: молчаливое исключение из правила
+                // безопасности в логе не отличить от работающего правила
+                logger?.LogWarning(
+                    "Сопряжение с машиной самого бэкенда разрешено ключом Desktop:AllowSameHostPairing " +
+                    "(отладочный режим, только Development)");
+            }
 
             try
             {

@@ -2,6 +2,7 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { Plus, Menu, FileText, Tags } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
+import { HandsBadge } from '../../features/desktop/HandsBadge';
 import { TagAssignMenu } from '../TagChip';
 import { modelLabel, modelProvider, assistantName } from '../../lib/models';
 import { effortLabel } from '../../lib/effort';
@@ -1156,6 +1157,9 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
         </span>
       </span>
     );
+    // Десктопный чат: руки, их устройство и «Стоп». Компонент сам решает, показываться
+    // ли — у обычного чата он пуст, поэтому условия типа чата здесь нет
+    slots.push(<HandsBadge key="hands" session={session} />);
     // Происхождение живёт здесь в ОБОИХ размерах и на обеих платформах: в правом
     // ряду длинный заголовок задачи выдавливал чипы и резался на 220px
     if (origin) slots.push(

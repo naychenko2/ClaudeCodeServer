@@ -59,6 +59,10 @@ export interface Project {
   // Ключи серверов личного MCP-реестра, ВКЛЮЧЁННЫХ в этом проекте (allow-list):
   // сервер едет в ход только там, где явно включён. Пусто/нет — не включён никто
   mcpServersOn?: string[] | null;
+  // Грань десктопного агента включена в этом проекте (ADR-008, флаг desktop-agent):
+  // вторая половина оси выдачи «проект + десктопный чат». Тумблер — рубильник: снятие
+  // гасит живые сеансы рук проекта, а не только запрещает новые
+  desktopAgentEnabled?: boolean;
   // Персона-«руководитель проекта» (фича default-personas-onboarding): дефолт для новых
   // чатов проекта; null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
   defaultPersonaId?: string | null;
@@ -575,6 +579,9 @@ export interface Session {
   // Закреплён в списке чатов
   isPinned?: boolean;
   claudeSessionId?: string;
+  // Десктопный чат (ADR-008): тип задаётся при создании и не меняется — в его транскрипте
+  // лежат кадры чужого рабочего стола, поэтому продолжить его обычным чатом нельзя
+  desktopChat?: boolean;
   mode: Mode;
   // Инструменты, разрешённые в этом чате без вопроса («Всегда разрешать …»). Скоуп —
   // инструмент целиком: «Bash» = любые команды этого чата. Разрешение постоянное
@@ -2855,4 +2862,49 @@ export interface IncidentDossier {
 export interface IncidentListResponse {
   status: IncidentStatus;
   items: IncidentSummary[];
+}
+
+// ---------- Десктопный агент (ADR-008) ----------
+
+// Устройство владельца из GET /api/devices. Отпечаток наружу урезан до 12 символов —
+// он служит человеку приметой «это та самая машина», а не проверкой.
+export interface DesktopDevice {
+  id: string;
+  name: string;
+  fingerprint: string;
+  clientVersion?: string | null;
+  createdAt: string;
+  lastSeenAt?: string | null;
+  revoked: boolean;
+  revokedAt?: string | null;
+  tokenVersion: number;
+}
+
+// Заявка на сопряжение: код из 8 символов живёт 5 минут и принадлежит ЭТОЙ веб-сессии.
+// hostFingerprint — отпечаток машины самого сервера: клиент на ней сопрягаться отказывается
+export interface DesktopPairingCode {
+  code: string;
+  expiresAt: string;
+  attemptsLeft: number;
+  hostFingerprint?: string;
+}
+
+// Сеанс рук глазами веб-морды (GET /api/devices/hands/chat/{id}).
+// facetRefusal — почему грань чату не выдана; null — выдана
+export interface DesktopHandsChatStatus {
+  active: boolean;
+  session: DesktopHandsSessionView | null;
+  requestedAt?: string | null;
+  facetRefusal?: string | null;
+}
+
+export interface DesktopHandsSessionView {
+  chatSessionId: string;
+  chat?: string | null;
+  // Имя устройства, которому отданы руки
+  device?: string | null;
+  startedAt: string;
+  expiresAt?: string | null;
+  idleDeadlineAt?: string | null;
+  hardDeadlineAt?: string | null;
 }

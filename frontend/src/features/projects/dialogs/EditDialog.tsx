@@ -17,6 +17,7 @@ import { GIT_BODY_H, GIT_CARD_H, GitModeCard, GitPushRow } from '../components/G
 import { ProjectSyncToggle } from '../../../components/ProjectSyncToggle';
 import { ProjectIconSection } from '../ProjectIconSection';
 import { McpProjectSection } from '../../mcp/McpProjectSection';
+import { DesktopFacetSection } from '../../desktop/DesktopFacetSection';
 import { BackgroundSection } from './BackgroundSection';
 import { AccordionSection, type AccordionSummaryTone } from './AccordionSection';
 import { invalidateProjectsCache } from '../useAllProjects';
@@ -236,6 +237,8 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   // менять не может (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем
   // за тем же условием, чтобы не показывать недоступное действие.
   const bgEnabled = useFeature(FLAGS.projectBackgrounds);
+  // Грань десктопа за флагом: без него секции нет — включать нечего, сервер откажет
+  const desktopEnabled = useFeature(FLAGS.desktopAgent);
   const me = useMe();
   const isOwner = !project.ownerId || project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
@@ -514,6 +517,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       </div>
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
+      {desktopEnabled && <DesktopFacetSection project={project} onUpdated={onProjectUpdated} />}
       <GitHistorySection project={project} />
       {bgEnabled && isOwner && (
         <BackgroundSection

@@ -4690,6 +4690,15 @@ public class SessionManager : IDisposable
             throw new SessionModeConflictException(
                 "Автопилот недоступен в чате «Командной реализации» — здесь работа идёт через задачи исполнителям.");
 
+        // ADR-008 («Два уровня, которые нельзя смешивать»): автопродолжение work-loop
+        // в десктопном чате запрещено. Цикл ведёт агента по итерациям без человека, а вся
+        // модель грани держится на том, что человек подтверждает каждое действие на
+        // устройстве. Выключение не запрещаем — вернуть false всегда можно.
+        if (enabled && entry.Info.DesktopChat)
+            throw new SessionModeConflictException(
+                "Цикл «до готово» недоступен в десктопном чате: агент не должен действовать на " +
+                "вашем компьютере без подтверждения каждого действия.");
+
         var wasEnabled = entry.Info.WorkLoop is not null;
         // Присвоение WorkLoop и очистку буфера хода держим под одним локом: иначе обнуление
         // поля состязается с чтением в TryConsumeWorkLoopRun/RefundWorkLoopRun/ContinueWorkLoopAsync,

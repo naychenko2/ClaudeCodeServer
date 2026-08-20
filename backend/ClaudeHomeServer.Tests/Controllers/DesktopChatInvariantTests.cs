@@ -146,6 +146,50 @@ public class DesktopChatInvariantTests : IClassFixture<TestWebApplicationFactory
         response.StatusCode.Should().Be(HttpStatusCode.Created);
     }
 
+    [Fact]
+    public async Task ДесктопныйЧат_ВключениеЦиклаДоГотово_400()
+    {
+        await SetFlagAsync(true);
+        var projectId = await CreateProjectAsync();
+        var session = await CreateSessionAsync(projectId, new { mode = "auto", desktop = true });
+        var id = session.GetProperty("id").GetString()!;
+
+        // ADR-008 («Два уровня»): автопродолжение work-loop в десктопном чате запрещено —
+        // цикл действует без человека, а модель грани держится на подтверждении каждого действия
+        var response = await _client.PutAsJsonAsync($"/api/chats/{id}/loop", new { enabled = true });
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        (await response.Content.ReadAsStringAsync()).Should().Contain("десктопном чате");
+    }
+
+    [Fact]
+    public async Task ДесктопныйЧат_ВыключениеЦиклаДоГотово_Разрешено()
+    {
+        await SetFlagAsync(true);
+        var projectId = await CreateProjectAsync();
+        var session = await CreateSessionAsync(projectId, new { mode = "auto", desktop = true });
+        var id = session.GetProperty("id").GetString()!;
+
+        // Стоп не запрещаем: снять несуществующий цикл — безвредный noop
+        var response = await _client.PutAsJsonAsync($"/api/chats/{id}/loop", new { enabled = false });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task ОбычныйЧат_ВключениеЦиклаДоГотово_Разрешено()
+    {
+        var projectId = await CreateProjectAsync();
+        var session = await CreateSessionAsync(projectId, new { mode = "auto" });
+        var id = session.GetProperty("id").GetString()!;
+
+        // Запрет бьёт ровно по десктопному чату, не шире
+        var response = await _client.PutAsJsonAsync($"/api/chats/{id}/loop", new { enabled = true });
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        var updated = JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync());
+        updated.GetProperty("workLoop").ValueKind.Should().Be(JsonValueKind.Object,
+            "цикл действительно включился — проверяется не только отсутствие отказа");
+    }
+
     /// <summary>
     /// Десктопный чат с транскриптом. ClaudeSessionId ставит CLI на первом ходу, а в тестах
     /// ход не идёт — проставляем поле напрямую в живой карточке чата (GetById отдаёт её же).

@@ -637,20 +637,36 @@ public class SessionManager : IDisposable
         return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
     }
 
+    // Право чата на десктопную грань по СУЩНОСТИ чата — единая точка правды (ADR-008:
+    // «Грань не доставляется в ходы исполнения задач, отложенные и регулярные чаты,
+    // групповые чаты»), никаких дублей-предикатов рядом. internal static — чистая функция,
+    // тестируется напрямую (DesktopTurnEligibleTests).
+    internal static bool DesktopTurnEligible(Session session) =>
+        // Десктопный ли чат (тип чата «Десктопный») — свойство конфигурации чата, а не хода
+        session.DesktopChat
+        // Чат-исполнитель задачи (в том числе отложенной и регулярной — их создаёт
+        // TaskExecutionService по расписанию, человека у машины в этот момент нет) и чат
+        // правила проактивности: Origin выводится из TaskId/AutomationRuleId (Session.Origin)
+        && session.Origin == ChatOrigin.Manual
+        && !session.TaskExecution
+        // Групповой чат: руки одного устройства на несколько собеседников не делятся.
+        // Participants заполняется ТОЛЬКО у групповых (ValidateParticipants: 2–8 персон);
+        // чат с одной персоной хранит её в PersonaId — поэтому «есть участники» == «групповой».
+        // Проверяем Count > 0, а не Count > 1: если валидацию состава когда-нибудь ослабят
+        // до одиночных участников, грань не должна молча поехать в чат с чужой персоной.
+        && session.Participants is not { Count: > 0 };
+
     // Контекст MCP-сервера десктопной грани (ADR-008, «Два уровня, которые нельзя смешивать»):
     // состав грани решает КОНФИГУРАЦИЯ на момент запуска CLI — тип чата «Десктопный» плюс
     // включение грани в проекте, — и никогда состояние хода. Право на каждый конкретный вызов
     // проверяет бэкенд (DesktopAccessGate), поэтому здесь нет ни сеанса рук, ни устройства:
     // их появление и исчезновение не должно менять tools/list и перезапускать процесс CLI.
-    // Грань не доставляется чатам-исполнителям задач и автоматизаций (Origin != Manual) и
-    // групповым чатам: там за рулём не человек у машины, а расписание или чужая персона.
-    // Персона может отказаться от грани Off-привязкой tool:desktop, как от codegraph/widgets.
+    // Право чата по его сущности — DesktopTurnEligible (единственная точка правды);
+    // персона может отказаться от грани Off-привязкой tool:desktop, как от codegraph/widgets.
     private DesktopMcpContext? BuildDesktopContext(string? ownerId, Session session, Persona? persona)
     {
         if (ownerId is null || string.IsNullOrEmpty(session.ProjectId)) return null;
-        if (!session.DesktopChat) return null;
-        if (session.Origin != ChatOrigin.Manual || session.TaskExecution) return null;
-        if (session.Participants is { Count: > 0 }) return null;
+        if (!DesktopTurnEligible(session)) return null;
         if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.DesktopAgent)) return null;
         if (_projects.GetById(session.ProjectId!)?.DesktopAgentEnabled != true) return null;
         if (!_bindings.ServerToolEnabled(ownerId, persona, "desktop")) return null;

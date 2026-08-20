@@ -38,21 +38,3 @@ public interface IDesktopTurnGate
     string? IssueTurnToken(string ownerId, Session session);
 }
 
-// Типы ходов, которым грань не доставляется никогда — независимо от типа чата,
-// устройств и сеанса (ADR-008: «Грань не доставляется в ходы исполнения задач,
-// отложенные и регулярные чаты, групповые чаты»). Ось выдачи — только проект и чат,
-// персональной привязки mcp:desktop не существует: она действовала бы во всех чатах
-// персоны, включая ночной tasks-executor.
-// Чистая функция от сущности чата: решение стабильно в пределах сессии.
-public static class DesktopTurnEligibility
-{
-    public static bool ChatEligible(Session session) =>
-        // Чат-исполнитель задачи (в том числе отложенной и регулярной — их создаёт
-        // TaskExecutionService по расписанию, человека у машины в этот момент нет)
-        !session.TaskExecution
-        && session.TaskId is null
-        // Чат, порождённый правилом проактивности персоны
-        && session.AutomationRuleId is null
-        // Групповой чат: руки одного устройства на несколько собеседников не делятся
-        && session.Participants is not { Count: > 1 };
-}

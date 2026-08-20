@@ -67,6 +67,14 @@ public static class BackupValidation
         CheckList<Persona>(problems, dataDir, "personas.json", PersonaOpts);
         CheckList<TaskItem>(problems, dataDir, "tasks.json", CaseInsensitiveOpts);
         CheckList<ProjectGroup>(problems, dataDir, "groups.json", CaseInsensitiveOpts);
+        // devices.json — реестр устройств десктопного агента (ADR-008). Стор критичный:
+        // в нём живут надгробия отозванных устройств и монотонные версии токенов, а
+        // молчаливо пустой стор после восстановления означал бы «все устройства пропали,
+        // сопрягай заново» — ровно тот случай, ради которого этот гейт и стоит.
+        // BackupSchema.Version НЕ инкрементируем: добавление нового файла-стора ломающим
+        // изменением формата не является — старый код просто не знает о нём, а новый читает
+        // отсутствующий файл штатно (см. комментарий у BackupSchema.Version).
+        CheckList<DesktopDevice>(problems, dataDir, Services.Desktop.DeviceRegistry.FileName, CaseInsensitiveOpts);
 
         // graph.json не входит в fatal-список намеренно: он регенерируется из кода
         // проекта, и один битый файл не должен блокировать восстановление всей data.

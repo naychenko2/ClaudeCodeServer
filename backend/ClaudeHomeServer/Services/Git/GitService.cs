@@ -49,7 +49,8 @@ public sealed record GitDossiersTip(string Ref, string CommitSha, string Author,
 // Запуск — через слой Execution (ILauncherFactory.ForOwner): для container-пользователей
 // git исполняется внутри песочницы cc-sandbox с маппингом путей, для local — на хосте.
 // Работа с remote (Forgejo) вынесена в отдельный GitServerService.
-public sealed class GitService(ILauncherFactory launchers)
+// Логгер опционален: DI подставляет реальный, а тесты конструируют сервис напрямую.
+public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? logger = null)
 {
     // Сериализация write-операций одного репозитория: git из UI, авто-коммит хода и
     // сессия Claude могут столкнуться на .git/index.lock. Чтение (status/log/diff) — без блокировки.
@@ -762,11 +763,30 @@ public sealed class GitService(ILauncherFactory launchers)
 
     // Есть ли ЛОКАЛЬНАЯ ветка паспортов: один дешёвый вызов проверки рефа —
     // признак hasDossierBranch для exportStatus (гейт кнопки «Загрузить» в UI).
+    // Ветка считается существующей ТОЛЬКО при нулевом exit code И непустом stdout
+    // с валидным sha: без --verify rev-parse эхом вернул бы имя рефа как свободный
+    // аргумент, а потеря кода возврата в цепочке запуска не превратит отказ в «ветка
+    // есть». Факты вызова (root, exit code, stdout) пишем в лог на Information —
+    // при инцидентах вида «кнопка есть, а ветки нет» это единственный способ увидеть,
+    // что именно видел git. Незапуск/таймаут git — не ошибка статуса, а «ветки нет»
+    // (кнопка скрыта): иначе гейт лишился бы весь эндпоинт ответом 500.
     public async Task<bool> HasDossiersBranchAsync(string? ownerId, string root, CancellationToken ct = default)
     {
         if (!IsGitRepo(root)) return false;
-        var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
-        return r.Ok && IsValidSha(r.Stdout.Trim());
+        try
+        {
+            var r = await RunAsync(ownerId, root, ["rev-parse", "--verify", "--quiet", DossiersRef], ct: ct);
+            var sha = r.Stdout.Trim();
+            logger?.LogInformation(
+                "HasDossiersBranch: root='{Root}' exit={ExitCode} stdout='{Stdout}' stderr='{Stderr}'",
+                root, r.ExitCode, sha, FirstLine(r.Stderr) ?? "");
+            return r.Ok && sha.Length > 0 && IsValidSha(sha);
+        }
+        catch (GitCommandException ex)
+        {
+            logger?.LogWarning(ex, "HasDossiersBranch: git-проверка не удалась, считаем ветку отсутствующей (root='{Root}')", root);
+            return false;
+        }
     }
 
     // Резолв рефа ветки паспортов: локальная ветка, при её отсутствии — remote-tracking

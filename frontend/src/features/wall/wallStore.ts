@@ -285,6 +285,20 @@ export function focusChat(id: string): void {
   if (_state.focusId !== id && _state.chats.some(c => c.id === id)) setState({ focusId: id });
 }
 
+// Проект фокусной колонки (null — колонки нет либо чат внепроектный). Им красится
+// титлбар окна на стене: App зовёт useThemeColor поверх этого селектора, а не
+// WallPage — meta[name=theme-color] один на документ, и второй хук за него дрался бы.
+// Снимок — сам Project из мапы: ссылка стабильна, поэтому поток status_changed
+// (он трогает только statuses) ререндера App не вызывает.
+export function getWallFocusProject(): Project | null {
+  const chat = _state.chats.find(c => c.id === _state.focusId);
+  return (chat?.projectId ? _state.projects.get(chat.projectId) : undefined) ?? null;
+}
+
+export function useWallFocusProject(): Project | null {
+  return useSyncExternalStore(subscribeWall, getWallFocusProject, getWallFocusProject);
+}
+
 // Обновление Session после серверной мутации из колонки (смена модели/режима/цикла…):
 // ChatPanel зовёт onSessionUpdated, и без применения сюда снимок стора остаётся старым —
 // композер после ре-рендера показывал бы прежние настройки. Состав не меняется, PUT не нужен.

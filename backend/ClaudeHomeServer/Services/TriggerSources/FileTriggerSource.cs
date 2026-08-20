@@ -98,7 +98,7 @@ public sealed class FileTriggerSource(AutomationRootResolver roots, ILogger<File
                 if (h.Available || reWarnDue)
                 {
                     log.LogWarning(
-                        "File-триггер правила {Rule} («{RuleName}»): {RootState} — папка не существует, правило не сработает",
+                        "File-триггер правила {RuleId} («{RuleName}»): {RootState} — папка не существует, правило не сработает",
                         ruleId, ctx.Rule.Name,
                         root is null ? "корень не резолвится (root=null)" : $"корень «{root}»");
                     h.LastWarnUtc = ctx.NowUtc;
@@ -109,7 +109,7 @@ public sealed class FileTriggerSource(AutomationRootResolver roots, ILogger<File
             {
                 if (!h.Available)
                     log.LogInformation(
-                        "File-триггер правила {Rule} («{RuleName}»): корень «{Root}» снова доступен — правило активно",
+                        "File-триггер правила {RuleId} («{RuleName}»): корень «{Root}» снова доступен — правило активно",
                         ruleId, ctx.Rule.Name, root);
                 h.Available = true;
             }

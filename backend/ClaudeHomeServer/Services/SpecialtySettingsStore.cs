@@ -441,7 +441,7 @@ public sealed class SpecialtySettingsStore
             next.Version = FormatVersion;
             Persist(next);
             _log?.LogInformation(
-                "Сброс настроек моделей специальностей: слой={Layer}, ключ={Key}, изменено={Changed}",
+                "Сброс настроек моделей специальностей: слой={Layer}, ключ={Specialty}, изменено={Changed}",
                 ownerId ?? "global", key ?? "*", changed);
             return new SpecialtyResetResult(changed, shadowed);
         }

@@ -25,6 +25,13 @@ public sealed class AlertPollingService(
     /// </summary>
     private const int BurstLimit = 5;
 
+    /// <summary>Вкладка «Инциденты» — внутренний роут, а не адрес SigNoz.</summary>
+    private const string IncidentsListUrl = "#/telemetry/incidents";
+
+    /// <summary>Карточка конкретного инцидента (разбирает её App.openNotificationUrl).</summary>
+    private static string IncidentUrl(string fingerprint)
+        => $"#/telemetry/incident/{Uri.EscapeDataString(fingerprint)}";
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         log.LogInformation("Опрос алертов запущен: {Url}, интервал {Sec}с",
@@ -82,13 +89,22 @@ public sealed class AlertPollingService(
     {
         if (started.Count == 0) return;
 
+        // Заглушённые человеком не будят: их видно в разделе, но уведомления по ним
+        // выключены сознательно. Запомнить всё равно надо — памятку берёт карточка
+        // инцидента после того, как алерт погас.
+        RememberAll(started);
+        started = [.. started.Where(a => !state.IsMuted(a.Fingerprint))];
+        if (started.Count == 0) return;
+
         if (started.Count > BurstLimit)
         {
             var names = string.Join(", ", started.Take(BurstLimit).Select(a => AlertDigest.Describe(a).Title));
             await FanOutAsync(admins, "alert", "telemetry_alert",
                 $"Сработало правил: {started.Count}",
                 $"{names} и ещё {started.Count - BurstLimit}.",
-                url: options.SignozUrl.TrimEnd('/') + "/alerts",
+                // Конкретного инцидента при лавине нет — ведём на список, а не в SigNoz:
+                // текст обещает разбор, и открывать вместо него сырой дашборд странно
+                url: IncidentsListUrl,
                 tag: "telemetry-burst", environment: null, sendPush: true);
         }
         else
@@ -97,15 +113,28 @@ public sealed class AlertPollingService(
             {
                 var (title, body) = AlertDigest.Describe(alert);
                 await FanOutAsync(admins, "alert", "telemetry_alert", title, body,
-                    url: AlertDigest.RuleUrl(options.SignozUrl, alert),
+                    // Внутренний роут вместо ссылки в SigNoz: тап открывает карточку
+                    // с готовым досье, ради которой фича и делалась. Ссылка на само
+                    // правило осталась вторичной — внутри карточки.
+                    url: IncidentUrl(alert.Fingerprint),
                     tag: alert.Fingerprint, environment: alert.Environment, sendPush: true);
             }
         }
 
-        foreach (var alert in started)
+    }
+
+    private void RememberAll(IEnumerable<SignozAlert> alerts)
+    {
+        foreach (var alert in alerts)
         {
-            state.Remember(alert.Fingerprint,
-                new AlertMemo(AlertDigest.Describe(alert).Title, alert.StartsAt ?? DateTimeOffset.UtcNow));
+            // Памятка несёт всё, что нужно карточке инцидента после того, как алерт погас:
+            // важность, контур и ruleId для ссылки в SigNoz (самого алерта тогда уже нет).
+            state.Remember(alert.Fingerprint, new AlertMemo(
+                AlertDigest.Describe(alert).Title,
+                alert.StartsAt ?? DateTimeOffset.UtcNow,
+                Severity: alert.Severity,
+                Environment: alert.Environment,
+                RuleId: alert.RuleId));
         }
     }
 
@@ -123,11 +152,14 @@ public sealed class AlertPollingService(
             await FanOutAsync(admins, "success", "telemetry_alert_resolved",
                 $"Восстановлено: {memo.Title}",
                 "Условие алерта больше не выполняется.",
-                url: options.SignozUrl.TrimEnd('/') + "/alerts",
+                // Погасший инцидент остаётся в истории — карточка по нему открывается
+                url: IncidentUrl(fingerprint),
                 tag: fingerprint, environment: null, sendPush: false);
         }
 
-        state.Forget(resolved);
+        // Не забываем, а помечаем погасшим: запись остаётся историей для раздела
+        // «Инциденты» (разобрать инцидент часто хочется уже после того, как он погас).
+        state.MarkResolved(resolved);
     }
 
     private async Task FanOutAsync(List<User> admins, string kind, string type,

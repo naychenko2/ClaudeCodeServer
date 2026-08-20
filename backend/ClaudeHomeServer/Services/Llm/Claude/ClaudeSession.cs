@@ -1796,7 +1796,8 @@ public class ClaudeSession : ILlmSessionAdapter
         // спану для всех путей (включая same-process, где _launcher.Start не идёт).
         _currentTurnId = Guid.NewGuid().ToString("N")[..12];
         using var turnActivity = TurnTelemetry.StartTurnSpan(
-            sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
+            chatId: Info.Id,
+            claudeSessionId: Info.ClaudeSessionId,
             turnId: _currentTurnId,
             model: EffectiveModel,
             provider: Info.Provider);
@@ -2474,7 +2475,8 @@ public class ClaudeSession : ILlmSessionAdapter
         using (var procActivity = TurnTelemetry.StartProcessSpan(
                    kind: TurnTelemetry.ExecutionKind(_launcher.IsSandboxed),
                    command: _launcher.ClaudeCliCommand,
-                   sessionId: Info.ClaudeSessionId ?? Info.Id.ToString(),
+                   chatId: Info.Id,
+                   claudeSessionId: Info.ClaudeSessionId,
                    mcpConfigHash: TurnTelemetry.McpConfigHash(effectiveMcpConfig)))
         {
             process = _launcher.Start(new Execution.ProcessSpec

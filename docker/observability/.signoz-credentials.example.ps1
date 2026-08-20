@@ -14,5 +14,6 @@ $env:SIGNOZ_JWT = "signoz-pat-вставь-сюда-длинную-строку-
 # $env:SIGNOZ_EMAIL    = "you@example.com"
 # $env:SIGNOZ_PASSWORD = "your-signoz-password"
 
-# Опционально: если SigNoz на другом URL
-# $env:SIGNOZ_URL = "http://localhost:3301"
+# Опционально: если SigNoz на другом URL. Base-path обязателен — с v0.134 под ним
+# живёт ВЕСЬ API, и адрес без префикса отвечает 404 на всё, кроме /api/v1/health.
+# $env:SIGNOZ_URL = "http://localhost:3301/telemetry-proxy"

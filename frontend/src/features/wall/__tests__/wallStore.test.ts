@@ -22,12 +22,12 @@ vi.mock('../../../lib/api', () => ({
   },
 }));
 
-import type { Session } from '../../../types';
+import type { Project, Session } from '../../../types';
 import { api } from '../../../lib/api';
 import { onMessage } from '../../../lib/signalr';
 import {
   slotCount, MAX_SLOTS, addChat, removeChat, reorderChat, moveToVisible,
-  getWallState, chatStatus, initWall, refresh, __resetWallForTests,
+  getWallState, chatStatus, initWall, refresh, focusChat, getWallFocusProject, __resetWallForTests,
 } from '../wallStore';
 
 function fakeSession(id: string, projectId?: string): Session {
@@ -172,5 +172,45 @@ describe('live-статусы', () => {
     const handler = (onMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
     handler({ type: 'status_changed', sessionId: 'zzz', status: 'working' });
     expect(getWallState().statuses.size).toBe(0);
+  });
+});
+
+describe('проект фокусной колонки (цвет титлбара окна)', () => {
+  const proj = { id: 'p1', name: 'Проект' } as unknown as Project;
+
+  async function loadWall() {
+    // mockResolvedValue (не Once): refresh из initWall может доехать позже нашего —
+    // с одинаковым ответом порядок перестаёт быть важным
+    (api.wall.get as ReturnType<typeof vi.fn>).mockResolvedValue({
+      chats: [fakeSession('a', 'p1'), fakeSession('b')],
+    });
+    (api.projects.list as ReturnType<typeof vi.fn>).mockResolvedValue([proj]);
+    await refresh();
+  }
+
+  it('отдаёт проект чата, стоящего в фокусе', async () => {
+    await loadWall();
+    focusChat('a');
+    expect(getWallFocusProject()).toBe(proj);
+  });
+
+  it('внепроектный чат в фокусе — null (красим акцентом)', async () => {
+    await loadWall();
+    focusChat('b');
+    expect(getWallFocusProject()).toBeNull();
+  });
+
+  it('пустая стена — null', () => {
+    expect(getWallFocusProject()).toBeNull();
+  });
+
+  it('снимок стабилен по ссылке: status_changed его не меняет (нет лишнего ререндера)', async () => {
+    initWall('u1');
+    await loadWall();
+    focusChat('a');
+    const before = getWallFocusProject();
+    const handler = (onMessage as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    handler({ type: 'status_changed', sessionId: 'a', status: 'working' });
+    expect(getWallFocusProject()).toBe(before);
   });
 });

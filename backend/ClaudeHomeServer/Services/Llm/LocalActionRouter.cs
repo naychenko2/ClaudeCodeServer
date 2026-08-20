@@ -50,7 +50,7 @@ public sealed class LocalActionRouter
         {
             if (!LocalActionCatalog.IsKnown(child.Key))
             {
-                _log.LogWarning("Ollama:Actions — неизвестный ключ действия «{Key}», игнорирую", child.Key);
+                _log.LogWarning("Ollama:Actions — неизвестный ключ действия «{Action}», игнорирую", child.Key);
                 continue;
             }
             if (bool.TryParse(child.Value, out var v)) _overrides[child.Key] = v;

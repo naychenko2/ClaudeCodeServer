@@ -55,7 +55,8 @@ public class ProcessSpanPathTests
         using var span = TurnTelemetry.StartProcessSpan(
             kind: "local",
             command: @"C:\Users\depec\AppData\Roaming\npm\node_modules\@anthropic-ai\claude-code\bin\claude.exe",
-            sessionId: "sess-1",
+            chatId: "chat-1",
+            claudeSessionId: "sess-1",
             mcpConfigHash: "deadbeef");
 
         span.Should().NotBeNull();

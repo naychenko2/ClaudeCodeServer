@@ -12,6 +12,9 @@ import { ExecutorPicker } from './ExecutorPicker';
 import { DueDatePicker } from './DueDatePicker';
 
 interface Props {
+  // Название по умолчанию — когда задача заводится ПО поводу (разбор инцидента
+  // телеметрии): человек всё равно правит его перед созданием
+  defaultTitle?: string;
   // Проект, выбранный по умолчанию (контекст воркспейса или фильтра календаря)
   defaultProjectId?: string;
   // Срок по умолчанию (быстрое создание на день из календаря)
@@ -26,8 +29,8 @@ interface Props {
   onClose: () => void;
 }
 
-export function NewTaskDialog({ defaultProjectId, defaultDueDate, defaultPersonaId, configureLabel = 'Создать и настроить', onCreated, onClose }: Props) {
-  const [title, setTitle] = useState('');
+export function NewTaskDialog({ defaultTitle, defaultProjectId, defaultDueDate, defaultPersonaId, configureLabel = 'Создать и настроить', onCreated, onClose }: Props) {
+  const [title, setTitle] = useState(defaultTitle ?? '');
   const [projects, setProjects] = useState<Project[]>([]);
   // null = «Личное» (задача вне проекта) — дефолт, когда открыто не из проекта
   const [projectId, setProjectId] = useState<string | null>(defaultProjectId ?? null);

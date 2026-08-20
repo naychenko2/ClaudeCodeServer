@@ -12,8 +12,9 @@
 import { useCallback, useEffect, useReducer, useRef } from 'react';
 import { speak, stopSpeaking, isSpeaking } from '../lib/tts';
 import { beep, primeBeep, closeBeep, startThinking, stopThinking, startListening, stopListening, NEED_ANSWER_DURATION_MS } from '../lib/beep';
-import { requestWakeLock, releaseWakeLock } from '../lib/wakeLock';
+import { requestWakeLock, releaseWakeLock, setWakeLockExclusive } from '../lib/wakeLock';
 import { showToast } from '../lib/toast';
+import { talkDiag, talkMark } from '../lib/talkDiag';
 import { describeSpeechError } from '../lib/voiceInput';
 
 export type HandsFreePhase = 'off' | 'listening' | 'pending' | 'sending' | 'waiting' | 'speaking';
@@ -103,6 +104,50 @@ function normalizeSpeech(text: string): string {
 // Публично для тестов: командой считается точное совпадение всего чанка
 export function isStopCommand(text: string): boolean {
   return STOP_COMMANDS.has(normalizeSpeech(text));
+}
+
+// Слова, на которых мысль ОБРЫВАЕТСЯ: союзы, предлоги, вводные и филлеры. Человек,
+// закончивший фразу на «потому что» или «э-э», собирается говорить дальше
+const DANGLING_WORDS = new Set([
+  'и', 'а', 'но', 'или', 'либо', 'что', 'чтобы', 'чтоб', 'как', 'когда', 'если',
+  'потому', 'значит', 'типа', 'вот', 'ну', 'э', 'ээ', 'эм', 'мм', 'ммм', 'то', 'же',
+  'для', 'на', 'в', 'с', 'со', 'по', 'к', 'ко', 'о', 'об', 'от', 'из', 'за', 'при',
+  'про', 'под', 'над', 'без', 'до', 'у', 'между', 'чем', 'хотя', 'поэтому', 'также',
+  'тоже', 'ещё', 'еще', 'там', 'этот', 'эта', 'это',
+]);
+
+// Короткие, но САМОДОСТАТОЧНЫЕ реплики: ответ на вопрос модели не должен ждать
+// длинную паузу только из-за того, что он в одно слово
+const SHORT_COMPLETE = new Set([
+  'да', 'нет', 'ага', 'угу', 'конечно', 'давай', 'давай да', 'хорошо', 'ладно',
+  'окей', 'ок', 'точно', 'верно', 'именно', 'понял', 'поехали', 'погнали',
+  'спасибо', 'дальше', 'продолжай', 'отмена', 'не надо', 'не знаю',
+]);
+
+// Сколько ждать в окне отмены перед отправкой накопленного.
+//
+// Фиксированные 2 с наказывали оба края: законченный вопрос ждал впустую, а мысль,
+// оборванная на полуслове, улетала в чат недосказанной. Это дешёвая замена semantic
+// VAD (OpenAI): решение принимается по ХВОСТУ фразы, а не по громкости.
+//
+// На пунктуацию полагаться нельзя — Web Speech для ru-RU её почти не ставит, поэтому
+// главный сигнал — последнее слово (висячий союз/предлог/филлер = не закончил), второй —
+// длина: 4+ слов без висячего хвоста это уже сформулированная реплика. Пунктуация,
+// если движок её всё же дал, работает усилителем.
+export function pendingDelayFor(buffer: string): number {
+  const raw = (buffer ?? '').trim();
+  if (!raw) return PENDING_MS;
+  const terminated = /[.!?…]$/.test(raw);
+  const normalized = normalizeSpeech(raw);
+  const words = normalized ? normalized.split(' ') : [];
+  if (words.length === 0) return PENDING_MS;
+
+  if (SHORT_COMPLETE.has(normalized)) return PENDING_FAST_MS;
+  if (DANGLING_WORDS.has(words[words.length - 1])) return PENDING_SLOW_MS;
+  // Одно-два слова без точки — обычно человек только начал говорить
+  if (words.length <= 2 && !terminated) return PENDING_SLOW_MS;
+  if (terminated || words.length >= 4) return PENDING_FAST_MS;
+  return PENDING_MS;
 }
 
 // Бесплодный цикл: движок отработал вхолостую. Считается ровно один раз за цикл —
@@ -248,8 +293,12 @@ export interface HandsFree {
   onCycleError: (code: string) => void;
 }
 
-// Окно отмены после распознанной фразы
-const PENDING_MS = 2000;
+// Окно отмены после распознанной фразы — ТРИ длительности вместо одной (см.
+// pendingDelayFor): законченная мысль уходит вдвое быстрее, оборванная получает время
+// договорить. Экспортируются для тестов
+export const PENDING_FAST_MS = 1000;
+export const PENDING_MS = 2000;
+export const PENDING_SLOW_MS = 2800;
 // Ход кончился, а willSpeak не пришёл — значит озвучки не будет (Р13)
 const SPEECH_WAIT_MS = 1500;
 // Нет хода, нет звука, нет прогресса — выключаем разговор (Р13). Считаем именно
@@ -303,11 +352,23 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
   const { activeRef } = opts;
   useEffect(() => { activeRef.current = active; }, [active, activeRef]);
 
-  // Экран не должен гаснуть, пока идёт разговор: вместе с ним встаёт распознавание
+  // Тайминги круга «замолчал → услышал ответ»: метки копятся в talkDiag и печатаются
+  // сводкой в дампе. Первый звук отмечает сам проигрыватель (lib/tts) — фаза speaking
+  // наступает раньше него на время синтеза
+  useEffect(() => {
+    if (phase === 'pending') talkMark('speech-end');
+    else if (phase === 'sending') talkMark('send');
+    else if (phase === 'waiting') talkMark('turn-start');
+  }, [phase, seq]);
+
+  // Экран не должен гаснуть, пока идёт разговор: вместе с ним встаёт распознавание.
+  // Пока петля жива, экраном распоряжается ТОЛЬКО она (эксклюзив): иначе владелец «ход»
+  // из реестра сессий отменил бы отпускание экрана на затянувшемся ходе (ниже)
   useEffect(() => {
     if (!active) return;
-    requestWakeLock();
-    return () => releaseWakeLock();
+    setWakeLockExclusive('voice', true);
+    requestWakeLock('voice');
+    return () => { releaseWakeLock('voice'); setWakeLockExclusive('voice', false); };
   }, [active]);
 
   // Пока ход идёт, человек смотрит не на экран, а под ноги: тихая пульсация — его
@@ -325,8 +386,8 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
   // в любую другую фазу берёт её заново
   useEffect(() => {
     if (!active) return;
-    if (phase !== 'waiting') { requestWakeLock(); return; }
-    const id = setTimeout(() => releaseWakeLock(), WAITING_WAKE_MS);
+    if (phase !== 'waiting') { requestWakeLock('voice'); return; }
+    const id = setTimeout(() => releaseWakeLock('voice'), WAITING_WAKE_MS);
     return () => clearTimeout(id);
   }, [active, phase, seq]);
 
@@ -375,13 +436,17 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     return () => stopListening();
   }, [phase, seq]);
 
-  // Окно отмены: сигнал + 2 секунды. Тап по кнопке в этот момент — это выключение петли
+  // Окно отмены: сигнал + пауза, длина которой зависит от того, дозрела ли мысль
+  // (pendingDelayFor). Тап по кнопке в этот момент — это выключение петли.
+  // Буфер в зависимостях безопасен: в фазе pending он не меняется (речь уводит в listening)
   useEffect(() => {
     if (phase !== 'pending') return;
     beep();
-    const id = setTimeout(() => dispatch({ type: 'pendingElapsed' }), PENDING_MS);
+    const wait = pendingDelayFor(buffer);
+    talkDiag(`pending: жду ${wait}мс`);
+    const id = setTimeout(() => dispatch({ type: 'pendingElapsed' }), wait);
     return () => clearTimeout(id);
-  }, [phase, seq]);
+  }, [phase, seq, buffer]);
 
   // Отправка накопленного мимо поля ввода: черновик пользователя не трогаем.
   // Композер может ход и не отправить (механику «Команды» успели взвести уже внутри
@@ -471,7 +536,8 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
       mountedRef.current = false;
       try { o.current.stopMic(false); } catch { /* noop */ }
       if (!ownsGlobalsRef.current) return;
-      releaseWakeLock();
+      releaseWakeLock('voice');
+      setWakeLockExclusive('voice', false);
       closeBeep();
     };
   }, []);

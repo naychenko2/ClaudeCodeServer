@@ -2,6 +2,7 @@ using System.Diagnostics;
 using ClaudeHomeServer.Services.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using OpenTelemetry;
 using OpenTelemetry.Exporter;
@@ -225,11 +226,15 @@ public static class ObservabilityExtensions
     /// </summary>
     private static void AddAlerts(IServiceCollection services, IConfiguration config)
     {
+        // Разбор инцидентов регистрируется ДО проверки IsUsable и независимо от неё:
+        // раздел «Инциденты» обязан ответить «телеметрия не настроена», а не исчезнуть
+        // из DI и уронить резолв контроллера (тот же принцип, что у TelemetryUiOptions).
+        AddIncidents(services, config);
+
         var options = Alerts.AlertsOptions.FromConfig(config);
         if (!options.IsUsable) return;
 
         services.AddSingleton(options);
-        services.AddSingleton<Alerts.AlertStateStore>();
         services.AddSingleton<Alerts.SignozAlertsClient>();
         // Тихий клиент, как у экспортёров выше: SigNoz опрашивается раз в минуту и лежит
         // штатно (не поднят, перезапускается), а дефолтные логгеры печатали на КАЖДЫЙ опрос
@@ -242,6 +247,31 @@ public static class ObservabilityExtensions
             .ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(15))
             .WithoutEgressProxy();
         services.AddHostedService<Alerts.AlertPollingService>();
+    }
+
+    /// <summary>
+    /// Разбор инцидентов (раздел «Инциденты»): опции, клиент SigNoz и сборщик досье.
+    ///
+    /// Регистрируется ВСЕГДА — см. вызов в <see cref="AddAlerts"/>. Состояние алертов
+    /// нужно обеим веткам (доставка помечает погасшие, раздел читает историю), поэтому
+    /// стор кладём через TryAdd — он остаётся одним синглтоном при любой комбинации.
+    /// </summary>
+    private static void AddIncidents(IServiceCollection services, IConfiguration config)
+    {
+        services.AddSingleton(Incidents.IncidentsOptions.FromConfig(config));
+        services.TryAddSingleton<Alerts.AlertStateStore>();
+        services.AddSingleton<Incidents.ISignozQueryClient, Incidents.SignozQueryClient>();
+        services.AddSingleton<Incidents.IIncidentLocalContext, Incidents.IncidentLocalContext>();
+        services.AddSingleton<Incidents.IncidentDossierService>();
+        // Тихий клиент, как у доставки алертов: SigNoz штатно бывает не поднят, а дефолтные
+        // логгеры печатали бы стектрейс на каждый заход в раздел (см. QuietHttpLogger).
+        services.AddQuietHttpClient(Incidents.SignozQueryClient.HttpClientName, new QuietHttpClientProfile(
+                Category: "ClaudeHomeServer.Telemetry.Incidents",
+                Subject: "сервером SigNoz",
+                Consequence: "Инциденты не разобрать."))
+            .ConfigureHttpClient(c => c.Timeout =
+                Incidents.IncidentsOptions.FromConfig(config).Timeout)
+            .WithoutEgressProxy();
     }
 
     /// <summary>

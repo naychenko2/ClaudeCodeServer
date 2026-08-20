@@ -19,6 +19,10 @@ public static class TestConfig
     {
         settings ??= [];
         settings.TryAdd("ClaudeUserProfileDir", EmptyClaudeProfileDir());
+        // Фоновый автосейв SessionManager в юнит-тестах не нужен: внутри SaveSessions живёт
+        // sweep-terminus, и его срабатывание по таймеру — источник плавающих падений (тест
+        // проверил статус, фон его поменял). Тесты, которым sweep нужен, зовут его явно.
+        settings.TryAdd("Session:AutoSaveSeconds", "0");
         return new ConfigurationBuilder().AddInMemoryCollection(settings).Build();
     }
 

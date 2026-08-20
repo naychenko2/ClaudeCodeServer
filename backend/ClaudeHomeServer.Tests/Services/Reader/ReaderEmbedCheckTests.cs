@@ -13,6 +13,13 @@ namespace ClaudeHomeServer.Tests.Services.Reader;
 // «Что проверить при реализации». Сеть — через StubHandler (без реальных сокетов),
 // SSRF-рубежи реальны: 127.0.0.1 и *.invalid детерминированно приватный/нерезолвящийся
 // адрес на любой машине и в CI (та же схема, что в ReaderServiceTests).
+/// <remarks>
+/// Категория <c>Dns</c>: тестам нужен НАСТОЯЩИЙ резолв внешних имён (example.com и т.п.).
+/// На машине с системным прокси (Proxifier) DNS отдаёт вместо них локальный адрес, SsrfGuard
+/// честно рубит его как loopback, и тесты валятся пачкой — это среда, а не регрессия; в CI они
+/// зелёные. Локально исключаются фильтром: dotnet test --filter "Category!=Dns".
+/// </remarks>
+[Trait("Category", "Dns")]
 public class ReaderEmbedCheckTests
 {
     private const string PublicHost = "example.com";

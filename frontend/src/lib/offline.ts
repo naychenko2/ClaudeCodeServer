@@ -232,9 +232,15 @@ function isNetworkError(e: unknown): boolean {
 // parse: 'blob' — бинарный ответ (mp3 озвучки) отдаётся как Blob, минуя JSON.parse и кэш
 // IndexedDB. Ошибочные ветки (401, !res.ok, офлайн, таймаут) общие с JSON-путём: тело ошибки
 // сервер шлёт JSON'ом и при бинарном запросе — на полях status/body держится фолбэк озвучки.
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' }): Promise<T>;
-export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob' }): Promise<Blob>;
-export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob' }): Promise<T | Blob> {
+//
+// live: true — запрос, которому офлайн-кэш ВРЕДЕН: ответ не сохраняется в IndexedDB и не
+// достаётся оттуда при обрыве. Нужно там, где значение имеет не только содержимое ответа, но и
+// сам факт «сервер сейчас отвечает». Пример — статус выкатки: продукт на время публикации
+// гаснет, и подставленный из кэша прошлый ответ превращает «сервер лежит, значит выкатка идёт»
+// в «сервер отвечает, ничего не происходит». Окно выкатки на этом различии и построено.
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json'; live?: boolean }): Promise<T>;
+export async function request(url: string, options: RequestInit & { timeoutMs?: number; parse: 'blob'; live?: boolean }): Promise<Blob>;
+export async function request<T>(url: string, options?: RequestInit & { timeoutMs?: number; parse?: 'json' | 'blob'; live?: boolean }): Promise<T | Blob> {
   const method = (options?.method ?? 'GET').toUpperCase();
   const isGet = method === 'GET';
 
@@ -250,7 +256,9 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
   // AbortController для таймаута: если сеть «зависла» (пакеты идут, но ответа нет),
   // мы не ждём браузерного TCP-таймаута (может быть минуты).
   // timeoutMs — оверрайд для заведомо долгих запросов (AI-генерация и т.п.)
-  const { timeoutMs, parse, ...fetchOptions } = options ?? {};
+  const { timeoutMs, parse, live, ...fetchOptions } = options ?? {};
+  // Кэшируем и достаём из кэша только те GET, которым это на пользу (см. комментарий к live)
+  const useOfflineCache = isGet && !live;
   const controller = new AbortController();
   const effectiveTimeout = timeoutMs ?? FETCH_TIMEOUT_MS;
   // Признак «прервали мы сами по таймауту»: AbortError от нашего таймера неотличим от
@@ -310,7 +318,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
     // Тело может быть пустым (Ok() без контента у мутаций) — не парсим пустую строку как JSON
     const text = res.status === 204 ? '' : await res.text();
     const data = (text ? JSON.parse(text) : undefined) as T;
-    if (isGet) {
+    if (useOfflineCache) {
       idbSet(url, { data, savedAt: Date.now() }).catch(() => { /* кэш недоступен — не критично */ });
     }
     return data;
@@ -336,8 +344,10 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
         // Гард «только из online» и сам пинг — внутри confirmOffline().
         await confirmOffline();
       }
-      // Кэш выручает GET независимо от причины обрыва — сначала пробуем его
-      if (isGet) {
+      // Кэш выручает GET независимо от причины обрыва — сначала пробуем его.
+      // Кроме live-запросов: там подстановка прошлого ответа выдала бы лежащий сервер за
+      // работающий, а вызывающему нужен именно факт обрыва.
+      if (useOfflineCache) {
         const cached = await idbGet<T>(url).catch(() => undefined);
         if (cached) return cached.data;
       }

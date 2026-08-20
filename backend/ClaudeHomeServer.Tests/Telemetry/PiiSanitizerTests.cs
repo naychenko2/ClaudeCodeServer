@@ -76,6 +76,136 @@ public class PiiSanitizerTests
         activity.GetTagItem("session_id").Should().Be(guid);
     }
 
+    /// <summary>
+    /// Сторож связки «инцидент → чат»: тег <c>chat_id</c> обязан ПРОЙТИ санитайзер.
+    ///
+    /// Проверяем исполнением, а не наличием строки в <c>KeepTags</c>: правила работают
+    /// по default-deny, поэтому при удалении строки тег выбросится МОЛЧА — ни ошибки,
+    /// ни лога, просто разбор инцидента перестанет находить чаты. Тест обязан падать
+    /// ровно в этом случае.
+    /// </summary>
+    [Fact]
+    public void ChatId_IsKept()
+    {
+        var chatId = Guid.NewGuid().ToString();
+        using var activity = CreateActivity(("chat_id", chatId), ("persona_name", "Вера"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("chat_id").Should().Be(chatId,
+            "по chat_id инцидент связывается с чатом — без него связка умирает молча");
+        activity.GetTagItem("persona_name").Should().BeNull("соседний PII-тег по-прежнему дропается");
+    }
+
+    [Fact]
+    public void Project_IsKept_ButProjectNameIsNot()
+    {
+        var projectId = Guid.NewGuid().ToString();
+        using var activity = CreateActivity(("Project", projectId), ("Name", "Секретный проект"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Project").Should().Be(projectId,
+            "в {Project} структурных логов уходит id проекта — без него тело лога в SigNoz " +
+            "остаётся с голым плейсхолдером и не говорит, о каком проекте речь");
+        activity.GetTagItem("Name").Should().BeNull(
+            "а вот НАЗВАНИЕ проекта — пользовательские данные, оно дропается как прежде");
+    }
+
+    [Fact]
+    public void PushEndpoint_IsDropped_WhileServiceHostIsKept()
+    {
+        using var activity = CreateActivity(
+            ("Host", "https://localhost:3301"),
+            ("Endpoint", "https://fcm.googleapis.com/fcm/send/cX9k…токен-устройства"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Host").Should().Be("https://localhost:3301",
+            "адрес вызываемого сервиса — операционная информация, по ней читаются логи сбоев");
+        activity.GetTagItem("Endpoint").Should().BeNull(
+            "под {Endpoint} PushService логирует адрес push-подписки — это идентификатор устройства");
+    }
+
+    [Fact]
+    public void IdSynonyms_AreKept()
+    {
+        // Нормализация схлопывает регистр и разделители, но НЕ синонимы: {Session} — тот же
+        // идентификатор, что session_id, а {ProjectId} — что project. Пока их не было в списке,
+        // одна половина событий приезжала читаемой, вторая обезличенной.
+        using var activity = CreateActivity(
+            ("Session", "s-42"), ("ProjectId", "p-7"), ("Tool", "notes_create"), ("TaskId", "t-9"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Session").Should().Be("s-42");
+        activity.GetTagItem("ProjectId").Should().Be("p-7");
+        activity.GetTagItem("Tool").Should().Be("notes_create");
+        activity.GetTagItem("TaskId").Should().Be("t-9");
+    }
+
+    [Fact]
+    public void NarrowNames_AreKept_WhileGenericSiblingsStayDropped()
+    {
+        // Приём вместо открытия generic-имени: место логирования переименовывает свой
+        // параметр в конкретный. {Rule} нёс rule.Id, но имя намекало на название от
+        // пользователя; {Message} в обёртках ModelFallback прятал всю диагностику подмен.
+        using var activity = CreateActivity(
+            ("RuleId", "rule-7"), ("Specialty", "analyst"), ("Entry", "team:abc:doc-1"),
+            ("FallbackStep", "Подмена: opus-5 -> fable-5"), ("ServiceId", "web"),
+            ("Rule", "Следить за релизами"), ("Key", "sk-секрет"), ("Message", "текст пользователя"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("RuleId").Should().Be("rule-7");
+        activity.GetTagItem("Specialty").Should().Be("analyst");
+        activity.GetTagItem("Entry").Should().Be("team:abc:doc-1");
+        activity.GetTagItem("FallbackStep").Should().Be("Подмена: opus-5 -> fable-5");
+        activity.GetTagItem("ServiceId").Should().Be("web");
+
+        activity.GetTagItem("Rule").Should().BeNull("имя правила автоматизации сочиняет пользователь");
+        activity.GetTagItem("Key").Should().BeNull("под generic-именем однажды уедет секрет");
+        activity.GetTagItem("Message").Should().BeNull();
+    }
+
+    [Fact]
+    public void RootAndDir_AreHashed_NotDropped()
+    {
+        // {Root} — это RootPath проекта: не Keep (путь на диске), но и не дроп — хэш держит
+        // корреляцию «одна и та же папка в разных событиях».
+        using var activity = CreateActivity(("Root", @"C:\GIT\ClaudeCodeServer"), ("Dir", @"D:\notes"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Root")?.ToString().Should().NotBe(@"C:\GIT\ClaudeCodeServer").And.HaveLength(8);
+        activity.GetTagItem("Dir")?.ToString().Should().NotBe(@"D:\notes").And.HaveLength(8);
+    }
+
+    [Fact]
+    public void Action_IsKept_WhileGenericMessageStaysDropped()
+    {
+        // Ключ действия каталога — операционка, а generic-имя {Message} закрыто намеренно:
+        // под ним по коду уезжает что угодно, включая текст пользователя. Место, которому
+        // нужен видимый текст отказа, называет свой параметр Reason/Error (CheapTextRunner).
+        using var activity = CreateActivity(
+            ("Action", "team-memory-consolidate"),
+            ("Reason", "AI не ответил за отведённое время (лимит 180 с, ждали 180 с)"),
+            ("Message", "любой пользовательский текст"));
+
+        var processor = new PiiSanitizingProcessor();
+        processor.OnEnd(activity);
+
+        activity.GetTagItem("Action").Should().Be("team-memory-consolidate");
+        activity.GetTagItem("Reason").Should().NotBeNull();
+        activity.GetTagItem("Message").Should().BeNull();
+    }
+
     [Fact]
     public void UserId_IsDropped()
     {

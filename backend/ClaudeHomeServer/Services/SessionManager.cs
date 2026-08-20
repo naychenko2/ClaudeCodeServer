@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -275,7 +275,19 @@ public class SessionManager : IDisposable
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
     // Автосохранение сессий каждые 30с
-    private static readonly TimeSpan AutoSaveInterval = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Период автосохранения (оно же — единственный фоновый триггер sweep-terminus, см. SaveSessions).
+    /// Настраивается ключом <c>Session:AutoSaveSeconds</c>; 0 и меньше — таймер не заводится вовсе.
+    ///
+    /// Ноль нужен ТЕСТАМ, и не ради скорости: sweep живёт внутри SaveSessions, поэтому фоновый
+    /// таймер выполняет его в произвольный момент — в том числе между двумя ассертами теста.
+    /// Вместе с глобальным Session.TaskSourceSessionResolver, который переустанавливает конструктор
+    /// каждого нового TaskManager в параллельном классе, это давало плавающее падение
+    /// Sweep_ЖивойПотомокВГлубину: иерархия делегирования на миг переставала резолвиться, и sweep
+    /// закрывал сессию, которую тест только что проверил живой. Поодиночке ни один из двух факторов
+    /// не воспроизводился — падало только на полном прогоне и не каждый раз.
+    /// </summary>
+    private static readonly TimeSpan DefaultAutoSaveInterval = TimeSpan.FromSeconds(30);
     private Timer? _autoSaveTimer;
     // Сериализует прямую запись стоимости fal.ai в историю неактивных сессий
     private readonly SemaphoreSlim _falPersistLock = new(1, 1);
@@ -530,8 +542,11 @@ public class SessionManager : IDisposable
         LoadSessions();
 
         // Автосохранение: периодический сброс in-memory данных на диск
-        _autoSaveTimer = new Timer(_ => SaveSessions(), null,
-            AutoSaveInterval, AutoSaveInterval);
+        var autoSave = int.TryParse(config["Session:AutoSaveSeconds"], out var secs)
+            ? TimeSpan.FromSeconds(secs)
+            : DefaultAutoSaveInterval;
+        if (autoSave > TimeSpan.Zero)
+            _autoSaveTimer = new Timer(_ => SaveSessions(), null, autoSave, autoSave);
     }
 
     // --- MCP tasks-server ---
@@ -870,7 +885,7 @@ public class SessionManager : IDisposable
             }
 
             // P12/P15: sweep-terminus. SaveSessions зовётся из ~50 точек (включая автосохранение
-            // по таймеру AutoSaveInterval) — этого довольно, чтобы без отдельного таймера
+            // по таймеру Session:AutoSaveSeconds) — этого довольно, чтобы без отдельного таймера
             // гарантированно довести зависшую в Active сессию до Finished. Ранний выход, когда
             // кандидатов нет, — O(N) под _saveLock только если хоть одна сессия в «завершённом Active».
             if (_stuckActiveGraceSeconds <= 0) return;
@@ -3242,11 +3257,22 @@ public class SessionManager : IDisposable
         entry.LocalVoiceCts = cts;
         Llm.OllamaClient.ChatTurnResult? turn = null;
         var cancelled = false;
+        // Сколько текста уже ушло в ленту потоком: по нему решается, слать ли ответ
+        // целиком в конце (страховка на случай, если поток не дал ни куска)
+        var streamed = 0;
         try
         {
             turn = await _ollama!.ChatTurnAsync(messages, _router.LocalModel,
                 TimeSpan.FromMilliseconds(_router.TimeoutMsFor(Llm.LocalActionCatalog.ChatVoice)),
-                spec.NumPredict, spec.NumCtx, ResolveOwnerId(entry.Info), cts.Token);
+                spec.NumPredict, spec.NumCtx, ResolveOwnerId(entry.Info),
+                // Поток: куски ответа уходят в ленту (и в озвучку разговора) по мере
+                // генерации — иначе первый звук ждал бы конца всего ответа
+                onDelta: async chunk =>
+                {
+                    streamed += chunk.Length;
+                    await OnMessageAsync(sessionId, acc, new TextDeltaMessage(chunk), runId);
+                },
+                ct: cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -3265,7 +3291,10 @@ public class SessionManager : IDisposable
 
         if (turn?.Text is { Length: > 0 } answer)
         {
-            await OnMessageAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
+            // Обычный путь: текст уже ушёл кусками из onDelta. Целиком шлём только если
+            // поток не дал ничего (не-потоковый ответ, сбой до первого куска)
+            if (streamed == 0)
+                await OnMessageAsync(sessionId, acc, new TextDeltaMessage(answer), runId);
             await OnMessageAsync(sessionId, acc, new ResultMessage(
                 Subtype: "success", DurationMs: sw.ElapsedMilliseconds, NumTurns: 1,
                 Usage: turn.Usage, TotalCostUsd: 0), runId);

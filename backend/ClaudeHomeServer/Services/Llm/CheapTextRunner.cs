@@ -173,8 +173,11 @@ public sealed class CheapTextRunner(
         catch (LlmTimeoutException ex) when (!ct.IsCancellationRequested)
         {
             // В сообщении исключения — применённый лимит и фактическая длительность:
-            // отказ по времени без этих цифр в логе не разбирается
-            log.LogWarning("cheap-runner: действие {Action} — {Message}; повторяю один раз",
+            // отказ по времени без этих цифр в логе не разбирается. Параметр зовётся
+            // {Reason}, а НЕ {Message}: generic-имя message санитайзер телеметрии дропает
+            // как пользовательский текст (PiiRules.DropSubstrings), и в SigNoz приезжал
+            // шаблон с плейсхолдером вместо цифр — то есть ровно то, ради чего строка писалась
+            log.LogWarning("cheap-runner: действие {Action} — {Reason}; повторяю один раз",
                 actionKey, ex.Message);
             return await claude.RunAsync(prompt, model, timeout: cloudTimeout, ct: ct, ownerId: ownerId,
                 label: actionKey);
@@ -350,7 +353,7 @@ public sealed class CheapTextRunner(
         }
         catch (LlmTimeoutException ex) when (!ct.IsCancellationRequested)
         {
-            log.LogWarning("cheap-runner (detailed): действие {Action} — {Message}; повторяю один раз",
+            log.LogWarning("cheap-runner (detailed): действие {Action} — {Reason}; повторяю один раз",
                 actionKey, ex.Message);
             return await claude.RunDetailedAsync(prompt, claudeModel, effTimeout, ct, ownerId, label: actionKey);
         }

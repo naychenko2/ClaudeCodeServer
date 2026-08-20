@@ -25,6 +25,7 @@ import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
 import { showToast } from './lib/toast'
+import { isDeployInProgress } from './lib/deployState'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged, onMessage } from './lib/signalr'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
@@ -36,6 +37,7 @@ import { setAllFlags, getFlag, FLAGS } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
+import { useWallFocusProject } from './features/wall/wallStore'
 import { setCtxThresholdsFromServer } from './lib/contextPrefs'
 import { useIsMobile } from './lib/breakpoints'
 import { loadModels } from './lib/models'
@@ -49,6 +51,7 @@ import { HomePage } from './pages/HomePage'
 import { WallPage } from './pages/WallPage'
 import { SpendPage } from './features/spend/SpendPage'
 import { TelemetryPage } from './features/telemetry/TelemetryPage'
+import { setPendingIncident, INCIDENT_OPEN_EVENT } from './features/telemetry/incidentLink'
 import { OPEN_SPEND_EVENT, type SpendOpenContext } from './lib/spend'
 import { useUiInspector, setUiInspectorAdmin, wireUiInspectorHotkey } from './lib/uiInspector'
 import { UiInspectorOverlay } from './features/inspector/UiInspectorOverlay'
@@ -105,6 +108,11 @@ if (initialHash?.screen === 'calendar' && initialHash.taskId) {
 if (initialHash?.screen === 'chats' && initialHash.chatId) {
   localStorage.setItem('cc_open_chat', initialHash.chatId)
 }
+// Диплинк #/telemetry/incident/{fingerprint} — карточка инцидента из уведомления
+// об алерте: TelemetryPage забирает отпечаток при монтировании
+if (initialHash?.screen === 'telemetry' && initialHash.incidentFingerprint) {
+  setPendingIncident(initialHash.incidentFingerprint)
+}
 
 export default function App() {
   // Авторизация — из localStorage (постоянно) или sessionStorage (saveKey=false)
@@ -159,8 +167,18 @@ export default function App() {
   // проекта — фирменный цвет проекта, вне — акцент текущей темы. «Спящий»
   // проект (уход в «Чаты»/«Заметки» без выхода) НЕ красит: красим только когда
   // WorkspacePage реально на экране, т.е. вкладка хаба — 'projects'.
+  // На «Стене» шапка идёт за ФОКУСНОЙ колонкой (её проект); внепроектный чат в
+  // фокусе — акцент, как и везде вне проекта. Хук зовём отсюда, а не из WallPage:
+  // meta один на документ, второй useThemeColor за него дрался бы (эффекты детей
+  // отрабатывают раньше родителя, и App затирал бы цвет стены).
   const inProjectScreen = effectiveHubTab === 'projects' && !!project;
-  useThemeColor(inProjectScreen ? projectMainColor(project!) : C.accent);
+  const wallFocusProject = useWallFocusProject();
+  const wallProject = effectiveHubTab === 'wall' ? wallFocusProject : null;
+  useThemeColor(
+    inProjectScreen ? projectMainColor(project!)
+      : wallProject ? projectMainColor(wallProject)
+        : C.accent
+  );
 
   // Витрина дизайн-системы #/ui-kit — переключается по hash без перезагрузки,
   // работает без авторизации (на экране входа тоже). В prod UiKitPage === null,
@@ -382,12 +400,16 @@ export default function App() {
   // не озвучиваем — это фоновый разрыв сокета (планшет заморозил вкладку при
   // переключении приложений), пользователь его не видел, и тост на каждый возврат
   // в приложение был бы спамом.
+  // Выкатка — тоже «тихое окно», и по той же причине: обрыв там не аварийный, а
+  // запланированный, пользователь смотрит на заставку публикации. Тост «Связь восстановлена»
+  // посреди неё сообщал бы о беде, которой не было. Флаг снимается вместе с концом выкатки,
+  // так что настоящий разрыв после неё озвучится как обычно.
   const wasOfflineRef = useRef(false)
   useEffect(() => {
     if (!online) { wasOfflineRef.current = true; return }
     if (wasOfflineRef.current) {
       wasOfflineRef.current = false
-      if (!becameVisibleRecently()) showToast('Связь восстановлена', 'Обновляем…')
+      if (!becameVisibleRecently() && !isDeployInProgress()) showToast('Связь восстановлена', 'Обновляем…')
     }
   }, [online])
 
@@ -990,6 +1012,16 @@ export default function App() {
       else switchHubTab('knowledge')
       return
     }
+    // Диплинк в раздел «Телеметрия»: карточка инцидента (#/telemetry/incident/{fp}) или
+    // просто вкладка «Инциденты» (#/telemetry/incidents — сводное уведомление о лавине).
+    // Раздел может быть УЖЕ открыт: switchHubTab его не перемонтирует, поэтому там, где
+    // соседи шлют событие, шлём и мы — иначе тап по уведомлению не делал бы ничего.
+    if (target?.screen === 'telemetry' && (target.incidentFingerprint || target.telemetryIncidents)) {
+      if (target.incidentFingerprint) setPendingIncident(target.incidentFingerprint)
+      if (effectiveHubTab === 'telemetry') window.dispatchEvent(new Event(INCIDENT_OPEN_EVENT))
+      else switchHubTab('telemetry')
+      return
+    }
     // Диплинк #/history — это overlay «Что нового», а не раздел: parseHash отдаёт его как
     // screen:'home' с флагом history, и без этой ветки ссылка внутри приложения молча
     // уводила на дашборд (overlay открывался только при полной загрузке страницы)
@@ -1018,6 +1050,40 @@ export default function App() {
     }
     // Не диплинк (абсолютный внешний URL) — полная загрузка, как раньше
     window.location.assign(url)
+  }
+  // Переход из карточки инцидента в затронутый чат. Каналы разные, и подменять их
+  // нельзя: раздел «Чаты» показывает ТОЛЬКО внепроектные (ChatsController.GetAll →
+  // GetProjectlessChats), поэтому проектный чат, открытый через него, просто не нашёлся
+  // бы в списке и экран остался бы пустым. Проектный идём открывать штатным каналом
+  // диплинка #/project/{id}/chat/{chatId}.
+  const openChatFromIncident = (chatId: string, projectId?: string | null) => {
+    if (!projectId) {
+      localStorage.setItem('cc_open_chat', chatId)
+      if (effectiveHubTab === 'chats') {
+        window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId } }))
+      } else {
+        switchHubTab('chats')
+      }
+      return
+    }
+    sessionStorage.setItem('cc_pending_project_chat', `${projectId}|${chatId}`)
+    if (effectiveHubTab === 'projects' && project?.id === projectId) {
+      window.dispatchEvent(new Event('cc-pending-project-chat'))
+    } else if (project?.id === projectId) {
+      localStorage.setItem(HUB_TAB_KEY, 'projects')
+      setHubTab('projects')
+    } else {
+      api.projects.list()
+        .then(list => {
+          const p = list.find(x => x.id === projectId)
+          if (p) {
+            localStorage.setItem(HUB_TAB_KEY, 'projects')
+            setHubTab('projects')
+            openProject(p)
+          }
+        })
+        .catch(() => {})
+    }
   }
   // Открытие задачи по её hash-URL из любого раздела (вкладка «Задачи» персоны и т.п.) —
   // переиспуем ту же навигацию, что у кликов по уведомлениям (календарь/проект, монтированный или нет).
@@ -1113,7 +1179,7 @@ export default function App() {
             : effectiveHubTab === 'spend'
               ? <SpendPage auth={auth} onLogout={logout} onHubTab={switchHubTab} ctx={spendCtx ?? {}} onClose={() => switchHubTab('home')} />
             : effectiveHubTab === 'telemetry'
-              ? <TelemetryPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onClose={() => switchHubTab('home')} />
+              ? <TelemetryPage auth={auth} onLogout={logout} onHubTab={switchHubTab} onClose={() => switchHubTab('home')} onOpenChat={openChatFromIncident} />
               : effectiveHubTab === 'notifications'
                 ? <NotificationsPage auth={auth} onLogout={logout} onHubTab={switchHubTab} />
               : moduleIdOf(effectiveHubTab)

@@ -33,6 +33,54 @@ export function talkDiag(msg: string, ...args: unknown[]): void {
   console.log('[talk]', line);
 }
 
+// --- Тайминги круга разговора ---
+//
+// Главный вопрос к режиму «сколько человек ждёт ответа» не читается из потока событий
+// глазами: нужны именно интервалы. Круг открывается концом речи и закрывается первым
+// реально прозвучавшим звуком; метки внутри круга пишутся ОДИН раз (первая побеждает),
+// чтобы повторные события фаз не смазывали картину.
+
+export type TalkMark = 'speech-end' | 'send' | 'turn-start' | 'first-audio';
+
+interface TalkCycle { t0: number; marks: Partial<Record<TalkMark, number>> }
+
+const MAX_CYCLES = 20;
+let cycles: TalkCycle[] = [];
+
+export function talkMark(mark: TalkMark): void {
+  const now = Date.now();
+  if (mark === 'speech-end') {
+    cycles.push({ t0: now, marks: { 'speech-end': 0 } });
+    if (cycles.length > MAX_CYCLES) cycles.splice(0, cycles.length - MAX_CYCLES);
+    talkDiag('mark: speech-end');
+    return;
+  }
+  const cycle = cycles[cycles.length - 1];
+  if (!cycle || cycle.marks[mark] !== undefined) return; // круга нет или метка уже стоит
+  cycle.marks[mark] = now - cycle.t0;
+  talkDiag(`mark: ${mark} +${now - cycle.t0}мс от конца речи`);
+}
+
+function avg(values: number[]): number | null {
+  if (values.length === 0) return null;
+  return Math.round(values.reduce((a, b) => a + b, 0) / values.length);
+}
+
+// Сводка по кругам: строка на круг + среднее. Пустая, пока метки не набраны
+function timingSummary(): string[] {
+  if (cycles.length === 0) return [];
+  const rows = cycles.map((c, i) => {
+    const cell = (m: TalkMark) => c.marks[m] === undefined ? '—' : `+${c.marks[m]}мс`;
+    return `#${String(i + 1).padStart(2, ' ')}  отправка ${cell('send')}` +
+      `  ход ${cell('turn-start')}  первый звук ${cell('first-audio')}`;
+  });
+  const audio = cycles.map(c => c.marks['first-audio']).filter((v): v is number => v !== undefined);
+  const send = cycles.map(c => c.marks['send']).filter((v): v is number => v !== undefined);
+  const line = `среднее: речь→отправка ${avg(send) ?? '—'}мс, ` +
+    `речь→первый звук ${avg(audio) ?? '—'}мс (кругов со звуком: ${audio.length})`;
+  return ['', '=== тайминги кругов (от конца речи) ===', ...rows, line];
+}
+
 // Дамп текстом: относительное время от первой записи (мс) + заголовок с окружением
 export function talkDiagDump(): string {
   const head = [
@@ -41,7 +89,12 @@ export function talkDiagDump(): string {
   ];
   const t0 = entries.length ? entries[0].t : Date.now();
   const body = entries.map(e => `+${String(e.t - t0).padStart(6, ' ')}ms  ${e.msg}`);
-  return [`=== talk diag ===`, ...head, ...body].join('\n');
+  return [`=== talk diag ===`, ...head, ...body, ...timingSummary()].join('\n');
+}
+
+// Сброс кругов (тесты; в проде буфер сам вытесняется по MAX_CYCLES)
+export function talkDiagResetCycles(): void {
+  cycles = [];
 }
 
 // Сохранить дамп: в localStorage (переживает перезагрузку вкладки) и на сервер

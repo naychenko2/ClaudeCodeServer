@@ -426,7 +426,7 @@ public sealed class DevServerService : IDisposable
     {
         foreach (var (id, instance) in _servers)
         {
-            _log.LogInformation("Shutdown: останов сервиса {Key}", id);
+            _log.LogInformation("Shutdown: останов сервиса {ServiceId}", id);
             instance.Dispose();
         }
         _servers.Clear();
@@ -446,17 +446,17 @@ public sealed class DevServerService : IDisposable
             if (SafeHasExited(instance.Process) && instance.Status != "stopped")
             {
                 shouldClean = true;
-                _log.LogInformation("DevServer {Key}: процесс завершился, а статус {Status} — очистка", key, instance.Status);
+                _log.LogInformation("DevServer {ServiceId}: процесс завершился, а статус {Status} — очистка", key, instance.Status);
             }
             else if (instance.Status == "error" && idle.TotalMinutes >= 5)
             {
                 shouldClean = true;
-                _log.LogInformation("DevServer {Key}: в статусе error {Idle:0} мин — очистка", key, idle.TotalMinutes);
+                _log.LogInformation("DevServer {ServiceId}: в статусе error {Idle:0} мин — очистка", key, idle.TotalMinutes);
             }
             else if (instance.Status == "starting" && idle.TotalMinutes >= 5)
             {
                 shouldClean = true;
-                _log.LogInformation("DevServer {Key}: не запустился за {Idle:0} мин — очистка", key, idle.TotalMinutes);
+                _log.LogInformation("DevServer {ServiceId}: не запустился за {Idle:0} мин — очистка", key, idle.TotalMinutes);
             }
 
             if (shouldClean && _servers.TryRemove(key, out var removed))

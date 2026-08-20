@@ -1,4 +1,4 @@
-import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession } from '../types';
+import type { Me, Project, ProjectGroup, ProjectTag, Session, FileEntry, SyncMark, WorkflowAgentInfo, WorkflowAgentBlock, AppSettings, UserProfile, SkillsData, SkillInfo, RegistrySkill, SkillSuggestion, GeneratedSkill, PermissionRule, UsageResponse, FalAccountResponse, GlifAccountResponse, ImageGenerationSettings, ImageGenerationPatch, ImagePlacePatch, ProviderBalanceInfo, FeatureFlagDefinition, SystemPromptPart, Task, CreateTaskDto, UpdateTaskDto, BoardColumn, BoardItem, HomeSummaryResponse, ChangelogDay, DaySummaryStub, ChangelogStatus, NoteSummary, NoteDetail, NoteBacklink, NoteGraph, DocAnnotation, NoteReply, NoteSource, NoteFolder, NoteTemplate, NoteSemanticHit, CreateNoteDto, UpdateNoteDto, NoteTask, ExtractTasksResponse, SearchHit, Persona, CreatePersonaDto, UpdatePersonaDto, PersonaScope, PersonaMemoryType, PersonaMemoryEntry, PersonaMemoryHit, PersonaContract, PersonaWorkingFocus, PantheonTemplate, PersonaBinding, PersonaBindingDto, PersonaBindingType, BindingTarget, KnowledgeBaseDetail, KnowledgeSearchHit, CreateKnowledgeBaseDto, KnowledgeListResponse, KnowledgeDocumentContent, TeamMemoryEntry, TeamMemoryType, TeamMemberDraft, PersonaAutomationRule, AutomationRuleDto, ProjectService, LaunchConfigEntry, GitStatus, GitBranchInfo, GitLogEntry, GitCommitDetail, GitStashEntry, GitFileChange, GitBlameLine, GitRemoteInfo, GitCommitPromptInfo, SpendOverviewResponse, SpendPivotResponse, SpendTurnsResponse, SpendTurnDetailResponse, SpendWidgetResponse, SpendBadgeResponse, SpendTaskPromptResponse, BackupStatus, BackupSummary, CodeGraph, DocEntry, DocDetail, DocSearchHit, DocsScope, DocsScopeInfo, DocProperty, DocTypeSchema, PromptSnapshot, PromptSection, ReaderPage, ReaderErrorCode, SpecialtyCatalogEntry, SpecialtySettingsLayer, SpecialtySettingsResponse, ResetResult, ModelPreviewResponse, PresetUsageResponse, PlacePresetRef, McpServer, McpBuiltinServer, McpServerUpsert, McpProbeResult, McpCallsResponse, McpOAuthStartResult, McpOAuthCompleteResult, DossierEntry, BackgroundResult, ChangedBySession, IncidentListResponse, IncidentDossier } from '../types';
 import { request } from './offline';
 
 // Личные/админские слоты моделей: сильная/средняя/слабая.
@@ -15,6 +15,30 @@ export interface GlyphCandidate {
   name?: string | null;
 }
 
+
+// Итог выкатки, как его пишет трей-раннер в deploy-status.json. Формат чужой — читаем как есть.
+// result: running | ok | blocked | build-failed | rolled-back | failed | error.
+// Времена — локальные строки «yyyy-MM-dd HH:mm:ss» без смещения.
+export interface DeployStatusFile {
+  startedAt: string | null;
+  finishedAt: string | null;
+  mode: string | null;
+  branch: string | null;
+  dirtyFiles: number;
+  head: string | null;
+  deployExitCode: number | null;
+  result: string | null;
+  productUp: boolean | null;
+  note: string | null;
+}
+
+// Ответ GET /api/admin/deploy/status: доступность выкатки плюс последний известный итог
+export interface DeployState {
+  enabled: boolean;
+  canLaunch: boolean;
+  reason: string | null;
+  status: DeployStatusFile | null;
+}
 
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
@@ -276,6 +300,21 @@ export const api = {
     // Места, где выбран пресет (диалог удаления)
     presetUsage: (id: string) =>
       request<PresetUsageResponse>(`/models/presets/${encodeURIComponent(id)}/usage`),
+  },
+
+  // Выкатка боевого продукта трей-раннером (только админам и только при Deploy:Enabled).
+  // status отвечает всегда, в том числе при выключенной фиче (enabled: false) — по нему
+  // шапка решает, показывать ли пункт меню, и 404 здесь шумел бы в консоли у всех.
+  deploy: {
+    // live: true — НЕ подставлять ответ из офлайн-кэша (IndexedDB), даже когда сервер не
+    // отвечает. Для этого запроса важно не только содержимое, но и сам факт ответа: продукт на
+    // время публикации гаснет, и подставленный прошлый ответ выдавал бы «сервер отвечает,
+    // ничего не происходит» — окно выкатки объявляло «трей команду не принял» поверх успешной
+    // публикации. cache: 'no-store' закрывает то же самое со стороны браузера.
+    status: () => request<DeployState>('/admin/deploy/status', { cache: 'no-store', live: true }),
+    // 202: команда ушла трею. previousStartedAt — начало ПРОШЛОЙ выкатки: только по смене
+    // этого времени видно, что трей команду принял и начал новую (см. DeployModal).
+    launch: () => request<{ previousStartedAt: string | null }>('/admin/deploy', { method: 'POST' }),
   },
 
   featureFlags: {
@@ -1337,7 +1376,24 @@ export const api = {
   // Раздел «Телеметрия»: статус проброса SigNoz — фронт решает, показать iframe или заглушку
   telemetry: {
     status: () =>
-      request<{ configured: boolean; reachable: boolean; proxyPath: string }>('/telemetry/status'),
+      request<{ configured: boolean; reachable: boolean; proxyPath: string; discussProjectId?: string | null }>('/telemetry/status'),
+    // Вкладка «Инциденты»: список отдаёт статус телеметрии ОТДЕЛЬНО от элементов —
+    // пустой список при выключенном SigNoz нельзя показывать как «всё тихо»
+    incidents: () => request<IncidentListResponse>('/telemetry/incidents'),
+    incident: (fingerprint: string) =>
+      request<IncidentDossier>(`/telemetry/incidents/${encodeURIComponent(fingerprint)}`),
+    // Досье markdown'ом — описание задачи и черновик сообщения в чат
+    incidentText: (fingerprint: string) =>
+      request<{ text: string }>(`/telemetry/incidents/${encodeURIComponent(fingerprint)}/text`),
+    // Разбор моделью — единственное место фичи, где участвует LLM, и только по кнопке
+    incidentExplain: (fingerprint: string) =>
+      request<{ text: string }>(
+        `/telemetry/incidents/${encodeURIComponent(fingerprint)}/explain`, { method: 'POST' }),
+    // Заглушить/вернуть звук: инцидент остаётся в списке, но уходит из счётчика и из push
+    muteIncident: (fingerprint: string, muted: boolean) =>
+      request<void>(
+        `/telemetry/incidents/${encodeURIComponent(fingerprint)}/mute?muted=${muted}`,
+        { method: 'POST' }),
   },
 
   files: {

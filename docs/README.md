@@ -53,7 +53,9 @@
 знакомства v2).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
-[audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md) и
+[audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),
+[incident-queries.md](observability/incident-queries.md) (раздел «Инциденты»: форма
+запросов к SigNoz, состав досье и ограничения связки) и
 [signoz-setup.md](observability/signoz-setup.md) подчинены ему.
 
 **modules/** — [integration-contract.md](modules/integration-contract.md) — источник правды;
@@ -84,7 +86,9 @@
 
 **research/** — материалы с датой: [feature-parity.md](research/feature-parity.md),
 [messenger-integration.md](research/messenger-integration.md) (не реализовано),
-[roadmap-team-zone.md](research/roadmap-team-zone.md). Читать как «так было тогда».
+[roadmap-team-zone.md](research/roadmap-team-zone.md),
+[voice-mode-benchmark.md](research/voice-mode-benchmark.md) (режим диалога против ChatGPT
+и Claude: разрывы и план P0/P1/P2). Читать как «так было тогда».
 
 **omo/** — [adoption.md](omo/adoption.md) (правовая рамка), `translations/` — переводы
 промптов, из которых генерируются `Services/Prompts/OmoPrompts*.cs`.

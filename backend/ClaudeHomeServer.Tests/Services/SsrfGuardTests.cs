@@ -113,6 +113,7 @@ public class SsrfGuardTests
         (await SsrfGuard.CheckAsync(uri, CancellationToken.None)).Should().Be(SsrfGuard.AddressCheck.Private);
     }
 
+    [Trait("Category", "Dns")]  // нужен настоящий DNS — см. remarks ReaderServiceTests
     [Fact]
     public async Task Check_НерезолвящийсяХост_DnsFailed()
     {

@@ -37,7 +37,7 @@ export { PillSwitch } from './PillSwitch';
 export { EmptyState } from './EmptyState';
 export { CanvasBackdrop } from './CanvasBackdrop';
 export { PageCanvas } from './PageCanvas';
-export { LoadingScreen } from './LoadingScreen';
+export { LoadingScreen, LoadingOverlay } from './LoadingScreen';
 export { FileTypeTile } from './FileTypeTile';
 export { FileStatusBadge } from './FileStatusBadge';
 export type { FileStatus } from './FileStatusBadge';

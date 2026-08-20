@@ -395,6 +395,31 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.IDeployHost,
     ClaudeHomeServer.Services.Deploy.DeployHost>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Deploy.DeployService>();
 AddHosted<ClaudeHomeServer.Services.Deploy.DeployReportService>();
+
+// === Десктопный агент (ADR-008): руки песочницы на машине пользователя ===
+// Реестр устройств и хеши их токенов — единственный стор грани; сеансы рук и живые
+// соединения канала живут только в памяти (рестарт бэкенда гасит сеанс по построению).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceRegistry>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DevicePairingService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopCapabilityTokenService>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopCallRouter>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopChatDirectory,
+    ClaudeHomeServer.Services.Desktop.DesktopChatDirectory>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopDeviceDirectory,
+    ClaudeHomeServer.Services.Desktop.DesktopDeviceDirectory>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopHandsNotifier,
+    ClaudeHomeServer.Services.Desktop.DesktopHandsNotifier>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopCallCanceller,
+    ClaudeHomeServer.Services.Desktop.DesktopRouterCallCanceller>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>();
+// Разрыв соединения — один из поводов погасить сеанс: маршрутизатор канала знает о нём
+// первым, поэтому сеансы подписаны на него наблюдателем, а не наоборот (форвард на тот же
+// синглтон, не второй экземпляр).
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceConnectionObserver>(
+    sp => sp.GetRequiredService<ClaudeHomeServer.Services.Desktop.DesktopHandsSessionService>());
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopAccessGate>();
+// Сторож сеансов: 15 минут простоя, потолок 2 часа, исчезнувший чат, снятый тумблер грани
+AddHosted<ClaudeHomeServer.Services.Desktop.DesktopSessionReaper>();
 AddHosted<TaskSchedulerService>();
 AddHosted<ChatExpiryService>();
 AddHosted<ChatTurnLoggerService>();
@@ -546,10 +571,19 @@ builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.IKnowledgeAler
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>();
 AddHostedFrom(sp => sp.GetRequiredService<ClaudeHomeServer.Services.Knowledge.KnowledgeIndexReconciler>());
 
-// JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office)
+// JWT для REST/SignalR; Negotiate (NTLM/Kerberos) для WebDAV (Microsoft Office).
+// Плюс ДВЕ именованные схемы грани десктопа (ADR-008, «Авторизация канала»): дефолтная
+// JwtBearer к /api/devices/* не допускается вовсе — сервисный JWT владельца лежит в env
+// каждого его хода, и на нём «ось выдачи» превратилась бы в барьер состава, а не
+// авторизации. Схемы именованные: контроллеры грани называют их явным
+// [Authorize(AuthenticationSchemes = ...)], и ни один эндпоинт не открывается «заодно».
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer()
-    .AddNegotiate();
+    .AddNegotiate()
+    // capability-токен чата: audience desktop, claims ownerId + sessionId + deviceId, TTL минуты
+    .AddDesktopCapability()
+    // токен устройства: 256 бит, на сервере только хеш в data/devices.json
+    .AddDesktopDevice();
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<JwtService>((opts, jwt) =>
     {
@@ -1207,6 +1241,9 @@ app.MapReverseProxy(proxyPipeline =>
 app.MapControllers();
 app.MapHub<SessionHub>("/hubs/session");
 app.MapHub<TerminalHub>("/hubs/terminal");
+// Канал десктопного агента (ADR-008): исходящее соединение клиента с машины пользователя,
+// push команды в конкретное соединение. Схема авторизации — токен устройства, а не общий JWT
+app.MapHub<ClaudeHomeServer.Hubs.DeviceHub>("/hubs/devices");
 
 // Graceful shutdown: гасим все живые процессы claude, терминалы и dev-серверы.
 //

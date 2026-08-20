@@ -415,6 +415,8 @@ public class ProjectManager
     }
 
     // Кастомные колонки Kanban-доски проекта; пустой список/null → дефолтные 3
+    public Project SetDesktopAgent(string id, bool enabled) => GetById(id)!;
+
     public Project UpdateBoardColumns(string id, List<BoardColumn>? columns)
     {
         var project = _projects.GetValueOrDefault(id)

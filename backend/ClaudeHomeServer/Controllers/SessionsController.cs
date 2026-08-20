@@ -32,6 +32,12 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     public async Task<IActionResult> Create(string projectId, [FromBody] CreateSessionRequest req)
     {
         if (!OwnsProject(projectId)) return NotFound();
+        // Инвариант десктопного чата (ADR-008): собственный транскрипт — ни из чужого,
+        // ни в чужие руки. Проверка ДО провижна персоны: отказ не должен заводить сущности.
+        if (req.Desktop && !flags.IsEnabled(UserId, FeatureFlagKeys.DesktopAgent))
+            return BadRequest(new { error = DesktopChatGuard.FlagOff });
+        if (DesktopChatGuard.Refuse(sessions, req.Desktop, req.ResumeSessionId) is string desktopRefusal)
+            return BadRequest(new { error = desktopRefusal });
         string? personaId = req.PersonaId;
         // Последний рубеж инварианта «новый чат человека — только с персоной» (план 2.4, парная
         // связь с фронт-правкой 4.3): под флагом без personaId/resumeSessionId сначала провижним
@@ -63,7 +69,7 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         {
             var mode = Enum.TryParse<ClaudeMode>(req.Mode, true, out var m) ? m : ClaudeMode.AcceptEdits;
             var session = await sessions.CreateAsync(projectId, mode, req.ResumeSessionId, req.Name,
-                req.Model, req.AgentName, req.Effort, personaId: personaId);
+                req.Model, req.AgentName, req.Effort, personaId: personaId, desktopChat: req.Desktop);
             return CreatedAtAction(nameof(GetAll), new { projectId }, session);
         }
         catch (KeyNotFoundException ex) { return NotFound(new { error = ex.Message }); }
@@ -169,7 +175,47 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
 
 // PersonaId — собеседник нового чата; под флагом default-personas-onboarding обязателен
 // (либо resumeSessionId — продолжение существующего разговора).
-public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null);
+// Desktop — тип чата «Десктопный» (ADR-008): только в проекте, только со своим транскриптом.
+public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSessionId = null, string? Name = null, string? Model = null, string? AgentName = null, string? Effort = null, string? PersonaId = null, bool Desktop = false);
+
+/// <summary>
+/// Инвариант десктопного чата (ADR-008, «Последствия»): собственный ClaudeSessionId —
+/// десктопный чат нельзя создать из resumeSessionId и нельзя продолжить из его транскрипта.
+///
+/// Правило одно на оба входа создания чатов (проектный и вне проекта), поэтому живёт
+/// отдельным классом, а не дублируется в двух контроллерах. Второе направление важнее
+/// первого: в .jsonl десктопного чата лежат кадры чужого рабочего стола, и обычный чат,
+/// продолженный из него, вынес бы их за периметр грани — вместе с фолбэком к стороннему
+/// провайдеру, из которого десктопный чат намеренно выведен.
+/// </summary>
+internal static class DesktopChatGuard
+{
+    public const string FlagOff =
+        "Десктопный чат недоступен: включите «Десктопный агент» в экспериментальных функциях";
+
+    public const string ResumeIntoDesktop =
+        "Десктопный чат нельзя создать из другого чата: у него собственная сессия Claude";
+
+    public const string ResumeFromDesktop =
+        "Это транскрипт десктопного чата: продолжить его в обычном чате нельзя";
+
+    public const string OutsideProject =
+        "Десктопный чат создаётся только в проекте: грань десктопного агента включается в проекте";
+
+    /// <summary>Текст отказа, либо null — создавать можно.</summary>
+    public static string? Refuse(SessionManager sessions, bool desktop, string? resumeSessionId)
+    {
+        if (string.IsNullOrWhiteSpace(resumeSessionId)) return null;
+        if (desktop) return ResumeIntoDesktop;
+
+        var csid = resumeSessionId.Trim();
+        // Сравнение по живым чатам: транскрипт удалённого десктопного чата уносится вместе
+        // с ним (инвариант удаления чата), так что «висящего» csid тут не остаётся.
+        return sessions.GetAll().Any(s => s.DesktopChat && s.ClaudeSessionId == csid)
+            ? ResumeFromDesktop
+            : null;
+    }
+}
 
 // ExpiresAfterMinutes: -1 (поле не прислано) — не менять; null — сделать сессию постоянной;
 // N > 0 — временная, авто-удаление через N минут после последней активности

@@ -6,6 +6,7 @@ using ClaudeHomeServer.Hubs;
 using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Auth;
+using ClaudeHomeServer.Services.Desktop;
 using ClaudeHomeServer.Services.Execution;
 using ClaudeHomeServer.Services.Http;
 using ClaudeHomeServer.Services.Images;
@@ -401,7 +402,6 @@ AddHosted<ClaudeHomeServer.Services.Deploy.DeployReportService>();
 // соединения канала живут только в памяти (рестарт бэкенда гасит сеанс по построению).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceRegistry>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DevicePairingService>();
-builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopCapabilityTokenService>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopCallRouter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopChatDirectory,
     ClaudeHomeServer.Services.Desktop.DesktopChatDirectory>();
@@ -581,9 +581,9 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer()
     .AddNegotiate()
     // capability-токен чата: audience desktop, claims ownerId + sessionId + deviceId, TTL минуты
-    .AddDesktopCapability()
+    .AddDesktopCapabilityAuth()
     // токен устройства: 256 бит, на сервере только хеш в data/devices.json
-    .AddDesktopDevice();
+    .AddDesktopDeviceAuth();
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<JwtService>((opts, jwt) =>
     {

@@ -296,6 +296,8 @@ public class SessionManager : IDisposable
     private readonly Llm.ModelAssignmentResolver _assignments;
     private readonly UserStore _users;
     private readonly JwtService _jwt;
+    // Токены грани десктопа (ADR-008): кеш по чату поверх _jwt, отдельный от сервисных
+    private readonly Desktop.DesktopCapabilityTokenService _desktopTokens;
     private readonly Microsoft.AspNetCore.Hosting.Server.IServer _server;
     private readonly IConfiguration _config;
     // Сервисный токен MCP-серверов — ОДИН на владельца (задачи/заметки/память/персоны/…
@@ -502,6 +504,7 @@ public class SessionManager : IDisposable
         _assignments = assignments ?? new Llm.ModelAssignmentResolver(appSettings);
         _users = users;
         _jwt = jwt;
+        _desktopTokens = new Desktop.DesktopCapabilityTokenService(jwt);
         _server = server;
         _config = config;
         // Sweep-terminus grace (P12/P15): потолок ожидания exited после result до принудительного
@@ -632,6 +635,28 @@ public class SessionManager : IDisposable
         if (!_bindings.ServerToolEnabled(ownerId, persona, "codegraph")) return null;
         var token = GetServiceToken(ownerId);
         return new CodeGraphMcpContext(ResolveTasksApiUrl(ownerId), token, projectId, sessionId, rootPath);
+    }
+
+    // Контекст MCP-сервера десктопной грани (ADR-008, «Два уровня, которые нельзя смешивать»):
+    // состав грани решает КОНФИГУРАЦИЯ на момент запуска CLI — тип чата «Десктопный» плюс
+    // включение грани в проекте, — и никогда состояние хода. Право на каждый конкретный вызов
+    // проверяет бэкенд (DesktopAccessGate), поэтому здесь нет ни сеанса рук, ни устройства:
+    // их появление и исчезновение не должно менять tools/list и перезапускать процесс CLI.
+    // Грань не доставляется чатам-исполнителям задач и автоматизаций (Origin != Manual) и
+    // групповым чатам: там за рулём не человек у машины, а расписание или чужая персона.
+    // Персона может отказаться от грани Off-привязкой tool:desktop, как от codegraph/widgets.
+    private DesktopMcpContext? BuildDesktopContext(string? ownerId, Session session, Persona? persona)
+    {
+        if (ownerId is null || string.IsNullOrEmpty(session.ProjectId)) return null;
+        if (!session.DesktopChat) return null;
+        if (session.Origin != ChatOrigin.Manual || session.TaskExecution) return null;
+        if (session.Participants is { Count: > 0 }) return null;
+        if (!_flags.IsEnabled(ownerId, FeatureFlagKeys.DesktopAgent)) return null;
+        if (_projects.GetById(session.ProjectId!)?.DesktopAgentEnabled != true) return null;
+        if (!_bindings.ServerToolEnabled(ownerId, persona, "desktop")) return null;
+        // Capability-токен чата, а не сервисный JWT владельца: /api/devices/* его не принимают
+        return new DesktopMcpContext(ResolveTasksApiUrl(ownerId),
+            _desktopTokens.TokenFor(ownerId, session.Id), session.Id);
     }
 
     // Подсказка про трейлер CCS-Session/CCS-Task (ADR-004, «Паспорта изменений»): только
@@ -1697,6 +1722,9 @@ public class SessionManager : IDisposable
             PersonaId = string.IsNullOrWhiteSpace(personaId) ? null : personaId,
             TaskExecution = taskExecution,
             TaskId = taskId,
+            // Тип чата «Десктопный» (ADR-008): задаётся при СОЗДАНИИ и дальше не меняется —
+            // состав грани фиксируется на момент запуска CLI
+            DesktopChat = desktopChat,
             // Онбординг-сессия: задаётся ДО старта — BuildPersonaLayer читает поле при сборке слоя
             OnboardingKind = onboardingKind,
         };
@@ -2754,6 +2782,7 @@ public class SessionManager : IDisposable
             ModulesMcp: BuildModulesContext(ownerId),
             WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
             CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
+            DesktopMcp: BuildDesktopContext(ownerId, session, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
             PromptSnapshotSink: PromptSinkFor(session.Id),
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
@@ -4105,6 +4134,7 @@ public class SessionManager : IDisposable
                 ModulesMcp: BuildModulesContext(project.OwnerId),
                 WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
                 CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
+                DesktopMcp: BuildDesktopContext(project.OwnerId, entry.Info, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),

@@ -1,4 +1,4 @@
-using ClaudeHomeServer.Models;
+﻿using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services;
 
@@ -28,6 +28,11 @@ public static class PersonaAccessPolicy
         // MCP персон (mcp__personas__*)
         "mcp__personas__personas_create", "mcp__personas__personas_update",
         "mcp__personas__personas_delete", "mcp__personas__personas_generate_avatar",
+        // Десктопная грань (ADR-008): читающие desktop_devices/desktop_screen/desktop_ui
+        // персоне «только чтение» остаются, всё меняющее чужой рабочий стол — нет.
+        // Имена MCP-инструментов в deny безопасны и когда сервер в ход не доставлен:
+        // запуск CLI роняют неизвестные ВСТРОЕННЫЕ имена (см. MultiEdit выше), а не mcp__*.
+        "mcp__desktop__desktop_act", "mcp__desktop__desktop_open", "mcp__desktop__desktop_run",
     ];
 
     // Итоговый список дополнительных запретов сессии персоны:

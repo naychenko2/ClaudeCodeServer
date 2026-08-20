@@ -31,7 +31,9 @@ public static class PersonaAccessPolicy
         // Десктопная грань (ADR-008): читающие desktop_devices/desktop_screen/desktop_ui
         // персоне «только чтение» остаются, всё меняющее чужой рабочий стол — нет.
         // Имена MCP-инструментов в deny безопасны и когда сервер в ход не доставлен:
-        // запуск CLI роняют неизвестные ВСТРОЕННЫЕ имена (см. MultiEdit выше), а не mcp__*.
+        // CLI не сверяет mcp__* со списком известных инструментов (в отличие от встроенных
+        // имён — см. MultiEdit выше). Проверено живым прогоном CLI — см. тест
+        // DesktopMcpToolsetStabilityTests.DenyИменаДесктопа_НеРоняютЗапускCli.
         "mcp__desktop__desktop_act", "mcp__desktop__desktop_open", "mcp__desktop__desktop_run",
     ];
 

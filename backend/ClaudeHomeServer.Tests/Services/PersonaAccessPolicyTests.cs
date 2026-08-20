@@ -78,4 +78,32 @@ public class PersonaAccessPolicyTests
     {
         PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.Custom)).Should().BeNull();
     }
+
+    [Fact]
+    public void ReadOnly_ДесктопнаяГрань_МутацииЗапрещены_ЧтениеСвободно()
+    {
+        var result = PersonaAccessPolicy.BuildExtraDisallowed(Make(PersonaAccess.ReadOnly));
+
+        // Меняющее чужой рабочий стол — под запретом (ADR-008: desktop_* вносятся в ReadOnly)
+        result.Should().Contain([
+            "mcp__desktop__desktop_act", "mcp__desktop__desktop_open", "mcp__desktop__desktop_run"]);
+        // Читающие инструменты персоне «только чтение» остаются
+        result.Should().NotContain("mcp__desktop__desktop_devices")
+            .And.NotContain("mcp__desktop__desktop_screen")
+            .And.NotContain("mcp__desktop__desktop_ui");
+    }
+
+    [Fact]
+    public void ДесктопныеЗапреты_ТолькоИменаMcp_НеВстроенные()
+    {
+        // Класс дефектов MultiEdit (ClaudeSession.BuiltInTaskTools): имя БЕЗ префикса mcp__
+        // в deny-списке — это неизвестное встроенное имя, и CLI на него ругается. Deny-имена
+        // ReadOnly-персоны уезжают в --disallowedTools КАЖДОЙ сессии — включая ходы, где грань
+        // не доставлена (чат не десктопный, грань выключена в проекте). Поэтому каждое
+        // desktop-имя обязано быть именем MCP-инструмента mcp__desktop__*. Живой прогон CLI
+        // с этим списком — DesktopMcpToolsetStabilityTests.DenyИменаДесктопа_НеРоняютЗапускCli.
+        foreach (var name in PersonaAccessPolicy.ReadOnlyDisallowed.Where(t => t.Contains("desktop")))
+            name.Should().StartWith("mcp__desktop__",
+                "голое имя без префикса mcp__ — это неизвестное встроенное имя, класс MultiEdit");
+    }
 }

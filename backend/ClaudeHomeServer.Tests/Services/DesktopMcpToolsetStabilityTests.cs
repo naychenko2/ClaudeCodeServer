@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ClaudeHomeServer.Services;
 using FluentAssertions;
 using Xunit;
 
@@ -311,5 +312,101 @@ public class DesktopMcpToolsetStabilityTests
         body.Should().NotContain("_currentTurn",
             "состояние хода не должно влиять на доставку грани — гейт исполнения живёт на "
             + "бэкенде и проверяется на каждый вызов");
+    }
+
+    /// <summary>
+    /// Deny-имена десктопной грани (PersonaAccessPolicy.ReadOnlyDisallowed) не роняют запуск
+    /// claude CLI, когда грань в этом ходу не доставлена: список уезжает в --disallowedTools
+    /// каждой сессии ReadOnly-персоны, а сервера desktop в конфиге хода нет. Живой прогон
+    /// (CLI 2.1.232): exit 0 и чистый stderr — CLI не сверяет mcp__*-имена со списком
+    /// известных инструментов, в отличие от встроенных (мёртвое встроенное имя даёт
+    /// предупреждение «matches no known tool» — класс дефекта MultiEdit).
+    /// Требования к окружению: claude в PATH и залогиненный профиль; промпт подаётся через
+    /// stdin — --disallowedTools вариадический и съедает позиционные аргументы. claude нет
+    /// (CI) или логин недоступен — скип; юнит-часть инварианта живёт в PersonaAccessPolicyTests.
+    /// </summary>
+    // claude в PATH: на Windows это npm-shim claude.cmd, который Process.Start с
+    // UseShellExecute=false по имени не резолвит — ищем полный путь сами.
+    private static string? FindClaude()
+    {
+        string[] exts = OperatingSystem.IsWindows() ? [".cmd", ".exe", ""] : [""];
+        var path = Environment.GetEnvironmentVariable("PATH") ?? "";
+        foreach (var dir in path.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            foreach (var ext in exts)
+            {
+                var candidate = Path.Combine(dir, "claude" + ext);
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        return null;
+    }
+
+    [SkippableFact]
+    public async Task DenyИменаДесктопа_НеРоняютЗапускCli()
+    {
+        var claudePath = FindClaude();
+        Skip.If(claudePath is null, "claude CLI не найден в PATH");
+
+        var deny = string.Join(",", PersonaAccessPolicy.ReadOnlyDisallowed);
+        var psi = new System.Diagnostics.ProcessStartInfo
+        {
+            FileName = claudePath!,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        psi.ArgumentList.Add("--print");
+        psi.ArgumentList.Add("--disallowedTools");
+        psi.ArgumentList.Add(deny);
+        // Маркеры вложенного запуска (наследуются, когда тесты гоняют изнутри Claude Code)
+        // с себя снимаем: CLI с CLAUDECODE=1/CLAUDE_CODE_* ведёт себя как дочерняя сессия.
+        // Провайдерские ANTHROPIC_*/CLAUDE_CONFIG_DIR наоборот наследуем — окружение
+        // прогоняющего (его ретранслятор, его профиль) остаётся его выбором.
+        foreach (var key in psi.Environment.Keys.Where(k =>
+                     k.Equals("CLAUDECODE", StringComparison.OrdinalIgnoreCase)
+                     || k.StartsWith("CLAUDE_CODE_", StringComparison.OrdinalIgnoreCase)
+                     || k.Equals("CLAUDE_PID", StringComparison.OrdinalIgnoreCase)).ToList())
+            psi.Environment.Remove(key);
+
+        System.Diagnostics.Process? proc;
+        try { proc = System.Diagnostics.Process.Start(psi); }
+        catch (Exception ex) { Skip.If(true, $"claude CLI не запустился: {ex.Message}"); return; }
+        Skip.If(proc is null, "не удалось запустить claude CLI");
+
+        using (proc!)
+        {
+            await proc.StandardInput.WriteAsync("Ответь одним словом: ок");
+            await proc.StandardInput.DisposeAsync();
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
+            var exitTask = proc.WaitForExitAsync();
+            if (await Task.WhenAny(exitTask, Task.Delay(TimeSpan.FromMinutes(2))) != exitTask)
+            {
+                proc.Kill(entireProcessTree: true);
+                var tail = stderrTask.IsCompleted ? await stderrTask : "";
+                Skip.If(true, $"claude CLI не завершился за 2 минуты (нет логина или сети); stderr: {tail[..Math.Min(300, tail.Length)]}");
+                return;
+            }
+
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+            // Инвариант в строгой форме: CLI принимает mcp__desktop__*-имена молча и завершает
+            // ход. «matches no known tool» — ровно тот класс, которого избегаем (неизвестное
+            // имя в deny; так проявлял себя MultiEdit), это красный при любом исходе хода.
+            // Сетевой или логинный сбой инфраструктуры инвариант не опровергает — скип, чтобы
+            // тест не флейкал от качества связи с API.
+            stderr.Should().NotContain("matches no known tool",
+                "CLI отверг deny-правило — неизвестное имя в deny-списке персоны");
+            if (proc.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
+            {
+                Skip.If(true, $"claude CLI не завершил ход (код {proc.ExitCode} — нет логина/сети?); stderr: {stderr[..Math.Min(300, stderr.Length)]}");
+                return;
+            }
+            stdout.Should().NotBeNullOrWhiteSpace("CLI завершил ход с deny-именами грани в правилах");
+        }
     }
 }

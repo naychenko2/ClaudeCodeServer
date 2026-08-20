@@ -490,8 +490,12 @@ override в `data/users.json`; фронт — стор [lib/featureFlags.ts](fro
   `Task.WhenAny`, а не `Task.Delay`).
 - **Категории тестов.** Большинство — юниты 1–50ms. Медленные: Controllers
   (`WebApplicationFactory`), `GitServiceTests` (`[Trait("Category", "Slow")]`), интеграционные MCP.
-  На итеративную правку — `dotnet test --filter "FullyQualifiedName~<Набор>"`; полный прогон —
-  перед коммитом/PR.
+  Отдельно `[Trait("Category", "Dns")]` — тестам нужен настоящий резолв внешних имён, и на машине
+  с Proxifier они валятся пачкой (среда, не регрессия): локально гоняй
+  `dotnet test --filter "Category!=Dns"`. Фоновый автосейв `SessionManager` (внутри него sweep)
+  в тестах выключен ключом `Session:AutoSaveSeconds = 0` — иначе фон меняет статусы между
+  ассертами. На итеративную правку — `dotnet test --filter "FullyQualifiedName~<Набор>"`;
+  полный прогон — перед коммитом/PR.
 - **Одна папка — один проект на владельца** (`ProjectManager.EnsureRootFree`, 400 при повторе):
   датасет Dify ключуется по `RootPath`. У разных владельцев общая папка допустима.
 - **Удаление чата уносит и транскрипт claude CLI** во всех профилях. Инвариант: только файл с

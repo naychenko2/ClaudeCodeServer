@@ -68,6 +68,12 @@ public class SessionManagerTests : IDisposable
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
+                // Автосейв по таймеру выключен: внутри SaveSessions живёт sweep-terminus, и
+                // фоновое срабатывание выполняло его между ассертами теста — вместе с глобальным
+                // Session.TaskSourceSessionResolver, который переустанавливает каждый новый
+                // TaskManager в параллельном классе, это давало плавающее падение
+                // Sweep_ЖивойПотомокВГлубину на полном прогоне. Тесты зовут sweep явно.
+                ["Session:AutoSaveSeconds"] = "0",
                 // Домашние папки владельцев (чаты вне проекта живут в {home}/Chats) — в temp
                 ["DefaultProjectsPath"] = Path.Combine(_tempDir, "homes"),
                 // Профиль CLI внутри temp — иначе уборка транскриптов при удалении чата

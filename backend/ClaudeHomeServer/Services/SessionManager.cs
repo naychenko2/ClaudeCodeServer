@@ -1,4 +1,4 @@
-﻿using System.Collections.Concurrent;
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -270,7 +270,19 @@ public class SessionManager : IDisposable
     private readonly string _sessionsFilePath;
     private readonly Lock _saveLock = new();
     // Автосохранение сессий каждые 30с
-    private static readonly TimeSpan AutoSaveInterval = TimeSpan.FromSeconds(30);
+    /// <summary>
+    /// Период автосохранения (оно же — единственный фоновый триггер sweep-terminus, см. SaveSessions).
+    /// Настраивается ключом <c>Session:AutoSaveSeconds</c>; 0 и меньше — таймер не заводится вовсе.
+    ///
+    /// Ноль нужен ТЕСТАМ, и не ради скорости: sweep живёт внутри SaveSessions, поэтому фоновый
+    /// таймер выполняет его в произвольный момент — в том числе между двумя ассертами теста.
+    /// Вместе с глобальным Session.TaskSourceSessionResolver, который переустанавливает конструктор
+    /// каждого нового TaskManager в параллельном классе, это давало плавающее падение
+    /// Sweep_ЖивойПотомокВГлубину: иерархия делегирования на миг переставала резолвиться, и sweep
+    /// закрывал сессию, которую тест только что проверил живой. Поодиночке ни один из двух факторов
+    /// не воспроизводился — падало только на полном прогоне и не каждый раз.
+    /// </summary>
+    private static readonly TimeSpan DefaultAutoSaveInterval = TimeSpan.FromSeconds(30);
     private Timer? _autoSaveTimer;
     // Сериализует прямую запись стоимости fal.ai в историю неактивных сессий
     private readonly SemaphoreSlim _falPersistLock = new(1, 1);
@@ -525,8 +537,11 @@ public class SessionManager : IDisposable
         LoadSessions();
 
         // Автосохранение: периодический сброс in-memory данных на диск
-        _autoSaveTimer = new Timer(_ => SaveSessions(), null,
-            AutoSaveInterval, AutoSaveInterval);
+        var autoSave = int.TryParse(config["Session:AutoSaveSeconds"], out var secs)
+            ? TimeSpan.FromSeconds(secs)
+            : DefaultAutoSaveInterval;
+        if (autoSave > TimeSpan.Zero)
+            _autoSaveTimer = new Timer(_ => SaveSessions(), null, autoSave, autoSave);
     }
 
     // --- MCP tasks-server ---
@@ -865,7 +880,7 @@ public class SessionManager : IDisposable
             }
 
             // P12/P15: sweep-terminus. SaveSessions зовётся из ~50 точек (включая автосохранение
-            // по таймеру AutoSaveInterval) — этого довольно, чтобы без отдельного таймера
+            // по таймеру Session:AutoSaveSeconds) — этого довольно, чтобы без отдельного таймера
             // гарантированно довести зависшую в Active сессию до Finished. Ранний выход, когда
             // кандидатов нет, — O(N) под _saveLock только если хоть одна сессия в «завершённом Active».
             if (_stuckActiveGraceSeconds <= 0) return;

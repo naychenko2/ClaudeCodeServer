@@ -1523,6 +1523,17 @@ public class ClaudeSession : ILlmSessionAdapter
         // Правила проекта: deny приоритетнее; allow — авто-разрешить; null — спросить пользователя
         var ruleDecision = PermissionRuleEvaluator.Evaluate(_permissionRules?.Invoke(), toolName, inputEl);
         if (ruleDecision == "deny") return "deny";
+        // Режим «Авто» обещает «действует сам»: shell-команды разрешаем без карточки,
+        // необратимые (стоп-список IrreversibleCommandGuard) — как раньше спрашивают.
+        // Строго ПОСЛЕ deny-правил проекта: явный запрет сильнее авто-разрешения.
+        if (ruleDecision == null
+            && Info.Mode == ClaudeMode.Auto
+            && IrreversibleCommandGuard.IsShellTool(toolName)
+            && inputEl.ValueKind == JsonValueKind.Object
+            && inputEl.TryGetProperty("command", out var autoCmdEl)
+            && autoCmdEl.ValueKind == JsonValueKind.String
+            && !IrreversibleCommandGuard.LooksIrreversible(autoCmdEl.GetString()))
+            return "allow";
         // Сессия-исполнитель задачи или ход правила автоматизации персоны работают автономно —
         // отвечать на карточку разрешения некому (чат никто не открывал), и без этого исполнитель
         // вязнет в первом же permission-запросе (status=Waiting до таймаута в 60 мин) и не может

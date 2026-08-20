@@ -402,10 +402,11 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   //   флаг change-dossiers-recall включён
   //   И проект — git-репозиторий (isGitRepo из /dossiers/export/status)
   // sharedFolder приезжает тем же запросом и подсовывается модалке для выноски.
-  // Этап 4 — кнопка импорта использует тот же гейт; вызов одного и того же
-  // /export/status не дублируем, импорт всегда возможен там же, где разрешён экспорт.
+  // hasDossierBranch — наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет,
+  // импорт из неё бессмыслен, и «Загрузить» гейтим отдельно от «Выгрузить» —
+  // выгрузить можно и когда ветки ещё нет, именно так она и создаётся.
   const recallEnabled = useFeature(FLAGS.changeDossiersRecall);
-  const [exportStatus, setExportStatus] = useState<{ isGitRepo: boolean; sharedFolder: boolean } | null>(null);
+  const [exportStatus, setExportStatus] = useState<{ isGitRepo: boolean; sharedFolder: boolean; hasDossierBranch: boolean } | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
 
@@ -419,11 +420,15 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
     let cancelled = false;
     api.dossiers.exportStatus(project.id)
       .then(s => { if (!cancelled) setExportStatus(s); })
-      .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false }); });
+      .catch(() => { if (!cancelled) setExportStatus({ isGitRepo: false, sharedFolder: false, hasDossierBranch: false }); });
     return () => { cancelled = true; };
   }, [project.id, recallEnabled]);
 
   const showExportButton = recallEnabled && exportStatus?.isGitRepo === true;
+  // Импорт дополнительно требует существующую ветку ccs/dossiers/v1: без неё
+  // «Загрузить» упрётся в «Загружать пока нечего». «Выгрузить» этой зависимости
+  // не имеет — выгрузка как раз и создаёт ветку.
+  const showImportButton = showExportButton && exportStatus?.hasDossierBranch === true;
   const hasHeader = useHasPanelHeader();
 
   // Стабильные onClose для диалогов — иначе каждая перерисовка панели (например,
@@ -544,31 +549,38 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
         </button>
         {/* Запасной вариант на случай, когда PanelHeaderSlot не сработает (мобил/вложенный
             контекст): тот же chipStyle, что у соседних чипов, иконка + короткая подпись.
-            Импорт стоит СЛЕВА от выгрузки — пара «забрать / отдать» по направлению стрелок. */}
-        {showExportButton && !hasHeader && (
+            Импорт стоит СЛЕВА от выгрузки — пара «забрать / отдать» по направлению стрелок.
+            Импорт гейтится отдельно: пока ветки ccs/dossiers/v1 ещё нет, показывать чип
+            «Загрузить» нельзя — одиночка упрётся в «Загружать пока нечего». «Выгрузить»
+            не требует ветки: она сама её и создаёт. */}
+        {(showImportButton || showExportButton) && !hasHeader && (
           <>
-            <button
-              onClick={() => setImportOpen(true)}
-              title="Загрузить из репозитория"
-              style={{
-                ...chipStyle, cursor: 'pointer', color: C.textHeading,
-                background: C.bgCard, border: `1px solid ${C.border}`,
-              }}
-            >
-              <Download size={11} strokeWidth={ICON_STROKE} />
-              Загрузить
-            </button>
-            <button
-              onClick={() => setExportOpen(true)}
-              title="Выгрузить в репозиторий"
-              style={{
-                ...chipStyle, cursor: 'pointer', color: C.textHeading,
-                background: C.bgCard, border: `1px solid ${C.border}`,
-              }}
-            >
-              <Upload size={11} strokeWidth={ICON_STROKE} />
-              Выгрузить
-            </button>
+            {showImportButton && (
+              <button
+                onClick={() => setImportOpen(true)}
+                title="Загрузить из репозитория"
+                style={{
+                  ...chipStyle, cursor: 'pointer', color: C.textHeading,
+                  background: C.bgCard, border: `1px solid ${C.border}`,
+                }}
+              >
+                <Download size={11} strokeWidth={ICON_STROKE} />
+                Загрузить
+              </button>
+            )}
+            {showExportButton && (
+              <button
+                onClick={() => setExportOpen(true)}
+                title="Выгрузить в репозиторий"
+                style={{
+                  ...chipStyle, cursor: 'pointer', color: C.textHeading,
+                  background: C.bgCard, border: `1px solid ${C.border}`,
+                }}
+              >
+                <Upload size={11} strokeWidth={ICON_STROKE} />
+                Выгрузить
+              </button>
+            )}
           </>
         )}
       </div>
@@ -664,15 +676,23 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       {/* Кнопки тулбара (ADR §6): только когда у панели есть шапка. Без pinned —
           ни одна из них не главное действие панели, в покое шапка должна оставаться
           чистой. Импорт (Download) ставится слева от выгрузки (Upload) — пара
-          «забрать / отдать» читается по направлению стрелок. */}
-      {showExportButton && hasHeader && (
+          «забрать / отдать» читается по направлению стрелок. Импорт гейтится
+          отдельно (showImportButton): пока ветки ccs/dossiers/v1 ещё нет, чип
+          «Загрузить» не показывается — одиночка упрётся в «Загружать пока нечего».
+          «Выгрузить» показывается по showExportButton: выгрузить можно и до создания
+          ветки, именно так она и появляется. */}
+      {(showImportButton || showExportButton) && hasHeader && (
         <PanelHeaderSlot side="right">
-          <IconButton size="sm" title="Загрузить из репозитория" onClick={() => setImportOpen(true)}>
-            <Download size={14} strokeWidth={ICON_STROKE} />
-          </IconButton>
-          <IconButton size="sm" title="Выгрузить в репозиторий" onClick={() => setExportOpen(true)}>
-            <Upload size={14} strokeWidth={ICON_STROKE} />
-          </IconButton>
+          {showImportButton && (
+            <IconButton size="sm" title="Загрузить из репозитория" onClick={() => setImportOpen(true)}>
+              <Download size={14} strokeWidth={ICON_STROKE} />
+            </IconButton>
+          )}
+          {showExportButton && (
+            <IconButton size="sm" title="Выгрузить в репозиторий" onClick={() => setExportOpen(true)}>
+              <Upload size={14} strokeWidth={ICON_STROKE} />
+            </IconButton>
+          )}
         </PanelHeaderSlot>
       )}
       <div style={{ flex: 1, overflow: 'auto', padding: `${SP.sm}px ${SP.md}px ${SP.lg}px` }}>

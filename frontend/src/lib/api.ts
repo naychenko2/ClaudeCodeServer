@@ -1310,9 +1310,11 @@ export const api = {
       return request<DossierEntry[]>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
     },
     // Готовность проекта к экспорту (ADR-004 §6): isGitRepo гейтит кнопку в UI,
-    // sharedFolder — предупреждение о втором владельце той же папки.
+    // sharedFolder — предупреждение о втором владельце той же папки. hasDossierBranch —
+    // наличие локальной refs/heads/ccs/dossiers/v1: пока ветки нет, импорт из неё
+    // бессмыслен, кнопку «Загрузить» в UI гейтим этим признаком.
     exportStatus: (projectId: string) =>
-      request<{ isGitRepo: boolean; sharedFolder: boolean }>(
+      request<{ isGitRepo: boolean; sharedFolder: boolean; hasDossierBranch: boolean }>(
         `/projects/${encodeURIComponent(projectId)}/dossiers/export/status`),
     // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
     // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:

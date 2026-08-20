@@ -88,8 +88,10 @@ public class DossiersController(ProjectManager projects, DossierStore store,
     // предупреждение «после отправки ветки историю решений увидит и второй владелец
     // папки». Экспорт при общей папке НЕ блокируется: ветка пишется в общий репозиторий
     // осознанно, признак нужен только для честного диалога подтверждения.
+    // hasDossierBranch — наличие локальной refs/heads/ccs/dossiers/v1 (один git-вызов):
+    // им гейтится кнопка «Загрузить» (импорт), пока ветки нет.
     [HttpGet("{id}/dossiers/export/status")]
-    public IActionResult ExportStatus(string id)
+    public async Task<IActionResult> ExportStatus(string id, CancellationToken ct)
     {
         if (!flags.IsEnabled(UserId, FeatureFlagKeys.ChangeDossiersRecall)) return NotFound();
         var p = Owned(id);
@@ -99,6 +101,7 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         {
             isGitRepo = GitService.IsGitRepo(p.RootPath),
             sharedFolder = projects.GetByRootPath(p.RootPath).Any(x => x.OwnerId != p.OwnerId),
+            hasDossierBranch = await git.HasDossiersBranchAsync(p.OwnerId, p.RootPath, ct),
         });
     }
 

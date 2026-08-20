@@ -402,6 +402,9 @@ AddHosted<ClaudeHomeServer.Services.Deploy.DeployReportService>();
 // соединения канала живут только в памяти (рестарт бэкенда гасит сеанс по построению).
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DeviceRegistry>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DevicePairingService>();
+// Отправитель команд на устройство: push в конкретное соединение хаба (групп нет)
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDeviceCommandSender,
+    ClaudeHomeServer.Services.Desktop.DeviceHubCommandSender>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.DesktopCallRouter>();
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Desktop.IDesktopChatDirectory,
     ClaudeHomeServer.Services.Desktop.DesktopChatDirectory>();

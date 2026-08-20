@@ -379,7 +379,7 @@ Dark launch: фича коммитится выключенной и включ�
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs)); хранение —
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
 хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
-(2026-08); в каталоге четыре флага: `workspace-destructive` (постоянный
+(2026-08); в каталоге шесть флагов, из них ключевые: `workspace-destructive` (постоянный
 предохранитель от необратимого удаления), `default-personas-onboarding` (ассистент по
 умолчанию заводится автоматически при первом входе, знакомство — по приглашению, а не
 обязательный экран; проектное знакомство v2 дополнительно раскладывает каркас папок

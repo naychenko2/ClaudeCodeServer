@@ -1146,8 +1146,15 @@ if (Directory.Exists(distPath))
         }
     };
 
+    // .onnx (модель Silero барж-ина, wwwroot/vad) в стандартной карте MIME отсутствует —
+    // без явной записи StaticFiles отвечает 404, SPA-fallback отдаёт вместо модели
+    // index.html, и VAD падает на инициализации («No graph was found in the protobuf»).
+    // В dev не воспроизводится: статику там раздаёт Vite, он отдаёт octet-stream сам
+    var contentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+    contentTypes.Mappings[".onnx"] = "application/octet-stream";
+
     app.UseDefaultFiles(new DefaultFilesOptions { FileProvider = fp });
-    app.UseStaticFiles(new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });
+    app.UseStaticFiles(new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders, ContentTypeProvider = contentTypes });
     // /_api/* — Office/SharePoint-запросы; возвращаем 404 вместо SPA, иначе Word показывает «Нет доступа»
     app.Map("/_api", api => api.Run(ctx => { ctx.Response.StatusCode = 404; return Task.CompletedTask; }));
     app.MapFallbackToFile("index.html", new StaticFileOptions { FileProvider = fp, OnPrepareResponse = setCacheHeaders });

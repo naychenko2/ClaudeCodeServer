@@ -73,8 +73,11 @@ public sealed class OpenAllowList(IEnumerable<string>? entries = null)
         var value = (target ?? "").Trim().Trim('"');
         if (value.Length == 0) return OpenDecision.Refuse("Не указано, что открывать");
 
-        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is not ("file" or "")
-            && !LooksLikeWindowsPath(value))
+        // Различаем ссылку и путь по СХЕМЕ, а не по слэшам: у «https://…» слэши есть
+        // всегда, и проверка на путь съедала бы все ссылки разом. Однобуквенная схема —
+        // это буква диска («C:\work»), её Uri тоже разбирает как схему.
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme.Length > 1
+            && !LooksLikeLocalPath(value))
         {
             // Ссылки: только http и https. file:, ms-settings:, javascript: и прочие
             // протокольные обработчики — не «ссылка», а способ запустить что угодно.
@@ -128,6 +131,11 @@ public sealed class OpenAllowList(IEnumerable<string>? entries = null)
 
     private static string[] Segments(string path) =>
         path.Replace('/', '\\').Split('\\', StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>Путь машины, а не ссылка: буква диска либо начало с разделителя (UNC).</summary>
+    private static bool LooksLikeLocalPath(string value) =>
+        value.StartsWith("\\", StringComparison.Ordinal)
+        || (value.Length >= 2 && value[1] == ':' && char.IsLetter(value[0]));
 
     private static bool LooksLikeWindowsPath(string value) =>
         value.Contains('\\') || value.Contains('/')

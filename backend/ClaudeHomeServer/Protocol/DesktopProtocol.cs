@@ -23,12 +23,13 @@ public static class DesktopProtocol
     /// </summary>
     public const string DeviceTokenScheme = Services.Desktop.DesktopDeviceAuthHandler.SchemeName;
 
-    // Claims токена устройства и capability-токена чата. Имена НЕ свои: их выдаёт
-    // сторона авторизации (DesktopDeviceAuthHandler и DesktopCaller), и разъехавшиеся
-    // литералы означали бы пустого владельца в хабе при формально успешной проверке токена.
+    // Claims токена устройства. Имена НЕ свои: их выдаёт сторона авторизации
+    // (DesktopDeviceAuthHandler), и разъехавшиеся литералы означали бы пустого владельца
+    // в хабе при формально успешной проверке токена. Claim чата (sid) сюда НЕ выносим:
+    // его читает только DesktopCaller.FromPrincipal — единственная точка разбора
+    // capability-токена, а висящий алиас читался бы как отдельная проверка чата.
     public const string OwnerIdClaim = "sub";
     public const string DeviceIdClaim = Services.Desktop.DesktopDeviceAuthHandler.DeviceIdClaim;
-    public const string SessionIdClaim = Services.Desktop.DesktopCaller.SessionClaim;
 
     /// <summary>Ack на команду: нет за 2 с — честная ошибка, а не висение до таймаута MCP.</summary>
     public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(2);

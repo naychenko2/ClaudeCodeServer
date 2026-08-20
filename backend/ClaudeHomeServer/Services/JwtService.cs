@@ -148,6 +148,75 @@ public class JwtService
         catch { return null; }
     }
 
+    // --- Capability-токен канала устройств (ADR-008, «Авторизация канала») ---
+
+    /// <summary>Audience грани десктопа. Отдельный от "ClaudeHomeServer" — в этом весь смысл.</summary>
+    public const string DesktopAudience = "desktop";
+
+    // TTL — минуты: сторона доверия здесь физическая машина владельца, а конфиг хода лежит
+    // в общем /turn-tmp песочницы (принятый остаточный риск ADR-008). Короткий срок сужает
+    // окно, поэтому токен обновляется на каждом запуске хода, а не живёт днями.
+    public static readonly TimeSpan DesktopTokenLifetime = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Capability-токен для /api/devices/*: audience "desktop", claims sub=ownerId + sid=чат
+    /// + did=устройство (если известно). Сервисный JWT владельца эти ручки не открывает —
+    /// иначе любой чат владельца (включая ночной tasks-executor) достал бы его из env хода.
+    /// </summary>
+    /// <remarks>
+    /// Токен КОНСТАНТЕН в пределах чата на момент запуска CLI. Ехать он обязан в env
+    /// MCP-сервера ВНУТРИ временного конфига (--mcp-config), а не в envOverrides процесса:
+    /// сигнатура запуска (ClaudeSession.BuildLaunchSignature) пропускает значение
+    /// --mcp-config, но env-оверрайды в неё входят целиком. Меняющийся от хода к ходу токен
+    /// в оверрайдах сдвинул бы отпечаток и перезапускал процесс со всеми MCP-серверами
+    /// («Stream closed», «No such tool available»).
+    /// </remarks>
+    public string IssueDesktopToken(string ownerId, string sessionId, string? deviceId = null)
+    {
+        var creds = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256);
+        var claims = new Desktop.DesktopCaller(ownerId, sessionId, deviceId).ToClaims();
+        var jwt = new JwtSecurityToken(
+            issuer: "ClaudeHomeServer",
+            audience: DesktopAudience,
+            claims: claims,
+            expires: DateTime.UtcNow.Add(DesktopTokenLifetime),
+            signingCredentials: creds);
+        return new JwtSecurityTokenHandler().WriteToken(jwt);
+    }
+
+    /// <summary>
+    /// Проверяет capability-токен канала устройств и возвращает чат-вызывателя либо null.
+    /// Строго по audience "desktop": пользовательский и сервисный JWT (aud ClaudeHomeServer)
+    /// сюда не проходят, как и office-токен.
+    /// </summary>
+    public Desktop.DesktopCaller? ValidateDesktopToken(string? token)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return null;
+        try
+        {
+            // MapInboundClaims=false — читаем raw "sub"/"sid"/"did" без ремапа в ClaimTypes.*
+            var principal = new JwtSecurityTokenHandler { MapInboundClaims = false }
+                .ValidateToken(token, DesktopValidationParameters, out _);
+            return Desktop.DesktopCaller.FromPrincipal(principal);
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Параметры проверки capability-токена: та же подпись, но своя audience.</summary>
+    public TokenValidationParameters DesktopValidationParameters => new()
+    {
+        ValidateIssuer = true,
+        ValidIssuer = "ClaudeHomeServer",
+        ValidateAudience = true,
+        ValidAudience = DesktopAudience,
+        ValidateLifetime = true,
+        ValidateIssuerSigningKey = true,
+        IssuerSigningKey = _key,
+        ClockSkew = TimeSpan.Zero,
+        NameClaimType = ClaimTypes.Name,
+        RoleClaimType = ClaimTypes.Role,
+    };
+
     /// <summary>
     /// Жив ли предъявленный токен с точки зрения версии сессий: сервисные пропускаем,
     /// у пользовательских claim tv обязан совпасть с текущей версией в UserStore.

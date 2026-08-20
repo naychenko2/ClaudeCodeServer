@@ -2499,7 +2499,8 @@ export interface SpendOverviewResponse {
   costUsd?: number | null;
   byDay: SpendDayPoint[];
   cards: {
-    users: SpendCardRow[];
+    // Разрез по пользователям бэк кладёт только в ответ scope=all — в scope=mine поля нет вовсе
+    users?: SpendCardRow[];
     projects: SpendCardRow[];
     models: SpendCardRow[];
     chats: SpendCardRow[];

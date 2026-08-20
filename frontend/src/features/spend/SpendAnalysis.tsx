@@ -8,13 +8,13 @@ import type {
   SpendTurnDto, SpendTurnsResponse,
 } from '../../types';
 import { api } from '../../lib/api';
-import { C, FONT, R, SHADOW, Z } from '../../lib/design';
+import { C, FONT, R, SHADOW, SP, Z } from '../../lib/design';
 import {
   ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtTok, fmtTime, isGenSource, nodeName,
   sourceColor, sourceLabel, sourceTextColor, spendQuery,
   type SpendDim, type SpendFilter, type SpendLevel,
 } from '../../lib/spend';
-import type { SpendState } from './SpendScreen';
+import type { SpendEmptyKind, SpendState } from './SpendScreen';
 import {
   Chip, ChipX, Dot, DropMenu, EmptyBody, GhostBtn, HBar, LoadError, MenuItem, Skel, nodeIcon,
 } from './spendUi';
@@ -45,13 +45,18 @@ interface Props {
   range: { from: string; to: string };
   showUsers: boolean;
   isMobile: boolean;
+  isTablet?: boolean;                       // 601–1199: вертикальный стек вместо двух колонок
+  emptyKind: SpendEmptyKind;                // чем объяснять пустоту: срез / период / трат не было вообще
   overview: SpendOverviewResponse | null;   // свод текущего среза (для «Итого» и бейджа окна)
   overviewError: boolean;
   onRetryOverview: () => void;
   onCloseScreen: () => void;
 }
 
-export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview, overviewError, onRetryOverview, onCloseScreen }: Props) {
+export function SpendAnalysis({ st, patch, range, showUsers, isMobile, isTablet = false, emptyKind, overview, overviewError, onRetryOverview, onCloseScreen }: Props) {
+  // Планшет: экран растянут на вьюпорт, значит панелям деталей потолок высоты не нужен —
+  // они тянутся сами (цепочка определённой высоты описана в SpendScreen)
+  const fill = isTablet;
   // Действующая цепочка уровней: кастомная или из пресета по роли
   const levels = useMemo<SpendLevel[]>(() => {
     if (st.levels) return st.levels;
@@ -210,7 +215,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
               border: `1px dashed ${C.info}`, color: C.info, background: C.infoBg,
             }}>
               Ход{detailDays ? ` · в окне ${detailDays} дней` : ''}
-              <ChipX onClick={() => removeLevel('turn')} />
+              <ChipX touch={isTablet} onClick={() => removeLevel('turn')} />
             </span>
           ) : (
             <span style={{
@@ -224,13 +229,13 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
                   админ
                 </span>
               )}
-              <ChipX onClick={() => removeLevel(d)} />
+              <ChipX touch={isTablet} onClick={() => removeLevel(d)} />
             </span>
           )}
         </span>
       ))}
       <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
-        <Chip dashed onClick={() => setMenu(menu === 'lvl' ? null : 'lvl')}>+ уровень ▾</Chip>
+        <Chip dashed touch={isTablet} onClick={() => setMenu(menu === 'lvl' ? null : 'lvl')}>+ уровень ▾</Chip>
         {menu === 'lvl' && (
           <DropMenu>
             {availableDims.map(d => (
@@ -245,7 +250,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
           </DropMenu>
         )}
       </span>
-      <Chip dashed onClick={() => { patch({ levels: null, preset: 'who', selKey: null }); setSelNode(null); }}>Сбросить</Chip>
+      <Chip dashed touch={isTablet} onClick={() => { patch({ levels: null, preset: 'who', selKey: null }); setSelNode(null); }}>Сбросить</Chip>
       {!isMobile && <span style={{ flex: 1 }} />}
       <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0, fontFamily: FONT.sans }}>Раскладки:</span>
       {SPEND_PRESETS.map(p => {
@@ -286,13 +291,13 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
     }}>
       <span style={{ fontSize: 11, color: C.textMuted, flexShrink: 0, fontFamily: FONT.sans }}>Срез:</span>
       {st.filters.map((f, i) => (
-        <Chip key={f.dim} filter>
+        <Chip key={f.dim} filter touch={isTablet} maxW={isTablet ? '100%' : undefined}>
           {DIM_LABELS[f.dim]}: {f.label}
-          <ChipX onClick={() => { patch({ filters: st.filters.filter((_, j) => j !== i), selKey: null }); setSelNode(null); }} />
+          <ChipX touch={isTablet} onClick={() => { patch({ filters: st.filters.filter((_, j) => j !== i), selKey: null }); setSelNode(null); }} />
         </Chip>
       ))}
       <span style={{ position: 'relative', display: 'inline-flex', flexShrink: 0 }}>
-        <Chip onClick={() => setMenu(menu === 'filter' || menu?.startsWith('fvals:') ? null : 'filter')}>+ фильтр ▾</Chip>
+        <Chip touch={isTablet} onClick={() => setMenu(menu === 'filter' || menu?.startsWith('fvals:') ? null : 'filter')}>+ фильтр ▾</Chip>
         {menu === 'filter' && (
           <DropMenu>
             {filterDims.map(d => (
@@ -323,7 +328,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
         })()}
       </span>
       {st.filters.length > 0 && (
-        <Chip dashed onClick={() => { patch({ filters: [], selKey: null }); setSelNode(null); }}>Сбросить срез</Chip>
+        <Chip dashed touch={isTablet} onClick={() => { patch({ filters: [], selKey: null }); setSelNode(null); }}>Сбросить срез</Chip>
       )}
     </div>
   );
@@ -342,7 +347,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
         key={t.id}
         onClick={() => selectTurn(t)}
         style={{
-          display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: R.lg,
+          display: 'flex', alignItems: 'center', gap: 8, padding: isTablet ? `${SP.md}px 10px` : '8px 10px', borderRadius: R.lg,
           cursor: 'pointer', background: sel ? C.accentLight : undefined,
           outline: sel ? `1px solid ${C.accentMuted}` : 'none',
         }}
@@ -443,7 +448,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
               <div
                 onClick={() => clickNode({ key, dim, name, node: n, filters, path: ancPath, parentTotal: total }, hasKids, key, nextIdx)}
                 style={{
-                  display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: R.lg,
+                  display: 'flex', alignItems: 'center', gap: 8, padding: isTablet ? `${SP.md}px 10px` : '8px 10px', borderRadius: R.lg,
                   cursor: 'pointer', position: 'relative',
                   background: sel ? C.accentLight : undefined,
                   outline: sel ? `1px solid ${C.accentMuted}` : 'none',
@@ -501,44 +506,65 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
         text="Добавьте хотя бы один уровень группировки («+ уровень») или выберите готовую раскладку."
         action={<GhostBtn onClick={() => { patch({ levels: null, preset: 'who', selKey: null }); setSelNode(null); }}>Раскладка по умолчанию</GhostBtn>} />
     : treeEmpty
-    ? (st.filters.length > 0 || st.day
+    ? (emptyKind === 'slice'
         ? <EmptyBody pic="🔍" title="Под этот срез ничего не попало"
             text="Такая комбинация фильтров не встречалась за период. Уберите один из фильтров."
             action={<GhostBtn onClick={() => { patch({ filters: [], day: null, selKey: null }); setSelNode(null); }}>Сбросить срез</GhostBtn>} />
+        : emptyKind === 'period'
+        ? <EmptyBody pic="📅" title="За этот период трат нет"
+            text="В выбранном периоде ходов не было — дереву нечего показать. Попробуйте более широкий период или снимите фильтры." />
         : <EmptyBody pic="🪙" title="Токенов ещё не потрачено"
             text="Дерево наполнится после первого хода в любом чате. Бесплатные модели тоже считаются — их токены видны зелёной серией." />)
     : renderChunk('', [], 0, '', rootTotal);
 
   // ================= Панель деталей =================
   const detail = selTurnId
-    ? <TurnPassport detail={turnDetail} showUsers={showUsers} onCloseScreen={onCloseScreen} />
+    ? <TurnPassport detail={turnDetail} showUsers={showUsers} fill={fill} onCloseScreen={onCloseScreen} />
     : selNode
-      ? <NodeDetail sel={selNode} ov={nodeOv} rootTotal={rootTotal} hasTurnLevel={levels.includes('turn')}
+      ? <NodeDetail sel={selNode} ov={nodeOv} rootTotal={rootTotal} hasTurnLevel={levels.includes('turn')} fill={fill} isTablet={isTablet}
           onShowTurns={() => {
             if (!levels.includes('turn')) patch({ levels: [...levels, 'turn'] });
           }} detailDays={detailDays} />
       : overviewError
         ? <LoadError onRetry={onRetryOverview} />
         : (
-          <SliceSummary overview={overview} filters={st.filters} day={st.day} rootTotal={rootTotal} />
+          <SliceSummary overview={overview} filters={st.filters} day={st.day} rootTotal={rootTotal} fill={fill} isTablet={isTablet} />
         );
 
   return (
-    <div onClick={() => { if (menu) setMenu(null); }}>
+    <div
+      onClick={() => { if (menu) setMenu(null); }}
+      style={isTablet ? { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 } : undefined}
+    >
       {pivotBar}
       {filterBar}
+      {/* Планшет: горизонтальный master-detail окупается примерно с 1100px — на 832
+          дереву не хватает ширины под имена, поэтому деталь встаёт ПОД дерево */}
       <div style={{
-        display: 'grid',
-        gridTemplateColumns: isMobile ? '1fr' : 'minmax(380px, 7fr) minmax(320px, 5fr)',
-        minHeight: isMobile ? 0 : 520,
+        ...(isTablet
+          ? { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }
+          : { display: 'grid', gridTemplateColumns: isMobile ? '1fr' : 'minmax(380px, 7fr) minmax(320px, 5fr)' }),
+        minHeight: isMobile || isTablet ? 0 : 520,
       }}>
-        <div style={{ borderRight: isMobile ? 'none' : `1px solid ${C.borderLight}`, minWidth: 0 }}>
-          <div style={{ padding: '10px 8px 16px', overflow: 'auto', maxHeight: isMobile ? undefined : 640 }}>
+        <div style={{
+          borderRight: isMobile || isTablet ? 'none' : `1px solid ${C.borderLight}`, minWidth: 0,
+          // 0 1 auto: короткое дерево занимает одну строку, длинное упирается в потолок и скроллится внутри
+          ...(isTablet ? { borderBottom: `1px solid ${C.borderLight}`, flex: '0 1 auto', maxHeight: '55%', minHeight: 0, display: 'flex', flexDirection: 'column' } : null),
+        }}>
+          <div style={{
+            padding: '10px 8px 16px', overflow: 'auto', maxHeight: isMobile || isTablet ? undefined : 640,
+            ...(isTablet ? { flex: 1, minHeight: 0 } : null),
+          }}>
             {rootChunk?.state === 'error' ? <LoadError onRetry={() => setTreeTick(t => t + 1)} /> : tree}
           </div>
         </div>
         {!isMobile && (
-          <div style={{ background: C.bgCard, borderRadius: `0 0 ${R.xxl}px 0`, minWidth: 0 }}>
+          <div style={{
+            background: C.bgCard, minWidth: 0,
+            // На планшете панель — подошва острова: скругление на обоих нижних углах
+            borderRadius: isTablet ? `0 0 ${R.xxl}px ${R.xxl}px` : `0 0 ${R.xxl}px 0`,
+            ...(isTablet ? { flex: '1 1 auto', minHeight: 260, display: 'flex', flexDirection: 'column' } : null),
+          }}>
             {detail}
           </div>
         )}
@@ -565,9 +591,9 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
 function DetailHead({ path, title, sub }: { path: string; title: string; sub: string }) {
   return (
     <div style={{ padding: '16px 18px 12px', borderBottom: `1px solid ${C.borderLight}` }}>
-      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4, minHeight: 13, fontFamily: FONT.sans }}>{path || ' '}</div>
-      <div style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 700, color: C.textHeading }}>{title}</div>
-      {sub && <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2, fontFamily: FONT.sans }}>{sub}</div>}
+      <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 4, minHeight: 13, fontFamily: FONT.sans, wordBreak: 'break-word' }}>{path || ' '}</div>
+      <div style={{ fontFamily: FONT.serif, fontSize: 18, fontWeight: 700, color: C.textHeading, wordBreak: 'break-word' }}>{title}</div>
+      {sub && <div style={{ fontSize: 11, color: C.textSecondary, marginTop: 2, fontFamily: FONT.sans, wordBreak: 'break-word' }}>{sub}</div>}
     </div>
   );
 }
@@ -576,7 +602,7 @@ function Metric({ label, value, sub, color }: { label: string; value: string; su
   return (
     <div style={{ background: C.bgPanel, border: `1px solid ${C.borderLight}`, borderRadius: R.lg, padding: '10px 12px', minWidth: 0 }}>
       <div style={{ fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, color: C.textMuted, fontFamily: FONT.sans }}>{label}</div>
-      <div style={{ fontFamily: FONT.mono, fontSize: 17, fontWeight: 600, color: color ?? C.textHeading, marginTop: 3, overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
+      <div style={{ fontFamily: FONT.mono, fontSize: 17, fontWeight: 600, color: color ?? C.textHeading, marginTop: 3, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{value}</div>
       {sub && <div style={{ fontSize: 10, color: C.textMuted, marginTop: 2, fontFamily: FONT.sans }}>{sub}</div>}
     </div>
   );
@@ -594,13 +620,13 @@ function Section({ title, extra, children }: { title: ReactNode; extra?: ReactNo
 }
 
 // Спарклайн дневного ряда: агрегатные дни приглушены, пунктир — граница окна, пик подсвечен
-function DaySpark({ byDay }: { byDay: { date: string; aggregated: boolean; total: number }[] }) {
+function DaySpark({ byDay, fill }: { byDay: { date: string; aggregated: boolean; total: number }[]; fill?: boolean }) {
   const max = Math.max(1, ...byDay.map(d => d.total));
   const hasAgg = byDay.some(d => d.aggregated);
   // Пунктирная граница — один раз, перед первым неагрегатным днём
   const sepIdx = hasAgg ? byDay.findIndex(d => !d.aggregated) : -1;
   return (
-    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 44 }}>
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: fill ? 96 : 44 }}>
       {byDay.map((d, i) => {
         const sep = i === sepIdx;
         return (
@@ -623,9 +649,9 @@ function DaySpark({ byDay }: { byDay: { date: string; aggregated: boolean; total
 }
 
 // Общая начинка свода (узла или всего среза) из overview-ответа
-function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }: {
+function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays, fill = false, isTablet = false }: {
   ov: SpendOverviewResponse; shareOfRoot: number | null; hasTurnLevel: boolean;
-  onShowTurns?: () => void; detailDays?: number;
+  onShowTurns?: () => void; detailDays?: number; fill?: boolean; isTablet?: boolean;
 }) {
   const s = ov.totals;
   const freeRow = ov.cards.sources.find(r => r.key === 'free');
@@ -637,8 +663,11 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
   const modelsMax = Math.max(1, ...models.map(m => m.tokens.total));
   const windowClamped = ov.byDay.some(d => d.aggregated);
   return (
-    <div style={{ padding: '14px 18px 18px', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', maxHeight: 610 }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+    <div style={{
+      padding: '14px 18px 18px', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto',
+      maxHeight: fill ? undefined : 610, ...(fill ? { flex: 1, minHeight: 0 } : null),
+    }}>
+      <div style={{ display: 'grid', gridTemplateColumns: isTablet ? 'repeat(4, minmax(0, 1fr))' : '1fr 1fr', gap: 8 }}>
         <Metric label="Токены за период" value={fmtTok(s.total)} color={C.accent}
           sub={shareOfRoot !== null ? `${Math.round(shareOfRoot * 100)}% текущего среза` : undefined} />
         <Metric label="Ходов" value={String(ov.turns)}
@@ -677,7 +706,7 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
         <Section title="Топ моделей">
           {models.map(m => (
             <HBar key={m.key || '·'} label={nodeName('model', m.key, m.name)} value={fmtTok(m.tokens.total)}
-              share={m.tokens.total / modelsMax} color={C.accent} />
+              share={m.tokens.total / modelsMax} color={C.accent} grow={isTablet} />
           ))}
         </Section>
       )}
@@ -690,7 +719,7 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
           </span>
         )}
       >
-        <DaySpark byDay={ov.byDay} />
+        <DaySpark byDay={ov.byDay} fill={fill} />
       </Section>
 
       {!hasTurnLevel && onShowTurns && (
@@ -703,8 +732,9 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
 }
 
 // «Итого по срезу» — когда узел не выбран
-function SliceSummary({ overview, filters, day, rootTotal }: {
+function SliceSummary({ overview, filters, day, rootTotal, fill = false, isTablet = false }: {
   overview: SpendOverviewResponse | null; filters: SpendFilter[]; day: string | null; rootTotal: number;
+  fill?: boolean; isTablet?: boolean;
 }) {
   if (!overview) {
     return <div style={{ padding: 18 }}><Skel w="40%" h={20} style={{ marginBottom: 12 }} /><Skel w="100%" h={120} /></div>;
@@ -716,15 +746,15 @@ function SliceSummary({ overview, filters, day, rootTotal }: {
   return (
     <>
       <DetailHead path="весь текущий срез" title="Итого по срезу" sub={subParts.length ? subParts.join(' · ') : 'фильтры не заданы'} />
-      <OverviewBody ov={overview} shareOfRoot={rootTotal > 0 ? 1 : null} hasTurnLevel />
+      <OverviewBody ov={overview} shareOfRoot={rootTotal > 0 ? 1 : null} hasTurnLevel fill={fill} isTablet={isTablet} />
     </>
   );
 }
 
 // Свод выбранного узла
-function NodeDetail({ sel, ov, rootTotal, hasTurnLevel, onShowTurns, detailDays }: {
+function NodeDetail({ sel, ov, rootTotal, hasTurnLevel, onShowTurns, detailDays, fill = false, isTablet = false }: {
   sel: SelNode; ov: SpendOverviewResponse | null | 'error'; rootTotal: number;
-  hasTurnLevel: boolean; onShowTurns: () => void; detailDays?: number;
+  hasTurnLevel: boolean; onShowTurns: () => void; detailDays?: number; fill?: boolean; isTablet?: boolean;
 }) {
   const head = (
     <DetailHead path={sel.path} title={sel.name}
@@ -740,7 +770,7 @@ function NodeDetail({ sel, ov, rootTotal, hasTurnLevel, onShowTurns, detailDays 
       {head}
       {promptTaskId && <TaskPromptBreakdown taskId={promptTaskId} />}
       <OverviewBody ov={ov} shareOfRoot={rootTotal > 0 ? ov.totals.total / rootTotal : null}
-        hasTurnLevel={hasTurnLevel} onShowTurns={onShowTurns} detailDays={detailDays} />
+        hasTurnLevel={hasTurnLevel} onShowTurns={onShowTurns} detailDays={detailDays} fill={fill} isTablet={isTablet} />
     </>
   );
 }
@@ -790,8 +820,8 @@ function TaskPromptBreakdown({ taskId }: { taskId: string }) {
 }
 
 // Паспорт хода: состав токенов, соседние ходы, приватность/переход в чат
-function TurnPassport({ detail, showUsers, onCloseScreen }: {
-  detail: SpendTurnDetailResponse | null | 'error'; showUsers: boolean; onCloseScreen: () => void;
+function TurnPassport({ detail, showUsers, fill = false, onCloseScreen }: {
+  detail: SpendTurnDetailResponse | null | 'error'; showUsers: boolean; fill?: boolean; onCloseScreen: () => void;
 }) {
   if (detail === 'error') {
     return <EmptyBody pic="🔍" title="Ход недоступен" text="Паспорт хода не найден: он старше окна детализации или недоступен вашей роли." />;
@@ -837,7 +867,10 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
         title={`${isGen ? `Генерация ${sourceLabel(t.source)}` : 'Ход'} · ${fmtDate(t.timestamp.slice(0, 10))}, ${fmtTime(t.timestamp)}`}
         sub={subParts.join(' · ')}
       />
-      <div style={{ padding: '14px 18px 18px', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', maxHeight: 610 }}>
+      <div style={{
+        padding: '14px 18px 18px', display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto',
+        maxHeight: fill ? undefined : 610, ...(fill ? { flex: 1, minHeight: 0 } : null),
+      }}>
         {isGen ? (
           <div style={{ border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgPanel, padding: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
@@ -854,9 +887,9 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
               <span style={{ fontWeight: 600, color: C.textHeading, fontSize: 13, fontFamily: FONT.sans }}>Паспорт хода</span>
               <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontWeight: 600, color: C.accent }}>{fmtTok(t.tokens.total)} ткн</span>
             </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 6 }}>
               {[['In', t.tokens.input], ['Out', t.tokens.output], ['Cache read', t.tokens.cacheRead], ['Cache create', t.tokens.cacheCreation]].map(([l, v]) => (
-                <div key={l as string} style={{ background: C.bgInset, borderRadius: R.md, padding: '7px 9px', minWidth: 0 }}>
+                <div key={l as string} style={{ background: C.bgInset, borderRadius: R.md, padding: '7px 9px', minWidth: 0, display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
                   <div style={{ fontSize: 9, textTransform: 'uppercase', letterSpacing: 0.4, color: C.textMuted, fontFamily: FONT.sans }}>{l}</div>
                   <div style={{ fontFamily: FONT.mono, fontSize: 12, fontWeight: 600, color: C.textHeading, marginTop: 2 }}>{fmtTok(v as number)}</div>
                 </div>
@@ -879,7 +912,7 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
         {!isGen && comp.length > 0 && (
           <Section title="Состав хода по типам токенов">
             {comp.map(([l, v, color]) => (
-              <HBar key={l} label={l} value={fmtTok(v)} share={v / compMax} color={color} />
+              <HBar key={l} label={l} value={fmtTok(v)} share={v / compMax} color={color} grow={fill} />
             ))}
             {cacheShare > 0.5 && (
               <div style={{ fontSize: 10, color: C.textMuted, marginTop: 4, fontFamily: FONT.sans }}>
@@ -891,7 +924,7 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
 
         {!isGen && win.length > 1 && (
           <Section title={`Чат «${t.chatName ?? t.taskTitle ?? '…'}» рядом с этим ходом`}>
-            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: 44 }}>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 2, height: fill ? 96 : 44 }}>
               {win.map(n => (
                 <i key={n.id} title={fmtTok(n.total)} style={{
                   flex: 1, borderRadius: '2px 2px 0 0', minHeight: 2,

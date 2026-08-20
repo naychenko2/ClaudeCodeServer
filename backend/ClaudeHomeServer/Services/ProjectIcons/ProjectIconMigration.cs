@@ -101,7 +101,8 @@ public sealed class ProjectIconMigration(
         }
     }
 
-    // Один проект — один ход модели, без повторов при отказе (ADR-009 §10): не подобралось —
+    // Один проект — один вызов подбора (внутри него двухходовая схема и ровно один повтор —
+    // ADR-009 §2.4), второй попытки на уровне миграции нет (ADR-009 §10): не подобралось —
     // проект остаётся на инициалах, это не ошибка, а фолбэк
     private async Task<IconMigrationSummary> MigrateOneAsync(Project candidate, CancellationToken ct)
     {

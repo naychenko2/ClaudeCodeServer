@@ -107,8 +107,8 @@ public static class LocalActionCatalog
     public const string DossierSummary = "dossier-summary";
     // Фон проекта (ADR-008): JSON со списком фигур дудла и ключом цвета палитры
     public const string ProjectBackground = "project-background";
-    // Значок проекта (ADR-009): имя иконки из белого списка lucide либо нарисованные
-    // моделью path'ы в viewBox 24; разметку собирает сервер (GlyphSvg.Build)
+    // Значок проекта (ADR-009): имя иконки из белого списка lucide — разметки от модели
+    // не приходит никогда. Место обслуживает ОБА хода подбора (слова → выбор из меню)
     public const string ProjectIcon = "project-icon";
 
     // Дефолты профилей. Переопределяются

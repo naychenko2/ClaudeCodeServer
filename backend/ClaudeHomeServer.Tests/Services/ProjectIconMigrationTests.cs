@@ -67,6 +67,14 @@ public class ProjectIconMigrationTests : IDisposable
     private static string GlyphsJson(params string[] names) =>
         """{"glyphs":[""" + string.Join(",", names.Select(n => $$"""{"name":"{{n}}"}""")) + "]}";
 
+    private static string WordsJson(params string[] words) =>
+        """{"words":[""" + string.Join(",", words.Select(w => "\"" + w + "\"")) + "]}";
+
+    // Ответ подставной модели для двухходовой схемы (ревизия 20.08.2026): ходу слов —
+    // слова-понятия, ходу выбора — имена. Ход различается контрактным ключом в промпте
+    private static string? TwoStepAnswer(string prompt, params string[] names) =>
+        prompt.Contains("\"words\"") ? WordsJson(names) : GlyphsJson(names);
+
     private ProjectIconMigration Migration(ICheapTextRunner cheap, IConfiguration? config = null) =>
         new(_projects, new ProjectIconGlyphService(cheap, NullLogger<ProjectIconGlyphService>.Instance),
             config ?? _config, NullLogger<ProjectIconMigration>.Instance);
@@ -79,7 +87,7 @@ public class ProjectIconMigrationTests : IDisposable
         SeedRaster(first);
         SeedRaster(second);
         var updatedAtBefore = (_projects.GetById(first.Id)!.UpdatedAt, _projects.GetById(second.Id)!.UpdatedAt);
-        var cheap = new CountingCheap(_ => GlyphsJson("wallet", "chart-line"));
+        var cheap = new CountingCheap(prompt => TwoStepAnswer(prompt, "wallet", "chart-line"));
 
         var summary = await Migration(cheap).RunAsync();
 
@@ -109,7 +117,7 @@ public class ProjectIconMigrationTests : IDisposable
         var blocker = Path.Combine(_tempDir, "blocker");
         File.WriteAllText(blocker, "файл, а не папка");
         var brokenConfig = BuildConfig(Path.Combine(blocker, "archives"));
-        var cheap = new CountingCheap(_ => GlyphsJson("wallet"));
+        var cheap = new CountingCheap(prompt => TwoStepAnswer(prompt, "wallet"));
 
         var summary = await Migration(cheap, brokenConfig).RunAsync();
 
@@ -128,7 +136,7 @@ public class ProjectIconMigrationTests : IDisposable
     {
         var project = NewProject();
         SeedRaster(project);
-        var cheap = new CountingCheap(_ => GlyphsJson("wallet"));
+        var cheap = new CountingCheap(prompt => TwoStepAnswer(prompt, "wallet"));
         var migration = Migration(cheap);
 
         await migration.RunAsync();
@@ -137,7 +145,8 @@ public class ProjectIconMigrationTests : IDisposable
         var second = await migration.RunAsync();
 
         Assert.Equal(IconMigrationSummary.Empty, second);
-        Assert.Equal(1, cheap.Calls);   // модель дёргалась ровно один раз на оба прогона
+        // Один проект — два хода двухходовой схемы (слова + выбор), второй прогон — no-op
+        Assert.Equal(2, cheap.Calls);
         Assert.Equal(setAtAfterFirst, _projects.GetById(project.Id)!.Icon.Glyph!.SetAt);
     }
 
@@ -169,16 +178,16 @@ public class ProjectIconMigrationTests : IDisposable
         // подставной модели привязан к ИМЕНИ проекта в промпте, а не к номеру вызова:
         // порядок обхода projects.GetAll() недетерминирован, привязка к порядку мигала
         var flaky = new CountingCheap(
-            prompt => prompt.Contains($"«{lucky.Name}»") ? GlyphsJson("rocket") : null);
+            prompt => prompt.Contains($"«{lucky.Name}»") ? TwoStepAnswer(prompt, "rocket") : null);
         await Migration(flaky).RunAsync();
         var luckySetAt = _projects.GetById(lucky.Id)!.Icon.Glyph!.SetAt;
 
         // Рестарт: модель работает — берётся только оставшийся кандидат
-        var healed = new CountingCheap(_ => GlyphsJson("rocket"));
+        var healed = new CountingCheap(prompt => TwoStepAnswer(prompt, "rocket"));
         var second = await Migration(healed).RunAsync();
 
         Assert.Equal(new IconMigrationSummary(1, 0), second);
-        Assert.Equal(1, healed.Calls);  // «всё заново» не запускается
+        Assert.Equal(2, healed.Calls);  // один проект — два хода двухходовой схемы, «всё заново» не запускается
         Assert.Equal(luckySetAt, _projects.GetById(lucky.Id)!.Icon.Glyph!.SetAt);
         Assert.NotNull(_projects.GetById(unlucky.Id)!.Icon.Glyph);
     }

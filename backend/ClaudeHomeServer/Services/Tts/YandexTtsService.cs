@@ -18,7 +18,12 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
 
     private readonly string? _apiKey = config["Yandex:SpeechKit:ApiKey"];
     private readonly string? _folderId = config["Yandex:SpeechKit:FolderId"];
-    private readonly string _voice = config["Yandex:SpeechKit:Voice"] ?? "alena";
+    // Дефолт — ДОКУМЕНТИРОВАННЫЙ голос из списка Яндекса (marina, есть и в v1, и в v3).
+    // Прежним дефолтом была alena: живой API её принимает (проверено 20.08.2026, 200 в обеих
+    // версиях), но в списке голосов документации её нет — а инстанс, поднятый без
+    // Yandex:SpeechKit:Voice, не должен зависеть от недокументированного имени: выключат —
+    // синтез отвалится с 400 у всех, кто голос не задал.
+    private readonly string _voice = config["Yandex:SpeechKit:Voice"] ?? "marina";
     private readonly double _speed = config.GetValue("Yandex:SpeechKit:Speed", 1.0);
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);

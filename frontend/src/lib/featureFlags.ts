@@ -13,6 +13,7 @@ export const FLAGS = {
   projectBackgrounds: 'project-backgrounds',
   taskReportCard: 'task-report-card',
   changeDossiersRecall: 'change-dossiers-recall',
+  desktopAgent: 'desktop-agent',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

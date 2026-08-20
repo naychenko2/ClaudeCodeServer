@@ -17,7 +17,7 @@
 // проект — git-репозиторий. Тумблер opt-out DossierOptOutButton живёт в шапке
 // чата и сюда не ходит.
 
-import { useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
 import {
   AlertTriangle, Bot, ChevronDown, ChevronRight, ClipboardList, Download, File as FileIcon, GitCompare, History, Info,
   Lightbulb, MessageCircle, Search, Upload, X,
@@ -426,6 +426,12 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   const showExportButton = recallEnabled && exportStatus?.isGitRepo === true;
   const hasHeader = useHasPanelHeader();
 
+  // Стабильные onClose для диалогов — иначе каждая перерисовка панели (например,
+  // обновление useNow в этом же компоненте) даёт свежую стрелочную функцию,
+  // Modal пересоздаёт обработчик Escape и ререндерит IconButton без нужды.
+  const closeExport = useCallback(() => setExportOpen(false), []);
+  const closeImport = useCallback(() => setImportOpen(false), []);
+
   useEffect(() => {
     let cancelled = false;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс перед новым запросом (сменился фильтр/проект) — иначе список чужого фильтра мигнёт перед загрузкой
@@ -732,7 +738,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       {showExportButton && (
         <DossierExportDialog
           open={exportOpen}
-          onClose={() => setExportOpen(false)}
+          onClose={closeExport}
           projectId={project.id}
           sharedFolder={exportStatus?.sharedFolder === true}
         />
@@ -740,7 +746,7 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       {showExportButton && (
         <DossierImportDialog
           open={importOpen}
-          onClose={() => setImportOpen(false)}
+          onClose={closeImport}
           projectId={project.id}
           // Импорт добавил записи — дёргаем список, чтобы они появились с бейджем
           // «Из репозитория» и парами по коммитам. Дёргается на закрытии success/nothing,

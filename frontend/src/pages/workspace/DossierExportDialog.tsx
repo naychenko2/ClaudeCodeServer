@@ -120,8 +120,10 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
   };
 
   const busy = phase === 'loading';
-  // no-op пока идёт запрос: закрытие посреди git-операции оставило бы без ответа.
-  const guardedClose = busy ? () => {} : onClose;
+  // Закрытие разрешено в любой фазе, включая loading: запрос уже ушёл, его UI не
+  // отменит, но диалог запирать нельзя (QA фиксировал «не закрывается»). При ошибке
+  // catch выше переводит phase в 'error', busy сбрасывается, и закрытие работает штатно.
+  const handleClose = onClose;
   const mainLabel = lastAction === 'exportPush' ? T.btnExportPush : T.btnExport;
 
   return (
@@ -131,7 +133,7 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
       // closeOnBackdrop=false во время запроса — иначе клик по оверлею посреди
       // git-плюминга оставил бы пользователя без ответа.
       closeOnBackdrop={!busy}
-      onClose={guardedClose}
+      onClose={handleClose}
     >
       {phase === 'confirm' || phase === 'confirmShared' || phase === 'loading' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
@@ -185,7 +187,11 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
         {(phase === 'confirm' || phase === 'confirmShared' || phase === 'loading') && (
           <>
             <div style={{ flex: 1 }}>
-              <Button variant="ghost" size="md" fullWidth disabled={busy} onClick={onClose}>
+              {/* «Отмена» не блокируется на loading — кнопка остаётся рабочим способом
+                  выхода из диалога (второй — крестик Modal). Действие само по себе не
+                  прерывает git-операцию: Promise в run() дойдёт до конца и переведёт
+                  фазу уже на размонтированном компоненте, что безопасно. */}
+              <Button variant="ghost" size="md" fullWidth onClick={onClose}>
                 {T.btnCancel}
               </Button>
             </div>

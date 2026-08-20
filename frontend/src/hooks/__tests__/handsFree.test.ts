@@ -258,6 +258,60 @@ describe('handsFreeReducer', () => {
   });
 });
 
+describe('барж-ин (перебивание голосом)', () => {
+  const speaking = () => run([
+    { type: 'recognized', text: 'расскажи' }, { type: 'pendingElapsed' },
+    { type: 'turnStarted' }, { type: 'speechWillStart' },
+  ], listening());
+
+  it('перебивание под озвучку возвращает в слушание с пустым буфером и репликой', () => {
+    const s = handsFreeReducer(speaking(), { type: 'bargeIn' });
+    expect(s.phase).toBe('listening');
+    expect(s.buffer).toBe('');
+    // Оборванная на полуслове озвучка неотличима от обрыва связи — петля отвечает
+    // словом, что перебивание засчитано
+    expect(s.notice).toBe('bargeAck');
+  });
+
+  it('вопрос модели важнее перебивания: с pendingExit выходим к решению', () => {
+    const withExit = handsFreeReducer(speaking(), { type: 'needsDecision' });
+    expect(withExit.pendingExit).toBe(true);
+    const s = handsFreeReducer(withExit, { type: 'bargeIn' });
+    expect(s.phase).toBe('off');
+    expect(s.notice).toBe('needDecision');
+  });
+
+  it('перебитая реплика петли гасит noticeSpeech — следующий speechFinished настоящий', () => {
+    // «Ты ещё здесь?» → человек перебил → ход → озвучка ответа. Без сброса noticeSpeech
+    // конец ЭТОЙ озвучки ушёл бы в ветку реплики и не сбросил счётчик бесплодных циклов
+    let s = listening();
+    for (let i = 0; i < BARREN_WARN; i++) s = handsFreeReducer(s, { type: 'cycleEnded' });
+    expect(s.noticeSpeech).toBe(true);
+    s = handsFreeReducer(s, { type: 'bargeIn' });
+    expect(s.phase).toBe('listening');
+    expect(s.noticeSpeech).toBe(false);
+    // Счётчик не обнулился перебиванием: его сбрасывает только распознанная речь
+    expect(s.barren).toBe(BARREN_WARN);
+    s = run([
+      { type: 'recognized', text: 'вопрос' }, { type: 'pendingElapsed' },
+      { type: 'turnStarted' }, { type: 'speechWillStart' }, { type: 'speechFinished' },
+    ], s);
+    expect(s.phase).toBe('listening');
+    expect(s.barren).toBe(0);
+  });
+
+  it('вне фазы озвучки событие глотается', () => {
+    for (const from of [
+      listening(),
+      handsFreeReducer(listening(), { type: 'recognized', text: 'а' }), // pending
+      run([{ type: 'recognized', text: 'а' }, { type: 'pendingElapsed' }, { type: 'turnStarted' }], listening()), // waiting
+      HANDS_FREE_INITIAL, // off
+    ]) {
+      expect(handsFreeReducer(from, { type: 'bargeIn' })).toEqual(from);
+    }
+  });
+});
+
 describe('pendingDelayFor — адаптивное окно отправки', () => {
   it.each([
     ['ну вот смотри я тут подумал и'],

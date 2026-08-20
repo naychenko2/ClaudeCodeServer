@@ -6,22 +6,28 @@
 // эффекты — таймеры, микрофон, wake lock, сигнал и реплики самого автомата.
 //
 // Главный дефект этой фичи — ЭХО: микрофон, открытый под играющую озвучку, слышит
-// собственный голос и гонит петлю по кругу. Поэтому микрофон открыт ровно в двух фазах
-// (listening/pending), а выход из ожидания идёт только через фазу озвучки или страховку.
+// собственный голос и гонит петлю по кругу. Поэтому РАСПОЗНАВАНИЕ (Web Speech) открыто
+// ровно в двух фазах (listening/pending), а выход из ожидания идёт только через фазу
+// озвучки или страховку. Под озвучкой дополнительно слушает отдельный VAD-канал
+// (lib/bargeVad) — только ради перебивания: его защита от эха —
+// браузерный AEC плюс гейт громкости, и по фазам с Web Speech он не пересекается.
+// Перебивание двухступенчатое: первая ступень (речь ~300 мс) лишь ПРИГЛУШАЕТ озвучку и
+// автомата не касается, до события bargeIn дело доходит, только если речь дожила до ~550 мс.
 
 import { useCallback, useEffect, useReducer, useRef } from 'react';
-import { speak, stopSpeaking, isSpeaking } from '../lib/tts';
+import { speak, stopSpeaking, isSpeaking, setSpeechVolume } from '../lib/tts';
 import { beep, primeBeep, closeBeep, startThinking, stopThinking, startListening, stopListening, NEED_ANSWER_DURATION_MS } from '../lib/beep';
 import { requestWakeLock, releaseWakeLock, setWakeLockExclusive } from '../lib/wakeLock';
 import { showToast } from '../lib/toast';
 import { talkDiag, talkMark } from '../lib/talkDiag';
 import { describeSpeechError } from '../lib/voiceInput';
+import { startBargeVad, stopBargeVad, DUCK_VOLUME } from '../lib/bargeVad';
 
 export type HandsFreePhase = 'off' | 'listening' | 'pending' | 'sending' | 'waiting' | 'speaking';
 
 // Реплики автомата о себе. Произносятся тем же speak() и ТОЛЬКО там, где озвучки ответа
 // заведомо нет (Р18): иначе speak() внутри себя зовёт stopSpeaking() и обрежет ответ
-export type HandsFreeNotice = 'stillThere' | 'needDecision' | 'idleOff' | 'micDead' | 'voiceOff';
+export type HandsFreeNotice = 'stillThere' | 'needDecision' | 'idleOff' | 'micDead' | 'voiceOff' | 'bargeAck';
 
 export interface HandsFreeState {
   phase: HandsFreePhase;
@@ -55,6 +61,8 @@ export type HandsFreeEvent =
   // Ход кончился, а озвучка так и не заявилась — страховка Р13 (1.5 с)
   | { type: 'speechSkipped' }
   | { type: 'needsDecision' }
+  // Перебивание голосом (VAD-канал, lib/bargeVad): работает только под озвучку
+  | { type: 'bargeIn' }
   // Отправка не состоялась (взведённая механика, пустой ход) — ждать хода нечего
   | { type: 'sendFailed' }
   | { type: 'offline' }
@@ -234,6 +242,19 @@ export function handsFreeReducer(s: HandsFreeState, e: HandsFreeEvent): HandsFre
       if (s.noticeSpeech) return enter(s, 'listening', { noticeSpeech: false });
       return enter(s, 'listening', { buffer: '', barren: 0, warned: false, pendingExit: false });
 
+    case 'bargeIn':
+      // Только под озвучку: в остальных фазах VAD-канал закрыт, а долетевшее из него
+      // событие — гонка, её глотаем
+      if (s.phase !== 'speaking') return s;
+      // Вопрос модели пришёл посреди озвучки: перебивание не отменяет выход к решению —
+      // дочитывать нечего, но решение всё равно за человеком (та же ветка, что у
+      // speechFinished с pendingExit)
+      if (s.pendingExit) return stop(s, 'needDecision');
+      // noticeSpeech гасим явно: перебили реплику самой петли («Ты ещё здесь?») — иначе
+      // следующий НАСТОЯЩИЙ speechFinished ушёл бы в ветку реплики и не сбросил счётчики.
+      // Сам barren не трогаем: его сбросит recognized, когда человек реально заговорит
+      return enter(s, 'listening', { buffer: '', noticeSpeech: false, notice: 'bargeAck' });
+
     case 'speechSkipped':
       return s.phase === 'waiting' ? enter(s, 'listening', { buffer: '' }) : s;
 
@@ -274,6 +295,10 @@ export interface HandsFreeOptions {
   // и PUT voiceMode=false (инвариант Р3: выход из петли гасит и режим). Звать
   // handsFree.stop() из него НЕЛЬЗЯ — toggle при выключенной петле её бы запустил
   onVoiceExit?: () => void;
+  // ChatPanel: погасить озвучку ТЕКУЩЕГО хода до следующей отправки — interrupt
+  // асинхронный, и без этого дельта/result, проскочившие после перебивания,
+  // воскресили бы звук (пересозданный стрим или одиночный speak на result)
+  onBargeSuppress?: () => void;
   // Зеркало «петля активна» для синхронного чтения из колбэков движка распознавания
   activeRef: React.RefObject<boolean>;
 }
@@ -316,6 +341,10 @@ const WAITING_WAKE_MS = 5 * 60_000;
 
 const NOTICE_TEXT: Record<HandsFreeNotice, string> = {
   stillThere: 'Ты ещё здесь?',
+  // Перебивание засчитано: озвучка оборвалась НЕ из-за обрыва связи. Одно слово, а не
+  // фраза — микрофон под ним закрыт (гвард isSpeaking), и каждая лишняя доля секунды
+  // съедает начало того, что человек уже говорит
+  bargeAck: 'Слушаю.',
   needDecision: 'Нужно твоё решение, посмотри на экран.',
   idleOff: 'Выключаю разговор.',
   micDead: 'Распознавание недоступно, выключаю разговор.',
@@ -324,7 +353,7 @@ const NOTICE_TEXT: Record<HandsFreeNotice, string> = {
 
 export function useHandsFree(opts: HandsFreeOptions): HandsFree {
   const [state, dispatch] = useReducer(handsFreeReducer, HANDS_FREE_INITIAL);
-  const { phase, seq, notice, buffer } = state;
+  const { phase, seq, notice, noticeSpeech, buffer } = state;
   const active = phase !== 'off';
 
   // Свежие значения для эффектов и стабильных колбэков
@@ -335,6 +364,9 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     bufferRef.current = buffer;
   });
   const lastStartRef = useRef(0);
+  // Барж-ин отвечает словом «Слушаю» — тик «микрофон открыт» поверх него был бы
+  // какофонией из двух сигналов об одном и том же
+  const skipListenTickRef = useRef(false);
   const lastErrorToastRef = useRef(0);
   // Компонент ещё жив. Ответ onSend приходит уже после смены фазы (эффект отправки
   // к этому моменту перезапущен), поэтому отменять колбэк можно только размонтированием
@@ -420,6 +452,43 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     return () => clearTimeout(id);
   }, [phase, seq, opts.isListening]);
 
+  // Первая ступень перебивания: под озвучкой кто-то заговорил. Автомату об этом знать
+  // нечего — фаза остаётся speaking (микрофон закрыт, канал слушает дальше), меняется
+  // только громкость. Ложная тревога отыгрывается обратно тем же способом
+  const onBargeDuck = useCallback(() => setSpeechVolume(DUCK_VOLUME), []);
+  const onBargeRelease = useCallback(() => setSpeechVolume(1), []);
+
+  // Вторая ступень: речь не прекратилась — перебивание всерьёз. Пришло из VAD-канала
+  const onBargeIn = useCallback(() => {
+    if (!o.current.activeRef.current) return; // петля уже погашена — гонка с выходом
+    talkDiag('barge: перебивание — глушу ответ');
+    talkMark('barge-in');
+    skipListenTickRef.current = true;
+    // Трек VAD отпускаем синхронно, ДО того как петля откроет Web Speech: на части
+    // платформ два захвата микрофона несовместимы, полагаться на эффект (он придёт
+    // кадром позже) в этом месте нельзя
+    stopBargeVad();
+    // Перебил недосказанный ход — ход больше не нужен (как кнопка «Стоп»): без
+    // прерывания следующая дельта пересоздала бы стрим озвучки и утащила петлю
+    // обратно в speaking, закрыв микрофон под носом у говорящего
+    if (o.current.isGenerating) o.current.onStop();
+    o.current.onBargeSuppress?.();
+    stopSpeaking();
+    // Web Speech стартует сразу: дебаунс RESTART_MS съел бы первые слова перебившего
+    lastStartRef.current = 0;
+    dispatch({ type: 'bargeIn' });
+  }, []);
+
+  // Слух под озвучку (барж-ин): VAD-канал открыт РОВНО в фазе speaking — единственной,
+  // где Web Speech закрыт. Платформенный гейт и тихая деградация — внутри bargeVad
+  useEffect(() => {
+    // Реплики самой петли («Ты ещё здесь?») под каналом не идут: VAD принял бы её
+    // собственный голос за перебивание и погнал бы петлю по кругу
+    if (phase !== 'speaking' || noticeSpeech) return;
+    startBargeVad({ onDuck: onBargeDuck, onRelease: onBargeRelease, onCut: onBargeIn });
+    return () => stopBargeVad();
+  }, [phase, seq, noticeSpeech, onBargeIn, onBargeDuck, onBargeRelease]);
+
   // «Слушаю»: звук только там, где человек ждёт очереди говорить — на старте разговора и
   // после ответа. При продолжении речи (pending → listening) и на рестартах цикла молчим:
   // человек и так говорит, а сигнал каждые несколько секунд превратился бы в тиканье.
@@ -431,8 +500,11 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     prevPhaseRef.current = phase;
     if (phase !== 'listening') return;
     // Из окна отмены вернулись потому, что человек продолжил говорить — тик в этот
-    // момент лёг бы прямо на его речь, поэтому только заводим повтор
-    startListening(prev !== 'pending');
+    // момент лёг бы прямо на его речь, поэтому только заводим повтор. После барж-ина
+    // тик тоже молчит: там про открытый микрофон уже сказано словом
+    const skipTick = skipListenTickRef.current;
+    skipListenTickRef.current = false;
+    startListening(prev !== 'pending' && !skipTick);
     return () => stopListening();
   }, [phase, seq]);
 
@@ -535,6 +607,9 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     return () => {
       mountedRef.current = false;
       try { o.current.stopMic(false); } catch { /* noop */ }
+      // stopBargeVad здесь НЕ зовём: bargeVad — синглтон вкладки, и безусловный вызов
+      // из чужого композера (стена чатов) глушил бы живой канал соседа. Свой канал
+      // закрывает cleanup VAD-эффекта — на размонтировании он отрабатывает штатно
       if (!ownsGlobalsRef.current) return;
       releaseWakeLock('voice');
       setWakeLockExclusive('voice', false);

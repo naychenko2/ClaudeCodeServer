@@ -674,6 +674,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // из чата с 2 результатами в чат с 5 зачитал бы вслух чужой старый ответ.
   const speakCountRef = useRef<number | null>(null);
   const speakSessionRef = useRef(session.id);
+  // Счётчик реплик человека — фактическая граница нового хода для снятия подавления
+  // барж-ина: handleSend для этого не годится (queued-ход не рождает user_message,
+  // и поздняя дельта СТАРОГО перебитого хода зачитала бы его с начала)
+  const userMsgCountRef = useRef<number | null>(null);
 
   // === Поточная озвучка хода (только режим разговора: voiceMode && handsFreeActive) ===
   // Единственный владелец звука хода в talk-режиме — StreamSpeech: speak() тут не зовётся
@@ -690,6 +694,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     streamRef.current?.stop();
     streamRef.current = null;
   }, []);
+  // Барж-ин: озвучка ТЕКУЩЕГО хода погашена перебиванием.
+  // Гейтит ОБЕ точки озвучки — пересоздание стрима на дельте и одиночный speak на
+  // result: interrupt хода асинхронный, и проскочившие после перебивания дельта или
+  // result воскресили бы звук, утащив петлю из слушания обратно в speaking.
+  // Снимается на границах нового хода/чата — там же, где сбрасывается стрим
+  const bargeSuppressedRef = useRef(false);
+  const handleBargeSuppress = useCallback(() => {
+    bargeSuppressedRef.current = true;
+    stopSpeech();
+    resetStreamSpeech();
+  }, [stopSpeech, resetStreamSpeech]);
 
   useEffect(() => { setSpeechToast((text) => showToast('Озвучка', text)); }, []);
   useEffect(() => {
@@ -697,8 +712,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     if (switched) {
       speakSessionRef.current = session.id;
       speakCountRef.current = null; // первая загрузка нового чата — молчим
+      userMsgCountRef.current = null;
       stopSpeech();
       resetStreamSpeech();
+      bargeSuppressedRef.current = false;
     }
     // Пока история грузится, items пуст у ЛЮБОГО чата: базовая отметка, взятая здесь,
     // равна нулю, и первый же загруженный снапшот выглядел бы как новые ответы —
@@ -706,16 +723,25 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // с первого ЗАГРУЖЕННОГО снапшота (та же причина, что у emptyChatFocus выше).
     if (isHistoryLoading) {
       speakCountRef.current = null;
+      userMsgCountRef.current = null;
       resetStreamSpeech();
+      bargeSuppressedRef.current = false;
       return;
     }
+    // Подавление барж-ина живёт до СЛЕДУЮЩЕГО хода, и его граница — появление реплики
+    // человека в ленте, а не сам факт отправки: у queued-хода user_message придёт позже
+    const um = items.reduce((acc, it) => acc + (it.kind === 'user_message' ? 1 : 0), 0);
+    if (userMsgCountRef.current !== null && um > userMsgCountRef.current)
+      bargeSuppressedRef.current = false;
+    userMsgCountRef.current = um;
     const rc = items.reduce((acc, it) => acc + (it.kind === 'result' ? 1 : 0), 0);
     const prev = speakCountRef.current;
     speakCountRef.current = rc;
     if (switched || prev === null) return;
     if (rc <= prev) {
-      // Новый ход начался (счётчик result сброшен редьюсером) — резка с нуля
-      if (rc < prev) resetStreamSpeech();
+      // Новый ход начался (счётчик result сброшен редьюсером) — резка с нуля,
+      // подавление барж-ина осталось у прошлого хода
+      if (rc < prev) { resetStreamSpeech(); bargeSuppressedRef.current = false; }
       return;
     }
 
@@ -742,6 +768,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     }
     // Стрим не создавался (гейт talk-режима не прошёл ни разу) — старый путь: озвучка
     // всего текста хода одним speak(). Гейты одиночного режима прежние.
+    // Перебитый ход сюда попадает с уже сброшенным стримом — молчит и он
+    if (bargeSuppressedRef.current) return;
     if (!voiceMode) return;
     // Цикл «до готово» (Р8): отличить финальный result от промежуточного в момент события
     // нельзя, а читать вслух каждую итерацию — мусор
@@ -756,6 +784,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // время работы инструмента — цель фичи)
   useEffect(() => {
     if (!voiceMode || !handsFreeActive) return;
+    if (bargeSuppressedRef.current) return; // ход перебит — дельты больше не озвучиваем
     const r = turnStreamChunks(streamStRef.current, items);
     if (r.off) { streamStRef.current = { ...streamStRef.current, off: true }; return; }
     streamStRef.current = { ...streamStRef.current, cursor: r.cursor };
@@ -2252,6 +2281,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             speechPhase={speechPhase}
             onHandsFreeActiveChange={setHandsFreeActive}
             onStopSpeech={stopSpeech}
+            onBargeSuppress={handleBargeSuppress}
             chatContext={chatContext}
             promptSuggestion={promptSuggestion}
             rateWindow={worstRate}

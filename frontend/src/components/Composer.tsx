@@ -124,6 +124,9 @@ export interface ComposerProps {
   // Оборвать играющую озвучку (владелец — ChatPanel): тап по кнопке разговора начинает
   // с неё, иначе микрофон откроется под чтение предыдущего ответа
   onStopSpeech?: () => void;
+  // Барж-ин: погасить озвучку ТЕКУЩЕГО хода до следующей отправки
+  // (владелец флага подавления — ChatPanel, обе точки озвучки там)
+  onBargeSuppress?: () => void;
   // Краткий контекст последних реплик чата — для механики «Панель экспертов»
   // с настройкой «Приложить контекст чата» (собирает ChatPanel из ленты)
   chatContext?: string;
@@ -456,6 +459,7 @@ export function Composer({
   speechPhase = 'idle',
   onHandsFreeActiveChange,
   onStopSpeech,
+  onBargeSuppress,
   chatContext,
   promptSuggestion = null,
   rateWindow,
@@ -882,6 +886,8 @@ export function Composer({
     // Голосовая команда выхода («стоп»): петля уже погашена редьюсером, здесь только
     // общий хвост выхода — прерывание хода и PUT voiceMode=false (Р3)
     onVoiceExit: exitTalk,
+    // Барж-ин: подавление озвучки перебитого хода ведёт ChatPanel (обе точки озвучки там)
+    onBargeSuppress,
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;

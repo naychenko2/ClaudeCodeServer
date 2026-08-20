@@ -31,7 +31,12 @@ const h = vi.hoisted(() => {
     fake,
     // Управляемое тестом бинарное состояние связи (имитация поведения offline.ts)
     isOnline: true,
+    // Отвечает ли /api/health подтверждающему пингу. false = сервер молчит
+    // (сеть отвалилась / бэкенд мёртв за живым прокси) — тогда офлайн ставится.
+    serverAlive: false,
     setConnectionState: vi.fn((v: string) => { h.isOnline = v === 'online'; }),
+    // Копия контракта offline.confirmOffline: флаг роняем только если пинг молчит
+    confirmOffline: vi.fn(async () => { if (!h.serverAlive) h.setConnectionState('offline'); }),
   };
 });
 
@@ -48,6 +53,7 @@ vi.mock('@microsoft/signalr', () => ({
 
 vi.mock('../offline', () => ({
   setConnectionState: h.setConnectionState,
+  confirmOffline: h.confirmOffline,
 }));
 
 let signalr: typeof import('../signalr');
@@ -68,7 +74,9 @@ beforeEach(async () => {
   h.fake.start.mockClear();
   h.fake.invoke.mockClear();
   h.isOnline = true;
+  h.serverAlive = false;
   h.setConnectionState.mockClear();
+  h.confirmOffline.mockClear();
 
   signalr = await import('../signalr');
   // Создаёт connection и регистрирует onreconnecting/onreconnected/onclose
@@ -135,7 +143,10 @@ describe('ensureConnected через joinSession', () => {
     expect(await guarded).toEqual(new Error('SignalR connect timeout'));
     expect(h.fake.invoke).not.toHaveBeenCalled();
     // Хвост ревью: при неподнявшемся хабе UI должен видеть честный offline,
-    // иначе зонд возврата (живёт только в offline) не запустится.
+    // иначе зонд возврата (живёт только в offline) не запустится. Сервер здесь
+    // молчит и подтверждающему пингу (serverAlive=false) — сигнал «Wi-Fi без
+    // интернета / мёртвый бэкенд за живым прокси» доходит как раньше.
+    expect(h.confirmOffline).toHaveBeenCalled();
     expect(h.setConnectionState).toHaveBeenCalledWith('offline');
   });
 
@@ -161,6 +172,54 @@ describe('ensureConnected через joinSession', () => {
     await vi.advanceTimersByTimeAsync(100);
 
     expect(await guarded).toEqual(new Error('SignalR disconnected while waiting'));
+    expect(h.confirmOffline).toHaveBeenCalled();
+    expect(h.setConnectionState).toHaveBeenCalledWith('offline');
+  });
+});
+
+// --- Подтверждение офлайна в ветках reject ---
+// 8 секунд ожидания легко накрывают паузу экспоненциального отката авто-реконнекта
+// (после четвёртой попытки она сама больше 8с). Отправка, попавшая в такую паузу,
+// раньше красила интерфейс в офлайн при живом сервере — теперь вердикт выносит
+// молчание /api/health, а не один только неподнявшийся хаб.
+describe('ensureConnected: офлайн только по подтверждению', () => {
+  it('таймаут 8с при ЖИВОМ сервере: reject тот же, но офлайн не ставится', async () => {
+    h.serverAlive = true;
+    h.fake.state = h.HubConnectionState.Reconnecting;
+    const guarded = signalr.joinSession('s1').catch((e: Error) => e);
+
+    await vi.advanceTimersByTimeAsync(8000);
+
+    // Контракт промиса не меняется: живой REST не делает неподнявшийся хаб успехом
+    expect(await guarded).toEqual(new Error('SignalR connect timeout'));
+    expect(h.fake.invoke).not.toHaveBeenCalled();
+    expect(h.confirmOffline).toHaveBeenCalled();
+    expect(h.setConnectionState).not.toHaveBeenCalledWith('offline');
+    expect(h.isOnline).toBe(true);
+  });
+
+  it('переход в Disconnected при ЖИВОМ сервере: reject тот же, офлайн не ставится', async () => {
+    h.serverAlive = true;
+    h.fake.state = h.HubConnectionState.Reconnecting;
+    const guarded = signalr.joinSession('s1').catch((e: Error) => e);
+
+    await vi.advanceTimersByTimeAsync(100);
+    h.fake.state = h.HubConnectionState.Disconnected;
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(await guarded).toEqual(new Error('SignalR disconnected while waiting'));
+    expect(h.confirmOffline).toHaveBeenCalled();
+    expect(h.setConnectionState).not.toHaveBeenCalledWith('offline');
+    expect(h.isOnline).toBe(true);
+  });
+
+  it('onclose подтверждения не спрашивает — терминальный обрыв ставит офлайн сразу', () => {
+    // Реконнекты исчерпаны либо явный stop(): ложного срабатывания класса «блип»
+    // здесь не бывает, и откладывать флаг на асинхронный пинг незачем.
+    h.serverAlive = true;
+    fireClose();
+
+    expect(h.confirmOffline).not.toHaveBeenCalled();
     expect(h.setConnectionState).toHaveBeenCalledWith('offline');
   });
 });

@@ -11,8 +11,9 @@
 //   2. Сетевая ошибка fetch в catch-ветке request(), ПОДТВЕРЖДЁННАЯ пингом
 //      /api/health (см. pingSharedFlight) — бэкенд недостижим. Одиночный провал
 //      fetch сам по себе входом не является.
-//   3. SignalR: окончательный обрыв (onclose) ИЛИ ветки reject ожидания
-//      подключения в ensureConnected() — таймаут 8с / переход в Disconnected.
+//   3. SignalR: окончательный обрыв (onclose) — сразу, ИЛИ ветки reject ожидания
+//      подключения в ensureConnected() (таймаут 8с / переход в Disconnected) —
+//      через то же подтверждение confirmOffline().
 //      Ветки reject нужны, потому что текущий делегат ретраев nextRetryDelayInMilliseconds
 //      всегда возвращает число → onclose практически недостижим, и единственный
 //      реальный сигнал «хаб не поднялся» приходит именно отсюда.
@@ -164,6 +165,17 @@ function pingSharedFlight(): Promise<boolean> {
   return _probeInFlight;
 }
 
+// Подтверждение разрыва для тех, кто судит о связи по СВОЕМУ каналу: сейчас это
+// ветки reject ensureConnected() в signalr.ts. Судья один и тот же, что у request(), —
+// молчание /api/health, и решение принимается только о флаге: вызывающий волен
+// реджектить свою операцию независимо от вердикта (хаб не поднялся — это его беда,
+// даже если REST жив).
+export async function confirmOffline(): Promise<void> {
+  // Из офлайна подтверждать нечего — мы уже там, а лишний пинг только шумит.
+  if (!_online) return;
+  if (!await pingSharedFlight()) setOnline(false);
+}
+
 async function runProbeTick() {
   _probeTimer = null;
   if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
@@ -310,10 +322,7 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
       // связи: сервер мог просто думать дольше отведённого. Состояние не трогаем,
       // иначе успешная, но медленная операция уводила бы приложение в офлайн.
       const ourTimeout = timedOut && timeoutMs !== undefined;
-      // Подтверждение спрашиваем только из online. Дело не в экономии: в офлайне
-      // подтверждать нечего (мы уже там), а GET в офлайне всё равно сначала идёт в
-      // сеть — без этого условия каждый такой промах плодил бы лишний пинг.
-      if (!ourTimeout && _online) {
+      if (!ourTimeout) {
         // Одиночный провал fetch — ещё не доказательство разрыва. Планшет размораживает
         // вкладку и реджектит все висевшие в полёте запросы разом при живом сервере и
         // нерванном сокете: прежний немедленный setOnline(false) давал ровно то мигание
@@ -324,7 +333,8 @@ export async function request<T>(url: string, options?: RequestInit & { timeoutM
         // (withServerTimeout 60с, onreconnecting — сознательный noop).
         // Мутации по-прежнему блокируются, а IDB-fallback для GET ниже ловят по
         // instanceof OfflineError (taskOutbox/notesOffline) — контракт не меняется.
-        if (!await pingSharedFlight()) setOnline(false);
+        // Гард «только из online» и сам пинг — внутри confirmOffline().
+        await confirmOffline();
       }
       // Кэш выручает GET независимо от причины обрыва — сначала пробуем его
       if (isGet) {

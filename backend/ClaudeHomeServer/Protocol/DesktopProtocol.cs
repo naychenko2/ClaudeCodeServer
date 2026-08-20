@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using System.Text.Json;
 
 namespace ClaudeHomeServer.Protocol;
@@ -21,12 +21,14 @@ public static class DesktopProtocol
     /// дефолтную JwtBearer и сервисный JWT владельца (ADR-008, «Авторизация канала»);
     /// сама схема регистрируется в слое авторизации устройств.
     /// </summary>
-    public const string DeviceTokenScheme = "device-token";
+    public const string DeviceTokenScheme = Services.Desktop.DesktopDeviceAuthHandler.SchemeName;
 
-    // Claims токена устройства/capability-токена. Значения — контракт с выдающей стороной.
-    public const string OwnerIdClaim = "ownerId";
-    public const string DeviceIdClaim = "deviceId";
-    public const string SessionIdClaim = "sessionId";
+    // Claims токена устройства и capability-токена чата. Имена НЕ свои: их выдаёт
+    // сторона авторизации (DesktopDeviceAuthHandler и DesktopCaller), и разъехавшиеся
+    // литералы означали бы пустого владельца в хабе при формально успешной проверке токена.
+    public const string OwnerIdClaim = "sub";
+    public const string DeviceIdClaim = Services.Desktop.DesktopDeviceAuthHandler.DeviceIdClaim;
+    public const string SessionIdClaim = Services.Desktop.DesktopCaller.SessionClaim;
 
     /// <summary>Ack на команду: нет за 2 с — честная ошибка, а не висение до таймаута MCP.</summary>
     public static readonly TimeSpan AckTimeout = TimeSpan.FromSeconds(2);

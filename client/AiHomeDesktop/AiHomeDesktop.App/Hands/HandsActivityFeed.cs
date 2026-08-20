@@ -1,5 +1,5 @@
-using System.Text.Json;
-using AiHomeDesktop.App.Execution;
+using AiHomeDesktop.Core.Abstractions;
+using AiHomeDesktop.Core.Protocol;
 
 namespace AiHomeDesktop.App.Hands;
 
@@ -38,8 +38,13 @@ public interface IHandsActivityFeed
     void Add(HandsFeedEntry entry);
 }
 
-/// <summary>Лента в памяти клиента: живёт, пока живёт окно, потолок — последние записи.</summary>
-public sealed class HandsActivityFeed(int capacity = 200) : IHandsActivityFeed
+/// <summary>
+/// Лента в памяти клиента: живёт, пока живёт окно, потолок — последние записи.
+///
+/// Она же принимает события склейки вызова из ядра (<see cref="ICallFeed"/>): у ленты один
+/// список на всё — и на сеанс, и на вызовы, иначе человек читал бы историю в двух местах.
+/// </summary>
+public sealed class HandsActivityFeed(int capacity = 200) : IHandsActivityFeed, ICallFeed
 {
     private readonly Lock _lock = new();
     private readonly LinkedList<HandsFeedEntry> _entries = [];
@@ -63,6 +68,13 @@ public sealed class HandsActivityFeed(int capacity = 200) : IHandsActivityFeed
         Changed?.Invoke();
     }
 
+    /// <summary>Событие вызова из ядра. Без исхода — вызов только пришёл, с исходом — кончился.</summary>
+    public void Add(DesktopFeedEntry entry) => Add(new HandsFeedEntry(
+        entry.At,
+        HandsFeedText.KindOf(entry.Outcome),
+        string.IsNullOrWhiteSpace(entry.ChatName) ? "без названия" : entry.ChatName!,
+        HandsFeedText.ForCall(entry)));
+
     public void Clear()
     {
         lock (_lock) _entries.Clear();
@@ -73,41 +85,29 @@ public sealed class HandsActivityFeed(int capacity = 200) : IHandsActivityFeed
 /// <summary>Подписи строк ленты. Отдельно от тостов: там вопрос, здесь — уже свершившееся.</summary>
 public static class HandsFeedText
 {
-    /// <summary>Что именно уехало в модель по завершённому вызову.</summary>
-    public static string ForResult(DesktopCall call, DesktopCallOutcome outcome)
+    /// <summary>Строка ленты по событию вызова: первая строка тоста плюс исход и размер.</summary>
+    public static string ForCall(DesktopFeedEntry entry)
     {
-        var what = call.Kind switch
-        {
-            DesktopCallKinds.Screen => $"кадр: {ConfirmationText.ScreenScope(call.Args)}",
-            DesktopCallKinds.Open => $"открытие: {Target(call.Args)}",
-            _ => $"вызов «{call.Kind}»"
-        };
+        // Заголовок вызова — первая строка того же текста, что видел человек в тосте:
+        // пересказывать вызов своими словами здесь так же нельзя, как и там.
+        var what = entry.Title.Split('\n')[0];
 
-        if (outcome.Outcome != DesktopOutcomes.Ok)
-            return $"{what} — исход {outcome.Outcome}{Tail(outcome.Message)}";
+        if (entry.Outcome is null) return $"{what} — вызов принят";
+        if (entry.Outcome != DesktopOutcomes.Ok) return $"{what} — исход {entry.Outcome}";
 
-        var size = PayloadSize(outcome.Payload);
-        return size is null ? $"{what} — ушло в модель" : $"{what} — ушло в модель, {size}";
+        return entry.Details is null
+            ? $"{what} — ушло в модель"
+            : $"{what} — ушло в модель, {entry.Details}";
     }
 
-    private static string Tail(string? message) =>
-        string.IsNullOrWhiteSpace(message) ? "" : $": {message}";
-
-    private static string Target(JsonElement? args) =>
-        args is { ValueKind: JsonValueKind.Object } o && o.TryGetProperty("target", out var t) && t.ValueKind == JsonValueKind.String
-            ? t.GetString() ?? "не указано"
-            : "не указано";
-
-    // Размер кадра считаем по base64-полю: человеку важно, сколько именно уехало.
-    private static string? PayloadSize(JsonElement? payload)
+    /// <summary>Как красить строку: отказ человека, отмена и сбой — разные новости.</summary>
+    public static HandsFeedKind KindOf(string? outcome) => outcome switch
     {
-        if (payload is not { ValueKind: JsonValueKind.Object } o
-            || !o.TryGetProperty("image", out var image) || image.ValueKind != JsonValueKind.Object
-            || !image.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.String) return null;
-
-        var bytes = (long)(data.GetString()?.Length ?? 0) * 3 / 4;
-        return bytes < 1024 ? $"{bytes} Б"
-            : bytes < 1024 * 1024 ? $"{bytes / 1024} КБ"
-            : $"{bytes / (1024.0 * 1024):0.0} МБ";
-    }
+        null => HandsFeedKind.Sent,
+        DesktopOutcomes.Ok => HandsFeedKind.Sent,
+        DesktopOutcomes.Denied => HandsFeedKind.Declined,
+        DesktopOutcomes.Cancelled => HandsFeedKind.Cancelled,
+        DesktopOutcomes.AwaitingConfirmation => HandsFeedKind.Cancelled,
+        _ => HandsFeedKind.Failed
+    };
 }

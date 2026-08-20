@@ -1,0 +1,152 @@
+<Application x:Class="AiHomeDesktop.App.DesktopApp"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             ShutdownMode="OnExplicitShutdown">
+    <!--
+        Оболочка живёт в трее, поэтому ShutdownMode=OnExplicitShutdown: закрытие окна
+        приложение не гасит (и на сервере не гасит сеанс рук), выход — только явный.
+
+        Цвета — зеркало светлой темы веб-морды (frontend/src/lib/theme.css). Токенов
+        оттуда клиент взять не может: это отдельное решение вне ClaudeHomeServer.slnx.
+        Правило одно — сюда попадают ЗНАЧЕНИЯ существующих токенов, своих цветов клиент
+        не выдумывает; расхождение чинится на обеих сторонах сразу.
+    -->
+    <Application.Resources>
+        <SolidColorBrush x:Key="BgMain" Color="#F4F0E8" />
+        <SolidColorBrush x:Key="BgPanel" Color="#EDE7DC" />
+        <SolidColorBrush x:Key="BgCard" Color="#FBF8F2" />
+        <SolidColorBrush x:Key="BgWhite" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="BorderSoft" Color="#E0D7C8" />
+        <SolidColorBrush x:Key="TextHeading" Color="#2A251F" />
+        <SolidColorBrush x:Key="TextPrimary" Color="#39332B" />
+        <SolidColorBrush x:Key="TextSecondary" Color="#756B5E" />
+        <SolidColorBrush x:Key="TextMuted" Color="#9A8F7E" />
+        <SolidColorBrush x:Key="Accent" Color="#D97757" />
+        <SolidColorBrush x:Key="AccentSoft" Color="#E8A990" />
+        <SolidColorBrush x:Key="AccentLight" Color="#F4ECE1" />
+        <SolidColorBrush x:Key="OnAccent" Color="#FBF8F2" />
+
+        <!-- Статусы связи. Accent сюда не берём: оранжевый в продукте — главное действие
+             и активные состояния, а не «всё хорошо» -->
+        <SolidColorBrush x:Key="Success" Color="#5E8B4E" />
+        <SolidColorBrush x:Key="Warning" Color="#C9923E" />
+        <SolidColorBrush x:Key="Danger" Color="#B4452F" />
+        <SolidColorBrush x:Key="DangerBg" Color="#FBF1EC" />
+        <SolidColorBrush x:Key="DangerBorder" Color="#F5C6BF" />
+
+        <FontFamily x:Key="UiFont">Segoe UI</FontFamily>
+        <FontFamily x:Key="HeadingFont">PT Serif, Georgia, Segoe UI</FontFamily>
+
+        <Style x:Key="H1" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource HeadingFont}" />
+            <Setter Property="FontSize" Value="24" />
+            <Setter Property="Foreground" Value="{StaticResource TextHeading}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style x:Key="Body" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style x:Key="Muted" TargetType="TextBlock" BasedOn="{StaticResource Body}">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}" />
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock" BasedOn="{StaticResource Body}">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+
+        <Style x:Key="Field" TargetType="TextBox">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}" />
+            <Setter Property="CaretBrush" Value="{StaticResource TextPrimary}" />
+            <Setter Property="Padding" Value="10,8" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border x:Name="Shell"
+                                Background="{StaticResource BgWhite}"
+                                BorderBrush="{StaticResource BorderSoft}"
+                                BorderThickness="1"
+                                CornerRadius="8">
+                            <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="Shell" Property="BorderBrush" Value="{StaticResource Accent}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource BgPanel}" />
+                                <Setter Property="Foreground" Value="{StaticResource TextMuted}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Акцентная кнопка — главное действие экрана и только оно -->
+        <Style x:Key="PrimaryButton" TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{StaticResource OnAccent}" />
+            <Setter Property="Padding" Value="16,9" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Shell" Background="{StaticResource Accent}" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="Opacity" Value="0.92" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource AccentSoft}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="GhostButton" TargetType="Button">
+            <Setter Property="FontFamily" Value="{StaticResource UiFont}" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}" />
+            <Setter Property="Padding" Value="12,7" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Shell" Background="Transparent"
+                                BorderBrush="{StaticResource BorderSoft}" BorderThickness="1"
+                                CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Shell" Property="Background" Value="{StaticResource AccentLight}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{StaticResource TextMuted}" />
+                                <Setter Property="Cursor" Value="Arrow" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Application.Resources>
+</Application>

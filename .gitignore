@@ -3,6 +3,8 @@ backend/**/bin/
 backend/**/obj/
 tools/**/bin/
 tools/**/obj/
+client/**/bin/
+client/**/obj/
 *.user
 .vs/
 data/

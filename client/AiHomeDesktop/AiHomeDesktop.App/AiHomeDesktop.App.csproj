@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Окно клиента: WebView2 с веб-мордой сервера, экран сопряжения, очередь заявок,
+    тосты подтверждения и иконка в трее. WinExe — окно, а не консоль.
+
+    OutputType переключается по наличию App.xaml: пока исходников окна нет, WinExe не
+    слинковался бы («программа не содержит Main»), и решение не собиралось бы вовсе.
+    Появится ApplicationDefinition — условие само вернёт WinExe, руками править нечего.
+  -->
+  <PropertyGroup>
+    <OutputType Condition="Exists('App.xaml')">WinExe</OutputType>
+    <OutputType Condition="!Exists('App.xaml')">Library</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <!-- Иконка в трее — NotifyIcon из WinForms: своей у WPF нет, а тянуть пакет ради
+         одной иконки незачем -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Иконка трея объявляет WinAPI через LibraryImport, а его генератор пишет unsafe-код -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <AssemblyName>AiHomeDesktop</AssemblyName>
+    <RootNamespace>AiHomeDesktop.App</RootNamespace>
+    <ApplicationManifest Condition="Exists('app.manifest')">app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <!--
+    UseWindowsForms ЗАМЕНЯЕТ набор неявных using'ов на свой (System.Drawing,
+    System.Windows.Forms), и System.IO с System.Net.Http из него выпадают — возвращаем их
+    явно, иначе половина файлов не видит File, Path и HttpClient.
+  -->
+  <ItemGroup>
+    <Using Include="System.IO" />
+    <Using Include="System.Net.Http" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.3179.45" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AiHomeDesktop.Core\AiHomeDesktop.Core.csproj" />
+    <ProjectReference Include="..\AiHomeDesktop.Windows\AiHomeDesktop.Windows.csproj" />
+  </ItemGroup>
+
+</Project>

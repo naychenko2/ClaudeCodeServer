@@ -94,29 +94,3 @@ public interface IHandsIndicator
     /// <summary>Обновить иконку и подсказку. Подсказка называет чат — «руки на home» без чата бессмысленно.</summary>
     void Update(HandsIndicatorState state, string? chatTitle);
 }
-
-/// <summary>
-/// Тост подтверждения. Текст формирует КЛИЕНТ из фактических аргументов вызова —
-/// модельное резюме в подтверждении не показывается никогда.
-/// </summary>
-public interface ICallConfirmation
-{
-    /// <summary>Спросить человека. true — подтвердил, false — отклонил.</summary>
-    Task<bool> AskAsync(ConfirmationRequest request, CancellationToken ct = default);
-
-    /// <summary>Закрыть висящий тост: сервер отменил вызов или погас сеанс.</summary>
-    void Close(string callId, string reason);
-}
-
-/// <summary>
-/// Содержимое тоста. Собирается <see cref="ConfirmationText"/> из аргументов вызова:
-/// заголовок — что произойдёт, строки — фактические значения, чат — всегда.
-/// </summary>
-public sealed record ConfirmationRequest(
-    string CallId,
-    string ChatTitle,
-    string Title,
-    IReadOnlyList<ConfirmationLine> Lines);
-
-/// <summary>Строка тоста: подпись и фактическое значение из аргументов вызова.</summary>
-public sealed record ConfirmationLine(string Label, string Value);

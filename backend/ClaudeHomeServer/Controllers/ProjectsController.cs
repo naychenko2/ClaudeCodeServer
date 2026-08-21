@@ -30,8 +30,8 @@ public class ProjectsController(ProjectManager projects, SessionManager sessions
         // не совпадать с DefaultProjectsPath (иначе получилось бы «..\..\GIT\myproj»)
         var basePath = homes.Resolve(users.GetById(UserId)) ?? appSettings.Get().DefaultProjectsPath;
         var relativePath = string.IsNullOrEmpty(basePath) ? p.RootPath : Path.GetRelativePath(basePath, p.RootPath);
-        // Дефолт-персона проекта (фича default-personas-onboarding). Сирота (персона удалена
-        // в обход проверки преемника) нормализуется в null — онбординг-гейт фронта сам чинит
+        // Дефолт-персона проекта. Сирота (персона удалена в обход проверки преемника)
+        // нормализуется в null — онбординг-гейт фронта сам чинит
         // осиротевший дефолт (как в AuthController.Me для личной)
         var defaultPersonaId = p.DefaultPersonaId is { } dpid && personas.Get(dpid, UserId) is not null
             ? dpid : null;

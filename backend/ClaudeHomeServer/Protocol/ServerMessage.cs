@@ -276,8 +276,8 @@ public record PersonasChangedMessage(string Action, string? PersonaId = null)
 public record TeamMemoryChangedMessage(string Action, string ProjectId, string? EntryId = null)
     : ServerMessage("team_memory_changed");
 
-// Онбординг завершён (фича default-personas-onboarding): дефолт-персона назначена из
-// онбординг-сессии. Kind — "user" | "project" (см. OnboardingKinds), PersonaId — назначенная
+// Онбординг завершён: дефолт-персона назначена из онбординг-сессии.
+// Kind — "user" | "project" (см. OnboardingKinds), PersonaId — назначенная
 // дефолт-персона, ProjectId — проект онбординг-сессии (null у пользовательского).
 // Эфемерное: в history не пишется; фронт снимает гейт по концу хода (result) или кнопке,
 // а не по этому событию mid-turn.

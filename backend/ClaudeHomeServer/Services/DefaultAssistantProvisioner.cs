@@ -6,18 +6,17 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
-// Провижн авто-ассистента (фича default-personas-onboarding): нейтральная заготовка
-// «Ассистент» (Coordinator + Full + привязки personas-manage/tasks/notes) становится
-// дефолтной персоной пользователя, пока он не познакомится с ней в интервью. Вызывается
-// ТОЛЬКО на точках записи (стартовый проход, хук флага, создание пользователя, рубеж
-// создания чата) — НИКОГДА на GET, иначе мутация проникала бы в /api/auth/me. Подробности
-// и контракт — план docs/.omc/plans/onboarding-optional-consensus.md §2.
+// Провижн авто-ассистента: нейтральная заготовка «Ассистент» (Coordinator + Full +
+// привязки personas-manage/tasks/notes) становится дефолтной персоной пользователя, пока он
+// не познакомится с ней в интервью. Вызывается ТОЛЬКО на точках записи (стартовый проход,
+// создание пользователя, рубеж создания чата) — НИКОГДА на GET, иначе мутация проникала бы
+// в /api/auth/me. Подробности и контракт — план
+// docs/.omc/plans/onboarding-optional-consensus.md §2.
 public class DefaultAssistantProvisioner
 {
     private readonly UserStore _users;
     private readonly PersonaManager _personas;
     private readonly PersonaBindingsService _bindings;
-    private readonly FeatureFlagService _flags;
     private readonly IHubContext<SessionHub> _hub;
     private readonly ILogger<DefaultAssistantProvisioner> _log;
 
@@ -29,29 +28,23 @@ public class DefaultAssistantProvisioner
         _locks.GetOrAdd(userId, _ => new SemaphoreSlim(1, 1));
 
     public DefaultAssistantProvisioner(UserStore users, PersonaManager personas,
-        PersonaBindingsService bindings, FeatureFlagService flags,
+        PersonaBindingsService bindings,
         IHubContext<SessionHub> hub, ILogger<DefaultAssistantProvisioner> log)
     {
         _users = users;
         _personas = personas;
         _bindings = bindings;
-        _flags = flags;
         _hub = hub;
         _log = log;
     }
 
     /// <summary>
-    /// Гарантирует, что у пользователя есть действующая дефолт-персона под включённым
-    /// флагом default-personas-onboarding. Возвращает её — уже существующую или только что
-    /// созданную; null — только когда провижн невозможен (флаг выключен либо создание упало).
-    /// Контракт из плана §2: иначе точка-рубеж не отличит «дефолт уже есть» от «флаг выключен».
+    /// Гарантирует, что у пользователя есть действующая дефолт-персона. Возвращает её —
+    /// уже существующую или только что созданную; null — только когда провижн невозможен
+    /// (пользователя нет, создание упало или запрос отменён).
     /// </summary>
     public async Task<Persona?> EnsureAsync(string userId, CancellationToken ct = default)
     {
-        // Флаг выключен — провижн не делаем
-        if (!_flags.IsEnabled(userId, FeatureFlagKeys.DefaultPersonasOnboarding))
-            return null;
-
         // Действующий дефолт резолвится в живую персону — возвращаем её без создания
         var me = _users.GetById(userId);
         if (me is null) return null;

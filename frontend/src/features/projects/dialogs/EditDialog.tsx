@@ -7,7 +7,6 @@ import { useOnline } from '../../../hooks/useOnline';
 import { C, FONT, FS, R, SP } from '../../../lib/design';
 import { Modal, ModalActions, TextArea, Field, Button, Toggle } from '../../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../../components/ui/icons';
-import { useFeature, FLAGS } from '../../../lib/featureFlags';
 import { useIsMobile } from '../../../lib/breakpoints';
 import { useMe } from '../../../lib/defaultPersona';
 import { getNav } from '../../../lib/nav';
@@ -232,10 +231,9 @@ type View = 'main' | 'prompt' | 'rules';
 
 export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onProjectUpdated, onClose }: Props) {
   const online = useOnline();
-  // Фон проекта — только под флагом и только владельцу: участник без прав владельца фон
-  // менять не может (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем
-  // за тем же условием, чтобы не показывать недоступное действие.
-  const bgEnabled = useFeature(FLAGS.projectBackgrounds);
+  // Фон проекта — только владельцу: участник без прав владельца фон менять не может
+  // (ADR-008 §7, постановка задачи). Бэк тоже гейтит (404), кнопки прячем за тем же
+  // условием, чтобы не показывать недоступное действие.
   const me = useMe();
   const isOwner = !project.ownerId || project.ownerId === me.userId;
   const [view, setView] = useState<View>('main');
@@ -245,9 +243,9 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
   const [systemPrompt, setSystemPrompt] = useState(project.systemPrompt ?? '');
   const [showHiddenFiles, setShowHiddenFiles] = useState(project.showHiddenFiles ?? false);
   const [rules, setRules] = useState<PermissionRule[]>(project.permissionRules ?? []);
-  // Строка «Руководитель проекта» (фича default-personas-onboarding, п.5.3) — у проекта
-  // с назначенным руководителем секции нет вовсе
-  const showLeadSection = useFeature(FLAGS.defaultPersonasOnboarding) && project.defaultPersonaId == null;
+  // Строка «Руководитель проекта» (п.5.3) — у проекта с назначенным руководителем
+  // секции нет вовсе
+  const showLeadSection = project.defaultPersonaId == null;
   const [draftPrompt, setDraftPrompt] = useState('');
   const [promptParts, setPromptParts] = useState<SystemPromptPart[] | null>(null);
   const builtinPrompt = promptParts?.find(p => p.kind === 'builtin')?.content
@@ -515,7 +513,7 @@ export function EditDialog({ project, groups = [], onSuccess, onIconUpdated, onP
       {showLeadSection && <ProjectLeadSection project={project} onClose={onClose} />}
       <McpProjectSection project={project} onUpdated={onProjectUpdated} />
       <GitHistorySection project={project} />
-      {bgEnabled && isOwner && (
+      {isOwner && (
         <BackgroundSection
           project={project}
           iconColor={iconColor}

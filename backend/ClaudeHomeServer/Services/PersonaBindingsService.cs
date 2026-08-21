@@ -524,7 +524,7 @@ public class PersonaBindingsService
 
     // --- Профиль дефолт-персоны (онбординг) ---
 
-    // Досев профиля дефолт-персоны по итогам онбординга (фича default-personas-onboarding):
+    // Досев профиля дефолт-персоны по итогам онбординга:
     // Specialty=Coordinator, Access=Full, Tool-привязки personas-manage/tasks/notes (Mode=Auto);
     // проектной — плюс дефолтные привязки к данным её проекта (CollectProjectDefaults).
     // Автопривязка «персоны проекта» из спеки покрыта модулем personas-manage (scoped по

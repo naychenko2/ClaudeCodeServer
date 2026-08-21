@@ -7,7 +7,6 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Button, IntroDot } from '../../components/ui';
 import { personaTitleLines, usePersonas } from '../../lib/personas';
 import { useMe } from '../../lib/defaultPersona';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../../lib/breakpoints';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { PersonaAvatar } from './PersonaAvatar';
@@ -38,14 +37,13 @@ export function PersonasHub({ personas, talking, onTalk, onOpenSession, onNew, o
     scrollRef.current?.scrollTo({ top: 0 });
   };
 
-  // Карточка-приглашение «знакомство» (фича default-personas-onboarding, п.5.1) —
-  // единственная залитая акцентом кнопка всей фичи. allPersonas (не отфильтрованный
-  // listMode) — дефолт-персона нужна вне зависимости от переключателя «Глобальные/Все».
+  // Карточка-приглашение «знакомство» (п.5.1) — единственная залитая акцентом кнопка
+  // всей фичи. allPersonas (не отфильтрованный listMode) — дефолт-персона нужна вне
+  // зависимости от переключателя «Глобальные/Все».
   const me = useMe();
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
   const allPersonas = usePersonas();
   const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
-  const showInvite = me.loaded && onboardingOn && me.needsOnboarding && !!defaultPersona;
+  const showInvite = me.loaded && me.needsOnboarding && !!defaultPersona;
   const assistantsSectionRef = useRef<HTMLElement>(null);
   const goToAssistantsList = () => assistantsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 

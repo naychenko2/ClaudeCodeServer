@@ -4,7 +4,7 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Services.Prompts;
 
-// Промпт «Мастера настройки» (OnboardingPrompts.UserMaster, фича default-personas-onboarding).
+// Промпт «Мастера настройки» (OnboardingPrompts.UserMaster).
 // Живая заготовка (assistantPersonaId задан) — мастер дорабатывает её через personas_update,
 // а не создаёт новую (соответствует серверному предохранителю в PersonasController.Create).
 // Мёртвая заготовка (id null — резолв не удался) — деградация к пути «создай персону».

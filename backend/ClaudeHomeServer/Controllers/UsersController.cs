@@ -37,10 +37,9 @@ public class UsersController(UserStore users, SessionManager sessions,
         {
             var user = users.Add(req.Username, req.Password, req.Role,
                 req.ExecutionEnvironment ?? ExecutionEnvironments.Local);
-            // Провижн ассистента новому пользователю (план 2.3). Сегодня это no-op: флаг
-            // default-personas-onboarding по умолчанию выключен, и EnsureAsync вернёт null.
-            // Сработает, когда флаг станет дефолтно включённым — тогда новичок сразу получит
-            // ассистента при заведении, без отдельного шага.
+            // Провижн ассистента новому пользователю (план 2.3): новичок сразу получает
+            // ассистента при заведении, без отдельного шага. Идемпотентно — повторный
+            // вызов на первом входе вернёт уже созданную заготовку.
             await provisioner.EnsureAsync(user.Id);
             return CreatedAtAction(nameof(GetAll), ToDto(user));
         }

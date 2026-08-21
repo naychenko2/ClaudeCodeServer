@@ -49,8 +49,8 @@
 [project-backgrounds.md](features/project-backgrounds.md),
 [project-icon-glyphs.md](features/project-icon-glyphs.md) (значок проекта вместо картинки:
 тексты интерфейса и «Что нового»),
-[project-onboarding-v2.md](features/project-onboarding-v2.md) (критерии снятия флага
-знакомства v2).
+[project-onboarding-v2.md](features/project-onboarding-v2.md) (знакомство с проектом v2:
+статус и источники правды).
 
 **observability/** — [overview.md](observability/overview.md) — главный документ раздела;
 [audit.md](observability/audit.md), [dashboards.md](observability/dashboards.md),

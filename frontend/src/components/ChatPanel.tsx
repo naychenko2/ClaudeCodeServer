@@ -1337,7 +1337,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     return tail.length > 0 ? tail.join('\n') : undefined;
   }, [items]);
 
-  // === Мост в командные механики (фича default-personas-onboarding) ===
+  // === Мост в командные механики ===
   // Маркеры <team-mechanic/> в текстах ассистента → карточки предложений. Дедуп «одна
   // механика — одна карточка на чат» сохраняется, но карточку несёт ПОСЛЕДНЕЕ
   // предложение каждой механики, а не первое: при повторном маркере карточка

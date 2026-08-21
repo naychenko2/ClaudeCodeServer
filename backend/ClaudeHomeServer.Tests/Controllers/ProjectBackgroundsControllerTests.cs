@@ -6,8 +6,8 @@ using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Права и гейт флага у эндпоинтов фона проекта (ADR-008 §7): чужой проект — 404,
-// выключенный флаг — 404 на обоих POST.
+// Права у эндпоинтов фона проекта (ADR-008 §7): чужой проект — 404 на всех трёх,
+// владельцу они доступны.
 public class ProjectBackgroundsControllerTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {
@@ -37,16 +37,19 @@ public class ProjectBackgroundsControllerTests(TestWebApplicationFactory factory
             .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
+    // Сброс владельцу доступен без всяких условий (модель для него не нужна — в отличие
+    // от generate, который в тестовом хосте пошёл бы к живому CheapTextRunner)
     [Fact]
-    public async Task При_выключенном_флаге_генерация_и_сброс_недоступны_владельцу()
+    public async Task Сброс_к_стандартному_фону_доступен_владельцу()
     {
         var owner = factory.CreateAuthenticatedClient();
         var projectId = await CreateProjectAsync(owner);
 
-        (await owner.PostAsync($"/api/projects/{projectId}/background/generate", null))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
-        (await owner.PostAsync($"/api/projects/{projectId}/background/reset", null))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var response = await owner.PostAsync($"/api/projects/{projectId}/background/reset", null);
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        JsonSerializer.Deserialize<JsonElement>(await response.Content.ReadAsStringAsync())
+            .GetProperty("kind").GetString().Should().Be("standard");
     }
 
     [Fact]

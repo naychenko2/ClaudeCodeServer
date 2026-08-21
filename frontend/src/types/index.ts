@@ -15,8 +15,8 @@ export interface ProjectTag {
   color?: string;
 }
 
-// Фон рабочего пространства проекта (фича project-backgrounds, ADR-008). Wire-формат
-// совпадает с ProjectBackgroundView бэка: kind — lowercase-строка, tileVersion — имя файла
+// Фон рабочего пространства проекта (ADR-008). Wire-формат совпадает
+// с ProjectBackgroundView бэка: kind — lowercase-строка, tileVersion — имя файла
 // тайла (оно же cache-buster у GET tile.svg, только при generated), failReason — класс
 // отказа. У проекта без фона поле отсутствует/null (генерацию не пробовали).
 export type ProjectBackgroundKind = 'pending' | 'generated' | 'standard' | 'failed';
@@ -59,16 +59,16 @@ export interface Project {
   // Ключи серверов личного MCP-реестра, ВКЛЮЧЁННЫХ в этом проекте (allow-list):
   // сервер едет в ход только там, где явно включён. Пусто/нет — не включён никто
   mcpServersOn?: string[] | null;
-  // Персона-«руководитель проекта» (фича default-personas-onboarding): дефолт для новых
-  // чатов проекта; null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
+  // Персона-«руководитель проекта»: дефолт для новых чатов проекта;
+  // null/отсутствует — онбординг проекта ещё не пройден (гейт в WorkspacePage)
   defaultPersonaId?: string | null;
   // Живая сессия онбординга проекта — для резюма прерванного интервью
   onboardingSessionId?: string | null;
   // Каркас знакомства v2: null/отсутствует — проект создан до фичи (не предлагаем),
   // "pending" — новый (можно предложить), "none" — человек отказался, иначе — ключ пресета
   presetKey?: string | null;
-  // Фон рабочего пространства (фича project-backgrounds): null/отсутствует — генерацию
-  // не пробовали (стандартный фон). Гейтом по флагу + владение (только владелец меняет)
+  // Фон рабочего пространства: null/отсутствует — генерацию не пробовали
+  // (стандартный фон). Меняет только владелец проекта
   background?: ProjectBackground | null;
 }
 
@@ -637,7 +637,7 @@ export interface Session {
   // чата не попадают в историю решений и не уходят в репозиторий. Только у проектных
   // сессий. Меняется через PUT sessions/{sid} (поле excludeFromDossiers)
   excludeFromDossiers?: boolean;
-  // Онбординг-сессия (фича default-personas-onboarding): "user" — гейт первого входа,
+  // Онбординг-сессия: "user" — гейт первого входа,
   // "project" — гейт проекта; отсутствует у обычных чатов. По признаку фронт прячет
   // командные механики («Обсудить с командой») — команды в интервью ещё нет
   onboardingKind?: 'user' | 'project' | null;
@@ -895,8 +895,8 @@ export type ServerMessage = { sessionId: string } & (
   // при каждой генерации новое (icon-{guid}), поэтому получатель ПЕРЕЧИТЫВАЕТ сущность,
   // а не дёргает прежний URL. Персонам бэк вдобавок шлёт personas_changed
   | { type: 'image_backfilled'; kind: 'project-icon' | 'persona-avatar'; entityId: string }
-  // Онбординг завершён (фича default-personas-onboarding): дефолт-персона назначена из
-  // онбординг-сессии. Гейт снимается НЕ по этому событию mid-turn, а по концу хода
+  // Онбординг завершён: дефолт-персона назначена из онбординг-сессии.
+  // Гейт снимается НЕ по этому событию mid-turn, а по концу хода
   // (result) или кнопке «Перейти в систему» — событие лишь помечает завершение
   | { type: 'onboarding_completed'; kind: 'user' | 'project'; personaId: string; projectId?: string | null }
   | { type: 'team_memory_changed'; action: 'added' | 'updated' | 'removed'; projectId: string; entryId?: string }
@@ -1615,8 +1615,8 @@ export interface GeneratedSkill {
 }
 
 // Ответ GET /api/auth/me — профиль текущего пользователя + эффективные настройки.
-// Поля онбординга (фича default-personas-onboarding): defaultPersonaId — личная
-// дефолт-персона (null — онбординг не пройден), needsOnboarding — обязательный гейт
+// Поля онбординга: defaultPersonaId — личная дефолт-персона
+// (null — онбординг не пройден), needsOnboarding — обязательный гейт
 // онбординга при входе, onboardingSessionId — живая сессия интервью для резюма.
 export interface Me {
   userId: string;

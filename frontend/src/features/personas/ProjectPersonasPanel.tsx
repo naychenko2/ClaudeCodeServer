@@ -17,7 +17,6 @@ import { PersonaTasksPanel } from './PersonaTasksPanel';
 import { PersonaAutomationPanel } from './PersonaAutomationPanel';
 import { PersonaWizard } from './PersonaWizard';
 import { DeletePersonaDialog } from './DeletePersonaDialog';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { useIsMobile } from '../../lib/breakpoints';
 
 // Проектная вкладка «Команда»: САЙДБАРНЫЙ СПИСОК персон этого проекта.
@@ -124,13 +123,12 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
 
   const accent = AGENT_COLORS[liveColor ?? persona?.avatar?.color ?? ''] ?? C.accent;
 
-  // Смена руководителя проекта (фича default-personas-onboarding): проектную персону
-  // можно назначить дефолтом проекта из меню тулбара. Локальный снимок дефолта —
-  // project из пропсов не обновляется по broadcast'у.
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Смена руководителя проекта: проектную персону можно назначить дефолтом проекта
+  // из меню тулбара. Локальный снимок дефолта — project из пропсов не обновляется
+  // по broadcast'у.
   const [projectDefaultId, setProjectDefaultId] = useState<string | null>(project.defaultPersonaId ?? null);
   useEffect(() => { setProjectDefaultId(project.defaultPersonaId ?? null); }, [project.id, project.defaultPersonaId]);
-  const isDefault = onboardingOn && !!persona && projectDefaultId === persona.id;
+  const isDefault = !!persona && projectDefaultId === persona.id;
   // Кандидат на руководителя, ждущий подтверждения: смена СУЩЕСТВУЮЩЕГО дефолта —
   // только через диалог (страховка от случайного клика); первое назначение — сразу.
   const [confirmLead, setConfirmLead] = useState<Persona | null>(null);
@@ -184,7 +182,7 @@ export function ProjectPersonaPane({ project, personaId, creating, initialView, 
           onTalk={() => talk(persona)}
           onDelete={() => onDelete(persona)}
           isDefault={isDefault}
-          onMakeDefault={onboardingOn ? () => requestMakeDefault(persona) : undefined}
+          onMakeDefault={() => requestMakeDefault(persona)}
           onSave={() => void formRef.current?.save()}
           onBack={onBack}
           onClose={onClose}

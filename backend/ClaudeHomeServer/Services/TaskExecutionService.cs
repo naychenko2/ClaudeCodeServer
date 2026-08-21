@@ -79,10 +79,6 @@ public class TaskExecutionService
     // Учёт размера постановки по секциям (шаг 4 плана оптимизации токенов). null — стор
     // не подключён (тесты без DI): замер тогда идёт только в лог, запуск задачи не страдает.
     private readonly Spend.TaskPromptMetricsStore? _promptMetrics;
-    // Фич-флаги владельца задачи: гейт `task-report-card` (доклад одним сообщением плюс
-    // реакция-решение вместо пересказа). null — сервис не подключён (тесты без DI),
-    // считаем флаг выключенным, то есть работает прежний доклад.
-    private readonly FeatureFlagService? _flags;
     // Паспорта прогонов сабагентов: отсюда исполнитель узнаёт, что сабагент его хода замолчал
     // на середине. null — стор не подключён (тесты без DI): ходы разбираются как раньше.
     private readonly Llm.Claude.SubagentRunLog? _subagentRuns;
@@ -102,11 +98,9 @@ public class TaskExecutionService
         SpecialtySettingsStore? specialtySettings = null,
         Llm.ModelAssignmentResolver? assignments = null,
         Spend.TaskPromptMetricsStore? promptMetrics = null,
-        FeatureFlagService? flags = null,
         Llm.Claude.SubagentRunLog? subagentRuns = null)
     {
         _subagentRuns = subagentRuns;
-        _flags = flags;
         _promptMetrics = promptMetrics;
         _tiers = tiers;
         _providers = providers;
@@ -968,10 +962,7 @@ public class TaskExecutionService
         // контракт для фронта (формат карточки/маркера — фронт)
         // Лицо доклада: персона-исполнитель, иначе — нейтральная карточка с именем её чата
         // («Задача: починить билд»), тот же вид, что у входящих сообщений без персоны
-        // Флаг владельца задачи: включён — карточка доклада (тексты для человека, id задачи
-        // структурным полем) и реакция-решение; выключен — прежние тексты и прежний промпт
-        var reportCard = IsReportCardEnabled(task);
-        var reportText = BuildDelegationReportText(task, reportCard);
+        var reportText = BuildDelegationReportText(task);
         var executorChatName = executorSession?.Name;
         // Время доклада ставим один раз и кладём в оба слоя (история + живая лента) —
         // тот же приём, что у reportTs в ReportUpAsync: фронт дедупит призрачный повтор
@@ -981,8 +972,6 @@ public class TaskExecutionService
         // B1: id задачи едет структурным полем в ОБОИХ вариантах записи (исполнитель-персона →
         // guest_text, исполнитель без персоны → user_message) и в обоих слоях (история + живая
         // лента) — по нему карточка открывает задачу, не выковыривая id из текста маркера.
-        // Пишем его независимо от флага: поле невидимо, пока карточка выключена, зато включение
-        // флага поднимает карточку и на докладах, доставленных до него.
         await _sessions.AppendStoredAsync(targetSessionId,
             executor is not null
                 ? new StoredTextMessage(reportText, personaId: executor.Id, timestamp: reportTs,
@@ -1034,11 +1023,10 @@ public class TaskExecutionService
         // одном факте снова было бы два сообщения. staffNote переводит запись в плашку-
         // разделитель (как у ходов штаба — «Ответ на карточку передан координатору»): она
         // едет и в live-бродкаст, и в history.json, и переживает доставку из очереди.
-        // Под флагом: без карточки доклада поведение прежнее (критерий приёмки 5).
         var deferred = await _sessions.SendOrEnqueueAsync(targetSessionId,
-            BuildDelegatorReactionPrompt(task, executor, reportCard),
+            BuildDelegatorReactionPrompt(task, executor),
             senderPersonaId: delegator?.Id, silent: true, suppressTasksExecute: true,
-            staffNote: reportCard ? DelegatorReactionStaffNote : null);
+            staffNote: DelegatorReactionStaffNote);
         _log.LogInformation("Доклад Z задачи {TaskId}: отправлен (гостевая реплика + реакция{Deferred}) в чат {SessionId}",
             task.Id, deferred ? " отложена — чат занят" : "", targetSessionId);
     }
@@ -1069,12 +1057,11 @@ public class TaskExecutionService
     // Тело resultMarkdown задачи для доклада — фолбэк на случай, если исполнитель завершил
     // задачу (done) не через tasks_complete с итогом (напр. вручную через UI/PUT).
     // Длинный итог обрезается по границе строки с явной пометкой, где читать целиком.
-    // reportCard — флаг `task-report-card` владельца: тексты для человека вместо прежних.
-    private static string DelegationReportBody(TaskItem task, bool reportCard)
+    private static string DelegationReportBody(TaskItem task)
     {
         var body = task.ResultMarkdown;
         if (string.IsNullOrWhiteSpace(body))
-            return reportCard ? DelegationReportNoResult : "(итог не указан)";
+            return DelegationReportNoResult;
         body = body.Trim();
         if (body.Length <= DelegationReportBodyLimit) return body;
 
@@ -1083,26 +1070,22 @@ public class TaskExecutionService
         var head = body[..DelegationReportBodyLimit];
         var cut = head.LastIndexOf('\n');
         if (cut > DelegationReportBodyLimit / 2) head = head[..cut];
-        var tail = reportCard
-            ? DelegationReportTruncatedTail
-            : $"… итог целиком — в задаче (`tasks_get` по id {task.Id}).";
-        return head.TrimEnd() + "\n\n" + tail;
+        return head.TrimEnd() + "\n\n" + DelegationReportTruncatedTail;
     }
 
     // Текст гостевой реплики B: маркер + пустая строка + итог задачи
-    internal static string BuildDelegationReportText(TaskItem task, bool reportCard = false) =>
-        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task, reportCard)}";
+    internal static string BuildDelegationReportText(TaskItem task) =>
+        $"{DelegationReportMarker}{task.Title}\n\n{DelegationReportBody(task)}";
 
     // Промпт авто-хода постановщика A: выжимка (id/название) + просьба отреагировать.
     // MINOR 1: полное тело resultMarkdown сюда НЕ дублируем — оно уже перед этим ходом
     // легло в ленту гостевой репликой B (ШАГ 1), A видит его при resume без пересказа.
     //
-    // B4 (reportCard=true): просим не «отреагировать», а ПРИНЯТЬ РЕШЕНИЕ — карточка доклада уже
-    // отвечает на вопрос «что сделано», и пересказ итога был вторым сообщением об одном факте.
+    // B4: просим не «отреагировать», а ПРИНЯТЬ РЕШЕНИЕ — карточка доклада уже отвечает на
+    // вопрос «что сделано», и пересказ итога был вторым сообщением об одном факте.
     // Решать нечего — ход отвечает ровно маркером молчания, и реплики в ленте не появляется
     // (гасит TurnAccumulator: после стрижки маркеров текст пуст → записи нет).
-    internal static string BuildDelegatorReactionPrompt(TaskItem task, Persona? executor,
-        bool reportCard = false)
+    internal static string BuildDelegatorReactionPrompt(TaskItem task, Persona? executor)
     {
         // Исполнитель может быть Claude без персоны (assignee=Claude, PersonaId=null) — тогда
         // PersonaLabel падал бы на null. Подпись nullable: персона → «Роль (Имя)», без персоны —
@@ -1112,11 +1095,6 @@ public class TaskExecutionService
             ? $"Персона-исполнитель {PersonaLabel(executor)} завершила"
             : "Исполнитель-Claude (без персоны) завершил";
         var head = $"{who} делегированную тобой задачу «{task.Title}» (id: {task.Id}). ";
-        if (!reportCard)
-            return head +
-                "Отчёт исполнителя только что появился выше в ленте.\n\n" +
-                "Отреагируй и продолжи работу при необходимости.";
-
         return head +
             "Отчёт исполнителя уже показан выше в ленте — пересказывать его не нужно.\n\n" +
             "Реши, что дальше: продолжаем работу (скажи, что делаешь), ставим новую задачу " +
@@ -1127,11 +1105,6 @@ public class TaskExecutionService
             $"Решать нечего — ответь ровно {SessionManager.NoReplyMarker} и больше ничем: " +
             "тогда реплика в ленте не появится.";
     }
-
-    // Флаг `task-report-card` владельца задачи. Владельца нет (данные до мультипользователя)
-    // либо сервис флагов не подключён — считаем выключенным: доклад работает как раньше.
-    private bool IsReportCardEnabled(TaskItem task) =>
-        task.OwnerId is { } owner && (_flags?.IsEnabled(owner, FeatureFlagKeys.TaskReportCard) ?? false);
 
     // Уведомление «ждёт ответа» (permission_request / AskUserQuestion)
     internal static NotificationMessage BuildWaitingNotification(TaskItem task, Persona? persona = null) => new(

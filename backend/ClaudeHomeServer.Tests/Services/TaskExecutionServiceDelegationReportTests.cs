@@ -113,7 +113,7 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
             NullLogger<SessionManager>.Instance, TestLauncherFactory.Instance, sandbox);
 
         _sut = new TaskExecutionService(_tasks, _sessions, _personas, hub.Object, push, notesKb, notif,
-            NullLogger<TaskExecutionService>.Instance, config, flags: flags);
+            NullLogger<TaskExecutionService>.Instance, config);
     }
 
     public void Dispose()
@@ -160,11 +160,9 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     // Задача, делегированная персоной-постановщиком из её чата и закрытая персоной-исполнителем:
     // оба сигнала join-а (R и D) на месте, доклад готов уходить.
     private async Task<(TaskItem Task, Session Parent, Persona Executor)> ArrangeDelegatedTaskAsync(
-        bool reportCard, SessionStatus parentStatus = SessionStatus.Active)
+        SessionStatus parentStatus = SessionStatus.Active)
     {
         var user = _userStore.Add("report-owner", "password123", "user");
-        if (reportCard)
-            _userStore.SetFeatureFlag(user.Id, FeatureFlagKeys.TaskReportCard, true);
         var delegator = CreatePersona(user.Id, "Постановщик");
         var executor = CreatePersona(user.Id, "Исполнитель");
 
@@ -190,9 +188,9 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     // --- Критерий приёмки 3: следов пустого хода в ленте нет ---
 
     [Fact]
-    public async Task ДокладСФлагом_ХодРеакции_НеОставляетПузыряСПромптомВЛенте()
+    public async Task Доклад_ХодРеакции_НеОставляетПузыряСПромптомВЛенте()
     {
-        var (task, _, _) = await ArrangeDelegatedTaskAsync(reportCard: true);
+        var (task, _, _) = await ArrangeDelegatedTaskAsync();
 
         await _sut.TryDeliverCompletionAsync(task);
 
@@ -209,9 +207,9 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     }
 
     [Fact]
-    public async Task ДокладСФлагом_ХодРеакции_НеОставляетПузыряСПромптомВИстории()
+    public async Task Доклад_ХодРеакции_НеОставляетПузыряСПромптомВИстории()
     {
-        var (task, parent, _) = await ArrangeDelegatedTaskAsync(reportCard: true);
+        var (task, parent, _) = await ArrangeDelegatedTaskAsync();
 
         await _sut.TryDeliverCompletionAsync(task);
 
@@ -226,9 +224,9 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
     // Занятый чат постановщика: ход встаёт в очередь, и подпись плашки обязана дожить до
     // отложенной доставки (DeliverPendingAsync) — иначе баг возвращается на втором входе
     [Fact]
-    public async Task ДокладСФлагом_ЗанятыйЧатПостановщика_ПодписьПлашкиЕдетВОчереди()
+    public async Task Доклад_ЗанятыйЧатПостановщика_ПодписьПлашкиЕдетВОчереди()
     {
-        var (task, parent, _) = await ArrangeDelegatedTaskAsync(reportCard: true,
+        var (task, parent, _) = await ArrangeDelegatedTaskAsync(
             parentStatus: SessionStatus.Working);
 
         await _sut.TryDeliverCompletionAsync(task);
@@ -237,19 +235,5 @@ public class TaskExecutionServiceDelegationReportTests : IDisposable
         queued.Silent.Should().BeTrue("призраком служебный промпт не показываем");
         queued.StaffNote.Should().Be(TaskExecutionService.DelegatorReactionStaffNote);
         _sessions.GetVisiblePending(parent.Id).Should().BeEmpty();
-    }
-
-    // Критерий приёмки 5: флаг выключен — поведение ровно как до изменения (прежний промпт
-    // без маркера молчания и прежний пузырь авто-хода)
-    [Fact]
-    public async Task ДокладБезФлага_ПрежнееПоведение()
-    {
-        var (task, _, _) = await ArrangeDelegatedTaskAsync(reportCard: false);
-
-        await _sut.TryDeliverCompletionAsync(task);
-
-        var reaction = Sent<UserMessageMessage>().Should().ContainSingle().Subject;
-        reaction.StaffNote.Should().BeNull();
-        reaction.Text.Should().NotContain(SessionManager.NoReplyMarker);
     }
 }

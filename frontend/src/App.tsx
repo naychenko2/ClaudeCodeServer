@@ -33,7 +33,7 @@ import { loadWorkspaceState } from './lib/workspaceState'
 import { navPush, navReplace, parseHash, getNav, type NavSnapshot } from './lib/nav'
 import { api } from './lib/api'
 import { idbClear } from './lib/idb'
-import { setAllFlags, getFlag, FLAGS } from './lib/featureFlags'
+import { setAllFlags } from './lib/featureFlags'
 import { setMeFromServer, clearMe, useMe } from './lib/defaultPersona'
 import { IntroChatPage, ProjectIntroChatPage, OPEN_INTRO_EVENT } from './features/onboarding/OnboardingPage'
 import { getWallReturn, isWallActive, setWallActive, setWallReturn } from './lib/wallMode'
@@ -230,15 +230,13 @@ export default function App() {
     return () => window.removeEventListener('popstate', onPop)
   }, [])
 
-  // Знакомство (фича default-personas-onboarding) — overlay поверх обычной навигации,
-  // план §4, п.4.5. Без projectId — личное, с { projectId } в detail — проектное (в паре
-  // с 4.3 это единственный способ показать интервью: гейта, который его открывал бы
-  // автоматически, больше нет — только приглашение, волна 5). При выключенном флаге
-  // маршрут инертен: диплинк #/intro уводит на главную вместо открытия.
+  // Знакомство — overlay поверх обычной навигации, план §4, п.4.5. Без projectId —
+  // личное, с { projectId } в detail — проектное (в паре с 4.3 это единственный способ
+  // показать интервью: гейта, который его открывал бы автоматически, больше нет —
+  // только приглашение, волна 5).
   const [introCtx, setIntroCtx] = useState<{ projectId?: string } | null>(null)
   useEffect(() => {
     const open = (e: Event) => {
-      if (!getFlag(FLAGS.defaultPersonasOnboarding)) return
       const detail = (e as CustomEvent<{ projectId?: string }>).detail ?? {}
       setIntroCtx(detail)
       if (!(window.history.state as { introOverlay?: boolean } | null)?.introOverlay) {
@@ -246,10 +244,7 @@ export default function App() {
       }
     }
     window.addEventListener(OPEN_INTRO_EVENT, open)
-    if (initialHash?.intro) {
-      if (getFlag(FLAGS.defaultPersonasOnboarding)) open(new Event(OPEN_INTRO_EVENT))
-      else navReplace({ screen: 'home' })
-    }
+    if (initialHash?.intro) open(new Event(OPEN_INTRO_EVENT))
     return () => window.removeEventListener(OPEN_INTRO_EVENT, open)
   }, [])
 
@@ -436,9 +431,8 @@ export default function App() {
       .then(me => {
         if (me?.featureFlags) setAllFlags(me.featureFlags)
         setCtxThresholdsFromServer(me?.contextThresholds)
-        // Стор дефолт-персоны/онбординга (фича default-personas-onboarding) — от него
-        // живут гейт первого входа и резолвер аватаров. Кормим ПОСЛЕ setAllFlags,
-        // чтобы needsOnboarding не сработал раньше, чем известен флаг
+        // Стор дефолт-персоны/онбординга — от него живут приглашение первого входа
+        // и резолвер аватаров
         if (me) setMeFromServer(me)
         // Имя могли поправить в профиле после логина — подхватываем без перевхода
         const fresh = me?.displayName?.trim() || undefined

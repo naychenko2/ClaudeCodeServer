@@ -69,8 +69,8 @@ interface EditProps extends CommonProps {
   talking?: boolean;
   onTalk: () => void;
   onDelete: () => void;
-  // Дефолт-персона (фича default-personas-onboarding): признак «эта персона — дефолт
-  // своей зоны» и действие назначения; onMakeDefault не задан — пункт меню не рисуется
+  // Дефолт-персона: признак «эта персона — дефолт своей зоны» и действие
+  // назначения; onMakeDefault не задан — пункт меню не рисуется
   isDefault?: boolean;
   onMakeDefault?: () => void;
 }
@@ -175,7 +175,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
           <span title={zoneLabel} style={zoneBadge(accent)}>
             {tight ? zoneLabel.split(' · ')[0] : zoneLabel}
           </span>
-          {/* Бейдж дефолт-персоны зоны (фича default-personas-onboarding) */}
+          {/* Бейдж дефолт-персоны зоны */}
           {isDefault && (
             <span title="Персона по умолчанию для новых чатов этой зоны" style={{
               display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 10.5, fontWeight: 600,
@@ -220,7 +220,7 @@ export function PersonaToolbar(props: EditProps | CreateProps) {
                 </IconButton>
                 {menuOpen && (
                   <Menu onClose={() => setMenuOpen(false)} align="right" top={38} minWidth={220}>
-                    {/* Назначение дефолт-персоны зоны (фича default-personas-onboarding) */}
+                    {/* Назначение дефолт-персоны зоны */}
                     {onMakeDefault && !isDefault && (
                       <MenuItem
                         icon={<Star size={15} strokeWidth={ICON_STROKE} />}

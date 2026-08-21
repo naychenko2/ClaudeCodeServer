@@ -9,7 +9,6 @@ import { AGENT_COLORS } from '../../components/AgentSelector';
 import { api } from '../../lib/api';
 import { usePersonas, ensurePersonasLoaded, bumpPersonas, personaLabel } from '../../lib/personas';
 import { useMe, refreshMe } from '../../lib/defaultPersona';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { navPush, navReplace, getNav, parseHash, type NavSnapshot } from '../../lib/nav';
 import { showToast } from '../../lib/toast';
@@ -65,14 +64,13 @@ export function PersonasPage({ auth, onLogout, onHubTab }: {
   // Идёт создание чата по кнопке «Поговорить»
   const [talking, setTalking] = useState(false);
 
-  // Карточка-приглашение «знакомство» на мобиле (фича default-personas-onboarding,
-  // п.5.1.2) — PersonasHub в мобильную ветку не попадает вовсе, без этой точки рендера
-  // знакомство на мобиле необнаружимо. Живёт над списком, а не внутри PersonaList —
-  // список переиспользуется панелью «Команда» проекта, где личное приглашение не к месту.
-  const introOnboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Карточка-приглашение «знакомство» на мобиле (п.5.1.2) — PersonasHub в мобильную
+  // ветку не попадает вовсе, без этой точки рендера знакомство на мобиле необнаружимо.
+  // Живёт над списком, а не внутри PersonaList — список переиспользуется панелью
+  // «Команда» проекта, где личное приглашение не к месту.
   const me = useMe();
   const defaultPersona = me.defaultPersonaId ? allPersonas.find(p => p.id === me.defaultPersonaId) : undefined;
-  const showMobileInvite = isMobile && me.loaded && introOnboardingOn && me.needsOnboarding && !!defaultPersona;
+  const showMobileInvite = isMobile && me.loaded && me.needsOnboarding && !!defaultPersona;
   // Отклик на тап «Выбрать другого ассистента» (Д-3): scrollIntoView контейнера здесь
   // бесполезен — прокрутка живёт внутри самого PersonaList, а контейнер и так во вьюпорте,
   // поэтому браузер ничего не делал, и тап выглядел мёртвой кнопкой. Короткая рамка C.accent
@@ -423,11 +421,10 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
   const [liveColor, setLiveColor] = useState<string | undefined>(undefined);
   const accent = AGENT_COLORS[liveColor ?? persona.avatar?.color ?? ''] ?? C.accent;
 
-  // Смена дефолт-персоны (фича default-personas-onboarding): глобальную можно назначить
-  // личным дефолтом из меню тулбара; проектную здесь не трогаем — её дефолт живёт в проекте
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Смена дефолт-персоны: глобальную можно назначить личным дефолтом из меню тулбара;
+  // проектную здесь не трогаем — её дефолт живёт в проекте
   const me = useMe();
-  const isDefault = onboardingOn && !isProjectScope && me.defaultPersonaId === persona.id;
+  const isDefault = !isProjectScope && me.defaultPersonaId === persona.id;
   // Кандидат ждёт подтверждения: смена СУЩЕСТВУЮЩЕГО дефолта — только через диалог
   // (защита от случайного клика мимо пункта меню); первое назначение — сразу.
   const [confirmDefault, setConfirmDefault] = useState(false);
@@ -500,7 +497,7 @@ function PersonaStudio({ persona, projects, talking, initialView, onDelete, onTa
         onTalk={onTalk}
         onDelete={onDelete}
         isDefault={isDefault}
-        onMakeDefault={onboardingOn && !isProjectScope ? requestMakeDefault : undefined}
+        onMakeDefault={!isProjectScope ? requestMakeDefault : undefined}
         onSave={() => void formRef.current?.save()}
         onBack={onBack}
         isMobile={isMobile}

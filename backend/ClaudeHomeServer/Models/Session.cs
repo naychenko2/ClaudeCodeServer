@@ -9,7 +9,7 @@ public enum ChatOrigin { Manual, Task, Automation }
 // Режимы прав — соответствуют значениям флага --permission-mode у claude CLI
 public enum ClaudeMode { Default, AcceptEdits, Plan, Auto, DontAsk, Bypass }
 
-// Значения Session.OnboardingKind (фича default-personas-onboarding):
+// Значения Session.OnboardingKind:
 // User — онбординг первого входа (ведёт системный «Мастер настройки», персоны у сессии нет);
 // Project — онбординг проекта (ведёт личная дефолт-персона владельца).
 public static class OnboardingKinds
@@ -369,7 +369,7 @@ public class Session
     // Задача-владелец чата-исполнителя (TaskExecutionService): для отображения контекста
     // («в рамках какой задачи») на плашке чата, в шапке и в артефактах сессии.
     public string? TaskId { get; set; }
-    // Онбординг-сессия (фича default-personas-onboarding): "user" | "project" (см. OnboardingKinds),
+    // Онбординг-сессия: "user" | "project" (см. OnboardingKinds),
     // null — обычный чат. Задаёт врезку онбординг-промпта в BuildPersonaLayer и гейт
     // MCP-вызова make-default (назначить дефолт из чата может только онбординг-сессия).
     public string? OnboardingKind { get; set; }

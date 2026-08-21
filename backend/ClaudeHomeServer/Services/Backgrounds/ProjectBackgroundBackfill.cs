@@ -15,15 +15,15 @@ public sealed record BackfillSummary(int Generated, int Skipped, int Failed)
 }
 
 /// <summary>
-/// Разовая генерация фонов существующим проектам при включении флага (ADR-008 §10).
+/// Разовая генерация фонов существующим проектам (ADR-008 §10).
 /// Идемпотентен по построению: кандидат — только проект, которого генерация НИКОГДА не
 /// касалась (<c>Background == null</c>), либо протухший Pending (сервер упал в середине).
 /// Generated / Standard / Failed не трогаются, поэтому повторный запуск — no-op, а
 /// отдельного стора «что уже прогнали» не нужно.
 /// </summary>
 public sealed class ProjectBackgroundBackfill(
-    ProjectManager projects, ProjectBackgroundService backgrounds, FeatureFlagService flags,
-    UserStore users, IHostApplicationLifetime lifetime, ILogger<ProjectBackgroundBackfill> log)
+    ProjectManager projects, ProjectBackgroundService backgrounds,
+    UserStore users, ILogger<ProjectBackgroundBackfill> log)
 {
     // Не больше 2 генераций одновременно на инстанс: 39 залповых вызовов сильной модели
     // упрутся в rate limit, и половина проектов получит Failed по вине очереди, а не модели
@@ -40,57 +40,24 @@ public sealed class ProjectBackgroundBackfill(
     private const int MaxAttempts = 2;
     // Пожизненный потолок попыток на проект (ADR-008 §10). Внутрипрогонный MaxAttempts гасит
     // случайный таймаут здесь и сейчас; этот — не даёт мёртвой модели долбиться при каждом
-    // включении флага. 3 = один полный прогон (до 2 попыток) + один короткий доводочный.
+    // рестарте. 3 = один полный прогон (до 2 попыток) + один короткий доводочный.
     private const int MaxTotalAttempts = 3;
 
     /// <summary>Пауза перед повторной попыткой; в тестах ужимается.</summary>
     internal TimeSpan RetryDelay { get; set; } = TimeSpan.FromSeconds(5);
 
-    /// <summary>
-    /// Запустить прогон владельца в фоне и сразу вернуть управление: включение флага —
-    /// это HTTP-запрос, а 39 вызовов сильной модели в него не укладываются.
-    /// Триггер — явное включение флага владельцем, поэтому транзиентные <c>Failed</c>
-    /// (нет модели / не записался файл) снова берутся в прогон, пока не исчерпан
-    /// <see cref="MaxTotalAttempts"/>. На старте сервера (<see cref="RunAllAsync"/>)
-    /// этого нет — иначе мёртвая модель долбилась бы при каждом рестарте.
-    /// </summary>
-    public void KickOff(string ownerId)
-    {
-        _ = Task.Run(async () =>
-        {
-            try { await RunAsync(ownerId, lifetime.ApplicationStopping, allowTransientRetry: true); }
-            catch (OperationCanceledException) { /* остановка приложения */ }
-            catch (Exception ex) { log.LogError(ex, "Массовый прогон фонов ({Owner}) сорвался", ownerId); }
-        });
-    }
-
-    /// <summary>Прогон по всем владельцам с включённым флагом — подстраховка на старте сервера.</summary>
+    /// <summary>Прогон по ВСЕМ владельцам — единственный триггер, работает на старте сервера.</summary>
     public async Task<BackfillSummary> RunAllAsync(CancellationToken ct = default)
     {
-        var owners = users.GetAll()
-            .Where(u => flags.IsEnabled(u.Id, FeatureFlagKeys.ProjectBackgrounds))
-            .Select(u => u.Id)
-            .ToList();
+        var owners = users.GetAll().Select(u => u.Id).ToList();
         if (owners.Count == 0) return BackfillSummary.Empty;
 
-        // Владельцы идут параллельно, но общий потолок держит _slots.
-        // Стартовый прогон НЕ возвращает транзиентные Failed в кандидаты — иначе мёртвая
-        // модель (нет строки каталога / пустой слот) долбилась бы при каждом рестарте.
-        // Возврат таких Failed — только по явному включению флага (KickOff).
+        // Владельцы идут параллельно, но общий потолок держит _slots
         var results = await Task.WhenAll(owners.Select(id => RunAsync(id, ct)));
         return results.Aggregate(BackfillSummary.Empty, (a, b) => a + b);
     }
 
-    /// <param name="allowTransientRetry">
-    /// Вернуть в кандидаты транзиентный <c>Failed</c> (<c>no-model</c>/<c>io</c>) с
-    /// <c>Attempts &lt; MaxTotalAttempts</c>. Ставится только триггером включения флага
-    /// (<see cref="KickOff"/>); стартовому прогону (<see cref="RunAllAsync"/>) нельзя —
-    /// иначе при первом включении с ещё не настроенной моделью все проекты навсегда упали
-    /// бы в <c>no-model</c>, а админ, настроив модель, не получил бы фоны без повторного
-    /// включения флага (ADR-008 §10).
-    /// </param>
-    public async Task<BackfillSummary> RunAsync(string ownerId, CancellationToken ct = default,
-        bool allowTransientRetry = false)
+    public async Task<BackfillSummary> RunAsync(string ownerId, CancellationToken ct = default)
     {
         if (!_running.TryAdd(ownerId, 0))
         {
@@ -101,7 +68,7 @@ public sealed class ProjectBackgroundBackfill(
         try
         {
             var all = projects.GetByOwner(ownerId);
-            var candidates = all.Where(p => IsCandidate(p.Background, allowTransientRetry)).ToList();
+            var candidates = all.Where(p => IsCandidate(p.Background)).ToList();
             log.LogInformation("Массовый прогон фонов ({Owner}): кандидатов {Candidates} из {Total} проектов",
                 ownerId, candidates.Count, all.Count);
             if (candidates.Count == 0) return BackfillSummary.Empty;
@@ -191,31 +158,26 @@ public sealed class ProjectBackgroundBackfill(
     }
 
     /// <summary>
-    /// Кандидат прогона: генерации не было вовсе, либо Pending протух (сервер упал), либо —
-    /// только по явному включению флага (<paramref name="allowTransientRetry"/>) — транзиентный
-    /// Failed (нет модели / не записался файл), пока попытки не исчерпаны. bad-json/rejected
-    /// кандидатами не становятся никогда: причина в модели или проекте, повтор — счёт за
-    /// токены без нового результата (ADR-008 §10).
+    /// Кандидат прогона: генерации не было вовсе либо Pending протух (сервер упал).
+    /// Failed кандидатом не становится: стартовый прогон идёт при каждом рестарте, и мёртвая
+    /// модель (нет строки каталога / пустой слот) долбилась бы в неё бесконечно. Повторную
+    /// попытку по конкретному проекту даёт кнопка «Сгенерировать» (ADR-008 §10).
     /// </summary>
-    internal static bool IsCandidate(ProjectBackground? background, bool allowTransientRetry = false,
-        TimeSpan? staleAfter = null)
+    internal static bool IsCandidate(ProjectBackground? background, TimeSpan? staleAfter = null)
     {
         if (background is null) return true;
         if (background.Kind == ProjectBackgroundKind.Pending)
             return background.StartedAt is not { } started
                 || DateTime.UtcNow - started >= (staleAfter ?? TimeSpan.FromMinutes(10));
 
-        return allowTransientRetry
-            && background.Kind == ProjectBackgroundKind.Failed
-            && TransientReasons.Contains(background.FailReason)
-            && background.Attempts < MaxTotalAttempts;
+        return false;
     }
 }
 
 /// <summary>
-/// Подстраховка на старте: флаг включён, кандидаты остались (сервер упал посреди прогона
-/// или флаг включили при выключенном инстансе) — доводим фоны до конца. Штатный триггер —
-/// включение флага в PUT /api/feature-flags/{key}.
+/// Единственный триггер прогона: на старте сервера доводим фоны существующим проектам
+/// (новый проект получает фон при создании). Прогон идемпотентен, поэтому лишний рестарт
+/// ничего не стоит — кандидатов просто нет.
 /// </summary>
 public sealed class ProjectBackgroundBackfillService(
     ProjectBackgroundBackfill backfill, ILogger<ProjectBackgroundBackfillService> log) : BackgroundService

@@ -1931,7 +1931,7 @@ public class SessionManager : IDisposable
     private (Func<string?>? Prompt, MemoryMcpContext? Memory, Func<string, Task<RecallBlock?>>? Recall, Persona? Persona)
         BuildPersonaLayer(Session session, string? ownerId)
     {
-        // Онбординг пользователя (фича default-personas-onboarding): персоны у сессии ещё
+        // Онбординг пользователя (знакомство): персоны у сессии ещё
         // нет — слой ведёт системный «Мастер настройки» тем же каналом PersonaPromptProvider.
         // После назначения дефолта персона садится в эту же сессию (SetPersona → AdapterStale),
         // слой пересобирается и становится обычным персонным.
@@ -1997,9 +1997,9 @@ public class SessionManager : IDisposable
         return (prompt, null, null, persona);
     }
 
-    // Блок «Командные механики» для руководителя проекта (мост в механики, фича
-    // default-personas-onboarding): добавляется, только когда персона чата — дефолт-персона
-    // его проекта (Project.DefaultPersonaId). Состав — по установленным скиллам
+    // Блок «Командные механики» для руководителя проекта (мост в механики): добавляется,
+    // только когда персона чата — дефолт-персона его проекта (Project.DefaultPersonaId).
+    // Состав — по установленным скиллам
     // (TeamMechanicsPromptCatalog); без SkillsService (тесты) остаются механики без скилла.
     // Только промпт: состав MCP-инструментов не меняется, зависимость от хода отсутствует.
     private string? BuildTeamMechanicsBlock(Session session, Persona persona)

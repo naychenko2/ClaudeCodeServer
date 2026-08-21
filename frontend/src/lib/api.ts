@@ -460,8 +460,8 @@ export const api = {
         method: 'POST', body: JSON.stringify({ kind }),
       }),
     getBuiltinPrompt: () => request<{ content: string }>('/projects/builtin-prompt'),
-    // --- Фон рабочего пространства (фича project-backgrounds, ADR-008 §7) ---
-    // Сгенерировать / перегенерировать фон. Тоже гейтится флагом+владением на бэке (404).
+    // --- Фон рабочего пространства (ADR-008 §7) ---
+    // Сгенерировать / перегенерировать фон. Гейтится владением на бэке (404).
     // suggestedColorKey + !colorApplied — сервер цвет не трогал (выбран руками), фронт
     // показывает диалог подтверждения; при согласии цвет меняет существующий update({color}).
     generateBackground: (id: string) =>
@@ -492,7 +492,7 @@ export const api = {
       request<Project>(`/projects/${id}/board-columns`, { method: 'PUT', body: JSON.stringify({ columns }) }),
     // Применить пресет каркаса (знакомство v2, п.4): "docs" / "dev" / "personal" — создать;
     // "none" — зафиксировать отказ. 409 → "Каркас уже применён"; 400 → неверный ключ.
-    // 404 → чужой проект или флаг выключен. Ответ — отчёт { created, skipped } (на "none" —
+    // 404 → чужой проект. Ответ — отчёт { created, skipped } (на "none" —
     // пустые массивы). На ошибке `err.status` покажет код, `err.body.error` — текст с бэка.
     applyPreset: (id: string, presetKey: string) =>
       request<{ created: string[]; skipped: { path: string; reason: string }[] }>(
@@ -743,11 +743,11 @@ export const api = {
     update: (id: string, dto: UpdatePersonaDto) =>
       request<Persona>(`/personas/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(dto) }),
     // successorId — преемник дефолт-персоны: без него удаление текущей дефолтной вернёт 400
-    // «выберите преемника» (фича default-personas-onboarding)
+    // «выберите преемника»
     remove: (id: string, successorId?: string) =>
       request<void>(`/personas/${encodeURIComponent(id)}${successorId ? `?successorId=${encodeURIComponent(successorId)}` : ''}`, { method: 'DELETE' }),
     // Назначить персону дефолтной: глобальную — личным дефолтом владельца, проектную —
-    // дефолтом её проекта (фича default-personas-onboarding)
+    // дефолтом её проекта
     makeDefault: (id: string) =>
       request<Persona>(`/personas/${encodeURIComponent(id)}/make-default`, { method: 'POST' }),
     // Чаты, ведущиеся от лица персоны (этап 2): список + создание нового.
@@ -1026,7 +1026,7 @@ export const api = {
   search: (q: string, topK = 8) =>
     request<SearchHit[]>(`/search?q=${encodeURIComponent(q)}&topK=${topK}`),
 
-  // Онбординги (фича default-personas-onboarding): старт/резюм обязательных чат-интервью.
+  // Онбординги: старт/резюм чат-интервью знакомства.
   // Идемпотентны: живая сессия онбординга возвращается как есть, удалённая — заменяется новой
   onboarding: {
     startUser: () => request<Session>('/onboarding/user/start', { method: 'POST' }),

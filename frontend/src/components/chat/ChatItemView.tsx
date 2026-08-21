@@ -34,7 +34,6 @@ import { MarkdownContent } from './MarkdownContent';
 import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
 import { DelegationReportCard } from './DelegationReportCard';
-import { FLAGS, useFeature } from '../../lib/featureFlags';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
 import { PersonaTaskView, isAgentToolUse } from './PersonaTaskView';
@@ -982,9 +981,6 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
-  // Карточка доклада о завершении задачи (task-report-card): выключен флаг — прежний
-  // бейдж/пузырь, включён — карточка с действиями «Открыть задачу»/«Чат исполнителя»
-  const reportCard = useFeature(FLAGS.taskReportCard);
   switch (item.kind) {
     case 'user_message': {
       // Служебный ход механики штаба (ответ на карточку, возврат в интервью, сводка волны) —
@@ -1070,7 +1066,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
         // Второй путь доклада: исполнитель без персоны — доклад приезжает user_message'ом
         // (viaAgent + имя чата-исполнителя). Тот же id задачи структурным полем, значит и
         // здесь карточка с действиями, а не безымянная реплика с маркером в тексте
-        const umReport = reportCard && item.delegationTaskId ? parseDelegationReport(item.text) : null;
+        const umReport = item.delegationTaskId ? parseDelegationReport(item.text) : null;
         if (umReport && item.delegationTaskId) {
           return (
             <DelegationReportCard
@@ -1209,10 +1205,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
         </div>
       );
-      // F1/F2: доклад с id задачи под флагом — карточка с путём к результату. Лицом идёт
+      // F1/F2: доклад с id задачи — карточка с путём к результату. Лицом идёт
       // персона-исполнитель (автор реплики), а не персона чата: доклад пишет она.
       // Нет id (старая история, F5) — прежний рендер бейджем.
-      if (reportCard && report && item.delegationTaskId) {
+      if (report && item.delegationTaskId) {
         return (
           <DelegationReportCard
             report={report}

@@ -437,7 +437,7 @@ public class PersonasController : ControllerBase
         else
         {
             // Дефолт-персона удаляется только с преемником по той же зоне — остаться без
-            // дефолта нельзя (фича default-personas-onboarding, единственная точка каскада)
+            // дефолта нельзя (единственная точка каскада)
             var isUserDefault = me?.DefaultPersonaId == id;
             var defaultOfProjects = _projects.GetByOwner(UserId)
                 .Where(p => p.DefaultPersonaId == id).ToList();
@@ -468,8 +468,8 @@ public class PersonasController : ControllerBase
         return NoContent();
     }
 
-    // Назначить персону дефолтной (фича default-personas-onboarding): глобальную — личным
-    // дефолтом владельца (User.DefaultPersonaId), проектную — дефолтом её проекта
+    // Назначить персону дефолтной: глобальную — личным дефолтом владельца
+    // (User.DefaultPersonaId), проектную — дефолтом её проекта
     // (Project.DefaultPersonaId). REST из UI свободен; вызов из чата (X-Caller-Session-Id
     // от MCP personas_set_default) разрешён ТОЛЬКО онбординг-сессии — иначе любая
     // manage-персона могла бы переназначить дефолт владельца из любого разговора.

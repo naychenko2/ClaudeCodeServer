@@ -12,8 +12,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{projectId}/sessions")]
 public class SessionsController(SessionManager sessions, ProjectManager projects,
-    FeatureFlagService flags, DefaultAssistantProvisioner provisioner,
-    PersonaManager personas) : ControllerBase
+    DefaultAssistantProvisioner provisioner, PersonaManager personas) : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
@@ -33,12 +32,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
     {
         if (!OwnsProject(projectId)) return NotFound();
         string? personaId = req.PersonaId;
-        // Последний рубеж инварианта «новый чат человека — только с персоной» (план 2.4, парная
-        // связь с фронт-правкой 4.3): под флагом без personaId/resumeSessionId сначала провижним
-        // ассистента и продолжим с ним. 400 — только когда провижн невозможен. Служебные пути
-        // (задачи, one-shot) REST не используют, поэтому гейт их не задевает.
-        if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
-            && flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding))
+        // Последний рубеж инварианта «новый чат человека — только с персоной» (парная связь
+        // с фронтом): без personaId/resumeSessionId сначала провижним ассистента и продолжим
+        // с ним. 400 — только когда провижн невозможен. Служебные пути (задачи, one-shot)
+        // REST не используют, поэтому гейт их не задевает.
+        if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId))
         {
             // Правило «персона контекста» — то же, что на фронте (lib/defaultPersona.ts):
             // в проекте чат ведёт руководитель, и только если его нет — личный ассистент.

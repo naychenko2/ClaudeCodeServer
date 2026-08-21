@@ -64,7 +64,7 @@ export interface HashTarget {
   incidentFingerprint?: string;
   telemetryIncidents?: boolean;
   history?: boolean; // #/history — открыть overlay «Что нового» (поверх дашборда)
-  intro?: boolean;   // #/intro — открыть overlay знакомства (фича default-personas-onboarding)
+  intro?: boolean;   // #/intro — открыть overlay знакомства
 }
 
 export function parseHash(hash: string = window.location.hash): HashTarget | null {

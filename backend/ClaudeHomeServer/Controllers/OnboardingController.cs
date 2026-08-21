@@ -15,8 +15,8 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Controllers;
 
-// Онбординги (фича default-personas-onboarding): обязательные чат-интервью первого входа
-// (личная дефолт-персона) и создания проекта (персона-руководитель). Онбординг — обычная
+// Онбординги: чат-интервью первого входа (личная дефолт-персона) и создания проекта
+// (персона-руководитель). Онбординг — обычная
 // сессия существующего рантайма со спец-промптом (Session.OnboardingKind → врезка в
 // SessionManager.BuildPersonaLayer); финализация — make-default из этой сессии
 // (PersonasController.MakeDefault → FinalizeOnboardingAsync).

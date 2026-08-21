@@ -10,7 +10,6 @@ import { api } from '../../lib/api';
 import { onMessage } from '../../lib/signalr';
 import { showToast } from '../../lib/toast';
 import { useIsMobile } from '../../lib/breakpoints';
-import { useFeature, FLAGS } from '../../lib/featureFlags';
 import { OPEN_INTRO_EVENT } from '../onboarding/OnboardingPage';
 import { useNow } from '../../lib/useNow';
 import { usePersonas, personaLabel } from '../../lib/personas';
@@ -81,9 +80,8 @@ export function TeamCommandCenter({
 
   useEffect(() => { sessionStorage.setItem('cc_team_tab', tab); }, [tab]);
 
-  // Руководитель проекта (фича default-personas-onboarding): дефолт-персона для чатов
-  // проекта. Локальный снимок — project из пропсов не обновляется по broadcast'у.
-  const onboardingOn = useFeature(FLAGS.defaultPersonasOnboarding);
+  // Руководитель проекта: дефолт-персона для чатов проекта. Локальный снимок —
+  // project из пропсов не обновляется по broadcast'у.
   const [leadId, setLeadId] = useState<string | null>(project.defaultPersonaId ?? null);
   useEffect(() => { setLeadId(project.defaultPersonaId ?? null); }, [project.id, project.defaultPersonaId]);
   // Смена СУЩЕСТВУЮЩЕГО руководителя — только через подтверждение (страховка от
@@ -226,7 +224,7 @@ export function TeamCommandCenter({
               personaById={personaById} onOpenPersona={onOpenPersona} onSwitchTab={switchTab} onOpenEvent={openEvent}
               onPickerOpen={() => setPickerOpen(true)} onNewTaskOpen={() => setNewTaskOpen(true)} onNewPersona={onNewPersona}
               onFormTeamOpen={() => setFormTeamOpen(true)} onMenuOpen={() => createTeamChat(team, onOpenSession)} stripe={stripe} isMobile={isMobile}
-              leadId={onboardingOn ? leadId : null} onMakeLead={onboardingOn ? requestMakeLead : undefined} />
+              leadId={leadId} onMakeLead={requestMakeLead} />
           )}
           {tab === 'memory' && (
             <TeamMemoryPanel mem={mem} onAdd={addMem} onUpdate={updateMem} onRemove={removeMem} stripe={stripe} />

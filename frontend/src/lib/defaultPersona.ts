@@ -1,12 +1,10 @@
-// Персоны по умолчанию (фича default-personas-onboarding): модульный стор ответа
-// /api/auth/me (дефолт-персона, признак онбординга) + единый хелпер создания чата
-// человеком. Паттерн стора — как lib/personas.ts: модульное состояние, подписки,
+// Персоны по умолчанию: модульный стор ответа /api/auth/me (дефолт-персона,
+// признак онбординга) + единый хелпер создания чата человеком. Паттерн стора — как lib/personas.ts: модульное состояние, подписки,
 // useSyncExternalStore. Инвалидация — по broadcast personas_changed (action='default').
 
 import { useSyncExternalStore } from 'react';
 import type { Me, Project, Session } from '../types';
 import { api } from './api';
-import { getFlag, FLAGS } from './featureFlags';
 import { OfflineError, RequestTimeoutError } from './offline';
 import { onMessage } from './signalr';
 
@@ -133,10 +131,9 @@ export class OnboardingRequiredError extends Error {
   }
 }
 
-// Единый хелпер создания чата человеком (инвариант «чат только с персоной»).
-// Под флагом чат создаётся от лица дефолт-персоны контекста; без флага — прежние пути
-// (байт-в-байт старое поведение). При отсутствии дефолта под флагом гейта на фронте
-// больше нет (план §4, п.4.3, парная правка с серверным рубежом 2.4): идём на тот же
+// Единый хелпер создания чата человеком (инвариант «чат только с персоной»):
+// чат создаётся от лица дефолт-персоны контекста. При отсутствии дефолта гейта на
+// фронте нет (план §4, п.4.3, парная правка с серверным рубежом 2.4): идём на тот же
 // api.sessions.create()/api.chats.create() без personaId — сервер сам провижнит
 // ассистента и продолжит создание с ним (400 остаётся только когда провижн вернул
 // null). OnboardingRequiredError — только на случай, когда и сервер не смог.
@@ -144,27 +141,22 @@ export async function createChatWithContextPersona(
   project?: Pick<Project, 'id' | 'defaultPersonaId'> | null,
   opts?: { mode?: string; name?: string },
 ): Promise<Session> {
-  if (getFlag(FLAGS.defaultPersonasOnboarding)) {
-    const defaultId = getContextDefaultPersonaId(project);
-    if (defaultId) {
-      return api.personas.createChat(defaultId, {
-        mode: opts?.mode ?? 'auto',
-        name: opts?.name,
-        projectId: project?.id,
-      });
-    }
-    try {
-      return project
-        ? await api.sessions.create(project.id, opts?.mode ?? 'auto', undefined, opts?.name)
-        : await api.chats.create(opts?.mode ?? 'auto', undefined, opts?.name);
-    } catch (e) {
-      if ((e as Error & { status?: number }).status === 400) {
-        throw new OnboardingRequiredError(project ? 'project' : 'user');
-      }
-      throw e;
-    }
+  const defaultId = getContextDefaultPersonaId(project);
+  if (defaultId) {
+    return api.personas.createChat(defaultId, {
+      mode: opts?.mode ?? 'auto',
+      name: opts?.name,
+      projectId: project?.id,
+    });
   }
-  return project
-    ? api.sessions.create(project.id, opts?.mode ?? 'auto', undefined, opts?.name)
-    : api.chats.create(opts?.mode ?? 'auto', undefined, opts?.name);
+  try {
+    return project
+      ? await api.sessions.create(project.id, opts?.mode ?? 'auto', undefined, opts?.name)
+      : await api.chats.create(opts?.mode ?? 'auto', undefined, opts?.name);
+  } catch (e) {
+    if ((e as Error & { status?: number }).status === 400) {
+      throw new OnboardingRequiredError(project ? 'project' : 'user');
+    }
+    throw e;
+  }
 }

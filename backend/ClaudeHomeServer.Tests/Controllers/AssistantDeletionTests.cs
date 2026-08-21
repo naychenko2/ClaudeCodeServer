@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
@@ -22,24 +21,18 @@ public class AssistantDeletionTests : IDisposable
 
     public void Dispose() => _factory.Dispose();
 
-    private async Task SetFlagAsync(bool enabled) =>
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled }))
-        .EnsureSuccessStatusCode();
-
     private async Task<JsonElement> MeAsync() => JsonSerializer.Deserialize<JsonElement>(
         await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync());
 
-    private async Task<string> ProvisionAssistantAsync()
-    {
-        await SetFlagAsync(true);
-        return (await MeAsync()).GetProperty("defaultPersonaId").GetString()!;
-    }
+    // Заготовку заводит стартовый проход провижна (Program.cs) — к моменту первого запроса
+    // дефолт владельца уже существует и совпадает с AssistantPersonaId.
+    private async Task<string> AssistantIdAsync() =>
+        (await MeAsync()).GetProperty("defaultPersonaId").GetString()!;
 
     [Fact]
     public async Task Delete_ЗаготовкаОнаЖеДефолт_БезПреемника_204_ОбнуляетОбаПоля()
     {
-        var assistantId = await ProvisionAssistantAsync();
+        var assistantId = await AssistantIdAsync();
 
         var response = await _client.DeleteAsync($"/api/personas/{assistantId}");
         response.StatusCode.Should().Be(HttpStatusCode.NoContent,
@@ -57,7 +50,7 @@ public class AssistantDeletionTests : IDisposable
     {
         // Заготовка перестала быть дефолтом (личный дефолт переключили на другую персону),
         // но статус заготовки ещё висит — удаление снимает статус, дефолт не трогает.
-        var assistantId = await ProvisionAssistantAsync();
+        var assistantId = await AssistantIdAsync();
         var otherId = JsonSerializer.Deserialize<JsonElement>(
             await (await _client.PostAsJsonAsync("/api/personas", new { name = "Другая" }))
                 .Content.ReadAsStringAsync()).GetProperty("id").GetString()!;

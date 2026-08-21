@@ -59,7 +59,7 @@ export function QuickActions({ onHubTab, onOpenProject }: {
     if (creatingChat) return;
     setCreatingChat(true);
     try {
-      // Под флагом default-personas-onboarding — от лица личной дефолт-персоны
+      // Чат создаётся от лица личной дефолт-персоны
       const chat = await createChatWithContextPersona();
       window.dispatchEvent(new CustomEvent('cc-open-chat', { detail: { chatId: chat.id } }));
     } catch {

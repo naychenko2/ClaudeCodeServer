@@ -438,18 +438,22 @@ Dark launch: фича коммитится выключенной и включ�
 ([Models/FeatureFlag.cs](backend/ClaudeHomeServer/Models/FeatureFlag.cs)); хранение —
 override в `data/users.json`; фронт — стор [lib/featureFlags.ts](frontend/src/lib/featureFlags.ts),
 хук `useFeature(FLAGS.key)`. Большинство старых флажных фич включены безусловно
-(2026-08); в каталоге три флага: `workspace-destructive` (постоянный
-предохранитель от необратимого удаления), `default-personas-onboarding` (ассистент по
-умолчанию заводится автоматически при первом входе, знакомство — по приглашению, а не
-обязательный экран; проектное знакомство v2 дополнительно раскладывает каркас папок
-и правил по подтверждению карточкой в ленте — детали
-[docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md),
-критерии снятия — [docs/features/project-onboarding-v2.md](docs/features/project-onboarding-v2.md))
-и `project-backgrounds` (рисунок и цвет фона подбираются моделью по смыслу проекта;
-контракт генерации без разметки, серверная сборка тайла и форма хранения —
-[ADR-008](docs/adr/ADR-008-project-background-generation.md), тексты интерфейса и критерии
-снятия флага — [docs/features/project-backgrounds.md](docs/features/project-backgrounds.md)).
+(2026-08); в каталоге **два флага**: `workspace-destructive` (постоянный предохранитель от
+необратимого удаления) и `change-dossiers-recall` (история решений по коду — подсказки
+персонам и выгрузка отдельной веткой, [ADR-004](docs/adr/ADR-004-change-dossiers.md)).
 Пометки «за флагом …» в доках — исторические; актуальный состав — в коде каталога.
+
+Работают безусловно, без тумблера (флаги сняты 2026-08-21): **ассистент по умолчанию и
+знакомство** — заготовка персоны заводится при первом входе, знакомство приходит
+приглашением, а не обязательным экраном; проектное знакомство v2 раскладывает каркас папок
+и правил по подтверждению карточкой в ленте
+([docs/architecture/onboarding-intro.md](docs/architecture/onboarding-intro.md),
+[docs/features/project-onboarding-v2.md](docs/features/project-onboarding-v2.md));
+**фон проекта** — рисунок и цвет подбираются моделью по смыслу проекта, контракт генерации
+без разметки и форма хранения — [ADR-008](docs/adr/ADR-008-project-background-generation.md),
+тексты интерфейса — [docs/features/project-backgrounds.md](docs/features/project-backgrounds.md);
+**карточка доклада о завершённой задаче** в чате постановщика вместе с новым промптом
+реакции — [docs/features/task-completion-report.md](docs/features/task-completion-report.md).
 
 **Как добавить новый флаг (3 шага):**
 1. Бэк: добавить строку в `FeatureFlagCatalog.All` (`key`, `title`, `description`, `Default: false`, `stage`).

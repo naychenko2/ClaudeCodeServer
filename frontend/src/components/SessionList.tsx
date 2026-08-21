@@ -147,7 +147,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   useEffect(() => { if (loaded) onSessionsChanged?.(sessions.length); }, [loaded, sessions.length, onSessionsChanged]);
 
   const createNew = async (): Promise<Session> => {
-    // Под флагом default-personas-onboarding — от лица дефолт-персоны проекта
+    // Чат создаётся от лица дефолт-персоны проекта
     const s = await createChatWithContextPersona(project, { mode: 'auto' });
     // Чужую (глобальную) сессию в список этого проекта не добавляем — поллинг сам синхронит
     if (s.projectId === project.id) setSessions(prev => [s, ...prev]);

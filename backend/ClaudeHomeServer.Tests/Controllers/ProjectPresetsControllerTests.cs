@@ -1,15 +1,13 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
 using ClaudeHomeServer.Tests.Helpers;
 using FluentAssertions;
 
 namespace ClaudeHomeServer.Tests.Controllers;
 
-// Права и гейт флага у эндпоинта пресета каркаса (знакомство v2, п.3): чужой проект — 404,
-// выключенный флаг — 404 (бэк проверяет обязательно, фронт-гейта мало), неизвестный ключ — 400,
-// повторное применение/отказ — 409.
+// Права у эндпоинта пресета каркаса (знакомство v2, п.3): чужой проект — 404,
+// неизвестный ключ — 400, повторное применение/отказ — 409.
 public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
     : IClassFixture<TestWebApplicationFactory>
 {
@@ -23,15 +21,7 @@ public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
             .GetProperty("id").GetString()!;
     }
 
-    // Владелец с включённым фич-флагом (дефолт каталога — выключен)
-    private async Task<HttpClient> OwnerWithFlagAsync()
-    {
-        var client = factory.CreateAuthenticatedClient();
-        (await client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = true }))
-            .EnsureSuccessStatusCode();
-        return client;
-    }
+    private HttpClient Owner() => factory.CreateAuthenticatedClient();
 
     private static async Task<string> PresetKeyOfAsync(HttpClient client, string projectId)
     {
@@ -43,26 +33,12 @@ public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task ЧужойПроект_404()
     {
-        var owner = await OwnerWithFlagAsync();
+        var owner = Owner();
         var stranger = factory.CreateAuthenticatedClient(
             TestWebApplicationFactory.SecondUsername, TestWebApplicationFactory.SecondPassword);
         var projectId = await CreateProjectAsync(owner);
 
         (await stranger.PostAsJsonAsync($"/api/projects/{projectId}/preset", new { presetKey = "docs" }))
-            .StatusCode.Should().Be(HttpStatusCode.NotFound);
-    }
-
-    [Fact]
-    public async Task ФлагВыключен_404_дажеДляВладельца()
-    {
-        var owner = factory.CreateAuthenticatedClient();
-        // Явно выключаем: соседние тесты этого же fixture включали флаг общему UserStore
-        (await owner.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled = false }))
-            .EnsureSuccessStatusCode();
-        var projectId = await CreateProjectAsync(owner);
-
-        (await owner.PostAsJsonAsync($"/api/projects/{projectId}/preset", new { presetKey = "docs" }))
             .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
@@ -72,7 +48,7 @@ public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
     [InlineData("Исходники")]     // имена папок снаружи не принимаются
     public async Task НеверныйКлюч_400(string key)
     {
-        var owner = await OwnerWithFlagAsync();
+        var owner = Owner();
         var projectId = await CreateProjectAsync(owner);
 
         (await owner.PostAsJsonAsync($"/api/projects/{projectId}/preset", new { presetKey = key }))
@@ -82,7 +58,7 @@ public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task ПустойКлюч_400()
     {
-        var owner = await OwnerWithFlagAsync();
+        var owner = Owner();
         var projectId = await CreateProjectAsync(owner);
 
         (await owner.PostAsJsonAsync($"/api/projects/{projectId}/preset", new { presetKey = "  " }))
@@ -92,7 +68,7 @@ public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Применение_ОтчётКаркасНаДискеИПовтор_409()
     {
-        var owner = await OwnerWithFlagAsync();
+        var owner = Owner();
         var projectId = await CreateProjectAsync(owner);
         var project = JsonSerializer.Deserialize<JsonElement>(
             await (await owner.GetAsync($"/api/projects/{projectId}")).Content.ReadAsStringAsync());
@@ -121,7 +97,7 @@ public class ProjectPresetsControllerTests(TestWebApplicationFactory factory)
     [Fact]
     public async Task Отказ_None_ПустойОтчётИПовтор_409()
     {
-        var owner = await OwnerWithFlagAsync();
+        var owner = Owner();
         var projectId = await CreateProjectAsync(owner);
 
         var response = await owner.PostAsJsonAsync($"/api/projects/{projectId}/preset", new { presetKey = "none" });

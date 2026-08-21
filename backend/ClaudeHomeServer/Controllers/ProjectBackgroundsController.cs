@@ -16,7 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/projects/{id}/background")]
 public class ProjectBackgroundsController(
-    ProjectManager projects, ProjectBackgroundService backgrounds, FeatureFlagService flags)
+    ProjectManager projects, ProjectBackgroundService backgrounds)
     : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -41,7 +41,6 @@ public class ProjectBackgroundsController(
     public async Task<ActionResult> Generate(string id, CancellationToken ct)
     {
         if (Owned(id) is not { } project) return NotFound();
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ProjectBackgrounds)) return NotFound();
 
         return Ok(Payload(await backgrounds.GenerateAsync(project, ct)));
     }
@@ -50,7 +49,6 @@ public class ProjectBackgroundsController(
     public ActionResult Reset(string id)
     {
         if (Owned(id) is null) return NotFound();
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.ProjectBackgrounds)) return NotFound();
 
         return Ok(Payload(backgrounds.Reset(id)));
     }

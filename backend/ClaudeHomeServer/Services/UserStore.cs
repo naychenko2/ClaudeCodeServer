@@ -76,7 +76,7 @@ public class UserStore
             "╚══════════════════════════════════════════════╝", generatedPassword);
     }
 
-    // Миграция IntroCompletedAt (фича default-personas-onboarding). Load бежит на КАЖДОМ
+    // Миграция IntroCompletedAt (знакомство с ассистентом). Load бежит на КАЖДОМ
     // старте, поэтому условие обязано быть точным: пользователь с дефолтом, но без признака
     // знакомства и без заготовки-ассистента считаются уже прошедшими знакомство — им
     // авто-ассистент не предлагают. Третье слагаемое (AssistantPersonaId == null) критично:
@@ -417,7 +417,7 @@ public class UserStore
     }
 
     /// <summary>
-    /// Личная дефолт-персона пользователя (фича default-personas-onboarding); null — сброс.
+    /// Личная дефолт-персона пользователя; null — сброс.
     /// Возвращает false если пользователь не найден.
     /// </summary>
     public bool SetDefaultPersona(string id, string? personaId)
@@ -449,7 +449,7 @@ public class UserStore
     }
 
     /// <summary>
-    /// Id заготовки-ассистента пользователя (фича default-personas-onboarding); null — сброс.
+    /// Id заготовки-ассистента пользователя; null — сброс.
     /// Возвращает false если пользователь не найден.
     /// </summary>
     public bool SetAssistantPersona(string id, string? personaId)

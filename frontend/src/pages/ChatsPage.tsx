@@ -166,7 +166,7 @@ export function ChatsPage({ auth, onLogout, onHubTab }: Props) {
     if (creating) return;
     setCreating(true);
     try {
-      // Под флагом default-personas-onboarding чат создаётся от лица личной дефолт-персоны
+      // Чат создаётся от лица личной дефолт-персоны
       const chat = await createChatWithContextPersona();
       setChats(prev => [chat, ...prev]);
       selectChat(chat);

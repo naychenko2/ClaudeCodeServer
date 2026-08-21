@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Llm;
 using ClaudeHomeServer.Tests.Helpers;
 using Microsoft.Extensions.DependencyInjection;
@@ -11,9 +11,8 @@ namespace ClaudeHomeServer.Tests.Controllers;
 
 // Страховка «Применить итоги разговора» онбординга (план 3.2): POST /api/onboarding/user/apply-transcript.
 // Контракт: 404 — нет живой сессии или живой заготовки; 200 — заготовка обновлена, знакомство завершено.
-// Свежая фабрика на каждый тест: состояние OnboardingSessionId/AssistantPersonaId/флага живёт в
-// общем UserStore синглтона, и тесты на нём зависели бы от порядка (как и ChatCreationPersonaGateTests,
-// но там состояние тогглируемое, а OnboardingSessionId — нет). Плюс своя ICheapTextRunner-заглушка,
+// Свежая фабрика на каждый тест: состояние OnboardingSessionId/AssistantPersonaId живёт в
+// общем UserStore синглтона, и тесты на нём зависели бы от порядка. Плюс своя ICheapTextRunner-заглушка,
 // отдающая готовый черновик: боевой раннер погнал бы claude.exe/Ollama в интеграционном тесте.
 public class OnboardingApplyTranscriptTests : IDisposable
 {
@@ -56,11 +55,6 @@ public class OnboardingApplyTranscriptTests : IDisposable
             .EnsureSuccessStatusCode();
     }
 
-    private async Task SetFlagAsync(bool enabled) =>
-        (await _client.PutAsJsonAsync(
-            $"/api/feature-flags/{FeatureFlagKeys.DefaultPersonasOnboarding}", new { enabled }))
-        .EnsureSuccessStatusCode();
-
     private async Task<JsonElement> MeAsync() => JsonSerializer.Deserialize<JsonElement>(
         await (await _client.GetAsync("/api/auth/me")).Content.ReadAsStringAsync())!;
 
@@ -73,13 +67,15 @@ public class OnboardingApplyTranscriptTests : IDisposable
         (await response.Content.ReadAsStringAsync()).Should().Contain("сессии");
     }
 
-    // Сессия есть, но заготовки-ассистента нет (флаг выключен — провижн не вызывался) → 404.
+    // Сессия есть, но живой заготовки нет (её удалили или статус уже снят правкой) → 404.
     [Fact]
     public async Task БезЗаготовки_404()
     {
         await EnsureHomeConfiguredAsync();
-        // Старт онбординга работает и без флага: создаёт сессию, пишет OnboardingSessionId.
         (await _client.PostAsync("/api/onboarding/user/start", null)).EnsureSuccessStatusCode();
+        // Статус заготовки снят: AssistantPersonaId пуст — применять итоги не к чему
+        var userId = (await MeAsync()).GetProperty("userId").GetString()!;
+        _factory.Services.GetRequiredService<UserStore>().SetAssistantPersona(userId, null);
         (await MeAsync()).GetProperty("onboardingSessionId").ValueKind.Should().Be(JsonValueKind.String);
 
         var response = await _client.PostAsync("/api/onboarding/user/apply-transcript", null);
@@ -93,8 +89,7 @@ public class OnboardingApplyTranscriptTests : IDisposable
     public async Task СоСессиейИЗаготовкой_ПрименяетЧерновикИЗавершает()
     {
         await EnsureHomeConfiguredAsync();
-        // Включение флага провижнит ассистента (хук 2.2): DefaultPersonaId == AssistantPersonaId.
-        await SetFlagAsync(true);
+        // Заготовку завёл стартовый проход провижна: DefaultPersonaId == AssistantPersonaId.
         var assistantId = (await MeAsync()).GetProperty("defaultPersonaId").GetString()!;
         // Старт онбординга фиксирует OnboardingSessionId.
         (await _client.PostAsync("/api/onboarding/user/start", null)).EnsureSuccessStatusCode();

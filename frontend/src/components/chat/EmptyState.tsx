@@ -35,8 +35,8 @@ export function ChatEmptyState({ hasProject, hasCLAUDEmd, onHint, session, proje
   greetingAbove?: boolean;
 }) {
   const asstName = useAssistantName();
-  // Лицо пустого чата (фича default-personas-onboarding): аватар персоны чата
-  // (или дефолт-персоны контекста); нейтральный favicon — только когда персоны нет
+  // Лицо пустого чата: аватар персоны чата (или дефолт-персоны контекста);
+  // нейтральный favicon — только когда персоны нет
   const facePersona = useContextPersona({
     personaId: session?.personaId ?? null,
     projectDefaultId: project ? (project.defaultPersonaId ?? null) : undefined,

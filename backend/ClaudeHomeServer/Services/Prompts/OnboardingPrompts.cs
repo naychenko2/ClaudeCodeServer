@@ -3,14 +3,14 @@ using ClaudeHomeServer.Models;
 
 namespace ClaudeHomeServer.Services.Prompts;
 
-// Промпты знакомства (фича default-personas-onboarding). Врезаются каналом
-// LlmSessionContext.PersonaPromptProvider (SessionManager.BuildPersonaLayer): у сессии
+// Промпты знакомства. Врезаются каналом LlmSessionContext.PersonaPromptProvider
+// (SessionManager.BuildPersonaLayer): у сессии
 // мастера (OnboardingKind == "user", персоны нет) — ВМЕСТО слоя персоны, у проектного
 // онбординга — надстройкой к слою личной дефолт-персоны владельца (сценарий v2: тип
 // проекта → интервью → каркас → команда → руководитель).
 //
 // Личное знакомство дорабатывает УЖЕ созданную заготовку-ассистента (провижн сделал её
-// дефолтом при включении флага): интервью заполняет имя/роль/характер/аватар через
+// дефолтом при первом входе): интервью заполняет имя/роль/характер/аватар через
 // personas_update + personas_generate_avatar, финал — personas_set_default с тем же id.
 // Создавать новую персону (personas_create) мастер не должен — этому мешает и промпт, и
 // серверный предохранитель (PersonasController.Create). Если заготовка резолвится в мёртвый

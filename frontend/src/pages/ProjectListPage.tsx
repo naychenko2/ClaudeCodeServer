@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { ArrowDownAZ, Clock, List, Plus, Search } from 'lucide-react';
 import type { Project, ProjectGroup, Session, AuthState } from '../types';
 import { api } from '../lib/api';
-import { getFlag, FLAGS } from '../lib/featureFlags';
 import { useOnline } from '../hooks/useOnline';
 import { OfflineError } from '../lib/offline';
 import { C, R, FONT, CHAT_MAX_W } from '../lib/design';
@@ -184,12 +183,12 @@ export function ProjectListPage({ onOpen, onLogout, auth, onHubTab }: Props) {
         <AddProjectDialog
           groups={orderedGroups}
           defaultGroupId={view !== 'all' && view !== 'sleeping' ? view : undefined}
-          // Под флагом default-personas-onboarding новый проект открывается сразу —
-          // гейт онбординга проекта (интервью руководителя) сработает сам
+          // Новый проект открывается сразу — приглашение к знакомству (интервью
+          // руководителя) покажет карточка в ленте
           onSuccess={p => {
             setProjects(prev => [...prev, p]);
             closeDialog();
-            if (getFlag(FLAGS.defaultPersonasOnboarding)) onOpen(p);
+            onOpen(p);
           }}
           onClose={closeDialog}
         />

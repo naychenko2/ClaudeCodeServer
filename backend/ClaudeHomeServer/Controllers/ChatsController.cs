@@ -13,7 +13,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/chats")]
-public class ChatsController(SessionManager sessions, FileService files, FeatureFlagService flags,
+public class ChatsController(SessionManager sessions, FileService files,
     DefaultAssistantProvisioner provisioner, ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
@@ -42,14 +42,13 @@ public class ChatsController(SessionManager sessions, FileService files, Feature
     public async Task<IActionResult> Create([FromBody] CreateChatRequest req)
     {
         string? personaId = req.PersonaId;
-        // Последний рубеж инварианта «новый чат человека — только с персоной» (план 2.4):
-        // под флагом без personaId/resumeSessionId сначала провижним ассистента и продолжим
-        // создание с ним. Работает в паре с фронт-правкой 4.3 — без неё продукт создаёт чаты
-        // через хелпер createChatWithContextPersona, минуя этот гейт; вместе они лечат и пустой
-        // дефолт, и осиротевший. 400 остаётся только когда провижн невозможен (сбой создания).
+        // Последний рубеж инварианта «новый чат человека — только с персоной»: без
+        // personaId/resumeSessionId сначала провижним ассистента и продолжим создание с ним.
+        // Работает в паре с фронтом — тот создаёт чаты через хелпер createChatWithContextPersona,
+        // минуя этот гейт; вместе они лечат и пустой дефолт, и осиротевший. 400 остаётся только
+        // когда провижн невозможен (сбой создания).
         // Групповые чаты (createGroup) и служебные пути сюда не доходят.
-        if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId)
-            && flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding))
+        if (string.IsNullOrWhiteSpace(personaId) && string.IsNullOrWhiteSpace(req.ResumeSessionId))
         {
             var provisioned = await provisioner.EnsureAsync(UserId, HttpContext.RequestAborted);
             if (provisioned is null)

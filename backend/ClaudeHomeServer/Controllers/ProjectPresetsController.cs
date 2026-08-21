@@ -16,8 +16,7 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/projects/{id}/preset")]
-public class ProjectPresetsController(
-    ProjectManager projects, ProjectPresetService presets, FeatureFlagService flags)
+public class ProjectPresetsController(ProjectManager projects, ProjectPresetService presets)
     : ControllerBase
 {
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -36,9 +35,6 @@ public class ProjectPresetsController(
     public ActionResult Apply(string id, [FromBody] ApplyPresetRequest req)
     {
         if (Owned(id) is not { } project) return NotFound();
-        // Флаг гейтит эндпоинт на бэке обязательно: OnboardingController его не проверяет
-        // (там гейтит фронт), а этот POST пишет в репозиторий — конвенция фона проекта
-        if (!flags.IsEnabled(UserId, FeatureFlagKeys.DefaultPersonasOnboarding)) return NotFound();
 
         var key = (req.PresetKey ?? "").Trim();
         if (key.Length == 0)

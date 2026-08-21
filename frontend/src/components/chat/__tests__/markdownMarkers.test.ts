@@ -30,6 +30,22 @@ describe('stripServiceMarkers', () => {
     expect(stripServiceMarkers('Беру.\n<team:work>Создать Coun')).toBe('Беру.');
   });
 
+  // Хвост P19: код-блок внутри маркера не должен разрывать пару — старый рез по сегментам
+  // оставлял после фенса код и хвост постановки как обычный текст
+  it('режет маркер работы с код-блоком внутри целиком', () => {
+    const text = 'Погнали.\n<team:work>перепиши так:\n```tsx\n<Button label="Старт" />\n```\nостальное как есть</team>\nГотово.';
+    expect(stripServiceMarkers(text)).toBe('Погнали.\n\nГотово.');
+  });
+
+  it('незакрытый маркер с код-блоком внутри прячет хвост до конца текста', () => {
+    expect(stripServiceMarkers('Беру.\n<team:work>дамп:\n```tsx\n<Button')).toBe('Беру.');
+  });
+
+  it('режет маркер, закрытый по имени, с код-блоком внутри', () => {
+    const text = 'Итог.\n<escalate:check>вот след:\n```\nstack trace\n```\nне сходится</escalate:check>';
+    expect(stripServiceMarkers(text)).toBe('Итог.');
+  });
+
   it('не трогает маркер внутри кода — там его цитируют, объясняя протокол', () => {
     const inline = 'Ставлю маркер `<team:work>постановка</team>` в конце ответа';
     expect(stripServiceMarkers(inline)).toBe(inline);

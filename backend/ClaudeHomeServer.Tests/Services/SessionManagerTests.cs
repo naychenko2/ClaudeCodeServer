@@ -4982,6 +4982,21 @@ public class SessionManagerTests : IDisposable
             .Should().Be("Готовлю план.  — всё по делу.");
     }
 
+    // Хвост P19: парсер принимает код-блок внутри маркера (FindPairedMarkerOutsideCode),
+    // а зачистка раньше резала по код-блокам — сегмент до фенса оставался в ленте с
+    // буквальным <team:work> и всей постановкой, закрывающий тег съедался как осиротевший.
+    // Зачистка обязана вырезать диапазон той же позиционной находкой пары, что и разбор.
+    [Theory]
+    [InlineData("<team:work>перепиши так:\n```\nvar x = 1;\n```\nостальное как есть</team>", "")]
+    [InlineData("Погнали.\n<team:work>дамп:\n```tsx\n<Button/>\n```\nверни как есть</team:work>\nГотово.",
+        "Погнали.\n\nГотово.")]
+    [InlineData("Проверил.\n<escalate:check>вот след:\n```\nstack trace\n```\nне сходится</escalate:check>",
+        "Проверил.\n")]
+    public void StripTeamProtocolMarkers_МаркерСКодБлокомВнутри_ВырезаетсяЦеликом(string input, string expected)
+    {
+        SessionManager.StripTeamProtocolMarkers(input).Should().Be(expected);
+    }
+
     [Theory]
     [InlineData("текст <team:wo", "текст ")]
     [InlineData("текст <escalate:che", "текст ")]

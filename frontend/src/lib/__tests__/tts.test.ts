@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { sanitizeForSpeech, splitSentences, verbalizeIdentifiers, takeSpeakableChunk, MAX_STREAM_CHUNK } from '../tts';
+import { sanitizeForSpeech, splitSentences, verbalizeIdentifiers, takeSpeakableChunk, MAX_STREAM_CHUNK, packSentences, PACK_LIMIT } from '../tts';
 
 // Запрос синтеза подменяем на управляемый: тесты промиса озвучки должны уметь и отдать
 // «озвучено», и подвесить запрос навсегда (проверка немедленного резолва stopSpeaking)
@@ -132,6 +132,71 @@ describe('splitSentences', () => {
 
 // Промис озвучки — контракт режима разговора: микрофон открывается ровно по нему,
 // поэтому «резолв раньше, чем синтезатор замолчал» = петля слышит собственный голос
+// Упаковка предложений в пакеты: синтез v3 тарифицируется за ЗАПРОС, поэтому цена ошибки
+// здесь — деньги (мелкая нарезка) либо задержка первого звука (крупная)
+describe('packSentences', () => {
+  const s = (len: number, word = 'слово') => Array(Math.ceil(len / (word.length + 1)))
+    .fill(word).join(' ').slice(0, len).trim();
+
+  it('первое предложение уходит отдельным пакетом — это разгон звука', () => {
+    const packs = packSentences(['Раз.', 'Два.', 'Три.']);
+    expect(packs[0]).toBe('Раз.');
+  });
+
+  it('следующие предложения клеятся в пакеты под лимит', () => {
+    const packs = packSentences(['Раз.', s(100), s(100), s(100)]);
+    expect(packs[0]).toBe('Раз.');
+    expect(packs.length).toBeLessThan(4); // без упаковки было бы 4 запроса
+    for (const p of packs) expect(p.length).toBeLessThanOrEqual(PACK_LIMIT);
+  });
+
+  it('ни один пакет не длиннее лимита запроса', () => {
+    const packs = packSentences(Array(30).fill(s(80)));
+    for (const p of packs) expect(p.length).toBeLessThanOrEqual(PACK_LIMIT);
+  });
+
+  it('текст не теряется и не переставляется', () => {
+    const parts = ['Первое.', 'Второе.', 'Третье.', 'Четвёртое.', 'Пятое.'];
+    expect(packSentences(parts).join(' ')).toBe(parts.join(' '));
+  });
+
+  it('короткий хвост приклеивается к предыдущему пакету, а не едет огрызком', () => {
+    // Огрызок тарифицируется как полный запрос — отдельным пакетом он ехать не должен
+    const packs = packSentences(['Раз.', s(200), s(200), 'Ага.']);
+    expect(packs[packs.length - 1]).not.toBe('Ага.');
+    expect(packs[packs.length - 1].endsWith('Ага.')).toBe(true);
+  });
+
+  it('из двух пакетов хвост не приклеивается — разгонный не удлиняем', () => {
+    const packs = packSentences(['Раз.', 'Ага.']);
+    expect(packs).toEqual(['Раз.', 'Ага.']);
+  });
+
+  it('пустые куски отбрасываются', () => {
+    expect(packSentences(['', '   ', 'Раз.'])).toEqual(['Раз.']);
+    expect(packSentences([])).toEqual([]);
+  });
+
+  // Ради этого весь переход на v3 (speechkit-pricing.md §4): запрос стоит одинаково
+  // независимо от длины, поэтому число ЗАПРОСОВ — это и есть счёт. Выигрыш зависит от
+  // длины предложений: короткие набиваются в пакет плотно, длинные — по два-три
+  it('короткие фразы голосового режима: шесть предложений едут тремя запросами', () => {
+    // 353 символа: без упаковки это 6 запросов (0,98 ₽) против 0,49 ₽ тремя пакетами
+    const sentences = Array.from({ length: 6 }, (_, i) => `${s(55)} ${i}.`);
+    const packs = packSentences(sentences);
+    expect(packs.length).toBe(3);
+    for (const p of packs) expect(p.length).toBeLessThanOrEqual(PACK_LIMIT);
+  });
+
+  it('длинные предложения: ответ на 600+ символов едет четырьмя запросами вместо шести', () => {
+    // Пакеты не набиваются под завязку осознанно: предложения не режем пополам,
+    // поэтому 101+203+203+101, а не три полных пакета
+    const sentences = Array.from({ length: 6 }, (_, i) => `${s(98)} номер ${i}.`);
+    expect(sentences.join(' ').length).toBeGreaterThan(600);
+    expect(packSentences(sentences).length).toBe(4);
+  });
+});
+
 describe('speak / stopSpeaking', () => {
   // Что происходит с созданным Audio: держим ссылки, чтобы дёргать onended вручную
   const played: { onended: (() => void) | null; onerror: (() => void) | null; paused: boolean }[] = [];

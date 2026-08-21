@@ -301,6 +301,10 @@ export interface HandsFreeOptions {
   onBargeSuppress?: () => void;
   // Зеркало «петля активна» для синхронного чтения из колбэков движка распознавания
   activeRef: React.RefObject<boolean>;
+  // Собеседник чата: его голосом петля говорит о себе («Слушаю.», «Выключаю разговор»).
+  // Иначе ответ звучал бы голосом персоны, а реплики петли — голосом инстанса, и в
+  // разговоре получилось бы два разных голоса
+  voicePersonaId?: string;
 }
 
 export interface HandsFree {
@@ -585,10 +589,10 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     // Вопрос модели: сигнал играет ChatPanel (он звучит и вне петли), здесь только фраза —
     // и с задержкой, иначе слова легли бы на пинг
     if (notice === 'needDecision') {
-      const id = setTimeout(() => { void speak(NOTICE_TEXT[notice]); }, NEED_ANSWER_DURATION_MS);
+      const id = setTimeout(() => { void speak(NOTICE_TEXT[notice], opts.voicePersonaId); }, NEED_ANSWER_DURATION_MS);
       return () => clearTimeout(id);
     }
-    const said = speak(NOTICE_TEXT[notice]);
+    const said = speak(NOTICE_TEXT[notice], opts.voicePersonaId);
     // «Ты ещё здесь?» звучит внутри живой петли (фаза speaking, микрофон закрыт) —
     // по концу реплики возвращаемся слушать. Остальные реплики произносятся уже
     // после выключения, и автомату о них знать нечего

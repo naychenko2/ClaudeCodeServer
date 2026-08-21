@@ -2105,6 +2105,13 @@ export interface PersonaContract {
   instructions?: string;      // полный регламент роли (длинный markdown)
 }
 
+// Как персона звучит в голосовом режиме; отсутствует — голосом инстанса из конфига
+export interface PersonaVoice {
+  voice?: string;        // имя голоса SpeechKit (белый список на сервере)
+  role?: string;         // амплуа голоса («good», «strict», …); не у всех голосов есть
+  speed?: number | null; // темп 0.1–3.0; null/отсутствие — из конфига
+}
+
 export interface Persona {
   id: string;
   ownerId: string;
@@ -2129,6 +2136,7 @@ export interface Persona {
   scope: PersonaScope;
   projectId?: string;         // задан только для scope === 'project'
   avatar: PersonaAvatar;
+  voice?: PersonaVoice | null; // личный голос; null/отсутствие — голос инстанса
   greeting?: string;          // приветствие персоны в начале чата
   memoryEnabled: boolean;     // долгая память (этап 2)
   // Специальность (функциональная роль) для оркестрации; отсутствие/none — не задана

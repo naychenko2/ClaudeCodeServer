@@ -77,6 +77,9 @@ export interface ComposerProps {
   participantIds?: string[] | null;
   // Создание нового группового чата из селектора собеседника (флаг persona-group-chats)
   onCreateGroup?: (personaIds: string[]) => void;
+  // Собеседник чата: его голосом петля разговора произносит реплики о себе
+  // («Слушаю.», «Выключаю разговор») — иначе они звучали бы не тем голосом, что ответ
+  voicePersonaId?: string;
   // Цикл «до готово» (флаг work-loop): текущее состояние (live с фолбэком на Session.workLoop);
   // null — цикл выключен. Тумблер виден при заданном onToggleWorkLoop.
   // Promise — чтобы автопилот с «до готово» мог дождаться включения цикла до отправки
@@ -416,6 +419,7 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
 
 export function Composer({
   sessionId,
+  voicePersonaId,
   onSend,
   onStop,
   onAttach,
@@ -888,6 +892,7 @@ export function Composer({
     onVoiceExit: exitTalk,
     // Барж-ин: подавление озвучки перебитого хода ведёт ChatPanel (обе точки озвучки там)
     onBargeSuppress,
+    voicePersonaId,
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;

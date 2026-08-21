@@ -7,7 +7,7 @@ import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { projectMainColor } from '../features/projects/projectUtil';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
-import { computeTodos, planHint } from '../hooks/useSessionArtifacts';
+import { computeTodoBatches } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api, setGitSessionContext } from '../lib/api';
@@ -28,7 +28,7 @@ import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, type StreamSpeech } from '../lib/tts';
-import { turnText, turnStreamChunks, turnStreamTail, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
+import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
 import { needAnswer, primeBeep } from '../lib/beep';
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
@@ -47,6 +47,7 @@ import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHea
 import { computeGlifGenStats } from './chat/glifStats';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
+import { TurnPlanPill } from './chat/TurnPlanPill';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { ChatEmptyState } from './chat/EmptyState';
@@ -231,7 +232,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // микрофон открылся бы под играющее аудио
   const [speechPhase, setSpeechPhase] = useState<SpeechPhase>('idle');
   const speechCallRef = useRef(0);
-  const startSpeaking = useCallback((text: string) => {
+  // personaId — чьим голосом читать; передаёт вызывающий, у которого под рукой ход
+  // (колбэк стабильный, без зависимостей — брать персону из замыкания здесь нечем)
+  const startSpeaking = useCallback((text: string, personaId?: string) => {
     const call = ++speechCallRef.current;
     // Синхронно, ДО первого await: в кадре завершения хода петля обязана видеть, что
     // озвучка будет, иначе успеет открыть микрофон ровно под старт синтеза
@@ -239,7 +242,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     void (async () => {
       try {
         setSpeechPhase('speaking');
-        await speak(text);
+        await speak(text, personaId);
       } finally {
         if (speechCallRef.current === call) setSpeechPhase('idle');
       }
@@ -767,7 +770,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // нельзя, а читать вслух каждую итерацию — мусор
     if (workLoopState) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect -- фаза озвучки обязана выставиться синхронно в этом же кадре (Р12)
-    if (text) startSpeaking(text);
+    if (text) startSpeaking(text, turnVoicePersonaId(items, session.personaId));
   }, [items, session.id, voiceMode, workLoopState, isHistoryLoading, startSpeaking, stopSpeech, resetStreamSpeech]);
 
   // Эффект стриминга: режет нарастающий текст хода на предложения и озвучивает их
@@ -794,7 +797,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         streamStRef.current = TURN_STREAM_INIT;
         // eslint-disable-next-line react-hooks/set-state-in-effect -- финал озвучки: микрофон петли открывается именно отсюда
         setSpeechPhase('idle');
-      });
+        // Голос захватывается ОДИН раз на весь ход: пакеты синтезируются заранее
+        // (prefetch), и смена голоса посреди хода выбросила бы оплаченный пакет
+      }, turnVoicePersonaId(items, session.personaId));
       streamRef.current = s;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- см. startSpeaking: та же дисциплина токена
       setSpeechPhase('willSpeak');
@@ -1262,19 +1267,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [items]);
 
   // Todo через TaskCreate/TaskUpdate инкрементальны (в отличие от TodoWrite с полным
-  // списком) — карточку чек-листа рисуем один раз, на последнем task-вызове ленты:
-  // там агрегат computeTodos отражает актуальное состояние всего списка
-  const lastTaskIdx = useMemo(() => {
-    for (let i = items.length - 1; i >= 0; i--) {
-      const it = items[i];
-      if (it.kind === 'tool_use' && !it.parentToolUseId && (it.name === 'TaskCreate' || it.name === 'TaskUpdate')) return i;
-    }
-    return -1;
-  }, [items]);
-  const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
+  // списком), а CLI ведёт ОДИН список на сессию — поэтому лента режется на пачки
+  // (computeTodoBatches): карточка чек-листа рисуется на последнем вызове КАЖДОЙ пачки
+  // со своим составом. Раньше карточка была одна на весь чат, и прошлые планы, сколько бы
+  // их ни было за сессию, в истории не показывались вовсе.
+  const todoBatches = useMemo(() => computeTodoBatches(items), [items]);
+  // индекс последнего вызова пачки → её список (для рендера карточки на этом месте)
+  const batchByIndex = useMemo(
+    () => new Map(todoBatches.filter(b => b.lastIndex >= 0).map(b => [b.lastIndex, b.todos])),
+    [todoBatches]);
+  // Текущая пачка — для пилюли прогресса и подписи «на каком я шаге»
+  const taskTodos = todoBatches.length ? todoBatches[todoBatches.length - 1].todos : [];
 
-  // Подпись под индикатором ожидания: на каком шаге плана модель сейчас (см. planHint)
-  const turnPlanHint = useMemo(() => planHint(taskTodos), [taskTodos]);
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
   // своего snapshotId нет — он лежит на сообщении, которым начался ход, а contextTokens
@@ -1498,7 +1502,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       onRetry={handleRetry}
       onInterrupt={interrupt}
       onMigrateProvider={handleMigrateProvider}
-      taskPlan={i === lastTaskIdx && taskTodos.length > 0 ? taskTodos : undefined}
+      taskPlan={batchByIndex.get(i)}
       agentActivity={extras?.agentActivity}
       agentRenderChild={extras?.agentRenderChild}
       turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
@@ -1529,7 +1533,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, batchByIndex, changeMode, turnBoundaries,
     mechanicOffers, launchedMechanics, declinedMechanicOffers, runTeamMechanic,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,
@@ -1559,7 +1563,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Карточка группы встаёт на место ПЕРВОЙ ошибки дня, остальные из ленты уходят в кат.
   //
   // Схлопывать массив ленты НЕЛЬЗЯ: индексы элементов — ключ к turnMeta, turnBoundaries,
-  // lastTaskIdx и execZone, и укороченный display сдвинул бы всю метаинформацию после
+  // batchByIndex и execZone, и укороченный display сдвинул бы всю метаинформацию после
   // первой же группы. Поэтому группа живёт картой «индекс первой ошибки дня → группа»,
   // а остальные ошибки гасятся набором индексов — как suppressedByWorkflow.
   const errorGroups = useMemo(() => {
@@ -1591,12 +1595,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Группировка — O(n) с постройкой карт по всей ленте (useMemo).
   const renderedItems = useMemo(() => {
     // Display-лента = сама items: индексы обязаны совпадать с items (по ним ходят
-    // turnMeta, turnBoundaries, lastTaskIdx, execZone). Ошибки прошлых дней рисуются
+    // turnMeta, turnBoundaries, batchByIndex, execZone). Ошибки прошлых дней рисуются
     // группой через errorGroups — карту «индекс → error_group» и набор гашеных индексов.
     const display = items;
-    // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
+    // Последний вызов каждой пачки (batchByIndex) исключаем из блока действий, как и TodoWrite:
     // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
-    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
+    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && !batchByIndex.has(idx) && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
     const inBlock = (it: ChatItem, idx: number) => isTool(it, idx) || it.kind === 'file_changed';
     // Ссылка на родителя есть у tool_use и у текста/thinking сабагента
     const parentOf = (it: ChatItem): string | undefined =>
@@ -1859,7 +1863,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups]);
+  }, [items, renderItem, batchByIndex, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups]);
 
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
   // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге
@@ -2063,7 +2067,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             Гаснет сама: стадия уходит с planning при карточке плана или отказа */}
         {showTeamPlanningIndicator && <TeamPlanningIndicator startedAt={liveTeamPlanning?.startedAt} />}
 
-        {online && showWaiting && (
+        {((online && showWaiting) || taskTodos.length > 0) && (
           // Индикатор стоит В ПОТОКЕ, по левому краю сообщений — как аватар обычной
           // строки. Раньше его выносили наружу отрицательным отступом (-38), и под это
           // держали жёлоб 52px слева от ленты: в узкой колонке стены домик лез на рамку,
@@ -2071,8 +2075,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // 12px (scale 1.85 от 28) — бокового поля ленты (CHAT_GUTTER_L / на мобиле
           // CHAT_GUTTER_MOBILE + мельче размах, media query в index.css) на них хватает,
           // клип области прокрутки (overflow-x: hidden) пульс не режет.
-          <div style={{ marginTop: 5 }}>
-            <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} hint={turnPlanHint} />
+          //
+          // Пилюля плана — в ЭТОЙ ЖЕ строке, справа, и живёт независимо от хода: индикатор
+          // гаснет по концу хода, а прогресс нужно смотреть как раз в паузе. Общая строка
+          // держит её на одном месте в обоих состояниях, без прыжка при старте/конце хода.
+          <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 10 }}>
+            {online && showWaiting && (
+              <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
+            )}
+            <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
+              <TurnPlanPill todos={taskTodos} />
+            </div>
           </div>
         )}
 
@@ -2224,6 +2237,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // стора черновиков (getDraft) уже под новый sessionId.
             key={session.id}
             sessionId={session.id}
+            voicePersonaId={session.personaId ?? undefined}
             offline={!online}
             onSend={handleSend}
             onStop={interrupt}

@@ -53,6 +53,21 @@ export function turnStreamTail(st: TurnStreamState, items: ChatItem[]): string {
 // Якорь хода — последний user_message (не result): на реплике второго хода result'а
 // нового ещё нет, и формула «после последнего result» возвращала текст ПРОШЛОГО
 // хода — стриминг озвучивал старый ответ первой фразой ещё до дельт нового.
+// Чьим голосом читать ход: персона последней реплики хода, иначе собеседник чата.
+//
+// Ход читается ОДНИМ голосом, даже если в групповом чате в нём говорили разные персоны.
+// Причина не в лени: пакеты уходят на синтез заранее (prefetch в startStreamSpeak), и
+// смена голоса посреди хода означала бы выбросить уже оплаченный пакет. Нарезка озвучки
+// по говорящему — отдельная задача, не здесь.
+export function turnVoicePersonaId(items: ChatItem[], chatPersonaId?: string | null): string | undefined {
+  const lastUm = items.map((it, i) => ({ it, i })).filter(x => x.it.kind === 'user_message').at(-1)?.i;
+  const turn = lastUm === undefined ? [] : items.slice(lastUm + 1);
+  const spoken = turn
+    .filter(it => it.kind === 'text' && !it.parentToolUseId && it.personaId)
+    .at(-1);
+  return (spoken?.kind === 'text' ? spoken.personaId : undefined) ?? chatPersonaId ?? undefined;
+}
+
 export function turnText(items: ChatItem[]): string {
   // Один якорь для живого и завершённого хода — последний user_message (как у
   // turnAlreadyEnded). Всё после него и до следующей реплики — текущий ход:

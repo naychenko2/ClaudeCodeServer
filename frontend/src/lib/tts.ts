@@ -364,7 +364,7 @@ export function stopSpeaking() {
 // Озвучить текст ответа. Санитайзер + нарезка + очередь; при отказе сервера — голос браузера.
 // Промис резолвится по опустошении очереди (и никогда не реджектится): режим разговора
 // открывает микрофон именно по нему, поэтому «резолв раньше конца звука» = эхо.
-export function speak(rawText: string): Promise<void> {
+export function speak(rawText: string, personaId?: string): Promise<void> {
   watchConnection();
   stopSpeaking();
   const token = ++speakToken;
@@ -377,11 +377,11 @@ export function speak(rawText: string): Promise<void> {
       resolve();
     };
     speechWaiters.push(finish);
-    void runSpeak(rawText, token).then(finish, finish);
+    void runSpeak(rawText, token, personaId).then(finish, finish);
   });
 }
 
-async function runSpeak(rawText: string, token: number): Promise<void> {
+async function runSpeak(rawText: string, token: number, personaId?: string): Promise<void> {
   const text = sanitizeForSpeech(rawText);
   if (!text) return;
   const parts = packSentences(splitSentences(text));
@@ -394,10 +394,10 @@ async function runSpeak(rawText: string, token: number): Promise<void> {
   }
 
   // Очередь: следующий кусок синтезируется, пока играет текущий
-  let next: Promise<Blob | null> | null = synthesize(parts[0]);
+  let next: Promise<Blob | null> | null = synthesize(parts[0], personaId);
   for (let i = 0; i < parts.length; i++) {
     const blobPromise = next;
-    next = i + 1 < parts.length ? synthesize(parts[i + 1]) : null;
+    next = i + 1 < parts.length ? synthesize(parts[i + 1], personaId) : null;
 
     let blob: Blob | null;
     try {
@@ -430,10 +430,13 @@ async function runSpeak(rawText: string, token: number): Promise<void> {
   }
 }
 
-function synthesize(text: string): Promise<Blob | null> {
+// personaId — чьим голосом читать. Сервер сам проверяет владельца и молча берёт голос
+// инстанса, если персона чужая или уже удалена: 400 здесь увёл бы остаток фразы на голос
+// браузера из-за одной устаревшей вкладки
+function synthesize(text: string, personaId?: string): Promise<Blob | null> {
   return request('/tts', {
     method: 'POST',
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, personaId }),
     parse: 'blob',
     // Синтез длинной фразы бывает дольше дефолтных 30 с только в патологии,
     // но обрыв не должен трактоваться как «связи нет»
@@ -491,7 +494,7 @@ export interface StreamSpeech {
 // stop(), внешний stopSpeaking(), потеря токена). Колбэк-канал вместо нескольких
 // done.then в вызывающем коде закрывает гонку «кто первый занулил ref — тот и
 // снял фазу»: снятие фазы всегда в одном месте
-export function startStreamSpeak(onDone?: () => void): StreamSpeech {
+export function startStreamSpeak(onDone?: () => void, personaId?: string): StreamSpeech {
   watchConnection();
   const token = ++speakToken;
   const queue: string[] = [];
@@ -533,7 +536,7 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
     if (next === undefined) return;
     prefetchText = next;
     prefetchFailed = false;
-    prefetch = synthesize(next)
+    prefetch = synthesize(next, personaId)
       .catch(e => {
         const status = (e as { status?: number }).status;
         const reason = (e as { body?: { reason?: string } }).body?.reason;
@@ -595,7 +598,7 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
         } else {
           dropPrefetch();
           try {
-            blob = await synthesize(text);
+            blob = await synthesize(text, personaId);
           } catch (e) {
             const status = (e as { status?: number }).status;
             const reason = (e as { body?: { reason?: string } }).body?.reason;

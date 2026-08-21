@@ -13,7 +13,8 @@
 
 - **Модель**: [Persona.cs](../../backend/ClaudeHomeServer/Models/Persona.cs) — `Persona`
   (Name, Role, Handle, Description, SystemPrompt, Model/Effort, Scope `Global|Project`, ProjectId,
-  Avatar `{Kind initials|image, Color, ImageFile}`, Greeting, MemoryEnabled) +
+  Avatar `{Kind initials|image, Color, ImageFile}`, Voice `{Voice, Role, Speed}`, Greeting,
+  MemoryEnabled) +
   `PersonaMemoryEntry` (Type `Semantic|Episodic|Procedural`, Text, Tags, Salience). Хранилище —
   `data/personas.json`, ассеты (аватары) — `data/personas/{id}/`.
 - **CRUD**: [PersonaManager.cs](../../backend/ClaudeHomeServer/Services/PersonaManager.cs) — per-owner
@@ -22,6 +23,13 @@
   `/api/personas/*` (CRUD с фильтрами `?scope=context|project|global&projectId=`, `{id}/chats`,
   `{id}/memory*`, `{id}/avatar*`, `ai/character` — LLM-генерация/улучшение характера с
   уточняющим промптом); realtime — `PersonasChangedMessage` (created/updated/deleted/memory).
+- **Голос**: `PUT /api/personas/{id}/voice` — `{voice, role?, speed?}`; пустой объект снимает
+  голос, и персона снова говорит голосом инстанса. Отдельным эндпоинтом, а не полем в
+  `Update`: там уже больше двадцати позиционных параметров. Валидация строгая (400 на
+  незнакомый голос, на амплуа, которого у голоса нет, и на темп вне 0.1–3.0) — в отличие от
+  пути озвучки, где всё кривое молча вырождается в дефолт (`VoiceResolver`, см.
+  [features.md](features.md), раздел «Голосовой режим чата»). Белый список голосов и их
+  амплуа — `TtsVoiceCatalog`, замерено прямыми запросами к SpeechKit.
 - **Чат с персоной**: `Session.PersonaId`; `SessionManager.CreatePersonaChatAsync` маршрутизирует
   по зоне — **глобальная** персона → чат вне проекта (scope = все данные владельца, `ProjectId=null`
   в tasks/notes MCP), **проектная** → сессия в её проекте (scope = только проект). Характер персоны

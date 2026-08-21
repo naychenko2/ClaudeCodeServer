@@ -34,7 +34,7 @@ public class YandexTtsServiceTests
     [Fact]
     public async Task Synthesize_БезКонфига_ВозвращаетNull()
     {
-        (await Make().SynthesizeAsync("Привет")).Should().BeNull();
+        (await Make().SynthesizeAsync("Привет", new VoiceChoice("zahar", null, 1.0))).Should().BeNull();
     }
 
     // --- SplitForSynthesis: нарезка под лимит 249 символов на запрос (v3) ---

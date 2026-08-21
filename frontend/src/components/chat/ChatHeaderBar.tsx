@@ -1,5 +1,5 @@
 import { useState, useEffect, type ReactNode } from 'react';
-import { Plus, Menu, FileText, Tags } from 'lucide-react';
+import { Plus, Menu, Tags } from 'lucide-react';
 import type { Project, Session, ClaudeBilling, Persona, ProjectTag } from '../../types';
 import { api } from '../../lib/api';
 import { TagAssignMenu } from '../TagChip';
@@ -787,9 +787,6 @@ interface ChatHeaderBarProps {
   // Последняя запущенная в чате механика «Обсудить с командой» — компактный бейдж в шапке
   lastMechanic?: TeamMechanicId | null;
   onOpenSidebar?: () => void;
-  artifactsOpen?: boolean;
-  onToggleArtifacts?: () => void;
-  artifactFileCount?: number;
   ctxEstimate: ContextEstimate;
   isWaiting: boolean;
   isCompacting: boolean;
@@ -945,7 +942,7 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
   );
 }
 
-export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, artifactsOpen, onToggleArtifacts, artifactFileCount, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
+export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
   // Планшет (601–1199): мобильная механика — объединённый чип, wide-поповер, плотная
   // группа кнопок, заголовок с многоточием. Объединяем с mobile через `isCompact`,
   // чтобы не дублировать ветки внутри costBadges / rightCluster / actionBtns.
@@ -1329,22 +1326,6 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
       {spendBadge}
     </>
   );
-  const artifactsBtn = onToggleArtifacts ? (
-    <ToolbarIconButton onClick={onToggleArtifacts} title="Артефакты сессии" isMobile={isCompact} active={artifactsOpen}>
-      <div style={{ position: 'relative', display: 'flex' }}>
-        <FileText size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />
-        {artifactFileCount !== undefined && artifactFileCount > 0 && (
-          <span style={{
-            position: 'absolute', top: -6, right: -7, minWidth: 14, height: 14, padding: '0 3px',
-            borderRadius: 7, background: C.accent, color: C.onAccent,
-            fontFamily: FONT.sans, fontSize: 9, fontWeight: 700, lineHeight: '14px', textAlign: 'center',
-          }}>
-            {artifactFileCount}
-          </span>
-        )}
-      </div>
-    </ToolbarIconButton>
-  ) : null;
   // Тумблер уведомлений ЭТОГО чата — сигнал о завершённом ходе, когда вкладка не в фокусе.
   // compact (колонка стены): не показываем — в тесной колонке хватает срока жизни,
   // а заглушить чат можно из меню его карточки в списке. Общий рубильник уведомлений
@@ -1371,10 +1352,10 @@ export function ChatHeaderBar({ session, project, hasMessages, online, cost, fal
   const extractBtn = <ExtractTasksButton session={session} hasMessages={hasMessages} online={online} />;
   const retitleBtn = <RetitleButton session={session} hasMessages={hasMessages} online={online} />;
   const actionBtns = isCompact
-    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
+    ? <div style={{ display: 'flex', alignItems: 'center', gap: 0, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>
     // На десктопе кнопки — неразрывная группа: при переносе кластера уходят вниз целиком,
     // оставаясь последними у правого края (мышечная память на позицию)
-    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{artifactsBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
+    : <div style={{ display: 'flex', alignItems: 'center', gap: TB.gap, flexShrink: 0 }}>{retitleBtn}{extractBtn}{summaryBtn}{tagsBtn}{notifyBtn}{dossierBtn}{expiryBadge}</div>;
 
   // Правый кластер шапки (бейджи + кнопки) единым flex-элементом: при тесноте узкого
   // десктопа переносится под заголовок ЦЕЛИКОМ (два чистых состояния вместо рваных

@@ -4,7 +4,7 @@ import {
   computeTodos,
   computeAgents,
   computeArtifacts,
-  countFiles,
+  planHint,
 } from '../useSessionArtifacts';
 
 // --- Фикстуры ChatItem ---
@@ -88,6 +88,54 @@ describe('computeTodos', () => {
       tool('TaskUpdate', { taskId: '1', status: 'in_progress' }),
     ];
     expect(computeTodos(items)).toEqual([{ content: 'A', status: 'in_progress', activeForm: undefined }]);
+  });
+
+  it('planHint: активный шаг, счётчик и activeForm', () => {
+    expect(planHint([
+      { content: 'A', status: 'completed' },
+      { content: 'B', status: 'in_progress', activeForm: 'Делаю B' },
+      { content: 'C', status: 'pending' },
+    ])).toBe('1/3 · Делаю B');
+  });
+
+  it('planHint: без activeForm берёт заголовок пункта', () => {
+    expect(planHint([{ content: 'Собрать бэкенд', status: 'in_progress' }])).toBe('0/1 · Собрать бэкенд');
+  });
+
+  it('planHint: нет in_progress — берёт первый незакрытый', () => {
+    expect(planHint([
+      { content: 'A', status: 'completed' },
+      { content: 'B', status: 'pending' },
+    ])).toBe('1/2 · B');
+  });
+
+  it('planHint: пустой план и полностью выполненный — подписи нет', () => {
+    expect(planHint([])).toBeUndefined();
+    expect(planHint([{ content: 'A', status: 'completed' }])).toBeUndefined();
+  });
+
+  it('план хода вытесняет задачи продуктового трекера из чек-листа', () => {
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'задача пользователя' }),
+      tool('TaskCreate', { subject: 'шаг плана' }, { result: 'Task #1 created' }),
+    ];
+    expect(computeTodos(items).map(t => t.content)).toEqual(['шаг плана']);
+  });
+
+  it('без плана хода задачи трекера показываются как раньше (фолбэк исполнителя)', () => {
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'задача пользователя' }),
+      tool('mcp__tasks__tasks_update', { title: 'задача пользователя', status: 'done' }),
+    ];
+    expect(computeTodos(items)).toEqual([{ content: 'задача пользователя', status: 'completed' }]);
+  });
+
+  it('одинокий TaskUpdate без TaskCreate трекер не вытесняет (обрезанная история)', () => {
+    const items: ChatItem[] = [
+      tool('mcp__tasks__tasks_create', { title: 'задача пользователя' }),
+      tool('TaskUpdate', { taskId: '1', status: 'completed' }),
+    ];
+    expect(computeTodos(items).map(t => t.content)).toEqual(['задача пользователя']);
   });
 
   it('если есть и TodoWrite, и Task* — Task* побеждает', () => {
@@ -373,24 +421,6 @@ describe('computeArtifacts', () => {
   it('пустой rootPath (чат вне проекта): абсолютные пути инструментов отсекаются', () => {
     const items = [tool('Write', { file_path: 'C:\\anything\\a.ts' })];
     expect(computeArtifacts(items, '').files).toEqual([]);
-  });
-});
-
-describe('countFiles', () => {
-  it('совпадает с числом файлов из computeArtifacts на смешанной ленте', () => {
-    const items: ChatItem[] = [
-      fileChanged('src/App.tsx', 1, 0),
-      tool('Write', { file_path: 'C:\\Sources\\MyProject\\src\\new.ts' }),
-      tool('Edit', { file_path: 'C:\\Sources\\MyProject\\src\\app.tsx' }), // дубль App.tsx
-      text('Упомянут src/lib/api.ts и внешний C:\\Other\\x.json'),
-    ];
-    const { files } = computeArtifacts(items, ROOT);
-    expect(countFiles(items, ROOT)).toBe(files.length);
-    expect(countFiles(items, ROOT)).toBe(4);
-  });
-
-  it('пустая лента → 0', () => {
-    expect(countFiles([], ROOT)).toBe(0);
   });
 });
 

@@ -7,7 +7,7 @@ import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { projectMainColor } from '../features/projects/projectUtil';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
-import { countFiles, computeTodos } from '../hooks/useSessionArtifacts';
+import { computeTodos, planHint } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
 import { useOnline } from '../hooks/useOnline';
 import { api, setGitSessionContext } from '../lib/api';
@@ -94,9 +94,6 @@ interface Props {
   agents?: AgentInfo[];
   attachedFiles: string[];
   onAttachedFilesChange: (files: string[]) => void;
-  // Тумблер панели «Артефакты сессии» в шапке (приходит только при включённом фич-флаге)
-  artifactsOpen?: boolean;
-  onToggleArtifacts?: () => void;
   // Приветственный бабл персоны: показывается в пустом чате вместо обычного empty state
   // (чисто визуально, в бэкенд не отправляется). Как только пойдут реальные сообщения — исчезает.
   greetingBubble?: React.ReactNode;
@@ -186,7 +183,7 @@ function memoizedCacheEntry(
   return entry;
 }
 
-export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, artifactsOpen, onToggleArtifacts, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
+export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTaskAside, pendingMessage, onPendingMessageSent, onSessionUpdated, isMobile, onBack, onWorkflowRunning, onOpenSidebar, skills, agents, attachedFiles, onAttachedFilesChange, greetingBubble, headerIsland, embedded, composerFocusSignal, headerDragProps }: Props) {
   const { items, isWaiting, isJoined, isHistoryLoading, rateLimits, isCompacting, compactNote, workLoop: liveWorkLoop, teamImplement: liveTeamImplement, teamPlanning: liveTeamPlanning, promptSuggestion, pending, composerRestore, consumeRestore, send, allowPermission, denyPermission, allowAlways, answerQuestion, respondPlan, respondTeamPlan, respondTeamEscalation, interrupt, compact, toggleThinking, noteCompanionSwitch, cancelPending, preemptForPending } = useSession(session.id, project?.id, (session.participants?.length ?? 0) > 1);
   // Открылся пустой чат (только что создан — своей истории у него нет) — курсор сразу
   // в поле ввода: сюда пришли писать, а не читать. Решение принимаем один раз на чат и
@@ -496,11 +493,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     [persona]
   );
 
-  // Число изменённых файлов — для бейджа на кнопке «Артефакты» (только когда тумблер проброшен)
-  const artifactFileCount = useMemo(
-    () => onToggleArtifacts && project ? countFiles(items, project.rootPath) : 0,
-    [onToggleArtifacts, items, project]
-  );
 
   const [hasCLAUDEmd, setHasCLAUDEmd] = useState<boolean | null>(null);
   useEffect(() => {
@@ -1281,6 +1273,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   }, [items]);
   const taskTodos = useMemo(() => (lastTaskIdx >= 0 ? computeTodos(items) : []), [items, lastTaskIdx]);
 
+  // Подпись под индикатором ожидания: на каком шаге плана модель сейчас (см. planHint)
+  const turnPlanHint = useMemo(() => planHint(taskTodos), [taskTodos]);
+
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
   // своего snapshotId нет — он лежит на сообщении, которым начался ход, а contextTokens
   // приходит только в result в конце хода. Оба разносим по ходу одним проходом:
@@ -1942,9 +1937,6 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       activeWorkflow={activeWorkflowInfo ?? undefined}
       lastMechanic={lastMechanic}
       onOpenSidebar={onOpenSidebar}
-      artifactsOpen={artifactsOpen}
-      onToggleArtifacts={onToggleArtifacts}
-      artifactFileCount={artifactFileCount}
       ctxEstimate={ctxEstimate}
       isWaiting={isWaiting}
       isCompacting={isCompacting}
@@ -2080,7 +2072,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // CHAT_GUTTER_MOBILE + мельче размах, media query в index.css) на них хватает,
           // клип области прокрутки (overflow-x: hidden) пульс не режет.
           <div style={{ marginTop: 5 }}>
-            <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
+            <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} hint={turnPlanHint} />
           </div>
         )}
 

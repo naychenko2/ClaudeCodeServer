@@ -47,8 +47,7 @@ export function useSessionPanels(session: Session | null, projectId?: string, ro
   // Персона (context) данные тянет сама через ContextSection.
   const artifacts = useSessionArtifacts(sessionId, projectId, rootPath ?? '', null);
   const plansCount = artifacts.plans.length;
-  // executingTask=false: в рельсе artifacts считаются без заголовка задачи-исполнителя
-  const badgeOpts = { executingTask: false, personaId: session?.personaId ?? null, isChat: !projectId };
+  const badgeOpts = { personaId: session?.personaId ?? null };
 
   const personaId = session?.personaId;
 

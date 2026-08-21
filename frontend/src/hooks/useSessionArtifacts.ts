@@ -177,6 +177,25 @@ function classifyTextPath(raw: string, rootPath: string): { path: string; extern
   return null; // относительный, но вне корня — мусор
 }
 
+// Подпись «где модель сейчас» для индикатора ожидания: «2/7 · Гоняю тесты».
+//
+// Отдельного места на экране это не занимает — индикатор и так висит на время хода,
+// а зона над композером у проектного чата занята git-баром, и полноценный список там
+// съел бы самую ценную полосу экрана (особенно на мобиле). Карточка чек-листа в ленте
+// остаётся: она про «что запланировано», эта строка — про «на каком я шаге».
+//
+// activeForm задуман ровно для такой строки («present continuous form shown in spinner»
+// в схеме TaskCreate); модель шлёт его не всегда — тогда берём заголовок пункта.
+// undefined — плана нет либо он весь выполнен (ход продолжается уже не по нему).
+export function planHint(todos: TodoItem[]): string | undefined {
+  if (!todos.length) return undefined;
+  const current = todos.find(t => t.status === 'in_progress')
+    ?? todos.find(t => t.status !== 'completed');
+  if (!current) return undefined;
+  const done = todos.filter(t => t.status === 'completed').length;
+  return `${done}/${todos.length} · ${current.activeForm ?? current.content}`;
+}
+
 // Собрать актуальный todo-список сессии из ленты чата. Понимает оба механизма CLI:
 // старый TodoWrite (каждый вызов несет полный список — последний побеждает) и новые
 // TaskCreate/TaskUpdate (инкрементальные). Экспортируется отдельно от computeArtifacts:
@@ -186,8 +205,17 @@ export function computeTodos(items: ChatItem[]): TodoItem[] {
   const tasks = new Map<string, TodoItem>(); // из TaskCreate/TaskUpdate, ключ — taskId
   let taskAutoId = 0; // запасная нумерация, если id не удалось достать из результата
 
+  // Приоритет источника: если в ленте есть план хода встроенным TaskCreate — задачи
+  // ПРОДУКТОВОГО трекера (mcp__tasks__*) сюда не подмешиваем. Ветки mcp появились как
+  // компенсация, когда встроенные тулы были запрещены наглухо (тот же день, что и запрет);
+  // теперь план хода вернулся в обычные чаты, и смешивать два разных смысла в одном
+  // чек-листе незачем — задачи пользователя видны в своей панели. Фолбэк на mcp остаётся
+  // для сессий-исполнителей (там план-тулы закрыты) и для старых транскриптов.
+  const hasBuiltInPlan = items.some(it => it.kind === 'tool_use' && it.name === 'TaskCreate');
+
   for (const it of items) {
     if (it.kind !== 'tool_use') continue;
+    if (hasBuiltInPlan && it.name.startsWith('mcp__tasks__')) continue;
     if (it.name === 'TodoWrite') {
       const t = (it.input as { todos?: unknown } | null)?.todos;
       if (Array.isArray(t)) {
@@ -502,28 +530,6 @@ export function computeArtifacts(items: ChatItem[], rootPath: string, executingT
     comments: [...comments.values()],
     executingTask,
   };
-}
-
-// Счётчик файлов для бейджа в шапке — ровно то же множество, что и список «Файлы»
-// (изменённые + упомянутые в тексте), чтобы число на бейдже совпадало со вкладкой.
-// Отдельно от computeArtifacts: не собирает ссылки/план (без new URL), только ключи файлов.
-export function countFiles(items: ChatItem[], rootPath: string): number {
-  const keys = new Set<string>();
-  for (const it of items) {
-    if (it.kind === 'file_changed') {
-      keys.add(it.path.replace(/\\/g, '/').replace(/^\.\//, '').toLowerCase());
-    } else if (it.kind === 'tool_use' && WRITE_TOOLS.has(it.name)) {
-      const raw = extractToolPath(it.input);
-      const rel = raw ? toRelative(raw, rootPath) : null;
-      if (rel) keys.add(rel.toLowerCase());
-    } else if (it.kind === 'text') {
-      for (const p of extractTextFilePaths(it.text)) {
-        const c = classifyTextPath(p, rootPath);
-        if (c) keys.add(c.path.toLowerCase());
-      }
-    }
-  }
-  return keys.size;
 }
 
 // Хук: подписывается на ленту активной сессии и мемоизует артефакты.

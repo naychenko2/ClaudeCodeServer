@@ -60,6 +60,8 @@ import { buildMediaVisibility } from './chat/mediaDedup';
 import { isTasksCreate } from './chat/TaskCreatedView';
 import { isWidgetShow } from './chat/WidgetView';
 import { WorkflowBlockView } from './chat/WorkflowBlockView';
+import { DeployProgressCard } from './chat/DeployProgressCard';
+import { isDeployStart } from '../lib/deployProgress';
 import { TeamPlanningIndicator } from './chat/TeamPlanningIndicator';
 
 // Боковой отступ мобильной ленты: чуть шире стандартных 12px, чтобы кольца «Эхо»
@@ -1605,7 +1607,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     const display = items;
     // Последний task-вызов (lastTaskIdx) исключаем из блока действий, как и TodoWrite:
     // на его месте рисуется отдельная карточка чек-листа, ей не место внутри контура
-    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow';
+    // Выкатка прода исключена из блока действий по той же причине, что и workflow:
+    // на её месте стоит карточка хода выкатки, а не строка инструмента
+    const isTool = (it: ChatItem, idx: number) => it.kind === 'tool_use' && it.name !== 'TodoWrite' && idx !== lastTaskIdx && !it.parentToolUseId && it.name.toLowerCase() !== 'workflow' && !isDeployStart(it.name);
     const inBlock = (it: ChatItem, idx: number) => isTool(it, idx) || it.kind === 'file_changed';
     // Ссылка на родителя есть у tool_use и у текста/thinking сабагента
     const parentOf = (it: ChatItem): string | undefined =>
@@ -1664,6 +1668,18 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         const wfAgents = (childrenByParentId.get(wf.id) ?? [])
           .filter(e => e.item.kind === 'tool_use').map(e => e.item as ToolUseItem);
         pushNode(<WorkflowBlockView key={`wf-${wf.id}`} workflow={wf} agents={wfAgents} childrenByParentId={childrenByParentId} onOpenFile={onOpenFile} />, i);
+        i++; prevNodeWasBlock = false; continue;
+      }
+      // Выкатка прода (ADR-010) — тем же приёмом: на месте вызова инструмента стоит
+      // карточка хода выкатки, deployId она берёт из его result
+      if (display[i].kind === 'tool_use' && isDeployStart((display[i] as ToolUseItem).name)) {
+        const dep = display[i] as ToolUseItem;
+        pushNode(
+          <div key={`dep-${dep.id}`} style={{ marginTop: 3 }}>
+            <DeployProgressCard item={dep} sessionId={session.id} online={online} onOpenFile={onOpenFile} />
+          </div>,
+          i,
+        );
         i++; prevNodeWasBlock = false; continue;
       }
       // Элементы, отрисованные внутри WorkflowBlockView или inline под родителем-агентом,
@@ -1868,7 +1884,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // personasVersion: findConsultedPersona матчит по стору персон — после его загрузки
     // карточки консультаций пересобираются с активностью внутри
     // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion — намеренный cache-bust: пересборка карточек после загрузки стора персон
-  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups]);
+  }, [items, renderItem, lastTaskIdx, execZone, online, onOpenFile, project, handleRevert, personasVersion, sessionBusy, turnBoundaries, mediaVisibility, errorGroups, session.id]);
 
   // Окно рендера ленты: монтируем только хвост, скрывая ведущие узлы. Состояние —
   // число СКРЫТЫХ сверху узлов (hiddenCount), а не «сколько показано»: при стриминге

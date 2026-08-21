@@ -40,6 +40,55 @@ export interface DeployState {
   status: DeployStatusFile | null;
 }
 
+// Журнал выкатки ИЗ ЧАТА (ADR-010) — другая механика, чем трей-раннер выше: заявку
+// исполняет внешний агент планировщика, а журнал deploy-state.json пишет он же.
+// Формат чужой и версионируется отдельно от сервера: незнакомые поля игнорируем,
+// отсутствующие переживаем (см. Services/Deploy/DeployState.cs).
+export interface DeployJournalStep {
+  name: string;
+  status?: string | null;   // ok | fail | running… — словарь агента, читаем как есть
+  ms: number;
+}
+
+export interface DeployJournalResult {
+  ok: boolean;
+  // succeeded | rolled_back | failed — дублирует финальную фазу
+  status: string;
+  message?: string | null;
+  releaseId?: string | null;
+  finishedAt?: string | null;
+}
+
+export interface DeployJournalRecord {
+  id: string;
+  kind?: string | null;     // deploy | rollback
+  // queued → building → switching → verifying → succeeded | rolled_back | failed
+  phase: string;
+  ref?: string | null;
+  sha?: string | null;
+  dirty?: boolean;
+  dirtyFiles?: string[];
+  initiatedBy?: { userId?: string | null; sessionId?: string | null } | null;
+  steps?: DeployJournalStep[];
+  result?: DeployJournalResult | null;
+  startedAt?: string | null;
+}
+
+export interface DeployJournalRelease {
+  id: string;
+  sha?: string | null;
+  path?: string | null;
+  createdAt?: string | null;
+}
+
+// Ответ GET /api/deploy/status
+export interface DeployJournal {
+  enabled: boolean;
+  current: DeployJournalRecord | null;
+  history: DeployJournalRecord[];
+  releases: DeployJournalRelease[];
+}
+
 export type { WorkflowAgentInfo, WorkflowAgentBlock };
 
 // Метаданные внешнего модуля из GET /api/modules (контракт §2/§7)
@@ -315,6 +364,15 @@ export const api = {
     // 202: команда ушла трею. previousStartedAt — начало ПРОШЛОЙ выкатки: только по смене
     // этого времени видно, что трей команду принял и начал новую (см. DeployModal).
     launch: () => request<{ previousStartedAt: string | null }>('/admin/deploy', { method: 'POST' }),
+  },
+
+  // Журнал выкатки из чата (ADR-010) — за ним следит карточка хода выкатки в ленте.
+  // live: true + no-store по той же причине, что и у трей-выкатки выше, и она здесь
+  // ещё важнее: сервер во время переключения ГАСНЕТ намеренно, и подставленный из
+  // офлайн-кэша прошлый ответ означал бы «прод отвечает, шаги не двигаются» — карточка
+  // рапортовала бы о живом сервере ровно тогда, когда его нет.
+  deployJournal: {
+    status: () => request<DeployJournal>('/deploy/status', { cache: 'no-store', live: true }),
   },
 
   featureFlags: {

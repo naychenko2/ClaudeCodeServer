@@ -25,27 +25,16 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
 
     private readonly string? _apiKey = config["Yandex:SpeechKit:ApiKey"];
     private readonly string? _folderId = config["Yandex:SpeechKit:FolderId"];
-    private readonly double _speed = config.GetValue("Yandex:SpeechKit:Speed", 1.0);
-    private readonly string _voice = ResolveVoice(config["Yandex:SpeechKit:Voice"], logger);
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);
 
-    // Незнакомый голос — это опечатка в конфиге, а не повод молчать: сообщаем и берём
-    // дефолтный. Отказ синтеза фронт запоминает на всю сессию, так что одна буква в имени
-    // голоса стоила бы человеку всей озвучки до перезагрузки вкладки.
-    private static string ResolveVoice(string? configured, ILogger logger)
-    {
-        var voice = TtsVoiceCatalog.Resolve(configured);
-        if (!string.IsNullOrWhiteSpace(configured) && !TtsVoiceCatalog.IsKnown(configured))
-            logger.LogWarning("Голос синтеза «{Voice}» не значится среди голосов SpeechKit v3 — " +
-                              "озвучка пойдёт голосом «{Fallback}». Проверь Yandex:SpeechKit:Voice.",
-                configured, voice);
-        return voice;
-    }
-
     // mp3-байты синтезированной речи; null — синтез не удался (не настроен, Яндекс ответил
     // ошибкой или недоступен). Причина уже в логе — вызывающему хватает «не вышло» для 502.
-    public async Task<byte[]?> SynthesizeAsync(string text, CancellationToken ct = default)
+    //
+    // Голос приходит готовым (VoiceResolver): здесь он уже проверен по белому списку, роль
+    // заведомо поддерживается этим голосом, скорость в границах. Второй раз не проверяем —
+    // иначе получим два источника правды о том, чем говорит персона.
+    public async Task<byte[]?> SynthesizeAsync(string text, VoiceChoice voice, CancellationToken ct = default)
     {
         if (!IsConfigured || string.IsNullOrWhiteSpace(text)) return null;
 
@@ -55,21 +44,22 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
         using var result = new MemoryStream();
         foreach (var chunk in SplitForSynthesis(text, MaxCharsPerRequest))
         {
-            var bytes = await SynthesizeChunkAsync(client, chunk, ct);
+            var bytes = await SynthesizeChunkAsync(client, chunk, voice, ct);
             if (bytes is null) return null; // причина в логе; полкуска озвучки хуже честного фолбэка
             result.Write(bytes);
         }
         return result.Length > 0 ? result.ToArray() : null;
     }
 
-    private async Task<byte[]?> SynthesizeChunkAsync(HttpClient client, string chunk, CancellationToken ct)
+    private async Task<byte[]?> SynthesizeChunkAsync(HttpClient client, string chunk, VoiceChoice voice,
+        CancellationToken ct)
     {
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);
             req.Headers.TryAddWithoutValidation("Authorization", $"Api-Key {_apiKey}");
             req.Headers.TryAddWithoutValidation("x-folder-id", _folderId);
-            req.Content = new StringContent(BuildPayload(chunk), Encoding.UTF8, "application/json");
+            req.Content = new StringContent(BuildPayload(chunk, voice), Encoding.UTF8, "application/json");
 
             using var resp = await client.SendAsync(req, ct);
             if (!resp.IsSuccessStatusCode)
@@ -101,16 +91,23 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
         }
     }
 
-    // Тело запроса v3. hints — массив, где каждый элемент задаёт ОДНУ подсказку: голос и
-    // скорость в один объект не сложить. Роль (амплуа голоса) не передаём — её пока
-    // неоткуда взять: голос на инстанс один и задаётся строкой конфига.
-    private string BuildPayload(string text) => JsonSerializer.Serialize(new
+    // Тело запроса v3. hints — массив, где каждый элемент задаёт ОДНУ подсказку: голос,
+    // скорость и роль в один объект не сложить.
+    private static string BuildPayload(string text, VoiceChoice voice)
     {
-        text,
-        outputAudioSpec = new { containerAudio = new { containerAudioType = "MP3" } },
-        hints = new object[] { new { voice = _voice }, new { speed = _speed } },
-        loudnessNormalizationType = "LUFS",
-    });
+        // Роль добавляется только когда она есть: пустая строка в hints — это для SpeechKit
+        // не «нейтрально», а ошибка 400
+        var hints = new List<object> { new { voice = voice.Voice }, new { speed = voice.Speed } };
+        if (!string.IsNullOrWhiteSpace(voice.Role)) hints.Add(new { role = voice.Role });
+
+        return JsonSerializer.Serialize(new
+        {
+            text,
+            outputAudioSpec = new { containerAudio = new { containerAudioType = "MP3" } },
+            hints,
+            loudnessNormalizationType = "LUFS",
+        });
+    }
 
     // Ответ v3 — поток JSON-объектов, по строке на кусок аудио; данные лежат в
     // result.audioChunk.data (base64). Любая неожиданность — строка с ошибкой, строка без

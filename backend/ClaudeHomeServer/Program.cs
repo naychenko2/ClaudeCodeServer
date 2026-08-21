@@ -442,6 +442,9 @@ builder.Services.AddQuietHttpClient("fal", new QuietHttpClientProfile(
 // при недоступном Яндексе фронт уходит на голос браузера. Внешний сервис — БЕЗ WithoutEgressProxy
 // (как fal/glif): ходит через egress-прокси.
 builder.Services.AddSingleton<ClaudeHomeServer.Services.Tts.YandexTtsService>();
+// Единственная точка склейки голоса (персона → конфиг). Singleton: дефолты инстанса
+// читаются один раз, поэтому предупреждение об опечатке в голосе не сыплется на каждую фразу
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Tts.VoiceResolver>();
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Services.Tts.YandexTtsService.HttpClientName,
     new QuietHttpClientProfile(

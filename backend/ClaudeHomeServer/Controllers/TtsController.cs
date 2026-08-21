@@ -1,3 +1,5 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using ClaudeHomeServer.Services.Tts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,10 +17,12 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/tts")]
-public class TtsController(YandexTtsService tts) : ControllerBase
+public class TtsController(YandexTtsService tts, VoiceResolver voices) : ControllerBase
 {
-    // Лимит запроса фронта; заодно верхняя граница расхода на один синтез (тарификация по символам)
+    // Лимит запроса фронта; заодно верхняя граница расхода на один синтез (тарификация по запросам)
     public const int MaxTextLength = 3000;
+
+    private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
 
     [HttpPost]
     public async Task<IActionResult> Synthesize([FromBody] TtsRequest req, CancellationToken ct)
@@ -31,7 +35,12 @@ public class TtsController(YandexTtsService tts) : ControllerBase
         if (!tts.IsConfigured)
             return StatusCode(503, new { reason = "not_configured" });
 
-        var bytes = await tts.SynthesizeAsync(req.Text, ct);
+        // Чужой или протухший personaId — не ошибка, а дефолтный голос: резолвер проверяет
+        // владельца сам. Отвечать 400 нельзя, фронт уводит на голос браузера ОСТАТОК фразы,
+        // то есть устаревший id в открытой вкладке стоил бы человеку куска озвучки
+        var voice = voices.Resolve(req.PersonaId, UserId);
+
+        var bytes = await tts.SynthesizeAsync(req.Text, voice, ct);
         if (bytes is null)
             return StatusCode(502, new { reason = "upstream" });
 
@@ -39,4 +48,6 @@ public class TtsController(YandexTtsService tts) : ControllerBase
     }
 }
 
-public record TtsRequest(string? Text);
+// PersonaId — чьим голосом читать; null/неизвестный — голосом инстанса из конфига.
+// Старый фронт поля не шлёт и получает прежнее поведение
+public record TtsRequest(string? Text, string? PersonaId = null);

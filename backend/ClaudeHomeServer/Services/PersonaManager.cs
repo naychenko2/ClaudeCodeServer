@@ -662,6 +662,10 @@ public class PersonaManager
             ?? throw new KeyNotFoundException($"Персона не найдена: {id}");
         lock (_saveLock)
         {
+            // Имя голоса нормализуем к каноническому: алиас в сторе означал бы, что форма
+            // не найдёт его в списке и покажет «голос не выбран» у настроенной персоны
+            if (voice is { IsEmpty: false })
+                voice.Voice = Services.Tts.TtsVoiceCatalog.Canonical(voice.Voice) ?? voice.Voice;
             persona.Voice = voice is { IsEmpty: false } ? voice : null;
             persona.UpdatedAt = DateTime.UtcNow;
         }

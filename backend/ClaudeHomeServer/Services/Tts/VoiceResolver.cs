@@ -24,10 +24,18 @@ public class VoiceResolver(PersonaManager personas, IConfiguration config, ILogg
     private readonly string _defaultVoice = ResolveConfiguredVoice(config["Yandex:SpeechKit:Voice"], logger);
     private readonly double _defaultSpeed = Clamp(config.GetValue<double?>("Yandex:SpeechKit:Speed") ?? 1.0);
 
-    // Голос для озвучки текста в чате. personaId приходит от клиента и может быть чужим
-    // или протухшим — Get проверяет владельца и отдаёт null, чего достаточно: берём дефолт
-    public VoiceChoice Resolve(string? personaId, string ownerId)
+    // Голос для озвучки текста. personaId приходит от клиента и может быть чужим
+    // или протухшим — Get проверяет владельца и отдаёт null, чего достаточно: берём дефолт.
+    //
+    // explicit — голос, выбранный ЗДЕСЬ И СЕЙЧАС (прослушивание в форме персоны): он
+    // сильнее персоны, иначе кнопка «Послушать» играла бы сохранённым голосом, а не тем,
+    // который человек примеряет. Ветка идёт через тот же резолв — клампинг темпа и сброс
+    // неподдержанного амплуа обязаны работать одинаково на обоих путях.
+    public VoiceChoice Resolve(string? personaId, string ownerId, PersonaVoice? @explicit = null)
     {
+        if (@explicit is { IsEmpty: false } && !string.IsNullOrWhiteSpace(@explicit.Voice))
+            return ForPersonaVoice(@explicit);
+
         if (string.IsNullOrWhiteSpace(personaId)) return Default();
         var persona = personas.Get(personaId, ownerId);
         return persona?.Voice is null ? Default() : ForPersonaVoice(persona.Voice);

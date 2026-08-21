@@ -4,7 +4,8 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import type { Persona, PersonaAccess, PersonaContract, PersonaMemoryEntry, PersonaMemoryType, PersonaScope, PersonaSpecialty, PersonaWorkingFocus, Project, UpdatePersonaDto } from '../../types';
 import { api } from '../../lib/api';
 import { useSpecialtyCatalog } from '../../lib/specialties';
-import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
+import { PersonaVoicePicker } from './PersonaVoicePicker';
+ import { Field, FieldLabel, TextField, TextArea, Toggle, Button, SegmentedControl, Menu, MenuItem, WaitingIndicator, ConfirmDialog } from '../../components/ui';
 import { useAiJob, runAiJob, resetAiJob } from '../../lib/aiJobStore';
 import { ImageGenNote, isImageGenQueued } from '../../components/ImageGenNote';
 import { PillSwitch } from '../../components/Toolbar';
@@ -203,6 +204,9 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   // Аватар: текущее состояние (обновляется после выбора кандидата), возможность
   // генерации (настроен ли fal), поле промпта. Статус/результат генерации — в
   // aiJobStore (переживает уход со страницы во время ожидания fal.ai).
+  // Голос персоны сохраняется отдельным эндпоинтом (PUT {id}/voice), поэтому в форме
+  // он живёт своим состоянием и уходит после создания/обновления персоны
+  const [voice, setVoice] = useState<Persona['voice']>(persona?.voice ?? null);
   const [avatar, setAvatar] = useState<Persona['avatar']>(persona?.avatar ?? { kind: 'initials', color: initial?.color ?? 'orange' });
   const [canGenerate, setCanGenerate] = useState(false);
   const [avatarPrompt, setAvatarPrompt] = useState('');
@@ -513,6 +517,23 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
   }, [persona, defaultScope, defaultProjectId, initial?.access, initial?.specialty]);
   const dirty = snapshot !== initialSnapshot;
 
+  // Сравнение «менялся ли голос»: поля простые, порядок фиксирован — JSON достаточно
+  const voiceKey = (v: Persona['voice']) =>
+    v ? `${v.voice ?? ''}|${v.role ?? ''}|${v.speed ?? ''}` : '';
+
+  // Отдельный PUT голоса. Сбой не роняет сохранение персоны: остальные поля уже записаны,
+  // и откатывать их из-за голоса неправильно — сообщаем и оставляем как есть
+  const syncVoice = async (saved: Persona): Promise<Persona> => {
+    if (voiceKey(voice) === voiceKey(persona?.voice ?? null)) return saved;
+    try {
+      return await api.personas.setVoice(saved.id, voice ?? null);
+    } catch (e) {
+      setError(e instanceof Error ? `Персона сохранена, но голос не удалось записать: ${e.message}`
+        : 'Персона сохранена, но голос не удалось записать');
+      return saved;
+    }
+  };
+
   const save = async () => {
     if (!canSave || busy) return;
     setBusy(true);
@@ -555,9 +576,15 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
       const saved = isEdit
         ? await api.personas.update(persona!.id, dto)
         : await api.personas.create(dto);
+
+      // Голос — отдельным запросом (у него свой эндпоинт со своей валидацией) и ПОСЛЕ
+      // сохранения: при создании персоны id появляется только здесь. Шлём, только если
+      // он менялся, — иначе каждое сохранение формы дёргало бы лишний PUT
+      const savedVoice = await syncVoice(saved);
+
       bumpPersonas();
       invalidateEffectiveLines(); // строки «Сейчас пойдёт» пересчитаются свежим резолвом
-      onSaved(saved);
+      onSaved(savedVoice);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось сохранить персону');
     } finally {
@@ -732,6 +759,22 @@ export const PersonaForm = forwardRef<PersonaFormHandle, PersonaFormProps>(funct
                   }}
                 />
               </div>
+            </Field>
+          </div>
+          <div style={{ maxWidth: isMobile ? '100%' : 360 }}>
+            <Field label="Голос" hint="Как персона звучит в голосовом режиме">
+              <PersonaVoicePicker
+                value={voice ?? null}
+                onChange={setVoice}
+                // Подбор смотрит на то, что набрано в форме СЕЙЧАС, а не на сохранённое
+                describe={() => ({
+                  name: name.trim() || undefined,
+                  role: role.trim() || undefined,
+                  description: description.trim() || undefined,
+                  character: character.trim() || undefined,
+                  tone: tone.trim() || undefined,
+                })}
+              />
             </Field>
           </div>
         </div>

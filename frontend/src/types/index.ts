@@ -2105,6 +2105,20 @@ export interface PersonaContract {
   instructions?: string;      // полный регламент роли (длинный markdown)
 }
 
+// Голос из каталога синтеза: канонический ключ, подпись для человека, пол и амплуа
+export interface TtsVoiceInfo {
+  voice: string;
+  label: string;
+  gender: 'female' | 'male';
+  roles: string[];
+}
+
+// configured=false — синтеза на сервере нет: предлагать слушать нечего
+export interface TtsVoicesResponse {
+  configured: boolean;
+  voices: TtsVoiceInfo[];
+}
+
 // Как персона звучит в голосовом режиме; отсутствует — голосом инстанса из конфига
 export interface PersonaVoice {
   voice?: string;        // имя голоса SpeechKit (белый список на сервере)

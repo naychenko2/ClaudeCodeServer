@@ -444,6 +444,59 @@ function synthesize(text: string, personaId?: string): Promise<Blob | null> {
   });
 }
 
+// --- Прослушивание голоса в форме персоны ---
+
+// Фраза-образец: одна и та же для всех голосов (сравнивать надо тембр, а не текст) и
+// заведомо короче лимита одного запроса — иначе примерка стоила бы кратно дороже
+export const VOICE_SAMPLE_TEXT = 'Привет! Так я буду звучать в разговоре с тобой.';
+
+// Уже синтезированные образцы: повторное нажатие на ту же строку не должно стоить денег
+// (запрос тарифицируется целиком, независимо от длины). Живёт до перезагрузки вкладки.
+const sampleCache = new Map<string, Blob>();
+
+export class VoicePreviewError extends Error {}
+
+// Послушать голос, не сохраняя его персоне.
+//
+// ОТДЕЛЬНЫЙ путь, а не speak(): в форме выбора голоса фолбэк на синтезатор браузера был бы
+// прямой ложью — человек услышал бы не «Алёну», а голос системы и решил, что она так звучит.
+// Поэтому отказ здесь — исключение с текстом для интерфейса, а не тихая подмена.
+//
+// Токен общий со всей озвучкой: внешний stopSpeaking() (смена чата, начало хода) обязан
+// глушить и примерку тоже. Обратное неверно — вызывающий не должен запускать превью поверх
+// идущего ответа: озвучка хода оборвалась бы, а петля разговора получила бы ложное
+// «озвучка закончилась». Гейт на isSpeaking() — на стороне кнопки.
+export async function previewVoice(voice: string, role?: string, speed?: number): Promise<void> {
+  watchConnection();
+  const key = `${voice}|${role ?? ''}|${speed ?? ''}`;
+  const token = ++speakToken;
+
+  let blob = sampleCache.get(key) ?? null;
+  if (!blob) {
+    try {
+      blob = await request('/tts', {
+        method: 'POST',
+        body: JSON.stringify({ text: VOICE_SAMPLE_TEXT, voice, role, speed }),
+        parse: 'blob',
+        timeoutMs: 45_000,
+      });
+    } catch (e) {
+      const status = (e as { status?: number }).status;
+      const reason = (e as { body?: { reason?: string } }).body?.reason;
+      const error = (e as { body?: { error?: string } }).body?.error;
+      if (status === undefined) throw new VoicePreviewError('Нет связи с сервером');
+      if (status === 503 && reason === 'not_configured')
+        throw new VoicePreviewError('Синтез речи не настроен на сервере');
+      throw new VoicePreviewError(error ?? 'Не удалось синтезировать образец');
+    }
+    if (!blob) throw new VoicePreviewError('Сервер вернул пустой ответ');
+    sampleCache.set(key, blob);
+  }
+
+  if (token !== speakToken) return; // примерку успели погасить, пока шёл синтез
+  await playBlob(blob, token);
+}
+
 function playBlob(blob: Blob, token: number): Promise<void> {
   return new Promise((resolve) => {
     if (typeof Audio === 'undefined') { resolve(); return; }

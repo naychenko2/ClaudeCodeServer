@@ -8,6 +8,7 @@ using ClaudeHomeServer.Protocol;
 using ClaudeHomeServer.Services;
 using ClaudeHomeServer.Services.Personas;
 using ClaudeHomeServer.Services.TriggerSources;
+using ClaudeHomeServer.Services.Tts;
 using ClaudeHomeServer.Telemetry;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -1078,6 +1079,38 @@ public class PersonasController : ControllerBase
     }
 
     // Полная замена набора привязок (PUT-семантика; дёргается MCP personas_bindings_set)
+    // Голос персоны в голосовом режиме. Пустое тело (или объект без единого заполненного
+    // поля) снимает голос — персона возвращается к голосу инстанса.
+    //
+    // Здесь валидация СТРОГАЯ (400), в отличие от пути озвучки, где кривое значение молча
+    // вырождается в дефолт: там на другом конце ухо человека посреди разговора, а тут —
+    // форма, которой ошибку надо показать.
+    [HttpPut("{id}/voice")]
+    public ActionResult<Persona> SetVoice(string id, [FromBody] PersonaVoice? req)
+    {
+        if (_personas.Get(id, UserId) is null) return NotFound();
+
+        if (req is { IsEmpty: false })
+        {
+            if (!TtsVoiceCatalog.IsKnown(req.Voice))
+                return BadRequest(new { error = $"Неизвестный голос синтеза: {req.Voice}" });
+            if (!string.IsNullOrWhiteSpace(req.Role) && !TtsVoiceCatalog.SupportsRole(req.Voice, req.Role))
+            {
+                var roles = TtsVoiceCatalog.RolesFor(req.Voice);
+                return BadRequest(new
+                {
+                    error = roles.Count == 0
+                        ? $"Голос {req.Voice} не поддерживает амплуа"
+                        : $"Голос {req.Voice} не умеет «{req.Role}»; доступны: {string.Join(", ", roles)}",
+                });
+            }
+            if (req.Speed is { } speed and (< 0.1 or > 3.0))
+                return BadRequest(new { error = "Темп речи допустим в диапазоне 0.1–3.0" });
+        }
+
+        return Ok(_personas.SetVoice(id, UserId, req));
+    }
+
     [HttpPut("{id}/bindings")]
     public async Task<ActionResult<IReadOnlyList<PersonaBinding>>> SetBindings(string id,
         [FromBody] PersonaBindingsSetRequest req)

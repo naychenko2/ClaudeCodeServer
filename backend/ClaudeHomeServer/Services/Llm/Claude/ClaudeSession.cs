@@ -374,21 +374,37 @@ public class ClaudeSession : ILlmSessionAdapter
     // через --disallowedTools; список задаётся из конфига (Claude:DisallowedTools).
     private readonly string[] _disallowedTools;
 
-    // Встроенные Task-инструменты Claude Code (Tasks-фича, синхронизация с claude.ai) —
-    // дублируют наш MCP tasks-server. Пока tasks-server подключён, блокируем их через
-    // --disallowedTools (см. сборку _disallowedTools в конструкторе), чтобы модель звала
-    // mcp__tasks__*, а не пустой встроенный трекер. ВНИМАНИЕ: «Task» (без суффикса) —
-    // это тул ЗАПУСКА СУБАГЕНТА (делегирование), его НЕ трогаем; только трекерные
-    // TaskGet/TaskList/TaskCreate/TaskUpdate.
+    // Встроенные Task-инструменты Claude Code делятся на ДВА набора с разной судьбой.
+    // ВНИМАНИЕ: «Task» (без суффикса) — это тул ЗАПУСКА СУБАГЕНТА (делегирование), его
+    // НЕ трогаем ни при каких условиях; здесь только трекерные, с суффиксом.
     //
-    // ВНИМАНИЕ: раньше тут стояло «несуществующие claude молча проигнорирует» и список
-    // содержал TaskComplete/TaskDelete/TaskSearch. Это допущение сломалось: CLI 2.1.x
-    // ВАЛИДИРУЕТ имена в deny-правилах. В интерактивном режиме он ругается в stderr на
-    // каждый ход, а в `--print` (one-shot) вообще падает с кодом 1 — так у нас разом легли
-    // все ИИ-фичи из-за мёртвого MultiEdit. Мёртвые имена сюда не добавлять: список сверять
-    // с реальным набором инструментов CLI при его обновлении.
-    private static readonly string[] BuiltInTaskTools =
-        ["TaskGet", "TaskList", "TaskCreate", "TaskUpdate"];
+    // ВНИМАНИЕ (общее для обоих списков): раньше тут стояло «несуществующие claude молча
+    // проигнорирует» и список содержал TaskComplete/TaskDelete/TaskSearch. Это допущение
+    // сломалось: CLI 2.1.x ВАЛИДИРУЕТ имена в deny-правилах. В интерактивном режиме он
+    // ругается в stderr на каждый ход, а в `--print` (one-shot) вообще падает с кодом 1 —
+    // так у нас разом легли все ИИ-фичи из-за мёртвого MultiEdit. Мёртвые имена сюда не
+    // добавлять: список сверять с реальным набором инструментов CLI при его обновлении.
+
+    // ЧТЕНИЕ трекера claude.ai — блокируем всегда, пока подключён наш tasks-server: там
+    // пусто, а модель (особенно haiku) шла за задачей туда вместо mcp__tasks__*, получала
+    // «No tasks» и бросала работу.
+    private static readonly string[] BuiltInTaskReadTools =
+        ["TaskGet", "TaskList"];
+
+    // ПЛАН ТЕКУЩЕГО ХОДА (преемник TodoWrite, которого CLI 2.1.226 уже не отдаёт) — нужен
+    // модели, чтобы вести многошаговую работу; по нему же фронт рисует карточку чек-листа
+    // и вкладку «Задачи» артефактов (computeTodos). Блокируем ТОЛЬКО у сессий-исполнителей
+    // задач: там на руках задача продуктового трекера, и «закрытие» её через TaskUpdate
+    // вместо mcp__tasks__tasks_complete оставило бы её висеть в inProgress навсегда
+    // (страховки на этот случай в продукте нет — заведена отдельная задача).
+    //
+    // Граница проходит по «на руках задача трекера», а НЕ по «автономности сессии»:
+    // ходы правил автоматизации персон (Info.AutomationRuleId) и делегированные ходы
+    // план-инструменты получают — путать их не с чем. По той же причине план-тулы НЕ
+    // добавлены в PersonaAccessPolicy.ReadOnlyDisallowed: план хода — не запись наружу
+    // и не правка файлов проекта.
+    private static readonly string[] BuiltInTaskPlanTools =
+        ["TaskCreate", "TaskUpdate"];
 
     // Браузерные инструменты, которые приходят в сессию ПОМИМО нашего MCP-конфига, — два
     // независимых канала: MCP плагина playwright (профили CLI) и коннектор аккаунта claude.ai
@@ -589,12 +605,18 @@ public class ClaudeSession : ILlmSessionAdapter
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
             ? [.. (disallowedTools ?? []), .. extra]
             : disallowedTools ?? [];
-        // Пока подключён наш MCP tasks-server, запрещаем встроенные Task-инструменты
-        // Claude Code (синхронизация с claude.ai — там пусто): они дублируют mcp__tasks__*
-        // и путают модель (особенно haiku зовёт TaskGet/TaskList вместо tasks_get/tasks_list,
-        // получает «No tasks» и бросает задачу). Без задач в сессии — не трогаем.
+        // Пока подключён наш MCP tasks-server, запрещаем ЧТЕНИЕ встроенного трекера
+        // claude.ai: он дублирует mcp__tasks__* и путает модель (haiku звал TaskGet/TaskList
+        // вместо tasks_get/tasks_list, получал «No tasks» и бросал задачу). Без задач
+        // в сессии — не трогаем.
         if (context.TasksMcp is not null)
-            _disallowedTools = [.. _disallowedTools, .. BuiltInTaskTools];
+            _disallowedTools = [.. _disallowedTools, .. BuiltInTaskReadTools];
+        // План хода (TaskCreate/TaskUpdate) закрыт только исполнителю задачи — см. коммент
+        // у BuiltInTaskPlanTools. Условие идёт по свойству СЕССИИ, а не хода: _disallowedTools
+        // считается один раз в конструкторе и в сигнатуру прогона (BuildLaunchSignature)
+        // попадает стабильным — мерцания сигнатуры и перезапуска CLI тут не возникает.
+        if (info.TaskExecution)
+            _disallowedTools = [.. _disallowedTools, .. BuiltInTaskPlanTools];
         // Браузер не положен персоне по роли — закрываем оба канала (плагин + коннектор)
         if (!_browserEnabled)
             _disallowedTools = [.. _disallowedTools, .. BrowserTools];
@@ -1528,6 +1550,14 @@ public class ClaudeSession : ILlmSessionAdapter
         // Свои MCP-серверы — без карточки, см. комментарий у BuiltInMcpServerPrefixes.
         if (ruleDecision == null && Array.Exists(BuiltInMcpServerPrefixes, p => toolName.StartsWith(p, StringComparison.Ordinal)))
             return "allow";
+        // План текущего хода (BuiltInTaskPlanTools) — тоже без карточки: побочных эффектов
+        // вне сессии у него нет, а спрашивать пришлось бы на КАЖДЫЙ шаг плана. В голосовом
+        // режиме и hands-free отвечать на такую карточку вовсе некому — ход завис бы в
+        // Waiting до таймаута. Ветка стоит превентивно: если CLI разрешения на эти тулы не
+        // спрашивает, она просто не сработает. Оба канала permission-запроса
+        // (sdk_control_request и основной) сходятся сюда — второго места для правки нет.
+        if (ruleDecision == null && Array.Exists(BuiltInTaskPlanTools, t => string.Equals(t, toolName, StringComparison.Ordinal)))
+            return "allow";
         if (ruleDecision == "allow" || _autoAllowTools.ContainsKey(toolName)) return "allow";
 
         var tcs = new TaskCompletionSource<string>();
@@ -1994,7 +2024,10 @@ public class ClaudeSession : ILlmSessionAdapter
                     "Управляй ею через MCP-инструменты mcp__tasks__* (tasks_list, tasks_search, tasks_get, tasks_create, " +
                     "tasks_update, tasks_complete, tasks_delete, tasks_add_subtask, tasks_toggle_subtask, tasks_board_columns). " + scope + " " +
                     "Когда пользователь просит создать/найти/изменить задачу, напоминание или список дел — используй эти инструменты, " +
-                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
+                    "а не файлы или собственный список. Даты — в формате YYYY-MM-DD, время HH:MM. " +
+                    "Не путай их со встроенными TaskCreate/TaskUpdate: те ведут план ТЕКУЩЕГО хода " +
+                    "(шаги работы, видны пользователю чек-листом в ленте) и в систему задач не попадают. " +
+                    "Задача пользователя — только mcp__tasks__*." + columnsHint + executeHint + personaExecHint + resultHint + crossProjectHint;
                 Add("mcp-tasks", "Как работать с задачами", tasksHint, group: "mcp");
             }
 

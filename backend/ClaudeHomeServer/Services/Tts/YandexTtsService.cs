@@ -1,32 +1,47 @@
 using System.Text;
+using System.Text.Json;
 
 namespace ClaudeHomeServer.Services.Tts;
 
-// Синтез речи через Yandex SpeechKit REST v1 (tts:synthesize) — озвучка ответов
+// Синтез речи через Yandex SpeechKit API v3 (tts/v3/utteranceSynthesis) — озвучка ответов
 // в голосовом режиме чата. Без ключа/folderId — IsConfigured=false, контроллер отдаёт 503
 // и фронт уходит на голос браузера (speechSynthesis).
 //
-// Референс по SpeechKit — nga-speech-to-text/SpeechKitClient.cs (там STT): у TTS другой хост,
-// form-urlencoded тело и бинарный ответ (audio/mpeg). Авторизация та же: Api-Key сервисного
-// аккаунта, которому для синтеза нужна роль ai.speechkit-tts.user (STT-роли недостаточно).
+// Почему v3, а не v1 (тот отдавал готовый mp3 и переваривал 5000 символов за раз): в v3
+// вдвое больше голосов, и при упаковке кусков он ещё и дешевле — точка безубыточности
+// 121 символ, разбор в docs/research/speechkit-pricing.md §4. Цена перехода — лимит
+// запроса 249 символов (замерено) и ответ не бинарём, а строками JSON с base64 внутри.
+//
+// Авторизация прежняя: Api-Key сервисного аккаунта с ролью ai.speechkit-tts.user (STT-роли
+// недостаточно — при живом ключе будет 403).
 public class YandexTtsService(IHttpClientFactory http, IConfiguration config, ILogger<YandexTtsService> logger)
 {
     public const string HttpClientName = "yandex-tts";
-    private const string Endpoint = "https://tts.api.cloud.yandex.net/speech/v1/tts:synthesize";
-    // Лимит REST v1 — 5000 символов на запрос: длиннее режем по предложениям и склеиваем mp3
-    internal const int MaxCharsPerRequest = 5000;
+    private const string Endpoint = "https://tts.api.cloud.yandex.net/tts/v3/utteranceSynthesis";
+    // Лимит одного запроса v3 — 249 символов (250 уже даёт 400 «Too long text»): длиннее
+    // режем по предложениям и склеиваем. Фронт пакует куски под тот же потолок, так что
+    // сюда обычно приезжает готовый пакет, а нарезка остаётся страховкой
+    internal const int MaxCharsPerRequest = 249;
 
     private readonly string? _apiKey = config["Yandex:SpeechKit:ApiKey"];
     private readonly string? _folderId = config["Yandex:SpeechKit:FolderId"];
-    // Дефолт — ДОКУМЕНТИРОВАННЫЙ голос из списка Яндекса (marina, есть и в v1, и в v3).
-    // Прежним дефолтом была alena: живой API её принимает (проверено 20.08.2026, 200 в обеих
-    // версиях), но в списке голосов документации её нет — а инстанс, поднятый без
-    // Yandex:SpeechKit:Voice, не должен зависеть от недокументированного имени: выключат —
-    // синтез отвалится с 400 у всех, кто голос не задал.
-    private readonly string _voice = config["Yandex:SpeechKit:Voice"] ?? "marina";
     private readonly double _speed = config.GetValue("Yandex:SpeechKit:Speed", 1.0);
+    private readonly string _voice = ResolveVoice(config["Yandex:SpeechKit:Voice"], logger);
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);
+
+    // Незнакомый голос — это опечатка в конфиге, а не повод молчать: сообщаем и берём
+    // дефолтный. Отказ синтеза фронт запоминает на всю сессию, так что одна буква в имени
+    // голоса стоила бы человеку всей озвучки до перезагрузки вкладки.
+    private static string ResolveVoice(string? configured, ILogger logger)
+    {
+        var voice = TtsVoiceCatalog.Resolve(configured);
+        if (!string.IsNullOrWhiteSpace(configured) && !TtsVoiceCatalog.IsKnown(configured))
+            logger.LogWarning("Голос синтеза «{Voice}» не значится среди голосов SpeechKit v3 — " +
+                              "озвучка пойдёт голосом «{Fallback}». Проверь Yandex:SpeechKit:Voice.",
+                configured, voice);
+        return voice;
+    }
 
     // mp3-байты синтезированной речи; null — синтез не удался (не настроен, Яндекс ответил
     // ошибкой или недоступен). Причина уже в логе — вызывающему хватает «не вышло» для 502.
@@ -53,29 +68,29 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
         {
             using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);
             req.Headers.TryAddWithoutValidation("Authorization", $"Api-Key {_apiKey}");
-            req.Content = new FormUrlEncodedContent(new Dictionary<string, string>
-            {
-                ["text"] = chunk,
-                ["lang"] = "ru-RU",
-                ["voice"] = _voice,
-                ["speed"] = _speed.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                ["format"] = "mp3",
-                ["folderId"] = _folderId!,
-            });
+            req.Headers.TryAddWithoutValidation("x-folder-id", _folderId);
+            req.Content = new StringContent(BuildPayload(chunk), Encoding.UTF8, "application/json");
 
             using var resp = await client.SendAsync(req, ct);
-            if (resp.IsSuccessStatusCode)
-                return await resp.Content.ReadAsByteArrayAsync(ct);
+            if (!resp.IsSuccessStatusCode)
+            {
+                // 403 при живом ключе — почти всегда не тот ключ, а не та РОЛЬ: без отдельного
+                // сообщения причина полдня ищется не там (ключ-то работает в STT)
+                if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
+                    logger.LogWarning("SpeechKit отверг синтез (403): ключ жив, но у сервисного аккаунта " +
+                                      "нет роли ai.speechkit-tts.user — выдай её в Yandex Cloud.");
+                else
+                    logger.LogWarning("SpeechKit ответил {Status} на синтез: {Body}",
+                        (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
+                return null;
+            }
 
-            // 403 при живом ключе — почти всегда не тот ключ, а не та РОЛЬ: без отдельного
-            // сообщения причина полдня ищется не там (ключ-то работает в STT)
-            if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden)
-                logger.LogWarning("SpeechKit отверг синтез (403): ключ жив, но у сервисного аккаунта " +
-                                  "нет роли ai.speechkit-tts.user — выдай её в Yandex Cloud.");
-            else
-                logger.LogWarning("SpeechKit ответил {Status} на синтез: {Body}",
-                    (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
-            return null;
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            var audio = ExtractAudio(body);
+            if (audio is null)
+                logger.LogWarning("SpeechKit ответил 200, но пригодного аудио в ответе нет: {Body}",
+                    body.Length > 500 ? body[..500] : body);
+            return audio;
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                    && !ct.IsCancellationRequested)
@@ -86,8 +101,49 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
         }
     }
 
+    // Тело запроса v3. hints — массив, где каждый элемент задаёт ОДНУ подсказку: голос и
+    // скорость в один объект не сложить. Роль (амплуа голоса) не передаём — её пока
+    // неоткуда взять: голос на инстанс один и задаётся строкой конфига.
+    private string BuildPayload(string text) => JsonSerializer.Serialize(new
+    {
+        text,
+        outputAudioSpec = new { containerAudio = new { containerAudioType = "MP3" } },
+        hints = new object[] { new { voice = _voice }, new { speed = _speed } },
+        loudnessNormalizationType = "LUFS",
+    });
+
+    // Ответ v3 — поток JSON-объектов, по строке на кусок аудио; данные лежат в
+    // result.audioChunk.data (base64). Любая неожиданность — строка с ошибкой, строка без
+    // аудио, оборванный на середине поток — это отказ ЦЕЛИКОМ: половина фразы в ушах хуже
+    // честного фолбэка на голос браузера.
+    internal static byte[]? ExtractAudio(string body)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return null;
+
+        using var audio = new MemoryStream();
+        foreach (var line in body.Split('\n'))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length == 0) continue;
+
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                if (!doc.RootElement.TryGetProperty("result", out var result)) return null;
+                if (!result.TryGetProperty("audioChunk", out var piece)) return null;
+                if (!piece.TryGetProperty("data", out var data)) return null;
+                audio.Write(data.GetBytesFromBase64());
+            }
+            catch (Exception ex) when (ex is JsonException or FormatException)
+            {
+                return null;
+            }
+        }
+        return audio.Length > 0 ? audio.ToArray() : null;
+    }
+
     // Нарезка текста под лимит одного запроса: по границам предложений, предложение длиннее
-    // лимита режется жёстко. Чистая internal static функция — иначе её нечем тестировать.
+    // лимита режется по словам. Чистая internal static функция — иначе её нечем тестировать.
     internal static List<string> SplitForSynthesis(string text, int maxLen)
     {
         var chunks = new List<string>();
@@ -101,8 +157,7 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             if (sentence.Length > maxLen)
             {
                 Flush(chunks, sb);
-                for (var i = 0; i < sentence.Length; i += maxLen)
-                    chunks.Add(sentence.Substring(i, Math.Min(maxLen, sentence.Length - i)));
+                chunks.AddRange(SplitLongSentence(sentence, maxLen));
                 continue;
             }
             if (sb.Length > 0 && sb.Length + 1 + sentence.Length > maxLen) Flush(chunks, sb);
@@ -118,6 +173,25 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             chunks.Add(sb.ToString());
             sb.Clear();
         }
+    }
+
+    // Предложение длиннее лимита (модель пишет без точек) режем по последнему пробелу, а не
+    // посреди слова: на лимите 249 эта ветка из почти недостижимой стала обычной, и «Провер /
+    // ка связи» слышно сразу. Слова длиннее лимита не бывает, но на всякий случай режем жёстко.
+    private static IEnumerable<string> SplitLongSentence(string sentence, int maxLen)
+    {
+        var start = 0;
+        while (sentence.Length - start > maxLen)
+        {
+            var cut = sentence.LastIndexOf(' ', start + maxLen - 1, maxLen);
+            if (cut <= start) cut = start + maxLen; // слово длиннее лимита — режем жёстко
+            var piece = sentence[start..cut].Trim();
+            if (piece.Length > 0) yield return piece;
+            start = cut;
+            while (start < sentence.Length && sentence[start] == ' ') start++;
+        }
+        var tail = sentence[start..].Trim();
+        if (tail.Length > 0) yield return tail;
     }
 
     // Предложения по .!?…и переводу строки; хвостовая пачка знаков («?!», «...») не рвётся.

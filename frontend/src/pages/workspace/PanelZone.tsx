@@ -1271,7 +1271,12 @@ export function PanelZone({
       <>
         <div onClick={() => setTabletPanels([])} style={{ position: 'absolute', inset: 0, zIndex: 14, background: windowWidth <= MOBILE_MAX ? C.overlay : 'transparent' }} />
         <div style={{
-          position: 'absolute', top: GAP, bottom: GAP, zIndex: 15,
+          // Drawер по высоте стека: `top: GAP` крепит к верху родителя, `bottom`
+          // НЕ задан — иначе drawер тянется на всю высоту родителя, и его
+          // `boxShadow: SHADOW.modal` (заметная, 24×60) выглядит как «большая
+          // карточка», даже когда внутри сидит короткая панель. `maxHeight`
+          // держит потолок — длинный контент упрётся в него и скроллится внутри.
+          position: 'absolute', top: GAP, maxHeight: `calc(100% - ${GAP * 2}px)`, zIndex: 15,
           ...(isLeft ? { left: RAIL_W + GAP } : { right: RAIL_W + GAP }),
           width: 'min(85vw, 380px)', display: 'flex', flexDirection: 'column', boxShadow: SHADOW.modal,
         }}>

@@ -189,6 +189,47 @@ export function splitSentences(text: string): string[] {
   return out;
 }
 
+// --- Упаковка предложений в пакеты под лимит одного запроса синтеза ---
+
+// Лимит запроса SpeechKit v3 — 249 символов (250 уже 400 «Too long text»).
+export const PACK_LIMIT = 249;
+
+// Хвост короче этого приклеиваем к предыдущему пакету: запрос тарифицируется целиком,
+// и огрызок в пять символов стоит столько же, сколько полный пакет
+const MIN_TAIL = 40;
+
+// Предложения → пакеты. Синтез v3 берёт деньги ЗА ЗАПРОС, а не за символы (точка
+// безубыточности против v1 — 121 символ, разбор в docs/research/speechkit-pricing.md §4),
+// поэтому слать каждое предложение отдельно — значит платить втрое. Но первое предложение
+// уходит В ОДИНОЧКУ: звук обязан пойти сразу, а не после того, как наберётся полный пакет.
+// Чистая функция без состояния — под юнит-тестом.
+export function packSentences(sentences: string[], limit = PACK_LIMIT): string[] {
+  const packs: string[] = [];
+  let buf = '';
+  const flush = () => { if (buf) { packs.push(buf); buf = ''; } };
+
+  for (const raw of sentences) {
+    const s = raw.trim();
+    if (!s) continue;
+    if (packs.length === 0 && !buf) { packs.push(s); continue; } // разгонный пакет
+    if (buf && buf.length + 1 + s.length > limit) flush();
+    buf = buf ? `${buf} ${s}` : s;
+    if (buf.length >= limit) flush();
+  }
+  flush();
+
+  // Огрызок в конце приклеиваем к предыдущему — но только когда пакетов уже больше двух:
+  // иначе склейка удлинит разгонный пакет и отложит первый звук
+  if (packs.length >= 3) {
+    const last = packs[packs.length - 1];
+    const prev = packs[packs.length - 2];
+    if (last.length < MIN_TAIL && prev.length + 1 + last.length <= limit) {
+      packs.splice(packs.length - 2, 2, `${prev} ${last}`);
+    }
+  }
+  return packs;
+}
+
 // --- Поточная резка нарастающего текста хода (режим разговора) ---
 
 // Незакрытое предложение длиннее лимита режем принудительно: модель пишет без точек —
@@ -343,7 +384,7 @@ export function speak(rawText: string): Promise<void> {
 async function runSpeak(rawText: string, token: number): Promise<void> {
   const text = sanitizeForSpeech(rawText);
   if (!text) return;
-  const parts = splitSentences(text);
+  const parts = packSentences(splitSentences(text));
   if (parts.length === 0) return;
 
   // Сервер уже сказал «синтеза нет» — не долбим его на каждое предложение
@@ -454,6 +495,10 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
   watchConnection();
   const token = ++speakToken;
   const queue: string[] = [];
+  // Копилка предложений перед отправкой: синтез берёт деньги за ЗАПРОС, и слать каждое
+  // предложение отдельно втрое дороже (см. packSentences). Копим, только пока в очереди
+  // есть чем занять уши, — иначе пакуем в ущерб паузе, ради которой стриминг и писался
+  let buffer = '';
   let ended = false;
   let stopped = false;
   let failedToServer = false;
@@ -509,6 +554,15 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
     prefetchText = '';
   };
 
+  // Копилка → очередь. Дальше всё как раньше: prefetch подхватит пакет, пока играет текущий
+  const flushBuffer = () => {
+    if (!buffer) return;
+    queue.push(buffer);
+    buffer = '';
+    startPrefetch();
+    void pump();
+  };
+
   const pump = async () => {
     if (pumping) return;
     pumping = true;
@@ -517,6 +571,9 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
         if (token !== speakToken) { finishDone(); return; }
         const text = queue.shift();
         if (text === undefined) {
+          // В очереди пусто, но в копилке лежит недособранный пакет — доигрываем его,
+          // а не ждём следующей дельты: пауза здесь слышна, экономия неощутима
+          if (buffer) { flushBuffer(); continue; }
           if (ended) { finishDone(); return; }
           return; // ждём следующих кусков; pump перезапустится из enqueue/end
         }
@@ -575,11 +632,19 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
   const stream: StreamSpeech = {
     enqueue(text) {
       if (ended || stopped) return; // поздние дельты после end() не читаются
-      queue.push(text);
-      startPrefetch(); // цикл может стоять на playBlob текущего куска — prefetch продолжит без него
-      void pump();
+      const piece = text.trim();
+      if (!piece) return;
+      if (buffer && buffer.length + 1 + piece.length > PACK_LIMIT) flushBuffer();
+      buffer = buffer ? `${buffer} ${piece}` : piece;
+      // Отдаём накопленное, когда пакет полон ЛИБО когда очередь пуста. Пустая очередь —
+      // это либо разгон (ещё ничего не звучало), либо текущий кусок вот-вот кончится:
+      // придержать буфер здесь значит получить ровно ту паузу, от которой уходили
+      if (buffer.length >= PACK_LIMIT || queue.length === 0) flushBuffer();
     },
     end() {
+      // Флаш ДО ended: иначе цикл увидит пустую очередь при ended и закроет done,
+      // недоговорив последний пакет
+      flushBuffer();
       ended = true;
       void pump();
     },
@@ -587,6 +652,7 @@ export function startStreamSpeak(onDone?: () => void): StreamSpeech {
       if (stopped) return;
       stopped = true;
       queue.length = 0;
+      buffer = '';
       finishDone();
       // Оборвать играющий кусок и осиротить стрим: чистящий цикл увидит чужой токен
       stopSpeaking();

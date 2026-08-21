@@ -141,4 +141,37 @@ public class VoiceResolverTests : IDisposable
     {
         Make("зорро").Resolve(null, "user-1").Voice.Should().Be(TtsVoiceCatalog.Default);
     }
+
+    // --- Прослушивание в форме: примеряемый голос сильнее сохранённого ---
+
+    [Fact]
+    public void ЯвныйГолос_СильнееГолосаПерсоны()
+    {
+        // Кнопка «Послушать» играет тем, что человек выбирает СЕЙЧАС, а не сохранённым
+        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "masha", Speed = 1.1 });
+
+        var choice = Make("zahar").Resolve(persona.Id, "user-1",
+            new PersonaVoice { Voice = "julia", Role = "strict", Speed = 0.9 });
+
+        choice.Should().BeEquivalentTo(new VoiceChoice("julia", "strict", 0.9));
+    }
+
+    [Fact]
+    public void ЯвныйГолос_ПроходитТеЖеПроверки()
+    {
+        // Ветка примерки идёт через тот же резолв: амплуа не от того голоса сбрасывается,
+        // темп зажимается — иначе превью падало бы там, где сохранение работает
+        var choice = Make().Resolve(null, "user-1",
+            new PersonaVoice { Voice = "filipp", Role = "strict", Speed = 99 });
+
+        choice.Should().BeEquivalentTo(new VoiceChoice("filipp", null, 3.0));
+    }
+
+    [Fact]
+    public void ПустаяПримерка_НеМешаетГолосуПерсоны()
+    {
+        var persona = PersonaWith("user-1", new PersonaVoice { Voice = "masha" });
+
+        Make().Resolve(persona.Id, "user-1", new PersonaVoice()).Voice.Should().Be("masha");
+    }
 }

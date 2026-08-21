@@ -100,6 +100,8 @@ public static class LocalActionCatalog
     public const string PersonaAutomationSuggest = "persona-automation-suggest";
     public const string PersonaBindingsSuggest = "persona-bindings-suggest";
     public const string PersonaQuickCreate = "persona-quick-create";
+    // Подбор голоса персоны по её характеру: модель выбирает ОДИН ключ из белого списка
+    public const string PersonaVoice = "persona-voice";
     public const string PersonaAiTeam = "persona-ai-team";
     public const string Changelog = "changelog";
     public const string PromptAudit = "prompt-audit";
@@ -213,6 +215,11 @@ public static class LocalActionCatalog
         new(SkillGenerate, "Генерация тела навыка", "Навыки", CheapProfile.Text, DefaultLocal: false),
         new(DailyBriefing, "Утренний бриф", "Продукт", CheapProfile.Large, DefaultLocal: false),
         new(PersonaQuickCreate, "Черновик персоны по промпту", "Персоны", CheapProfile.Text, DefaultLocal: false),
+        // Голос персоны: сопоставить характер и тембр по описаниям голосов. Промпт крошечный
+        // (15 строк каталога), но это выбор «по смыслу», а не механическая правка — уровнем
+        // ниже Medium модель начинает возвращать имена, которых в списке нет
+        new(PersonaVoice, "Голос персоны", "Персоны", CheapProfile.Small, DefaultLocal: false,
+            Tier: ModelTier.Medium),
         new(PersonaAiTeam, "Состав команды персон", "Персоны", CheapProfile.Large, DefaultLocal: false),
         // Сводка «Что нового»: тяжелее прочих (много коммитов, до 12 пунктов JSON, свой большой
         // таймаут Changelog:TimeoutMs) — потребитель передаёт timeout/maxTokens поверх профиля.

@@ -832,6 +832,85 @@ public class PersonasController : ControllerBase
 
     // AI-помощь с характером персоны: сгенерировать с нуля или улучшить/дополнить существующий
     // (one-shot LLM). Возвращает структурированный контракт (P1) для подстановки в форму.
+    // Подбор голоса по характеру персоны. БЕЗ id: характер в момент подбора живёт в форме и
+    // ещё не сохранён, а у новой персоны id попросту нет.
+    //
+    // Три разных исхода, а не один: модель никого не выбрала (200 + voice: null), модель
+    // ответила мусором (502) и сбой вызова (502). Молчание вместо ответа годится фоновому
+    // месту вроде значка проекта — здесь человек нажал кнопку и ждёт реакции.
+    [HttpPost("ai/voice")]
+    public async Task<ActionResult> AiVoice([FromBody] AiVoiceRequest req)
+    {
+        var model = _oneShot.NormalizeModel(_config["Notes:AiModel"] ?? _config["Tasks:AiModel"] ?? "haiku");
+        try
+        {
+            var raw = await _cheap.RunAsync(Services.Llm.LocalActionCatalog.PersonaVoice,
+                BuildVoicePrompt(req), model, UserId, ct: HttpContext.RequestAborted);
+
+            var picked = ParseVoiceAnswer(raw);
+            if (picked is null && raw.Contains("none", StringComparison.OrdinalIgnoreCase))
+                return Ok(new { voice = (string?)null, role = (string?)null });
+
+            if (picked is null)
+            {
+                _log.LogWarning("ai/voice: голос не распознан; сырой ответ: {Raw}",
+                    raw.Length > 600 ? raw[..600] + "…" : raw);
+                return StatusCode(502, new { error = "Модель не выбрала голос из списка — попробуйте ещё раз" });
+            }
+            return Ok(new { voice = picked.Value.Voice, role = picked.Value.Role });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(502, new { error = $"Не удалось подобрать голос: {ex.Message}" });
+        }
+    }
+
+    // Ответ модели: «голос» либо «голос амплуа». Ищем ключ каталога по границам слова —
+    // модель любит добавить объяснение, и подстрочный поиск увёл бы парсер не туда
+    internal static (string Voice, string? Role)? ParseVoiceAnswer(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var words = System.Text.RegularExpressions.Regex.Matches(raw, @"[A-Za-z_]+")
+            .Select(m => m.Value).ToList();
+
+        foreach (var word in words)
+        {
+            var voice = Services.Tts.TtsVoiceCatalog.Canonical(word);
+            if (voice is null) continue;
+            // Амплуа берём только рядом стоящее и только поддержанное этим голосом
+            var role = words.FirstOrDefault(w => Services.Tts.TtsVoiceCatalog.SupportsRole(voice, w));
+            return (voice, role);
+        }
+        return null;
+    }
+
+    private static string BuildVoicePrompt(AiVoiceRequest req)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("Подбери голос синтеза речи, которым будет говорить персона-ассистент.");
+        if (!string.IsNullOrWhiteSpace(req.Name)) sb.AppendLine($"Имя: {req.Name.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Role)) sb.AppendLine($"Роль: {req.Role.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Description)) sb.AppendLine($"Описание: {req.Description.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Character)) sb.AppendLine($"Характер: {req.Character.Trim()}");
+        if (!string.IsNullOrWhiteSpace(req.Tone)) sb.AppendLine($"Тон: {req.Tone.Trim()}");
+
+        sb.AppendLine();
+        sb.AppendLine("Доступные голоса (ключ · описание · пол · доступные амплуа):");
+        foreach (var v in Services.Tts.TtsVoiceCatalog.All)
+        {
+            var roles = v.Roles.Count > 0 ? string.Join(", ", v.Roles) : "нет";
+            var gender = v.Gender == Services.Tts.TtsVoiceCatalog.Gender.Female ? "женский" : "мужской";
+            sb.AppendLine($"{v.Voice} · {v.Label} · {gender} · амплуа: {roles}");
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("Ответь ОДНОЙ строкой: ключ голоса, либо ключ голоса и амплуа через пробел. " +
+                      "Амплуа указывай только из списка доступных для этого голоса. " +
+                      "Если ни один голос не подходит — ответь: none. " +
+                      "Никаких пояснений.");
+        return sb.ToString();
+    }
+
     [HttpPost("ai/character")]
     public async Task<ActionResult> AiCharacter([FromBody] AiCharacterRequest req)
     {
@@ -1086,7 +1165,7 @@ public class PersonasController : ControllerBase
     // вырождается в дефолт: там на другом конце ухо человека посреди разговора, а тут —
     // форма, которой ошибку надо показать.
     [HttpPut("{id}/voice")]
-    public ActionResult<Persona> SetVoice(string id, [FromBody] PersonaVoice? req)
+    public async Task<ActionResult<Persona>> SetVoice(string id, [FromBody] PersonaVoice? req)
     {
         if (_personas.Get(id, UserId) is null) return NotFound();
 
@@ -1108,7 +1187,11 @@ public class PersonasController : ControllerBase
                 return BadRequest(new { error = "Темп речи допустим в диапазоне 0.1–3.0" });
         }
 
-        return Ok(_personas.SetVoice(id, UserId, req));
+        var persona = _personas.SetVoice(id, UserId, req);
+        // Как и все соседние мутации: смена голоса должна долетать до других вкладок и
+        // списка персон, иначе там останется прежний голос до перезагрузки
+        await Broadcast("updated", id);
+        return Ok(persona);
     }
 
     [HttpPut("{id}/bindings")]
@@ -2421,6 +2504,9 @@ public record UpdateMemoryRequest(string Text);
 public record GenerateAvatarRequest(string? Prompt = null, int? Count = null);
 
 public record AiCharacterRequest(string? Name, string? Role, string? Description, string? Current, string? Instruction);
+
+// Подбор голоса: всё нужное приходит в теле, потому что персона может быть ещё не сохранена
+public record AiVoiceRequest(string? Name, string? Role, string? Description, string? Character, string? Tone);
 
 // AutoBindings: null/true — подобрать привязки AI после создания (за флагом persona-bindings),
 // false — не подбирать.

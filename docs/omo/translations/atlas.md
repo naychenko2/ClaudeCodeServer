@@ -204,12 +204,16 @@ Task(subagent_type="general-purpose", run_in_background=false, prompt="…зад
 
 ### Шаг 0: зарегистрируй трекинг
 
+Если todo-инструменты доступны, заведи два пункта — по одному вызову на каждый
+(TaskCreate инкрементальный, списком не принимает):
+
 ```
-TodoWrite([
-  { id: "orchestrate-plan", content: "Завершить ВСЕ задачи реализации", status: "in_progress", priority: "high" },
-  { id: "pass-final-wave", content: "Пройти финальную волну проверки — ВСЕ ревьюеры дают APPROVE", status: "pending", priority: "high" }
-])
+TaskCreate({ subject: "Завершить ВСЕ задачи реализации", description: "..." })
+TaskCreate({ subject: "Пройти финальную волну проверки — ВСЕ ревьюеры дают APPROVE", description: "..." })
 ```
+
+Дальше веди их через `TaskUpdate({ taskId, status })`. Инструменты закрыты (например,
+ты исполнитель задачи из трекера) — держи те же два пункта в голове и отчитывайся текстом.
 
 ### Шаг 1: проанализируй план
 

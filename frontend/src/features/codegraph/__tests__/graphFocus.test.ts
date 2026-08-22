@@ -102,3 +102,39 @@ describe('buildFocusModel', () => {
     expect(buildFocusModel(g, 'нет-такого', { filters: ALL })).toBeNull();
   });
 });
+
+describe('focusNeighbours — языковой фильтр', () => {
+  // M1: focusNeighbours с options.languages пропускает соседей выключенного языка.
+  // Без этого раскрытый хвост «+N» в панели показывал языки, которые холст скрыл
+  function langGraph(): CodeGraph {
+    return {
+      nodes: [
+        { id: 'center', label: 'c', fullyQualifiedName: 'A.C', sourceFile: 'C.cs', sourceLocation: '1', kind: 'Class' },
+        { id: 'cs1', label: 'cs1', fullyQualifiedName: 'A.CS1', sourceFile: 'C1.cs', sourceLocation: '1', kind: 'Class' },
+        { id: 'ts1', label: 'ts1', fullyQualifiedName: 'A.TS1', sourceFile: 'T1.tsx', sourceLocation: '1', kind: 'Component' },
+        { id: 'ts2', label: 'ts2', fullyQualifiedName: 'A.TS2', sourceFile: 'T2.tsx', sourceLocation: '1', kind: 'Component' },
+      ],
+      edges: [
+        { source: 'cs1', target: 'center', relation: 'References', confidence: 'Extracted' },
+        { source: 'ts1', target: 'center', relation: 'References', confidence: 'Extracted' },
+        { source: 'ts2', target: 'center', relation: 'References', confidence: 'Extracted' },
+      ],
+      godNodes: [],
+      metadata: { nodeCount: 4, edgeCount: 3, fileCount: 4, isStale: false },
+    };
+  }
+
+  it('оставляет соседей только включённого языка', () => {
+    const g = langGraph();
+    const onlyTs = focusNeighbours(g, 'center', 'in', { filters: ALL, languages: { csharp: false, typescript: true } });
+    expect(onlyTs.map(o => o.node.id).sort()).toEqual(['ts1', 'ts2']);
+    const onlyCs = focusNeighbours(g, 'center', 'in', { filters: ALL, languages: { csharp: true, typescript: false } });
+    expect(onlyCs.map(o => o.node.id)).toEqual(['cs1']);
+  });
+
+  it('без явного languages ведёт себя как «оба включены» (обратная совместимость)', () => {
+    const g = langGraph();
+    const all = focusNeighbours(g, 'center', 'in', { filters: ALL });
+    expect(all).toHaveLength(3);
+  });
+});

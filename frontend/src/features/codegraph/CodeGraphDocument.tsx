@@ -18,7 +18,7 @@ import { Toolbar, ToolbarIconButton } from '../../components/Toolbar';
 import { Modal } from '../../components/ui/Modal';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useCodeGraph, useCodeGraphActions } from '../../lib/codeGraph';
-import { graphDegree } from './graphFocus';
+import { graphDegree, nodeLanguage } from './graphFocus';
 import { buildFocusModel } from './graphFocus';
 import { buildOverviewScene, layoutOverview, defaultExpandedGroups, type OverviewItem } from './graphOverview';
 import { CodeGraphFocusCanvas, CodeGraphOverviewCanvas } from './CodeGraphCanvas';
@@ -55,11 +55,12 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
     return buildFocusModel(s.data, s.selectedId, {
       filters: s.filters,
       hideTests: s.hideTestNodes,
+      languages: { csharp: s.langCSharp, typescript: s.langTypeScript },
       depth2: s.focusDepth2,
       mobile: isMobile,
       degree,
     });
-  }, [s.data, s.selectedId, s.filters, s.hideTestNodes, s.focusDepth2, isMobile, degree]);
+  }, [s.data, s.selectedId, s.filters, s.hideTestNodes, s.langCSharp, s.langTypeScript, s.focusDepth2, isMobile, degree]);
 
   // «Обзор»: холст показывает группы неймспейсов по слоям, не типы.
   // Раскрытые пользователем группы — сверх автоматически раскрытого общего корня.
@@ -77,9 +78,10 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
       typesGroup: s.overviewTypesGroup,
       hideTests: s.hideTestNodes,
       filters: s.filters,
+      languages: { csharp: s.langCSharp, typescript: s.langTypeScript },
       typesLimit: isMobile ? 12 : 30,
     });
-  }, [s.data, s.viewMode, overviewExpanded, s.overviewTypesGroup, s.hideTestNodes, s.filters, isMobile]);
+  }, [s.data, s.viewMode, overviewExpanded, s.overviewTypesGroup, s.hideTestNodes, s.filters, s.langCSharp, s.langTypeScript, isMobile]);
 
   const overviewLayout = useMemo(
     () => (overviewScene ? layoutOverview(overviewScene, { size: isMobile ? 'mobile' : 'desktop' }) : null),
@@ -117,14 +119,26 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
     if (!s.filters.Calls) n++;
     if (!s.filters.Implements) n++;
     if (!s.filters.References) n++;
+    if (!s.langCSharp) n++;
+    if (!s.langTypeScript) n++;
     if (s.query.trim()) n++;
     if (s.selectedId) n++;
     return n;
-  }, [s.filters, s.query, s.selectedId]);
+  }, [s.filters, s.langCSharp, s.langTypeScript, s.query, s.selectedId]);
 
   const meta = s.data?.metadata;
   const built = formatBuiltAt(meta?.builtAt);
   const isStale = !!meta?.isStale;
+
+  // Знаменатель «X из N узлов» в StatusBar — по языковому фильтру, иначе
+  // выключенный C# завышает N на размер скрытого языка (M3)
+  const visibleNodeCount = useMemo(() => {
+    if (!s.data) return 0;
+    const langs = { csharp: s.langCSharp, typescript: s.langTypeScript };
+    let n = 0;
+    for (const node of s.data.nodes) if (langs[nodeLanguage(node.sourceFile)]) n++;
+    return n;
+  }, [s.data, s.langCSharp, s.langTypeScript]);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', background: C.bgCard, position: 'relative' }}>
@@ -270,7 +284,7 @@ export function CodeGraphDocument({ projectId, isMobile, onClose, onOpenFile, on
             {/* Счётчик фокуса: честно проговаривает, сколько показано и сколько скрыто */}
             {s.viewMode === 'focus' && focus && (
               <StatusBar>
-                {`Показано ${focus.shownCount} из ${s.data.nodes.length} узлов · глубина ${s.focusDepth2 ? 2 : 1}`}
+                {`Показано ${focus.shownCount} из ${visibleNodeCount} узлов · глубина ${s.focusDepth2 ? 2 : 1}`}
                 {s.focusDepth2 && ` (второе кольцо: ${focus.secondShown} из ${focus.secondTotal}, остальные скрыты)`}
                 {` · связей у центра: ${focus.centerDegree}`}
                 {(focus.incoming.length > focus.limit || focus.outgoing.length > focus.limit)

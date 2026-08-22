@@ -54,11 +54,12 @@ export function CodeGraphMiniMap({ graphOpen, onExpand, onCollapse }: {
     return buildFocusModel(s.data, s.selectedId, {
       filters: s.filters,
       hideTests: s.hideTestNodes,
+      languages: { csharp: s.langCSharp, typescript: s.langTypeScript },
       depth2: s.focusDepth2,
       panel: true,
       degree,
     });
-  }, [s.data, s.viewMode, s.selectedId, s.filters, s.hideTestNodes, s.focusDepth2, degree]);
+  }, [s.data, s.viewMode, s.selectedId, s.filters, s.hideTestNodes, s.langCSharp, s.langTypeScript, s.focusDepth2, degree]);
 
   const scene = useMemo(() => {
     if (!s.data || s.viewMode !== 'overview') return null;
@@ -67,10 +68,11 @@ export function CodeGraphMiniMap({ graphOpen, onExpand, onCollapse }: {
       typesGroup: s.overviewTypesGroup,
       hideTests: s.hideTestNodes,
       filters: s.filters,
+      languages: { csharp: s.langCSharp, typescript: s.langTypeScript },
       maxItems: PANEL_MAX_ITEMS,
       typesLimit: PANEL_TYPES_LIMIT,
     });
-  }, [s.data, s.viewMode, expanded, s.overviewTypesGroup, s.hideTestNodes, s.filters]);
+  }, [s.data, s.viewMode, expanded, s.overviewTypesGroup, s.hideTestNodes, s.filters, s.langCSharp, s.langTypeScript]);
 
   const layout = useMemo(() => (scene ? layoutOverview(scene, { size: 'panel' }) : null), [scene]);
 

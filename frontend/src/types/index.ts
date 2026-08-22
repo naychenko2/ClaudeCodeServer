@@ -97,7 +97,9 @@ export interface BoardColumn {
 // Code Graph — логическая карта типов проекта и рёбер между ними
 // (GET /api/projects/{id}/code-graph). Узлы — типы, рёбра — связи типов,
 // godNodes — точки перегруза (кандидаты на разбиение).
-export type CodeGraphNodeKind = 'Class' | 'Interface' | 'Struct' | 'Enum';
+export type CodeGraphNodeKind =
+  | 'Class' | 'Interface' | 'Struct' | 'Enum'
+  | 'Component' | 'Hook' | 'UiPrimitive' | 'Util';
 export type CodeGraphRelation = 'Calls' | 'Implements' | 'References';
 export type CodeGraphConfidence = 'Extracted' | 'Inferred';
 

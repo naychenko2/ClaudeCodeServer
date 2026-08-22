@@ -46,6 +46,11 @@ interface InternalState {
   legendOpen: boolean;
   hideTestNodes: boolean;
   hideOrphanNodes: boolean;
+  // Языковые фильтры: оба включены по умолчанию, последний включённый не снимается
+  // (toggleGraphLanguage молча отказывает, если выключатся оба — пустой граф никому не нужен).
+  // Применяется и к списку/поиску, и к холстам через единый предикат nodeLanguage().
+  langCSharp: boolean;
+  langTypeScript: boolean;
   focusDepth2: boolean;
   // Раскрытый хвост соседей («+N ещё» на холсте → полный список в панели)
   focusTail: 'in' | 'out' | null;
@@ -107,6 +112,8 @@ let _state: State = {
   legendOpen: false,
   hideTestNodes: false,
   hideOrphanNodes: false,
+  langCSharp: true,
+  langTypeScript: true,
   focusDepth2: false,
   focusTail: null,
   navPath: [],
@@ -148,6 +155,8 @@ export async function loadCodeGraph(projectId: string, force = false): Promise<v
     legendOpen: reset ? false : _state.legendOpen,
     hideTestNodes: reset ? false : _state.hideTestNodes,
     hideOrphanNodes: reset ? false : _state.hideOrphanNodes,
+    langCSharp: reset ? true : _state.langCSharp,
+    langTypeScript: reset ? true : _state.langTypeScript,
     focusDepth2: reset ? false : _state.focusDepth2,
     focusTail: reset ? null : _state.focusTail,
     navPath,
@@ -246,8 +255,19 @@ export function setGraphFilter(rel: CodeGraphRelation, on: boolean) {
 export function toggleGraphFilter(rel: CodeGraphRelation) {
   setGraphFilter(rel, !_state.filters[rel]);
 }
+
+// Языковой фильтр. Хотя бы один язык должен оставаться включённым — иначе
+// граф пустеет целиком, а это против цели фильтра («убрать лишнее», не «убрать всё»).
+// Поэтому попытка снять последний включённый — no-op без побочных эффектов.
+export function toggleGraphLanguage(lang: 'csharp' | 'typescript') {
+  const nextCSharp = lang === 'csharp' ? !_state.langCSharp : _state.langCSharp;
+  const nextTypeScript = lang === 'typescript' ? !_state.langTypeScript : _state.langTypeScript;
+  if (!nextCSharp && !nextTypeScript) return;
+  set({ langCSharp: nextCSharp, langTypeScript: nextTypeScript });
+}
+
 export function resetGraphFilters() {
-  set({ filters: { ...ALL_ON } });
+  set({ filters: { ...ALL_ON }, langCSharp: true, langTypeScript: true });
 }
 
 export function setGraphQuery(q: string) {
@@ -367,6 +387,7 @@ export function useCodeGraphActions() {
     load: (projectId: string, force?: boolean) => { void loadCodeGraph(projectId, force); },
     build: (projectId: string) => { void buildCodeGraph(projectId); },
     toggleFilter: toggleGraphFilter,
+    toggleLanguage: toggleGraphLanguage,
     resetFilters: resetGraphFilters,
     setQuery: setGraphQuery,
     select: selectGraphNode,

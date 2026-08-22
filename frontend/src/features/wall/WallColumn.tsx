@@ -21,6 +21,7 @@ import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { ChatPanel } from '../../components/ChatPanel';
 import { ProjectIcon } from '../projects/ProjectIcon';
 import { useCanHover } from '../../lib/pointer';
+import { useAgentsRunning } from '../../lib/agentsPresence';
 import { projectTone, fadeTone, projectTopWash } from '../../lib/projectTone';
 import { chatStatus, focusChat, updateChat, removeChat, startOrderDrag, isOrderDrag, dropOrder } from './wallStore';
 
@@ -40,7 +41,14 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
   onOpenFile?: (path: string) => void;
 }) {
   const status = chatStatus(session);
-  const busy = status === 'working' || status === 'waiting';
+  // Живые фоновые агенты: ход завершён, статус спокойный — без этого колонка чата,
+  // где идёт работа, выглядит ровно как простаивающая. Стену держат открытой именно
+  // чтобы следить, поэтому молчать тут дороже всего
+  const agentsRunning = useAgentsRunning(session.id);
+  const busy = status === 'working' || status === 'waiting' || agentsRunning;
+  const busyLabel = status === 'waiting' ? 'ждёт вас'
+    : status === 'working' ? 'идёт ход'
+      : 'работают агенты';
   // Вложения композера — per-колонка: загрузка кладёт файл в рабочую папку сессии
   // и возвращает путь сюда; заглушка-[] превращала бы скрепку в молчаливую потерю
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
@@ -140,7 +148,7 @@ export function WallColumn({ session, project, index, focused, onZoom, onOpenFil
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
           {project === null ? 'проект недоступен' : project ? project.name : 'Чат вне проекта'}
-          {busy && <span style={{ color: status === 'waiting' ? C.danger : C.warning }}> · {status === 'working' ? 'идёт ход' : 'ждёт вас'}</span>}
+          {busy && <span style={{ color: status === 'waiting' ? C.danger : C.warning }}> · {busyLabel}</span>}
         </span>
         {/* Тач-экран: «убрать со стены» отдельной кнопкой — подменять ею иконку
             проекта нельзя (без наведения подмена стала бы постоянной, и «чей это

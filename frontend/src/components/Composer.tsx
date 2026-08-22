@@ -23,7 +23,7 @@ import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { showToast } from '../lib/toast';
-import { Modal, Button } from './ui';
+import { Modal } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -426,12 +426,12 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
 
 // Строка состояния озвучки НАД полем ввода — общая для обоих стилей. Поле остаётся
 // полем: в голосовом режиме без петли человек продолжает печатать, и подменять его
-// плашкой нельзя. Два экземпляра с разными текстами и действиями, поэтому геометрия
-// вынесена сюда — копия разъехалась бы на первой правке паддингов.
-function VoiceStatusRow({ icon, text, actions, isMobile }: {
+// плашкой нельзя. Действий у строки нет намеренно: продолжение разговора висело здесь
+// кнопкой, дублирующей кнопку режима в композере строкой ниже — тот же обработчик и то
+// же состояние. Строка только напоминает, что ответы будут озвучены.
+function VoiceStatusRow({ icon, text, isMobile }: {
   icon: ReactNode;
   text: string;
-  actions: ReactNode;
   isMobile?: boolean;
 }) {
   return (
@@ -443,7 +443,6 @@ function VoiceStatusRow({ icon, text, actions, isMobile }: {
       <span style={{ fontSize: FS.sm, color: C.textMuted, fontWeight: 600, flex: 1, minWidth: 0 }}>
         {text}
       </span>
-      <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>{actions}</span>
     </div>
   );
 }
@@ -1932,13 +1931,6 @@ export function Composer({
             ? 'Вслух — короткий пересказ, ответ на экране целиком'
             : 'Разговор на паузе — ответы всё ещё озвучиваются'}
           isMobile={isMobile}
-          actions={
-            <Button size="sm" variant="ghostAccent" onClick={handleVoiceButton}
-              title="Продолжить разговор без касаний"
-              style={isMobile ? { minHeight: 40 } : undefined}>
-              Продолжить
-            </Button>
-          }
         />
       )}
       {/* Чипы вложений */}

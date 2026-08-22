@@ -624,7 +624,19 @@ export function Composer({
   const { hasSpeech, isListening, recSeconds, startMic, stopMic } = useVoiceInput({
     onResult: chunk => {
       if (talkActiveRef.current) handsFreeRef.current?.onRecognized(chunk);
-      else setText(prev => (prev ? prev + ' ' + chunk : chunk));
+      else {
+        setText(prev => (prev ? prev + ' ' + chunk : chunk));
+        // Диктовка идёт без фокуса в поле, поэтому браузер не подтягивает вид к каретке —
+        // сами уводим textarea в конец, чтобы человек видел хвост распознанного.
+        // На следующем кадре: к этому моменту React уже дорисовал новый текст, а autoResize
+        // зовём тут же — иначе прокрутка сработала бы по старой высоте.
+        // Только для голоса: на ручной правке середины дёргать поле вниз нельзя
+        requestAnimationFrame(() => {
+          autoResize();
+          const el = textareaRef.current;
+          if (el) el.scrollTop = el.scrollHeight;
+        });
+      }
     },
     onKeyboardFallback: () => textareaRef.current?.focus(),
     onEnd: () => {

@@ -18,7 +18,7 @@ import { type ContextEstimate } from '../../lib/context';
 import { ContextThresholdsDialog } from '../ContextThresholdsDialog';
 import { ICON_SIZE, ICON_STROKE } from '../ui/icons';
 import { C, FONT, R, SHADOW, TB, CHAT_MAX_W, GROUP_COLORS } from '../../lib/design';
-import { useWindowWidth, MOBILE_MAX, TABLET_MAX } from '../../lib/breakpoints';
+import { useWindowWidth, MOBILE_MAX, TABLET_WIDE_MIN } from '../../lib/breakpoints';
 import { Toolbar, ToolbarIconButton } from '../Toolbar';
 import { BackButton, ChatTopicIcon, Modal, ModalActions } from '../ui';
 import { bumpNotes } from '../../lib/notes';
@@ -943,11 +943,19 @@ function ExtractTasksButton({ session, hasMessages, online }: { session: Session
 }
 
 export function ChatHeaderBar({ session, project, hasMessages, online, cost, falCost, glifCost, billing, onBillingChange, rateWindows, isMobile, onBack, activeWorkflow, lastMechanic, onOpenSidebar, ctxEstimate, isWaiting, isCompacting, canCompact, compactNote, onCompact, persona, personaZoneName, agent, participants, onSessionUpdated, island, compact }: ChatHeaderBarProps) {
-  // Планшет (601–1199): мобильная механика — объединённый чип, wide-поповер, плотная
-  // группа кнопок, заголовок с многоточием. Объединяем с mobile через `isCompact`,
-  // чтобы не дублировать ветки внутри costBadges / rightCluster / actionBtns.
+  // УЗКИЙ планшет (601 – TABLET_WIDE_MIN): мобильная механика — объединённый чип,
+  // wide-поповер, плотная группа кнопок, заголовок с многоточием. Объединяем с mobile
+  // через `isCompact`, чтобы не дублировать ветки внутри costBadges / rightCluster /
+  // actionBtns.
+  //
+  // Верхняя граница — TABLET_WIDE_MIN, а не TABLET_MAX: тулбарная ветка ниже
+  // растягивается на всю ширину острова, тогда как лента и композер зажаты в
+  // CHAT_MAX_W = 950 и центрированы. На широком планшете (1120 у MatePad) остров
+  // шире — шапка вылезала за колонку сообщений на 37px с каждой стороны, и контролы
+  // висели левее и правее всего остального. Hero-ветка такой ширины не имеет:
+  // maxWidth: CHAT_MAX_W ставит её ровно над лентой.
   const ww = useWindowWidth();
-  const isTablet = !isMobile && ww > MOBILE_MAX && ww <= TABLET_MAX;
+  const isTablet = !isMobile && ww > MOBILE_MAX && ww < TABLET_WIDE_MIN;
   const isCompact = isMobile || isTablet;
 
   // Теги чата: реестр проекта (для чата вне проекта тегов нет — кнопки тоже нет).

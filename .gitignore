@@ -116,6 +116,8 @@ docs/plans/
 backend/.tmpbuild/
 backend/.vite/
 test-results/
+# Кеш vitest, запущенного из корня репо (появляется от прогонов фронтовых тестов с корня)
+/node_modules/
 
 # Планы plan-mode сессий (выход из планирования пишет сюда); итог работы живёт в коммитах
 .claude/plans/

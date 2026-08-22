@@ -9,7 +9,7 @@ import { Button } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { Check } from 'lucide-react';
 import {
-  TEAM_MECHANICS, DEFAULT_TEAM_SETTINGS, costEstimate, type TeamMechanicId,
+  TEAM_MECHANICS, DEFAULT_TEAM_SETTINGS, costEstimate, detectTeamMechanic, type TeamMechanicId,
 } from './teamMechanics';
 
 export interface TeamMechanicOffer {
@@ -161,16 +161,69 @@ export function hasUserTurnAfter(items: readonly FeedTurnLike[], index: number):
   return false;
 }
 
+// «Запустили механику» — после карточки в ленте есть «живой» ход пользователя с командой
+// этой механики. Симметрично hasUserTurnAfter: считаем ПОСЛЕ индекса карточки, иначе
+// прошлый запуск этой механики (например, в чате-штабе) гасил бы каждое новое предложение
+// той же механики ещё до клика. result/error в ленте между карточкой и user_message
+// пропускаем — нам важен сам факт отправки команды, а не её исход (исход учитывает
+// failedLaunch ниже).
+export function hasLaunchedAfter(
+  items: readonly FeedTurnLike[],
+  index: number,
+  offerId: TeamMechanicId,
+): boolean {
+  for (let j = index + 1; j < items.length; j++) {
+    const it = items[j];
+    if (it.kind !== 'user_message') continue;
+    if (it.systemDirective || it.staffNote || it.auto) continue;
+    const text = (it as { text?: unknown }).text;
+    if (typeof text !== 'string') continue;
+    if (detectTeamMechanic(text) === offerId) return true;
+  }
+  return false;
+}
+
+// «Запуск провалился» — после успешной отправки команды механики в ленте появился
+// error-элемент раньше, чем result. Невалидный ход: списываем launched и возвращаем
+// активную кнопку «повторить». Считаем ПОСЛЕ карточки (симметрично hasLaunchedAfter),
+// иначе прошлая ошибка чужой механики гасила бы не свою карточку.
+export function hasFailedLaunchAfter(
+  items: readonly FeedTurnLike[],
+  index: number,
+): boolean {
+  let seenLaunch = false;
+  for (let j = index + 1; j < items.length; j++) {
+    const it = items[j];
+    if (!seenLaunch && it.kind === 'user_message'
+        && !it.systemDirective && !it.staffNote && !it.auto) {
+      seenLaunch = true;
+      continue;
+    }
+    if (seenLaunch && it.kind === 'error') return true;
+    // result закрывает ход штатно — запуском считается состоявшимся
+    if (seenLaunch && it.kind === 'result') return false;
+  }
+  return false;
+}
+
 // Карточка предложения механики: имя/иконка/ориентир цены + «Запустить» (C.accent —
 // главное действие). После запуска кнопка гаснет; одна механика — одна карточка на чат
 // (дедуп по ленте делает ChatPanel). Отказ (диалог ушёл дальше без запуска) гасит кнопку
 // так же, но с подписью «Вы отказались» — карточка остаётся честной историей разговора,
 // а случайный дорогой клик спустя время становится невозможен.
-export function TeamMechanicOfferCard({ offer, launched, declined, onRun }: {
+//
+// Состояние «Запущено» теперь не тупик: клик по статусу скроллит к ходу запуска
+// (onScrollToLaunch), а если запуск провалился (onRerun не undefined) — рядом кнопка
+// «повторить» той же темой. Сценарий-критерий: в чате-штабе с прошлым /team-implement
+// новое предложение кликабельно, а старая карточка (если ещё видна) не блокирует ленту.
+export function TeamMechanicOfferCard({ offer, launched, failed, declined, onRun, onScrollToLaunch, onRerun }: {
   offer: TeamMechanicOffer;
   launched: boolean;
+  failed?: boolean;
   declined?: boolean;
   onRun: () => void;
+  onScrollToLaunch?: () => void;
+  onRerun?: () => void;
 }) {
   const mech = TEAM_MECHANICS.find(m => m.id === offer.id);
   if (!mech) return null;
@@ -202,13 +255,30 @@ export function TeamMechanicOfferCard({ offer, launched, declined, onRun }: {
         )}
       </div>
       {launched ? (
-        <span style={{
-          display: 'inline-flex', alignItems: 'center', gap: 5, flexShrink: 0,
-          fontSize: FS.xs, fontWeight: 600, color: C.success,
-        }}>
-          <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-          Запущено
-        </span>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0 }}>
+          <button
+            type="button"
+            onClick={onScrollToLaunch}
+            title="Показать ход запуска в ленте"
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 5,
+              fontSize: FS.xs, fontWeight: 600, color: C.success,
+              background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+              fontFamily: 'inherit',
+            }}
+          >
+            <Check size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+            Запущено
+          </button>
+          {failed && onRerun && (
+            <Button variant="primary" size="sm" onClick={onRerun} title="Повторить запуск этой же темой">
+              Повторить
+            </Button>
+          )}
+          {failed && !onRerun && (
+            <span style={{ fontSize: FS.xs, color: C.danger }}>Запуск не удался</span>
+          )}
+        </div>
       ) : declined ? (
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 3, flexShrink: 0 }}>
           <Button

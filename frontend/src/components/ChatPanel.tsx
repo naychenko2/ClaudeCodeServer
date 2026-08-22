@@ -15,7 +15,10 @@ import { ensureGit, loadUnpushedLog } from '../lib/git';
 import { slugify } from '../lib/slug';
 import { parseWorkflowMeta } from '../lib/workflowMeta';
 import { detectTeamMechanic, buildTeamTurnText, DEFAULT_TEAM_SETTINGS, type TeamMechanicId } from '../features/team/teamMechanics';
-import { hasUserTurnAfter, buildMechanicOffers, type TeamMechanicOffer } from '../features/team/TeamMechanicOffer';
+import {
+  hasUserTurnAfter, hasLaunchedAfter, hasFailedLaunchAfter, buildMechanicOffers,
+  type TeamMechanicOffer,
+} from '../features/team/TeamMechanicOffer';
 import {
   buildProjectPresetOffer, resolvePresetCardState, type PresetCardState,
 } from '../features/onboarding/ProjectPresetOffer';
@@ -1348,35 +1351,76 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // закреплял карточку у самого старого маркера, который к тому моменту был погашен
   // ходом пользователя, и запустить механику становилось невозможно.
   const mechanicOffers = useMemo(() => buildMechanicOffers(items), [items]);
-  // «Запущено»: механика уже уходила ходом этого чата (детект по ленте — переживает F5)
-  // либо кнопка нажата только что (локальная пометка до появления user_message). Это же
-  // компенсирует потерю промпт-инструкции «не навязывать после отказа» при компакции.
-  const [clickedMechanics, setClickedMechanics] = useState<ReadonlySet<TeamMechanicId>>(new Set());
-  const launchedMechanics = useMemo(() => {
-    const s = new Set<TeamMechanicId>(clickedMechanics);
-    for (const it of items) {
-      if (it.kind !== 'user_message') continue;
-      const m = detectTeamMechanic(it.text);
-      if (m) s.add(m);
+  // «Запущено» и «запуск провалился» считаем по ИНДЕКСУ карточки, симметрично declined.
+  // Раньше launchedMechanics был Set<TeamMechanicId> и смотрел по всей ленте: в чате, где
+  // механика уже запускалась (например, штаб командной реализации), каждое новое
+  // предложение той же механики рождалось мёртвым — «Запущено» ещё до всякого клика.
+  // hasLaunchedAfter/hasFailedLaunchAfter ограничены окном ПОСЛЕ карточки, поэтому
+  // прошлые запуски невидимы для новой карточки.
+  const [clickedOfferIndices, setClickedOfferIndices] = useState<ReadonlySet<number>>(new Set());
+  const launchedByIndex = useMemo(() => {
+    const s = new Set<number>(clickedOfferIndices);
+    for (const [i, offer] of mechanicOffers) {
+      if (hasLaunchedAfter(items, i, offer.id)) s.add(i);
     }
     // implementMode текстом не детектится (обычное сообщение) — «запущено» = режим включён
-    if (teamImplementState) s.add('implementMode');
+    if (teamImplementState) {
+      for (const [i, offer] of mechanicOffers) {
+        if (offer.id === 'implementMode') s.add(i);
+      }
+    }
     return s;
-  }, [items, clickedMechanics, teamImplementState]);
+  }, [items, mechanicOffers, clickedOfferIndices, teamImplementState]);
+  // Ход с командой ушёл, но result не пришёл — error в ленте раньше result'а. Снимаем
+  // «Запущено» и возвращаем кнопку «Повторить» той же темой. Симметрично launched:
+  // только окно ПОСЛЕ карточки; прошлые ошибки чужих ходов нашу карточку не гасят.
+  const failedByIndex = useMemo(() => {
+    const s = new Set<number>();
+    for (const i of launchedByIndex) {
+      if (hasFailedLaunchAfter(items, i)) s.add(i);
+    }
+    return s;
+  }, [items, launchedByIndex]);
   // «Отказались»: после карточки диалог пошёл дальше (новый живой ход пользователя),
   // а механику так и не запустили — кнопку гасим с подписью, чтобы спустя время не
   // купить случайным кликом дорогой прогон. Индексы карточек, не id: дедуп «одна
-  // механика — одна карточка» уже гарантирует взаимно-однозначность.
+  // механика — одна карточка» уже гарантирует взаимно-однозначность. По симметрии с
+  // launchedByIndex declined считается по индексам — без глобального флага по id.
   const declinedMechanicOffers = useMemo(() => {
     const s = new Set<number>();
-    for (const [i, offer] of mechanicOffers) {
-      if (launchedMechanics.has(offer.id)) continue;
+    for (const [i] of mechanicOffers) {
+      if (launchedByIndex.has(i)) continue;
       if (hasUserTurnAfter(items, i)) s.add(i);
     }
     return s;
-  }, [items, mechanicOffers, launchedMechanics]);
-  const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer) => {
-    setClickedMechanics(prev => new Set(prev).add(offer.id));
+  }, [items, mechanicOffers, launchedByIndex]);
+
+  // Найти индекс user_message, запускающего механику ПОСЛЕ карточки — для скролла.
+  // Симметрично hasLaunchedAfter: ищем живой ход с командой механики после offerIndex.
+  // Служебные ходы и авто-продолжения пропускаем (они не считались запуском для launched).
+  const findLaunchedIndex = useCallback((items: readonly ChatItem[], offerIndex: number, offerId: TeamMechanicId): number | null => {
+    for (let j = offerIndex + 1; j < items.length; j++) {
+      const it = items[j];
+      if (it.kind !== 'user_message') continue;
+      if (it.systemDirective || it.staffNote || it.auto) continue;
+      if (detectTeamMechanic(it.text) === offerId) return j;
+    }
+    return null;
+  }, []);
+
+  // Скролл к user_message с командой механики ПОСЛЕ карточки — для клика по статусу
+  // «Запущено». Элементы ленты помечены data-feed-index, поиск идёт по контейнеру ленты.
+  // Вызывается из TeamMechanicOfferCard при клике по статусу.
+  const scrollToMechanicLaunch = useCallback((offerIndex: number, offerId: TeamMechanicId) => {
+    const targetIdx = findLaunchedIndex(items, offerIndex, offerId);
+    if (targetIdx == null) return;
+    const root = scrollRef.current;
+    const node = root?.querySelector<HTMLElement>(`[data-feed-index="${targetIdx}"]`);
+    node?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [items, findLaunchedIndex]);
+
+  const runTeamMechanic = useCallback(async (offer: TeamMechanicOffer, offerIndex: number) => {
+    setClickedOfferIndices(prev => new Set(prev).add(offerIndex));
     try {
       // «Командная реализация» — режим чата: включается REST-ом ДО отправки темы
       if (offer.id === 'implementMode') {
@@ -1390,7 +1434,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       await send(buildTeamTurnText(offer.id, offer.topic, DEFAULT_TEAM_SETTINGS, chatContext), [], modeRef.current);
     } catch (err) {
       showToast('Командные механики', err instanceof Error ? err.message : 'Не удалось запустить механику');
-      setClickedMechanics(prev => { const n = new Set(prev); n.delete(offer.id); return n; });
+      setClickedOfferIndices(prev => { const n = new Set(prev); n.delete(offerIndex); return n; });
     }
   }, [session.id, send, chatContext, onSessionUpdated, atBottomRef]);
 
@@ -1514,12 +1558,21 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       agentRenderChild={extras?.agentRenderChild}
       turnBoundaryKind={item.kind === 'session_started' ? turnBoundaries.get(i) : undefined}
       teamMechanicOffer={item.kind === 'text' && mechanicOffers.has(i)
-        ? {
-            offer: mechanicOffers.get(i)!,
-            launched: launchedMechanics.has(mechanicOffers.get(i)!.id),
-            declined: declinedMechanicOffers.has(i),
-            onRun: () => void runTeamMechanic(mechanicOffers.get(i)!),
-          }
+        ? (() => {
+            const offer = mechanicOffers.get(i)!;
+            const launched = launchedByIndex.has(i);
+            return {
+              offer,
+              launched,
+              // failed важно только при launched: пока карточка не запущена, ошибок нет
+              failed: launched && failedByIndex.has(i),
+              declined: declinedMechanicOffers.has(i),
+              onRun: () => void runTeamMechanic(offer, i),
+              onScrollToLaunch: () => scrollToMechanicLaunch(i, offer.id),
+              // Перезапуск той же темой — только если запуск провалился (есть failedByIndex)
+              onRerun: launched && failedByIndex.has(i) ? () => void runTeamMechanic(offer, i) : undefined,
+            };
+          })()
         : undefined}
       projectPresetOffer={item.kind === 'text' && presetOffers.has(i) && presetCardState.mode !== 'hidden'
         ? {
@@ -1541,7 +1594,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     denyPermission, handleAllowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
     interrupt, handleMigrateProvider, lastTaskIdx, taskTodos, changeMode, turnBoundaries,
-    mechanicOffers, launchedMechanics, declinedMechanicOffers, runTeamMechanic,
+    mechanicOffers, launchedByIndex, failedByIndex, declinedMechanicOffers, runTeamMechanic, scrollToMechanicLaunch,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,
   ]);
@@ -1800,7 +1853,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             && !!findConsultedPersona(it, getPersonasSnapshot(), project?.id ?? null);
           return (
             <Fragment key={itemKey(it, idx)}>
-              <div style={topBorder ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
+              <div data-feed-index={idx} style={topBorder ? { borderTop: `1px solid ${C.bgInset}` } : undefined}>
                 {it.kind === 'file_changed'
                   ? <FileChangedRow item={it} online={online} onOpenFile={onOpenFile} onRevert={project ? handleRevert : undefined} />
                   : renderItem(it, idx, isPersonaTask
@@ -1847,12 +1900,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           && !item.auto;
         pushNode(
           isUserBubble
-            ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
+            ? <div key={`sp-${i}`} data-feed-index={i} style={{ marginTop: 3, display: 'flex', justifyContent: 'flex-end' }}>{node}</div>
             : (kind === 'user_message' || kind === 'result')
-              ? <div key={`sp-${i}`} style={{ marginTop: 3, display: 'flex', justifyContent: 'center' }}>{node}</div>
+              ? <div key={`sp-${i}`} data-feed-index={i} style={{ marginTop: 3, display: 'flex', justifyContent: 'center' }}>{node}</div>
               : needsTopSpacing
-                ? <div key={`sp-${i}`} style={{ marginTop: 3 }}>{node}</div>
-                : node,
+                ? <div key={`sp-${i}`} data-feed-index={i} style={{ marginTop: 3 }}>{node}</div>
+                : <Fragment key={`sp-${i}`}><span data-feed-index={i} style={{ display: 'contents' }}>{node}</span></Fragment>,
           i
         );
         i++;

@@ -654,8 +654,18 @@ interface ItemProps {
   turnBoundaryKind?: 'entered' | 'returned';
   // Предложение командной механики (маркер <team-mechanic/> в этом тексте; фича
   // default-personas-onboarding): карточка с кнопкой запуска. Дедуп «одна механика —
-  // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда
-  teamMechanicOffer?: { offer: TeamMechanicOffer; launched: boolean; declined?: boolean; onRun: () => void };
+  // одна карточка на чат» и launched считает ChatPanel; сам маркер из текста стрижётся всегда.
+  // В состоянии «Запущено» карточка даёт действие: onScrollToLaunch скроллит к ходу запуска,
+  // onRerun (если есть) — кнопка «Повторить» для провалившегося хода.
+  teamMechanicOffer?: {
+    offer: TeamMechanicOffer;
+    launched: boolean;
+    failed?: boolean;
+    declined?: boolean;
+    onRun: () => void;
+    onScrollToLaunch?: () => void;
+    onRerun?: () => void;
+  };
   // Предложение каркаса (маркер <project-preset key="…"/>; знакомство v2, п.4): карточка
   // с кнопками «Создать» / «Не нужно». Внутри решает, что рисовать — pending/применён/
   // отклонён/null — по переданному состоянию (берётся с DTO проекта, не из ленты).
@@ -1187,8 +1197,11 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             <TeamMechanicOfferCard
               offer={teamMechanicOffer.offer}
               launched={teamMechanicOffer.launched}
+              failed={teamMechanicOffer.failed}
               declined={teamMechanicOffer.declined}
               onRun={teamMechanicOffer.onRun}
+              onScrollToLaunch={teamMechanicOffer.onScrollToLaunch}
+              onRerun={teamMechanicOffer.onRerun}
             />
           )}
           {/* Карточка предложения каркаса проекта — «Создать» / «Не нужно» */}

@@ -1,3 +1,5 @@
+using System.Net;
+using System.Text;
 using ClaudeHomeServer.Services.Tts;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -32,9 +34,13 @@ public class YandexTtsServiceTests
     }
 
     [Fact]
-    public async Task Synthesize_БезКонфига_ВозвращаетNull()
+    public async Task Synthesize_БезКонфига_НиАудио_НиОплаченныхЗапросов()
     {
-        (await Make().SynthesizeAsync("Привет", new VoiceChoice("zahar", null, 1.0))).Should().BeNull();
+        var res = await Make().SynthesizeAsync("Привет", new VoiceChoice("zahar", null, 1.0));
+        res.Audio.Should().BeNull();
+        // Ни одного запроса не ушло — значит и счёт выставлять не за что
+        res.BilledRequests.Should().Be(0);
+        res.Rub.Should().Be(0);
     }
 
     // --- SplitForSynthesis: нарезка под лимит 249 символов на запрос (v3) ---
@@ -150,5 +156,107 @@ public class YandexTtsServiceTests
         YandexTtsService.ExtractAudio("").Should().BeNull();
         YandexTtsService.ExtractAudio("   ").Should().BeNull();
         YandexTtsService.ExtractAudio("""{"result":{}}""").Should().BeNull();
+    }
+
+    // --- учёт оплаченных запросов: SpeechKit тарифицируется ЗА ЗАПРОС ---
+
+    private sealed class StubHandler(Func<int, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        public int Calls;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+            => Task.FromResult(respond(Interlocked.Increment(ref Calls)));
+    }
+
+    private sealed class StubHttpFactory(HttpMessageHandler handler) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(handler, disposeHandler: false);
+    }
+
+    private static YandexTtsService MakeLive(StubHandler handler, double? rubPerRequest = null)
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Yandex:SpeechKit:ApiKey"] = "key",
+            ["Yandex:SpeechKit:FolderId"] = "folder",
+        };
+        if (rubPerRequest is { } r) values["Yandex:SpeechKit:RubPerRequest"] = r.ToString(
+            System.Globalization.CultureInfo.InvariantCulture);
+        var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
+        return new YandexTtsService(new StubHttpFactory(handler), config,
+            NullLogger<YandexTtsService>.Instance);
+    }
+
+    private static HttpResponseMessage AudioOk() => new(HttpStatusCode.OK)
+    {
+        Content = new StringContent(Chunk(1, 2, 3), Encoding.UTF8, "application/json"),
+    };
+
+    // Текст на два запроса: два предложения, каждое длиннее половины лимита в 249 символов
+    private static string TwoChunkText() =>
+        new string('а', 200) + ". " + new string('б', 200) + ".";
+
+    [Fact]
+    public async Task Synthesize_ВсеКускиУспешны_СчитаетКаждыйЗапрос()
+    {
+        var handler = new StubHandler(_ => AudioOk());
+        var res = await MakeLive(handler, rubPerRequest: 0.1626)
+            .SynthesizeAsync(TwoChunkText(), new VoiceChoice("zahar", null, 1.0));
+
+        handler.Calls.Should().Be(2);
+        res.Audio.Should().NotBeNull();
+        res.BilledRequests.Should().Be(2);
+        res.Rub.Should().BeApproximately(0.3252, 1e-6);
+    }
+
+    [Fact]
+    public async Task Synthesize_ОбрывНаВторомКуске_ПервыйЗапросВсёРавноОплачен()
+    {
+        // Яндекс уже принял первый запрос и выставит за него счёт — озвучка провалилась,
+        // а деньги списаны. Промолчать здесь значит занижать расход.
+        var handler = new StubHandler(call => call == 1
+            ? AudioOk()
+            : new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent("boom", Encoding.UTF8, "text/plain"),
+            });
+
+        var res = await MakeLive(handler, rubPerRequest: 0.1626)
+            .SynthesizeAsync(TwoChunkText(), new VoiceChoice("zahar", null, 1.0));
+
+        res.Audio.Should().BeNull("половина фразы хуже честного фолбэка на голос браузера");
+        res.BilledRequests.Should().Be(1);
+        res.Rub.Should().BeApproximately(0.1626, 1e-6);
+    }
+
+    [Fact]
+    public async Task Synthesize_ОтказНаПервомЖеЗапросе_НичегоНеОплачено()
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent("no role", Encoding.UTF8, "text/plain"),
+        });
+
+        var res = await MakeLive(handler).SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0));
+
+        res.BilledRequests.Should().Be(0, "отказ Яндекс не тарифицирует");
+        res.Rub.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Synthesize_ОтветБезАудио_ЗапросВсёРавноОплачен()
+    {
+        // 200 с ошибкой в теле: аудио нет, но запрос принят — значит и посчитан
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("""{"error":{"grpcCode":3,"message":"Too long text"}}""",
+                Encoding.UTF8, "application/json"),
+        });
+
+        var res = await MakeLive(handler, rubPerRequest: 0.1626)
+            .SynthesizeAsync("Привет.", new VoiceChoice("zahar", null, 1.0));
+
+        res.Audio.Should().BeNull();
+        res.BilledRequests.Should().Be(1);
     }
 }

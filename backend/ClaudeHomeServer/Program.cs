@@ -451,6 +451,17 @@ builder.Services.AddQuietHttpClient(
         Category: "ClaudeHomeServer.Tts.Yandex",
         Subject: "синтезом речи Yandex SpeechKit",
         Consequence: "Озвучка ответов переключится на голос браузера."));
+// Деньги Yandex Cloud: остаток на биллинг-аккаунте (Billing API принимает только IAM-токен,
+// поэтому рядом живёт обмен ключа сервисного аккаунта на токен). Опциональная зависимость:
+// без ключа раздел просто выключен, недоступность Яндекса — не ошибка приложения.
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Yandex.YandexIamTokenProvider>();
+builder.Services.AddSingleton<ClaudeHomeServer.Services.Yandex.YandexAccountService>();
+builder.Services.AddQuietHttpClient(
+    ClaudeHomeServer.Services.Yandex.YandexIamTokenProvider.HttpClientName,
+    new QuietHttpClientProfile(
+        Category: "ClaudeHomeServer.Billing.Yandex",
+        Subject: "биллингом Yandex Cloud",
+        Consequence: "Остаток на счёте не показывается; на озвучку и её учёт это не влияет."));
 builder.Services.AddQuietHttpClient(
     ClaudeHomeServer.Controllers.FilesController.OnlyOfficeCommandClient,
     new QuietHttpClientProfile(

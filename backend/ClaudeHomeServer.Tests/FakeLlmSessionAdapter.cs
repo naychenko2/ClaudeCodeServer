@@ -42,6 +42,7 @@ internal sealed class FakeLlmSessionAdapter : ILlmSessionAdapter
     public bool HasQueuedTurn => false;
     public bool OrchestrationActive => false;
     public bool HasPendingBg => false;
+    public bool HasTrackedBg => false;
     public bool IsContinuationInFlight => false;
 
     public Task StartAsync() => Task.CompletedTask;

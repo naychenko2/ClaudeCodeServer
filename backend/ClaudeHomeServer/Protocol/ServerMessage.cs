@@ -102,6 +102,14 @@ public record ToolResultMessage(string ToolUseId, string Content, bool IsError)
 public record BgAgentDoneMessage(IReadOnlyList<string> ToolUseIds, bool Aborted = false)
     : ServerMessage("bg_agent_done");
 
+// Есть ли у чата ЖИВЫЕ фоновые агенты — для списка чатов, не для ленты. Шлётся только на
+// переходе 0↔N (первая задача взята на учёт / закрылась последняя), а не на каждой задаче.
+// Отдельное событие, а не флаг в status_changed: тот дёргает reloadHistory открытого чата
+// (useSession) и пачку рефетчей, а старт фонового агента статуса сессии не меняет вовсе —
+// чат при доживании фона уже Active, и именно поэтому карточка выглядела остывшей
+public record BgAgentsPresenceMessage(bool Active)
+    : ServerMessage("bg_agents_presence");
+
 public record PermissionRequestMessage(string RequestId, string ToolName, object ToolInput)
     : ServerMessage("permission_request");
 

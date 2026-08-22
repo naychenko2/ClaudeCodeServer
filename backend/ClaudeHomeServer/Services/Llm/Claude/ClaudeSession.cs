@@ -305,6 +305,22 @@ public class ClaudeSession : ILlmSessionAdapter
             get { lock (PendingBg) return PendingBg.Count > 0 || PendingBgUnknown; }
         }
 
+        // Только ТОЧНО учтённые фоновые задачи (без PendingBgUnknown) — то, о чём можно
+        // честно сказать человеку «здесь работают агенты». HasPendingBg для этого не
+        // годится: PendingBgUnknown значит «видели запуск, но id не распознали», и он
+        // намеренно консервативен — держать процесс живым лучше зря, чем убить рабочего
+        // агента. Для картинки та же консервативность превращается в ложный значок:
+        // задачи нет, в панели агентов пусто, а карточка чата светится
+        public bool HasTrackedBg
+        {
+            get { lock (PendingBg) return PendingBg.Count > 0; }
+        }
+
+        // Последнее опубликованное наружу значение HasPendingBg (0/1) — гейт события
+        // bg_agents_presence: список чатов интересует только переход 0↔N, а не каждая
+        // задача. Поле (а не свойство) — читается-пишется через Interlocked.Exchange
+        public int BgPresencePublished;
+
         public static TaskCompletionSource NewTcs() =>
             new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
@@ -339,6 +355,13 @@ public class ClaudeSession : ILlmSessionAdapter
     // — P12/P15). Тем же признаком пользуется CloseStdinIfIdle, чтобы не закрыть stdin у прогона с
     // живыми агентами. Чтение _run — как в HasLiveTurn: ссылка атомарна, устаревший в момент чтения
     // run даёт лишь консервативный «фоновые есть» (sweep пропустит), что безопаснее ложного terminus.
+    // Учтённые поимённо фоновые задачи — источник признака «в чате работают агенты» для
+    // списка чатов (см. ILlmSessionAdapter.HasTrackedBg)
+    public bool HasTrackedBg
+    {
+        get { var run = _run; return run is not null && run.HasTrackedBg; }
+    }
+
     public bool HasPendingBg
     {
         get { var run = _run; return run is not null && run.HasPendingBg; }
@@ -2785,6 +2808,9 @@ public class ClaudeSession : ILlmSessionAdapter
             run.UnknownBgToolUses.Clear();
         }
         run.PendingBgUnknown = false;
+        // Процесс умер — фона у чата больше нет. Публикуем ДО закрытия карточек: список
+        // чатов гасит свечение сразу, не дожидаясь рассылки bg_agent_done по каждой карточке
+        PublishBgPresence(run);
         // drainSubagent: false — _subagentWatcher либо уже продренирован и обнулён выше
         // (wasCurrent), либо принадлежит НОВОМУ прогону, заместившему этот (!wasCurrent):
         // дренировать чужой поток здесь было бы порчей его состояния.
@@ -3705,6 +3731,30 @@ public class ClaudeSession : ILlmSessionAdapter
             run.PendingBgUnknown = true;
             lock (run.PendingBg) run.UnknownBgToolUses.Add(toolUseId);
         }
+        PublishBgPresence(run);
+    }
+
+    // Наружу («у чата есть живые фоновые агенты») — ЕДИНСТВЕННАЯ точка публикации: её зовут
+    // после КАЖДОЙ мутации набора фоновых задач, а событие уходит только когда значение
+    // реально сменилось (переход 0↔N). Так не приходится угадывать «те самые» места: учёт
+    // ведут семь разных путей (текстовый TrackBgLaunch, структурные task_started /
+    // task_notification / background_tasks_changed, TaskOutput, финализация прогона).
+    //
+    // Звать СТРОГО вне lock (PendingBg): рассылка уходит в SessionManager, а тот под своим
+    // _saveLock сериализует сессии — держать наш лок в этот момент значило бы выстроить два
+    // лока в противоположном порядке. HasPendingBg берёт лок сам, на мгновение.
+    private void PublishBgPresence(CliRun run)
+    {
+        var active = run.HasTrackedBg ? 1 : 0;
+        if (Interlocked.Exchange(ref run.BgPresencePublished, active) == active) return;
+        _ = Task.Run(async () =>
+        {
+            try { await _onMessage(new BgAgentsPresenceMessage(active == 1)); }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ClaudeSession] bg_agents_presence не разослан: {ex.Message}");
+            }
+        });
     }
 
     // Этот tool_use — фоновый агент, который только запустился и ещё работает? Учёт ведут
@@ -3763,6 +3813,7 @@ public class ClaudeSession : ILlmSessionAdapter
             removed = before - run.PendingBg.Count;
             left = run.PendingBg.Count;
         }
+        PublishBgPresence(run);
         if (removed > 0)
             Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась ({removed} шт.), осталось {left}");
         if (doneTools.Count > 0)
@@ -3792,6 +3843,7 @@ public class ClaudeSession : ILlmSessionAdapter
             run.PendingBg.Remove(agentId, out doneTool);
             left = run.PendingBg.Count;
         }
+        PublishBgPresence(run);
         if (string.IsNullOrEmpty(doneTool)) return;
 
         Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась через TaskOutput (aborted={aborted}), осталось {left}");
@@ -3823,6 +3875,7 @@ public class ClaudeSession : ILlmSessionAdapter
             if (run.UnknownBgToolUses.Remove(toolUseId) && run.UnknownBgToolUses.Count == 0)
                 run.PendingBgUnknown = false;
         }
+        PublishBgPresence(run);
     }
 
     // Структурное событие CLI: завершение фоновой задачи (completed/failed/stopped) — точный
@@ -3856,6 +3909,7 @@ public class ClaudeSession : ILlmSessionAdapter
             }
             if (wasTracked) doneTool = toolUseId;
         }
+        PublishBgPresence(run);
         if (string.IsNullOrEmpty(doneTool)) return;
 
         Console.WriteLine($"[ClaudeSession] Фоновая задача завершилась (структурно, aborted={aborted})");
@@ -3877,7 +3931,9 @@ public class ClaudeSession : ILlmSessionAdapter
     // за ним (и за финализацией прогона), не за этим событием.
     private void HandleBackgroundTasksChanged(CliRun run, JsonElement root)
     {
-        if (IsBackgroundTasksEmptySnapshot(root)) run.PendingBgUnknown = false;
+        if (!IsBackgroundTasksEmptySnapshot(root)) return;
+        run.PendingBgUnknown = false;
+        PublishBgPresence(run);
     }
 
     private async Task HandleStreamEventAsync(JsonElement root)

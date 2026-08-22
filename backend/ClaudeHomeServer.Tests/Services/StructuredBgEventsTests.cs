@@ -145,6 +145,15 @@ public class StructuredBgEventsTests : IDisposable
         return run;
     }
 
+    // Карточки агентов из потока сообщений. Рядом с ними в тот же поток идёт присутствие
+    // фона (BgAgentsPresenceMessage — сигнал для списка чатов), поэтому «сколько карточек
+    // закрылось» считаем по типу, а не по длине списка
+    private static IReadOnlyList<BgAgentDoneMessage> DoneOf(IEnumerable<ServerMessage> sent) =>
+        sent.OfType<BgAgentDoneMessage>().ToList();
+
+    private static IReadOnlyList<BgAgentsPresenceMessage> PresenceOf(IEnumerable<ServerMessage> sent) =>
+        sent.OfType<BgAgentsPresenceMessage>().ToList();
+
     private static Dictionary<string, string> PendingBgOf(object run) =>
         (Dictionary<string, string>)CliRunType.GetField("PendingBg")!.GetValue(run)!;
 
@@ -265,11 +274,11 @@ public class StructuredBgEventsTests : IDisposable
 
         InvokeHandleStructuredTaskNotification(session, run,
             El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1","status":"completed"}"""));
-        await WaitForAsync(() => sent.Count > 0);
+        await WaitForAsync(() => DoneOf(sent).Count > 0);
 
         PendingBgOf(run).Should().NotContainKey("ad465d65e2756280a");
-        sent.Should().ContainSingle().Which.Should().BeOfType<BgAgentDoneMessage>();
-        var msg = (BgAgentDoneMessage)sent[0];
+        DoneOf(sent).Should().ContainSingle();
+        var msg = DoneOf(sent)[0];
         msg.ToolUseIds.Should().Equal("toolu_1");
         msg.Aborted.Should().BeFalse();
     }
@@ -288,10 +297,10 @@ public class StructuredBgEventsTests : IDisposable
 
         InvokeHandleStructuredTaskNotification(session, run,
             El("""{"task_id":"неизвестный-id","tool_use_id":"toolu_орфан","status":"failed"}"""));
-        await WaitForAsync(() => sent.Count > 0);
+        await WaitForAsync(() => DoneOf(sent).Count > 0);
 
-        sent.Should().ContainSingle().Which.Should().BeOfType<BgAgentDoneMessage>();
-        var msg = (BgAgentDoneMessage)sent[0];
+        DoneOf(sent).Should().ContainSingle();
+        var msg = DoneOf(sent)[0];
         msg.ToolUseIds.Should().Equal("toolu_орфан");
         msg.Aborted.Should().BeTrue();
     }
@@ -371,11 +380,11 @@ public class StructuredBgEventsTests : IDisposable
         var notification = El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1","status":"completed"}""");
 
         InvokeHandleStructuredTaskNotification(session, run, notification); // первое завершение
-        await WaitForAsync(() => sent.Count > 0);
+        await WaitForAsync(() => DoneOf(sent).Count > 0);
         InvokeHandleStructuredTaskNotification(session, run, notification); // повтор того же события
         await Task.Delay(100); // дать шанс возможному второму fire-and-forget Task.Run
 
-        sent.Should().ContainSingle("повторное событие для уже закрытой задачи не должно задваивать bg_agent_done");
+        DoneOf(sent).Should().ContainSingle("повторное событие для уже закрытой задачи не должно задваивать bg_agent_done");
     }
 
     [Fact]
@@ -392,12 +401,88 @@ public class StructuredBgEventsTests : IDisposable
 
         InvokeHandleStructuredTaskNotification(session, run,
             El("""{"task_id":"ad465d65e2756280a","tool_use_id":"toolu_1","status":"completed"}""")); // структурный путь
-        await WaitForAsync(() => sent.Count > 0);
+        await WaitForAsync(() => DoneOf(sent).Count > 0);
 
         InvokeHandleTaskNotificationText(session, run,
             "<task-notification><task-id>ad465d65e2756280a</task-id></task-notification>"); // текстовый путь, тот же run
         await Task.Delay(100);
 
-        sent.Should().ContainSingle("текстовый путь после структурного не находит задачу в PendingBg и не шлёт вторую карточку");
+        DoneOf(sent).Should().ContainSingle("текстовый путь после структурного не находит задачу в PendingBg и не шлёт вторую карточку");
+    }
+
+    // --- 5. присутствие фона: сигнал для СПИСКА чатов, только на переходе 0↔N ---
+
+    [Fact]
+    public async Task ПерваяФоноваяЗадача_ПубликуетПрисутствие()
+    {
+        // Пока фоновый агент работает, ход чата уже завершён и статус сессии — Active,
+        // у которого нет ни свечения, ни движения. Это событие — единственный способ
+        // для списка чатов узнать, что работа в чате всё-таки идёт
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-1","tool_use_id":"toolu_1"}"""));
+        await WaitForAsync(() => PresenceOf(sent).Count > 0);
+
+        PresenceOf(sent).Should().ContainSingle().Which.Active.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task ВтораяФоноваяЗадача_ПрисутствиеНеПовторяется()
+    {
+        // Гейт по переходу: событий должно быть столько, сколько РАЗ менялось состояние,
+        // а не сколько задач запущено — иначе десяток агентов дал бы десяток рассылок
+        // всем вкладкам проекта подряд
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-1","tool_use_id":"toolu_1"}"""));
+        await WaitForAsync(() => PresenceOf(sent).Count > 0);
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-2","tool_use_id":"toolu_2"}"""));
+        await Task.Delay(100); // дать шанс возможной второй fire-and-forget рассылке
+
+        PresenceOf(sent).Should().ContainSingle("присутствие публикуется на переходе 0↔N, а не на каждой задаче");
+    }
+
+    [Fact]
+    public async Task НеучтённыйФоновыйЗапуск_ПрисутствиеНеПубликуется()
+    {
+        // PendingBgUnknown значит «видели фоновый запуск, но id задачи не распознали». Он
+        // намеренно консервативен и держит процесс живым — но говорить человеку «здесь
+        // работают агенты» на этом основании нельзя: конкретной задачи нет, панель агентов
+        // пуста, и значок на карточке чата оказывается ложным (замечено на бою 22.08)
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+
+        InvokeHandleTaskNotificationText(session, run, "неважно"); // не трогает набор задач
+        SetPendingBgUnknown(run, true);
+        UnknownBgToolUsesOf(run).Add("toolu_1");
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"","tool_use_id":""}""")); // не парсится
+        await Task.Delay(100);
+
+        PresenceOf(sent).Should().BeEmpty("неопознанный запуск — не повод светить значок агентов");
+    }
+
+    [Fact]
+    public async Task ЗакрытиеПоследнейЗадачи_СнимаетПрисутствие()
+    {
+        // Пока жива хоть одна задача — присутствие держится; снимается ровно на последней
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-1","tool_use_id":"toolu_1"}"""));
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"task-2","tool_use_id":"toolu_2"}"""));
+        await WaitForAsync(() => PresenceOf(sent).Count > 0);
+
+        InvokeHandleStructuredTaskNotification(session, run,
+            El("""{"task_id":"task-1","tool_use_id":"toolu_1","status":"completed"}"""));
+        await Task.Delay(100);
+        PresenceOf(sent).Should().ContainSingle("одна задача ещё работает — присутствие не снимаем");
+
+        InvokeHandleStructuredTaskNotification(session, run,
+            El("""{"task_id":"task-2","tool_use_id":"toolu_2","status":"completed"}"""));
+        await WaitForAsync(() => PresenceOf(sent).Count > 1);
+
+        PresenceOf(sent).Should().HaveCount(2);
+        PresenceOf(sent)[1].Active.Should().BeFalse();
     }
 }

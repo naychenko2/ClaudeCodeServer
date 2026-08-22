@@ -1036,6 +1036,16 @@ public class SessionManager : IDisposable
             .OrderByDescending(s => s.UpdatedAt)
             .ToList();
 
+    // Сессии владельца с ЖИВЫМИ фоновыми агентами — снимок для холодного старта списка чатов
+    // (событие bg_agents_presence клиент мог пропустить, пока не вошёл в группы). Состояния
+    // не держим: источник истины — сам прогон, HasPendingBg берёт свой лок на мгновение.
+    // Сначала фильтр по фону (живой фон — редкость), потом резолв владельца.
+    public IReadOnlyList<string> GetSessionsWithLiveAgents(string ownerId) =>
+        _sessions.Values
+            .Where(e => e.Process is { HasTrackedBg: true } && ResolveOwnerId(e.Info) == ownerId)
+            .Select(e => e.Info.Id)
+            .ToList();
+
     // Число сессий проекта — для карточки проекта (без аллокации списка)
     public int CountByProject(string projectId) =>
         _sessions.Values.Count(e => e.Info.ProjectId == projectId);
@@ -7759,6 +7769,13 @@ public class SessionManager : IDisposable
                 case BgAgentDoneMessage m:
                     acc.OnBgAgentsDone(m.ToolUseIds);
                     await acc.SaveSnapshotAsync(_history);
+                    break;
+                // Присутствие фона — сигнал для СПИСКА чатов, а не для ленты: в историю не
+                // пишем (состояние живёт ровно столько, сколько процесс) и статус сессии не
+                // трогаем — ApplyStatusAsync двигал бы UpdatedAt, а по нему идут сортировка,
+                // секции дерева и непрочитанность. Рассылка — в session + project/user-группы
+                case BgAgentsPresenceMessage m:
+                    await BroadcastSessionMessageAsync(sessionId, m);
                     break;
                 case FileChangedMessage m:
                     acc.OnFileChanged(m.Path, m.Added, m.Removed, m.External);

@@ -68,8 +68,9 @@
 [remote-access.md](operations/remote-access.md) (Tailscale + HTTPS).
 
 **design/** — [guidelines.md](design/guidelines.md) (обязательна для правок UI),
-[audit.md](design/audit.md) (сверка реализации с макетами), `mockups/` — кликабельные
-прототипы в HTML.
+[target-devices.md](design/target-devices.md) (приоритетные устройства и их ширины
+в CSS-пикселях), [audit.md](design/audit.md) (сверка реализации с макетами),
+`mockups/` — кликабельные прототипы в HTML.
 
 **adr/** —
 [ADR-001](adr/ADR-001-task-and-chat-origin.md) (происхождение задач и чатов),

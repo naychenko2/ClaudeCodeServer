@@ -180,4 +180,57 @@ public class DossierStoreTests : IDisposable
         _store.List(Owner, "p1").Should().BeEmpty();
         _store.List(Owner, "p2").Should().BeEmpty();
     }
+
+    // CapturedAt (спринт Г): момент снятия паспорта. Own-записи получают UtcNow в Add,
+    // импортированные (AddImportedRange) остаются null, старый JSON без поля читается без ошибок.
+    [Fact]
+    public void Add_ЗаполняетCapturedAt_ИПерсистит()
+    {
+        var before = DateTimeOffset.UtcNow;
+        var added = _store.Add(New("aaaa1111"));
+        var after = DateTimeOffset.UtcNow;
+
+        added.CapturedAt.Should().NotBeNull();
+        var captured = added.CapturedAt!.Value;
+        captured.Should().BeOnOrAfter(before);
+        captured.Should().BeOnOrBefore(after);
+
+        // Персист: новый стор поверх того же data-каталога читает поле с диска
+        var reloaded = new DossierStore(new ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?>
+            {
+                ["DataPath"] = Path.Combine(_temp, "projects.json"),
+                ["Dossiers:MaxEntries"] = "2",
+            }).Build());
+        reloaded.List(Owner, Project).Should().ContainSingle(d => d.CommitSha == "aaaa1111")
+            .Which.CapturedAt.Should().NotBeNull();
+    }
+
+    [Fact]
+    public void AddImportedRange_НеЗаполняетCapturedAt()
+    {
+        var imported = New("imp1");
+        imported.Origin = DossierOrigin.Imported;
+        imported.ImportedAuthor = "author";
+        imported.ImportedFromBranch = "ccs/dossiers/v1";
+
+        _store.AddImportedRange(Owner, Project, [imported]);
+
+        _store.List(Owner, Project).Should().ContainSingle(d => d.CommitSha == "imp1")
+            .Which.CapturedAt.Should().BeNull("момент захвата импортированной записи не известен");
+    }
+
+    [Fact]
+    public void СтарыйJsonБезCapturedAt_ДесериализуетсяБезОшибок()
+    {
+        var dir = Path.Combine(_temp, "dossiers", Owner);
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "legacy.json"),
+            """
+            [{"Id":"legacy1","OwnerId":"ownerA","ProjectId":"legacy","CommitSha":"old1111","CommitSubject":"старая запись","CommittedAt":"2026-01-01T00:00:00Z"}]
+            """);
+
+        var d = _store.List(Owner, "legacy").Should().ContainSingle(x => x.CommitSha == "old1111").Subject;
+        d.CapturedAt.Should().BeNull();
+    }
 }

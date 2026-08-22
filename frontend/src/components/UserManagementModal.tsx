@@ -137,6 +137,17 @@ export function UserManagementModal({ currentUserId, onClose }: Props) {
         title={titleNode}
         width={620}
         onClose={onClose}
+        // В titleNode справа primary-кнопка «Добавить» — встроенный крестик встал
+        // бы правее неё и сломал порядок «главное действие у края». Вместо него
+        // явный выход футером «Закрыть».
+        hideCloseButton
+        footer={
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Button variant="secondary" size="md" onClick={onClose}>
+              Закрыть
+            </Button>
+          </div>
+        }
       >
         {loading && (
           <div style={{ color: C.textMuted, fontSize: 14, padding: '12px 0' }}>Загрузка…</div>

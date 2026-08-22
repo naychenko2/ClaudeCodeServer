@@ -79,9 +79,7 @@ export function Modal({
 
   // Крестик в углу карточки. Внутри карточки (currentTarget у оверлея — другой),
   // поэтому клик по нему НЕ сработает как closeOnBackdrop, и stopPropagation не нужен.
-  // Размер sm: не вылезает за кромку и не перекрывает заголовок. На loading-фазе
-  // диалог может подменить onClose на no-op — крестик честно отдаст это, и тогда
-  // закрытие не сработает (это и есть защита «не закрывай меня посреди запроса»).
+  // Размер sm: не вылезает за кромку и не перекрывает заголовок.
   const closeButton = hideCloseButton ? null : (
     <IconButton
       size="sm"
@@ -116,13 +114,17 @@ export function Modal({
     </div>
   );
 
-  // Ряд шапки с крестиком. На десктопе — встроен в верхнюю секцию карточки.
-  const headerRow = (titleBlock || closeButton) && (
-    <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, flexShrink: 0 }}>
-      {titleBlock}
-      {closeButton}
-    </div>
-  );
+  // Ряд шапки. На десктопе — заголовок слева, крестик справа. На мобиле крестик
+  // уже стоит в handle-row шторки, поэтому в шапке остаётся только titleBlock
+  // (без крестика и без лишнего ряда из одного крестика, когда title/subtitle пусты).
+  const headerRow = isMobile
+    ? titleBlock
+    : (titleBlock || closeButton) && (
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: SP.sm, flexShrink: 0 }}>
+          {titleBlock}
+          {closeButton}
+        </div>
+      );
 
   const overlayBase: CSSProperties = {
     position: 'fixed', inset: 0, background: C.overlay,
@@ -134,6 +136,11 @@ export function Modal({
       <div
         className="cc-overlay"
         style={{ ...overlayBase, alignItems: 'flex-end' }}
+        // closeOnBackdrop=false во время loading — клик по оверлею закрывать нельзя
+        // (диалог запирает UI, иначе человек останется без ответа). Но осознанно
+        // оставляем Escape и крестик рабочими даже в loading: это явное намерение
+        // закрыть, и лучше снять диалог и показать ответ устаревшим, чем запереть
+        // окно навсегда (так уже ловил QA: «не закрывается»).
         onPointerDown={(e) => { if (closeOnBackdrop && e.target === e.currentTarget) onClose(); }}
       >
         <div

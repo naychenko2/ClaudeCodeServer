@@ -254,6 +254,9 @@ export function BackgroundSection({ project, iconColor, onColorChange, onProject
         <Modal
           width={MODAL_W.confirm}
           onClose={() => setConfirm(null)}
+          // Без title первым ребёнком идёт превью во всю ширину — встроенный
+          // крестик встал бы над ним и отодвинул картинку вниз.
+          hideCloseButton
           footer={
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: SP.sm }}>
               <Button variant="ghost" size="md" onClick={() => setConfirm(null)}>

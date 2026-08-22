@@ -4,8 +4,8 @@
 // Шесть состояний по макету docs/mockups/dossier-export-dialog.md:
 //  1. confirm         — обычное подтверждение
 //  2. confirmShared   — то же + предупреждение об общей папке
-//  3. loading         — запрос ушёл; диалог НЕ закрывается (иначе git-операция
-//                       оставила бы человека без ответа)
+//  3. loading         — запрос ушёл; closeOnBackdrop=false, но Escape и крестик
+//                       закрывают диалог штатно (явное намерение пользователя)
 //  4. success         — финальная карточка «выгружено N паспортов»
 //  5. empty           — финальная карточка «нечего выгружать» (бэк вернул ноль)
 //  6. error           — финальная карточка + возврат к действию с теми же кнопками
@@ -86,21 +86,23 @@ interface Props {
 
 export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: Props) {
   // Локальный phase живёт в модалке: при переоткрытии стартуем с подтверждения
-  // (не возвращаемся в success/error прошлого запуска). loading держит диалог открытым
-  // — closeOnBackdrop=false + no-op onClose внутри запроса.
+  // (не возвращаемся в success/error прошлого запуска).
   const [phase, setPhase] = useState<Phase>('confirm');
   const [lastAction, setLastAction] = useState<LastAction>('export');
   const [count, setCount] = useState(0);
 
   // При каждом открытии сбрасываемся в подтверждение — иначе после успеха/ошибки
   // повторный клик по кнопке тулбара привёл бы к финальному состоянию прошлого запуска.
+  // sharedFolder в зависимости НЕТ: если статус общей папки придёт во время loading,
+  // эффект выдернет фазу из loading обратно в confirm и пользователь увидит второй
+  // параллельный запуск того же экспорта (m6 из ревью Глеба 20.08).
   useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- ресет при каждом открытии модалки
       setPhase(sharedFolder ? 'confirmShared' : 'confirm');
       setCount(0);
     }
-  }, [open, sharedFolder]);
+  }, [open]);
 
   // Закрыт — не рендерим карточку. Эта проверка нужна на случай, когда родитель
   // держит DossierExportDialog смонтированным постоянно (двойное монтирование
@@ -126,10 +128,6 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
   };
 
   const busy = phase === 'loading';
-  // Закрытие разрешено в любой фазе, включая loading: запрос уже ушёл, его UI не
-  // отменит, но диалог запирать нельзя (QA фиксировал «не закрывается»). При ошибке
-  // catch выше переводит phase в 'error', busy сбрасывается, и закрытие работает штатно.
-  const handleClose = onClose;
   const mainLabel = lastAction === 'exportPush' ? T.btnExportPush : T.btnExport;
 
   return (
@@ -139,7 +137,7 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
       // closeOnBackdrop=false во время запроса — иначе клик по оверлею посреди
       // git-плюминга оставил бы пользователя без ответа.
       closeOnBackdrop={!busy}
-      onClose={handleClose}
+      onClose={onClose}
     >
       {phase === 'confirm' || phase === 'confirmShared' || phase === 'loading' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>

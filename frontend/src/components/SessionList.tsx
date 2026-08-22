@@ -466,7 +466,7 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       <ChatListToolbar
         onNew={() => { void createNew(); }}
         hideNew={!online}
@@ -481,8 +481,14 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
       {/* Сверху отступ ужимается только под разделитель группы («Сегодня»): свой
           верхний padding у него есть, и вместе с общим набегало 18px пустоты под
           шапкой. Без группировки список начинается сразу карточкой — ей нужен
-          обычный отступ, иначе она липнет к заголовку. */}
-      <div style={{ flex: 1, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
+          обычный отступ, иначе она липнет к заголовку.
+          minHeight:0 нужен потому, что внешний контейнер — flex-элемент
+          контентной зоны PanelShell при fill=false (одна панель в drawer'е): без
+          явного обнуления min-height flex-элемент по умолчанию растёт до высоты
+          контента и не сжимается, а overflow:auto у скролл-дива не срабатывает,
+          потому что нет переполнения. С minHeight:0 список сжимается до
+          свободного места родителя, а длинный контент уходит в скролл. */}
+      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: `${groupBy === 'none' ? 8 : 2}px 8px 8px` }}>
         {/* Чатов в проекте нет вовсе (список уже приехал) — не голая панель, а empty-state.
             Условие по loaded, а не по длине: пустой стартовый массив ещё не значит «чатов
             нет», и empty мигнул бы до загрузки. Кнопки создания тут нет — «Новый» живёт

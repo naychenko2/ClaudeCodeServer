@@ -1615,7 +1615,11 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
   );
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    // minHeight:0 — см. SessionList: при fill=false в drawer'е контентная зона
+    // PanelShell имеет auto-высоту, и без обнуления min-height flex-элемент
+    // растёт до высоты контента и не сжимается; overflow:auto у скролл-дива
+    // не срабатывает, потому что нет переполнения.
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
       {/* Шапки может не быть (мобильная вкладка сайдбара) — тогда те же контролы
           рисуются своей строкой в теле панели */}
       {hasPanelHeader
@@ -1705,8 +1709,10 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
       )}
 
       {/* Tree / список папки / результаты поиска */}
-      {/* Дерево: сверху воздух, чтобы первая строка не липла к кромке шапки */}
-      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: `${SP.sm}px 4px 12px` }}>
+      {/* Дерево: сверху воздух, чтобы первая строка не липла к кромке шапки.
+          minHeight:0 — см. комментарий у внешнего div'а: без него скролл не
+          появляется в drawer'е с одной короткой панелью (fill=false). */}
+      <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, minHeight: 0, overflowX: isMobile ? 'hidden' : 'auto', overflowY: 'auto', padding: `${SP.sm}px 4px 12px` }}>
         {searchResults !== null ? (
           searchResults.length === 0 ? (
             <EmptyState

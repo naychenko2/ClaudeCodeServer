@@ -22,20 +22,18 @@ if (typeof document !== 'undefined' && !document.getElementById('cc-list-flash-s
  * В списках чатов заменяет дату на самих карточках — по разделителю видно, какие чаты
  * относятся к одному дню, и карточка не тратит на это место.
  *
- * align='left' + dense — вариант для плотных списков (панель «Документация»): подпись прижата
- * влево, левой черты нет вовсе (её огрызок только отодвигал подпись от колонки иконок,
- * а границу группы держит черта справа), отступы вдвое меньше.
+ * dense — вариант для плотных списков (панели «Документация» и «Сервисы»): отступы
+ * вдвое меньше, высота подписи совпадает со строкой файла.
  *
  * С onClick разделитель становится переключателем группы (свернуть/развернуть) — корень
  * тогда кнопка, а не div: у сворачивания есть клавиатура и фокус, самодельный кликабельный
  * div их теряет. leading/trailing — место под шеврон и счётчик скрытых строк.
  */
 export function ListDateDivider({
-  title, align = 'center', dense = false, flash = false, onClick, leading, trailing, titleAttr,
+  title, dense = false, flash = false, onClick, leading, trailing, titleAttr,
   highlightOnHover = false, active = false, onLineClick, lineTitleAttr, onLineHover, beforeTitle,
 }: {
   title: string;
-  align?: 'center' | 'left';
   dense?: boolean;
   // Кратко подсветить и мигнуть — «вот сюда прокрутили»
   flash?: boolean;
@@ -71,10 +69,7 @@ export function ListDateDivider({
   const body = (
     <>
       {leading}
-      {/* Слева черты нет только в плотном варианте: там подпись стоит в колонке строк
-          списка, и огрызок линии перед ней сбивал бы иконку раздела с колонки иконок
-          документов */}
-      {align === 'left' ? null : <div style={line} />}
+      <div style={line} />
       {beforeTitle}
       <span style={{
         fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap',

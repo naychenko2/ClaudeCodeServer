@@ -339,8 +339,8 @@ function FolderSticky({ folder, title: titleProp, collapsed, hidden, onToggle, o
         {...foldHoverProps}
         title={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы раздела`}
         style={{
-          // Своё поле у шеврона: без левой черты подпись с бейджем подтянулись влево,
-          // и шеврон вплотную к краю плашки смотрелся выпавшим из колонки
+          // Своё поле у шеврона: шеврон вплотную к краю плашки смотрелся выпавшим
+          // из колонки иконок документов
           width: 16, flexShrink: 0, height: 20, padding: 0, border: 'none',
           marginLeft: SP.xs,
           background: 'transparent', cursor: 'pointer',
@@ -352,7 +352,7 @@ function FolderSticky({ folder, title: titleProp, collapsed, hidden, onToggle, o
       <div style={{ flex: 1, minWidth: 0 }}>
         <ListDateDivider
           title={title}
-          align="left" dense
+          dense
           onClick={onOpenPage}
           highlightOnHover
           active={active}
@@ -423,7 +423,7 @@ function FolderSticky({ folder, title: titleProp, collapsed, hidden, onToggle, o
     }}>
       <ListDateDivider
         title={title}
-        align="left" dense
+        dense
         onClick={onToggle}
         titleAttr={`${title} — ${collapsed ? 'показать' : 'скрыть'} документы`}
         leading={

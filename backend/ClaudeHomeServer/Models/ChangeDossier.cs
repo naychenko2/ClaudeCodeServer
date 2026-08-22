@@ -22,6 +22,10 @@ public class ChangeDossier
     public string CommitSubject { get; set; } = "";
     public DateTimeOffset CommittedAt { get; set; }
 
+    // Момент снятия паспорта (захват, не сам коммит): DossierStore.Add ставит UtcNow
+    // для новых own-записей; у Imported и у записей до появления поля — null (неизвестен).
+    public DateTimeOffset? CapturedAt { get; set; }
+
     // Прежние SHA после переякорения при squash/rebase (§7 ADR-004)
     public List<string> SupersededSha { get; set; } = [];
 

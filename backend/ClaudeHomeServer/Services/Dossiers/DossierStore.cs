@@ -118,6 +118,9 @@ public sealed class DossierStore : Knowledge.IKnowledgeSyncParticipant
     {
         lock (_saveLock)
         {
+            // Момент захвата паспорта — только здесь, у новых own-записей; импорт идёт
+            // мимо (AddImportedRange) и его записи остаются без CapturedAt
+            dossier.CapturedAt = DateTimeOffset.UtcNow;
             var list = Get(dossier.OwnerId, dossier.ProjectId);
             list.Add(dossier);
             EvictIfNeeded(dossier.OwnerId, dossier.ProjectId, list);

@@ -1404,7 +1404,16 @@ export const api = {
       if (filter?.symbol) qs.set('symbol', filter.symbol);
       if (filter?.commit) qs.set('commit', filter.commit);
       const s = qs.toString();
-      return request<DossierEntry[]>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
+      // Контракт GET /dossiers (ADR-004 §4, спринт «История решений» блок В):
+      // { entries, coverage }. coverage — метрика охвата за окно periodDays:
+      // знаменатель commits (с --follow при file), числитель dossiers. При сбое git
+      // числитель/знаменатель обнуляются (контракт бэка — листинг не роняется).
+      // coverage помечена опциональной: ранний ответ или альтернативная сборка бэка
+      // могут её не прислать — панель тогда просто не рисует строку охвата.
+      return request<{
+        entries: DossierEntry[];
+        coverage?: { periodDays: number; commits: number; dossiers: number } | null;
+      }>(`/projects/${projectId}/dossiers${s ? `?${s}` : ''}`);
     },
     // Готовность проекта к экспорту (ADR-004 §6): isGitRepo гейтит кнопку в UI,
     // sharedFolder — предупреждение о втором владельце той же папки. hasDossierBranch —

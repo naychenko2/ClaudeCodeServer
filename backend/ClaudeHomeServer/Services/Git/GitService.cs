@@ -66,10 +66,12 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
     // Конвенция проекта: все относительные пути — через SafeJoin (защита от traversal)
     // до передачи в git. Git и сам отвергает пути вне репо, но валидируем единообразно.
+    // Возврат — с прямыми слэшами: git ждёт POSIX-разделители, и на Linux путь с
+    // обратными молча даёт пустой вывод (log --follow) вместо ошибки.
     private static string ValidateRel(string root, string relPath)
     {
         FileService.SafeJoinPublic(root, relPath);
-        return relPath;
+        return relPath.Replace('\\', '/');
     }
 
     // Низкоуровневый запуск git. args передаются раздельно (ArgumentList — без shell,
@@ -287,6 +289,29 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             ["log", "--follow", "-n", limit.ToString(),
              "--pretty=format:%H%x1f%h%x1f%an%x1f%ae%x1f%aI%x1f%s%x1e", "--", relPath], ct: ct);
         return r.Ok ? ParseLog(r.Stdout) : [];
+    }
+
+    // Число коммитов за последние days суток — знаменатель метрики охвата паспортами
+    // (GET /dossiers). Без пути — весь HEAD через rev-list --count; с путём — история
+    // одного файла через log --follow (переживает переименования, как FileLogAsync).
+    // --since фильтрует по committer date. Не-репозиторий и любой сбой git — 0:
+    // листинг паспортов не должен падать из-за метрики.
+    public async Task<int> CountRecentCommitsAsync(
+        string? ownerId, string root, int days, string? relPath = null, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return 0;
+        var since = "--since=" + DateTimeOffset.UtcNow.AddDays(-days)
+            .ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(relPath))
+        {
+            var r = await RunAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
+            return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
+        }
+        var log = await RunAsync(ownerId, root,
+            ["log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
+        return log.Ok
+            ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
+            : 0;
     }
 
     private static List<GitLogEntry> ParseLog(string stdout)
@@ -701,7 +726,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             {
                 foreach (var f in files)
                 {
-                    var rel = ValidateRel(root, f.Path).Replace('\\', '/');
+                    var rel = ValidateRel(root, f.Path);
                     var blob = await RunOkAsync(ownerId, root, ["hash-object", "-w", "--stdin"],
                         stdin: f.Content, ct: ct);
                     await RunOkAsync(ownerId, root,

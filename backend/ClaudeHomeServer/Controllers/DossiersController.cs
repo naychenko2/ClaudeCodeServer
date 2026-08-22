@@ -37,8 +37,13 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         return p is null || p.OwnerId != UserId ? null : p;
     }
 
+    // Окно метрики охвата (спринт «История решений», блок В): знаменатель — коммиты
+    // за 7 суток. Отдаётся наружу в coverage.periodDays — долю охвата фронт считает сам.
+    private const int CoveragePeriodDays = 7;
+
     [HttpGet("{id}/dossiers")]
-    public IActionResult List(string id, [FromQuery] string? file, [FromQuery] string? symbol, [FromQuery] string? commit)
+    public async Task<IActionResult> List(string id, [FromQuery] string? file,
+        [FromQuery] string? symbol, [FromQuery] string? commit, CancellationToken ct)
     {
         var p = Owned(id);
         if (p is null) return NotFound();
@@ -46,6 +51,11 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         var result = string.IsNullOrWhiteSpace(file) && string.IsNullOrWhiteSpace(symbol) && string.IsNullOrWhiteSpace(commit)
             ? store.List(UserId, id).OrderByDescending(d => d.CommittedAt).ToList()
             : store.Find(UserId, id, file, symbol, commit);
+
+        // Метрика охвата: коммиты окна против числа паспортов в выдаче. При файловом
+        // фильтре знаменатель сужается до истории одного файла (--follow), символ и
+        // коммит знаменатель не трогают. Сбой git метрику обнуляет, листинг не роняет.
+        var commits = await git.CountRecentCommitsAsync(p.OwnerId, p.RootPath, CoveragePeriodDays, file, ct);
 
         // Символы в досье якорятся по снимку кодографа (DossierCaptureService.AnchorAsync):
         // пока граф корня не построен, свежие досье остаются на файловом уровне. Сигналим
@@ -55,7 +65,20 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         if (graphs.GetCacheSignature(p.RootPath) is null)
             Response.Headers["X-CodeGraph-Building"] = "true";
 
-        return Ok(result);
+        // Контракт ответа: { entries, coverage } (раньше — голый массив записей).
+        // Числитель охвата — уникальные коммиты: свой и импортированный паспорта
+        // одного sha — это пара записей об одном коммите, а не два охваченных.
+        return Ok(new
+        {
+            entries = result,
+            coverage = new
+            {
+                periodDays = CoveragePeriodDays,
+                commits,
+                dossiers = result.Select(d => d.CommitSha)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            },
+        });
     }
 
     // Поиск паспортов для MCP dossier_lookup (этап 2, ADR-004 §5): по пути, символу или

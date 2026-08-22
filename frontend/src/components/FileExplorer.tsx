@@ -2046,7 +2046,7 @@ export function FileExplorer({ project, onOpenFile, activeFilePath, isMobile = f
           <MenuItem key="offline" icon={<MI_Cloud />} label={sstate === 'direct' ? 'Убрать из офлайна' : 'Сохранить офлайн'}
             onClick={() => { close(); toggleSyncMark(project.id, entry); }} />);
         add(!entry.isDirectory && onOpenDossiers,
-          <MenuItem key="dossiers" icon={<MI_Dossiers />} label="История решений" onClick={() => { close(); onOpenDossiers!(entry.path); }} />);
+          <MenuItem key="dossiers" icon={<MI_Dossiers />} label="Почему менялся этот файл" onClick={() => { close(); onOpenDossiers!(entry.path); }} />);
         // «Заметка о файле» — привязка frontmatter file:. Только вне vault: внутри
         // notes/ уже есть «Новая заметка», а заметка о заметке не нужна
         add(!entry.isDirectory && !inNotesVault(entry.path),

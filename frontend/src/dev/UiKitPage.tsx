@@ -12,7 +12,7 @@ import {
   type LucideIcon,
   Palette, Layers, Type, ToggleRight,
   LayoutTemplate, MoreHorizontal, Pencil, Copy, Trash2,
-  Ruler, Mail, Search,
+  Ruler, Mail, Search, Smartphone,
   LayoutGrid, Columns2, Settings, X,
   MousePointerClick,
   Plus,
@@ -33,7 +33,7 @@ import { STATUS_CONFIG, STATUS_GLOW, type SessionStatus } from '../components/St
 import { ProviderLimitCard } from '../components/chat/ChatItemView';
 import type { Session, ChatItem } from '../types';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
-import { useIsMobile } from '../lib/breakpoints';
+import { useIsMobile, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
 import {
   Island, IslandHeader, SegmentedControl, IconSegmented, Toggle, Dot, FileTypeTile, FileStatusBadge, Badge,
@@ -99,6 +99,7 @@ const BADGE_TONES: BadgeTone[] = ['neutral', 'accent', 'success', 'warning', 'da
 // Порядок соответствует основному flow ниже. При добавлении новой секции —
 // добавь её сюда и повесь rootProps={{ id }} на её Island.
 const TOC_SECTIONS: { id: string; label: string }[] = [
+  { id: 'sec-viewport',   label: 'Замер экрана'      },
   { id: 'sec-toggles',    label: 'Переключатели'     },
   { id: 'sec-overlays',   label: 'Оверлеи'           },
   { id: 'sec-toolbar',    label: 'Тулбар'            },
@@ -185,6 +186,11 @@ export function UiKitPage() {
             flexDirection: 'column',
             gap: ISLAND.gap,
           }}>
+            {/* Замер реальных CSS-размеров устройства (см. ViewportSection) */}
+            <div id="sec-viewport" style={{ scrollMarginTop: STICKY_OFFSET }}>
+              <ViewportSection />
+            </div>
+
             {/* Примитивы — переключатели */}
             <div id="sec-toggles" style={{ scrollMarginTop: STICKY_OFFSET }}>
               <TogglesSection />
@@ -692,6 +698,160 @@ function FieldsSection() {
             placeholder="you@example.com"
           />
         </Field>
+      </div>
+    </Island>
+  );
+}
+
+// === Секция «Замер экрана» ========================================
+// Служебная плашка: снимает РЕАЛЬНЫЕ CSS-размеры устройства, на котором открыта
+// витрина. Нужна потому, что справочники устройств считают CSS как «физика ÷ 3»
+// и промахиваются (у Fold 7 расчёт давал 728 CSS, живой замер — 673, отсюда и
+// MOBILE_MAX = 600), а консоли и `javascript:`-строк в адресной строке на
+// телефоне нет. Снятые цифры переносятся в docs/design/target-devices.md.
+
+type ViewportMetrics = {
+  w: number; h: number; dpr: number;
+  screenW: number; screenH: number;
+  standalone: boolean;
+};
+
+function readViewportMetrics(): ViewportMetrics {
+  return {
+    w: window.innerWidth,
+    h: window.innerHeight,
+    dpr: window.devicePixelRatio,
+    screenW: window.screen.width,
+    screenH: window.screen.height,
+    standalone: window.matchMedia('(display-mode: standalone)').matches,
+  };
+}
+
+// Пересъём на resize и повороте. Зум страницы меняет DPR и тоже приходит
+// resize'ом, поэтому отдельная подписка на плотность не нужна.
+function useViewportMetrics(): ViewportMetrics {
+  const [m, setM] = useState(readViewportMetrics);
+  useEffect(() => {
+    const onChange = () => setM(readViewportMetrics());
+    window.addEventListener('resize', onChange);
+    window.addEventListener('orientationchange', onChange);
+    return () => {
+      window.removeEventListener('resize', onChange);
+      window.removeEventListener('orientationchange', onChange);
+    };
+  }, []);
+  return m;
+}
+
+// Строка «подпись — значение»: значение моноширинным, чтобы цифры стояли
+// колонкой, а не плясали по ширине глифов.
+function MetricRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: SP.sm, flexWrap: 'wrap' }}>
+      <span style={{ fontSize: FS.sm, color: C.textSecondary, minWidth: SP.xxxl * 3 }}>{label}</span>
+      <span style={{ fontFamily: FONT.mono, fontSize: FS.md, color: C.textPrimary }}>{value}</span>
+      {hint ? <span style={{ fontSize: FS.xs, color: C.textMuted }}>{hint}</span> : null}
+    </div>
+  );
+}
+
+function ViewportSection() {
+  const m = useViewportMetrics();
+
+  const layout = m.w <= MOBILE_MAX ? 'мобильная'
+    : m.w <= TABLET_MAX ? 'планшетная'
+    : 'десктопная';
+
+  // Запас до ближайшего порога раскладки. У раскладных он бывает в десяток
+  // пикселей — тогда это решающая цифра, а не любопытная.
+  const gap = m.w <= MOBILE_MAX ? MOBILE_MAX - m.w
+    : m.w <= TABLET_MAX ? Math.min(m.w - MOBILE_MAX, TABLET_MAX - m.w)
+    : m.w - TABLET_MAX;
+  const tight = gap <= 40;
+
+  const dpr = Math.round(m.dpr * 1000) / 1000;
+  const summary = `${m.w} × ${m.h} CSS @ DPR ${dpr} → ${Math.round(m.w * dpr)} × ${Math.round(m.h * dpr)} физических`;
+
+  return (
+    <Island>
+      <IslandHeader
+        icon={
+          <Smartphone
+            size={ICON_SIZE.md}
+            strokeWidth={ICON_STROKE}
+            style={{ color: C.accent, flexShrink: 0 }}
+          />
+        }
+        title="Замер экрана"
+        badge={`${layout} раскладка`}
+      />
+      <div style={{
+        padding: ISLAND.pad,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: ISLAND.gap,
+      }}>
+        {/* Готовая строка для доки: userSelect:'all' — на телефоне выделяется
+            одним тапом, иначе её пришлось бы ловить пальцем по символу.
+            Clipboard API тут не годится: с телефона витрину открывают по http
+            в локальной сети, а там navigator.clipboard недоступен. */}
+        <SubBlock label="Строка для docs/design/target-devices.md — выдели и скопируй">
+          <div style={{
+            fontFamily: FONT.mono,
+            fontSize: FS.lg,
+            color: C.textPrimary,
+            background: C.bgWhite,
+            border: `1px solid ${C.border}`,
+            borderRadius: R.xl,
+            padding: SP.md,
+            userSelect: 'all',
+            overflowWrap: 'anywhere',
+          }}>
+            {summary}
+          </div>
+        </SubBlock>
+
+        <SubBlock label="Подробно">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: SP.sm }}>
+            <MetricRow label="Окно (CSS)" value={`${m.w} × ${m.h}`} hint="то, с чем работает вёрстка" />
+            <MetricRow label="Плотность (DPR)" value={String(dpr)} hint="физических точек на CSS-пиксель" />
+            <MetricRow
+              label="Физические точки"
+              value={`${Math.round(m.w * dpr)} × ${Math.round(m.h * dpr)}`}
+              hint="паспортная цифра производителя"
+            />
+            <MetricRow
+              label="Экран целиком (CSS)"
+              value={`${m.screenW} × ${m.screenH}`}
+              hint="весь дисплей, а не окно браузера"
+            />
+            <MetricRow label="Ориентация" value={m.h >= m.w ? 'портрет' : 'ландшафт'} />
+            <MetricRow
+              label="Режим отображения"
+              value={m.standalone ? 'установленная PWA' : 'вкладка браузера'}
+              hint="в PWA высота больше — нет адресной строки"
+            />
+            <MetricRow
+              label="Пороги раскладки"
+              value={`MOBILE_MAX ${MOBILE_MAX} · TABLET_MAX ${TABLET_MAX}`}
+              hint={`запас до ближайшего — ${gap}px`}
+            />
+          </div>
+        </SubBlock>
+
+        {tight ? (
+          <Badge tone="warning">
+            До переключения раскладки {gap}px — экран на границе, проверь оба режима
+          </Badge>
+        ) : null}
+
+        <SubBlock label="Чтобы замер не врал">
+          <div style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.6 }}>
+            Зум страницы — 100% (в Chrome он множится на DPR). Режим «версия для ПК» —
+            выключен, он подменяет ширину десктопной. Складные меряем в обоих состояниях,
+            остальные — в обеих ориентациях.
+          </div>
+        </SubBlock>
       </div>
     </Island>
   );

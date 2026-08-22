@@ -66,8 +66,11 @@ public class DossiersController(ProjectManager projects, DossierStore store,
             Response.Headers["X-CodeGraph-Building"] = "true";
 
         // Контракт ответа: { entries, coverage } (раньше — голый массив записей).
-        // Числитель охвата — уникальные коммиты: свой и импортированный паспорта
-        // одного sha — это пара записей об одном коммите, а не два охваченных.
+        // Числитель охвата — уникальные коммиты того же окна, что и знаменатель:
+        // (1) свой и импортированный паспорта одного sha — пара записей об одном
+        // коммите, а не два охваченных; (2) паспорта старше окна не считаются —
+        // иначе числитель (вся история стора) перерастал знаменатель (7 дней git).
+        var since = DateTimeOffset.UtcNow.AddDays(-CoveragePeriodDays);
         return Ok(new
         {
             entries = result,
@@ -75,7 +78,8 @@ public class DossiersController(ProjectManager projects, DossierStore store,
             {
                 periodDays = CoveragePeriodDays,
                 commits,
-                dossiers = result.Select(d => d.CommitSha)
+                dossiers = result.Where(d => d.CommittedAt >= since)
+                    .Select(d => d.CommitSha)
                     .Distinct(StringComparer.OrdinalIgnoreCase).Count(),
             },
         });

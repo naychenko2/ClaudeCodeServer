@@ -53,7 +53,7 @@ public class DossiersControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     // Паспорт в стор владельца тестового пользователя (тот же синглтон, что в контроллере)
-    private void SeedDossier(string projectId, string sha, params string[] files)
+    private void SeedDossier(string projectId, string sha, string[]? files = null, DateTimeOffset? committedAt = null)
     {
         var owner = _factory.Services.GetRequiredService<UserStore>()
             .FindByUsername(TestWebApplicationFactory.TestUsername)!.Id;
@@ -63,8 +63,8 @@ public class DossiersControllerTests : IClassFixture<TestWebApplicationFactory>
             ProjectId = projectId,
             CommitSha = sha,
             CommitSubject = "субъект",
-            CommittedAt = DateTimeOffset.UtcNow,
-            Files = [.. files],
+            CommittedAt = committedAt ?? DateTimeOffset.UtcNow,
+            Files = [.. (files ?? [])],
             Why = "проверка охвата",
         });
     }
@@ -80,8 +80,8 @@ public class DossiersControllerTests : IClassFixture<TestWebApplicationFactory>
     public async Task Листинг_ОтдаётЗаписи_ИМетрикуОхвата()
     {
         var (projectId, firstSha) = await CreateGitProjectAsync("DossiersList");
-        SeedDossier(projectId, firstSha, "a.txt");
-        SeedDossier(projectId, "ffffffff", "b.txt");
+        SeedDossier(projectId, firstSha, ["a.txt"]);
+        SeedDossier(projectId, "ffffffff", ["b.txt"]);
 
         // Без фильтров: обе записи, знаменатель — все коммиты окна
         var payload = await GetListAsync($"{projectId}/dossiers");
@@ -106,12 +106,29 @@ public class DossiersControllerTests : IClassFixture<TestWebApplicationFactory>
         var (projectId, firstSha) = await CreateGitProjectAsync("DossiersDedup");
         // Свой и импортированный паспорта об одном коммите: sha даже в разном регистре —
         // числитель охвата один коммит, а не две записи (регрессия консилиума 2026-08-22)
-        SeedDossier(projectId, firstSha, "a.txt");
-        SeedDossier(projectId, firstSha.ToUpperInvariant(), "a.txt");
+        SeedDossier(projectId, firstSha, ["a.txt"]);
+        SeedDossier(projectId, firstSha.ToUpperInvariant(), ["a.txt"]);
 
         var payload = await GetListAsync($"{projectId}/dossiers");
         payload.GetProperty("entries").EnumerateArray().Should().HaveCount(2);
         payload.GetProperty("coverage").GetProperty("dossiers").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Листинг_ЗаписиВнеОкна_НеУвеличиваютЧислитель()
+    {
+        var (projectId, firstSha) = await CreateGitProjectAsync("DossiersWindow");
+        // Свежий паспорт в окне + два паспорта старше окна: числитель считает только окно,
+        // иначе (регрессия прода 2026-08-22, «372 из 200») числитель перерастал знаменатель
+        SeedDossier(projectId, firstSha, ["a.txt"]);
+        SeedDossier(projectId, "deadbee1", ["b.txt"], DateTimeOffset.UtcNow.AddDays(-8));
+        SeedDossier(projectId, "deadbee2", ["b.txt"], DateTimeOffset.UtcNow.AddDays(-30));
+
+        var payload = await GetListAsync($"{projectId}/dossiers");
+        payload.GetProperty("entries").EnumerateArray().Should().HaveCount(3);
+        var coverage = payload.GetProperty("coverage");
+        coverage.GetProperty("commits").GetInt32().Should().Be(2);
+        coverage.GetProperty("dossiers").GetInt32().Should().Be(1, "паспорта старше окна не считаются");
     }
 
     [Fact]

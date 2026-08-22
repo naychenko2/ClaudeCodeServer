@@ -21,8 +21,23 @@ public enum NodeKind
     /// <summary>UI-примитив дизайн-системы (компонент из components/ui).</summary>
     UiPrimitive,
 
-    /// <summary>Утилита: хелпер, константа, тип — всё, что не компонент/хук.</summary>
+    /// <summary>Утилита: хелпер, тип — всё, что не компонент/хук.</summary>
     Util,
+
+    /// <summary>
+    /// Экспортируемая константа — чистые данные (примитив или объект/массив без функций),
+    /// напр. токены дизайн-системы. В отличие от Util исключается из топа хабов: у данных
+    /// нет исходящих путей, degree делает их «словарём», а не точкой входа в код.
+    /// </summary>
+    Constant,
+}
+
+/// <summary>Хелперы строкового Kind (DTO снимка/запросов несут NodeKind строкой).</summary>
+public static class NodeKinds
+{
+    /// <summary>Kind — константа (старые снимки без этого вида просто не совпадут).</summary>
+    public static bool IsConstant(string? kind) =>
+        Enum.TryParse<NodeKind>(kind, out var k) && k == NodeKind.Constant;
 }
 
 /// <summary>

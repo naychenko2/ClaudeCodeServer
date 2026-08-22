@@ -65,6 +65,15 @@ public class TypeScriptGraphProviderTests : IClassFixture<TestWebApplicationFact
             "модульное ребро AvatarMenu.tsx::* разворачивается в именованные узлы файла, " +
             "а импорт из components/ui резолвится сквозь index-реэкспорт до Segmented.tsx");
 
+        // Вид Constant: чистые данные (токены дизайн-системы) отличаются от объекта со
+        // стрелочными методами (api) — решение принимает экстрактор по AST инициализатора.
+        raw.Nodes.Should().ContainKey("lib/design.ts::C");
+        raw.Nodes["lib/design.ts::C"].Kind.Should().Be(NodeKind.Constant,
+            "C — объект из строк без функций, чистые данные");
+        raw.Nodes.Should().ContainKey("lib/api.ts::api");
+        raw.Nodes["lib/api.ts::api"].Kind.Should().Be(NodeKind.Util,
+            "api — объект со стрелочными методами, это поведение, не константа");
+
         codeGraph.RegisterProvider(".ts", provider);
         codeGraph.RegisterProvider(".tsx", provider);
 

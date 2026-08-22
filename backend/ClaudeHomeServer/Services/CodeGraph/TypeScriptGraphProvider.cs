@@ -7,7 +7,7 @@ using ClaudeHomeServer.Services.Execution;
 namespace ClaudeHomeServer.Services.CodeGraph;
 
 /// <summary>
-/// Провайдер графа для TypeScript/React: узлы (component/hook/ui-примитив/util) и рёбра
+/// Провайдер графа для TypeScript/React: узлы (component/hook/ui-примитив/util/constant) и рёбра
 /// References строит Node-скрипт-экстрактор frontend/scripts/codegraph-extractor.mjs
 /// (TS Compiler API). Провайдер запускает его под Node с rootPath и мапит JSON-снапшот
 /// из stdout в Core.CodeGraph — по образцу Node-MCP-серверов (подпроцесс node).
@@ -16,8 +16,9 @@ namespace ClaudeHomeServer.Services.CodeGraph;
 /// на stdout { "Nodes": [{ Id: "файл::имя", Name, Category, FilePath }],
 /// "Edges": [{ From, To, Kind }], "Metadata": {…} }. Маппинг принимает оба набора имён полей
 /// (Name/Category/FilePath ↔ Label/Kind/SourceFile, From/To/Kind ↔ Source/Target/Relation,
-/// в любом регистре). Category — component/hook/ui-примитив/util; строки Kind состыкованы:
-/// «ui-примитив» (кириллицей) и ui-primitive/uiprimitive → UiPrimitive, неизвестное → Util.
+/// в любом регистре). Category — component/hook/ui-примитив/util/constant; строки Kind
+/// состыкованы: «ui-примитив» (кириллицей) и ui-primitive/uiprimitive → UiPrimitive,
+/// «константа» → Constant, неизвестное → Util.
 /// Конец ребра «файл::*» — модуль целиком: разворачивается во все именованные узлы этого
 /// файла (граф живёт именованными узлами); узлов у файла нет — ребро отбрасывается вместе
 /// с прочими висящими концами. Metadata не читается (диагностика экстрактора).
@@ -333,6 +334,7 @@ public sealed class TypeScriptGraphProvider : ICodeGraphProvider
             "hook" => NodeKind.Hook,
             "uiprimitive" or "uiпримитив" => NodeKind.UiPrimitive,
             "util" or "utility" => NodeKind.Util,
+            "constant" or "константа" => NodeKind.Constant,
             "class" => NodeKind.Class,
             "interface" => NodeKind.Interface,
             "struct" => NodeKind.Struct,

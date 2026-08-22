@@ -2,7 +2,6 @@ using ClaudeHomeServer.Services.CodeGraph;
 using ClaudeHomeServer.Services.CodeGraph.Core;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ClaudeHomeServer.Tests.Services;
@@ -65,6 +64,40 @@ public class CodeGraphPromptProviderTests
         return new() { Nodes = nodes, Edges = edges };
     }
 
+    // Хаб-координатор с 12 входящими из 12 РАЗНЫХ файлов + константа design.ts::C с
+    // degree 15 (выше хаба): хаб получает метрику «используют N файлов», константа —
+    // уходит в секцию «словарь», а не в строки топа.
+    private static CodeGraph HubWithDictionaryGraph()
+    {
+        var nodes = new Dictionary<string, CodeGraphNode>
+        {
+            ["Demo.Api"] = Node("Demo.Api", "Api.ts"),
+        };
+        var edges = new List<CodeGraphEdge>();
+        for (var i = 0; i < 12; i++)
+        {
+            var id = $"Demo.Caller{i}";
+            nodes[id] = Node(id, $"Caller{i}.ts");
+            edges.Add(new() { Source = id, Target = "Demo.Api", Relation = EdgeRelation.References, Confidence = EdgeConfidence.Extracted });
+        }
+        nodes["src/lib/design.ts::C"] = new CodeGraphNode
+        {
+            Id = "src/lib/design.ts::C",
+            Label = "C",
+            FullyQualifiedName = "src/lib/design.ts::C",
+            SourceFile = "src/lib/design.ts",
+            SourceLocation = "L12",
+            Kind = NodeKind.Constant,
+        };
+        for (var i = 0; i < 15; i++)
+        {
+            var id = $"Demo.Ui{i}";
+            nodes[id] = Node(id, $"Ui{i}.tsx");
+            edges.Add(new() { Source = id, Target = "src/lib/design.ts::C", Relation = EdgeRelation.References, Confidence = EdgeConfidence.Extracted });
+        }
+        return new() { Nodes = nodes, Edges = edges };
+    }
+
     private static void WriteCs(string dir)
     {
         // .cs нужны, чтобы IsStale было что сравнивать; пишем ДО построения → mtime < BuiltAt → не stale.
@@ -91,6 +124,41 @@ public class CodeGraphPromptProviderTests
         slice.Should().Contain("codegraph_neighbors");
         slice.Should().Contain("codegraph_hubs");
         slice.Should().NotContain("устаревшим", "исходники не менялись после построения");
+    }
+
+    [Fact]
+    public async Task GetSliceAsync_ХабВходящиеИзНесколькихФайлов_МетрикаФайловИСловарьКонстант()
+    {
+        var dir = MkRootDir();
+        WriteCs(dir);
+        var (provider, _, persistence) = MkProvider();
+        await persistence.SaveAsync(dir, HubWithDictionaryGraph(), CancellationToken.None);
+
+        var slice = await provider.GetSliceAsync(dir);
+
+        slice.Should().NotBeNull();
+        slice.Should().Contain("Хабы (точки входа в код)");
+        // Метрика — уникальные файлы-импортёры, а не сырой degree
+        slice.Should().Contain("• Demo.Api (Api.ts) — используют 12 файлов");
+        // Константа — в свёрнутом словаре одной строкой на файл, не в строках хабов
+        slice.Should().Contain("Словарь (импортируется повсюду, навигации нет)");
+        slice.Should().Contain("design.ts (C)");
+        slice.Should().NotContain("• src/lib/design.ts::C");
+    }
+
+    [Fact]
+    public async Task GetSliceAsync_ХабБезВходящих_ОткатНаСтепеньСвязности()
+    {
+        var dir = MkRootDir();
+        WriteCs(dir);
+        var (provider, _, persistence) = MkProvider();
+        await persistence.SaveAsync(dir, HubGraph(), CancellationToken.None);
+
+        var slice = await provider.GetSliceAsync(dir);
+
+        // HubGraph: хаб — ИСТОЧНИК всех рёбер, файлов-импортёров нет — показываем degree.
+        slice.Should().Contain("12 связей");
+        slice.Should().NotContain("Словарь", "констант в графе нет — секции быть не должно");
     }
 
     [Fact]

@@ -129,6 +129,31 @@ public class TypeScriptGraphProviderParseTests
     }
 
     [Fact]
+    public void ParseSnapshot_КонстантаИОбъектСМетодами_РазличаютсяПоKind()
+    {
+        // Экстрактор решает «данные или поведение» по AST инициализатора: токены
+        // дизайн-системы (C, FONT, ICON_*) — чистые данные → constant; api (объект со
+        // стрелочными методами) → util. Здесь — стыковка обеих строк Category.
+        var json = """
+        {
+          "Nodes": [
+            { "Id": "lib/design.ts::C", "Name": "C", "Category": "constant", "FilePath": "lib/design.ts" },
+            { "Id": "lib/design.ts::FONT", "Name": "FONT", "Category": "константа", "FilePath": "lib/design.ts" },
+            { "Id": "lib/api.ts::api", "Name": "api", "Category": "util", "FilePath": "lib/api.ts" }
+          ],
+          "Edges": []
+        }
+        """;
+
+        var graph = TypeScriptGraphProvider.ParseSnapshot(json);
+
+        graph.Nodes["lib/design.ts::C"].Kind.Should().Be(NodeKind.Constant);
+        graph.Nodes["lib/design.ts::FONT"].Kind.Should().Be(NodeKind.Constant);
+        graph.Nodes["lib/api.ts::api"].Kind.Should().Be(NodeKind.Util,
+            "объект со стрелочными методами — поведение, не константа");
+    }
+
+    [Fact]
     public void ParseSnapshot_ОтбрасываетВисящиеРёбраИДубли()
     {
         var json = """

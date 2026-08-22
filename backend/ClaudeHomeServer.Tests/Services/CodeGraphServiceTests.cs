@@ -217,4 +217,83 @@ public class CodeGraphServiceTests : IClassFixture<TestWebApplicationFactory>
         again.Should().BeTrue("после завершения guard свободен для нового запроса");
         await Task.Delay(800);
     }
+
+    /// <summary>
+    /// Провайдер с фиксированным узлом: Build всегда заводит один узел с заданным
+    /// SourceFile, Update меняет Kind (доказывает, что Update реально отработал).
+    /// </summary>
+    private sealed class SingleNodeProvider : ICodeGraphProvider
+    {
+        private readonly string _sourceFile;
+        public int BuildCalls;
+        public int UpdateCalls;
+
+        public SingleNodeProvider(string sourceFile) => _sourceFile = sourceFile;
+
+        private CodeGraph Make(string kind) => new()
+        {
+            Nodes = new Dictionary<string, CodeGraphNode>
+            {
+                [_sourceFile] = new()
+                {
+                    Id = _sourceFile,
+                    Label = Path.GetFileNameWithoutExtension(_sourceFile),
+                    FullyQualifiedName = _sourceFile,
+                    SourceFile = _sourceFile,
+                    SourceLocation = "L1",
+                    Kind = Enum.Parse<NodeKind>(kind),
+                },
+            },
+            Edges = new List<CodeGraphEdge>(),
+        };
+
+        public Task<CodeGraph> BuildAsync(string rootPath, CancellationToken ct)
+        {
+            Interlocked.Increment(ref BuildCalls);
+            return Task.FromResult(Make("Class"));
+        }
+
+        public Task<CodeGraph> UpdateAsync(string rootPath, IEnumerable<string> changedFiles, CancellationToken ct)
+        {
+            Interlocked.Increment(ref UpdateCalls);
+            return Task.FromResult(Make("Util"));
+        }
+    }
+
+    [Fact]
+    public async Task ИнкрементTs_ПереиспользуетСрезПровайдераБезИзменений()
+    {
+        var service = _factory.Services.GetRequiredService<CodeGraphService>();
+        var cs = new SingleNodeProvider("backend/Foo.cs");
+        var ts = new SingleNodeProvider("frontend/App.tsx");
+        service.RegisterProvider(".cs", cs);
+        service.RegisterProvider(".tsx", ts);
+
+        var dir = Path.Combine(_factory.TempDir, "cgraph_slice_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(dir);
+        await File.WriteAllTextAsync(Path.Combine(dir, "Foo.cs"), "public class Foo { }");
+        await File.WriteAllTextAsync(Path.Combine(dir, "App.tsx"), "export const App = () => <div/>;");
+
+        // Полное построение: оба провайдера через BuildAsync.
+        await service.RebuildAsync(dir, CancellationToken.None);
+        cs.BuildCalls.Should().Be(1);
+        ts.BuildCalls.Should().Be(1);
+
+        // Инкремент ТОЛЬКО по .tsx: TS-провайдер получает UpdateAsync, C# — ничего:
+        // его часть обязана приехать из прошлого снимка (срез), а не полным BuildAsync,
+        // и не потеряться при merge.
+        service.InvalidateIncremental(dir, new[] { Path.Combine(dir, "App.tsx") });
+        await Task.Delay(500); // заметно дольше окна дебаунса (50мс в тестовой фабрике)
+
+        cs.BuildCalls.Should().Be(1, "правка .tsx не должна заново гонять C#-провайдера (полный Roslyn-прогон)");
+        ts.UpdateCalls.Should().Be(1, "TS-провайдер получил инкремент");
+
+        var snapshot = await service.GetSnapshotAsync(dir, CancellationToken.None);
+        snapshot.Should().NotBeNull();
+        var sources = snapshot!.Nodes.Select(n => n.SourceFile).ToList();
+        sources.Should().Contain("backend/Foo.cs", "C#-часть не потерялась при переиспользовании среза");
+        sources.Should().Contain("frontend/App.tsx", "TS-часть обновилась");
+        snapshot.Nodes.Single(n => n.SourceFile == "frontend/App.tsx").Kind
+            .Should().Be("Util", "узел пришёл из UpdateAsync, а не из старого среза");
+    }
 }

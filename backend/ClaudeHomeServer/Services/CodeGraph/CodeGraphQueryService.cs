@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using ClaudeHomeServer.Services.CodeGraph.Core;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -29,6 +30,13 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
         int EdgeCount);
 
     private readonly ConcurrentDictionary<string, Index> _cache = new();
+
+    // Кэш результата isStale: полный mtime-обход исходников на КАЖДЫЙ вызов любого
+    // инструмента (find/neighbors/hubs) — лишние тысячи stat'ов на ход; и slice-промпт
+    // зовёт свою проверку тоже. TTL 5с много дешевле повтора обхода, а задержка запуска
+    // перестроения на ≤5с ничто против дебаунса 15с.
+    private readonly ConcurrentDictionary<string, (DateTimeOffset At, bool Stale)> _staleCache = new();
+    private static readonly TimeSpan StaleCacheTtl = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Поиск узлов по имени типа или части FQN. null — граф не построен.
@@ -147,7 +155,7 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
 
         var hubs = index.Hubs
             .Take(Clamp(limit))
-            .Select(id => Brief(index.Nodes[id], index))
+            .Select(id => Brief(index.Nodes[id], index, importerFiles: true))
             .ToList();
 
         return new CodeGraphHubsResultDto
@@ -202,14 +210,37 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
         return (null, candidates);
     }
 
-    private static CodeGraphNodeBriefDto Brief(GraphNodeDto node, Index index) => new()
+    private static CodeGraphNodeBriefDto Brief(GraphNodeDto node, Index index, bool importerFiles = false) => new()
     {
         Id = node.Id,
         Fqn = string.IsNullOrWhiteSpace(node.FullyQualifiedName) ? node.Label : node.FullyQualifiedName,
         Kind = node.Kind,
         Location = Location(node),
         Degree = index.Degree.GetValueOrDefault(node.Id),
+        Files = importerFiles ? CountImporterFiles(node.Id, index) : null,
     };
+
+    /// <summary>
+    /// Уникальные файлы-импортёры узла по входящим рёбрам: у TS id источника «файл::имя»
+    /// (файл — префикс), у C# — SourceFile узла-источника. Считается на лету, хранить нечего.
+    /// </summary>
+    private static int CountImporterFiles(string nodeId, Index index)
+    {
+        var incoming = index.Incoming.GetValueOrDefault(nodeId);
+        if (incoming is null || incoming.Count == 0) return 0;
+
+        var files = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var e in incoming)
+        {
+            if (index.Nodes.TryGetValue(e.Source, out var src) && !string.IsNullOrEmpty(src.SourceFile))
+                files.Add(src.SourceFile);
+            else if (e.Source.Contains("::"))
+                files.Add(e.Source[..e.Source.LastIndexOf("::")]);
+            else
+                files.Add(e.Source);
+        }
+        return files.Count;
+    }
 
     // «файл:строка» одной строкой: SourceLocation снимка — «line 42» (см. NodeExtractor).
     private static string Location(GraphNodeDto node)
@@ -232,9 +263,18 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
     // сколь угодно долго. Ответ отдаётся из текущего снимка с пометкой isStale.
     private bool StaleAndRefresh(string rootPath, Index index)
     {
-        if (!graphs.IsStaleFor(rootPath, index.BuiltAt)) return false;
-        graphs.StartRebuildIfIdle(rootPath);
-        return true;
+        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var now = DateTimeOffset.UtcNow;
+
+        if (_staleCache.TryGetValue(key, out var cached) && now - cached.At < StaleCacheTtl)
+            return cached.Stale;
+
+        var stale = graphs.IsStaleFor(rootPath, index.BuiltAt);
+        if (stale)
+            graphs.StartRebuildIfIdle(rootPath);
+
+        _staleCache[key] = (now, stale);
+        return stale;
     }
 
     // Индекс графа из кэша либо из снимка. null — граф ещё не построен.
@@ -275,6 +315,9 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
         }
 
         var hubs = nodes.Values
+            // Константы — словарь, не точка входа в код: исключаем из топа, как GodNodes
+            // (в codegraph_find они остаются — поиск по имени обязан их находить).
+            .Where(n => !NodeKinds.IsConstant(n.Kind))
             .Where(n => degree.GetValueOrDefault(n.Id) > 0)
             .OrderByDescending(n => degree.GetValueOrDefault(n.Id))
             .ThenBy(n => n.FullyQualifiedName, StringComparer.Ordinal)

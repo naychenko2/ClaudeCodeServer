@@ -2017,11 +2017,21 @@ public class ClaudeSession : ILlmSessionAdapter
                 Add("ask-question", "Как задавать вопросы кнопками", askHint);
             }
 
-            // Голосовой режим чата: ответ слушают, а не читают — коротко и без таблиц/кода/схем.
+            // Голосовой режим чата. talk — ответ слушают, а не читают: коротко и без
+            // таблиц/кода/схем. digest — ответ читают с экрана и слушают выжимку: формат
+            // обычный, а вслух идёт блок <voice> в конце.
             // Вторая половина правила — оговорка в конце слоя персоны (PersonaPromptBuilder):
             // слой персоны клеится ПОСЛЕ секций и без неё перебил бы этот формат своим.
-            if (Info.VoiceMode)
-                Add("voice-mode", "Формат для голосового режима", Prompts.VoicePrompts.SectionText);
+            //
+            // Ходу без живого слушателя digest-секция не нужна: озвучивать некому, а маркер
+            // засорил бы транскрипт. Признаки те же, что у подсказки ask-question выше —
+            // исполнитель задачи, ход правила автоматизации и делегированный ход из другого
+            // чата. talk трогать не стали: там формат ответа устоялся, менять его задним
+            // числом — отдельное решение.
+            var heard = !Info.TaskExecution && Info.AutomationRuleId is null && _currentTurnAgentDepth < 1;
+            if (Prompts.VoicePrompts.SectionFor(Info.VoiceMode, Info.IsVoiceDigest, heard) is { } voiceSection)
+                Add("voice-mode", Info.IsVoiceDigest ? "Формат для озвучки ответов" : "Формат для голосового режима",
+                    voiceSection);
 
             // Подсказка про систему задач — только когда tasks-server подключён
             if (_tasksMcp is not null)

@@ -16,10 +16,11 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
     // null — персона не руководитель или предложить нечего.
     // voiceMode — голосовой режим чата: в конец слоя дописывается оговорка, что голосовой
     // формат сильнее слота «Формат ответов» персоны (сам слой клеится ПОСЛЕ секций промпта
-    // и без неё перебил бы секцию voice-mode).
+    // и без неё перебил бы секцию voice-mode). voiceStyle — какая именно оговорка:
+    // talk отменяет формат персоны целиком, digest — только внутри блока <voice>.
     public string Build(Persona persona, string? model, bool switched = false, bool greeted = false,
-        string? teamMechanicsBlock = null, bool voiceMode = false) =>
-        BuildCore(persona, providers.ProviderKey(model), switched, greeted, teamMechanicsBlock, voiceMode);
+        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null) =>
+        BuildCore(persona, providers.ProviderKey(model), switched, greeted, teamMechanicsBlock, voiceMode, voiceStyle);
 
     // Промпт файлового сабагента: модель исполнения неизвестна на этапе генерации
     // (.md общий для чатов всех провайдеров, сабагент бежит на модели сессии) —
@@ -30,7 +31,7 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
     internal const string SubagentProviderKey = "subagent";
 
     internal static string BuildCore(Persona persona, string providerKey, bool switched, bool greeted,
-        string? teamMechanicsBlock = null, bool voiceMode = false)
+        string? teamMechanicsBlock = null, bool voiceMode = false, string? voiceStyle = null)
     {
         var sb = new StringBuilder();
 
@@ -89,7 +90,9 @@ public sealed class PersonaPromptBuilder(LlmProviderRegistry providers)
         // Голосовой режим — последним блоком слоя: оговорка обязана стоять НИЖЕ слота
         // «Формат ответов» и примеров речи, иначе они перебьют голосовое правило
         if (voiceMode)
-            sb.Append("\n\n").Append(Prompts.VoicePrompts.PersonaOverride);
+            sb.Append("\n\n").Append(VoiceStyles.Normalize(voiceStyle) == VoiceStyles.Digest
+                ? Prompts.VoicePrompts.DigestPersonaOverride
+                : Prompts.VoicePrompts.PersonaOverride);
 
         return sb.ToString();
     }

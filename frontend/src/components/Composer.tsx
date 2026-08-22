@@ -23,7 +23,7 @@ import { DangerModeConfirm } from './DangerModeConfirm';
 import { useAssistantName } from './chat/contexts';
 import { getDraft, setDraft } from '../lib/drafts';
 import { showToast } from '../lib/toast';
-import { Modal } from './ui';
+import { Modal, Button } from './ui';
 import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import { useHandsFree, type SpeechPhase } from '../hooks/useHandsFree';
@@ -31,6 +31,7 @@ import { useMicLevel } from '../hooks/useMicLevel';
 import { primeAudio } from '../lib/tts';
 import { isMicKeyboardFallback } from '../lib/voiceInput';
 import { talkDiag, talkDiagSave } from '../lib/talkDiag';
+import { VOICE_STYLE_TALK, VOICE_STYLE_DIGEST, type VoiceStyle } from '../lib/voiceStyle';
 import type { SkillInfo, AgentInfo, Persona, WorkLoopState, SessionTeamImplement } from '../types';
 
 export interface ComposerProps {
@@ -114,6 +115,10 @@ export interface ComposerProps {
   // после провалившегося PUT или смены чата
   voiceMode?: boolean;
   onToggleVoiceMode?: (next: boolean) => void | Promise<void>;
+  // Стиль озвучки — не настройка, выводится из ширины экрана в ChatPanel
+  // (см. lib/voiceStyle.ts). Кнопка от него не зависит: разговор без рук работает на
+  // любом устройстве, стиль решает только, что читается вслух — весь ответ или пересказ
+  voiceStyle?: VoiceStyle;
   // Модель ждёт решения человека (permission_request / ask_question): режим разговора
   // по нему выходит из петли — голосом на такое не ответишь
   awaitingResponse?: boolean;
@@ -419,6 +424,30 @@ function RateStripe({ w, isMobile }: { w: RateWindow; isMobile?: boolean }) {
   );
 }
 
+// Строка состояния озвучки НАД полем ввода — общая для обоих стилей. Поле остаётся
+// полем: в голосовом режиме без петли человек продолжает печатать, и подменять его
+// плашкой нельзя. Два экземпляра с разными текстами и действиями, поэтому геометрия
+// вынесена сюда — копия разъехалась бы на первой правке паддингов.
+function VoiceStatusRow({ icon, text, actions, isMobile }: {
+  icon: ReactNode;
+  text: string;
+  actions: ReactNode;
+  isMobile?: boolean;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 8,
+      padding: isMobile ? '7px 10px 0' : '6px 10px 0',
+    }}>
+      {icon}
+      <span style={{ fontSize: FS.sm, color: C.textMuted, fontWeight: 600, flex: 1, minWidth: 0 }}>
+        {text}
+      </span>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>{actions}</span>
+    </div>
+  );
+}
+
 export function Composer({
   sessionId,
   voicePersonaId,
@@ -461,6 +490,7 @@ export function Composer({
   onToggleWorktree,
   voiceMode = false,
   onToggleVoiceMode,
+  voiceStyle = VOICE_STYLE_TALK,
   awaitingResponse = false,
   speechPhase = 'idle',
   onHandsFreeActiveChange,
@@ -898,6 +928,9 @@ export function Composer({
   });
   useEffect(() => { handsFreeRef.current = handsFree; });
   const talkActive = handsFree.active;
+  // Вслух идёт пересказ, а не весь ответ. Признак СТИЛЯ (то есть устройства), а не
+  // состояния озвучки и не отдельного режима кнопки: на поведение кнопки он не влияет
+  const digestVoice = voiceStyle === VOICE_STYLE_DIGEST;
   // Диагностика петли: фазы и старт/стоп. Дамп сохраняется при остановке —
   // его можно вытащить с телефона через window.__talkDiag() или localStorage
   useEffect(() => { talkDiag('loop: фаза', handsFree.phase); }, [handsFree.phase]);
@@ -987,7 +1020,7 @@ export function Composer({
   // Тап по кнопке режима. Синхронная часть жеста (прайминг аудио и старт микрофона) идёт
   // ДО любого await: политика autoplay и разрешение микрофона живут только внутри жеста
   const handleVoiceButton = () => {
-    talkDiag('tap: кнопка режима разговора', { talkActive });
+    talkDiag('tap: кнопка режима разговора', { talkActive, voiceStyle });
     if (talkActive) {
       // В разговоре у кнопки ОДИН смысл — «прекрати»: заткнуть чтение, прервать ход,
       // выйти из режима. Разбирать, в какой фазе мы сейчас, человеку на ходу некогда,
@@ -1554,9 +1587,12 @@ export function Composer({
       title={talkActive
         ? 'Разговор идёт: говори — отвечу вслух. Нажми, чтобы выключить'
         : voiceMode
-          ? 'Голосовой режим включён (ответы короткие и вслух). Нажми — начнём разговор без рук'
-          : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
+          ? 'Голосовой режим включён. Нажми — начнём разговор без рук'
+          : digestVoice
+            ? 'Режим разговора: говори — отвечу вслух коротким пересказом, ответ останется на экране'
+            : 'Режим разговора: говори — отвечу вслух и снова буду слушать'}
       aria-label="Режим разговора"
+      aria-pressed={voiceMode}
       style={{
         ...iconBtnGuard,
         width: isMobile ? 38 : 34, height: isMobile ? 38 : 34, borderRadius: R.pill, border: 'none',
@@ -1861,29 +1897,28 @@ export function Composer({
           а петли разговора нет — она не переживает смену чата/раздела/F5. Отдельная
           строка НАД полем ввода, а не замена его: поле обязано оставаться полем —
           и тесты, и человек продолжают печатать в голосовом режиме без петли */}
+      {/* Строка обязательна, а не декоративна: режим переживает F5 и смену чата, и без
+          напоминания единственными признаками включённой озвучки остаются оттенок кнопки
+          и сияние в момент речи — включил утром, вернулся вечером, ответ заговорил.
+          Текст следует за стилем: он объясняет, что именно прозвучит, а выбирать тут
+          нечего — стиль выводится из ширины экрана */}
       {voiceMode && !talkActive && !workLoop?.active && !teamMech && (
-        <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          padding: isMobile ? '7px 10px 0' : '6px 10px 0',
-        }}>
-          <VolumeX size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
-          <span style={{ fontSize: FS.sm, color: C.textMuted, fontWeight: 600, flex: 1, minWidth: 0 }}>
-            Разговор на паузе — ответы всё ещё озвучиваются
-          </span>
-          <button
-            type="button"
-            onClick={handleVoiceButton}
-            title="Продолжить разговор без касаний"
-            style={{
-              ...iconBtnGuard,
-              flexShrink: 0, border: 'none', cursor: 'pointer', borderRadius: R.pill,
-              background: C.accentLight, color: C.accent, fontWeight: 600, fontSize: FS.xs,
-              padding: isMobile ? '6px 12px' : '5px 11px', whiteSpace: 'nowrap',
-            }}
-          >
-            Продолжить
-          </button>
-        </div>
+        <VoiceStatusRow
+          icon={digestVoice
+            ? <AudioLines size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />
+            : <VolumeX size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} color={C.textMuted} style={{ flexShrink: 0 }} />}
+          text={digestVoice
+            ? 'Вслух — короткий пересказ, ответ на экране целиком'
+            : 'Разговор на паузе — ответы всё ещё озвучиваются'}
+          isMobile={isMobile}
+          actions={
+            <Button size="sm" variant="ghostAccent" onClick={handleVoiceButton}
+              title="Продолжить разговор без касаний"
+              style={isMobile ? { minHeight: 40 } : undefined}>
+              Продолжить
+            </Button>
+          }
+        />
       )}
       {/* Чипы вложений */}
       {attachments.length > 0 && (

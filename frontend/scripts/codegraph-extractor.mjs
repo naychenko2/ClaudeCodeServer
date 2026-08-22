@@ -78,12 +78,27 @@ function printHelp() {
 
 const DEFAULT_EXCLUDE = [/[/\\]dev[/\\]/, /\.test\.[cm]?[jt]sx?$/, /\.spec\.[cm]?[jt]sx?$/, /\.d\.ts$/];
 
+// Каталоги, не относящиеся к исходникам: скип целиком, по имени на любой глубине
+// (образец — CompilationBuilder.IgnoredDirectories на C#-стороне; полный паритет не самоцель).
+// Храним в нижнем регистре и сравниваем тоже в нижнем: на Linux-фикстуре имя
+// реального каталога может прийти как 'Build' или 'OBJ', а на Windows ext4
+// отдаёт 'BUILD' — регистр зависит от файловой системы, а решение должно быть
+// стабильным (как OrdinalIgnoreCase в C#-экстракторе).
+const EXCLUDED_DIRS = new Set([
+  'node_modules',
+  // build-артефакты: bin/obj — .NET (в Tests/bin сборка копирует .ts-фикстуры кратно
+  // числу конфигураций), dist/publish — фронтенд, build/coverage — прочие тулчейны
+  'bin', 'obj', 'dist', 'build', 'coverage', 'publish',
+].map(s => s.toLowerCase()));
+
 function walkFiles(srcRoot) {
   const out = [];
   function recurse(dir) {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      // Dot-каталоги (.claude/.git/.vscode…) — одним правилом: в .claude/worktrees лежат
+      // клоны репо чужих веток со своим frontend/src, а в .claude — плагины и их кеш
       if (entry.name.startsWith('.')) continue;
-      if (entry.name === 'node_modules') continue;
+      if (EXCLUDED_DIRS.has(entry.name.toLowerCase())) continue;
       const full = join(dir, entry.name);
       if (entry.isDirectory()) {
         recurse(full);

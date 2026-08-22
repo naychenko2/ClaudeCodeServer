@@ -7,6 +7,7 @@ import { ICON_SIZE, ICON_STROKE } from './ui/icons';
 import { Modal, IconButton } from './ui';
 import { personaLabel } from '../lib/personas';
 import { useCanHover } from '../lib/pointer';
+import { useListAutoFocus } from '../lib/listAutoFocus';
 import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import {
   ALL_ORIGINS, ALL_STATUS_CHIPS,
@@ -171,9 +172,10 @@ function FilterContent({
   const hiddenOrigins = ORIGIN_OPTIONS.filter(o => !filters.origins.includes(o.value));
   const showPersona = personaIdsInList.length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
+  const canFocus = useListAutoFocus();
 
   // Открыл поповер/шторку — фокус сразу в поле поиска (макет: «открыл → фокус уже в поле»)
-  useEffect(() => { searchRef.current?.focus(); }, []);
+  useEffect(() => { if (canFocus) searchRef.current?.focus(); }, [canFocus]);
 
   return (
     <>

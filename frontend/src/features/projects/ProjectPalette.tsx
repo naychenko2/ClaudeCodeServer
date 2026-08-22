@@ -6,6 +6,7 @@ import type { Project } from '../../types';
 import { ProjectIcon } from './ProjectIcon';
 import { useAllProjects, openProjectViaEvent, openAllProjects, openNewProjectFlow } from './useAllProjects';
 import { usePinnedIds, useRecentIds, isPinned, togglePin } from '../../lib/pinnedProjects';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 
 // Командная палитра переключения проектов: поиск + секции «Закреплённые» и «Недавние».
 // Открывается лупой в зоне проектов (Ctrl+K занят AI-палитрой). Значки — projectColor/Initial.
@@ -72,12 +73,13 @@ export function ProjectPalette({ currentProjectId, onClose }: { currentProjectId
   const [q, setQ] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const mayFocus = useListAutoFocus();
   useEffect(() => {
-    inputRef.current?.focus();
+    if (mayFocus) inputRef.current?.focus();
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, mayFocus]);
 
   const byId = useMemo(() => new Map(projects.map(p => [p.id, p])), [projects]);
   const match = (p: Project) => p.name.toLowerCase().includes(q.trim().toLowerCase());

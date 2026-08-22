@@ -16,6 +16,7 @@ import { Badge, Button, Dot, FileTypeTile, Menu, MenuItem, MenuSep, Modal, TextF
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { labelOfValue, propDotColor, propValue, toneOfValue } from '../../lib/docsTypes';
 import { useIsMobile } from '../../lib/breakpoints';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 
 // Шапка складной секции превью — общая с блоком «Ссылаются сюда»: два разных вида
 // у соседних секций одной панели читались бы как два разных элемента
@@ -146,6 +147,7 @@ function DocRefPicker({ def, value, link, index, saving, onSave, style }: {
   const isMobile = useIsMobile();
   const [open, setOpen] = useState<DOMRect | null>(null);
   const [q, setQ] = useState('');
+  const searchAutoFocus = useListAutoFocus();
 
   const current = link ? index.find(d => d.path === link) : null;
   const matches = index
@@ -156,7 +158,7 @@ function DocRefPicker({ def, value, link, index, saving, onSave, style }: {
   const list = (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
       <div style={{ padding: `${SP.xs}px ${SP.sm}px` }}>
-        <TextField value={q} onChange={setQ} placeholder="Поиск документа" autoFocus />
+        <TextField value={q} onChange={setQ} placeholder="Поиск документа" autoFocus={searchAutoFocus} />
       </div>
       {value && (
         <MenuItem icon={<X size={ICON_SIZE.xs} strokeWidth={ICON_STROKE} />} label="Очистить"

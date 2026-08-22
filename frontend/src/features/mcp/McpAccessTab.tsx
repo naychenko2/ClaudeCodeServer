@@ -11,6 +11,7 @@ import { showToast } from '../../lib/toast';
 import { personaGrantedFor, plural } from './useMcpData';
 import type { McpData } from './useMcpData';
 import type { McpServer, Persona, Project } from '../../types';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 
 // Вкладка «Доступ»: allow-list модель — сервер не едет никуда, пока не выдан явно.
 export function McpAccessTab({ data, onClose, onAdd, onEdit }: {
@@ -349,6 +350,7 @@ function GrantPickerBody({ server, data, projects, personas, onDone, onEdit }: {
   onEdit: (server: McpServer) => void;
 }) {
   const [segment, setSegment] = useState<'projects' | 'personas'>('projects');
+  const searchAutoFocus = useListAutoFocus();
   const [query, setQuery] = useState('');
   const isMobile = useIsMobile();
 
@@ -395,7 +397,7 @@ function GrantPickerBody({ server, data, projects, personas, onDone, onEdit }: {
       <TextField
         value={query}
         onChange={setQuery}
-        autoFocus
+        autoFocus={searchAutoFocus}
         placeholder={segment === 'projects' ? `Поиск по ${projects.length} проектам` : `Поиск по ${personas.length} персонам`}
       />
       <div style={{ maxHeight: isMobile ? '46vh' : 264, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>

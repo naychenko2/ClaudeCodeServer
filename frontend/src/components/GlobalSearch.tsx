@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { openNoteById } from '../features/notes/saveToNote';
 import { Modal } from './ui';
 import { C, FONT, R } from '../lib/design';
+import { useListAutoFocus } from '../lib/listAutoFocus';
 
 // Единый поиск (флаг unified-search): оверлей с поиском по заметкам и задачам сразу.
 // Заметка → открыть в разделе «Заметки»; задача → диплинк через App (календарь/проект).
@@ -12,8 +13,9 @@ export function GlobalSearch({ onClose }: { onClose: () => void }) {
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [loading, setLoading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const canFocus = useListAutoFocus();
 
-  useEffect(() => { inputRef.current?.focus(); }, []);
+  useEffect(() => { if (canFocus) inputRef.current?.focus(); }, [canFocus]);
 
   useEffect(() => {
     const term = q.trim();

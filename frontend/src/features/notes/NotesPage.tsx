@@ -25,6 +25,7 @@ import { PanelZone } from '../../pages/workspace/PanelZone';
 import { notesPanels, zoneOf } from '../../pages/workspace/panelStackState';
 import { NOTES_KEYS } from '../../pages/workspace/panelCatalog';
 import { useIsMobile, useWindowWidth } from '../../lib/breakpoints';
+import { useListAutoFocus } from '../../lib/listAutoFocus';
 
 type Mode = 'notes' | 'graph';
 
@@ -190,16 +191,17 @@ export function NotesPage({ auth, onLogout, onHubTab }: {
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   // AI-хаб: «Поиск по смыслу» из палитры — переключаем режим и ставим фокус в поиск
+  const searchShouldFocus = useListAutoFocus();
   useEffect(() => {
     const onRun = (e: Event) => {
       if ((e as CustomEvent<{ action?: string }>).detail?.action !== 'note.semantic') return;
       leaveGraph();
       if (semanticAvailable) setSearchMode('semantic');
-      setTimeout(() => searchInputRef.current?.focus(), 50);
+      if (searchShouldFocus) setTimeout(() => searchInputRef.current?.focus(), 50);
     };
     window.addEventListener('cc-ai-run', onRun);
     return () => window.removeEventListener('cc-ai-run', onRun);
-  }, [semanticAvailable, leaveGraph]);
+  }, [semanticAvailable, leaveGraph, searchShouldFocus]);
   useEffect(() => {
     const q = query.trim();
     // eslint-disable-next-line react-hooks/set-state-in-effect -- часть debounce-эффекта: очистка результатов на пустом запросе

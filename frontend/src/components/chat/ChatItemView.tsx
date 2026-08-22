@@ -1519,12 +1519,16 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // строках значит гонять взгляд по вертикали за состоянием одного и того же хода
       return planPill
         ? (
-          <div style={{
-            alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8,
-            flexWrap: 'wrap', justifyContent: 'center', maxWidth: '100%',
-          }}>
+          // Итог хода остаётся ТОЧНО по центру ленты, как и без пилюли: держат его две
+          // равные распорки по краям, а не justifyContent — иначе центр съезжал бы влево
+          // ровно на ширину пилюли, и мета-строка «прыгала» бы при её появлении.
+          // Пилюля живёт в правой распорке, прижатая к краю.
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+            <div style={{ flex: 1, minWidth: 0 }} />
             {meta}
-            {planPill}
+            <div style={{ flex: 1, minWidth: 0, display: 'flex', justifyContent: 'flex-end' }}>
+              {planPill}
+            </div>
           </div>
         )
         : <div style={{ alignSelf: 'center' }}>{meta}</div>;

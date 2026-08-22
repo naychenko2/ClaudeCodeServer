@@ -112,4 +112,33 @@ public class TurnPromptAssemblerTests
         VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: false)
             .Should().BeNull();
     }
+
+    // Выдержка у длинных ответов живёт БЕЗ озвучки: человек пишет вопрос руками и хочет
+    // видеть суть плашкой, а прочитать её вслух — отдельной кнопкой, по желанию
+    [Fact]
+    public void ВыборСекции_БезОзвучки_ПроситВыдержкуУДлинных()
+    {
+        VoicePrompts.SectionFor(voiceMode: false, digest: false, heard: true, longAnswerDigest: true)
+            .Should().Be(VoicePrompts.LongAnswerSectionText);
+
+        // Флаг выключен — секции нет вовсе, формат ответов не меняется
+        VoicePrompts.SectionFor(voiceMode: false, digest: false, heard: true, longAnswerDigest: false)
+            .Should().BeNull();
+
+        // Ход без живого читателя выдержку тоже не просит
+        VoicePrompts.SectionFor(voiceMode: false, digest: false, heard: false, longAnswerDigest: true)
+            .Should().BeNull();
+    }
+
+    [Fact]
+    public void ВыборСекции_ОзвучкаПеребиваетВыдержку()
+    {
+        // Разговор: ответ и так короткий целиком, отдельный блок выдержки в нём не нужен
+        VoicePrompts.SectionFor(voiceMode: true, digest: false, heard: true, longAnswerDigest: true)
+            .Should().Be(VoicePrompts.SectionText);
+
+        // Озвучка выжимки: там блок обязателен ВСЕГДА, а не только у длинных ответов
+        VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: true, longAnswerDigest: true)
+            .Should().Be(VoicePrompts.DigestSectionText);
+    }
 }

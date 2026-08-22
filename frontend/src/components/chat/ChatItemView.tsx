@@ -1172,7 +1172,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             lead={author ? <PersonaAvatar persona={author} size={28} speaking={speaking} /> : undefined}
             // Выжимка для озвучки — она же краткое содержание ответа для глаз. Внутри
             // пузыря: это хвост ЭТОГО ответа, а не отдельная карточка ленты
-            footer={voiceDigestNote ? <VoiceDigestNote text={voiceDigestNote} /> : undefined} />
+            footer={voiceDigestNote
+              ? <VoiceDigestNote text={voiceDigestNote} personaId={author?.id} />
+              : undefined} />
           {/* Карточка предложения командной механики — запуск только по кнопке */}
           {teamMechanicOffer && (
             <TeamMechanicOfferCard

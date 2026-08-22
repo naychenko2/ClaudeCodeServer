@@ -1025,10 +1025,13 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
     else revealPanelKey('toc');
   };
 
-  // Тумблер «История решений» в шапке diff-просмотра — тем же каналом, что «Оглавление»
-  // выше. Только в diff (мокап: «кнопка в шапке diff-просмотра»).
+  // Тумблер «Почему менялся этот файл» — открывает панель «История решений» с
+  // фильтром по текущему файлу (activeFilePath в DossierHistoryPanel подтягивается
+  // из openFile автоматически). Видна на любой вкладке, кроме мобильной раскладки
+  // (там панель dossiers не работает) и хост-режима (файл вне проекта — dossiers
+  // завязан на project.id).
   const dossiersPanelOpen = zoneOf(panelZones, 'dossiers') !== null;
-  const dossiersToggleVisible = tab === 'diff' && !isMobile;
+  const dossiersToggleVisible = !isHostMode && !isMobile;
   const toggleDossiersPanel = () => {
     if (dossiersPanelOpen) closePanelKey('dossiers');
     else revealPanelKey('dossiers');
@@ -1279,7 +1282,7 @@ export function FileViewer({ project, filePath, onClose, onToggleFullscreen, ful
       });
     }
     if (dossiersToggleVisible) {
-      const dossiersTitle = dossiersPanelOpen ? 'Скрыть историю решений' : 'История решений';
+      const dossiersTitle = dossiersPanelOpen ? 'Скрыть историю решений' : 'Почему менялся этот файл';
       secondary.push({
         key: 'dossiers',
         node: (

@@ -343,6 +343,9 @@ export interface DossierEntry {
   // tip-коммита ветки (кто нажал «Выгрузить», тот и подписан).
   origin: DossierOrigin;
   importedAuthor: string | null;
+  // Момент снятия паспорта для own-записей; у импортированных null — там время брать
+  // неоткуда, и строка в карточке для них не рисуется (см. DossierHistoryPanel).
+  capturedAt?: string | null;
 }
 
 // Элемент доски агентов (диспетчерская: GET /api/board/agents)

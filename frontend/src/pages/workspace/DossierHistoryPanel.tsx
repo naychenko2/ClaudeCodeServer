@@ -68,6 +68,11 @@ function monthLabel(iso: string): string {
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
 }
+// Только время (HH:mm): «снято 14:32» под метастрокой own-записи. У импортированных
+// capturedAt == null — строку не рисуем, форматтер тут ни при чём.
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+}
 function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
@@ -254,6 +259,14 @@ function DossierCard({ entry, author, open, onToggle, onOpenChat, onOpenTask, on
               </>
             )}
           </div>
+          {/* Время снятия — только у own-записей (у импортированных capturedAt == null,
+              см. ChangeDossier и блок Г спринта): импортированные живут без метки
+              времени, и строка для них была бы чужой пустышкой. */}
+          {entry.capturedAt && (
+            <p style={{ margin: `${SP.xxs}px 0 0`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+              снято {formatTime(entry.capturedAt)}
+            </p>
+          )}
           {previewLine && (
             <p style={{
               margin: `${SP.xs}px 0 0`, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.4,
@@ -390,6 +403,10 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
   }
 
   const [entries, setEntries] = useState<DossierEntry[] | null>(null);
+  // Метрика охвата (блок В): окно periodDays, всего коммитов и паспортов в выдаче.
+  // null — ответ пришёл без coverage (старая сборка бэка) или запрос ещё не ушёл;
+  // subheader тогда просто не рисует строку «Охвачено N из M».
+  const [coverage, setCoverage] = useState<{ periodDays: number; commits: number; dossiers: number } | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
   const [personas, setPersonas] = useState<Map<string, Persona>>(new Map());
@@ -442,13 +459,15 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
     // eslint-disable-next-line react-hooks/set-state-in-effect -- сброс перед новым запросом (сменился фильтр/проект) — иначе список чужого фильтра мигнёт перед загрузкой
     setEntries(null);
     setLoadError(false);
+    setCoverage(null);
     api.dossiers.list(project.id, fileFilter ? { file: fileFilter } : undefined)
-      .then(list => {
+      .then(res => {
         if (cancelled) return;
         // archived показываем только по явному запросу (заметка с текстами) —
         // в общем списке им не место
-        const visible = list.filter(e => e.status !== 'archived');
+        const visible = res.entries.filter(e => e.status !== 'archived');
         setEntries(visible);
+        setCoverage(res.coverage ?? null);
         setOpenId(visible[0]?.id ?? null);
       })
       .catch(() => { if (!cancelled) { setEntries([]); setLoadError(true); } });
@@ -525,6 +544,14 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.5 }}>
         {fileFilter ? 'Зачем менялся этот файл и что при этом решили' : 'История решений по проекту'}
       </p>
+      {/* Метрика охвата (блок В): показываем, только если бэк прислал coverage и
+          коммитов в окне больше нуля — иначе строка «0 из 0» создаёт шум и ни о чём
+          не говорит (нет окна — нечего мерить). */}
+      {coverage && coverage.commits > 0 && (
+        <p style={{ margin: `0 0 ${SP.sm}px`, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
+          Охвачено {coverage.dossiers} из {coverage.commits} коммитов за неделю
+        </p>
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: SP.xs, flexWrap: 'wrap' }}>
         {fileFilter ? (
           <span style={{ ...chipStyle, background: C.accentLight, borderColor: 'transparent', color: C.accent }}>
@@ -593,8 +620,8 @@ export function DossierHistoryPanel({ project, auth, activeFilePath, chatExclude
       <EmptyState
         compact
         icon={<FileIcon size={20} strokeWidth={ICON_STROKE} />}
-        title="Этот файл ещё не меняли из чата"
-        subtitle="История решений собирается с момента включения — для старого кода её нет."
+        title="Этот файл пока не попадал в историю решений"
+        subtitle="Она собирается автоматически из коммитов с трейлером чата."
       />
     ) : (
       <EmptyState

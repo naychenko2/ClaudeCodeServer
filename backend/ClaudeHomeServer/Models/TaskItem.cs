@@ -58,6 +58,12 @@ public class TaskItem
     // Сбрасывается при повторном запуске исполнителя (TaskManager.MarkClaudeStarted).
     public DateTime? ExecutorStoppedAt { get; set; }
     public string? ExecutorStopReason { get; set; }
+    // Страховка «ход кончился, а задачу никто не закрыл» (TaskExecutionService.CheckStalledExecutorAsync):
+    // отметки о напоминании исполнителю и об уведомлении человека. Ровно по одному на запуск —
+    // обе сбрасываются перезапуском исполнителя (MarkClaudeStarted), а не каждым ходом:
+    // иначе многошаговая задача получала бы напоминание после каждого своего хода.
+    public DateTime? ExecutorNudgedAt { get; set; }
+    public DateTime? ExecutorStaleAlertedAt { get; set; }
     // Идемпотентность join двух независимых сигналов завершения (CT-8): R — конец хода
     // (ClaudeResult) и D — Status=Done (tasks_complete/PUT). CAS TaskManager.TryMarkCompletionDelivered
     // гарантирует ровно одну доставку L0/Z-доклада вне зависимости от порядка их прихода.

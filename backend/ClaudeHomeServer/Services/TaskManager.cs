@@ -331,6 +331,10 @@ public class TaskManager
         // Если причина не ушла, следующий ход поставит пометку заново.
         task.ExecutorStoppedAt = null;
         task.ExecutorStopReason = null;
+        // Отметки страховки «задача осталась в работе» — той же природы: новая попытка
+        // получает и своё напоминание, и своё уведомление человеку (по одному на запуск).
+        task.ExecutorNudgedAt = null;
+        task.ExecutorStaleAlertedAt = null;
         if (task.Status == TaskItemStatus.Todo) task.Status = TaskItemStatus.InProgress;
         task.UpdatedAt = DateTime.UtcNow;
         Save();
@@ -362,6 +366,28 @@ public class TaskManager
         task.ExecutorStoppedAt = atUtc;
         task.ExecutorStopReason = reason;
         task.UpdatedAt = DateTime.UtcNow;
+        Save();
+        return task;
+    }
+
+    // Страховка «ход кончился, а задача не закрыта»: отметка отправленного напоминания
+    // исполнителю (nudge) либо уведомления человеку (alert). Как у MarkReminderSent, UpdatedAt
+    // НЕ двигаем: тишину чата-исполнителя страховка считает в том числе от UpdatedAt задачи —
+    // сдвиг им же оттягивал бы собственный порог, и второй шаг никогда бы не наступил.
+    public TaskItem? MarkExecutorNudged(string id, DateTime atUtc)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ExecutorNudgedAt = atUtc;
+        Save();
+        return task;
+    }
+
+    public TaskItem? MarkExecutorStaleAlerted(string id, DateTime atUtc)
+    {
+        var task = _tasks.GetValueOrDefault(id);
+        if (task is null) return null;
+        task.ExecutorStaleAlertedAt = atUtc;
         Save();
         return task;
     }

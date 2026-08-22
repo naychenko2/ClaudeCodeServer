@@ -90,6 +90,10 @@ public class TaskExecutionService
     // агента не более двух раз (SessionManager.MaxSubagentNudges) — дальше молчать нельзя:
     // работа реально встала, и это уже случай «зовите человека».
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _truncations = new();
+    // Сколько чат-исполнитель должен молчать, чтобы страховка сочла задачу брошенной
+    // (Tasks:ExecutorStaleMinutes, дефолт 15). Тем же порогом меряется и второй шаг —
+    // молчание ПОСЛЕ напоминания.
+    private readonly TimeSpan _staleAfter;
 
     public TaskExecutionService(
         TaskManager tasks, SessionManager sessions, PersonaManager personas,
@@ -105,6 +109,8 @@ public class TaskExecutionService
         FeatureFlagService? flags = null,
         Llm.Claude.SubagentRunLog? subagentRuns = null)
     {
+        _staleAfter = TimeSpan.FromMinutes(
+            int.TryParse(config["Tasks:ExecutorStaleMinutes"], out var stale) && stale > 0 ? stale : 15);
         _subagentRuns = subagentRuns;
         _flags = flags;
         _promptMetrics = promptMetrics;
@@ -783,6 +789,140 @@ public class TaskExecutionService
         // Модель Z: активный доклад в чат постановщика (в дополнение к L0-тосту выше)
         await ReportToDelegatorAsync(task, persona);
     }
+
+    // --- Страховка: ход кончился, а задачу никто не закрыл ---
+
+    // Что делать с «молчащей» задачей на очередном тике планировщика.
+    internal enum ExecutorStallAction
+    {
+        None,   // не наш случай либо порог тишины ещё не вышел
+        Nudge,  // напомнить самому исполнителю (один автоход)
+        Alert,  // напоминание не помогло (или напоминать некому) — звать человека
+    }
+
+    // Успешный ход задачу не закрывает: сделать это обязан сам исполнитель вызовом
+    // tasks_complete. Промежуточный ход многошаговой задачи и «исполнитель молча забил»
+    // на конце хода неразличимы, поэтому решает не событие, а ТИШИНА: чат-исполнитель не
+    // подаёт признаков жизни дольше порога. Отсюда и два шага вместо уведомления сразу —
+    // сначала окликаем исполнителя, человека дёргаем, только если это не помогло.
+    //
+    // Чистый предикат (без побочных эффектов): все три ветки проверяются юнит-тестами без
+    // живого CLI. Порог передаётся параметром — тот же и для тишины после напоминания.
+    internal static ExecutorStallAction ClassifyStall(TaskItem task, Session? session,
+        DateTime nowUtc, TimeSpan staleAfter)
+    {
+        // Задача закрыта либо доклад по ней уже ушёл — страховать нечего
+        if (task.Status == TaskItemStatus.Done || task.CompletionDelivered) return ExecutorStallAction.None;
+        // Исполнителя не запускали, ход ещё идёт (ClaudeResult null) либо он провалился:
+        // провал уведомляет сам (BuildResultNotification), дублировать его не надо
+        if (task.ClaudeStartedAt is null || task.ClaudeResult != "success") return ExecutorStallAction.None;
+        // Терминальная остановка исполнителя — своё уведомление с причиной уже ушло
+        if (task.ExecutorStoppedAt is not null) return ExecutorStallAction.None;
+        // Человека уже позвали — на этом страховка заканчивается (ровно одно уведомление)
+        if (task.ExecutorStaleAlertedAt is not null) return ExecutorStallAction.None;
+        // Чат-исполнитель занят: идёт следующий ход (Starting/Working) либо ход ждёт ответа
+        // человека на разрешение (Waiting — о нём уведомляет BuildWaitingNotification)
+        if (session is not null && session.Status is SessionStatus.Starting or SessionStatus.Working
+            or SessionStatus.Waiting)
+            return ExecutorStallAction.None;
+
+        // Шаг 2: напоминание ушло, а задача так и не закрыта — зовём человека
+        if (task.ExecutorNudgedAt is { } nudgedAt)
+            return nowUtc - nudgedAt >= staleAfter ? ExecutorStallAction.Alert : ExecutorStallAction.None;
+
+        // Шаг 1: тишину считаем от последней активности чата-исполнителя.
+        var lastActivity = session?.UpdatedAt ?? task.UpdatedAt;
+        var idle = nowUtc - lastActivity;
+        if (idle < staleAfter) return ExecutorStallAction.None;
+        // Окликать некого (чат удалён или протух по TTL) либо поздно: чат молчит дольше
+        // окна свежести — платный ход в позавчерашний разговор пользы не даст, а на первом
+        // же тике после обновления такие ходы ушли бы во ВСЕ давно висящие задачи разом
+        // (та же защита от лавины, что AutoStartWindow у автозапуска). Человеку при этом
+        // сказать всё равно надо — уведомление уходит без окна.
+        return session is null || idle > NudgeWindow
+            ? ExecutorStallAction.Alert
+            : ExecutorStallAction.Nudge;
+    }
+
+    // Окно свежести оклика: чат молчит дольше — сразу к человеку, без платного автохода
+    internal static readonly TimeSpan NudgeWindow = TimeSpan.FromHours(24);
+
+    /// <summary>
+    /// Один шаг страховки по задаче — вызывается тиком TaskSchedulerService. Отметки живут
+    /// на самой задаче (ExecutorNudgedAt / ExecutorStaleAlertedAt), поэтому шаг не повторяется
+    /// на следующем тике и переживает рестарт сервера.
+    /// </summary>
+    public async Task CheckStalledExecutorAsync(TaskItem task, DateTime nowUtc)
+    {
+        var session = task.LinkedSessionId is not null ? _sessions.GetById(task.LinkedSessionId) : null;
+        switch (ClassifyStall(task, session, nowUtc, _staleAfter))
+        {
+            case ExecutorStallAction.Nudge:
+                await NudgeExecutorAsync(task, session!, nowUtc);
+                break;
+            case ExecutorStallAction.Alert:
+                await AlertStaleTaskAsync(task, nowUtc);
+                break;
+        }
+    }
+
+    // Оклик исполнителя: один автоход в его же чат — «закрой задачу или эскалируй».
+    private async Task NudgeExecutorAsync(TaskItem task, Session session, DateTime nowUtc)
+    {
+        // Отметку ставим ДО отправки: сорвавшийся автоход не должен повторяться каждым
+        // тиком (раз в 30 с), а шаг 2 отсчитывается от этого же момента — человек узнает
+        // о брошенной задаче даже тогда, когда оклик вообще не удалось доставить.
+        _tasks.MarkExecutorNudged(task.Id, nowUtc);
+        try
+        {
+            // silent + staffNote: в ленте остаётся плашка-разделитель, а не пузырь с сырым
+            // служебным промптом (тот же приём, что у хода-реакции постановщика)
+            await _sessions.SendOrEnqueueAsync(session.Id, BuildStaleNudgePrompt(task),
+                silent: true, staffNote: StaleNudgeStaffNote);
+            _log.LogWarning("Задача {TaskId} «{Title}»: ход закончился, задача не закрыта — " +
+                "напомнил исполнителю в чате {SessionId}", task.Id, task.Title, session.Id);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Не удалось напомнить исполнителю о незакрытой задаче {TaskId}", task.Id);
+        }
+    }
+
+    // Оклик не помог (или окликать было некого) — уведомление человеку. Пометку «исполнитель
+    // встал» не ставим: она про терминальный отказ провайдера, а здесь работа просто брошена.
+    private async Task AlertStaleTaskAsync(TaskItem task, DateTime nowUtc)
+    {
+        var updated = _tasks.MarkExecutorStaleAlerted(task.Id, nowUtc) ?? task;
+        await _hub.BroadcastTaskChangedAsync(updated.OwnerId!, "updated", updated);
+
+        var persona = updated.PersonaId is not null ? _personas.Get(updated.PersonaId, updated.OwnerId!) : null;
+        await NotifyAsync(updated, BuildStaleNotification(updated, persona));
+        _log.LogWarning("Задача {TaskId} «{Title}» осталась в работе после конца хода — " +
+            "напоминание исполнителю не помогло, зову человека", updated.Id, updated.Title);
+    }
+
+    // Подпись плашки оклика: единственное, что человек видит от служебного промпта
+    internal const string StaleNudgeStaffNote = "Напоминание исполнителю: задача не закрыта";
+
+    // Промпт оклика: ровно два выхода — закрыть задачу либо эскалировать. Третьего («доделаю
+    // как-нибудь потом») быть не должно, иначе оклик превращается в новый бесконечный ход.
+    internal static string BuildStaleNudgePrompt(TaskItem task) =>
+        $"Твой ход закончился, а задача «{task.Title}» (id: {task.Id}) осталась в статусе «в работе». " +
+        "Работа сделана — закрой задачу через tasks_complete (resultMarkdown с итогом, " +
+        "linkedFiles с файлами). Не сделана и ты застрял — эскалируй через chats_report_up " +
+        "тому, кто поставил задачу (blocker: true), задачу не завершай. " +
+        "Ничего другого сейчас не делай.";
+
+    // Уведомление человеку: задача не закрыта и сама уже не закроется
+    internal static NotificationMessage BuildStaleNotification(TaskItem task, Persona? persona = null) => new(
+        Title: "Задача осталась в работе",
+        Body: $"{task.Title}: исполнитель закончил и не закрыл задачу — проверьте результат",
+        Url: TaskSchedulerService.TaskUrl(task),
+        Kind: "claude",
+        PersonaId: persona?.Id,
+        ProjectId: task.ProjectId,
+        TaskId: task.Id,
+        Tag: "Исполнитель");
 
     // --- Чистая логика маппинга (извлечена для юнит-тестов) ---
 

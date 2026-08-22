@@ -1,7 +1,6 @@
 using System.Collections.Concurrent;
 using ClaudeHomeServer.Services.CodeGraph.Core;
 using ClaudeHomeServer.Services.CodeGraph.Roslyn;
-using Microsoft.Extensions.Configuration;
 
 namespace ClaudeHomeServer.Services.CodeGraph;
 
@@ -104,16 +103,17 @@ public sealed class CodeGraphService : IDisposable
     public DateTimeOffset? GetCacheSignature(string rootPath) => _persistence.GetCacheSignature(rootPath);
 
     /// <summary>
-    /// Граф устарел: дешёвый mtime-чек (.cs новее BuiltAt). Экспонирован для slice-провайдера,
-    /// чтобы помечать slice устаревшим без полного GetSnapshotAsync каждый ход.
+    /// Граф устарел: дешёвый mtime-чек (.cs/.ts/.tsx новее BuiltAt). Экспонирован для
+    /// slice-провайдера, чтобы помечать slice устаревшим без полного GetSnapshotAsync каждый ход.
     /// </summary>
     public bool IsStaleFor(string rootPath, DateTimeOffset builtAt) => IsStale(rootPath, builtAt);
 
     /// <summary>
-    /// Граф устарел: хотя бы один .cs-файл проекта изменён позже BuiltAt.
-    /// Дёшево по mtime; при отсутствии BuiltAt (старый снимок) считаем устаревшим.
-    /// Обход — тот же, что у построения (EnumerateCsFiles минует .claude/bin/obj/node_modules…):
-    /// иначе stat шёл бы по мусорным .cs (на ClaudeCodeServer это 7878 файлов и ~40с на GET).
+    /// Граф устарел: хотя бы один исходник (.cs/.ts/.tsx — все расширения зарегистрированных
+    /// провайдеров) изменён позже BuiltAt. Дёшево по mtime; при отсутствии BuiltAt (старый
+    /// снимок) считаем устаревшим. Обход — тем же списком мусорных каталогов, что и построение
+    /// (.claude/bin/obj/node_modules…), одним проходом: иначе stat шёл бы по мусорным файлам
+    /// (на ClaudeCodeServer это 7878 .cs и ~40с на GET).
     /// </summary>
     private static bool IsStale(string rootPath, DateTimeOffset builtAt)
     {
@@ -122,11 +122,11 @@ public sealed class CodeGraphService : IDisposable
             if (!Directory.Exists(rootPath)) return false;
             if (builtAt == DateTimeOffset.MinValue) return true;
 
-            var newest = CompilationBuilder.EnumerateCsFiles(rootPath)
+            var newest = CompilationBuilder.EnumerateSourceFiles(rootPath, [".cs", ".ts", ".tsx"])
                 .Select(f => { try { return new FileInfo(f).LastWriteTimeUtc; } catch { return DateTime.MinValue; } })
                 .DefaultIfEmpty(DateTime.MinValue)
                 .Max();
-            // Нет .cs — нечего считать устаревшим (граф для пустого проекта не строится).
+            // Нет исходников — нечего считать устаревшим (граф для пустого проекта не строится).
             if (newest == DateTime.MinValue) return false;
             return newest > builtAt.UtcDateTime;
         }
@@ -402,6 +402,9 @@ public sealed class CodeGraphService : IDisposable
     /// <summary>
     /// Построить граф из всех зарегистрированных провайдеров.
     /// Если changedByExtension задан — провайдер с changed получает UpdateAsync, прочие — BuildAsync.
+    /// Один провайдер на нескольких extension (TypeScriptGraphProvider — .ts и .tsx) вызывается
+    /// ОДИН раз: без группировки получали два полных прогона экстрактора и задвоение всех
+    /// его рёбер на merge.
     /// </summary>
     private async Task<Core.CodeGraph> BuildInternalAsync(
         string rootPath,
@@ -411,33 +414,36 @@ public sealed class CodeGraphService : IDisposable
         var allNodes = new Dictionary<string, CodeGraphNode>();
         var allEdges = new List<CodeGraphEdge>();
 
-        // Каждый провайдер: UpdateAsync (если есть changed для его extension) иначе BuildAsync.
-        var tasks = _providers.Select(async kvp =>
-        {
-            var ext = kvp.Key;
-            var provider = kvp.Value;
-            try
+        // Группируем регистр по ИНСТАНСУ провайдера: Build/Update — один вызов на провайдера,
+        // changed-файлы всех его расширений объединяем (UpdateAsync TS всё равно строит
+        // снапшот целиком, дробить его по расширениям незачем).
+        var tasks = _providers
+            .GroupBy(kvp => kvp.Value)
+            .Select(async g =>
             {
-                Core.CodeGraph graph;
-                if (changedByExtension is not null
-                    && changedByExtension.TryGetValue(ext, out var files)
-                    && files.Count > 0)
+                var provider = g.Key;
+                try
                 {
-                    graph = await provider.UpdateAsync(rootPath, files, ct);
+                    var changed = changedByExtension is null
+                        ? null
+                        : g.SelectMany(kvp => changedByExtension.TryGetValue(kvp.Key, out var files)
+                                ? files
+                                : [])
+                            .ToList();
+
+                    Core.CodeGraph graph = changed is not null && changed.Count > 0
+                        ? await provider.UpdateAsync(rootPath, changed, ct)
+                        : await provider.BuildAsync(rootPath, ct);
+                    return (graph.Nodes, graph.Edges);
                 }
-                else
+                catch (Exception ex)
                 {
-                    graph = await provider.BuildAsync(rootPath, ct);
+                    _logger.LogWarning(ex, "Провайдер {Provider} упал при построении графа для {Path}",
+                        provider.GetType().Name, rootPath);
+                    return (Nodes: new Dictionary<string, CodeGraphNode>(), Edges: new List<CodeGraphEdge>());
                 }
-                return (graph.Nodes, graph.Edges);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Провайдер {Provider} упал при построении графа для {Path}",
-                    provider.GetType().Name, rootPath);
-                return (Nodes: new Dictionary<string, CodeGraphNode>(), Edges: new List<CodeGraphEdge>());
-            }
-        }).ToList();
+            })
+            .ToList();
 
         var results = await Task.WhenAll(tasks);
 
@@ -451,7 +457,12 @@ public sealed class CodeGraphService : IDisposable
             allEdges.AddRange(edges);
         }
 
-        return new Core.CodeGraph { Nodes = allNodes, Edges = allEdges };
+        // Дедуп на merge по (Source, Target, Relation): каждый провайдер дедупит себя,
+        // но склейка нескольких графов — наша забота; дубль здесь задваивал бы степень
+        // узлов (топ хабов и сортировка соседей врут).
+        var dedupedEdges = allEdges.DistinctBy(e => (e.Source, e.Target, e.Relation)).ToList();
+
+        return new Core.CodeGraph { Nodes = allNodes, Edges = dedupedEdges };
     }
 
     /// <summary>

@@ -727,7 +727,7 @@ if (!inspectionMode)
     _ = Task.Run(() => app.Services.GetRequiredService<ModelCatalogService>().GetModelsAsync());
     // Фоновый прогрев локальной модели Ollama (грузим веса в память заранее; best-effort)
     _ = Task.Run(() => app.Services.GetRequiredService<ClaudeHomeServer.Services.Llm.OllamaClient>().WarmUpAsync());
-    // Регистрация языковых провайдеров CodeGraph (C# для .cs файлов)
+    // Регистрация языковых провайдеров CodeGraph (C# для .cs; TS/React для .ts/.tsx)
     try
     {
         var codeGraphService = app.Services.GetRequiredService<ClaudeHomeServer.Services.CodeGraph.CodeGraphService>();
@@ -735,6 +735,14 @@ if (!inspectionMode)
             app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.CSharpGraphProvider>>());
         codeGraphService.RegisterProvider(".cs", csProvider);
         Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .cs");
+        // TS-провайдер гоняет Node-экстрактор frontend/scripts/codegraph-extractor.mjs;
+        // без Node/скрипта тихо отдаёт пустой граф (см. TypeScriptGraphProvider).
+        var tsProvider = new ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider(
+            app.Services.GetRequiredService<ILogger<ClaudeHomeServer.Services.CodeGraph.TypeScriptGraphProvider>>(),
+            app.Configuration);
+        codeGraphService.RegisterProvider(".ts", tsProvider);
+        codeGraphService.RegisterProvider(".tsx", tsProvider);
+        Console.WriteLine("[CodeGraph] зарегистрирован провайдер для .ts/.tsx");
     }
     catch (Exception ex)
     {

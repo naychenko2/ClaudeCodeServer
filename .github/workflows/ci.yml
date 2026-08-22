@@ -26,7 +26,9 @@ jobs:
       - name: Build
         run: dotnet build backend/ClaudeHomeServer.slnx -warnaserror
       - name: Test
-        run: dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build
+        # Категория "Node" — тестам нужен Node + frontend/node_modules (npm-зависимости
+        # в backend-job не ставим); они остаются для локальных прогонов, как Dns.
+        run: dotnet test backend/ClaudeHomeServer.Tests/ClaudeHomeServer.Tests.csproj --no-build --filter "Category!=Node"
 
   frontend:
     name: Frontend (lint + typecheck + build)

@@ -9,7 +9,7 @@ public sealed class CodeGraphNodeBriefDto
 {
     public string Id { get; init; } = "";
     public string Fqn { get; init; } = "";
-    /// <summary>Class | Interface | Struct | Enum</summary>
+    /// <summary>Class | Interface | Struct | Enum | Component | Hook | UiPrimitive | Util</summary>
     public string Kind { get; init; } = "";
     /// <summary>«относительный/путь.cs:42» (строка опускается, если её нет в снимке).</summary>
     public string Location { get; init; } = "";

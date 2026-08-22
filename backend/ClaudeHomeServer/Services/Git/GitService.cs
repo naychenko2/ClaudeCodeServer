@@ -289,6 +289,29 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
         return r.Ok ? ParseLog(r.Stdout) : [];
     }
 
+    // Число коммитов за последние days суток — знаменатель метрики охвата паспортами
+    // (GET /dossiers). Без пути — весь HEAD через rev-list --count; с путём — история
+    // одного файла через log --follow (переживает переименования, как FileLogAsync).
+    // --since фильтрует по committer date. Не-репозиторий и любой сбой git — 0:
+    // листинг паспортов не должен падать из-за метрики.
+    public async Task<int> CountRecentCommitsAsync(
+        string? ownerId, string root, int days, string? relPath = null, CancellationToken ct = default)
+    {
+        if (!IsGitRepo(root)) return 0;
+        var since = "--since=" + DateTimeOffset.UtcNow.AddDays(-days)
+            .ToString("yyyy-MM-ddTHH:mm:sszzz", CultureInfo.InvariantCulture);
+        if (string.IsNullOrWhiteSpace(relPath))
+        {
+            var r = await RunAsync(ownerId, root, ["rev-list", "--count", since, "HEAD"], ct: ct);
+            return r.Ok && int.TryParse(r.Stdout.Trim(), out var n) ? n : 0;
+        }
+        var log = await RunAsync(ownerId, root,
+            ["log", "--follow", since, "--format=%H", "--", ValidateRel(root, relPath)], ct: ct);
+        return log.Ok
+            ? log.Stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length
+            : 0;
+    }
+
     private static List<GitLogEntry> ParseLog(string stdout)
     {
         var list = new List<GitLogEntry>();

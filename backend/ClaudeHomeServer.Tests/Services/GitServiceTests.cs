@@ -105,6 +105,64 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         sha2.Should().NotBe(sha1);
     }
 
+    // ---------- Метрика охвата паспортов: CountRecentCommitsAsync (GET /dossiers) ----------
+
+    // Обе даты коммита в прошлом: --since фильтрует по committer date, поэтому сдвигаем
+    // и author-дату тоже — коммит честно «старый» с обеих сторон
+    private static readonly Dictionary<string, string> OldDates = new()
+    {
+        ["GIT_AUTHOR_DATE"] = "2020-01-01T12:00:00",
+        ["GIT_COMMITTER_DATE"] = "2020-01-01T12:00:00",
+    };
+
+    [Fact]
+    public async Task CountRecentCommits_Окно_Файл_И_Follow()
+    {
+        // Свежий коммит поверх фикстурного: в окне 7 суток лежат оба
+        await File.WriteAllTextAsync(Path.Combine(_repo, "a.txt"), "правка\n");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "свежий коммит");
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7)).Should().Be(2);
+
+        // Файловый фильтр: знаменатель — история одного файла (b.txt трогал только init,
+        // a.txt — init и свежий)
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "b.txt")).Should().Be(1);
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "a.txt")).Should().Be(2);
+
+        // --follow: переименование не рвёт историю файла
+        await RawGit("mv", "a.txt", "c.txt");
+        await _git.StageAllAsync(null, _repo);
+        await _git.CommitAsync(null, _repo, "переименовали a в c");
+        (await _git.CountRecentCommitsAsync(null, _repo, days: 7, "c.txt"))
+            .Should().Be(3, "история c.txt включает и коммиты a.txt до переименования");
+    }
+
+    // Отдельное репо с монотонной историей: корень датирован в прошлое, tip — сейчас.
+    // --since у git — traversal-эвристика по датам, рассчитанная ровно на такой порядок
+    // (старое ниже свежего); инвертированные даты она не обязана считать честно.
+    [Fact]
+    public async Task CountRecentCommits_ИсключаетКоммитыВнеОкна()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "gitsvc_since_" + Guid.NewGuid().ToString("N"));
+        _extraDirs.Add(dir);
+        Directory.CreateDirectory(dir);
+        await _git.InitAsync(null, dir);
+        await RawGitIn(dir, "config", "user.email", "test@test");
+        await RawGitIn(dir, "config", "user.name", "Тест");
+
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "старое\n");
+        await _git.StageAllAsync(null, dir);
+        await RawGitIn(dir, OldDates, "commit", "-m", "старый корень");
+        await File.WriteAllTextAsync(Path.Combine(dir, "a.txt"), "новое\n");
+        await _git.StageAllAsync(null, dir);
+        await RawGitIn(dir, "commit", "-m", "свежий коммит");
+
+        (await _git.CountRecentCommitsAsync(null, dir, days: 7))
+            .Should().Be(1, "в окне только свежий коммит, корень 2020 года исключён");
+        (await _git.CountRecentCommitsAsync(null, dir, days: 7, "a.txt"))
+            .Should().Be(1, "файловая ветка тоже отбрасывает старый коммит");
+    }
+
     [Fact]
     public async Task StageHunk_Индексирует_Только_Патч()
     {
@@ -464,10 +522,15 @@ public class GitServiceTests : IAsyncLifetime, IDisposable
         await _git.WorktreeRemoveAsync(null, _repo, wt);
     }
 
-    // Прямой git в произвольной папке (конфиг тестового worktree)
-    private static async Task RawGitIn(string dir, params string[] args)
+    // Прямой git в произвольной папке (конфиг тестового worktree); env — для коммитов
+    // с заданной датой (GIT_AUTHOR_DATE/GIT_COMMITTER_DATE)
+    private static Task RawGitIn(string dir, params string[] args) => RawGitIn(dir, null, args);
+
+    private static async Task RawGitIn(string dir, Dictionary<string, string>? env, params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = dir, UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        if (env is not null)
+            foreach (var kv in env) psi.Environment[kv.Key] = kv.Value;
         foreach (var a in args) psi.ArgumentList.Add(a);
         using var p = Process.Start(psi)!;
         await p.WaitForExitAsync();

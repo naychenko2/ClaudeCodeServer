@@ -100,9 +100,9 @@ public class DossierImportEndpointTests : IClassFixture<TestWebApplicationFactor
         (await File.ReadAllTextAsync(storeFile))
             .Should().Contain("\"Origin\":\"imported\"", "файл стора хранит признак происхождения");
 
-        var list = JsonSerializer.Deserialize<JsonElement>(
+        var payload = JsonSerializer.Deserialize<JsonElement>(
             await (await _client.GetAsync($"/api/projects/{projectId}/dossiers")).Content.ReadAsStringAsync());
-        var imported = list.EnumerateArray().Should().ContainSingle().Subject;
+        var imported = payload.GetProperty("entries").EnumerateArray().Should().ContainSingle().Subject;
         imported.GetProperty("commitSha").GetString().Should().Be("1a2b3c4d");
         imported.GetProperty("origin").GetString().Should().Be("imported", "GET отдаёт признак происхождения");
         imported.GetProperty("importedAuthor").GetString().Should().Be("AI Home");

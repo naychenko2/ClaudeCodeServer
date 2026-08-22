@@ -29,9 +29,10 @@ import { Rows3, Pin, FolderOpen, Bell, List, ListTree } from 'lucide-react';
 import { C, FONT, FS, SP, R, SHADOW, ISLAND, MODAL_W, GROUP_COLORS } from '../lib/design';
 import { AGENT_COLORS } from '../components/AgentSelector';
 import { ChatCard } from '../components/ChatCard';
-import { STATUS_CONFIG, STATUS_GLOW, type SessionStatus } from '../components/StatusIndicator';
+import { STATUS_CONFIG, STATUS_GLOW, type VisualStatus } from '../components/StatusIndicator';
 import { ProviderLimitCard } from '../components/chat/ChatItemView';
-import type { Session, ChatItem } from '../types';
+import type { Session, ChatItem, Persona } from '../types';
+import { PersonaAvatar } from '../features/personas/PersonaAvatar';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../lib/themeMode';
 import { useIsMobile, MOBILE_MAX, TABLET_MAX } from '../lib/breakpoints';
 import { CanvasBackdrop } from '../components/ui/CanvasBackdrop';
@@ -448,6 +449,21 @@ function TogglesSection() {
 }
 
 // === Секция «Примитивы — оверлеи и меню» ==========================
+// Лица для витрины подсветки «сейчас говорит»: цвет колец приходит извне (в продукте —
+// из ChatPanel, вместе с цветом сияния композера), поэтому держим его рядом с персоной
+const KIT_PERSONAS: Array<{ persona: Persona; color: string }> = [
+  { persona: { id: 'kit-1', ownerId: 'kit', name: 'Вера', handle: 'vera', scope: 'global', avatar: { kind: 'initials', color: 'purple' } } as Persona, color: AGENT_COLORS.purple },
+  { persona: { id: 'kit-2', ownerId: 'kit', name: 'Олег', handle: 'oleg', scope: 'global', avatar: { kind: 'initials', color: 'green' } } as Persona, color: AGENT_COLORS.green },
+];
+function KitAvatarSample({ persona, caption, speaking }: { persona: Persona; caption: string; speaking?: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: SP.sm }}>
+      <PersonaAvatar persona={persona} size={28} speaking={speaking} />
+      <span style={{ fontSize: FS.xs, color: C.textMuted }}>{persona.name} · {caption}</span>
+    </div>
+  );
+}
+
 // Modal / ConfirmDialog / Menu+MenuItem / BackButton / WaitingIndicator.
 // Триггеры открывают соответствующие оверлеи; BackButton — статично;
 // WaitingIndicator показан в обычном режиме и с hint. Стили — только токены
@@ -537,6 +553,20 @@ function OverlaysSection() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: SP.md }}>
             <WaitingIndicator />
             <WaitingIndicator hint="Читаю файлы проекта…" />
+          </div>
+        </SubBlock>
+
+        {/* Аватар персоны: обычный и «сейчас говорит» (пульс цветом персоны при озвучке).
+            Размах колец здесь МЕЛЬЧЕ, чем у WaitingIndicator выше: в ленте аватар сидит
+            лидом внутри пузыря с overflow: hidden, полный размах срезало бы кромкой. */}
+        <SubBlock label="PersonaAvatar — кто сейчас говорит (озвучка ответа)">
+          <div style={{ display: 'flex', alignItems: 'center', gap: SP.xl }}>
+            {KIT_PERSONAS.map(({ persona, color }) => (
+              <div key={persona.id} style={{ display: 'flex', alignItems: 'flex-end', gap: SP.lg }}>
+                <KitAvatarSample persona={persona} caption="молчит" />
+                <KitAvatarSample persona={persona} caption="говорит" speaking={color} />
+              </div>
+            ))}
           </div>
         </SubBlock>
       </div>
@@ -1740,12 +1770,12 @@ const DEMO_SESSIONS: Session[] = [
 // Порядок состояний для витрины ореола: сначала светящиеся (живые, потом ошибка),
 // следом спокойные. Подписи и цвета не дублируем — берём боевые таблицы
 // STATUS_CONFIG / STATUS_GLOW, чтобы витрина не разъезжалась с карточкой.
-const GLOW_STATES: SessionStatus[] = [
-  'starting', 'working', 'waiting', 'error', 'active', 'orphaned', 'finished',
+const GLOW_STATES: VisualStatus[] = [
+  'starting', 'working', 'agents', 'waiting', 'error', 'active', 'orphaned', 'finished',
 ];
 
 // Чем состояние себя ведёт — подпись под демо-карточкой
-const glowBehaviour = (st: SessionStatus) => {
+const glowBehaviour = (st: VisualStatus) => {
   const g = STATUS_GLOW[st];
   if (g.alpha === 0) return 'без свечения';
   if (!g.breath) return `ровный контур · ${g.alpha}%`;
@@ -2620,11 +2650,11 @@ function PanelsSection() {
         </SubBlock>
 
         {/* Состояние чата в списке несёт ореол самой карточки — точки статуса в ней
-            больше нет. Ниже боевой ChatCard во всех 7 состояниях: он рисует ореол сам
+            больше нет. Ниже боевой ChatCard во всех 8 видах: он рисует ореол сам
             по таблицам STATUS_CONFIG / STATUS_GLOW (StatusIndicator.tsx) классами
             cc-glow-* из index.css. Цвет отвечает «что происходит», переливание —
             «происходит прямо сейчас», сила (alpha) — насколько это требует внимания. */}
-        <SubBlock label="ChatCard — ореол статуса, все 7 состояний">
+        <SubBlock label="ChatCard — ореол статуса, все 8 видов">
           <Island bg={C.bgMain} borderColor={ISLAND.border} style={{ overflow: 'hidden' }}>
             <div style={{
               padding: SP.md, display: 'grid',
@@ -2633,7 +2663,10 @@ function PanelsSection() {
               {GLOW_STATES.map(st => (
                 <div key={st}>
                   <ChatCard
-                    session={{ ...DEMO_SESSIONS[1], id: `demo-glow-${st}`, status: st, isPinned: false }}
+                    // 'agents' — не статус CLI, а вид: сессия при живом фоне Active
+                    session={{ ...DEMO_SESSIONS[1], id: `demo-glow-${st}`,
+                      status: st === 'agents' ? 'active' : st, isPinned: false }}
+                    agentsRunning={st === 'agents'}
                     isActive={false}
                     isMobile={false}
                     fallbackName="Новый чат"

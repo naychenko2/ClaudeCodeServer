@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Вариант 4: Улучшенный ConnectionStatus</title>
+<style>
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-bg-selected: #E8E1D4;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-accent:       #D97757;
+    --c-border:       #E0D7C8;
+    --c-border-light: #E8E1D4;
+    --c-success:      #5E8B4E;
+    --c-warning:      #C9923E;
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island:   0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-bg-selected: #38332D;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-accent:       #E38A6A;
+    --c-border:       #3D3830;
+    --c-border-light: #34302A;
+    --c-success:      #7CB86A;
+    --c-warning:      #E0AC5A;
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island:   0 1px 2px rgba(0,0,0,.30), 0 8px 24px rgba(0,0,0,.45);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--c-bg-main);
+    color: var(--c-text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .demo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .variant {
+    background: var(--c-bg-card);
+    border: 1px solid var(--c-border);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: var(--shadow-card);
+  }
+  .variant h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+  }
+
+  /* Десктоп: футер сайдбара */
+  .sidebar-footer {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px;
+    background: var(--c-bg-panel);
+    border-radius: 8px;
+    border: 1px solid var(--c-border-light);
+  }
+  .status-icon {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--c-bg-white);
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 1px solid var(--c-border);
+  }
+  .status-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+  }
+  .status-info {
+    flex: 1;
+    min-width: 0;
+  }
+  .status-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .status-subtitle {
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Счётчик проблем */
+  .reconnect-count {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    background: var(--c-bg-selected);
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--c-text-secondary);
+    margin-left: 4px;
+  }
+
+  /* Мобильное меню */
+  .mobile-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    background: var(--c-bg-white);
+    border-radius: 8px;
+    border: 1px solid var(--c-border);
+    margin-bottom: 8px;
+  }
+  .menu-icon {
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .menu-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .menu-text {
+    flex: 1;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--c-text-primary);
+  }
+  .menu-badge {
+    padding: 2px 6px;
+    background: var(--c-warning);
+    color: #fff;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 600;
+  }
+
+  /* Состояния */
+  .online .status-dot, .online .menu-dot {
+    background: var(--c-success);
+  }
+  .offline .status-dot, .offline .menu-dot {
+    background: var(--c-text-muted);
+  }
+  .offline .status-subtitle {
+    color: var(--c-text-muted);
+  }
+  .unstable .status-dot, .unstable .menu-dot {
+    background: var(--c-warning);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  .unstable .status-subtitle {
+    color: var(--c-warning);
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .theme-toggle {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    padding: 8px 12px;
+    background: var(--c-bg-white);
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+    z-index: 1000;
+  }
+  .note {
+    margin-top: 12px;
+    padding: 8px;
+    background: var(--c-bg-panel);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--c-text-secondary);
+  }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? '' : 'dark'">Переключить тему</button>
+
+<div class="demo-grid">
+  <!-- Десктоп: Онлайн -->
+  <div class="variant online">
+    <h3>Десктоп: Онлайн</h3>
+    <div class="sidebar-footer">
+      <div class="status-icon">
+        <div class="status-dot"></div>
+      </div>
+      <div class="status-info">
+        <div class="status-title">AI Home</div>
+        <div class="status-subtitle">C:\Sources\ClaudeCodeServer</div>
+      </div>
+    </div>
+    <div class="note">Зелёная точка, путь проекта — стандартный ConnectionStatus</div>
+  </div>
+
+  <!-- Десктоп: Офлайн -->
+  <div class="variant offline">
+    <h3>Десктоп: Офлайн</h3>
+    <div class="sidebar-footer">
+      <div class="status-icon">
+        <div class="status-dot"></div>
+      </div>
+      <div class="status-info">
+        <div class="status-title">AI Home</div>
+        <div class="status-subtitle">Офлайн — сохранённые данные</div>
+      </div>
+    </div>
+    <div class="note">Серая точка + текст офлайн — текущее поведение</div>
+  </div>
+
+  <!-- Десктоп: Нестабильно со счётчиком -->
+  <div class="variant unstable">
+    <h3>Десктоп: Нестабильно</h3>
+    <div class="sidebar-footer">
+      <div class="status-icon">
+        <div class="status-dot"></div>
+      </div>
+      <div class="status-info">
+        <div class="status-title">AI Home <span class="reconnect-count">5 обрывов</span></div>
+        <div class="status-subtitle">Проблемы со связью</div>
+      </div>
+    </div>
+    <div class="note">Жёлтая точка + счётчик обрывов за сессию — новый элемент</div>
+  </div>
+
+  <!-- Мобила: Меню аватара -->
+  <div class="variant unstable">
+    <h3>Мобила: В меню аватара</h3>
+    <div class="mobile-menu-item">
+      <div class="menu-icon">
+        <div class="menu-dot"></div>
+      </div>
+      <span class="menu-text">Состояние связи</span>
+      <span class="menu-badge">5</span>
+    </div>
+    <div class="note">На мобиле — в меню аватара, счётчик как бейдж</div>
+  </div>
+
+  <!-- Возврат в онлайн -->
+  <div class="variant online">
+    <h3>Возврат в онлайн (тихий)</h3>
+    <div class="sidebar-footer">
+      <div class="status-icon">
+        <div class="status-dot"></div>
+      </div>
+      <div class="status-info">
+        <div class="status-title">AI Home</div>
+        <div class="status-subtitle">C:\Sources\ClaudeCodeServer</div>
+      </div>
+    </div>
+    <div class="note">Просто возврат к зелёной точке и пути — без тоста</div>
+  </div>
+</div>
+
+</body>
+</html>

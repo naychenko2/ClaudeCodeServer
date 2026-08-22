@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Вариант 1: Индикатор в шапке чата</title>
+<style>
+  :root {
+    --c-bg-main:     #F4F0E8;
+    --c-bg-panel:    #EDE7DC;
+    --c-bg-card:     #FBF8F2;
+    --c-bg-white:    #FFFFFF;
+    --c-text-heading:   #2A251F;
+    --c-text-primary:   #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted:     #9A8F7E;
+    --c-accent:       #D97757;
+    --c-border:       #E0D7C8;
+    --c-success:      #5E8B4E;
+    --c-warning:      #C9923E;
+    --shadow-card:     0 2px 8px rgba(60, 50, 35, 0.05);
+  }
+  [data-theme="dark"] {
+    --c-bg-main:     #201C18;
+    --c-bg-panel:    #272320;
+    --c-bg-card:     #2E2A25;
+    --c-bg-white:    #2E2A25;
+    --c-text-heading:   #F2ECE1;
+    --c-text-primary:   #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted:     #8A8072;
+    --c-accent:       #E38A6A;
+    --c-border:       #3D3830;
+    --c-success:      #7CB86A;
+    --c-warning:      #E0AC5A;
+    --shadow-card:     0 2px 10px rgba(0, 0, 0, 0.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--c-bg-main);
+    color: var(--c-text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .demo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .variant {
+    background: var(--c-bg-card);
+    border: 1px solid var(--c-border);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: var(--shadow-card);
+  }
+  .variant h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+  }
+  .chat-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px;
+    background: var(--c-bg-panel);
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .chat-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+  }
+  .chat-title-text {
+    font-size: 14px;
+  }
+  .status-indicator {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    background: var(--c-bg-white);
+    border-radius: 6px;
+    border: 1px solid var(--c-border);
+  }
+  .status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .status-text {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--c-text-secondary);
+    white-space: nowrap;
+  }
+
+  /* Состояния */
+  .online .status-dot {
+    background: var(--c-success);
+  }
+  .offline .status-dot {
+    background: var(--c-text-muted);
+  }
+  .unstable .status-dot {
+    background: var(--c-warning);
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+  }
+
+  .theme-toggle {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    padding: 8px 12px;
+    background: var(--c-bg-white);
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+    z-index: 1000;
+  }
+  .note {
+    margin-top: 12px;
+    padding: 8px;
+    background: var(--c-bg-panel);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--c-text-secondary);
+  }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? '' : 'dark'">Переключить тему</button>
+
+<div class="demo-grid">
+  <!-- Состояние 1: Онлайн (стабильно) -->
+  <div class="variant online">
+    <h3>Онлайн</h3>
+    <div class="chat-header">
+      <div class="chat-title">
+        <div class="chat-title-text">AI Home</div>
+      </div>
+      <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span class="status-text">В сети</span>
+      </div>
+    </div>
+    <div class="note">Зелёная точка — связь стабильна, никаких действий не требуется</div>
+  </div>
+
+  <!-- Состояние 2: Офлайн -->
+  <div class="variant offline">
+    <h3>Офлайн</h3>
+    <div class="chat-header">
+      <div class="chat-title">
+        <div class="chat-title-text">AI Home</div>
+      </div>
+      <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span class="status-text">Офлайн</span>
+      </div>
+    </div>
+    <div class="note">Серая точка + текст — связь потеряна, работает офлайн-кэш</div>
+  </div>
+
+  <!-- Состояние 3: Нестабильно -->
+  <div class="variant unstable">
+    <h3>Нестабильно</h3>
+    <div class="chat-header">
+      <div class="chat-title">
+        <div class="chat-title-text">AI Home</div>
+      </div>
+      <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span class="status-text">Проблемы связи</span>
+      </div>
+    </div>
+    <div class="note">Жёлтая пульсирующая точка — мигание, но тоста нет</div>
+  </div>
+
+  <!-- Состояние 4: Возврат в онлайн -->
+  <div class="variant online">
+    <h3>Возврат в онлайн (тихий)</h3>
+    <div class="chat-header">
+      <div class="chat-title">
+        <div class="chat-title-text">AI Home</div>
+      </div>
+      <div class="status-indicator">
+        <div class="status-dot"></div>
+        <span class="status-text">В сети</span>
+      </div>
+    </div>
+    <div class="note">Точка просто стала зелёной — без тоста «Связь восстановлена»</div>
+  </div>
+</div>
+
+</body>
+</html>

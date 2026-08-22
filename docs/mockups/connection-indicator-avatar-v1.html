@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Индикатор связи вокруг аватарки</title>
+<style>
+  :root {
+    --c-bg-main: #F4F0E8;
+    --c-bg-panel: #EDE7DC;
+    --c-bg-card: #FBF8F2;
+    --c-bg-white: #FFFFFF;
+    --c-text-heading: #2A251F;
+    --c-text-primary: #39332B;
+    --c-text-secondary: #756B5E;
+    --c-text-muted: #9A8F7E;
+    --c-border: #E0D7C8;
+    --c-success: #5E8B4E;
+    --c-warning: #C9923E;
+    --c-danger: #B4452F;
+    --shadow-card: 0 2px 8px rgba(60, 50, 35, 0.05);
+    --shadow-island: 0 1px 2px rgba(60, 50, 35, 0.06), 0 6px 20px rgba(60, 50, 35, 0.10);
+  }
+  [data-theme="dark"] {
+    --c-bg-main: #201C18;
+    --c-bg-panel: #272320;
+    --c-bg-card: #2E2A25;
+    --c-bg-white: #2E2A25;
+    --c-text-heading: #F2ECE1;
+    --c-text-primary: #EDE6DB;
+    --c-text-secondary: #B3A897;
+    --c-text-muted: #8A8072;
+    --c-border: #3D3830;
+    --c-success: #7CB86A;
+    --c-warning: #E0AC5A;
+    --c-danger: #E8785E;
+    --shadow-card: 0 2px 10px rgba(0, 0, 0, 0.35);
+    --shadow-island: 0 1px 2px rgba(0, 0, 0, 0.30), 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    background: var(--c-bg-main);
+    color: var(--c-text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 13px;
+  }
+  .theme-toggle {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    padding: 8px 12px;
+    background: var(--c-bg-white);
+    border: 1px solid var(--c-border);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+    z-index: 1000;
+  }
+  h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+    margin: 0 0 8px;
+  }
+  .intro {
+    color: var(--c-text-secondary);
+    font-size: 12px;
+    margin-bottom: 20px;
+    max-width: 720px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    max-width: 1200px;
+  }
+  .variant {
+    background: var(--c-bg-card);
+    border: 1px solid var(--c-border);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: var(--shadow-card);
+  }
+  .variant h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--c-text-heading);
+  }
+  .state-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+  .state-label {
+    width: 90px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--c-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  /* Общий контейнер аватарки */
+  .avatar-wrap {
+    position: relative;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .avatar {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #D97757;
+    color: #FBF8F2;
+    font-size: 10px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  [data-theme="dark"] .avatar {
+    background: #E38A6A;
+    color: #201C18;
+  }
+
+  /* Вариант 1: Кольцо */
+  .v1-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    border: 2px solid var(--c-success);
+    transition: all 0.2s ease;
+  }
+  .v1-unstable .v1-ring {
+    border-style: dashed;
+    border-color: var(--c-warning);
+    animation: ringPulse 1.4s ease-in-out infinite;
+  }
+  .v1-offline .v1-ring {
+    border: 2px dashed var(--c-text-muted);
+    clip-path: polygon(0 0, 100% 0, 100% 40%, 0 60%);
+  }
+  @keyframes ringPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.55; }
+  }
+
+  /* Вариант 2: Угловая наклейка */
+  .v2-badge {
+    position: absolute;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--c-success);
+    border: 1.5px solid var(--c-bg-card);
+    transition: all 0.2s ease;
+  }
+  .v2-online .v2-badge { bottom: 0; right: 0; }
+  .v2-unstable .v2-badge {
+    top: 0;
+    right: 0;
+    background: var(--c-warning);
+    animation: badgePulse 1.2s ease-in-out infinite;
+  }
+  .v2-offline .v2-badge {
+    top: 0;
+    left: 0;
+    width: 9px;
+    height: 9px;
+    background: var(--c-text-muted);
+    border-radius: 2px;
+    transform: rotate(45deg);
+  }
+  .v2-offline .v2-badge::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 5px;
+    height: 1.5px;
+    background: var(--c-bg-card);
+    transform: translate(-50%, -50%) rotate(90deg);
+  }
+  @keyframes badgePulse {
+    0%, 100% { transform: scale(1); opacity: 1; }
+    50% { transform: scale(1.25); opacity: 0.7; }
+  }
+
+  /* Вариант 3: Обесцвечивание + диагональ */
+  .v3-overlay {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    pointer-events: none;
+  }
+  .v3-offline .avatar {
+    filter: grayscale(100%);
+    opacity: 0.6;
+  }
+  .v3-offline .v3-overlay::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: -10%;
+    width: 120%;
+    height: 1.5px;
+    background: var(--c-text-muted);
+    transform: translateY(-50%) rotate(-45deg);
+  }
+  .v3-unstable .avatar {
+    filter: grayscale(30%);
+  }
+  .v3-unstable .v3-overlay::before {
+    content: '!';
+    position: absolute;
+    top: -2px;
+    right: -2px;
+    width: 10px;
+    height: 10px;
+    background: var(--c-warning);
+    color: var(--c-bg-card);
+    border-radius: 50%;
+    font-size: 7px;
+    font-weight: 800;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Вариант 4: Секторное кольцо */
+  .v4-ring {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+  }
+  .v4-online .v4-ring {
+    border: 2px solid var(--c-success);
+  }
+  .v4-unstable .v4-ring {
+    border: 2px solid transparent;
+    border-top-color: var(--c-warning);
+    border-right-color: var(--c-warning);
+    animation: spin 1.2s linear infinite;
+  }
+  .v4-offline .v4-ring {
+    border: 2px solid var(--c-text-muted);
+    border-bottom-color: transparent;
+    border-left-color: transparent;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Мобильный превью */
+  .mobile-bar {
+    margin-top: 16px;
+    padding: 10px 12px;
+    background: var(--c-bg-panel);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 44px;
+  }
+  .mobile-title {
+    font-weight: 600;
+    font-size: 13px;
+    color: var(--c-text-heading);
+  }
+
+  .note {
+    margin-top: 12px;
+    padding: 8px;
+    background: var(--c-bg-panel);
+    border-radius: 6px;
+    font-size: 11px;
+    color: var(--c-text-secondary);
+  }
+</style>
+</head>
+<body>
+
+<button class="theme-toggle" onclick="document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'dark' ? '' : 'dark'">Свет / тьма</button>
+
+<h1>Индикатор связи вокруг аватарки</h1>
+<p class="intro">Аватарка — 22×22px, маркер не перекрывает лицо и читается на узком экране. Состояния различаются формой и положением, не только цветом.</p>
+
+<div class="grid">
+  <!-- Вариант 1: Кольцо -->
+  <div class="variant">
+    <h3>Вариант 1: Кольцо-контур</h3>
+    <div class="state-row v1-online">
+      <span class="state-label">Онлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v1-ring"></div></div>
+    </div>
+    <div class="state-row v1-unstable">
+      <span class="state-label">Нестабильно</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v1-ring"></div></div>
+    </div>
+    <div class="state-row v1-offline">
+      <span class="state-label">Офлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v1-ring"></div></div>
+    </div>
+    <div class="state-row v1-online">
+      <span class="state-label">Возврат</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v1-ring"></div></div>
+    </div>
+    <div class="mobile-bar">
+      <span class="mobile-title">AI Home</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v1-ring"></div></div>
+    </div>
+    <div class="note">Сплошное = онлайн, пунктир = нестабильно, обрывное = офлайн. Тихий возврат — сплошное кольцо без тоста.</div>
+  </div>
+
+  <!-- Вариант 2: Угловая наклейка -->
+  <div class="variant">
+    <h3>Вариант 2: Точка-наклейка</h3>
+    <div class="state-row v2-online">
+      <span class="state-label">Онлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v2-badge"></div></div>
+    </div>
+    <div class="state-row v2-unstable">
+      <span class="state-label">Нестабильно</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v2-badge"></div></div>
+    </div>
+    <div class="state-row v2-offline">
+      <span class="state-label">Офлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v2-badge"></div></div>
+    </div>
+    <div class="state-row v2-online">
+      <span class="state-label">Возврат</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v2-badge"></div></div>
+    </div>
+    <div class="mobile-bar">
+      <span class="mobile-title">AI Home</span>
+      <div class="avatar-wrap v2-online"><div class="avatar">АН</div><div class="v2-badge"></div></div>
+    </div>
+    <div class="note">Положение меняется: онлайн — снизу-справа, нестабильно — сверху-справа, офлайн — крестик сверху-слева.</div>
+  </div>
+
+  <!-- Вариант 3: Обесцвечивание -->
+  <div class="variant">
+    <h3>Вариант 3: Обесцвечивание + диагональ</h3>
+    <div class="state-row v3-online">
+      <span class="state-label">Онлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v3-overlay"></div></div>
+    </div>
+    <div class="state-row v3-unstable">
+      <span class="state-label">Нестабильно</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v3-overlay"></div></div>
+    </div>
+    <div class="state-row v3-offline">
+      <span class="state-label">Офлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v3-overlay"></div></div>
+    </div>
+    <div class="state-row v3-online">
+      <span class="state-label">Возврат</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v3-overlay"></div></div>
+    </div>
+    <div class="mobile-bar">
+      <span class="mobile-title">AI Home</span>
+      <div class="avatar-wrap v3-offline"><div class="avatar">АН</div><div class="v3-overlay"></div></div>
+    </div>
+    <div class="note">Офлайн — чёрно-белая аватарка с перечёркиванием. Нестабильно — восклицание. Возврат — цвет.</div>
+  </div>
+
+  <!-- Вариант 4: Секторное кольцо -->
+  <div class="variant">
+    <h3>Вариант 4: Секторное кольцо</h3>
+    <div class="state-row v4-online">
+      <span class="state-label">Онлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v4-ring"></div></div>
+    </div>
+    <div class="state-row v4-unstable">
+      <span class="state-label">Нестабильно</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v4-ring"></div></div>
+    </div>
+    <div class="state-row v4-offline">
+      <span class="state-label">Офлайн</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v4-ring"></div></div>
+    </div>
+    <div class="state-row v4-online">
+      <span class="state-label">Возврат</span>
+      <div class="avatar-wrap"><div class="avatar">АН</div><div class="v4-ring"></div></div>
+    </div>
+    <div class="mobile-bar">
+      <span class="mobile-title">AI Home</span>
+      <div class="avatar-wrap v4-unstable"><div class="avatar">АН</div><div class="v4-ring"></div></div>
+    </div>
+    <div class="note">Полное кольцо = онлайн, вращающаяся дуга = нестабильно, большой разрыв = офлайн.</div>
+  </div>
+</div>
+
+</body>
+</html>

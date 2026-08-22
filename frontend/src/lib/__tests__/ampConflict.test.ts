@@ -118,9 +118,11 @@ describe('память устройства о конфликте захвато
 describe('ранний вердикт конфликта', () => {
   const t0 = 1_000_000;
 
+  // Боевая расстановка: наш поток открыт, движок запустился, человек говорит
   function speaking(): AmpConflictDetector {
     const d = new AmpConflictDetector();
     d.setStream(true);
+    d.cycleStart();
     d.noteVoice(t0);
     return d;
   }
@@ -143,6 +145,34 @@ describe('ранний вердикт конфликта', () => {
 
   it('без нашего потока конфликта быть не может', () => {
     const d = new AmpConflictDetector();
+    d.cycleStart();
+    d.noteVoice(t0);
+    expect(d.earlyConflict(t0 + 10 * EARLY_CONFLICT_MS)).toBe(false);
+  });
+
+  // Главная ловушка: поток амплитуды открыт всю микрофонную фазу, а циклы движка
+  // идут в ней чередой. Речь, сказанная в паузе МЕЖДУ циклами, никем не слушается
+  // законно — принять её за конфликт значит стереть человеку уже распознанную фразу
+  it('пока цикл не открыт, молчание движка законно', () => {
+    const d = new AmpConflictDetector();
+    d.setStream(true);
+    d.noteVoice(t0);
+    expect(d.earlyConflict(t0 + 10 * EARLY_CONFLICT_MS)).toBe(false);
+  });
+
+  it('старт цикла обнуляет речь из паузы, а не наследует её', () => {
+    const d = new AmpConflictDetector();
+    d.setStream(true);
+    d.noteVoice(t0);                          // говорил, пока движок был закрыт
+    d.cycleStart();                           // движок открылся только сейчас
+    expect(d.earlyConflict(t0 + EARLY_CONFLICT_MS)).toBe(false);
+    d.noteVoice(t0 + EARLY_CONFLICT_MS);
+    expect(d.earlyConflict(t0 + 2 * EARLY_CONFLICT_MS)).toBe(true);
+  });
+
+  it('конец цикла закрывает окно вердикта до следующего старта', () => {
+    const d = speaking();
+    d.cycleEnd(true);
     d.noteVoice(t0);
     expect(d.earlyConflict(t0 + 10 * EARLY_CONFLICT_MS)).toBe(false);
   });
@@ -165,6 +195,7 @@ describe('ранний вердикт конфликта', () => {
     const d = speaking();
     d.noteEngineHeard();
     d.cycleEnd(false);
+    d.cycleStart();
     d.noteVoice(t0);
     expect(d.earlyConflict(t0 + EARLY_CONFLICT_MS)).toBe(true);
   });

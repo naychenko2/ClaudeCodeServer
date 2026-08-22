@@ -662,6 +662,8 @@ export function Composer({
     onKeyboardFallback: () => textareaRef.current?.focus(),
     // Движок реально слышит звук — снимает подозрение раннего детектора конфликта
     onHeard: () => { if (talkActiveRef.current) reportEngineHeardRef.current?.(); },
+    // Движок захватил аудио: до этого момента детектору судить не о чем
+    onCycleStart: () => { if (talkActiveRef.current) reportCycleStartRef.current?.(); },
     onEnd: () => {
       if (!talkActiveRef.current) return;
       // Бесплодный цикл: буфер петли пуст — движок не услышал ни слова. Корм
@@ -964,6 +966,7 @@ export function Composer({
     reportMicDead: reportMicDeadToAurora,
     reportCycleEnd: reportCycleEndToAurora,
     reportEngineHeard: reportEngineHeardToAurora,
+    reportCycleStart: reportCycleStartToAurora,
   } = useMicLevel({
     active: auroraVisible,
     micActive: auroraMicActive,
@@ -981,6 +984,8 @@ export function Composer({
   useEffect(() => { reportCycleEndRef.current = reportCycleEndToAurora; });
   const reportEngineHeardRef = useRef(reportEngineHeardToAurora);
   useEffect(() => { reportEngineHeardRef.current = reportEngineHeardToAurora; });
+  const reportCycleStartRef = useRef(reportCycleStartToAurora);
+  useEffect(() => { reportCycleStartRef.current = reportCycleStartToAurora; });
 
   // Отсчёт окна отмены (2 секунды) — только для подписи в полосе ввода; сам таймер
   // ведёт автомат петли

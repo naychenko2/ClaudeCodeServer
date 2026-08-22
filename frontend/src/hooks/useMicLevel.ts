@@ -39,9 +39,20 @@ function isAmpUnsafe(): boolean {
   return ampUnsafeSession || isAmpUnsafeDevice();
 }
 
+// Подтверждённый вердикт: был реальный бесплодный цикл распознавания (или смерть
+// движка под нашим потоком). Запоминаем на устройстве — урок дорогой, повторять его
+// в каждой новой вкладке незачем
 function markAmpUnsafe(): void {
   ampUnsafeSession = true;
   markAmpUnsafeDevice();
+}
+
+// Ранний вердикт — эвристика по расхождению амплитуды и слуха движка: на устройстве
+// НЕ запоминаем. Отката в интерфейсе нет, а ложное срабатывание навсегда посадило бы
+// сияние на псевдо. Вкладке этого хватает: конфликт устойчив, и подтверждённый
+// вердикт всё равно придёт следующим бесплодным циклом
+function markAmpUnsafeSession(): void {
+  ampUnsafeSession = true;
 }
 
 // Apple-платформы: WebKit-реализация SpeechRecognition не терпит параллельного
@@ -108,6 +119,10 @@ export interface MicLevel {
   // Движок подал признак слуха (soundstart/speechstart/результат): звук до него
   // доходит, ранний вердикт в этом цикле снимается
   reportEngineHeard: () => void;
+  // Движок запущен и захватил аудио: до этого момента его молчание законно — наш
+  // поток открыт всю микрофонную фазу, а циклы распознавания идут в ней чередой,
+  // и между ними речь человека никем не слушается по определению
+  reportCycleStart: () => void;
 }
 
 export function useMicLevel({ active, micActive, speechActive, targetRef, onEarlyConflict }: MicLevelOptions): MicLevel {
@@ -192,8 +207,11 @@ export function useMicLevel({ active, micActive, speechActive, targetRef, onEarl
           // он тянется 5-6 секунд, и всё сказанное за них пропадает
           if (conflictRef.current.earlyConflict()) {
             talkDiag('amp: РАННИЙ КОНФЛИКТ — движок глух под нашим захватом');
-            markAmpUnsafe();
-            conflictRef.current.cycleStart(); // вердикт разовый: не повторяем каждый кадр
+            markAmpUnsafeSession();
+            // Вердикт разовый: закрываем цикл сразу, иначе следующий же кадр rAF
+            // выстрелил бы им повторно — поток гаснет только к следующему проходу
+            // эффекта, и до тех пор условие оставалось бы истинным
+            conflictRef.current.cycleEnd(false);
             setStreamKick(k => k + 1);
             earlyRef.current?.();
           }
@@ -310,5 +328,7 @@ export function useMicLevel({ active, micActive, speechActive, targetRef, onEarl
   }, []);
 
   const reportEngineHeard = useCallback(() => conflictRef.current.noteEngineHeard(), []);
-  return { reportMicDead, reportCycleEnd, reportEngineHeard };
+  const reportCycleStart = useCallback(() => conflictRef.current.cycleStart(), []);
+
+  return { reportMicDead, reportCycleEnd, reportEngineHeard, reportCycleStart };
 }

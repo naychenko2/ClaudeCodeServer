@@ -1,12 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import type { ReactNode, CSSProperties } from 'react';
 import { X } from 'lucide-react';
 import { C, R, FONT, SHADOW, SP, Z } from '../../lib/design';
-import { MOBILE_MAX } from '../../lib/breakpoints';
 import { getPopupDepth } from '../../lib/popupEscape';
 import { IconButton } from './IconButton';
 import { ICON_SIZE, ICON_STROKE } from './icons';
+import { useIsMobileModal } from './useIsMobileModal';
 
 interface ModalProps {
   width?: number;
@@ -22,32 +22,6 @@ interface ModalProps {
   cardStyle?: CSSProperties;
 }
 
-const MOBILE_BP = MOBILE_MAX + 1; // единый порог с раскладкой (см. lib/breakpoints)
-
-// Брейкпоинт мобилы определяется внутри Modal — потребители получают
-// bottom-sheet автоматически, без прокидывания пропсов.
-function useIsMobile() {
-  const [mobile, setMobile] = useState(() =>
-    typeof window !== 'undefined'
-      ? window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`).matches
-      : false
-  );
-  useEffect(() => {
-    const mq = window.matchMedia(`(max-width: ${MOBILE_BP - 1}px)`);
-    const handler = (e: MediaQueryListEvent) => setMobile(e.matches);
-    // eslint-disable-next-line react-hooks/set-state-in-effect -- подписка matchMedia: мобильный брейкпоинт
-    setMobile(mq.matches);
-    // addEventListener поддерживается современными браузерами; для совместимости — фолбэк
-    if (mq.addEventListener) mq.addEventListener('change', handler);
-    else mq.addListener(handler);
-    return () => {
-      if (mq.removeEventListener) mq.removeEventListener('change', handler);
-      else mq.removeListener(handler);
-    };
-  }, []);
-  return mobile;
-}
-
 // Единое модальное окно.
 //  • Десктоп/планшет (>=768): центрированная карточка с мягким появлением.
 //  • Мобила (<768): bottom-sheet — выезжает снизу, drag-handle сверху,
@@ -59,7 +33,7 @@ export function Modal({
   width = 440, title, subtitle, footer, onClose,
   closeOnBackdrop = true, hideCloseButton = false, children, cardStyle,
 }: ModalProps) {
-  const isMobile = useIsMobile();
+  const isMobile = useIsMobileModal();
 
   useEffect(() => {
     // preventDefault — сигнал нижележащим слоям (оверлей «Стены» и любой будущий),

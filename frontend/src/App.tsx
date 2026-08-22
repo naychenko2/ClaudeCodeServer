@@ -17,15 +17,13 @@ import { AiLauncher } from './components/ai/AiLauncher'
 import { OPEN_GLOBAL_SEARCH_EVENT } from './lib/ai/actions'
 import { resetAiAwaiting } from './lib/ai/awaiting'
 import { PRODUCT_HISTORY_EVENT, productHistorySeenKey } from './components/HubHeader'
-import { initConnectivity, becameVisibleRecently } from './lib/offline'
+import { initConnectivity } from './lib/offline'
 import { installSelectionScopes } from './lib/selectionScope'
 import { LoadingScreen } from './components/ui/LoadingScreen'
 import { recordRecentProject } from './lib/pinnedProjects'
 import { useOnline } from './hooks/useOnline'
 import { useThemeColor } from './hooks/useThemeColor'
 import { projectMainColor } from './features/projects/projectUtil'
-import { showToast } from './lib/toast'
-import { isDeployInProgress } from './lib/deployState'
 import { runOfflineSnapshot, syncProjectFiles, drainOfflineQueues } from './lib/sync'
 import { onFilesChanged, onMessage } from './lib/signalr'
 import { onProjectIconBackfilled } from './features/projects/useAllProjects'
@@ -389,25 +387,10 @@ export default function App() {
     setProject(fresh)
   }), [])
 
-  // Toast «Связь восстановлена» — только на переходе offline → online (старт офлайн
-  // и первый онлайн не озвучиваем; прогрев кэша и drain очередей делается эффектом ниже).
-  // «Тихое окно»: восстановление в первые секунды после возврата вкладки в видимость
-  // не озвучиваем — это фоновый разрыв сокета (планшет заморозил вкладку при
-  // переключении приложений), пользователь его не видел, и тост на каждый возврат
-  // в приложение был бы спамом.
-  // Выкатка — тоже «тихое окно», и по той же причине: обрыв там не аварийный, а
-  // запланированный, пользователь смотрит на заставку публикации. Тост «Связь восстановлена»
-  // посреди неё сообщал бы о беде, которой не было. Флаг снимается вместе с концом выкатки,
-  // так что настоящий разрыв после неё озвучится как обычно.
-  const wasOfflineRef = useRef(false)
-  useEffect(() => {
-    if (!online) { wasOfflineRef.current = true; return }
-    if (wasOfflineRef.current) {
-      wasOfflineRef.current = false
-      if (!becameVisibleRecently() && !isDeployInProgress()) showToast('Связь восстановлена', 'Обновляем…')
-    }
-  }, [online])
-
+  // Связь: возврат offline → online теперь тихий. Маркер у аватарки
+  // (useConnectionDisplayState) сам показывает состояние с гистерезисом
+  // ~3с, об офлайне уже сообщает заглушка композера. Тост «Связь восстановлена»
+  // убран — на нестабильном WiFi он вылетал на каждый блип и раздражал.
   useEffect(() => { initConnectivity() }, [])
 
   // UI-инспектор (admin-only): хоткей Ctrl+Alt+I регистрируется один раз, admin-флаг

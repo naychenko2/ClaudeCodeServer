@@ -314,44 +314,15 @@ describe('setConnectionState: совместимость с signalr.ts', () => {
   });
 });
 
-describe('becameVisibleRecently: тихое окно после возврата вкладки', () => {
-  // Достаём visibilitychange-хендлер, зарегистрированный initConnectivity в застабленном
-  // document, — тесты гоняют реальный обработчик, а не переизобретают его логику
-  function visibilityHandler(doc: { addEventListener: ReturnType<typeof vi.fn> }): () => void {
-    const call = doc.addEventListener.mock.calls.find(([ev]) => ev === 'visibilitychange');
-    expect(call).toBeDefined();
-    return call![1] as () => void;
-  }
-
-  it('вкладка не уходила в фон — окно не активно, тост не глушится', () => {
-    vi.stubGlobal('document', { visibilityState: 'visible', addEventListener: vi.fn() });
-    offline.initConnectivity();
-    expect(offline.becameVisibleRecently()).toBe(false);
-  });
-
-  it('возврат вкладки открывает окно; спустя 5с оно закрывается', () => {
-    const doc = { visibilityState: 'hidden', addEventListener: vi.fn() };
-    vi.stubGlobal('document', doc);
-    offline.initConnectivity();
-    const handler = visibilityHandler(doc);
-
-    doc.visibilityState = 'visible';
-    handler();
-    expect(offline.becameVisibleRecently()).toBe(true);
-
-    // Восстановление позже тихого окна (пользователь наблюдал офлайн) — тост уместен
-    vi.advanceTimersByTime(5_100);
-    expect(offline.becameVisibleRecently()).toBe(false);
-  });
-
-  it('уход вкладки в фон отметку не ставит', () => {
-    const doc = { visibilityState: 'hidden', addEventListener: vi.fn() };
-    vi.stubGlobal('document', doc);
-    offline.initConnectivity();
-    const handler = visibilityHandler(doc);
-
-    handler(); // visibilitychange при hidden — уход в фон
-    expect(offline.becameVisibleRecently()).toBe(false);
+describe('becameVisibleRecently: удалён (тост упразднён)', () => {
+  // В задаче «Заменить тост „Связь восстановлена" маркером связи» (60c98a33)
+  // утилита больше не нужна: нижестоящий потребитель (App.tsx) убран. Сам
+  // паттерн «тихое окно» больше не востребован — display-состояние само
+  // гасит блипы через гистерезис 3с. Тест-страховка на случай регрессии:
+  // экспорт из offline.ts убран, и попытка вызвать должна падать по TS.
+  it('утилита не экспортируется — ожидаем TS-ошибку компиляции', () => {
+    // @ts-expect-error — намеренно: экспорт удалён
+    expect((offline as { becameVisibleRecently?: () => boolean }).becameVisibleRecently).toBeUndefined();
   });
 });
 
@@ -541,5 +512,120 @@ describe('зонд возврата', () => {
     handler();
     await vi.advanceTimersByTimeAsync(0);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+// --- Display-состояние (с гистерезисом) ---
+// Бинарный isOnline() реагирует мгновенно, а UI-маркер у аватарки
+// (useConnectionDisplayState) — с задержкой, чтобы короткий блип (разморозка
+// вкладки на планшете) не красил интерфейс. Маркер заменил тост «Связь
+// восстановлена», который вылетал на каждый блип и раздражал.
+//
+// Переходы:
+//   online → offline:   3с устойчивой потери → 'unstable' (пунктир warning)
+//   unstable → offline: ещё 7с (10с от потери) → 'offline' (grayscale+черта)
+//   * → online:         мгновенно (возврат тихий)
+describe('display-состояние: гистерезис и тихий возврат', () => {
+  it('на старте — online', () => {
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('setOnline(false): 3с удерживаем online визуально (блип не красит)', () => {
+    offline.setOnline(false);
+    // Бинарный isOnline() падает сразу, а display-состояние — нет
+    expect(offline.isOnline()).toBe(false);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // 2.9с — всё ещё online
+    vi.advanceTimersByTime(2_900);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // 3.1с — переход в unstable
+    vi.advanceTimersByTime(200);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+  });
+
+  it('блип online→offline→online за <3с: display-состояние не успело смениться', () => {
+    offline.setOnline(false);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    vi.advanceTimersByTime(1_000);
+    offline.setOnline(true);
+    // Никаких промежуточных переходов: возврат в online отменил таймер
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // До 3с с момента ухода в offline: даже если дойдёт таймер, ничего не произойдёт
+    vi.advanceTimersByTime(5_000);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('unstable продолжается 7с → переход в offline (10с от потери)', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(3_000);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+
+    vi.advanceTimersByTime(6_900);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+
+    vi.advanceTimersByTime(200);
+    expect(offline.getConnectionDisplayState()).toBe('offline');
+  });
+
+  it('возврат online из unstable: мгновенный, таймер эскалации отменяется', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(3_000);
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+
+    // Возврат на отметке 5с (до эскалации в offline)
+    vi.advanceTimersByTime(2_000);
+    offline.setOnline(true);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+
+    // Если бы таймер эскалации не отменился, на 10с был бы скачок в offline
+    vi.advanceTimersByTime(20_000);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('возврат online из offline: мгновенный (без промежуточного unstable)', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(10_100);
+    expect(offline.getConnectionDisplayState()).toBe('offline');
+
+    offline.setOnline(true);
+    expect(offline.getConnectionDisplayState()).toBe('online');
+  });
+
+  it('повторный setOnline(false) во время таймера не сбрасывает отсчёт (идемпотентность)', () => {
+    offline.setOnline(false);
+    vi.advanceTimersByTime(1_000);
+    // Дубль входа в offline: _online не меняется, но и таймер гистерезиса не перезапускается
+    offline.setOnline(false);
+    vi.advanceTimersByTime(2_100);
+    // С момента ПЕРВОГО setOnline(false) прошло 3.1с → должно сработать
+    expect(offline.getConnectionDisplayState()).toBe('unstable');
+  });
+
+  it('подписчики display-состояния уведомляются о переходах', () => {
+    const fn = vi.fn();
+    const unsub = offline.subscribeConnectionDisplayState(fn);
+
+    offline.setOnline(false);
+    expect(fn).toHaveBeenCalledTimes(0); // мгновенного перехода display нет (гистерезис)
+    vi.advanceTimersByTime(3_000);
+    expect(fn).toHaveBeenCalledTimes(1); // → unstable
+    vi.advanceTimersByTime(7_000);
+    expect(fn).toHaveBeenCalledTimes(2); // → offline
+
+    offline.setOnline(true);
+    expect(fn).toHaveBeenCalledTimes(3); // → online
+
+    // Дубль значения — не уведомляем
+    offline.setOnline(true);
+    expect(fn).toHaveBeenCalledTimes(3);
+
+    unsub();
+    offline.setOnline(false);
+    vi.advanceTimersByTime(3_000);
+    expect(fn).toHaveBeenCalledTimes(3); // отписались — уведомлений нет
   });
 });

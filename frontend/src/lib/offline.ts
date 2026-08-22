@@ -46,20 +46,60 @@ export function subscribeOnline(fn: () => void): () => void {
   return () => _listeners.delete(fn);
 }
 
-// Отметка последнего возврата вкладки в видимость — «тихое окно» для тоста
-// «Связь восстановлена». Фоновый разрыв сокета (планшет заморозил/затроттлил вкладку
-// при переключении приложений) пользователь не наблюдал, а формальный переход
-// offline → online при заморозке вообще случается уже ПОСЛЕ разморозки — поэтому
-// привязываемся не к видимости в момент обрыва, а ко времени с момента возврата.
-// 0 = вкладка не уходила в фон с загрузки, окно не активно.
-let _lastBecameVisibleAt = 0;
-const VISIBILITY_QUIET_WINDOW_MS = 5_000;
+// === Display-состояние (с гистерезисом) ===
+//
+// Бинарный флаг _online меняется мгновенно по любому признаку (ОС-событие,
+// SignalR, успешный ответ), но UI реагирует на «не-онлайн» с задержкой:
+// иначе короткий блип (разморозка вкладки на планшете, кратковременный
+// провал WS) раскрашивает маркер как аварию, и старый тост «Связь
+// восстановлена» вылетал на каждый блип. Маркер у аватарки — пассивный,
+// блипы НЕ должны менять интерфейс.
+//
+// Переходы:
+//   online → offline:   3с устойчивой потери → 'unstable' (пунктир warning)
+//   unstable → offline: ещё 7с (10с от потери) → 'offline' (grayscale+черта)
+//   * → online:         мгновенно, без промежуточных (возврат тихий)
+//
+// Гистерезис НЕ маскирует реальный разрыв: confirmOffline() уже подтвердил
+// провал пингом /api/health, бинарный isOnline() ушёл в false, и зонд
+// возврата + signalr onreconnected поднимут его при первой возможности. 3с —
+// только пауза перед тем, как начать показывать не-онлайн-вид.
+export type ConnectionDisplayState = 'online' | 'unstable' | 'offline';
 
-// true — вкладка стала видимой только что (меньше VISIBILITY_QUIET_WINDOW_MS назад).
-// Читает App.tsx: восстановление связи в этом окне не озвучивается тостом.
-export function becameVisibleRecently(): boolean {
-  return _lastBecameVisibleAt !== 0
-    && Date.now() - _lastBecameVisibleAt < VISIBILITY_QUIET_WINDOW_MS;
+// Сколько выдерживаем устойчивую потерю связи, прежде чем показывать 'unstable'.
+// Короткий блип (разморозка вкладки, кратковременный провал WS) укладывается в
+// это окно — и НЕ красит интерфейс.
+const OFFLINE_DISPLAY_DELAY_MS = 3_000;
+// Дополнительная выдержка в 'unstable' перед переходом в 'offline'. В сумме
+// 10с от потери связи. Если в это окно уложился возврат — переход в 'offline'
+// отменяется, и пользователь видит только 'unstable' (пунктир) без эскалации.
+const UNSTABLE_TO_OFFLINE_DELAY_MS = 7_000;
+
+let _display: ConnectionDisplayState = 'online';
+let _unstableTimer: ReturnType<typeof setTimeout> | null = null;
+let _offlineTimer: ReturnType<typeof setTimeout> | null = null;
+const _displayListeners = new Set<() => void>();
+
+export function getConnectionDisplayState(): ConnectionDisplayState {
+  return _display;
+}
+
+export function subscribeConnectionDisplayState(fn: () => void): () => void {
+  _displayListeners.add(fn);
+  return () => { _displayListeners.delete(fn); };
+}
+
+function clearUnstableTimer() {
+  if (_unstableTimer !== null) { clearTimeout(_unstableTimer); _unstableTimer = null; }
+}
+function clearOfflineTimer() {
+  if (_offlineTimer !== null) { clearTimeout(_offlineTimer); _offlineTimer = null; }
+}
+
+function setDisplay(next: ConnectionDisplayState) {
+  if (_display === next) return;
+  _display = next;
+  _displayListeners.forEach(fn => fn());
 }
 
 export function setOnline(value: boolean) {
@@ -71,6 +111,34 @@ export function setOnline(value: boolean) {
   // офлайн», здесь провал вообще ничего не делает, а в online зонд не
   // запускается вовсе.
   if (value) stopProbe(); else scheduleNextProbe();
+
+  if (value) {
+    // Мгновенный возврат в online: отменяем оба таймера эскалации, маркер
+    // снимается сразу. Никаких промежуточных состояний на возврате — это и
+    // есть «тихий возврат», который заменяет тост.
+    clearUnstableTimer();
+    clearOfflineTimer();
+    setDisplay('online');
+  } else {
+    // Уход в offline: держим визуально 'online' ещё OFFLINE_DISPLAY_DELAY_MS,
+    // чтобы блип не успел покрасить интерфейс. По истечении — 'unstable', и
+    // запускается второй таймер на эскалацию до 'offline'.
+    clearUnstableTimer();
+    _unstableTimer = setTimeout(() => {
+      _unstableTimer = null;
+      // Между setOnline(false) и срабатыванием таймера могли вернуться в online:
+      // тогда setOnline(true) сбросил _unstableTimer, и мы сюда не попадём.
+      // Дополнительная проверка — защита от гонки с явным setDisplay('online').
+      if (_online) return;
+      setDisplay('unstable');
+      clearOfflineTimer();
+      _offlineTimer = setTimeout(() => {
+        _offlineTimer = null;
+        if (_online) return;
+        setDisplay('offline');
+      }, UNSTABLE_TO_OFFLINE_DELAY_MS);
+    }, OFFLINE_DISPLAY_DELAY_MS);
+  }
   _listeners.forEach(fn => fn());
 }
 
@@ -377,7 +445,6 @@ export function initConnectivity() {
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') {
-        _lastBecameVisibleAt = Date.now();
         // Возврат на вкладку при офлайне — форсированный тик зонда, не ждём PROBE_INTERVAL_MS
         fireProbeNow();
       }

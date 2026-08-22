@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { C, R, SHADOW, Z } from '../../lib/design';
+import { C, FS, R, SHADOW, Z } from '../../lib/design';
 import { ConnectionStatus } from '../../components/ConnectionStatus';
 import { SegmentedControl } from '../../components/ui';
 import { useThemeMode, setThemeMode, type ThemeMode } from '../../lib/themeMode';
@@ -9,6 +9,7 @@ import { isMicKeyboardFallback, clearMicKeyboardFallback } from '../../lib/voice
 import { showToast } from '../../lib/toast';
 import { toggleUiInspector, useUiInspector } from '../../lib/uiInspector';
 import { buildStamp } from '../../lib/buildInfo';
+import { useConnectionDisplayState } from '../../hooks/useConnectionDisplayState';
 
 const THEME_OPTIONS: { value: ThemeMode; label: string }[] = [
   { value: 'light', label: 'Светлая' },
@@ -92,6 +93,15 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
   const [micFallback, setMicFallback] = useState(false);
   // Режим UI-инспектора — подсветка пункта, пока режим включён
   const inspectorOn = useUiInspector();
+  // Маркер связи: 'online' (сплошное кольцо success), 'unstable' (пунктир warning
+  // с пульсом — после 3с устойчивой потери), 'offline' (grayscale + диагональ —
+  // после 10с от потери). Возврат — мгновенный, без промежуточных.
+  const connection = useConnectionDisplayState();
+  const connectionLabel = connection === 'online'
+    ? 'В сети'
+    : connection === 'unstable'
+      ? 'Проблемы со связью'
+      : 'Офлайн';
 
   const toggleOpen = () => {
     setOpen(o => {
@@ -141,21 +151,65 @@ export function AvatarMenu({ username, displayName, isAdmin, serverUrl, onLogout
         onKeyDown={handleKeyDown}
         role="button"
         tabIndex={0}
-        aria-label={notifBadge > 0
-          ? `Меню пользователя, ${notifBadge > 99 ? '99+' : notifBadge} непрочитанных уведомлений`
-          : 'Меню пользователя'}
+        aria-label={
+          (notifBadge > 0
+            ? `Меню пользователя, ${notifBadge > 99 ? '99+' : notifBadge} непрочитанных уведомлений`
+            : 'Меню пользователя')
+          + `, ${connectionLabel}`
+        }
         style={{
           display: 'flex', alignItems: 'center', gap: 7, background: C.bgPanel,
-          borderRadius: 20, padding: hideStatus ? 5 : '5px 11px 5px 7px', cursor: 'pointer',
+          borderRadius: 20, padding: hideStatus ? 6 : '6px 11px 6px 7px', cursor: 'pointer',
           minWidth: 0, maxWidth: 220, overflow: 'hidden',
         }}
       >
-        <div style={{
-          width: 22, height: 22, borderRadius: '50%', background: C.accent,
-          color: C.onAccent, fontSize: 11, fontWeight: 700,
-          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-        }}>
-          {name ? name.slice(0, 2).toUpperCase() : 'ME'}
+        {/* Маркер связи: пассивный визуал у аватарки вместо тоста «Связь восстановлена».
+            Обёртка 28×28 (запас под 2px-кольцо + 1px обводка кольца); аватар 22×22;
+            кольцо и черта — абсолютно позиционированы. Title читается при ховере,
+            status для скринридера добавлен в aria-label самого триггера (выше), чтобы
+            не дублировать структурой. Тач-цель триггера: 6px padding + 28px маркер
+            = 40px (порог из гайда для мобильного тапа). */}
+        <div
+          title={connectionLabel}
+          style={{
+            position: 'relative', width: 28, height: 28,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <div style={{
+            width: 22, height: 22, borderRadius: R.full, background: C.accent,
+            color: C.onAccent, fontSize: FS.xs, fontWeight: 700,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            filter: connection === 'offline' ? 'grayscale(100%)' : 'none',
+            opacity: connection === 'offline' ? 0.6 : 1,
+            transition: 'filter 0.2s ease, opacity 0.2s ease',
+          }}>
+            {name ? name.slice(0, 2).toUpperCase() : 'ME'}
+          </div>
+          {connection !== 'offline' && (
+            // Кольцо: 2px цветной border + 1px обводка в C.bgPanel снаружи — отделяет
+            // кольцо от любого фона под пилюлей (между C.warning/C.success и C.accent
+            // аватаром контраст недостаточный на самих участках пересечения).
+            <div aria-hidden style={{
+              position: 'absolute', inset: 0, borderRadius: R.full,
+              border: `2px solid ${connection === 'unstable' ? C.warning : C.success}`,
+              borderStyle: connection === 'unstable' ? 'dashed' : 'solid',
+              boxShadow: `0 0 0 1px ${C.bgPanel}`,
+              animation: connection === 'unstable' ? 'cc-conn-pulse 1.4s ease-in-out infinite' : 'none',
+              pointerEvents: 'none',
+            }} />
+          )}
+          {connection === 'offline' && (
+            // Черта: C.textHeading вместо C.textMuted — на grayscale+opacity:0.6 аватаре
+            // textMuted даёт контраст ~1.3:1, черта не читается. textHeading читается
+            // в обеих темах (тёмный на светлом круге, светлый на тёмном).
+            <div aria-hidden style={{
+              position: 'absolute', top: '50%', left: '-12%', width: '124%', height: 1.5,
+              background: C.textHeading, transform: 'translateY(-50%) rotate(-45deg)',
+              pointerEvents: 'none', borderRadius: 1,
+            }} />
+          )}
         </div>
         {!hideStatus && <ConnectionStatus variant="badge" label={serverUrl || 'localhost'} />}
       </div>

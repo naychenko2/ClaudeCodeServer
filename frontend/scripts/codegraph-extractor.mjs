@@ -478,6 +478,13 @@ function buildProgram(fileList, parsedOptions) {
   const compilerOptions = {
     ...parsedOptions,
     noEmit: true,
+    // Экстрактор ходит только по AST исходников: lib.d.ts и @types ему не нужны,
+    // а их загрузка — большая доля createProgram. Импорты продолжают резолвиться
+    // обычным module resolution (noResolve нельзя — program.getSourceFile по
+    // резолвнутому пути требует, чтобы файл был в программе).
+    lib: [],
+    types: [],
+    skipLibCheck: true,
   };
   return ts.createProgram({
     rootNames: fileList.map(f => f.full),
@@ -640,7 +647,8 @@ function main() {
     },
   };
 
-  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  // Без отступов: pretty-print раздувает stdout в ~4 раза и тормозит пайп с C#-парсером.
+  process.stdout.write(JSON.stringify(out) + '\n');
 }
 
 function findDeclarationNode(sf, name) {

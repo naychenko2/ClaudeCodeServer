@@ -11,11 +11,12 @@
  *     "Metadata": { SourceRoot, GeneratedAt, TotalFiles, TotalNodes, TotalEdges }
  *   }
  *
- * Категории узлов: component | hook | ui-примитив | util.
+ * Категории узлов: component | hook | ui-примитив | util | constant.
  *   component     — .tsx-файл с именованной функцией, в теле которой есть JSX
  *   ui-примитив   — путь содержит components/ui/
  *   hook          — имя начинается с «use» + заглавная (useFoo)
- *   util          — всё остальное (в т.ч. типы, сторы, константы)
+ *   constant      — чистые данные: примитив или объект/массив без функций
+ *   util          — всё остальное (в т.ч. типы, сторы)
  *
  * Рёбра References — от каждого named import к фактическому файлу-источнику,
  * с резолвом алиасов tsconfig и полным разворачиванием index-реэкспортов
@@ -448,8 +449,65 @@ function valueReturnsJsx(initializer) {
   return false;
 }
 
+// Есть ли в поддереве функции (стрелки, методы, геттеры) — такие данные уже поведение.
+function containsFunction(root) {
+  let found = false;
+  function walk(n) {
+    if (found) return;
+    if (
+      ts.isArrowFunction(n) ||
+      ts.isFunctionExpression(n) ||
+      ts.isMethodDeclaration(n) ||
+      ts.isGetAccessorDeclaration(n) ||
+      ts.isSetAccessorDeclaration(n)
+    ) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(n, walk);
+  }
+  walk(root);
+  return found;
+}
+
+// Константа — чистые данные без поведения: примитив или объект/массив, внутри которых
+// нет функций (объект со стрелочными методами вроде api — НЕ константа). Токены
+// дизайн-системы (C, FONT, ICON_*) импортируют отовсюду, но навигации по графу они
+// не несут — поэтому узел обязан отличаться от util для фильтра топа хабов.
+function isConstantDeclaration(node) {
+  if (!node) return false;
+  let expr = node;
+  if (ts.isVariableDeclaration(expr)) {
+    if (!expr.initializer) return false;
+    expr = expr.initializer;
+  }
+  // as const / satisfies / приведения — разворачиваем до собственно значения
+  while (
+    ts.isAsExpression(expr) ||
+    ts.isSatisfiesExpression(expr) ||
+    ts.isTypeAssertionExpression(expr)
+  ) {
+    expr = expr.expression;
+  }
+  if (ts.isObjectLiteralExpression(expr) || ts.isArrayLiteralExpression(expr)) {
+    return !containsFunction(expr);
+  }
+  return (
+    ts.isStringLiteral(expr) ||
+    ts.isNoSubstitutionTemplateLiteral(expr) ||
+    ts.isNumericLiteral(expr) ||
+    ts.isBigIntLiteral(expr) ||
+    expr.kind === ts.SyntaxKind.TrueKeyword ||
+    expr.kind === ts.SyntaxKind.FalseKeyword ||
+    expr.kind === ts.SyntaxKind.NullKeyword
+  );
+}
+
 // Категория конкретного named-экспорта в файле.
 function categorizeExport(fileRel, exportName, declarationNode) {
+  // Константу проверяем ДО ui-примитива: токены дизайн-системы (ICON_SIZE, ICON_STROKE)
+  // живут в components/ui/, но остаются словарём, а не точкой входа в код.
+  if (isConstantDeclaration(declarationNode)) return 'constant';
   // ui-примитив — определяется путём (любой named export в components/ui/)
   if (fileRel.includes('/components/ui/') || fileRel.startsWith('components/ui/')) {
     return 'ui-примитив';

@@ -9,12 +9,18 @@ public sealed class CodeGraphNodeBriefDto
 {
     public string Id { get; init; } = "";
     public string Fqn { get; init; } = "";
-    /// <summary>Class | Interface | Struct | Enum | Component | Hook | UiPrimitive | Util</summary>
+    /// <summary>Class | Interface | Struct | Enum | Component | Hook | UiPrimitive | Util | Constant</summary>
     public string Kind { get; init; } = "";
     /// <summary>«относительный/путь.cs:42» (строка опускается, если её нет в снимке).</summary>
     public string Location { get; init; } = "";
     /// <summary>Степень связности: входящие + исходящие рёбра.</summary>
     public int Degree { get; init; }
+    /// <summary>
+    /// Сколько РАЗНЫХ файлов ссылаются на узел (файлы источников входящих рёбер) —
+    /// честнее сырого degree для хабов: разворот «файл::*» надувает in-degree
+    /// (784 ребра у токена C = всего 332 файла). Заполняется только в хабах.
+    /// </summary>
+    public int? Files { get; init; }
 }
 
 /// <summary>Результат поиска узлов по имени/части FQN.</summary>

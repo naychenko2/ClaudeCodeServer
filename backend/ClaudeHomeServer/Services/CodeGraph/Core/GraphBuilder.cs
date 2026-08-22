@@ -18,6 +18,8 @@ public record CodeGraph
     /// <summary>
     /// Получить god-узлы (типы с высокой центральностью по degree).
     /// Degree = число входящих + исходящих рёбер.
+    /// Константы (чистые данные) исключаются: у них нет исходящих путей, degree делает
+    /// их «словарём» (токены дизайн-системы обгоняют координаторов), а не точкой входа в код.
     /// </summary>
     /// <param name="minDegree">Минимальный degree для включения (дефолт 10).</param>
     /// <returns>Список god-узлов, отсортированный по убыванию degree.</returns>
@@ -31,6 +33,7 @@ public record CodeGraph
         }
 
         return Nodes.Values
+            .Where(n => n.Kind != NodeKind.Constant)
             .Where(n => degree.GetValueOrDefault(n.Id) >= minDegree)
             .OrderByDescending(n => degree.GetValueOrDefault(n.Id));
     }

@@ -33,6 +33,7 @@ import { saveChatNote, openNoteById } from '../../features/notes/saveToNote';
 import { MarkdownContent } from './MarkdownContent';
 import { CollapsibleMarkdownBody } from './AgentContentBlocks';
 import { parseDelegationReport } from '../../lib/delegationReport';
+import { detectAutoCommand, isCancelCommand } from '../../lib/autoCommand';
 import { DelegationReportCard } from './DelegationReportCard';
 import { ToolUseView } from './ToolUseView';
 import { PersonaAskView, isPersonaAsk } from './PersonaAskView';
@@ -1038,13 +1039,13 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const teamInfo = teamMech ? describeTeamTurn(item.text) : null;
       // QA Fold 8: авто-слэш-команды (`item.auto && !teamMech`, текст начинается с `/`)
       // больше не рисуем тяжёлой карточкой AgentMessageView — рендерим компактным
-      // разделителем по образцу ветки systemDirective. Отличаем cancel от прочих
-      // команд по подстроке (cancel-варианты семейства oh-my-claudecode:cancel*).
-      const cmdMatch = item.auto && !teamMech ? /^(\S+)/.exec(item.text.trim()) : null;
-      const isCmd = !!cmdMatch;
-      const isCancelCmd = isCmd && /cancel|stop|abort|прервать/i.test(cmdMatch![1]);
-      if (isCmd) {
-        const cmd = cmdMatch![1];
+      // разделителем по образцу ветки systemDirective. Команда — только текст с `/`
+      // в начале: прочие авто-сообщения (промпт задачи «## ЗАДАЧА…», доклад «↩ Отчёт…»)
+      // чипом не являются и идут карточкой ниже. Отличаем cancel от прочих команд по
+      // подстроке (cancel-варианты семейства oh-my-claudecode:cancel*).
+      const cmd = item.auto && !teamMech ? detectAutoCommand(item.text) : null;
+      const isCancelCmd = cmd !== null && isCancelCommand(cmd);
+      if (cmd !== null) {
         const label = isCancelCmd ? `Цикл прерван · команда «${cmd}»` : `Команда · «${cmd}»`;
         return (
           <div style={{ alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8, maxWidth: '100%' }}>

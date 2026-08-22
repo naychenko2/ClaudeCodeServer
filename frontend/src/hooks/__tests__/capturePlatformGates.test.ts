@@ -13,7 +13,11 @@ function withUa(ua: string, gate: () => boolean): boolean {
   return gate();
 }
 
-const ANDROID_TABLET = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36';
+// UA с боевого дампа: Chrome урезает его до «Android 10; K» и на телефоне, и на
+// планшете, токен Mobile при этом остаётся
+const ANDROID = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36';
+// Планшет без токена Android — проверяет ветку Tablet отдельно
+const TABLET = 'Mozilla/5.0 (Linux; Tablet; rv:120.0) Gecko/120.0 Firefox/120.0';
 const IPHONE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1';
 const IPAD = 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/604.1';
 const SAFARI_MAC = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15';
@@ -36,7 +40,7 @@ describe('isAmpUnsafePlatform (второй захват ломает движо
     });
 
   it('Android остаётся с барж-ином: там ломается только ПАРАЛЛЕЛЬНЫЙ захват', () => {
-    expect(withUa(ANDROID_TABLET, isAmpUnsafePlatform)).toBe(false);
+    expect(withUa(ANDROID, isAmpUnsafePlatform)).toBe(false);
   });
 
   it.each([['Chrome Windows', CHROME_WIN], ['Chrome Linux', CHROME_LINUX], ['Chrome macOS', CHROME_MAC]])(
@@ -54,7 +58,8 @@ describe('isAmpUnsafePlatform (второй захват ломает движо
 // ОДНОВРЕМЕННО с открытым Web Speech
 describe('isParallelCaptureUnsafe (амплитуда под открытым распознаванием)', () => {
   it.each([
-    ['Android-планшет (UA урезан до «Android 10; K»)', ANDROID_TABLET],
+    ['Android (UA урезан до «Android 10; K»)', ANDROID],
+    ['планшет с токеном Tablet', TABLET],
     ['iPhone', IPHONE],
     ['iPad', IPAD],
     ['Safari macOS', SAFARI_MAC],

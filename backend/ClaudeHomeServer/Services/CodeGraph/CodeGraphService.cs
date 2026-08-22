@@ -34,6 +34,10 @@ public sealed class CodeGraphService : IDisposable
     // Токен остановки сервиса: отменяет все фоновые перестроения разом.
     private readonly CancellationTokenSource _stopping = new();
 
+    // Последний успешно сохранённый граф per normalizedRootPath: база для переиспользования
+    // срезов провайдеров при инкременте (правка .tsx не должна заново гонять Roslyn по .cs).
+    private readonly ConcurrentDictionary<string, Core.CodeGraph> _lastGraphs = new();
+
     public CodeGraphService(
         ILogger<CodeGraphService> logger,
         ProjectManager projects,
@@ -77,8 +81,9 @@ public sealed class CodeGraphService : IDisposable
 
         // Нет в кэше — строим с нуля
         _logger.LogInformation("Построение графа для {Path}", rootPath);
-        var graph = await BuildInternalAsync(rootPath, changedByExtension: null, ct);
+        var graph = await BuildInternalAsync(rootPath, changedByExtension: null, prevGraph: null, ct);
         await _persistence.SaveAsync(rootPath, graph, ct);
+        _lastGraphs[WorkspaceKnowledgeStore.NormalizePath(rootPath)] = graph;
         return graph;
     }
 
@@ -143,6 +148,7 @@ public sealed class CodeGraphService : IDisposable
     public void Invalidate(string rootPath)
     {
         _persistence.Delete(rootPath);
+        _lastGraphs.TryRemove(WorkspaceKnowledgeStore.NormalizePath(rootPath), out _);
     }
 
     /// <summary>
@@ -189,8 +195,9 @@ public sealed class CodeGraphService : IDisposable
         CancelActiveRebuild(normalized);
 
         _logger.LogInformation("Перестроение графа (явный триггер) для {Path}", rootPath);
-        var graph = await BuildInternalAsync(rootPath, changedByExtension: null, ct);
+        var graph = await BuildInternalAsync(rootPath, changedByExtension: null, prevGraph: null, ct);
         await _persistence.SaveAsync(rootPath, graph, ct);
+        _lastGraphs[normalized] = graph;
 
         _logger.LogInformation("Граф перестроен для {Path}: {Nodes} узлов, {Edges} рёбер",
             rootPath, graph.Nodes.Count, graph.Edges.Count);
@@ -322,8 +329,13 @@ public sealed class CodeGraphService : IDisposable
             _logger.LogInformation("Перестроение графа для {Path} (changed: {Count})",
                 rootPath, state.Files.Count);
 
-            var graph = await BuildInternalAsync(rootPath, changedByExtension, ct);
+            // prevGraph — база для переиспользования срезов нетронутых провайдеров
+            // (правка .tsx не гоняет Roslyn по .cs). Берём из памяти, не из graph.json.
+            _lastGraphs.TryGetValue(normalizedPath, out var prevGraph);
+
+            var graph = await BuildInternalAsync(rootPath, changedByExtension, prevGraph, ct);
             await _persistence.SaveAsync(rootPath, graph, ct);
+            _lastGraphs[normalizedPath] = graph;
 
             _logger.LogInformation("Граф перестроен для {Path}: {Nodes} узлов, {Edges} рёбер",
                 rootPath, graph.Nodes.Count, graph.Edges.Count);
@@ -401,7 +413,9 @@ public sealed class CodeGraphService : IDisposable
 
     /// <summary>
     /// Построить граф из всех зарегистрированных провайдеров.
-    /// Если changedByExtension задан — провайдер с changed получает UpdateAsync, прочие — BuildAsync.
+    /// Если changedByExtension задан — провайдер с changed получает UpdateAsync; прочие при
+    /// наличии prevGraph переиспользуют из него свой срез (правка .tsx не должна заново
+    /// гонять Roslyn по всем .cs), без prevGraph — BuildAsync.
     /// Один провайдер на нескольких extension (TypeScriptGraphProvider — .ts и .tsx) вызывается
     /// ОДИН раз: без группировки получали два полных прогона экстрактора и задвоение всех
     /// его рёбер на merge.
@@ -409,6 +423,7 @@ public sealed class CodeGraphService : IDisposable
     private async Task<Core.CodeGraph> BuildInternalAsync(
         string rootPath,
         Dictionary<string, List<string>>? changedByExtension,
+        Core.CodeGraph? prevGraph,
         CancellationToken ct)
     {
         var allNodes = new Dictionary<string, CodeGraphNode>();
@@ -430,6 +445,17 @@ public sealed class CodeGraphService : IDisposable
                                 ? files
                                 : [])
                             .ToList();
+
+                    // Инкремент, который не затронул этот провайдер: его часть графа не
+                    // изменилась — берём срез из прошлого снимка вместо полного прогона.
+                    // Среза нет (первое построение) или он пуст (сбой экстрактора в прошлый
+                    // раз) — честный BuildAsync, чтобы не замораживать пустоту навсегда.
+                    if (changed is not null && changed.Count == 0
+                        && prevGraph is not null
+                        && TrySlice(prevGraph, g.Select(kvp => kvp.Key).ToList(), out var slice))
+                    {
+                        return (slice.Nodes, slice.Edges);
+                    }
 
                     Core.CodeGraph graph = changed is not null && changed.Count > 0
                         ? await provider.UpdateAsync(rootPath, changed, ct)
@@ -463,6 +489,31 @@ public sealed class CodeGraphService : IDisposable
         var dedupedEdges = allEdges.DistinctBy(e => (e.Source, e.Target, e.Relation)).ToList();
 
         return new Core.CodeGraph { Nodes = allNodes, Edges = dedupedEdges };
+    }
+
+    /// <summary>
+    /// Вырезать из графа часть провайдера: узлы, чей SourceFile имеет одно из extensions,
+    /// и рёбра, исходящие из этих узлов. false — срез пуст: переиспользовать нечего,
+    /// вызывающий должен пойти в полный BuildAsync. Ребро относят по Source-узлу:
+    /// смешанных C#↔TS рёбер не существует (у провайдеров непересекающиеся вселенные Id).
+    /// </summary>
+    private static bool TrySlice(
+        Core.CodeGraph graph,
+        IReadOnlyCollection<string> extensions,
+        out Core.CodeGraph slice)
+    {
+        var exts = extensions.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var nodes = graph.Nodes
+            .Where(kvp => exts.Contains(Path.GetExtension(kvp.Value.SourceFile)))
+            .ToDictionary(kvp => kvp.Key, kvp => kvp.Value);
+        if (nodes.Count == 0)
+        {
+            slice = Core.CodeGraph.Empty;
+            return false;
+        }
+        var edges = graph.Edges.Where(e => nodes.ContainsKey(e.Source)).ToList();
+        slice = new Core.CodeGraph { Nodes = nodes, Edges = edges };
+        return true;
     }
 
     /// <summary>

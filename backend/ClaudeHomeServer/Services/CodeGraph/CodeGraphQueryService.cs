@@ -30,6 +30,13 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
 
     private readonly ConcurrentDictionary<string, Index> _cache = new();
 
+    // Кэш результата isStale: полный mtime-обход исходников на КАЖДЫЙ вызов любого
+    // инструмента (find/neighbors/hubs) — лишние тысячи stat'ов на ход; и slice-промпт
+    // зовёт свою проверку тоже. TTL 5с много дешевле повтора обхода, а задержка запуска
+    // перестроения на ≤5с ничто против дебаунса 15с.
+    private readonly ConcurrentDictionary<string, (DateTimeOffset At, bool Stale)> _staleCache = new();
+    private static readonly TimeSpan StaleCacheTtl = TimeSpan.FromSeconds(5);
+
     /// <summary>
     /// Поиск узлов по имени типа или части FQN. null — граф не построен.
     /// </summary>
@@ -232,9 +239,18 @@ public sealed class CodeGraphQueryService(CodeGraphService graphs)
     // сколь угодно долго. Ответ отдаётся из текущего снимка с пометкой isStale.
     private bool StaleAndRefresh(string rootPath, Index index)
     {
-        if (!graphs.IsStaleFor(rootPath, index.BuiltAt)) return false;
-        graphs.StartRebuildIfIdle(rootPath);
-        return true;
+        var key = WorkspaceKnowledgeStore.NormalizePath(rootPath);
+        var now = DateTimeOffset.UtcNow;
+
+        if (_staleCache.TryGetValue(key, out var cached) && now - cached.At < StaleCacheTtl)
+            return cached.Stale;
+
+        var stale = graphs.IsStaleFor(rootPath, index.BuiltAt);
+        if (stale)
+            graphs.StartRebuildIfIdle(rootPath);
+
+        _staleCache[key] = (now, stale);
+        return stale;
     }
 
     // Индекс графа из кэша либо из снимка. null — граф ещё не построен.

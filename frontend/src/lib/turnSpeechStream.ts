@@ -81,3 +81,27 @@ export function turnText(items: ChatItem[]): string {
     .join('\n')
     .trim();
 }
+
+// Какая реплика ленты сейчас звучит: индекс последней text-реплики текущего хода,
+// принадлежащей ГОВОРЯЩЕЙ персоне (её же голосом читается ход). По этому индексу
+// лента подсвечивает аватар — «говорит она».
+//
+// Принадлежность считается так же, как её видит лента: у реплики без personaId автор —
+// собеседник чата (ChatItemView резолвит лицо тем же правилом). Чужая реплика не
+// подсвечивается вовсе: в групповом чате последним мог ответить кто-то другой, и
+// кольцо на его аватаре соврало бы про голос. Нет спикера или подходящей реплики — null.
+export function turnVoiceItemIndex(
+  items: ChatItem[],
+  speakerId: string | undefined,
+  chatPersonaId?: string | null,
+): number | null {
+  if (!speakerId) return null;
+  const lastUm = items.map((it, i) => ({ it, i })).filter(x => x.it.kind === 'user_message').at(-1)?.i;
+  if (lastUm === undefined) return null;
+  for (let i = items.length - 1; i > lastUm; i--) {
+    const it = items[i];
+    if (it.kind !== 'text' || it.parentToolUseId) continue;
+    if ((it.personaId ?? chatPersonaId ?? undefined) === speakerId) return i;
+  }
+  return null;
+}

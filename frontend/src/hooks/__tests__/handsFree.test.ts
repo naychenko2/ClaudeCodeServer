@@ -340,6 +340,20 @@ describe('нерасслышанная речь (ранний конфликт �
     expect(handsFreeReducer(barren, { type: 'misheard' }).barren).toBe(0);
   });
 
+  // Вместе со счётчиком снимается и отметка «уже спрашивали»: иначе следующая серия
+  // пустых циклов пройдёт без вопроса «Ты ещё здесь?» и разговор выключится молча
+  it('отметка о заданном вопросе снимается вместе со счётчиком', () => {
+    // BARREN_WARN пустых циклов уводят в реплику «Ты ещё здесь?»; по её концу петля
+    // возвращается слушать, неся отметку warned
+    const warned = run([
+      ...Array.from({ length: BARREN_WARN }, () => ({ type: 'cycleEnded' as const })),
+      { type: 'speechFinished' },
+    ], listening());
+    expect(warned.phase).toBe('listening');
+    expect(warned.warned).toBe(true);
+    expect(handsFreeReducer(warned, { type: 'misheard' }).warned).toBe(false);
+  });
+
   it.each([
     ['waiting', run([{ type: 'recognized', text: 'да' }, { type: 'pendingElapsed' },
       { type: 'turnStarted' }], listening())],
@@ -404,6 +418,11 @@ describe('pendingDelayFor — адаптивное окно отправки', (
   it.each([
     ['ну давай на этом всё'],
     ['да мне это непонятно вообще'],
+    // Винительный падеж — обычный хвост императива, в том числе с предлогом
+    ['открой конфиг и посмотри на него'],
+    ['проверь ссылки и почини их'],
+    ['возьми последнюю версию и накати её'],
+    ['а это вообще зачем'],
   ])('«%s» — слово-завершитель не считается висячим', (text) => {
     expect(pendingDelayFor(text)).toBe(PENDING_FAST_MS);
   });

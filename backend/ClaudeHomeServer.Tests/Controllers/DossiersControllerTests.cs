@@ -101,6 +101,20 @@ public class DossiersControllerTests : IClassFixture<TestWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Листинг_ДубльSha_СчитаетОдинКоммит()
+    {
+        var (projectId, firstSha) = await CreateGitProjectAsync("DossiersDedup");
+        // Свой и импортированный паспорта об одном коммите: sha даже в разном регистре —
+        // числитель охвата один коммит, а не две записи (регрессия консилиума 2026-08-22)
+        SeedDossier(projectId, firstSha, "a.txt");
+        SeedDossier(projectId, firstSha.ToUpperInvariant(), "a.txt");
+
+        var payload = await GetListAsync($"{projectId}/dossiers");
+        payload.GetProperty("entries").EnumerateArray().Should().HaveCount(2);
+        payload.GetProperty("coverage").GetProperty("dossiers").GetInt32().Should().Be(1);
+    }
+
+    [Fact]
     public async Task Листинг_БезGit_ОтдаётПустуюМетрику()
     {
         var dir = Path.Combine(_factory.TempDir, "dossiers_nogit_" + Guid.NewGuid().ToString("N")[..8]);

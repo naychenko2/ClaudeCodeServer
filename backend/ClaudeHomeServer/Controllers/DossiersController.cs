@@ -65,11 +65,19 @@ public class DossiersController(ProjectManager projects, DossierStore store,
         if (graphs.GetCacheSignature(p.RootPath) is null)
             Response.Headers["X-CodeGraph-Building"] = "true";
 
-        // Контракт ответа: { entries, coverage } (раньше — голый массив записей)
+        // Контракт ответа: { entries, coverage } (раньше — голый массив записей).
+        // Числитель охвата — уникальные коммиты: свой и импортированный паспорта
+        // одного sha — это пара записей об одном коммите, а не два охваченных.
         return Ok(new
         {
             entries = result,
-            coverage = new { periodDays = CoveragePeriodDays, commits, dossiers = result.Count },
+            coverage = new
+            {
+                periodDays = CoveragePeriodDays,
+                commits,
+                dossiers = result.Select(d => d.CommitSha)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).Count(),
+            },
         });
     }
 

@@ -66,10 +66,12 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
 
     // Конвенция проекта: все относительные пути — через SafeJoin (защита от traversal)
     // до передачи в git. Git и сам отвергает пути вне репо, но валидируем единообразно.
+    // Возврат — с прямыми слэшами: git ждёт POSIX-разделители, и на Linux путь с
+    // обратными молча даёт пустой вывод (log --follow) вместо ошибки.
     private static string ValidateRel(string root, string relPath)
     {
         FileService.SafeJoinPublic(root, relPath);
-        return relPath;
+        return relPath.Replace('\\', '/');
     }
 
     // Низкоуровневый запуск git. args передаются раздельно (ArgumentList — без shell,
@@ -724,7 +726,7 @@ public sealed class GitService(ILauncherFactory launchers, ILogger<GitService>? 
             {
                 foreach (var f in files)
                 {
-                    var rel = ValidateRel(root, f.Path).Replace('\\', '/');
+                    var rel = ValidateRel(root, f.Path);
                     var blob = await RunOkAsync(ownerId, root, ["hash-object", "-w", "--stdin"],
                         stdin: f.Content, ct: ct);
                     await RunOkAsync(ownerId, root,

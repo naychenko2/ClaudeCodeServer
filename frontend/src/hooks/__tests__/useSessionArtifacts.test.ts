@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ChatItem } from '../../types';
 import {
   computeTodos,
+  computeTodoBatches,
   computeAgents,
   computeArtifacts,
   planHint,
@@ -95,18 +96,19 @@ describe('computeTodos', () => {
       { content: 'A', status: 'completed' },
       { content: 'B', status: 'in_progress', activeForm: 'Делаю B' },
       { content: 'C', status: 'pending' },
-    ])).toBe('1/3 · Делаю B');
+    ])).toEqual({ text: 'Делаю B', done: 1, total: 3 });
   });
 
   it('planHint: без activeForm берёт заголовок пункта', () => {
-    expect(planHint([{ content: 'Собрать бэкенд', status: 'in_progress' }])).toBe('0/1 · Собрать бэкенд');
+    expect(planHint([{ content: 'Собрать бэкенд', status: 'in_progress' }]))
+      .toEqual({ text: 'Собрать бэкенд', done: 0, total: 1 });
   });
 
   it('planHint: нет in_progress — берёт первый незакрытый', () => {
     expect(planHint([
       { content: 'A', status: 'completed' },
       { content: 'B', status: 'pending' },
-    ])).toBe('1/2 · B');
+    ])).toEqual({ text: 'B', done: 1, total: 2 });
   });
 
   it('planHint: пустой план и полностью выполненный — подписи нет', () => {
@@ -136,6 +138,55 @@ describe('computeTodos', () => {
       tool('TaskUpdate', { taskId: '1', status: 'completed' }),
     ];
     expect(computeTodos(items).map(t => t.content)).toEqual(['задача пользователя']);
+  });
+
+  it('пачки: новый пункт после полностью выполненного списка начинает новую', () => {
+    const items: ChatItem[] = [
+      tool('TaskCreate', { subject: 'A' }, { result: 'Task #1 created' }),
+      tool('TaskUpdate', { taskId: '1', status: 'completed' }),
+      tool('TaskCreate', { subject: 'B' }, { result: 'Task #2 created' }),
+    ];
+    const batches = computeTodoBatches(items);
+    expect(batches.map(b => b.todos.map(t => t.content))).toEqual([['A'], ['B']]);
+    // карточка каждой пачки рисуется на её последнем вызове
+    expect(batches.map(b => b.lastIndex)).toEqual([1, 2]);
+    // пилюля и подпись смотрят на текущую пачку
+    expect(computeTodos(items).map(t => t.content)).toEqual(['B']);
+  });
+
+  it('пачки: незакрытый пункт держит список одним', () => {
+    const items: ChatItem[] = [
+      tool('TaskCreate', { subject: 'A' }, { result: 'Task #1 created' }),
+      tool('TaskCreate', { subject: 'B' }, { result: 'Task #2 created' }),
+      tool('TaskUpdate', { taskId: '1', status: 'completed' }),
+      tool('TaskCreate', { subject: 'C' }, { result: 'Task #3 created' }),
+    ];
+    const batches = computeTodoBatches(items);
+    expect(batches).toHaveLength(1);
+    expect(batches[0].todos.map(t => t.content)).toEqual(['A', 'B', 'C']);
+  });
+
+  it('пачки: обновление пункта прошлой пачки текущую не трогает', () => {
+    const items: ChatItem[] = [
+      tool('TaskCreate', { subject: 'A' }, { result: 'Task #1 created' }),
+      tool('TaskUpdate', { taskId: '1', status: 'completed' }),
+      tool('TaskCreate', { subject: 'B' }, { result: 'Task #2 created' }),
+      tool('TaskUpdate', { taskId: '1', subject: 'A изменённая' }),
+    ];
+    const batches = computeTodoBatches(items);
+    expect(batches[0].todos[0].content).toBe('A');
+    expect(batches[1].todos.map(t => t.content)).toEqual(['B']);
+  });
+
+  it('пачки: TodoWrite остаётся одной пачкой', () => {
+    const items: ChatItem[] = [
+      tool('TodoWrite', { todos: [{ content: 'A', status: 'completed' }] }),
+      tool('TodoWrite', { todos: [{ content: 'B', status: 'pending' }] }),
+    ];
+    const batches = computeTodoBatches(items);
+    expect(batches).toHaveLength(1);
+    expect(batches[0].todos.map(t => t.content)).toEqual(['B']);
+    expect(batches[0].lastIndex).toBe(1);
   });
 
   it('если есть и TodoWrite, и Task* — Task* побеждает', () => {

@@ -19,6 +19,8 @@ import { TeamWidget } from '../features/home/TeamWidget';
 import { WhatsNewWidget } from '../features/home/WhatsNewWidget';
 import { NotificationsWidget } from '../features/home/NotificationsWidget';
 import { BackupWidget } from '../features/home/BackupWidget';
+import { WallWidget } from '../features/home/WallWidget';
+import { moveToVisible, slotCount } from '../features/wall/wallStore';
 
 interface Props {
   auth: AuthState;
@@ -46,6 +48,15 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
   useEffect(() => { void ensurePersonasLoaded(); }, []);
 
   const today = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  // Вход на стену из виджета. moveToVisible, а не focusChat: стена показывает первые
+  // slotCount(w) колонок и фокусирует только видимую, поэтому клик по невлезшей строке
+  // открыл бы чужой чат. Цена — такой клик меняет порядок набора и сохраняет его на
+  // сервере; это осознанно, иначе виджет открывал бы не то, по чему кликнули.
+  const openWall = (focusId?: string) => {
+    if (focusId) moveToVisible(focusId, slotCount(window.innerWidth));
+    onHubTab('wall');
+  };
 
   return (
     <PageCanvas>
@@ -110,6 +121,11 @@ export function HomePage({ auth, onLogout, onHubTab, onOpenProject }: Props) {
                 <TasksWidget onHubTab={onHubTab} />
                 <RecentSessionsWidget recent={data?.recent ?? []} onHubTab={onHubTab} />
                 <ProjectsWidget onOpenProject={onOpenProject} />
+                {/* Стена — сразу под проектами: она и есть «несколько проектов разом»,
+                    и читается как продолжение их списка.
+                    Только десктоп: стена гасит себя при ширине ≤ MOBILE_MAX (тот же
+                    порог, что у useIsMobile), и на телефоне вход вёл бы в заглушку */}
+                <WallWidget ownerId={auth.id} onOpenWall={openWall} />
                 <NotesWidget onHubTab={onHubTab} />
                 <TeamWidget onHubTab={onHubTab} />
               </div>

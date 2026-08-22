@@ -1257,6 +1257,26 @@ export interface GlifAccountResponse {
   spend?: GlifSpend | null;
 }
 
+// Деньги Yandex Cloud (GET /api/yandex/account): остаток на биллинг-аккаунте и НАШ расход
+// на озвучку за период. Баланс приходит строкой — так его отдаёт Billing API, и валюта у него
+// своя (обычно RUB). balanceHidden=true — смотрит не админ: кошелёк инстанса ему не показываем.
+// spend считает продукт сам: разбивку по услугам Billing API не отдаёт в принципе.
+export interface YandexAccountResponse {
+  enabled: boolean;
+  error?: string | null;
+  account?: {
+    id: string;
+    name?: string | null;
+    balance?: string | null;
+    currency?: string | null;
+    active: boolean;
+  } | null;
+  asOf?: string | null;
+  balanceHidden: boolean;
+  days: number;
+  spend?: { total: number; requests: number } | null;
+}
+
 // === Генерация картинок (иконка проекта, аватар персоны) ===
 // Настройка инстанса: какой генератор идёт в работу (auto | fal | glif) и какой моделью.
 // Ответ GET/PUT /api/image-generation одинаковый — после записи перечитывать не нужно.
@@ -2522,6 +2542,9 @@ export interface SpendOverviewResponse {
   // «Модели и расход» → плитка «По тарифам API»: бэк отдаёт не всегда —
   // без поля плитка просто не рисуется.
   costUsd?: number | null;
+  // Расход на сервисы Яндекса за период (озвучка SpeechKit): рубли и число оплаченных
+  // запросов. null — таких трат не было; с долларами и токенами НЕ складывается — другая валюта
+  rub?: { total: number; requests: number } | null;
   byDay: SpendDayPoint[];
   cards: {
     users: SpendCardRow[];

@@ -38,6 +38,10 @@ export const SPEND_SOURCES: Record<string, { label: string; color: string }> = {
   fal: { label: 'fal.ai', color: C.plan },
   glif: { label: 'glif', color: C.warning },
   free: { label: 'Бесплатные', color: C.success },
+  // Озвучка ответов (Yandex SpeechKit): токенов нет, считается запросами и рублями.
+  // Цвет — чернильный токен хаба: свободных семантических цветов серий не осталось,
+  // а он заметно отличается от accent/plan/warning соседних источников
+  tts: { label: 'Озвучка', color: C.navInk },
 };
 
 export const sourceLabel = (s: string) => SPEND_SOURCES[s]?.label ?? s;
@@ -50,8 +54,23 @@ export const sourceTextColor = (s: string) =>
 // Источники-«генерации медиа»: денежной суммы у записи нет, показываются счётчиком
 // генераций (как fal). Бэкенд считает Generations у любых source — фронт лишь
 // различает такие источники для подписей и формата значений.
-export const GEN_SOURCES: readonly string[] = ['fal', 'glif'];
+export const GEN_SOURCES: readonly string[] = ['fal', 'glif', 'tts'];
 export const isGenSource = (s: string) => GEN_SOURCES.includes(s);
+
+// Единица измерения источника без токенов: у fal/glif это генерации, у озвучки — запросы
+// синтеза (SpeechKit тарифицируется ровно за запрос, см. docs/research/speechkit-pricing.md)
+export const genUnit = (s: string) => (s === 'tts' ? 'запр.' : 'ген.');
+export const genUnitLong = (s: string) => (s === 'tts' ? 'запросов' : 'генераций');
+
+// Рубли расхода на сервисы Яндекса: копейки показываем только когда они есть —
+// «0,50 ₽» информативно, а «12,00 ₽» просто шумит
+export function fmtRub(v: number): string {
+  const rounded = Math.round(v * 100) / 100;
+  return `${rounded.toLocaleString('ru-RU', {
+    minimumFractionDigits: Number.isInteger(rounded) ? 0 : 2,
+    maximumFractionDigits: 2,
+  })} ₽`;
+}
 
 // Имена «пустых» узлов (key: "") бэкенд уже подставляет в name; страховка на null
 export function nodeName(_dim: SpendDim, key: string, name: string | null): string {

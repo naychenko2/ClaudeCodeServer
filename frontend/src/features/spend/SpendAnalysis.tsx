@@ -10,8 +10,8 @@ import type {
 import { api } from '../../lib/api';
 import { C, FONT, R, SHADOW, Z } from '../../lib/design';
 import {
-  ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtTok, fmtTime, isGenSource, nodeName,
-  sourceColor, sourceLabel, sourceTextColor, spendQuery,
+  ADMIN_ONLY_DIMS, DIM_LABELS, SPEND_PRESETS, fmtDate, fmtRub, fmtTok, fmtTime, genUnit,
+  genUnitLong, isGenSource, nodeName, sourceColor, sourceLabel, sourceTextColor, spendQuery,
   type SpendDim, type SpendFilter, type SpendLevel,
 } from '../../lib/spend';
 import type { SpendState } from './SpendScreen';
@@ -365,7 +365,7 @@ export function SpendAnalysis({ st, patch, range, showUsers, isMobile, overview,
           marginLeft: 'auto', fontFamily: FONT.mono, fontSize: isGen ? 11 : 12, fontWeight: 600, flexShrink: 0,
           color: isGen ? sourceTextColor(t.source) : isFree ? C.successText : C.textHeading,
         }}>
-          {isGen ? `${t.generations} ген.` : fmtTok(t.tokens.total)}
+          {isGen ? `${t.generations} ${genUnit(t.source)}` : fmtTok(t.tokens.total)}
         </span>
       </div>
     );
@@ -642,7 +642,11 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
         <Metric label="Токены за период" value={fmtTok(s.total)} color={C.accent}
           sub={shareOfRoot !== null ? `${Math.round(shareOfRoot * 100)}% текущего среза` : undefined} />
         <Metric label="Ходов" value={String(ov.turns)}
-          sub={ov.falGenerations ? `+ ${ov.falGenerations} генераций медиа` : windowClamped ? 'часть периода — агрегаты (🔒)' : 'все в окне детализации'} />
+          sub={[
+            ov.falGenerations ? `+ ${ov.falGenerations} вызовов без токенов` : null,
+            ov.rub ? `${fmtRub(ov.rub.total)} озвучка` : null,
+          ].filter(Boolean).join(' · ')
+            || (windowClamped ? 'часть периода — агрегаты (🔒)' : 'все в окне детализации')} />
         <Metric label="In / Out" value={`${fmtTok(s.input)} / ${fmtTok(s.output)}`}
           sub={`cache read ${fmtTok(s.cacheRead)} · create ${fmtTok(s.cacheCreation)}`} />
         <Metric label="Бесплатные" value={freeRow ? fmtTok(freeRow.tokens.total) : '—'} color={C.successText}
@@ -666,7 +670,7 @@ function OverviewBody({ ov, shareOfRoot, hasTurnLevel, onShowTurns, detailDays }
             ))}
             {genRows.map(r => (
               <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 10, color: C.textSecondary, fontFamily: FONT.sans }}>
-                <Dot color={sourceColor(r.key)} size={8} />{sourceLabel(r.key)} · {r.falGenerations} генераций
+                <Dot color={sourceColor(r.key)} size={8} />{sourceLabel(r.key)} · {r.falGenerations} {genUnitLong(r.key)}
               </span>
             ))}
           </div>
@@ -842,10 +846,10 @@ function TurnPassport({ detail, showUsers, onCloseScreen }: {
           <div style={{ border: `1px solid ${C.borderLight}`, borderRadius: R.lg, background: C.bgPanel, padding: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <span style={{ fontWeight: 600, color: C.textHeading, fontSize: 13, fontFamily: FONT.sans }}>Операция {sourceLabel(t.source)}</span>
-              <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontWeight: 600, color: sourceTextColor(t.source) }}>{t.generations} ген.</span>
+              <span style={{ marginLeft: 'auto', fontFamily: FONT.mono, fontWeight: 600, color: sourceTextColor(t.source) }}>{t.generations} {genUnit(t.source)}</span>
             </div>
             <div style={{ fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
-              Модель {t.model ?? t.label ?? '—'} · токенов нет — считаем генерации. В суммы токенов не входит.
+              {t.source === 'tts' ? 'Голос' : 'Модель'} {t.model ?? t.label ?? '—'} · токенов нет — считаем {genUnitLong(t.source)}. В суммы токенов не входит.
             </div>
           </div>
         ) : (

@@ -5,7 +5,8 @@ import type { ReactNode } from 'react';
 import type { SpendCardRow, SpendOverviewResponse, SpendTurnDto } from '../../types';
 import { C, FONT, R, SHADOW } from '../../lib/design';
 import {
-  DIM_LABELS, SPEND_SOURCES, fmtDate, fmtTok, fmtTime, isGenSource, nodeName, sourceColor, sourceLabel,
+  DIM_LABELS, SPEND_SOURCES, fmtDate, fmtRub, fmtTok, fmtTime, genUnit, genUnitLong, isGenSource,
+  nodeName, sourceColor, sourceLabel,
   type SpendDim, type SpendFilter,
 } from '../../lib/spend';
 import { Dot, EmptyBody, GhostBtn, nodeIcon } from './spendUi';
@@ -101,7 +102,9 @@ function topCard(opts: {
             name={opts.dim === 'source' ? sourceLabel(r.key) : name}
             meta={opts.dim === 'chat' ? (r.meta === 'task' ? 'задача' : null) : null}
             share={genOnly || isGen ? 0 : r.tokens.total / max}
-            value={genOnly || isGen ? `${r.falGenerations} ген.` : fmtTok(r.tokens.total)}
+            value={genOnly || isGen
+              ? `${r.falGenerations} ${opts.dim === 'source' ? genUnit(r.key) : 'ген.'}`
+              : fmtTok(r.tokens.total)}
             valueColor={genOnly || isGen ? genColor : isFree ? C.successText : C.accent}
             barColor={barColor}
             onClick={() => opts.onOpen({ filter: { dim: opts.dim, val: r.key, label: opts.dim === 'source' ? sourceLabel(r.key) : name } })}
@@ -184,8 +187,15 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
     { v: fmtTok(s.cacheRead), l: 'cache read' },
     { v: fmtTok(data.byDay.reduce((a, d) => a + (d.bySource['free'] ?? 0), 0)), l: 'бесплатные', color: C.successText },
     ...(genRows.length > 0
-      ? genRows.map(r => ({ v: String(r.falGenerations), l: `генераций ${sourceLabel(r.key)}`, color: sourceColor(r.key) }))
+      ? genRows.map(r => ({
+        v: String(r.falGenerations),
+        l: `${genUnitLong(r.key)} ${sourceLabel(r.key).toLowerCase()}`,
+        color: sourceColor(r.key),
+      }))
       : [{ v: '0', l: 'генераций fal.ai', color: C.planText }]),
+    // Рубли Яндекса — отдельной плиткой: единственная валюта, которую продукт знает точно
+    // (тарификация за запрос), поэтому показываем деньгами, а не «примерно»
+    ...(data.rub ? [{ v: fmtRub(data.rub.total), l: 'озвучка', color: sourceColor('tts') }] : []),
   ];
 
   // Дорогие ходы — только детальное окно; клик — паспорт хода в анализе
@@ -270,7 +280,7 @@ export function SpendOverview({ data, showUsers, isMobile, filtersActive, onOpen
               {genRows.length > 0
                 ? genRows.map(r => (
                   <span key={r.key} style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, color: C.textSecondary, fontFamily: FONT.sans }}>
-                    <Dot color={sourceColor(r.key)} />{sourceLabel(r.key)} — {r.falGenerations} ген.
+                    <Dot color={sourceColor(r.key)} />{sourceLabel(r.key)} — {r.falGenerations} {genUnit(r.key)}
                   </span>
                 ))
                 : (

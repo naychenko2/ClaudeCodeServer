@@ -15,7 +15,7 @@ public sealed record SpendSlice(
     DateOnly Date, string OwnerId, string? ProjectId, string? SessionId, string? TaskId,
     string? PersonaId, string Provider, string? Model, string Source,
     long Input, long Output, long CacheRead, long CacheCreation,
-    double Cost, int Generations, int Turns, bool Detailed);
+    double Cost, double Rub, int Generations, int Turns, bool Detailed);
 
 public sealed record SpendTokensDto(long Input, long Output, long CacheRead, long CacheCreation, long Total);
 
@@ -42,10 +42,15 @@ public sealed record SpendPassportDto(SpendTurnDto Turn, IReadOnlyList<SpendNeig
 
 public sealed record SpendOverviewDto(
     string From, string To, int DetailDays, string WindowStart, bool AllUsers,
-    SpendTokensDto Totals, int Turns, int FalGenerations,
+    SpendTokensDto Totals, int Turns, int FalGenerations, SpendRubDto? Rub,
     IReadOnlyList<SpendDayDto> ByDay,
     Dictionary<string, IReadOnlyList<SpendCardRowDto>> Cards,
     IReadOnlyList<SpendTurnDto> TopTurns);
+
+// Расход в рублях (сервисы Яндекса — сейчас только озвучка SpeechKit): сумма и число
+// оплаченных запросов. null — за период таких трат не было, и строке в UI взяться неоткуда.
+// Отдельно от токенов и долларов осознанно: это ДРУГАЯ валюта, складывать нечего.
+public sealed record SpendRubDto(double Total, int Requests);
 
 public sealed record SpendWidgetDto(SpendTokensDto Today, SpendTokensDto Week,
     int TodayTurns, int WeekTurns, int WeekFalGenerations, IReadOnlyList<SpendDayDto> ByDay);
@@ -76,13 +81,13 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
                 result.Add(new SpendSlice(r.Date, r.OwnerId, r.ProjectId, r.SessionId, r.TaskId,
                     r.PersonaId, r.Provider, ResolveModel(r.Model, r.Provider), r.Source,
                     r.InputTokens, r.OutputTokens, r.CacheReadTokens, r.CacheCreationTokens,
-                    r.CostUsd ?? 0, r.Generations, 1, Detailed: true));
+                    r.CostUsd ?? 0, r.CostRub ?? 0, r.Generations, 1, Detailed: true));
         foreach (var d in store.DailyBetween(from, to))
             if (Match(d, f) && DateOnly.TryParse(d.Date, out var date))
                 result.Add(new SpendSlice(date, d.OwnerId, d.ProjectId, d.SessionId, d.TaskId,
                     d.PersonaId, d.Provider, ResolveModel(d.Model, d.Provider), d.Source,
                     d.InputTokens, d.OutputTokens, d.CacheReadTokens, d.CacheCreationTokens,
-                    d.CostUsd, d.Generations, d.Turns, Detailed: false));
+                    d.CostUsd, d.CostRub, d.Generations, d.Turns, Detailed: false));
         return result;
     }
 
@@ -145,7 +150,7 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         // own — от текущего пользователя, а не от фильтра среза: у админа в scope=all
         // f.Owner пуст, а при сужении user=X равен чужому владельцу (ревью Глеба, major-2)
         var topTurns = store.DetailsBetween(from, to)
-            .Where(r => Match(r, f) && r.Source != SpendSources.Fal)
+            .Where(r => Match(r, f) && !SpendSources.IsTokenless(r.Source))
             .OrderByDescending(r => r.TotalTokens)
             .Take(TopTurnsLimit)
             .Select(r => ToTurnDto(r, currentUserId))
@@ -154,7 +159,24 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         return new SpendOverviewDto(
             from.ToString("yyyy-MM-dd"), to.ToString("yyyy-MM-dd"),
             store.DetailDays, store.WindowStart.ToString("yyyy-MM-dd"), allUsers,
-            acc.Tokens(), acc.Turns, acc.Generations, byDay, cards, topTurns);
+            acc.Tokens(), acc.Turns, acc.Generations, RubOf(slices), byDay, cards, topTurns);
+    }
+
+    // Рублёвый расход периода (сервисы Яндекса) — для раздела денег Yandex Cloud: там он
+    // нужен отдельно от обзора, потому что Billing API разбивку по услугам не отдаёт.
+    public SpendRubDto? Rub(DateOnly from, DateOnly to, SpendFilter f) => RubOf(Slices(from, to, f));
+
+    // Рублёвый итог среза; ноль трат — null, чтобы UI не рисовал пустую строку «0 ₽»
+    private static SpendRubDto? RubOf(IEnumerable<SpendSlice> slices)
+    {
+        double total = 0;
+        var requests = 0;
+        foreach (var s in slices.Where(s => s.Source == SpendSources.Tts))
+        {
+            total += s.Rub;
+            requests += s.Generations;
+        }
+        return requests == 0 ? null : new SpendRubDto(Math.Round(total, 2), requests);
     }
 
     private IReadOnlyList<SpendCardRowDto> Card(List<SpendSlice> slices, string groupBy) =>
@@ -329,8 +351,10 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
         var acc = new Acc();
         foreach (var s in Slices(DateOnly.MinValue, today, f)) acc.Add(s);
 
+        // «Последний ход» — именно ход: запись озвучки или генерации тут показала бы
+        // «0 ткн · озвучка» вместо настоящего ответа и погасила бы признак бесплатной модели
         var last = store.DetailsBetween(store.WindowStart, today)
-            .Where(r => r.SessionId == sessionId)
+            .Where(r => r.SessionId == sessionId && !SpendSources.IsTokenless(r.Source))
             .OrderByDescending(r => r.Timestamp)
             .FirstOrDefault();
         return new SpendBadgeDto(sessionId, acc.Tokens(), acc.Turns,
@@ -371,7 +395,10 @@ public sealed class SpendAnalyticsService(SpendStore store, SessionManager sessi
             _out += s.Output;
             _cr += s.CacheRead;
             _cc += s.CacheCreation;
-            Turns += s.Turns;
+            // Ход — это обращение к модели. Вызовы без токенов (генерация картинки, запрос
+            // синтеза) идут своим счётчиком Generations: иначе один озвученный ответ добавлял
+            // бы 5–10 «ходов» в сводки, виджет и бейдж чата
+            if (!SpendSources.IsTokenless(s.Source)) Turns += s.Turns;
             Generations += s.Generations;
         }
 

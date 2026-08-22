@@ -42,6 +42,10 @@ public static class FeatureFlagKeys
     // персоны + MCP-инструменты dossier_lookup/dossier_get. Второй шаг двухфлаговой выкатки:
     // включается, когда записи перестали быть мусорными (замер качества на проде).
     public const string ChangeDossiersRecall = "change-dossiers-recall";
+
+    // Стиль озвучки digest: полный ответ на экране + короткая выжимка вслух
+    // (Session.VoiceStyle, VoicePrompts.DigestSectionText).
+    public const string VoiceDigest = "voice-digest";
 }
 
 /// <summary>
@@ -101,6 +105,16 @@ public static class FeatureFlagCatalog
             Key: FeatureFlagKeys.ChangeDossiersRecall,
             Title: "История решений: подсказки персонам и выгрузка в репозиторий",
             Description: "Персоны видят историю решений по коду, который правят, и не предлагают повторно то, что уже отвергли. А саму историю можно выгрузить в репозиторий отдельной веткой — отправка только по вашей кнопке.",
+            Default: false,
+            Stage: "dev"),
+
+        // Второй стиль озвучки (VoiceStyles.Digest): ответ на экране полный, вслух читается
+        // выжимка из блока <voice> в его конце. Выключен — озвучка работает как раньше,
+        // только внутри режима разговора (короткий ответ целиком).
+        new FeatureFlagDefinition(
+            Key: FeatureFlagKeys.VoiceDigest,
+            Title: "Озвучивать краткую выжимку ответа",
+            Description: "За компьютером ответ приходит полным — с кодом, таблицами и схемами, — а вслух читается только короткая суть в несколько предложений. Стиль озвучки выбирается удержанием кнопки с наушниками и запоминается на этом устройстве.",
             Default: false,
             Stage: "dev"),
     ];

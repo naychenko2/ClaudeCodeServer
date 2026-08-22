@@ -38,6 +38,8 @@ internal sealed class SubagentStreamWatcher : IDisposable
     private readonly Dictionary<string, DateTime> _reported = [];
     // Скан зовётся из цикла поллинга и из DrainAsync (перед tool_result) — не параллелим
     private readonly SemaphoreSlim _scanLock = new(1, 1);
+    // Снимок ProfilesRoot на создание ватчера (см. конструктор)
+    private readonly string? _profilesRoot;
     private string? _dir;               // папка subagents появляется при первом сабагенте
     private Task? _loop;
 
@@ -49,7 +51,8 @@ internal sealed class SubagentStreamWatcher : IDisposable
         !IsDisposed && _cwd == cwd && _claudeSessionId == claudeSessionId;
 
     public SubagentStreamWatcher(string cwd, string claudeSessionId, Func<ServerMessage, Task> onMessage,
-        string? sessionId = null, Action<SubagentRunPassport>? runSink = null, int cliContextWindow = 0)
+        string? sessionId = null, Action<SubagentRunPassport>? runSink = null, int cliContextWindow = 0,
+        string? profilesRoot = null)
     {
         _cwd = cwd;
         _claudeSessionId = claudeSessionId;
@@ -57,6 +60,10 @@ internal sealed class SubagentStreamWatcher : IDisposable
         _sessionId = sessionId;
         _runSink = runSink;
         _cliContextWindow = cliContextWindow;
+        // Снимок на момент создания ватчера: статик WorkflowAgentParser.ProfilesRoot —
+        // глобальный, и в тестах его перезаписывает Program.cs параллельных
+        // WebApplicationFactory-хостов; живой ватчер не должен менять корень посреди работы
+        _profilesRoot = profilesRoot ?? WorkflowAgentParser.ProfilesRoot;
     }
 
     public void Start()
@@ -70,7 +77,9 @@ internal sealed class SubagentStreamWatcher : IDisposable
                 foreach (var f in Directory.GetFiles(_dir, "agent-*.jsonl", SearchOption.TopDirectoryOnly))
                 {
                     _offsets[f] = new FileInfo(f).Length;
-                    // Начало транскрипта не прочитано — паспорт такого агента считается неполным
+                    // Начало транскрипта не прочитано — паспорт такого агента считается неполным.
+                    // Содержимое прошлого хода НЕ парсим: журнал не должен получать паспорт
+                    // за активность, которой в этом ходе не было.
                     TallyFor(f).Partial = true;
                 }
         }
@@ -173,7 +182,10 @@ internal sealed class SubagentStreamWatcher : IDisposable
         await _scanLock.WaitAsync();
         try
         {
-            _dir ??= ResolveDir();
+            // Папка subagents появляется при первом сабагенте — пробуем найти её при каждом скане,
+            // пока не найдём (??= не подойдет: null от ResolveDir "запомнится" и новые попытки не пойдут)
+            if (_dir is null)
+                _dir = ResolveDir();
             if (_dir is null) return;
 
             foreach (var file in Directory.GetFiles(_dir, "agent-*.jsonl", SearchOption.TopDirectoryOnly).OrderBy(f => f))
@@ -272,24 +284,45 @@ internal sealed class SubagentStreamWatcher : IDisposable
         }
     }
 
-    // Папка транскриптов сабагентов текущей сессии. Корни — как у workflow-транскриптов
-    // (~/.claude/projects + профили сторонних провайдеров). Сначала — по соглашению CLI
-    // об уплощении cwd (не-алфавитно-цифровые символы → '-'), затем фолбэк-скан по id сессии.
     private string? ResolveDir()
     {
         var flat = string.Concat(_cwd.Select(c => char.IsAsciiLetterOrDigit(c) ? c : '-'));
+
+        // Профили подписок (sub-*) и созданные после старта сервера не входят в AllowedRoots
+        // (там только явно зарегистрированные провайдеры) — проходим их ключи сами:
+        // {ProfilesRoot}/{key}/projects/{flat}/{sessionId}/subagents
+        if (_profilesRoot is { } profilesRoot && Directory.Exists(profilesRoot))
+            foreach (var keyDir in Directory.GetDirectories(profilesRoot))
+            {
+                var projectsDir = Path.Combine(keyDir, "projects");
+                if (!Directory.Exists(projectsDir)) continue;
+                var found = FindSubagentsDir(projectsDir, flat);
+                if (found is not null) return found;
+            }
+
         foreach (var root in WorkflowAgentParser.AllowedRoots)
         {
             if (!Directory.Exists(root)) continue;
+            var found = FindSubagentsDir(root, flat);
+            if (found is not null) return found;
+        }
 
-            var byConvention = Path.Combine(root, flat, _claudeSessionId, "subagents");
-            if (Directory.Exists(byConvention)) return byConvention;
+        return null;
+    }
 
-            foreach (var projDir in Directory.GetDirectories(root))
-            {
-                var candidate = Path.Combine(projDir, _claudeSessionId, "subagents");
-                if (Directory.Exists(candidate)) return candidate;
-            }
+    // Ищет папку subagents в заданном корне по соглашению {flat}/{sessionId}/subagents,
+    // с фолбэк-перебором подпапок корня: правило уплощения cwd у CLI может отличаться
+    // от нашего (кириллица, точки, подчёркивания) — без фолбэка такие проекты молча
+    // теряли бы паспорта
+    private string? FindSubagentsDir(string root, string flat)
+    {
+        var byConvention = Path.Combine(root, flat, _claudeSessionId, "subagents");
+        if (Directory.Exists(byConvention)) return byConvention;
+
+        foreach (var projDir in Directory.GetDirectories(root))
+        {
+            var candidate = Path.Combine(projDir, _claudeSessionId, "subagents");
+            if (Directory.Exists(candidate)) return candidate;
         }
         return null;
     }
@@ -297,16 +330,33 @@ internal sealed class SubagentStreamWatcher : IDisposable
     public void Dispose()
     {
         if (IsDisposed) return;
+
+        // Финальное дренирование — дочитываем хвост транскрипта перед эмиссией паспортов
+        try { DrainAsync().GetAwaiter().GetResult(); }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[SubagentWatcher] Финальный дренаж не удался: {ex.Message}");
+        }
+
         IsDisposed = true;
         _cts.Cancel();
+
         // Паспорта агентов, чьё завершение продукт так и не объявил (прогон умер, ход
         // закончился раньше агента): без них самый интересный класс обрывов был бы не виден.
-        // Хвост транскрипта тут уже дочитан — вызывающий дренирует ватчер перед Dispose.
+        // Хвост транскрипта тут уже дочитан — финальный дренаж выше.
         // Ждём конца возможного скана: те же словари пишет поток поллинга (лок берём ПОСЛЕ
         // отмены — иначе ждали бы полный тик). Не дождались — паспорта пропускаем, ронять
         // остановку ватчера из-за диагностики нельзя.
+        // Только агенты с новыми строками при этом ватчере: старые файлы без новой
+        // активности молчат — их содержимое уже в истории прошлого хода
         if (_scanLock.Wait(TimeSpan.FromSeconds(2)))
-            try { foreach (var file in _tallies.Keys.ToList()) Emit(file, "run_end"); }
+            try
+            {
+                foreach (var file in _tallies.Keys.ToList())
+                    // Только агенты с новыми строками при этом ватчере: старые файлы без новой
+                    // активности молчат — их содержимое уже в истории прошлого хода
+                    if (_tallies[file].FeedCalled) Emit(file, "run_end");
+            }
             finally { _scanLock.Release(); }
         _cts.Dispose();
     }

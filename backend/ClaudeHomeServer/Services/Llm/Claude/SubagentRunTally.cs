@@ -19,6 +19,8 @@ internal sealed class SubagentRunTally(string agentId)
     public string? ToolUseId { get; set; }
     // Ватчер подключился к уже начатому транскрипту: часть строк не прочитана никогда
     public bool Partial { get; set; }
+    // В этом прогоне ватчера Feed вызывался (были новые строки в транскрипте)
+    public bool FeedCalled { get; set; }
 
     public DateTime StartedAt { get; private set; }
     public DateTime LastActivityAt { get; private set; }
@@ -40,6 +42,7 @@ internal sealed class SubagentRunTally(string agentId)
 
     public void Feed(JsonElement root)
     {
+        FeedCalled = true;
         if (!root.TryGetProperty("type", out var t)) return;
         var type = t.GetString();
 

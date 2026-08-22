@@ -23,11 +23,13 @@ function build(chats: Session[], opts: {
   isVisible?: (c: Session) => boolean;
   collapsedIds?: Set<string>;
   activeId?: string | null;
+  agentsRunningIds?: ReadonlySet<string>;
 } = {}) {
   return buildChatTreeRows(chats, {
     isVisible: opts.isVisible ?? all,
     collapsedIds: opts.collapsedIds ?? none,
     activeId: opts.activeId ?? null,
+    agentsRunningIds: opts.agentsRunningIds,
   });
 }
 
@@ -151,6 +153,22 @@ describe('buildChatTreeRows', () => {
     expect(r.rows[0].groupCount).toBe(5);
     // working + waiting + starting; active и finished — не «в работе»
     expect(r.rows[0].groupRunningCount).toBe(3);
+  });
+
+  it('чат с живыми фоновыми агентами считается работающим, хотя статус спокойный', () => {
+    // Фоновые агенты доживают после конца хода: статус сессии уже active, но работа идёт —
+    // счётчик свёрнутой ветки обязан совпадать с переливом карточки, иначе бейдж врёт
+    const chats = [
+      mk('p'),
+      mk('c1', { parentSessionId: 'p', status: 'active' }),
+      mk('c2', { parentSessionId: 'p', status: 'finished' }),
+    ];
+
+    expect(build(chats, { collapsedIds: new Set(['p']) }).rows[0].groupRunningCount).toBe(0);
+    expect(build(chats, {
+      collapsedIds: new Set(['p']),
+      agentsRunningIds: new Set(['c1']),
+    }).rows[0].groupRunningCount).toBe(1);
   });
 
   it('сам узел в свой счётчик не входит', () => {

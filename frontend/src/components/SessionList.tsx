@@ -13,6 +13,7 @@ import { ChatListToolbar } from './ChatListToolbar';
 import { EmptyState } from './ui';
 import { useChatFilters, useSanitizePersonaFilter, matchChatFilter, isDefaultFilters, defaultChatFiltersKeepingView, buildHiddenReason } from '../lib/chatFilters';
 import { buildChatTreeRows, splitChatTreeByRoots, useTreeCollapse } from '../lib/chatTree';
+import { useAgentsPresence } from '../lib/agentsPresence';
 import { useLastMechanicVersion } from '../lib/lastMechanic';
 import { ChatCard } from './ChatCard';
 import { ChatTreeBranch, nestTreeRows } from './ChatTreeRow';
@@ -315,6 +316,8 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const { groupBy, sortOrder, hierarchy } = filters;
   // Память свёрнутых веток дерева
   const { collapsedIds, toggleCollapse } = useTreeCollapse(project.id);
+  // Чаты с живыми фоновыми агентами — считаются работающими в счётчике свёрнутой ветки
+  const agentsRunningIds = useAgentsPresence();
 
   // Персоны в списке (для селектора фильтра)
   const personaIdsInList = [...new Set(sessions.filter(s => s.personaId).map(s => s.personaId!))];
@@ -330,10 +333,10 @@ export function SessionList({ project, activeSession, onSelect, onSessionUpdated
   const activeSessionId = activeSession?.id ?? null;
   const tree = useMemo(
     () => hierarchy
-      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder })
+      ? buildChatTreeRows(sessions, { isVisible, collapsedIds, activeId: activeSessionId, sortOrder, agentsRunningIds })
       : null,
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters],
+    [sessions, hierarchy, sortOrder, collapsedIds, activeSessionId, filters, agentsRunningIds],
   );
   // Скрыто фильтрами — одинаково для плоского и дерева: множество видимых чатов одно
   const hiddenCount = sessions.length - filteredSessions.length;

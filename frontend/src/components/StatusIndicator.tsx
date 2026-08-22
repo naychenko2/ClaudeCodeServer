@@ -2,15 +2,21 @@ import { C } from '../lib/design'
 
 export type SessionStatus = 'starting' | 'working' | 'active' | 'waiting' | 'orphaned' | 'finished' | 'error'
 
+// Вид карточки в списке. Шире статуса CLI: 'agents' — ход уже завершён (сессия Active),
+// но в чате доживают ФОНОВЫЕ агенты, и карточка обязана выглядеть живой. В сам
+// SessionStatus его не добавляем — тот описывает состояние процесса, а не картинку
+export type VisualStatus = SessionStatus | 'agents'
+
 // Легенда статусов: подпись и цвет. Цвет — на основных (землистых) токенах;
 // его же читает перелив фона карточки (STATUS_GLOW не несёт отдельного цвета).
 // Цветные — те, по чьей карточке идёт движение: starting и working (accent —
 // работа), waiting (warning — медовый, «нужен человек»), error (danger).
 // Спокойные (active/orphaned/finished) — нейтрально-серые (textMuted): ход
 // завершён, фон они не красят, и цвет им ни на что не влияет
-export const STATUS_CONFIG: Record<SessionStatus, { label: string; color: string }> = {
+export const STATUS_CONFIG: Record<VisualStatus, { label: string; color: string }> = {
   starting: { label: 'запуск',     color: C.accent    },
   working:  { label: 'работает',   color: C.accent    },
+  agents:   { label: 'агенты работают', color: C.accent },
   active:   { label: 'активна',    color: C.textMuted },
   waiting:  { label: 'ждёт ввода', color: C.warning   },
   orphaned: { label: 'прервана',   color: C.textMuted },
@@ -25,9 +31,13 @@ export const STATUS_CONFIG: Record<SessionStatus, { label: string; color: string
 // к finished — серо-бежевый без glow (различают только подписью).
 // Цвет свечения берётся из STATUS_CONFIG (основной землистый токен) — отдельного
 // насыщенного glow-цвета нет: точки и аура одного цвета
-export const STATUS_GLOW: Record<SessionStatus, { alpha: number; breath: boolean; slow?: boolean }> = {
+export const STATUS_GLOW: Record<VisualStatus, { alpha: number; breath: boolean; slow?: boolean }> = {
   starting: { alpha: 55, breath: true },
   working:  { alpha: 60, breath: true },
+  // Фоновые агенты: волна как у работающего чата — работа там и правда идёт. Отличает
+  // такой чат не оттенок (на 8-процентной разнице цвета его не различить), а значок
+  // агентов в строке имени; см. ChatCard
+  agents:   { alpha: 60, breath: true },
   waiting:  { alpha: 55, breath: true, slow: true },
   error:    { alpha: 72, breath: false },
   orphaned: { alpha: 0,  breath: false },

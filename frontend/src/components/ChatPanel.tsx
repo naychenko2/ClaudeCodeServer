@@ -270,7 +270,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     void (async () => {
       try {
         setSpeechPhase('speaking');
-        await speak(text, personaId);
+        await speak(text, personaId, session.id);
       } finally {
         // Токен тот же, что у фазы: поздний finally осиротевшего вызова не должен
         // гасить подсветку уже начавшейся озвучки
@@ -893,7 +893,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         setSpeakingPersonaId(null);
         // Голос захватывается ОДИН раз на весь ход: пакеты синтезируются заранее
         // (prefetch), и смена голоса посреди хода выбросила бы оплаченный пакет
-      }, voiceId);
+      }, voiceId, session.id);
       streamRef.current = s;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- см. startSpeaking: та же дисциплина токена
       setSpeechPhase('willSpeak');

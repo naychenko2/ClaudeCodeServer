@@ -855,6 +855,9 @@ export type ServerMessage = { sessionId: string } & (
   // достоверный сигнал «ответ готов» (по task-notification CLI). aborted=true — агенты
   // умерли вместе с процессом (Стоп/несовместимый ход), не доработав
   | { type: 'bg_agent_done'; toolUseIds: string[]; aborted?: boolean }
+  // У чата появились/закончились живые фоновые агенты. Событие для СПИСКА чатов (карточка
+  // светится, пока агенты работают), а не для ленты: приходит только на переходе 0↔N
+  | { type: 'bg_agents_presence'; active: boolean }
   | { type: 'permission_request'; requestId: string; toolName: string; toolInput: unknown }
   | { type: 'ask_question'; toolUseId: string; input: unknown }
   | { type: 'plan_review'; requestId: string; plan: string }

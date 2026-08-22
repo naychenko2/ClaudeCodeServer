@@ -1121,6 +1121,9 @@ export const api = {
   // Чаты вне проекта (project-less)
   chats: {
     list: () => request<Session[]>('/chats'),
+    // id чатов (в т.ч. проектных), где прямо сейчас работают фоновые агенты. Снимок нужен
+    // потому, что событие bg_agents_presence приходит только на переходе 0↔N
+    agentsPresence: () => request<string[]>('/chats/agents-presence'),
     get: (id: string) => request<Session>(`/chats/${id}`),
     create: (mode = 'auto', resumeSessionId?: string, name?: string, model?: string, effort?: string) =>
       request<Session>('/chats', {

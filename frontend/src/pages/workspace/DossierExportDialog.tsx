@@ -102,6 +102,12 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
     }
   }, [open, sharedFolder]);
 
+  // Закрыт — не рендерим карточку. Эта проверка нужна на случай, когда родитель
+  // держит DossierExportDialog смонтированным постоянно (двойное монтирование
+  // панели): без неё диалог жил бы в DOM даже при open=false, плюс активный
+  // реестр Modal увидел бы «занято» и не дал открыть второй.
+  if (!open) return null;
+
   const run = async (action: LastAction) => {
     setLastAction(action);
     // eslint-disable-next-line react-hooks/set-state-in-effect -- переход перед запросом, чтобы нажатая кнопка показала спиннер

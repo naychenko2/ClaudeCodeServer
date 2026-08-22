@@ -82,9 +82,66 @@ export function verbalizeIdentifiers(text: string): string {
   return text;
 }
 
+// Маркер выжимки для озвучки (стиль digest): всё от первого вхождения `<voice` до конца
+// текста. Правило одно и то же в санитайзере и на рендере ленты — и оно намеренно
+// «до конца», а не «до закрывающего тега»: пока ход стримится, тег приезжает по кусочкам,
+// и полуоткрытый `<voi` иначе то мигал бы в ленте, то читался бы вслух.
+//
+// Вырез БЕЗУСЛОВНЫЙ, не гейтится стилем: маркер остаётся в сохранённой истории и
+// транскрипте CLI (без него --resume вернул бы контекст без примера формата), поэтому
+// модель может повторить его и после выключения digest — а HTML-подобные теги санитайзер
+// иначе не трогает вовсе, и синтезатор зачитал бы «voice» вслух.
+export const VOICE_MARKER_RE = /<voice[\s\S]*$/i;
+const VOICE_TAG = '<voice';
+// Фенсы кода — с их началом, чтобы можно было отличить открытый блок от закрытого
+const FENCE_RE = /(```|~~~)/g;
+
+export function stripVoiceMarker(text: string): string {
+  if (!text) return '';
+  // Резать можно ТОЛЬКО вне блоков кода. Иначе ответ, показывающий формат маркера
+  // примером (а он теперь описан и в доках проекта, и в этом файле), обрывался бы на
+  // экране навсегда — причём у всех, включая тех, у кого фича выключена: этот путь
+  // флагом не гейтится. Правило совпадает с extractVoiceDigest, который фенсы тоже
+  // игнорирует; разъедься они — пользователь молча теряет кусок ответа.
+  let inCode = false;
+  let fence = '';
+  let i = 0;
+  FENCE_RE.lastIndex = 0;
+  for (let m = FENCE_RE.exec(text); m; m = FENCE_RE.exec(text)) {
+    if (!inCode) {
+      // Кусок до открывающего фенса — обычный текст: маркер в нём и режем
+      const at = findMarker(text.slice(i, m.index));
+      if (at >= 0) return text.slice(0, i + at);
+      inCode = true;
+      fence = m[1];
+    } else if (m[1] === fence) {
+      inCode = false;
+    }
+    i = m.index + m[1].length;
+  }
+  // Хвост после последнего фенса. Незакрытый блок кода (ход ещё стримится) маркера
+  // содержать не может — там код
+  if (inCode) return text;
+  const at = findMarker(text.slice(i));
+  return at >= 0 ? text.slice(0, i + at) : text;
+}
+
+// Позиция начала маркера в куске обычного текста: полный тег либо его оборванный
+// хвост в самом конце («…<voi») — на стриме тег приезжает по буквам, и без этого он
+// успевал бы мелькнуть в ленте и уехать в синтез. Минимум две буквы («<v»), чтобы
+// ответ, оканчивающийся на одиночный «<», не терял символ. -1 — маркера нет
+function findMarker(chunk: string): number {
+  const full = chunk.search(/<voice/i);
+  if (full >= 0) return full;
+  for (let n = Math.min(VOICE_TAG.length - 1, chunk.length); n >= 2; n--) {
+    if (VOICE_TAG.startsWith(chunk.slice(chunk.length - n).toLowerCase())) return chunk.length - n;
+  }
+  return -1;
+}
+
 export function sanitizeForSpeech(md: string): string {
   if (!md) return '';
-  let text = md;
+  let text = stripVoiceMarker(md);
 
   // Блоки кода целиком (```...```) и однострочный код `...`
   text = text.replace(/```[\s\S]*?```/g, ' ');

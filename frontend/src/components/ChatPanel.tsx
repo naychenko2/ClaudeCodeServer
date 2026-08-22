@@ -28,9 +28,12 @@ import { computeTurnTree, sessionStartedBoundaries } from '../lib/turnWorktree';
 import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
-import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, type StreamSpeech } from '../lib/tts';
-import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, turnVoiceItemIndex, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
+import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, sanitizeForSpeech, splitSentences, type StreamSpeech } from '../lib/tts';
+import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, turnVoiceItemIndex, extractVoiceDigest, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
+import { talkDiag } from '../lib/talkDiag';
 import { needAnswer, primeBeep } from '../lib/beep';
+import { voiceStyleFor, normalizeVoiceStyle, VOICE_STYLE_DIGEST, VOICE_STYLE_TALK } from '../lib/voiceStyle';
+import { FLAGS, useFeature } from '../lib/featureFlags';
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
@@ -227,6 +230,24 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // бэке) + озвучка ответа. Прайминг аудио прямо в обработчике клика — политика autoplay
   // разрешает воспроизведение только после пользовательского жеста.
   const voiceMode = session.voiceMode === true;
+  // Стиль озвучки живёт ЗДЕСЬ, а не в модуле-хранилище: значение читают четыре места в
+  // двух компонентах (ветка кнопки и плашка состояния в Composer, гейт стрима и ветка
+  // озвучки здесь). Голые функции чтения/записи не реактивны — выбор пункта в меню
+  // записал бы localStorage и не перерисовал ни кнопку, ни гейты
+  const voiceDigestFlag = useFeature(FLAGS.voiceDigest);
+  // Стиль НЕ настраивается — выводится из ширины экрана (см. lib/voiceStyle.ts).
+  // Флаг выключен — всегда talk: фича не протекает ни в промпт, ни в кнопку
+  const voiceStyle = voiceDigestFlag ? voiceStyleFor(isMobile === true) : VOICE_STYLE_TALK;
+  const voiceDigest = voiceMode && voiceStyle === VOICE_STYLE_DIGEST;
+  // Чат, чей стиль уже выправлен на сервере в этот заход (см. эффект синхронизации ниже)
+  const styleSyncedRef = useRef<string | null>(null);
+  // Стиль сменился на лету (окно растянули, планшет повернули) — снять гард, чтобы
+  // эффект ниже выправил значение на сервере: иначе ход собрался бы в прежнем формате
+  const prevStyleRef = useRef(voiceStyle);
+  if (prevStyleRef.current !== voiceStyle) {
+    prevStyleRef.current = voiceStyle;
+    styleSyncedRef.current = null;
+  }
   // Фаза озвучки для режима разговора: петля в композере открывает микрофон только когда
   // она вернулась в idle. Ведётся С ТОКЕНОМ вызова (Р12): новый speak внутри себя зовёт
   // stopSpeaking(), и finally предыдущего иначе сбросил бы фазу уже начавшейся озвучки —
@@ -267,13 +288,33 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // Значение ПРИХОДИТ от композера: запрошенное состояние (PUT ещё в полёте) знает
   // только он — там же живёт петля разговора. Свой ref здесь был вторым источником
   // правды и после провала PUT или смены чата инвертировал режим
+  // Выправить стиль на сервере, если он остался от ДРУГОГО устройства. Гейт по voiceMode
+  // обязателен: дефолт digest на широком экране расходится со стилем каждого старого чата,
+  // и без него PUT (то есть перезапись всего sessions.json) уходил бы на открытие любого
+  // чата, включая те, где озвучкой не пользовались. При выключенной озвучке стиль на
+  // сервере никого не интересует — секцию промпта по нему не выбирают.
+  // Один PUT на открытие чата: onSessionUpdated вернул бы новый объект сессии и эффект
+  // пошёл бы по кругу. Ответ намеренно ИГНОРИРУЕМ — поздний ответ, разошедшийся с тапом
+  // по кнопке, вернул бы voiceMode прошлого состояния и перевернул её (см. комментарий
+  // к handleToggleVoiceMode ниже). Ошибки молча: чинить тут человеку нечего
+  useEffect(() => {
+    if (!voiceMode) return;
+    if (normalizeVoiceStyle(session.voiceStyle) === voiceStyle) return;
+    if (styleSyncedRef.current === session.id) return;
+    styleSyncedRef.current = session.id;
+    void updateChatFields(session, { voiceStyle }).catch(() => {});
+  }, [session, voiceMode, voiceStyle]);
+
   const handleToggleVoiceMode = useCallback(async (next: boolean) => {
     primeAudio();
     // Разбудить аудиоконтекст сигналов в том же жесте: сигнал «нужно решение» может
     // понадобиться и без запуска петли, а вне жеста браузер контекст не пустит
     primeBeep();
     try {
-      const updated = await updateChatFields(session, { voiceMode: next });
+      // Стиль уходит вместе с включением: серверу он нужен уже на первом ходу, а
+      // sync-эффект выше сработал бы только на следующем открытии чата
+      const updated = await updateChatFields(session, next ? { voiceMode: true, voiceStyle } : { voiceMode: false });
+      styleSyncedRef.current = session.id;
       onSessionUpdated?.(updated); // без этого кнопка не перерисуется
       if (!next) stopSpeech();
     } catch (err) {
@@ -282,7 +323,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       // и петля разговора крутилась бы вхолостую — композер по ошибке её гасит
       throw err;
     }
-  }, [session, onSessionUpdated, stopSpeech]);
+  }, [session, onSessionUpdated, stopSpeech, voiceStyle]);
 
   // Режим «Командная реализация»: live-состояние из событий team_implement,
   // до первого события — из Session.teamImplement; null — режим выключен
@@ -799,9 +840,24 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // Цикл «до готово» (Р8): отличить финальный result от промежуточного в момент события
     // нельзя, а читать вслух каждую итерацию — мусор
     if (workLoopState) return;
+    // Стиль digest: вслух идёт ТОЛЬКО выжимка из блока <voice> в конце ответа. Полный текст
+    // хода здесь не озвучивается никогда — иначе синтезатор зачитает код и таблицы.
+    // Извлечение синхронное и до первого await (дисциплина токена speechCallRef)
+    if (voiceDigest) {
+      const digest = extractVoiceDigest(text);
+      // Модель забыла маркер — читаем ПЕРВЫЕ ТРИ ПРЕДЛОЖЕНИЯ, чтобы не молчать вовсе.
+      // Именно предложения, а не первую строку: ответ одним абзацем без переводов строки
+      // уехал бы в синтез целиком — ровно то поведение, от которого этот стиль и уходит
+      const spoken = digest ?? splitSentences(sanitizeForSpeech(text)).slice(0, 3).join(' ');
+      if (!digest) talkDiag('digest: ход без маркера <voice>', { fallback: spoken.length });
+      if (!spoken.trim()) { showToast('Озвучка', 'В ответе нечего озвучить'); return; }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- см. ниже: фаза выставляется синхронно в этом же кадре (Р12)
+      startSpeaking(spoken, turnVoicePersonaId(items, session.personaId));
+      return;
+    }
     // eslint-disable-next-line react-hooks/set-state-in-effect -- фаза озвучки обязана выставиться синхронно в этом же кадре (Р12)
     if (text) startSpeaking(text, turnVoicePersonaId(items, session.personaId));
-  }, [items, session.id, voiceMode, workLoopState, isHistoryLoading, startSpeaking, stopSpeech, resetStreamSpeech]);
+  }, [items, session.id, session.personaId, voiceMode, voiceDigest, workLoopState, isHistoryLoading, startSpeaking, stopSpeech, resetStreamSpeech]);
 
   // Эффект стриминга: режет нарастающий текст хода на предложения и озвучивает их
   // по мере появления, не дожидаясь result. tool_use/thinking_delta ничего не делают —
@@ -809,6 +865,11 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // время работы инструмента — цель фичи)
   useEffect(() => {
     if (!voiceMode || !handsFreeActive) return;
+    // Явная проверка стиля, а не расчёт на «в digest петли не бывает»: один промах — и
+    // стрим зачитает вслух полный ответ с кодом и таблицами. Заодно это держит инвариант
+    // «единственный владелец звука в talk — StreamSpeech»: стрим и ветка digest выше
+    // не пересекаются никогда
+    if (voiceStyle !== VOICE_STYLE_TALK) return;
     if (bargeSuppressedRef.current) return; // ход перебит — дельты больше не озвучиваем
     const r = turnStreamChunks(streamStRef.current, items);
     if (r.off) { streamStRef.current = { ...streamStRef.current, off: true }; return; }
@@ -841,7 +902,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       setSpeakingPersonaId(voiceId ?? null);
     }
     for (const c of r.chunks) streamRef.current!.enqueue(c);
-  }, [items, voiceMode, handsFreeActive]);
+  }, [items, voiceMode, voiceStyle, handsFreeActive, session.personaId]);
 
   // Уход со страницы/размонтирование — озвучка не должна пережить чат
   useEffect(() => () => stopSpeaking(), []);
@@ -1254,8 +1315,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   useEffect(() => {
     const was = prevAwaitingRef.current;
     prevAwaitingRef.current = awaitingResponse;
-    if (awaitingResponse && !was && voiceMode) needAnswer();
-  }, [awaitingResponse, voiceMode]);
+    // В digest не пищим: сигнал заведён для разговора, где человек не смотрит на экран,
+    // а здесь карточку с вопросом он видит глазами
+    if (awaitingResponse && !was && voiceMode && !voiceDigest) needAnswer();
+  }, [awaitingResponse, voiceMode, voiceDigest]);
 
   // Номера версий plan_review: счётчик с последнего user_message включительно (1, 2, …).
   // Также помечаем, был ли в текущем ходе отклонённый план — тогда показываем бейдж даже для v1.
@@ -2320,6 +2383,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             onToggleWorktree={project ? openWorktreeConfirm : undefined}
             voiceMode={voiceMode}
             onToggleVoiceMode={handleToggleVoiceMode}
+            voiceStyle={voiceStyle}
             // Вопрос модели выводит режим разговора из петли: голосом на разрешение
             // не ответишь. Именно awaitingResponse, а НЕ isWaiting (тот = «ход идёт»
             // и уходит выше как isGenerating)

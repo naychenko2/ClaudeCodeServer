@@ -239,4 +239,38 @@ public class PersonaPromptBuilderTests
     {
         Build(MakePersona()).Should().NotContain(VoicePrompts.PersonaOverride);
     }
+
+    // Стиль digest: формат персоны НЕ отменяется — коротко только внутри блока <voice>.
+    // Перепутать оговорки нельзя: talk-версия заставила бы отвечать коротко и на экране
+    [Fact]
+    public void VoiceStyleDigest_СвояОговоркаВместоРазговорной()
+    {
+        var persona = MakePersona(contract: new PersonaContract
+        {
+            Character = "Ты дотошный.",
+            OutputFormat = "Вердикт, затем до трёх замечаний.",
+        });
+
+        var prompt = PersonaPromptBuilder.BuildCore(persona, "claude",
+            switched: false, greeted: false, voiceMode: true,
+            voiceStyle: ClaudeHomeServer.Models.VoiceStyles.Digest);
+
+        prompt.Should().EndWith(VoicePrompts.DigestPersonaOverride);
+        prompt.Should().NotContain(VoicePrompts.PersonaOverride);
+        prompt.IndexOf(VoicePrompts.DigestPersonaOverride)
+            .Should().BeGreaterThan(prompt.IndexOf("## Формат ответов"));
+    }
+
+    // Пустой и битый стиль — разговор: старые чаты ведут себя как раньше
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("shout")]
+    public void VoiceStyleПустойИлиМусор_ЭтоРазговорнаяОговорка(string? style)
+    {
+        var prompt = PersonaPromptBuilder.BuildCore(MakePersona(), "claude",
+            switched: false, greeted: false, voiceMode: true, voiceStyle: style);
+
+        prompt.Should().EndWith(VoicePrompts.PersonaOverride);
+    }
 }

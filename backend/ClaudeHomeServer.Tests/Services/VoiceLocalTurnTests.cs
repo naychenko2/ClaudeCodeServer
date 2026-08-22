@@ -293,6 +293,26 @@ public class VoiceLocalTurnTests : IDisposable
             .Should().Be(true, "цикл снят — разговор снова на локали");
     }
 
+    // Стиль digest — полный агентный ответ с маркером <voice> в конце. Локальная болталка
+    // (LocalCompanionSection) не умеет ни инструменты, ни маркер: пропусти её гейт — и
+    // фронт озвучит фолбэком всю реплику Ollama целиком, молча нарушив контракт стиля
+    [Fact]
+    public async Task Гейт_СтильDigest_ЛокальныйХодОтключен()
+    {
+        var session = await MakeVoiceChatAsync();
+        var entry = GetEntry(session.Id);
+        var gate = typeof(SessionManager).GetMethod("ShouldRunLocalVoice",
+            BindingFlags.NonPublic | BindingFlags.Instance)!;
+
+        _sut.SetVoiceMode(session.Id, null, ClaudeHomeServer.Models.VoiceStyles.Digest);
+        gate.Invoke(_sut, [entry, false, false, new List<string>()])!
+            .Should().Be(false, "digest — это ход CLI с инструментами, локаль его не воспроизведёт");
+
+        _sut.SetVoiceMode(session.Id, null, ClaudeHomeServer.Models.VoiceStyles.Talk);
+        gate.Invoke(_sut, [entry, false, false, new List<string>()])!
+            .Should().Be(true, "разговор снова на локали");
+    }
+
     [Fact]
     public async Task Стоп_ОтменяетЛокальныйХодИЗакрываетЕгоЧерезExited()
     {

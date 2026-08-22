@@ -80,4 +80,36 @@ public class TurnPromptAssemblerTests
             .Should().BeGreaterThan(text.IndexOf(VoicePrompts.SectionText));
         text.Should().EndWith(VoicePrompts.PersonaOverride);
     }
+
+    // Развилка «какой формат увидит модель» — единственная точка (VoicePrompts.SectionFor),
+    // вынесенная из ClaudeSession ради этого шва. Тут решается, придёт ответ коротким
+    // целиком или полным с маркером <voice>, поэтому проверяем все четыре исхода.
+    [Fact]
+    public void ВыборСекции_РежимВыключен_СекцииНет()
+    {
+        VoicePrompts.SectionFor(voiceMode: false, digest: false, heard: true).Should().BeNull();
+        VoicePrompts.SectionFor(voiceMode: false, digest: true, heard: true).Should().BeNull();
+    }
+
+    [Fact]
+    public void ВыборСекции_Разговор_ЭтоКороткийФормат()
+    {
+        VoicePrompts.SectionFor(voiceMode: true, digest: false, heard: true)
+            .Should().Be(VoicePrompts.SectionText);
+        // Разговор формат не теряет и без живого слушателя — поведение оставлено как было
+        VoicePrompts.SectionFor(voiceMode: true, digest: false, heard: false)
+            .Should().Be(VoicePrompts.SectionText);
+    }
+
+    [Fact]
+    public void ВыборСекции_Digest_ТолькоКогдаЕстьКомуСлушать()
+    {
+        VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: true)
+            .Should().Be(VoicePrompts.DigestSectionText);
+
+        // Ход исполнителя задачи / правила автоматизации / делегированный: озвучивать
+        // некому, а маркер <voice> засорил бы транскрипт
+        VoicePrompts.SectionFor(voiceMode: true, digest: true, heard: false)
+            .Should().BeNull();
+    }
 }

@@ -128,13 +128,15 @@ public sealed class AlertPollingService(
         foreach (var alert in alerts)
         {
             // Памятка несёт всё, что нужно карточке инцидента после того, как алерт погас:
-            // важность, контур и ruleId для ссылки в SigNoz (самого алерта тогда уже нет).
+            // важность, контур, ruleId для ссылки в SigNoz и чат-виновник (самого алерта
+            // тогда уже нет, а метки живут только пока он горит).
             state.Remember(alert.Fingerprint, new AlertMemo(
                 AlertDigest.Describe(alert).Title,
                 alert.StartsAt ?? DateTimeOffset.UtcNow,
                 Severity: alert.Severity,
                 Environment: alert.Environment,
-                RuleId: alert.RuleId));
+                RuleId: alert.RuleId,
+                ChatId: alert.ChatId));
         }
     }
 

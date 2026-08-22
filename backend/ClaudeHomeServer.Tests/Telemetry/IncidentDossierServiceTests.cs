@@ -33,7 +33,11 @@ public class IncidentDossierServiceTests : IDisposable
        "annotations":{"description":"Ходы падают чаще обычного"}},
       {"fingerprint":"fp-prod","status":{"state":"active"},"startsAt":"2026-08-19T10:00:00Z",
        "labels":{"alertname":"Всплеск ошибок LLM","deployment.environment":"production","severity":"critical"},
-       "annotations":{"description":"Прод падает"}}
+       "annotations":{"description":"Прод падает"}},
+      {"fingerprint":"fp-chat","status":{"state":"active"},"startsAt":"2026-08-19T10:20:00Z",
+       "labels":{"alertname":"Ходы массово встали","deployment.environment":"dev",
+                 "severity":"warning","chat_id":"chat-залипший"},
+       "annotations":{"description":"Ходы в одном чате идут дольше 15 минут"}}
     ]}
     """;
 
@@ -82,10 +86,15 @@ public class IncidentDossierServiceTests : IDisposable
     {
         public IReadOnlyList<IncidentTurn> Seen = [];
 
+        /// <summary>Чат из меток алерта, доехавший до локального контекста.</summary>
+        public string? SeenAlertChat;
+
         public IReadOnlyList<IncidentChat> Describe(
-            IReadOnlyList<IncidentTurn> turns, DateTimeOffset from, DateTimeOffset to)
+            IReadOnlyList<IncidentTurn> turns, DateTimeOffset from, DateTimeOffset to,
+            string? alertChatId)
         {
             Seen = turns;
+            SeenAlertChat = alertChatId;
             return chats;
         }
     }
@@ -204,6 +213,57 @@ public class IncidentDossierServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Build_AlertWithChatLabel_PassesChatToLocalContext()
+    {
+        // «Ходы массово встали» называет виновника прямо в метках, и ходы у него
+        // УСПЕШНЫЕ: искать чат среди упавших ходов бесполезно, список был бы пуст.
+        var client = new FakeClient(AlertsJson, BreakdownJson, TurnsJson, LogsJson);
+        var local = new FakeLocalContext();
+        var service = new IncidentDossierService(Options(), client, NewStore(), local);
+
+        await service.BuildAsync("fp-chat", CancellationToken.None);
+
+        local.SeenAlertChat.Should().Be("chat-залипший");
+    }
+
+    [Fact]
+    public async Task Build_ResolvedIncident_KeepsChatFromMemo()
+    {
+        // Метки живут, пока алерт горит. Диплинк из уведомления открывают позже —
+        // чат обязан приехать из памятки, иначе разбор погасшего инцидента слепой.
+        var store = NewStore();
+        store.Remember("fp-was-slow", new AlertMemo(
+            "Ходы массово встали", DateTimeOffset.UtcNow.AddHours(-2),
+            Severity: "warning", Environment: "dev", ChatId: "chat-залипший"));
+        store.MarkResolved(["fp-was-slow"]);
+
+        var client = new FakeClient(AlertsJson, BreakdownJson, TurnsJson, LogsJson);
+        var local = new FakeLocalContext();
+        var service = new IncidentDossierService(Options(), client, store, local);
+
+        await service.BuildAsync("fp-was-slow", CancellationToken.None);
+
+        local.SeenAlertChat.Should().Be("chat-залипший");
+    }
+
+    [Fact]
+    public void Text_ChatFromAlert_SaysSoInsteadOfZeroFailures()
+    {
+        var dossier = new IncidentDossier
+        {
+            Incident = new IncidentSummary(
+                "fp-chat", "Ходы массово встали — дев", null, "warning", "dev",
+                DateTimeOffset.UtcNow, null, IsFiring: true),
+            Chats = [new IncidentChat("chat-1", null, "Назначение голосов", 0, 0, [], FromAlert: true)],
+        };
+
+        var text = IncidentDossierText.Render(dossier);
+
+        text.Should().Contain("указан алертом");
+        text.Should().NotContain("падений 0", "ноль падений у долгих, но успешных ходов ничего не опровергает");
+    }
+
+    [Fact]
     public async Task List_ShowsFiringAboveResolved()
     {
         var store = NewStore();
@@ -216,8 +276,8 @@ public class IncidentDossierServiceTests : IDisposable
         var (status, items) = await service.ListAsync(CancellationToken.None);
 
         status.Should().Be(IncidentStatus.Ok);
-        items.Should().HaveCount(3);
-        items.Take(2).Should().OnlyContain(i => i.IsFiring);
+        items.Should().HaveCount(4);
+        items.Take(3).Should().OnlyContain(i => i.IsFiring);
         items.Last().Fingerprint.Should().Be("fp-old");
     }
 

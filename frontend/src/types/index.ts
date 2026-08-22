@@ -2848,6 +2848,9 @@ export interface IncidentChat {
   failures: number;
   totalTokens: number;
   mcpFailures: string[];
+  // Чат назвал сам алерт (правила с разрезом по chat_id): попадает в список даже
+  // без упавших ходов — они там успешные, просто долгие.
+  fromAlert?: boolean;
 }
 
 export interface IncidentDossier {

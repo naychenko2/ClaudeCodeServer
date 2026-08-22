@@ -53,7 +53,11 @@ public sealed record IncidentChat(
     string? Title,
     int Failures,
     long TotalTokens,
-    IReadOnlyList<string> McpFailures);
+    IReadOnlyList<string> McpFailures,
+    // Чат назвал сам алерт (правила с разрезом по chat_id). Такой чат попадает в список
+    // даже без единого упавшего хода — у «Ходы массово встали» ходы успешные, просто
+    // долгие, и «падений 0» здесь не признак благополучия.
+    bool FromAlert = false);
 
 /// <summary>
 /// Досье по инциденту. Собирается ДЕТЕРМИНИРОВАННО, без участия модели: LLM зовётся

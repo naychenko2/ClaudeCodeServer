@@ -33,7 +33,6 @@ import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, turnVoi
 import { talkDiag } from '../lib/talkDiag';
 import { needAnswer, primeBeep } from '../lib/beep';
 import { voiceStyleFor, normalizeVoiceStyle, VOICE_STYLE_DIGEST, VOICE_STYLE_TALK } from '../lib/voiceStyle';
-import { FLAGS, useFeature } from '../lib/featureFlags';
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
 import { type Mode, ModeIcon, MODES, isDangerMode } from '../lib/modes';
@@ -234,10 +233,8 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   // двух компонентах (ветка кнопки и плашка состояния в Composer, гейт стрима и ветка
   // озвучки здесь). Голые функции чтения/записи не реактивны — выбор пункта в меню
   // записал бы localStorage и не перерисовал ни кнопку, ни гейты
-  const voiceDigestFlag = useFeature(FLAGS.voiceDigest);
-  // Стиль НЕ настраивается — выводится из ширины экрана (см. lib/voiceStyle.ts).
-  // Флаг выключен — всегда talk: фича не протекает ни в промпт, ни в кнопку
-  const voiceStyle = voiceDigestFlag ? voiceStyleFor(isMobile === true) : VOICE_STYLE_TALK;
+  // Стиль НЕ настраивается — выводится из ширины экрана (см. lib/voiceStyle.ts)
+  const voiceStyle = voiceStyleFor(isMobile === true);
   const voiceDigest = voiceMode && voiceStyle === VOICE_STYLE_DIGEST;
   // Чат, чей стиль уже выправлен на сервере в этот заход (см. эффект синхронизации ниже)
   const styleSyncedRef = useRef<string | null>(null);

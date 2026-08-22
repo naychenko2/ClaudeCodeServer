@@ -563,8 +563,6 @@ public class ClaudeSession : ILlmSessionAdapter
     private readonly Func<ExternalMcpContext?>? _externalMcpProvider;
     // Браузер (плагин playwright) в этой сессии: false — гасим плагин на запуске CLI
     private readonly bool _browserEnabled;
-    // Просить выдержку у длинных ответов (флаг владельца voice-digest) — только секция промпта
-    private readonly bool _longAnswerDigest;
     // Реестр CLI-провайдеров: env-оверрайды процесса (ANTHROPIC_BASE_URL и др.)
     // для сторонних моделей; null — всегда родной Claude
     private readonly LlmProviderRegistry? _providers;
@@ -637,7 +635,6 @@ public class ClaudeSession : ILlmSessionAdapter
         _personaAgentsProvider = context.PersonaAgentsProvider;
         _externalMcpProvider = context.ExternalMcpProvider;
         _browserEnabled = context.BrowserEnabled;
-        _longAnswerDigest = context.LongAnswerDigest;
         _launcher = context.Launcher ?? Execution.LocalProcessRunner.Instance;
         // Запреты конфига + ограничения возможностей персоны (ExtraDisallowedTools)
         _disallowedTools = context.ExtraDisallowedTools is { Count: > 0 } extra
@@ -2032,7 +2029,7 @@ public class ClaudeSession : ILlmSessionAdapter
             // чата. talk трогать не стали: там формат ответа устоялся, менять его задним
             // числом — отдельное решение.
             var heard = !Info.TaskExecution && Info.AutomationRuleId is null && _currentTurnAgentDepth < 1;
-            if (Prompts.VoicePrompts.SectionFor(Info.VoiceMode, Info.IsVoiceDigest, heard, _longAnswerDigest) is { } voiceSection)
+            if (Prompts.VoicePrompts.SectionFor(Info.VoiceMode, Info.IsVoiceDigest, heard) is { } voiceSection)
                 Add("voice-mode", Info.VoiceMode
                         ? (Info.IsVoiceDigest ? "Формат для озвучки ответов" : "Формат для голосового режима")
                         : "Краткая выдержка у длинных ответов",

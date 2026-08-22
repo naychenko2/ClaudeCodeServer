@@ -628,11 +628,6 @@ public class SessionManager : IDisposable
     private bool BrowserEnabled(string? ownerId, Persona? persona) =>
         persona is null || _bindings.SectionEnabled(ownerId, persona, "browser");
 
-    // Просить у длинных ответов краткую выдержку (маркер <voice> последним блоком) — тот же
-    // флаг владельца, что и у второго стиля озвучки: выдержка нужна и в текстовом чате без
-    // всякого звука, а плашка «Коротко» и чтение по кнопке разбирают её одним правилом.
-    private bool LongAnswerDigestEnabled(string? ownerId) =>
-        ownerId is not null && _flags.IsEnabled(ownerId, FeatureFlagKeys.VoiceDigest);
 
     // Контекст MCP-сервера графа кода: инструменты codegraph_* доступны только в чате проекта —
     // граф ключуется проектом (в чате вне проекта искать нечего). Тот же сервисный токен
@@ -2768,7 +2763,6 @@ public class SessionManager : IDisposable
             WidgetsMcp: BuildWidgetsContext(ownerId, persona.Persona),
             CodeGraphMcp: BuildCodeGraphContext(ownerId, session.ProjectId, session.Id, rootPath, persona.Persona),
             BrowserEnabled: BrowserEnabled(ownerId, persona.Persona),
-            LongAnswerDigest: LongAnswerDigestEnabled(ownerId),
             PromptSnapshotSink: PromptSinkFor(session.Id),
             PromptSnapshotToolsSink: PromptToolsSinkFor(session.Id),
             SubagentRunSink: SubagentRunSinkFor(session.Id),
@@ -4089,7 +4083,6 @@ public class SessionManager : IDisposable
                 // Чат вне проекта — графа кода нет (он ключуется проектом)
                 CodeGraphMcp: null,
                 BrowserEnabled: BrowserEnabled(entry.Info.OwnerId, persona.Persona),
-                LongAnswerDigest: LongAnswerDigestEnabled(entry.Info.OwnerId),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(entry.Info.OwnerId, entry.Info.Provider),
@@ -4129,7 +4122,6 @@ public class SessionManager : IDisposable
                 WidgetsMcp: BuildWidgetsContext(project.OwnerId, persona.Persona),
                 CodeGraphMcp: BuildCodeGraphContext(project.OwnerId, project.Id, entry.Info.Id, rootPath, persona.Persona),
                 BrowserEnabled: BrowserEnabled(project.OwnerId, persona.Persona),
-                LongAnswerDigest: LongAnswerDigestEnabled(project.OwnerId),
                 PromptSnapshotSink: PromptSinkFor(entry.Info.Id),
                 PromptSnapshotToolsSink: PromptToolsSinkFor(entry.Info.Id),
                 CliConfigRoot: ConfigRootFor(project.OwnerId, entry.Info.Provider),

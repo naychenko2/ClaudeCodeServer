@@ -100,13 +100,13 @@ public static class VoicePrompts
     // подсказки ask-question рядом). В talk формат оставлен как был: он устоялся, менять
     // его задним числом — отдельное решение, поэтому heard там не проверяется.
     //
-    // longAnswerDigest — флаг владельца voice-digest: выдержку у длинных ответов просим
-    // и когда озвучка выключена вовсе.
-    public static string? SectionFor(bool voiceMode, bool digest, bool heard, bool longAnswerDigest = false)
+    // Последняя ветка — обычный текстовый чат без всякой озвучки: выдержку у длинных
+    // ответов просим всегда, она нужна глазами не меньше, чем вслух.
+    public static string? SectionFor(bool voiceMode, bool digest, bool heard)
     {
         if (voiceMode && !digest) return SectionText;
         if (voiceMode && digest && heard) return DigestSectionText;
-        return longAnswerDigest && heard ? LongAnswerSectionText : null;
+        return heard ? LongAnswerSectionText : null;
     }
 
     // Оговорка в самый конец слоя персоны: голосовой формат сильнее её собственного

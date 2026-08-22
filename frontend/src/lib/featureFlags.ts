@@ -13,7 +13,6 @@ export const FLAGS = {
   projectBackgrounds: 'project-backgrounds',
   taskReportCard: 'task-report-card',
   changeDossiersRecall: 'change-dossiers-recall',
-  voiceDigest: 'voice-digest',
 } as const;
 
 export type FlagKey = (typeof FLAGS)[keyof typeof FLAGS];

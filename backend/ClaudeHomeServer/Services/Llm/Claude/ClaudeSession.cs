@@ -305,15 +305,27 @@ public class ClaudeSession : ILlmSessionAdapter
             get { lock (PendingBg) return PendingBg.Count > 0 || PendingBgUnknown; }
         }
 
+        // CLI прислал снэпшот живых фоновых задач, и он ПУСТ: «здесь никто не работает»
+        // из первых рук. Гасит только КАРТИНКУ (HasTrackedBg), не живучесть прогона:
+        // закрытие карточек и решение «держать процесс» остаются за task_notification и
+        // финализацией — пустой снэпшот наблюдался живьём и до уведомления о завершении.
+        // Снимается стартом любой новой задачи и непустым снэпшотом.
+        public volatile bool BgTasksEmptySnapshot;
+
         // Только ТОЧНО учтённые фоновые задачи (без PendingBgUnknown) — то, о чём можно
         // честно сказать человеку «здесь работают агенты». HasPendingBg для этого не
         // годится: PendingBgUnknown значит «видели запуск, но id не распознали», и он
         // намеренно консервативен — держать процесс живым лучше зря, чем убить рабочего
         // агента. Для картинки та же консервативность превращается в ложный значок:
-        // задачи нет, в панели агентов пусто, а карточка чата светится
+        // задачи нет, в панели агентов пусто, а карточка чата светится.
+        //
+        // Пустой снэпшот перебивает счётчик: завершение задачи доезжает ТРЕМЯ путями
+        // (структурный task_notification, текстовый <task-notification>, TaskOutput), и если
+        // все три прошли мимо — запись висела в PendingBg до самой смерти процесса, а значок
+        // агентов горел в списке чатов часами. Снэпшот от CLI авторитетнее нашего учёта.
         public bool HasTrackedBg
         {
-            get { lock (PendingBg) return PendingBg.Count > 0; }
+            get { lock (PendingBg) return !BgTasksEmptySnapshot && PendingBg.Count > 0; }
         }
 
         // Последнее опубликованное наружу значение HasPendingBg (0/1) — гейт события
@@ -3725,7 +3737,10 @@ public class ClaudeSession : ILlmSessionAdapter
         if (!m.Success && content.Contains("in the background", StringComparison.Ordinal))
             m = BgResumedRe.Match(content);
         if (m.Success)
+        {
+            run.BgTasksEmptySnapshot = false;   // старт новой задачи отменяет «работать некому»
             lock (run.PendingBg) run.PendingBg[m.Groups[1].Value] = toolUseId;
+        }
         else if (candidate)
         {
             run.PendingBgUnknown = true;
@@ -3868,6 +3883,7 @@ public class ClaudeSession : ILlmSessionAdapter
     {
         if (ParseTaskStarted(root) is not { } started) return;
         var (taskId, toolUseId) = started;
+        run.BgTasksEmptySnapshot = false;   // старт новой задачи отменяет «работать некому»
         lock (run.PendingBg)
         {
             run.PendingBg[taskId] = toolUseId;
@@ -3931,10 +3947,17 @@ public class ClaudeSession : ILlmSessionAdapter
     // за ним (и за финализацией прогона), не за этим событием.
     private void HandleBackgroundTasksChanged(CliRun run, JsonElement root)
     {
-        if (!IsBackgroundTasksEmptySnapshot(root)) return;
-        run.PendingBgUnknown = false;
+        if (!IsBackgroundTasksSnapshot(root)) return;
+        var empty = IsBackgroundTasksEmptySnapshot(root);
+        run.BgTasksEmptySnapshot = empty;
+        if (empty) run.PendingBgUnknown = false;
         PublishBgPresence(run);
     }
+
+    // Событие вообще несёт снэпшот задач (массив tasks на месте)? Непустой снэпшот —
+    // такой же законный сигнал, как пустой: он снимает отметку «работать некому».
+    internal static bool IsBackgroundTasksSnapshot(JsonElement root) =>
+        root.TryGetProperty("tasks", out var tasks) && tasks.ValueKind == JsonValueKind.Array;
 
     private async Task HandleStreamEventAsync(JsonElement root)
     {

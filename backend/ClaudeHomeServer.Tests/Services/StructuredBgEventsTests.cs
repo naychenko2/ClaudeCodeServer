@@ -169,6 +169,60 @@ public class StructuredBgEventsTests : IDisposable
     private static HashSet<string> BgLaunchCandidatesOf(object run) =>
         (HashSet<string>)CliRunType.GetField("BgLaunchCandidates")!.GetValue(run)!;
 
+    // Признак «здесь работают агенты» — ровно то, по чему список чатов рисует значок
+    private static bool HasTrackedBgOf(object run) =>
+        (bool)CliRunType.GetProperty("HasTrackedBg")!.GetValue(run)!;
+
+    // === Снэпшот живых задач гасит значок агентов ===
+    //
+    // Инцидент: значок «здесь работают агенты» горел в списке чатов часами после того, как
+    // агенты закончили. Завершение доезжает тремя путями (структурный task_notification,
+    // текстовый <task-notification>, TaskOutput), и если все три прошли мимо, запись висела
+    // в PendingBg до самой смерти процесса — а тот доживает до получаса. Пустой снэпшот CLI
+    // при этом приходил, но гасил только PendingBgUnknown и на значок не влиял.
+
+    [Fact]
+    public async Task ПустойСнэпшот_ГаситЗначокАгентов_ДажеЕслиЗадачаОсталасьВУчёте()
+    {
+        var (session, sent) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"t1","tool_use_id":"toolu_1"}"""));
+        HasTrackedBgOf(run).Should().BeTrue("задача стартовала");
+
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+
+        HasTrackedBgOf(run).Should().BeFalse("CLI сказал, что живых задач нет — это авторитетнее нашего учёта");
+        // Рассылка присутствия — fire-and-forget, ждём событие, а не спим (CI слабее машины)
+        await WaitForAsync(() => PresenceOf(sent).Count > 1);
+        PresenceOf(sent).Select(m => m.Active).Should().Equal([true, false]);
+    }
+
+    [Fact]
+    public void ПослеПустогоСнэпшота_НоваяЗадачаСноваЗажигаетЗначок()
+    {
+        var (session, _) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"t2","tool_use_id":"toolu_2"}"""));
+
+        HasTrackedBgOf(run).Should().BeTrue("старт задачи отменяет «работать некому»");
+    }
+
+    [Fact]
+    public void НепустойСнэпшот_СнимаетОтметкуПустоты()
+    {
+        var (session, _) = NewClaudeSession();
+        var run = NewRun();
+        InvokeHandleTaskStarted(session, run, El("""{"task_id":"t3","tool_use_id":"toolu_3"}"""));
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[]}"""));
+        HasTrackedBgOf(run).Should().BeFalse();
+
+        InvokeHandleBackgroundTasksChanged(session, run, El("""{"tasks":[{"task_id":"t3","task_type":"local_agent","description":"живая"}]}"""));
+
+        HasTrackedBgOf(run).Should().BeTrue("CLI подтвердил, что задача всё-таки жива");
+    }
+
     private static (ClaudeSession Session, List<ServerMessage> Sent) NewClaudeSession()
     {
         var sent = new List<ServerMessage>();

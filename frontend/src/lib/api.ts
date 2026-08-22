@@ -1425,10 +1425,12 @@ export const api = {
     // Запуск экспорта. push=true — единственное место UI, откуда вызывается git push
     // (ADR §6: «Push — только вручную»). Ответ — состояние финальной карточки:
     // count подставляется в текст успеха, nothingToExport переключает на состояние «пусто».
+    // timeoutMs 120 с: plumbing-экспорт на большой истории (~38 с на 217 паспортов
+    // наблюдалось на проде) — дефолтные 30 с обрывали запрос, хотя сервер ещё работал.
     exportRun: (projectId: string, push: boolean) =>
       request<{ status: 'exported' | 'nothingToExport'; count: number }>(
         `/projects/${encodeURIComponent(projectId)}/dossiers/export`,
-        { method: 'POST', body: JSON.stringify({ push }) }),
+        { method: 'POST', body: JSON.stringify({ push }), timeoutMs: 120_000 }),
     // Импорт «Историй решений» из ветки ccs/dossiers/v1 (этап 4): читает ветку
     // plumbing-командами и кладёт записи в стор с origin='imported' и importedAuthor.
     // added — реально добавленные, skipped — остальные записи index.json

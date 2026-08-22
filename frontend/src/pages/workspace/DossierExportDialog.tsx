@@ -21,6 +21,7 @@ import { C, FONT, FS, MODAL_W, R, SP } from '../../lib/design';
 import { ICON_STROKE } from '../../components/ui/icons';
 import { Button, Modal } from '../../components/ui';
 import { api } from '../../lib/api';
+import { OfflineError, RequestTimeoutError } from '../../lib/offline';
 
 // Тексты по постановке — вынесены в константы, чтобы линтер случайно не «поправил».
 const T = {
@@ -28,12 +29,33 @@ const T = {
   warning: 'Эту папку как проект подключил ещё один пользователь. После отправки ветки историю решений увидит и он.',
   successPrefix: 'История решений выгружена в ветку ccs/dossiers/v1 — паспортов: ',
   empty: 'Всё уже выгружено — новых паспортов с прошлого раза нет.',
+  // Фолбэк для случая, когда сервер не прислал осмысленного сообщения (например,
+  // сетевой сбой без текста): пользователь всё равно видит объяснение и напоминание
+  // о неприкосновенности рабочего дерева.
   error: 'Не удалось выгрузить историю решений. Рабочее дерево не тронуто — попробуйте ещё раз.',
   btnExport: 'Выгрузить',
   btnExportPush: 'Выгрузить и отправить',
   btnCancel: 'Отмена',
   btnClose: 'Закрыть',
 } as const;
+
+// Достаём человеческое сообщение из любой ошибки request():
+//  • HTTP-ошибка бэка: тело { error: "..." } (Conflict из контроллера отдаёт ex.Message)
+//  • таймаут: RequestTimeoutError со своим текстом
+//  • сеть / офлайн-мутация: OfflineError
+//  • всё прочее — undefined, и тогда UI падает на константу T.error
+function readErrorMessage(e: unknown): string | undefined {
+  if (e instanceof RequestTimeoutError) return e.message;
+  if (e instanceof OfflineError) return e.message;
+  if (e instanceof Error) {
+    // body.error — на случай, если бэк прислал поле мимо message (по факту request()
+    // дублирует его в message, но двойная проверка дешёвая)
+    const bodyErr = (e as Error & { body?: { error?: unknown } }).body?.error;
+    if (typeof bodyErr === 'string' && bodyErr.trim()) return bodyErr;
+    if (e.message.trim()) return e.message;
+  }
+  return undefined;
+}
 
 // Ветка одна и та же во всех текстах; единый инлайн-mono-фрагмент, как у sha коммита
 // в карточках DossierHistoryPanel.
@@ -90,6 +112,9 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
   const [phase, setPhase] = useState<Phase>('confirm');
   const [lastAction, setLastAction] = useState<LastAction>('export');
   const [count, setCount] = useState(0);
+  // Текст ошибки для финальной карточки: приходит из бэка (HTTP error/Conflict) или
+  // из request() (таймаут/сеть). Пусто — рендерим константу T.error как фолбэк.
+  const [errorMessage, setErrorMessage] = useState('');
 
   // При каждом открытии сбрасываемся в подтверждение — иначе после успеха/ошибки
   // повторный клик по кнопке тулбара привёл бы к финальному состоянию прошлого запуска.
@@ -122,7 +147,11 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
         setCount(res.count);
         setPhase('success');
       }
-    } catch {
+    } catch (e) {
+      // Показываем реальную причину (ex.Message с бэка, таймаут, сеть) — раньше при
+      // ЛЮБОМ сбое горела константа, и пользователь не мог отличить «Conflict на
+      // ветке» от обрыва связи. Фолбэк T.error остаётся на случай, когда текста нет.
+      setErrorMessage(readErrorMessage(e) ?? '');
       setPhase('error');
     }
   };
@@ -180,7 +209,7 @@ export function DossierExportDialog({ open, onClose, projectId, sharedFolder }: 
             tone="danger"
             icon={<AlertTriangle size={20} strokeWidth={ICON_STROKE} color={C.danger} />}
           >
-            {T.error}
+            {errorMessage || T.error}
           </Notice>
         </div>
       )}

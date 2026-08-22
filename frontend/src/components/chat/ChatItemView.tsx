@@ -22,6 +22,8 @@ import { stripTeamMechanicMarkers, TeamMechanicOfferCard, type TeamMechanicOffer
 import {
   stripProjectPresetMarkers, ProjectPresetOfferCard, type PresetCardState,
 } from '../../features/onboarding/ProjectPresetOffer';
+import { stripVoiceMarker } from '../../lib/tts';
+import { VoiceDigestNote, parseVoiceDigest } from './VoiceDigestNote';
 import { useContextPersona } from '../../lib/contextPersona';
 import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
@@ -404,7 +406,7 @@ function UserMessageBubble({ text, ts, children }: {
 
 // Ответ ассистента. Панель «мета + Копировать/В заметку/Повторить» — оверлеем у нижней
 // кромки: десктоп — fade-in по hover на сообщении, мобайл (тач) — по тапу.
-function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead }: {
+function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSnapshotId, turnContextTokens, turnCache, lead, footer }: {
   text: string; online: boolean; onRetry: () => void; streaming?: boolean;
   model?: string; ts?: number; promptSnapshotId?: string; turnContextTokens?: number | null;
   turnCache?: { read: number; creation: number } | null;
@@ -412,6 +414,10 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
   // обтекают его справа, дальше текст идёт полной шириной — под аватаром не копится
   // пустая полоса на всю высоту длинного сообщения
   lead?: ReactNode;
+  // Хвост ВНУТРИ пузыря (выжимка для озвучки). Не сиблингом снаружи: у обёртки снизу
+  // marginBottom под абсолютную строку действий, и блок за ней читался бы отдельной
+  // карточкой ленты, а не концом этого ответа
+  footer?: ReactNode;
 }) {
   // «В заметку»: сохранение ответа в базу заметок (проект → notes/, чат → personal)
   const project = useContext(ChatProjectContext);
@@ -449,6 +455,7 @@ function TextMessageView({ text, online, onRetry, streaming, model, ts, promptSn
           {/* Мигающая каретка стриминга (B2) */}
           {streaming && <span style={{ display: 'inline-block', width: 7, height: 15, marginTop: 3, borderRadius: 1, background: C.accent, animation: 'blink 1s step-start infinite', verticalAlign: 'text-bottom' }} />}
         </div>
+        {footer}
       </div>
       {/* Строка под постом: действия, затем модель и время. Оверлей, места не занимает */}
       {!streaming && (
@@ -1134,10 +1141,15 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       const report = parseDelegationReport(item.text);
       // Маркер предложения механики <team-mechanic/> из отображаемого текста стрижём всегда
       // (вместе с незакрытым префиксом в хвосте стрима); карточку рендерит проп ниже
-      const bodyText = stripProjectPresetMarkers(
+      // Маркер выжимки для озвучки стрижём БЕЗУСЛОВНО — тем же правилом, что санитайзер
+      // речи (stripVoiceMarker): всё от первого `<voice` до конца текста. «До конца», а не
+      // «до закрывающего тега», потому что на стриме тег приезжает по кусочкам и
+      // полуоткрытый `<voi` иначе мигал бы в ленте. Само содержимое показывает плашка ниже
+      const bodyText = stripVoiceMarker(stripProjectPresetMarkers(
         stripTeamMechanicMarkers(report ? report.body : item.text, streaming),
         streaming,
-      );
+      ));
+      const voiceDigestNote = parseVoiceDigest(report ? report.body : item.text);
       // Пост сабагента кнопки «какой промпт ушёл» не получает: его промпт собирал CLI,
       // а наш снимок описывает ход основного агента
       //
@@ -1157,7 +1169,10 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
             turnContextTokens={turnContextTokens} turnCache={turnCache}
-            lead={author ? <PersonaAvatar persona={author} size={28} speaking={speaking} /> : undefined} />
+            lead={author ? <PersonaAvatar persona={author} size={28} speaking={speaking} /> : undefined}
+            // Выжимка для озвучки — она же краткое содержание ответа для глаз. Внутри
+            // пузыря: это хвост ЭТОГО ответа, а не отдельная карточка ленты
+            footer={voiceDigestNote ? <VoiceDigestNote text={voiceDigestNote} /> : undefined} />
           {/* Карточка предложения командной механики — запуск только по кнопке */}
           {teamMechanicOffer && (
             <TeamMechanicOfferCard

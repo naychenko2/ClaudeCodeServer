@@ -209,6 +209,7 @@ public sealed class SpendStore : ISpendCollector
             row.CacheReadTokens += r.CacheReadTokens;
             row.CacheCreationTokens += r.CacheCreationTokens;
             row.CostUsd += r.CostUsd ?? 0;
+            row.CostRub += r.CostRub ?? 0;
             row.Generations += r.Generations;
             row.Turns += 1;
         }

@@ -3,7 +3,8 @@ using System.Text.Json.Serialization;
 namespace ClaudeHomeServer.Models;
 
 // Источники расхода токенов (спека Spend Analytics v2): ходы чатов/задач, фоновые one-shot,
-// генерации fal.ai (токенов нет — счётчик), бесплатные модели (токены есть, стоимость 0).
+// генерации fal.ai (токенов нет — счётчик), бесплатные модели (токены есть, стоимость 0),
+// синтез речи Yandex SpeechKit (токенов нет, счётчик запросов и рубли).
 public static class SpendSources
 {
     public const string ChatTurn = "chat-turn";
@@ -11,6 +12,11 @@ public static class SpendSources
     public const string Fal = "fal";
     public const string Glif = "glif";
     public const string Free = "free";
+    public const string Tts = "tts";
+
+    // Источники без токенов: у них расход меряется счётчиком вызовов, а не токенами, поэтому
+    // в рейтингах «по токенам» им делать нечего (иначе они вечно висят внизу с нулём).
+    public static bool IsTokenless(string source) => source is Fal or Glif or Tts;
 
     // Бесплатный исполнитель: локальная Ollama, прямой адаптер любого OpenAI-совместимого
     // источника (провайдер заканчивается на "-direct") или модель ":free" через CLI.
@@ -46,7 +52,12 @@ public sealed class SpendRecord
     public long CacheCreationTokens { get; init; }
     // Стоимость собирается про запас (метрика фичи — токены, UI деньги не показывает)
     public double? CostUsd { get; init; }
-    // Счётчик генераций fal.ai (токенов у него нет); у остальных источников 0
+    // Стоимость в РУБЛЯХ — расход на сервисы Яндекса (озвучка SpeechKit тарифицируется в них).
+    // Отдельное поле, а не пересчёт в доллары: курс пришлось бы выдумывать, и врал бы он тем
+    // сильнее, чем старше запись. Валюты не складываются нигде — ни здесь, ни в агрегатах.
+    public double? CostRub { get; init; }
+    // Счётчик вызовов без токенов: генерации fal.ai/glif и запросы синтеза речи (SpeechKit
+    // тарифицируется ЗА ЗАПРОС, так что это ровно единицы тарификации); у остальных 0
     public int Generations { get; init; }
     public long DurationMs { get; init; }
     // Подпись операции: ключ фонового действия (changelog, notes.tags…) или endpoint fal
@@ -77,6 +88,7 @@ public sealed class DailySpendRow
     public long CacheReadTokens { get; set; }
     public long CacheCreationTokens { get; set; }
     public double CostUsd { get; set; }
+    public double CostRub { get; set; }
     public int Generations { get; set; }
     // Количество свёрнутых записей (ходов/вызовов)
     public int Turns { get; set; }

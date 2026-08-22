@@ -188,12 +188,24 @@ const TOOLS = [
 
 const staleNote = r => r?.isStale ? '\n(граф может быть устаревшим — файлы менялись после построения)' : '';
 
+// Пустой результат на устаревшем графе — не «ничего не найдено», а «проверено по старому
+// снимку»: иначе модель принимает пустоту за истину и не повторяет запрос. Предупреждение
+// В НАЧАЛЕ ответа — первая строка задаёт интерпретацию всего текста.
+const staleEmptyWarning = () =>
+  '⚠ Граф кода устарел и перестраивается фоном — поиск шёл по СТАРОМУ снимку.\n'
+  + 'Если тип обязан существовать (фронт только что добавлен и т.п.), повтори запрос через 1–2 минуты.';
+
 // «FQN [Kind] file.cs:42 — N связей»
 const nodeLine = n => `${n.fqn} [${n.kind}] ${n.location || '?'} — ${n.degree} связей`;
 
 function renderFind(result, query, limit) {
   const rows = result.results ?? [];
-  if (rows.length === 0) return `По запросу «${query}» в графе кода ничего не найдено.${staleNote(result)}`;
+  if (rows.length === 0) {
+    if (result.isStale) {
+      return `${staleEmptyWarning()}\nПо запросу «${query}» в старом снимке ничего не найдено.`;
+    }
+    return `По запросу «${query}» в графе кода ничего не найдено.`;
+  }
   const lines = rows.map(nodeLine);
   const rest = result.total - rows.length;
   if (rest > 0) lines.push(`… ещё ${rest} (показаны первые ${rows.length}, limit=${limit})`);
@@ -211,7 +223,12 @@ function renderNeighbors(result, limit) {
     + `Связей: ${node.degree} (входящих ${result.totalIn}, исходящих ${result.totalOut})`
     + (byRelation ? `; под фильтром ${result.total}: ${byRelation}` : '');
 
-  if (rows.length === 0) return `${head}\nПод фильтром связей нет.${staleNote(result)}`;
+  if (rows.length === 0) {
+    if (result.isStale) {
+      return `${head}\n${staleEmptyWarning()}\nПод фильтром связей в старом снимке нет.`;
+    }
+    return `${head}\nПод фильтром связей нет.`;
+  }
 
   // ← кто зависит от узла, → от чего зависит узел
   const lines = rows.map(n => {

@@ -531,6 +531,12 @@ body {
   .cc-echo-ring--gutter { animation-name: cc-echo-ring-sm; }
 }
 
+/* Пульс «сейчас говорит» у аватара реплики: тот же мелкий размах, но на всех ширинах.
+   Аватар лежит ЛИДОМ ВНУТРИ пузыря ответа (float, отступы ~9px), а у пузыря
+   overflow: hidden — полный размах (scale 1.85 ≈ +12px) срезало бы слева и сверху.
+   Мелкий (scale 1.3 ≈ +4px) укладывается в отступы целиком. */
+.cc-echo-ring--tight { animation-name: cc-echo-ring-sm; }
+
 /* === Модальные окна и мобильные шторки === */
 @keyframes cc-overlay-in {
   from { opacity: 0; }

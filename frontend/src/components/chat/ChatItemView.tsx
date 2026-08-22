@@ -23,7 +23,7 @@ import {
   stripProjectPresetMarkers, ProjectPresetOfferCard, type PresetCardState,
 } from '../../features/onboarding/ProjectPresetOffer';
 import { useContextPersona } from '../../lib/contextPersona';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, useAssistantName } from './contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, PersonaContext, SpeakingItemContext, useAssistantName } from './contexts';
 import { PromptSnapshotDialog } from '../../features/chat/PromptSnapshotDialog';
 import { PersonaAvatar } from '../../features/personas/PersonaAvatar';
 import { AGENT_COLORS } from '../AgentSelector';
@@ -946,6 +946,8 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
+  // Кто сейчас звучит (индекс реплики + цвет персоны) — им подсвечивается аватар
+  const speakingItem = useContext(SpeakingItemContext);
   const asstName = useAssistantName();
   // Подписка на стор персон: авторские аватары реплик (personaId) обновятся после загрузки стора
   usePersonasVersion();
@@ -1145,6 +1147,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // лидом ВНУТРЬ пузыря (lead в TextMessageView): текст обтекает его, и под ним не
       // тянется пустая полоса на всю высоту длинного ответа.
       const author = item.personaId ? (getPersonaById(item.personaId) ?? persona) : persona;
+      // Её голосом сейчас читают ход — аватар пульсирует цветом персоны (кто говорит).
+      // Индекс, а не id: у text-реплики ленты идентичности нет, место в items и есть её адрес
+      const speaking = speakingItem?.index === index ? speakingItem.color : undefined;
       const msg = (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {report && <DelegationReportBadge title={report.title} />}
@@ -1152,7 +1157,7 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
             model={item.model} ts={item.ts}
             promptSnapshotId={item.parentToolUseId ? undefined : promptSnapshotId}
             turnContextTokens={turnContextTokens} turnCache={turnCache}
-            lead={author ? <PersonaAvatar persona={author} size={28} /> : undefined} />
+            lead={author ? <PersonaAvatar persona={author} size={28} speaking={speaking} /> : undefined} />
           {/* Карточка предложения командной механики — запуск только по кнопке */}
           {teamMechanicOffer && (
             <TeamMechanicOfferCard

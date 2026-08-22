@@ -6,6 +6,7 @@ import { usePersonasVersion, getPersonaById, getPersonasSnapshot, ensurePersonas
 import { findConsultedPersona } from './chat/PersonaTaskView';
 import { showToast } from '../lib/toast';
 import { projectMainColor } from '../features/projects/projectUtil';
+import { agentDotColor } from './AgentSelector';
 import { PersonaGreeting } from '../features/personas/PersonaGreeting';
 import { computeTodoBatches } from '../hooks/useSessionArtifacts';
 import { useChatScroll } from '../hooks/useChatScroll';
@@ -28,7 +29,7 @@ import { retryableInterruptedIndex } from '../lib/chatReducer';
 import { useCtxThresholds } from '../lib/contextPrefs';
 import { notify } from '../lib/notify';
 import { speak, stopSpeaking, primeAudio, setSpeechToast, startStreamSpeak, type StreamSpeech } from '../lib/tts';
-import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
+import { turnText, turnStreamChunks, turnStreamTail, turnVoicePersonaId, turnVoiceItemIndex, TURN_STREAM_INIT, type TurnStreamState } from '../lib/turnSpeechStream';
 import { needAnswer, primeBeep } from '../lib/beep';
 import type { SpeechPhase } from '../hooks/useHandsFree';
 import { updateChatFields } from '../lib/chatUpdate';
@@ -45,7 +46,7 @@ import { setChatContext, AI_RECOMPUTE_EVENT } from '../lib/ai/chatContext';
 import { setFabObstacle } from '../lib/ai/fabObstacle';
 import { ChatHeaderBar, type CostStats, type FalCostStats } from './chat/ChatHeaderBar';
 import { computeGlifGenStats } from './chat/glifStats';
-import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
+import { ChatProjectContext, ChatTreePathContext, ChatSessionContext, ChatOpenFileContext, ChatOpenReaderContext, ChatOpenTaskContext, FalCostContext, GlifCostContext, AssistantNameContext, MediaVisibilityContext, PersonaContext, SpeakingItemContext, TeamPlanContext, TeamEscalationContext, type TeamPlanChatContext, type TeamEscalationChatContext } from './chat/contexts';
 import { WaitingIndicator } from './ui/WaitingIndicator';
 import { TurnPlanPill } from './chat/TurnPlanPill';
 import { Modal, ModalActions, ConfirmDialog, Button } from './ui';
@@ -234,17 +235,25 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const speechCallRef = useRef(0);
   // personaId — чьим голосом читать; передаёт вызывающий, у которого под рукой ход
   // (колбэк стабильный, без зависимостей — брать персону из замыкания здесь нечем)
+  // Чей голос звучит ПРЯМО СЕЙЧАС — захваченная на ход персона. Отсюда питаются оба
+  // визуальных эффекта «кто говорит»: кольцо у её аватара в ленте и цвет сияния над
+  // композером (см. activeSpeaker). Захват на ход, а не пересчёт по ленте: голос тоже
+  // берётся один раз (пакеты синтеза уходят вперёд), и подсветка обязана совпадать с ним
+  const [speakingPersonaId, setSpeakingPersonaId] = useState<string | null>(null);
   const startSpeaking = useCallback((text: string, personaId?: string) => {
     const call = ++speechCallRef.current;
     // Синхронно, ДО первого await: в кадре завершения хода петля обязана видеть, что
     // озвучка будет, иначе успеет открыть микрофон ровно под старт синтеза
     setSpeechPhase('willSpeak');
+    setSpeakingPersonaId(personaId ?? null);
     void (async () => {
       try {
         setSpeechPhase('speaking');
         await speak(text, personaId);
       } finally {
-        if (speechCallRef.current === call) setSpeechPhase('idle');
+        // Токен тот же, что у фазы: поздний finally осиротевшего вызова не должен
+        // гасить подсветку уже начавшейся озвучки
+        if (speechCallRef.current === call) { setSpeechPhase('idle'); setSpeakingPersonaId(null); }
       }
     })();
   }, []);
@@ -253,6 +262,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     speechCallRef.current++;
     stopSpeaking();
     setSpeechPhase('idle');
+    setSpeakingPersonaId(null);
   }, []);
   // Значение ПРИХОДИТ от композера: запрошенное состояние (PUT ещё в полёте) знает
   // только он — там же живёт петля разговора. Свой ref здесь был вторым источником
@@ -415,6 +425,26 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [session.participants, personasVersion]
   );
+
+  // === Кто сейчас говорит ===
+  // ОДИН источник на оба эффекта: кольцо у аватара её реплики в ленте и цвет aurora-
+  // сияния над композером. Гейт по фазе, а не по одному speakingPersonaId: захваченная
+  // персона переживает конец озвучки, и без гейта свет горел бы после того, как смолкло.
+  // Персона не резолвится (стор не загружен, чат ведёт голос инстанса) — эффекта нет:
+  // цвета взять неоткуда, а серый пульс врал бы про говорящего.
+  const activeSpeaker = useMemo(() => {
+    if (speechPhase === 'idle' || !speakingPersonaId) return null;
+    const p = getPersonaById(speakingPersonaId);
+    if (!p) return null;
+    return { color: agentDotColor(p.avatar?.color), index: turnVoiceItemIndex(items, speakingPersonaId, session.personaId) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- personasVersion: стор персон нереактивен, бамп заставляет перечитать getPersonaById
+  }, [speechPhase, speakingPersonaId, items, session.personaId, personasVersion]);
+  // Значение контекста ленты: подсвечиваемой реплики может не быть вовсе (её ход уже
+  // сменился, говорит не автор последней реплики) — тогда светится только композер
+  const speakingItem = useMemo(
+    () => (activeSpeaker && activeSpeaker.index !== null ? { index: activeSpeaker.index, color: activeSpeaker.color } : null),
+    [activeSpeaker]);
+
   const isGroupChat = participantPersonas.length > 1;
   // Есть ли уже ходы — назначать/менять персону можно только у пустого чата (бэкенд иначе 400)
   // Персоны, доступные в контексте чата (глобальные + этого проекта) — для селектора,
@@ -790,6 +820,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       // только onDone-колбэк стрима: он срабатывает при любом исходе (очередь
       // доиграла / stop() / внешний stopSpeaking) ровно один раз
       const call = ++speechCallRef.current;
+      const voiceId = turnVoicePersonaId(items, session.personaId);
       const s = startStreamSpeak(() => {
         if (speechCallRef.current !== call) return; // осиротели — фазу трогать нельзя
         if (streamRef.current !== s) return; // стрим уже сброшен (новый ход/чат)
@@ -797,13 +828,17 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
         streamStRef.current = TURN_STREAM_INIT;
         // eslint-disable-next-line react-hooks/set-state-in-effect -- финал озвучки: микрофон петли открывается именно отсюда
         setSpeechPhase('idle');
+        // eslint-disable-next-line react-hooks/set-state-in-effect -- вместе с фазой: подсветка говорящей гаснет ровно тогда, когда смолкает голос
+        setSpeakingPersonaId(null);
         // Голос захватывается ОДИН раз на весь ход: пакеты синтезируются заранее
         // (prefetch), и смена голоса посреди хода выбросила бы оплаченный пакет
-      }, turnVoicePersonaId(items, session.personaId));
+      }, voiceId);
       streamRef.current = s;
       // eslint-disable-next-line react-hooks/set-state-in-effect -- см. startSpeaking: та же дисциплина токена
       setSpeechPhase('willSpeak');
       setSpeechPhase('speaking');
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- подсветка говорящей зажигается тем же кадром, что и фаза
+      setSpeakingPersonaId(voiceId ?? null);
     }
     for (const c of r.chunks) streamRef.current!.enqueue(c);
   }, [items, voiceMode, handsFreeActive]);
@@ -2067,7 +2102,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           </>
         )}
 
-        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}>{visibleNodes}</TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
+        <FalCostContext.Provider value={falCostByRequest}><GlifCostContext.Provider value={glifCostByJob}><MediaVisibilityContext.Provider value={mediaVisibility}><ChatProjectContext.Provider value={projectCtx}><ChatTreePathContext.Provider value={treePathCtx}><ChatSessionContext.Provider value={session.id}><ChatOpenFileContext.Provider value={onOpenFile ?? null}><ChatOpenReaderContext.Provider value={onOpenReader ?? null}><ChatOpenTaskContext.Provider value={onOpenTaskAside ?? null}><TeamPlanContext.Provider value={teamPlanCtx}><TeamEscalationContext.Provider value={teamEscalationCtx}><SpeakingItemContext.Provider value={speakingItem}>{visibleNodes}</SpeakingItemContext.Provider></TeamEscalationContext.Provider></TeamPlanContext.Provider></ChatOpenTaskContext.Provider></ChatOpenReaderContext.Provider></ChatOpenFileContext.Provider></ChatSessionContext.Provider></ChatTreePathContext.Provider></ChatProjectContext.Provider></MediaVisibilityContext.Provider></GlifCostContext.Provider></FalCostContext.Provider>
 
         {/* Плашка «Команда готовит план…»: стадия планирования идёт минутами (потолок
             планировщика 300с), и молчащая лента читалась как «всё встало» (прод 2026-08-04).
@@ -2302,9 +2337,10 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             // открылся пустой чат. Оба счётчика монотонны, поэтому сумма растёт от любого
             // из них; 0 = сигнала не было (Composer такое значение игнорирует).
             focusSignal={(composerFocusSignal ?? 0) + emptyChatFocus}
-            // Фирменный цвет проекта — им светится aurora-сияние при озвучке
-            // ответа (говорит «голос проекта»); чат вне проекта — фиолетовый токен
-            projectColorHex={project ? projectMainColor(project) : undefined}
+            // Цвет сияния при озвучке: сперва цвет говорящей персоны (тот же, что у кольца
+            // её аватара в ленте), иначе фирменный цвет проекта — «голос проекта»;
+            // ни того, ни другого нет — оранжевый токен внутри композера
+            auroraColorHex={activeSpeaker?.color ?? (project ? projectMainColor(project) : undefined)}
           />
           </div>
         </div>

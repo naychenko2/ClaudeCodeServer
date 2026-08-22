@@ -50,6 +50,11 @@ export interface VoiceInputOptions {
   // Код ошибки движка (SpeechRecognitionErrorEvent.error) плюс синтетический
   // 'mic-dead' от watchdog. Режим разговора считает по ним бесплодные циклы
   onError?: (code: string) => void;
+  // Движок подал признак СЛУХА (soundstart/speechstart/результат) — не путать с
+  // признаком жизни: audiostart приходит и когда второй захват уже перехватил
+  // микрофон, а движку достаётся тишина. Именно по этой разнице детектор конфликта
+  // (lib/ampConflict) отличает глухой движок от рабочего, не дожидаясь конца цикла
+  onHeard?: () => void;
   // Тосты об ошибках берёт на себя вызывающий (в петле разговора они демпфируются,
   // а 'no-speech' там вообще норма — просто тишина). Функция, а не флаг: вызывающий
   // читает своё состояние в момент события, не в рендере
@@ -74,7 +79,7 @@ function detectSpeechSupport(): boolean {
 // Голосовой ввод. На устройствах с рабочим Web Speech (телефоны) распознаём сами.
 // Где движок «мёртвый» (например, Huawei без Google-сервисов) — отдаём управление
 // вызывающему через onKeyboardFallback, чтобы надиктовать клавиатурой.
-export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, quiet }: VoiceInputOptions): VoiceInput {
+export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, onHeard, quiet }: VoiceInputOptions): VoiceInput {
   const [isListening, setIsListening] = useState(false);
   const [recSeconds, setRecSeconds] = useState(0);
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
@@ -96,12 +101,14 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, qu
   const onFallbackRef = useRef(onKeyboardFallback);
   const onEndRef = useRef(onEnd);
   const onErrorRef = useRef(onError);
+  const onHeardRef = useRef(onHeard);
   const quietRef = useRef(quiet);
   useEffect(() => {
     onResultRef.current = onResult;
     onFallbackRef.current = onKeyboardFallback;
     onEndRef.current = onEnd;
     onErrorRef.current = onError;
+    onHeardRef.current = onHeard;
     quietRef.current = quiet;
   });
 
@@ -161,14 +168,17 @@ export function useVoiceInput({ onResult, onKeyboardFallback, onEnd, onError, qu
     // часть браузеров (Android, WebView) его не эмитит, хотя распознавание работает —
     // и watchdog убивал вполне рабочий движок.
     const alive = () => { gotAudio = true; clearWatchdog(); };
+    // Слух — сильнее жизни: до движка реально доходит звук, второй захват микрофон
+    // не перехватил
+    const heard = () => { alive(); onHeardRef.current?.(); };
 
     rec.onstart = () => { talkDiag('engine: start'); alive(); };
     rec.onaudiostart = () => { talkDiag('engine: audiostart'); alive(); };
-    rec.onsoundstart = () => { talkDiag('engine: soundstart'); alive(); };
-    rec.onspeechstart = () => { talkDiag('engine: speechstart'); alive(); };
+    rec.onsoundstart = () => { talkDiag('engine: soundstart'); heard(); };
+    rec.onspeechstart = () => { talkDiag('engine: speechstart'); heard(); };
 
     rec.onresult = (e: SpeechResultEventLike) => {
-      alive();
+      heard();
       let last = '';
       for (let i = 0; i < e.results.length; i++) {
         const r = e.results[i];

@@ -644,7 +644,7 @@ export function Composer({
   // и признак quiet читаются синхронно, в момент события движка
   const talkActiveRef = useRef(false);
   // Колбэки петли доступны только после её объявления (ниже) — держим ссылку
-  const handsFreeRef = useRef<{ onRecognized: (t: string) => void; onCycleEnd: () => void; onCycleError: (c: string) => void } | null>(null);
+  const handsFreeRef = useRef<{ onRecognized: (t: string) => void; onCycleEnd: () => void; onCycleError: (c: string) => void; onMisheard: () => void } | null>(null);
   // Буфер петли на момент конца цикла: пустой буфер после cycleEnded = бесплодный
   // цикл (движок не отдал ни слова). Читается в onEnd ниже для детектора конфликта
   // амплитуды; ref обновляется эффектом ниже, где буфер уже известен
@@ -660,6 +660,8 @@ export function Composer({
       else setText(prev => (prev ? prev + ' ' + chunk : chunk));
     },
     onKeyboardFallback: () => textareaRef.current?.focus(),
+    // Движок реально слышит звук — снимает подозрение раннего детектора конфликта
+    onHeard: () => { if (talkActiveRef.current) reportEngineHeardRef.current?.(); },
     onEnd: () => {
       if (!talkActiveRef.current) return;
       // Бесплодный цикл: буфер петли пуст — движок не услышал ни слова. Корм
@@ -958,13 +960,27 @@ export function Composer({
   // амплитуды нет). Вне петли озвучка видна по speechPhase
   const auroraMicActive = talkActive && (handsFree.phase === 'listening' || handsFree.phase === 'pending');
   const auroraSpeechActive = talkActive ? handsFree.phase === 'speaking' : speechPhase !== 'idle';
-  const { reportMicDead: reportMicDeadToAurora, reportCycleEnd: reportCycleEndToAurora } = useMicLevel({ active: auroraVisible, micActive: auroraMicActive, speechActive: auroraSpeechActive, targetRef: auroraRef });
+  const {
+    reportMicDead: reportMicDeadToAurora,
+    reportCycleEnd: reportCycleEndToAurora,
+    reportEngineHeard: reportEngineHeardToAurora,
+  } = useMicLevel({
+    active: auroraVisible,
+    micActive: auroraMicActive,
+    speechActive: auroraSpeechActive,
+    targetRef: auroraRef,
+    // Конфликт пойман на лету: поток амплитуды уже погашен детектором, петле
+    // остаётся сказать человеку, что не расслышали, и открыть микрофон заново
+    onEarlyConflict: () => { if (talkActiveRef.current) handsFreeRef.current?.onMisheard(); },
+  });
   // useVoiceInput объявлен ВЫШЕ и его onError уже позвал канарейку — держим
   // актуальную ссылку для объявления ниже по файлу, не копию на момент рендера
   const reportMicDeadRef = useRef(reportMicDeadToAurora);
   useEffect(() => { reportMicDeadRef.current = reportMicDeadToAurora; });
   const reportCycleEndRef = useRef(reportCycleEndToAurora);
   useEffect(() => { reportCycleEndRef.current = reportCycleEndToAurora; });
+  const reportEngineHeardRef = useRef(reportEngineHeardToAurora);
+  useEffect(() => { reportEngineHeardRef.current = reportEngineHeardToAurora; });
 
   // Отсчёт окна отмены (2 секунды) — только для подписи в полосе ввода; сам таймер
   // ведёт автомат петли

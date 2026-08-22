@@ -27,7 +27,7 @@ export type HandsFreePhase = 'off' | 'listening' | 'pending' | 'sending' | 'wait
 
 // Реплики автомата о себе. Произносятся тем же speak() и ТОЛЬКО там, где озвучки ответа
 // заведомо нет (Р18): иначе speak() внутри себя зовёт stopSpeaking() и обрежет ответ
-export type HandsFreeNotice = 'stillThere' | 'needDecision' | 'idleOff' | 'micDead' | 'voiceOff' | 'bargeAck';
+export type HandsFreeNotice = 'stillThere' | 'needDecision' | 'idleOff' | 'micDead' | 'voiceOff' | 'bargeAck' | 'misheard';
 
 export interface HandsFreeState {
   phase: HandsFreePhase;
@@ -53,6 +53,9 @@ export type HandsFreeEvent =
   | { type: 'toggle' }
   | { type: 'recognized'; text: string }
   | { type: 'cycleEnded' }
+  // Конфликт захватов пойман на лету: человек говорит, движок глух. Сказанное уже
+  // потеряно — честно признаёмся и слушаем заново
+  | { type: 'misheard' }
   | { type: 'cycleError'; code: string }
   | { type: 'pendingElapsed' }
   | { type: 'turnStarted' }
@@ -115,13 +118,35 @@ export function isStopCommand(text: string): boolean {
 }
 
 // Слова, на которых мысль ОБРЫВАЕТСЯ: союзы, предлоги, вводные и филлеры. Человек,
-// закончивший фразу на «потому что» или «э-э», собирается говорить дальше
+// закончивший фразу на «потому что» или «э-э», собирается говорить дальше.
+//
+// Список важнее, чем кажется: правило «4+ слов = мысль дозрела» ниже перебивает всё
+// остальное, поэтому слово, не попавшее сюда, отправляет длинную оборванную фразу
+// через минимальную паузу. Замер поймал ровно это на «слушай а что если мы…»,
+// «давай посмотрим на файл который…», «проверь вот эти три…»: местоимений,
+// союзных слов и числительных в списке не было
 const DANGLING_WORDS = new Set([
   'и', 'а', 'но', 'или', 'либо', 'что', 'чтобы', 'чтоб', 'как', 'когда', 'если',
   'потому', 'значит', 'типа', 'вот', 'ну', 'э', 'ээ', 'эм', 'мм', 'ммм', 'то', 'же',
   'для', 'на', 'в', 'с', 'со', 'по', 'к', 'ко', 'о', 'об', 'от', 'из', 'за', 'при',
   'про', 'под', 'над', 'без', 'до', 'у', 'между', 'чем', 'хотя', 'поэтому', 'также',
   'тоже', 'ещё', 'еще', 'там', 'этот', 'эта', 'это',
+  // Местоимения: фраза почти никогда не заканчивается на «мы», «его», «мне»
+  'я', 'ты', 'мы', 'вы', 'он', 'она', 'оно', 'они', 'меня', 'тебя', 'него', 'неё',
+  'нее', 'них', 'мне', 'тебе', 'ему', 'ей', 'им', 'нам', 'вам', 'нас', 'вас',
+  'его', 'её', 'ее', 'их', 'мой', 'моя', 'моё', 'мое', 'твой', 'наш', 'ваш',
+  'себе', 'себя', 'свой', 'своя', 'своё', 'свое', 'свои',
+  // Союзные слова: «файл который…», «место где…» — придаточное только начинается
+  'который', 'которая', 'которое', 'которые', 'которых', 'кто', 'где', 'куда',
+  'откуда', 'зачем', 'почему', 'сколько', 'какой', 'какая', 'какие', 'чей',
+  // Числительные: «эти три…», «первые два…» — дальше идёт предмет счёта
+  'один', 'два', 'две', 'три', 'четыре', 'пять', 'шесть', 'семь', 'восемь',
+  'девять', 'десять', 'первый', 'второй', 'третий', 'пару', 'несколько',
+  // Определители и усилители перед существительным
+  // «всё» и «вообще» сюда НЕ входят: ими фразу как раз заканчивают
+  // («ну на этом всё», «непонятно вообще»)
+  'эти', 'этих', 'тот', 'та', 'те', 'такой', 'такая', 'такие', 'весь', 'вся',
+  'любой', 'каждый', 'самый', 'очень',
 ]);
 
 // Короткие, но САМОДОСТАТОЧНЫЕ реплики: ответ на вопрос модели не должен ждать
@@ -212,6 +237,14 @@ export function handsFreeReducer(s: HandsFreeState, e: HandsFreeEvent): HandsFre
       // Человек замолчал, а сказанное уже в буфере — взводим окно отправки
       if (s.phase === 'listening') return s.buffer ? enter(s, 'pending') : barrenTick(s);
       return s;
+
+    case 'misheard':
+      // Только из фаз с открытым микрофоном: в ожидании хода и под озвучкой наш
+      // поток закрыт, и вердикт туда прийти не мог
+      if (s.phase !== 'listening' && s.phase !== 'pending') return s;
+      // Буфер чистим: в нём мог осесть огрызок фразы, начатой до конфликта, — уйдя
+      // в чат, он был бы обрывком, а человек всё равно повторит целиком
+      return enter(s, 'speaking', { buffer: '', notice: 'misheard', noticeSpeech: true, barren: 0 });
 
     case 'cycleError':
       if (s.phase !== 'listening') return s;
@@ -320,6 +353,8 @@ export interface HandsFree {
   onRecognized: (text: string) => void;
   onCycleEnd: () => void;
   onCycleError: (code: string) => void;
+  // Ранний вердикт конфликта захватов от детектора амплитуды
+  onMisheard: () => void;
 }
 
 // Окно отмены после распознанной фразы — ТРИ длительности вместо одной (см.
@@ -334,7 +369,12 @@ const SPEECH_WAIT_MS = 1500;
 // бездействие: ход с инструментами идёт минутами, а озвучка 1500 символов — полторы
 const IDLE_MS = 60_000;
 // Перезапуск распознавания не чаще раза в полторы секунды: ошибочные циклы прилетают
-// мгновенно, и без дебаунса получился бы горячий цикл start→error→start (Р9)
+// мгновенно, и без дебаунса получился бы горячий цикл start→error→start (Р9).
+//
+// Дебаунс платят только БЕСПЛОДНЫЕ круги. Круг, в котором движок отдал распознанный
+// текст, здоров по определению — заставлять его ждать полторы секунды значило бы
+// дарить эту паузу каждому кругу разговора: человек уже договорил, ответ прозвучал,
+// а микрофон ещё закрыт. Ровно так же обнуляет дебаунс барж-ин ниже
 const RESTART_MS = 1500;
 // Демпфер тостов об ошибках движка (Р17)
 const ERROR_TOAST_MS = 30_000;
@@ -349,6 +389,9 @@ const NOTICE_TEXT: Record<HandsFreeNotice, string> = {
   // фраза — микрофон под ним закрыт (гвард isSpeaking), и каждая лишняя доля секунды
   // съедает начало того, что человек уже говорит
   bargeAck: 'Слушаю.',
+  // Конфликт захватов: сказанное не дошло до распознавания. Молчаливая пауза здесь
+  // хуже всего — человек не понимает, услышали его или думают над ответом
+  misheard: 'Не расслышал, повтори.',
   needDecision: 'Нужно твоё решение, посмотри на экран.',
   idleOff: 'Выключаю разговор.',
   micDead: 'Распознавание недоступно, выключаю разговор.',
@@ -368,6 +411,9 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     bufferRef.current = buffer;
   });
   const lastStartRef = useRef(0);
+  // Прошлый круг распознавания дал текст: движок жив, дебаунс перезапуска не нужен.
+  // Гасится в момент старта следующего круга — пропуск разовый, на один круг
+  const lastCycleFruitfulRef = useRef(false);
   // Барж-ин отвечает словом «Слушаю» — тик «микрофон открыт» поверх него был бы
   // какофонией из двух сигналов об одном и том же
   const skipListenTickRef = useRef(false);
@@ -449,10 +495,15 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
         // петли) — микрофон под него не открываем, пробуем позже
         if (isSpeaking()) { arm(SPEECH_POLL_MS); return; }
         lastStartRef.current = Date.now();
+        lastCycleFruitfulRef.current = false;
         o.current.startMic();
       }, wait);
     };
-    arm(Math.max(0, RESTART_MS - (Date.now() - lastStartRef.current)));
+    // Здоровый круг (был распознанный текст) открывает микрофон сразу; бесплодный —
+    // через дебаунс, чтобы сбойный движок не крутил горячий цикл
+    arm(lastCycleFruitfulRef.current
+      ? 0
+      : Math.max(0, RESTART_MS - (Date.now() - lastStartRef.current)));
     return () => clearTimeout(id);
   }, [phase, seq, opts.isListening]);
 
@@ -596,7 +647,8 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     // «Ты ещё здесь?» звучит внутри живой петли (фаза speaking, микрофон закрыт) —
     // по концу реплики возвращаемся слушать. Остальные реплики произносятся уже
     // после выключения, и автомату о них знать нечего
-    if (notice === 'stillThere') void said.then(() => dispatch({ type: 'speechFinished' }));
+    if (notice === 'stillThere' || notice === 'misheard')
+      void said.then(() => dispatch({ type: 'speechFinished' }));
     // Голосовой выход: автомат уже погашен, композеру осталось доделать хвост тапа
     // по кнопке (страховочное прерывание хода и PUT voiceMode=false)
     if (notice === 'voiceOff') o.current.onVoiceExit?.();
@@ -641,10 +693,16 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     showToast('Разговор', message);
   }, []);
 
-  const onRecognized = useCallback((text: string) => dispatch({ type: 'recognized', text }), []);
+  const onRecognized = useCallback((text: string) => {
+    lastCycleFruitfulRef.current = true;
+    dispatch({ type: 'recognized', text });
+  }, []);
   const onCycleEnd = useCallback(() => dispatch({ type: 'cycleEnded' }), []);
+  const onMisheard = useCallback(() => dispatch({ type: 'misheard' }), []);
   const onCycleError = useCallback((code: string) => {
     if (code === 'mic-dead') { dispatch({ type: 'micDead' }); return; }
+    // Сбойный круг снимает право на мгновенный перезапуск, даже если текст в нём был
+    lastCycleFruitfulRef.current = false;
     dispatch({ type: 'cycleError', code });
     // no-speech в петле — это просто тишина (Р9), остальное тостим с демпфером (Р17)
     if (code === 'no-speech' || code === 'aborted') return;
@@ -654,5 +712,5 @@ export function useHandsFree(opts: HandsFreeOptions): HandsFree {
     showToast('Разговор', `Распознавание: ${describeSpeechError(code)}`);
   }, []);
 
-  return { phase, active, buffer, start, stop, abort, onRecognized, onCycleEnd, onCycleError };
+  return { phase, active, buffer, start, stop, abort, onRecognized, onCycleEnd, onCycleError, onMisheard };
 }

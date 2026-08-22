@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Volume2, ChevronDown } from 'lucide-react';
 import { C, FS, SP, R, FIELD, FONT, SHADOW } from '../../lib/design';
-import { Button, IconButton, Menu, MenuItem, InlineSegmented, WaitingIndicator } from '../../components/ui';
+import { Button, IconButton, Menu, MenuItem, InlineSegmented } from '../../components/ui';
 import { ICON_SIZE, ICON_STROKE } from '../../components/ui/icons';
 import { useIsMobile } from '../../lib/breakpoints';
 import { api } from '../../lib/api';
@@ -42,6 +42,20 @@ const SEGMENT_TONE = { bg: C.bgWhite, fg: C.textPrimary };
 // экран целиком и оставлял видимой строку выбора
 const LIST_MIN_WIDTH = 280;
 const LIST_MAX_HEIGHT = 320;
+
+// «Звук идёт» — те же полоски-эквалайзер, которыми композер показывает запись голоса:
+// знак в продукте уже знакомый, и он влезает в кнопку. WaitingIndicator сюда не годится
+// вовсе — это индикатор ЛЕНТЫ, с логотипом, аватаром персоны и печатающимся текстом:
+// внутри кнопки-иконки он раскрывался в целый блок не на своём месте.
+function PlayingBars({ height }: { height: number }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 2, height }} aria-hidden>
+      {[0, 0.15, 0.3].map(delay => (
+        <span key={delay} className="cc-wave-bar" style={{ height, animationDelay: `${delay}s` }} />
+      ))}
+    </span>
+  );
+}
 
 // Голос не выбран — «обычная» скорость, а не «ничего не выбрано»: пустой ряд читается как
 // сломанный контрол, хотя персона в этот момент говорит именно с обычной скоростью
@@ -141,7 +155,7 @@ export function PersonaVoicePicker({ value, onChange, describe }: {
   };
 
   const previewIcon = (key: string) => playing === key
-    ? <WaitingIndicator />
+    ? <PlayingBars height={ICON_SIZE.sm} />
     : <Volume2 size={ICON_SIZE.sm} strokeWidth={ICON_STROKE} />;
 
   return (
@@ -309,7 +323,7 @@ function VoiceRows({ catalog, selected, playing, configured, isMobile, onPick, o
                 // поэтому без амплуа (выбранное настроение проверяется кнопкой снаружи)
                 action={{
                   icon: playing === v.voice
-                    ? <WaitingIndicator />
+                    ? <PlayingBars height={isMobile ? ICON_SIZE.sm : ICON_SIZE.xs} />
                     : <Volume2 size={isMobile ? ICON_SIZE.sm : ICON_SIZE.xs} strokeWidth={ICON_STROKE} />,
                   title: configured ? `Послушать: ${v.label}` : 'Озвучка не настроена',
                   onClick: () => { if (!playing && configured) onListen(v.voice); },

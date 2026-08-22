@@ -20,8 +20,11 @@ export interface ChatFieldsPatch {
   // Opt-out «не сохранять решения из этого чата» (ADR-004 §6). Только у проектных сессий
   excludeFromDossiers?: boolean | null;
   notificationsMuted?: boolean;
-  // Голосовой режим чата: ответ приходит коротким и озвучивается (POST /api/tts)
+  // Голосовой режим чата: ответы озвучиваются (POST /api/tts)
   voiceMode?: boolean;
+  // Стиль озвучки ('talk' | 'digest'). Уходит и БЕЗ voiceMode: стиль принадлежит
+  // устройству, и второе устройство выправляет его у чата с уже включённой озвучкой
+  voiceStyle?: string;
 }
 
 export function updateChatFields(session: Session, patch: ChatFieldsPatch): Promise<Session> {
@@ -34,6 +37,7 @@ export function updateChatFields(session: Session, patch: ChatFieldsPatch): Prom
     ...(patch.excludeFromDossiers !== undefined && { excludeFromDossiers: patch.excludeFromDossiers }),
     ...(patch.notificationsMuted !== undefined && { notificationsMuted: patch.notificationsMuted }),
     ...(patch.voiceMode !== undefined && { voiceMode: patch.voiceMode }),
+    ...(patch.voiceStyle !== undefined && { voiceStyle: patch.voiceStyle }),
   };
   return session.projectId
     ? api.sessions.update(session.projectId, session.id, data)

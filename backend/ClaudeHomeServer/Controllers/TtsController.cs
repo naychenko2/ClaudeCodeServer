@@ -1,6 +1,8 @@
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using ClaudeHomeServer.Models;
+using ClaudeHomeServer.Services;
+using ClaudeHomeServer.Services.Spend;
 using ClaudeHomeServer.Services.Tts;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -19,7 +21,8 @@ namespace ClaudeHomeServer.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/tts")]
-public class TtsController(YandexTtsService tts, VoiceResolver voices) : ControllerBase
+public class TtsController(YandexTtsService tts, VoiceResolver voices,
+    SessionManager sessions, ISpendCollector spend) : ControllerBase
 {
     // Лимит запроса фронта; заодно верхняя граница расхода на один синтез (тарификация по запросам)
     public const int MaxTextLength = 3000;
@@ -65,20 +68,58 @@ public class TtsController(YandexTtsService tts, VoiceResolver voices) : Control
         // то есть устаревший id в открытой вкладке стоил бы человеку куска озвучки
         var voice = voices.Resolve(req.PersonaId, UserId, picked);
 
-        var bytes = await tts.SynthesizeAsync(req.Text, voice, ct);
-        if (bytes is null)
+        var res = await tts.SynthesizeAsync(req.Text, voice, ct);
+        // Расход пишем ДО проверки успеха: принятые запросы оплачены и при провалившемся
+        // синтезе тоже, а молчаливо потерянные деньги — худший вид неучтённых
+        RecordSpend(req, voice, res);
+        if (res.Audio is null)
             return StatusCode(502, new { reason = "upstream" });
 
-        return File(bytes, "audio/mpeg");
+        return File(res.Audio, "audio/mpeg");
+    }
+
+    // Трата на озвучку: SpeechKit тарифицируется ЗА ЗАПРОС, и сервис вернул ровно число
+    // запросов, которые Яндекс принял. Ноль отбрасывает сам SpendStore — пустых записей он
+    // не копит, так что отдельной проверки «а было ли что тратить» здесь не нужно.
+    private void RecordSpend(TtsRequest req, VoiceChoice voice, TtsResult res)
+    {
+        if (res.BilledRequests <= 0) return;
+
+        // Чат нужен только ради разрезов (проект, задача, персона). Чужой или протухший id —
+        // не ошибка: озвучка уже состоялась, трата всё равно ложится на своего владельца,
+        // просто без разрезов. Прослушивание голоса в карточке персоны идёт сюда же, но
+        // чата у него нет вовсе — оно и будет строкой без чата.
+        var session = req.SessionId is { Length: > 0 } sid ? sessions.GetById(sid) : null;
+        if (session is not null && session.OwnerId != UserId) session = null;
+
+        spend.Record(new SpendRecord
+        {
+            OwnerId = UserId,
+            ProjectId = session?.ProjectId,
+            SessionId = session?.Id,
+            TaskId = session?.TaskId,
+            // Только из чата: id из запроса не проверен на владельца, а чужая персона в
+            // отчёте о МОИХ деньгах — ложь дороже пропущенного разреза
+            PersonaId = session?.PersonaId,
+            Provider = "yandex",
+            Model = voice.Voice,
+            Source = SpendSources.Tts,
+            Generations = res.BilledRequests,
+            CostRub = res.Rub,
+            Label = voice.Voice,
+        });
     }
 }
 
+// SessionId — чат, которому засчитать расход на озвучку (разрезы проект/задача/персона в
+// аналитике трат). Не влияет ни на голос, ни на ответ: чужой, протухший или отсутствующий
+// id просто оставляет трату без разрезов — старый фронт его не шлёт и работает как прежде.
 // PersonaId — чьим голосом читать; null/неизвестный — голосом инстанса из конфига.
 // Voice/Role/Speed — примеряемый голос для прослушивания в форме персоны: он сильнее
 // PersonaId, потому что человек слушает то, что выбирает сейчас, а не сохранённое.
 // Старый фронт полей не шлёт и получает прежнее поведение
 public record TtsRequest(string? Text, string? PersonaId = null,
-    string? Voice = null, string? Role = null, double? Speed = null);
+    string? Voice = null, string? Role = null, double? Speed = null, string? SessionId = null);
 
 public record TtsVoiceDto(string Voice, string Label, string Gender, IReadOnlyList<string> Roles);
 

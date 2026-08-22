@@ -14,6 +14,13 @@ namespace ClaudeHomeServer.Services.Tts;
 //
 // Авторизация прежняя: Api-Key сервисного аккаунта с ролью ai.speechkit-tts.user (STT-роли
 // недостаточно — при живом ключе будет 403).
+// Итог синтеза: аудио (null — не вышло) и то, за сколько запросов Яндекс уже выставит счёт.
+// Rub — те же запросы в рублях по цене из конфига, чтобы прайс знало ОДНО место.
+public sealed record TtsResult(byte[]? Audio, int BilledRequests, double Rub)
+{
+    public static readonly TtsResult Nothing = new(null, 0, 0);
+}
+
 public class YandexTtsService(IHttpClientFactory http, IConfiguration config, ILogger<YandexTtsService> logger)
 {
     public const string HttpClientName = "yandex-tts";
@@ -25,34 +32,69 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
 
     private readonly string? _apiKey = config["Yandex:SpeechKit:ApiKey"];
     private readonly string? _folderId = config["Yandex:SpeechKit:FolderId"];
+    // Цена одного запроса v3 в рублях: прайс Яндекса живёт своей жизнью, поэтому он в конфиге,
+    // а не в коде. Дефолт — 0,1626 ₽ (снято 20.08.2026, docs/research/speechkit-pricing.md §1)
+    private readonly double _rubPerRequest =
+        config.GetValue<double?>("Yandex:SpeechKit:RubPerRequest") ?? 0.1626;
 
     public bool IsConfigured => !string.IsNullOrWhiteSpace(_apiKey) && !string.IsNullOrWhiteSpace(_folderId);
 
     // mp3-байты синтезированной речи; null — синтез не удался (не настроен, Яндекс ответил
     // ошибкой или недоступен). Причина уже в логе — вызывающему хватает «не вышло» для 502.
     //
+    // BilledRequests — сколько запросов Яндекс успел принять и, значит, затарифицировать:
+    // тарификация идёт ЗА ЗАПРОС, и куски, ушедшие до обрыва на середине, оплачены, даже
+    // если целиком озвучка провалилась и Audio здесь null. Молчать о них — занижать счёт.
+    // В счётчик попадают только подтверждённые ответы 2xx: отказ (400/403/5xx) не тарифицируется,
+    // а про оборванный по таймауту запрос мы попросту не знаем — гадать хуже, чем недосчитать
+    // одну единицу, и эта неопределённость здесь единственная.
+    //
     // Голос приходит готовым (VoiceResolver): здесь он уже проверен по белому списку, роль
     // заведомо поддерживается этим голосом, скорость в границах. Второй раз не проверяем —
     // иначе получим два источника правды о том, чем говорит персона.
-    public async Task<byte[]?> SynthesizeAsync(string text, VoiceChoice voice, CancellationToken ct = default)
+    public async Task<TtsResult> SynthesizeAsync(string text, VoiceChoice voice, CancellationToken ct = default)
     {
-        if (!IsConfigured || string.IsNullOrWhiteSpace(text)) return null;
+        if (!IsConfigured || string.IsNullOrWhiteSpace(text)) return TtsResult.Nothing;
 
         var client = http.CreateClient(HttpClientName);
         client.Timeout = TimeSpan.FromSeconds(30);
 
+        var billed = 0;
         using var result = new MemoryStream();
         foreach (var chunk in SplitForSynthesis(text, MaxCharsPerRequest))
         {
-            var bytes = await SynthesizeChunkAsync(client, chunk, voice, ct);
-            if (bytes is null) return null; // причина в логе; полкуска озвучки хуже честного фолбэка
+            byte[]? bytes;
+            bool accepted;
+            try
+            {
+                (bytes, accepted) = await SynthesizeChunkAsync(client, chunk, voice, ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // Клиент ушёл (закрыл вкладку, нажал «Стоп»): наружу это уходит обычным
+                // отказом, а не исключением — иначе вызывающий не успеет записать расход,
+                // и уже оплаченные запросы просто исчезнут из учёта
+                return new TtsResult(null, billed, Rub(billed));
+            }
+            // Принятый запрос оплачен независимо от того, вытащили ли мы из ответа аудио
+            if (accepted) billed++;
+            // причина в логе; полкуска озвучки хуже честного фолбэка, но уже оплаченные
+            // запросы уезжают вызывающему — их посчитает учёт расхода
+            if (bytes is null) return new TtsResult(null, billed, Rub(billed));
             result.Write(bytes);
         }
-        return result.Length > 0 ? result.ToArray() : null;
+        return result.Length > 0
+            ? new TtsResult(result.ToArray(), billed, Rub(billed))
+            : new TtsResult(null, billed, Rub(billed));
     }
 
-    private async Task<byte[]?> SynthesizeChunkAsync(HttpClient client, string chunk, VoiceChoice voice,
-        CancellationToken ct)
+    // Рубли за N запросов; округление до копеек — иначе в JSONL расхода поедут хвосты double
+    private double Rub(int requests) => Math.Round(requests * _rubPerRequest, 4);
+
+    // Accepted — Яндекс ответил успехом, то есть запрос затарифицирован (даже если аудио в
+    // ответе не оказалось). Отказ и обрыв связи — Accepted=false, см. комментарий у SynthesizeAsync.
+    private async Task<(byte[]? Audio, bool Accepted)> SynthesizeChunkAsync(HttpClient client,
+        string chunk, VoiceChoice voice, CancellationToken ct)
     {
         try
         {
@@ -72,7 +114,7 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
                 else
                     logger.LogWarning("SpeechKit ответил {Status} на синтез: {Body}",
                         (int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
-                return null;
+                return (null, false);
             }
 
             var body = await resp.Content.ReadAsStringAsync(ct);
@@ -80,14 +122,14 @@ public class YandexTtsService(IHttpClientFactory http, IConfiguration config, IL
             if (audio is null)
                 logger.LogWarning("SpeechKit ответил 200, но пригодного аудио в ответе нет: {Body}",
                     body.Length > 500 ? body[..500] : body);
-            return audio;
+            return (audio, true);
         }
         catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException
                                    && !ct.IsCancellationRequested)
         {
             // Недоступность/таймаут Яндекса — штатный случай: строку в лог пишет QuietHttpLogger,
             // здесь только «не вышло»
-            return null;
+            return (null, false);
         }
     }
 

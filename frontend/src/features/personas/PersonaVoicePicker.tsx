@@ -38,6 +38,11 @@ const ROLE_LABELS: Record<string, string> = {
 // так хватает (выбранная строка голоса плюс «Сохранить» в шапке)
 const SEGMENT_TONE = { bg: C.bgWhite, fg: C.textPrimary };
 
+// Ширина списка — под самую длинную подпись голоса; высота — чтобы список не занимал
+// экран целиком и оставлял видимой строку выбора
+const LIST_MIN_WIDTH = 280;
+const LIST_MAX_HEIGHT = 320;
+
 // Голос не выбран — «обычная» скорость, а не «ничего не выбрано»: пустой ряд читается как
 // сломанный контрол, хотя персона в этот момент говорит именно с обычной скоростью
 function speedKey(speed?: number | null): 'slow' | 'normal' | 'fast' {
@@ -181,7 +186,7 @@ export function PersonaVoicePicker({ value, onChange, describe }: {
       </div>
 
       {anchor && catalog && (
-        <Menu onClose={() => setAnchor(null)} anchor={anchor} minWidth={280} maxHeight={320}>
+        <Menu onClose={() => setAnchor(null)} anchor={anchor} minWidth={LIST_MIN_WIDTH} maxHeight={LIST_MAX_HEIGHT}>
           <VoiceRows
             catalog={catalog}
             selected={value?.voice}
@@ -226,7 +231,7 @@ export function PersonaVoicePicker({ value, onChange, describe }: {
       {/* Подбор и сброс — вторичные действия: главное в этой карточке «Сохранить» */}
       <div style={{ display: 'flex', gap: SP.xs, flexWrap: 'wrap' }}>
         {describe && (
-          <Button variant="ghost" size="sm" loading={suggesting} onClick={() => void suggest()}>
+          <Button variant="ghostAccent" size="sm" loading={suggesting} onClick={() => void suggest()}>
             ✨ Подобрать
           </Button>
         )}

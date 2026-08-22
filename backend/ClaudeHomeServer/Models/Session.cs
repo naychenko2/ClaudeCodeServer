@@ -343,9 +343,19 @@ public class Session
     // Чат заглушён: браузерные уведомления («нужно решение» / «ход завершён») по нему не
     // показываются. Настройка ЧАТА; общее разрешение браузера — глобальный тумблер в разделе «Уведомления»
     public bool NotificationsMuted { get; set; }
-    // Голосовой режим чата: ответ приходит коротким (секция промпта + оговорка в слое персоны)
-    // и озвучивается фронтом через POST /api/tts (Yandex SpeechKit). Тумблер — кнопка в композере.
+    // Голосовой режим чата: ответ озвучивается фронтом через POST /api/tts (Yandex SpeechKit).
+    // Тумблер — кнопка в композере.
     public bool VoiceMode { get; set; }
+    // Стиль озвучки (VoiceStyles): talk — ответ приходит коротким целиком (разговор на ходу),
+    // digest — ответ обычный и полный, а вслух читается выжимка из маркера <voice> в его конце.
+    // Пусто/мусор = talk (VoiceStyles.Normalize). Выбор стиля принадлежит УСТРОЙСТВУ (localStorage
+    // браузера), здесь хранится последнее выставленное значение — серверу оно нужно, чтобы
+    // выбрать секцию промпта хода.
+    public string? VoiceStyle { get; set; }
+    // Голосовой режим со стилем digest. Вычисляется, в JSON не уходит: Session сериализуется
+    // в data/sessions.json (он же едет в бэкапы) и в ответы API.
+    [System.Text.Json.Serialization.JsonIgnore]
+    public bool IsVoiceDigest => VoiceMode && VoiceStyle == VoiceStyles.Digest;
     // Цикл «до готово» (флаг work-loop): не null — ход автопродолжается до маркера завершения
     public SessionWorkLoop? WorkLoop { get; set; }
     // Режим «Командная реализация»: не null — чат работает как

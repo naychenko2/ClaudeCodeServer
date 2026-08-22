@@ -1153,12 +1153,17 @@ public class SessionManager : IDisposable
         return entry.Info;
     }
 
-    // Включить/выключить голосовой режим чата (короткий формат ответа + озвучка на фронте).
+    // Включить/выключить голосовой режим чата и/или сменить стиль озвучки.
+    // Один сеттер на оба поля намеренно: каждый дёргает SaveSessions(), то есть перезапись
+    // всего списка — два раздельных дали бы две записи файла на один PUT.
+    // null-аргумент = поле не трогаем: стиль приезжает и БЕЗ флага (устройство выправляет
+    // чужой стиль у чата с уже включённой озвучкой), а такой запрос не должен её гасить.
     // UpdatedAt не трогаем по той же причине, что в SetExpiry: это настройка, а не активность.
-    public Session? SetVoiceMode(string sessionId, bool on)
+    public Session? SetVoiceMode(string sessionId, bool? on, string? style = null)
     {
         if (!_sessions.TryGetValue(sessionId, out var entry)) return null;
-        entry.Info.VoiceMode = on;
+        if (on is bool value) entry.Info.VoiceMode = value;
+        if (style is not null) entry.Info.VoiceStyle = VoiceStyles.Normalize(style);
         SaveSessions();
         return entry.Info;
     }
@@ -1939,7 +1944,16 @@ public class SessionManager : IDisposable
             var built = _promptBuilder.Build(p, session.Model, session.PersonaSwitched,
                 greeted: !string.IsNullOrWhiteSpace(p.Greeting),
                 teamMechanicsBlock: BuildTeamMechanicsBlock(session, p),
-                voiceMode: session.VoiceMode);
+                // Стиль digest — только там, где секция формата тоже поедет (ClaudeSession,
+                // гейт «есть живой слушатель»). Иначе персона получила бы «пиши блок <voice>
+                // в конце» без самого формата и без того, кому это слушать: маркер засорил бы
+                // транскрипт исполнителя задачи ровно тем, что гейт и должен предотвращать.
+                // Делегированный ход (глубина агента) виден только внутри ClaudeSession —
+                // здесь отсекаем два признака из трёх, третий добирает сама секция
+                voiceMode: session.VoiceMode,
+                voiceStyle: session.TaskExecution || session.AutomationRuleId is not null
+                    ? VoiceStyles.Talk
+                    : session.VoiceStyle);
             // Групповой чат: надстройка со списком участников и правилом «говори только за себя»
             if (session.Participants is { Count: > 1 } memberIds)
             {
@@ -3146,6 +3160,10 @@ public class SessionManager : IDisposable
     private bool ShouldRunLocalVoice(SessionEntry entry, bool auto, bool systemDirective,
         IReadOnlyList<string> attachedPaths) =>
         entry.Info.VoiceMode
+        // Только стиль talk: digest — это полный агентный ответ с маркером <voice> в конце,
+        // а локальная болталка (LocalCompanionSection) не умеет ни инструменты, ни маркер.
+        // Забыть этот гейт — значит молча озвучить фолбэком всю реплику Ollama целиком.
+        && !entry.Info.IsVoiceDigest
         && _router is not null && _ollama is not null
         && _router.UsesLocal(Llm.LocalActionCatalog.ChatVoice)
         && !auto && !systemDirective

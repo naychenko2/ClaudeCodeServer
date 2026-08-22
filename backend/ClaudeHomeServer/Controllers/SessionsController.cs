@@ -77,7 +77,11 @@ public class SessionsController(SessionManager sessions, ProjectManager projects
         var session = sessions.GetById(sessionId);
         if (session == null || session.ProjectId != projectId) return NotFound();
         if (req.NotificationsMuted is bool muted) sessions.SetNotificationsMuted(sessionId, muted);
-        if (req.VoiceMode is bool voice) sessions.SetVoiceMode(sessionId, voice);
+        // Хотя бы одно из двух — см. тот же блок в ChatsController.Update
+        if (req.VoiceStyle is not null && !VoiceStyles.IsKnown(req.VoiceStyle))
+            return BadRequest(new { error = "Неизвестный стиль озвучки" });
+        if (req.VoiceMode is not null || req.VoiceStyle is not null)
+            sessions.SetVoiceMode(sessionId, req.VoiceMode, req.VoiceStyle);
         if (req.ExpiresAfterMinutes is not -1)
         {
             if (req.ExpiresAfterMinutes is <= 0) return BadRequest(new { error = "Срок жизни чата должен быть положительным" });
@@ -176,5 +180,6 @@ public record CreateSessionRequest(string Mode = "acceptEdits", string? ResumeSe
 // ExcludeFromDossiers: null (поле не прислано) — не менять; иначе — признак opt-out
 // «Истории решений» (ADR-004 §6, тумблер «Не сохранять решения из этого чата»)
 // NotificationsMuted: null — не менять; true — заглушить уведомления чата
-// VoiceMode: null — не менять; иначе — голосовой режим (короткий формат ответа + озвучка)
-public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null, bool? NotificationsMuted = null, bool? VoiceMode = null);
+// VoiceMode: null — не менять; иначе — озвучка ответов включена/выключена
+// VoiceStyle: null — не менять; иначе VoiceStyles.Talk | Digest (см. UpdateChatRequest)
+public record UpdateSessionRequest(string? Name = null, string? Model = null, string? Effort = null, int? ExpiresAfterMinutes = -1, List<string>? Tags = null, bool? ExcludeFromDossiers = null, bool? NotificationsMuted = null, bool? VoiceMode = null, string? VoiceStyle = null);

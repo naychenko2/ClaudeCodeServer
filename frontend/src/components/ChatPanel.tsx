@@ -1276,8 +1276,12 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
   const batchByIndex = useMemo(
     () => new Map(todoBatches.filter(b => b.lastIndex >= 0).map(b => [b.lastIndex, b.todos])),
     [todoBatches]);
-  // Текущая пачка — для пилюли прогресса и подписи «на каком я шаге»
-  const taskTodos = todoBatches.length ? todoBatches[todoBatches.length - 1].todos : [];
+  // Текущая пачка — для пилюли прогресса и подписи «на каком я шаге». useMemo обязателен:
+  // список уходит в зависимости renderItem, и новый массив на каждый рендер сбрасывал бы
+  // мемоизацию всей ленты
+  const taskTodos = useMemo(
+    () => (todoBatches.length ? todoBatches[todoBatches.length - 1].todos : []),
+    [todoBatches]);
 
 
   // Снимок промпта и размер контекста ДЛЯ КАЖДОГО индекса ленты: у постов ассистента
@@ -1486,6 +1490,9 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
       online={online}
       streaming={isWaiting && i === items.length - 1}
       isLastResult={i === lastResultIndex}
+      planPill={!showWaiting && i === lastResultIndex && taskTodos.length > 0
+        ? <TurnPlanPill todos={taskTodos} />
+        : undefined}
       canRetryInterrupted={i === retryInterruptedIdx}
       onToggleThinking={toggleThinking}
       onAllowPermission={allowPermission}
@@ -1533,7 +1540,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
     online, isWaiting, items.length, lastResultIndex, retryInterruptedIdx, toggleThinking, allowPermission,
     denyPermission, allowAlways, answerQuestion, handleRespondPlan, planVersions,
     lastApprovedPlanIdx, mode, onOpenFile, project, handleRevert, handleRetry,
-    interrupt, handleMigrateProvider, batchByIndex, changeMode, turnBoundaries,
+    interrupt, handleMigrateProvider, batchByIndex, showWaiting, taskTodos, changeMode, turnBoundaries,
     mechanicOffers, launchedMechanics, declinedMechanicOffers, runTeamMechanic,
     presetOffers, presetCardState, presetNote, presetError, presetBusy, applyPreset, declinePreset,
     turnMeta,
@@ -2067,7 +2074,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
             Гаснет сама: стадия уходит с planning при карточке плана или отказа */}
         {showTeamPlanningIndicator && <TeamPlanningIndicator startedAt={liveTeamPlanning?.startedAt} />}
 
-        {((online && showWaiting) || taskTodos.length > 0) && (
+        {online && showWaiting && (
           // Индикатор стоит В ПОТОКЕ, по левому краю сообщений — как аватар обычной
           // строки. Раньше его выносили наружу отрицательным отступом (-38), и под это
           // держали жёлоб 52px слева от ленты: в узкой колонке стены домик лез на рамку,
@@ -2080,9 +2087,7 @@ export function ChatPanel({ session, project, onOpenFile, onOpenReader, onOpenTa
           // гаснет по концу хода, а прогресс нужно смотреть как раз в паузе. Общая строка
           // держит её на одном месте в обоих состояниях, без прыжка при старте/конце хода.
           <div style={{ marginTop: 5, display: 'flex', alignItems: 'center', gap: 10 }}>
-            {online && showWaiting && (
-              <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
-            )}
+            <WaitingIndicator planning={planningKind} awaitingResponse={awaitingResponse} />
             <div style={{ marginLeft: 'auto', minWidth: 0, display: 'flex' }}>
               <TurnPlanPill todos={taskTodos} />
             </div>

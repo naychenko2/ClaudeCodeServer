@@ -10,6 +10,7 @@ import type { ProviderAvailabilityVerdict } from '../../lib/providerLimit';
 import { api } from '../../lib/api';
 import type { TodoItem } from '../../hooks/useSessionArtifacts';
 import type { Mode } from '../../lib/modes';
+import { TodoList } from './TodoList';
 import { C, FONT, SHADOW, R } from '../../lib/design';
 import { useModelLabel } from '../../lib/models';
 import { formatPostTime, formatPostTimeFull } from '../../lib/postTime';
@@ -71,41 +72,8 @@ function TodoPlanView({ todos }: { todos: TodoItem[] }) {
           {done}/{todos.length}
         </span>
       </div>
-      <div style={{ padding: '7px 13px 10px', display: 'flex', flexDirection: 'column', gap: 1 }}>
-        {todos.map((t, i) => {
-          const isDone = t.status === 'completed';
-          const isActive = t.status === 'in_progress';
-          const label = isActive && t.activeForm ? t.activeForm : t.content;
-          return (
-            <div key={i} style={{ display: 'flex', alignItems: 'flex-start', gap: 9, padding: '4px 0' }}>
-              <span style={{ flexShrink: 0, marginTop: 1, display: 'flex' }}>
-                {isDone ? (
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="8" fill={C.success} />
-                    <path d="M4.5 8.2l2.2 2.2 4.8-4.8" stroke={C.onAccent} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                ) : isActive ? (
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="7" fill={C.accent} />
-                    <circle cx="8" cy="8" r="2.6" fill={C.accentLight} />
-                  </svg>
-                ) : (
-                  <svg width="15" height="15" viewBox="0 0 16 16" fill="none">
-                    <circle cx="8" cy="8" r="6.5" stroke={C.dashed} strokeWidth="1.5" />
-                  </svg>
-                )}
-              </span>
-              <span style={{
-                fontSize: 13, lineHeight: 1.4,
-                color: isDone ? C.textMuted : isActive ? C.textHeading : C.textSecondary,
-                textDecoration: isDone ? 'line-through' : 'none',
-                fontWeight: isActive ? 600 : 400,
-              }}>
-                {label}
-              </span>
-            </div>
-          );
-        })}
+      <div style={{ padding: '7px 13px 10px' }}>
+        <TodoList todos={todos} />
       </div>
     </div>
   );
@@ -631,6 +599,10 @@ interface ItemProps {
   onMigrateProvider?: (model: string, subscriptionKey?: string) => Promise<void>;
   // Агрегированный чек-лист TaskCreate/TaskUpdate — приходит только на последний task-вызов ленты
   taskPlan?: TodoItem[];
+  // Пилюля прогресса плана: приходит на ПОСЛЕДНИЙ result, когда ход уже закончился, —
+  // тогда она встаёт в один ряд с итогом хода, а не висит отдельной строкой ниже.
+  // Пока ход идёт, пилюлю рисует ChatPanel рядом с индикатором ожидания.
+  planPill?: ReactNode;
   // Снимок промпта хода, к которому относится этот пост, и размер контекста его запроса —
   // оба считает ChatPanel скользящим окном по ленте (у поста ассистента своего id нет).
   // undefined — история до появления снимков либо пост сабагента: кнопки не будет
@@ -970,7 +942,7 @@ function ModelSwitchedPill({ item }: { item: Extract<ChatItem, { kind: 'model_sw
   );
 }
 
-export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
+export const ChatItemView = memo(function ChatItemView({ item, index, online, streaming, isLastResult, canRetryInterrupted, onToggleThinking, onAllowPermission, onDenyPermission, onAllowAlways, onAnswerQuestion, onRespondPlan, planVersion, planShowBadge, planShowSwitch, onSwitchMode, onOpenFile, onRevert, onRetry, onInterrupt, onMigrateProvider, taskPlan, planPill, agentActivity, agentRenderChild, turnBoundaryKind, teamMechanicOffer, projectPresetOffer, promptSnapshotId, turnContextTokens, turnCache }: ItemProps) {
   const project = useContext(ChatProjectContext);
   const treePath = useContext(ChatTreePathContext);
   const persona = useContext(PersonaContext);
@@ -1510,9 +1482,9 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
       // Плашка токенов/времени — только у последнего хода (экономия места); у прошлых скрываем
       if (!isLastResult) return null;
 
-      return (
+      const meta = (
         <div style={{
-          fontSize: 11, color: C.textMuted, alignSelf: 'center',
+          fontSize: 11, color: C.textMuted,
           background: C.bgSelected, borderRadius: 8, padding: '4px 11px',
           fontFamily: FONT.mono,
           display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', justifyContent: 'center',
@@ -1543,6 +1515,19 @@ export const ChatItemView = memo(function ChatItemView({ item, index, online, st
           )}
         </div>
       );
+      // Пилюля плана — в ОДНОМ ряду с итогом: обе служебные, и держать их на разных
+      // строках значит гонять взгляд по вертикали за состоянием одного и того же хода
+      return planPill
+        ? (
+          <div style={{
+            alignSelf: 'center', display: 'flex', alignItems: 'center', gap: 8,
+            flexWrap: 'wrap', justifyContent: 'center', maxWidth: '100%',
+          }}>
+            {meta}
+            {planPill}
+          </div>
+        )
+        : <div style={{ alignSelf: 'center' }}>{meta}</div>;
     }
 
     case 'rate_limit': {

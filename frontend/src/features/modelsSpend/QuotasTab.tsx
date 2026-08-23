@@ -264,26 +264,36 @@ interface SubCtx {
 }
 
 // Пилюли шапки карточки подписки: тариф + ограничения. Третья ось наблюдаемости рядом
-// с бейджем «в ротации»: false → «Без Opus» / «Без 1M», null/undefined — поле не пришло
-// со старого бэка (обратная совместимость снимков), дефолт true неинформативен и пилюлю
-// не рисует. Сами пилюли warn-цвета — это «ограничение», а не норма.
+// с бейджем «в ротации»: false → «Без Opus и 1M» (объединяем в одну пилюлю, минус
+// ширина и одна ложная «тревога»), null/undefined — поле не пришло со старого бэка
+// (обратная совместимость снимков), дефолт true неинформативен и пилюлю не рисует.
+// Тон plain: ограничение — постоянное свойство тарифа, а не «сейчас что-то не так»;
+// янтарь остаётся только у бейджа ротации.
 export function subscriptionPills(sub: SubscriptionUsage): PillSpec[] {
   const pills: PillSpec[] = [];
   if (sub.tier) pills.push({ label: `Тариф: ${sub.tier}`, tone: 'plain' });
-  if (sub.supportsOpus === false) pills.push({ label: 'Без Opus', tone: 'warn' });
-  if (sub.supports1M === false) pills.push({ label: 'Без 1M', tone: 'warn' });
+  const limits = limitsLabel(sub);
+  if (limits) pills.push({ label: limits, tone: 'plain' });
   return pills;
 }
 
-// Только warn-пилюли ограничений — отдельный массив для раскрытия карточки: на мобиле
-// шапка тесна (точка, имя, бейдж ротации, свежесть) и пилюли там скрыты, поэтому без
-// дубля в раскрытии warn-пилюли вообще не видны. Тариф НЕ включаем: он уже отдельной
-// строкой `<Pill>Тариф: …</Pill>` рядом.
+// Пилюли ограничений для раскрытия карточки — то же, что в шапке, без тарифа. Тариф НЕ
+// включаем: он уже отдельной строкой `<Pill>Тариф: …</Pill>` рядом. Дубль нужен в двух
+// случаях: на узких вьюпортах шапка переносится на две строки и читается хуже, и для
+// карточек без тарифа (tier: null) — там это единственное место, где ограничения видны.
 export function subscriptionExpandedPills(sub: SubscriptionUsage): PillSpec[] {
-  const pills: PillSpec[] = [];
-  if (sub.supportsOpus === false) pills.push({ label: 'Без Opus', tone: 'warn' });
-  if (sub.supports1M === false) pills.push({ label: 'Без 1M', tone: 'warn' });
-  return pills;
+  const limits = limitsLabel(sub);
+  return limits ? [{ label: limits, tone: 'plain' }] : [];
+}
+
+// Собираем «Без Opus» / «Без 1M» / «Без Opus и 1M». false на обоих → одна пилюля, не
+// две — иначе на узких вьюпортах две warn-плашки съедают место и обесценивают янтарь
+// бейджа ротации рядом.
+function limitsLabel(sub: SubscriptionUsage): string | null {
+  const parts: string[] = [];
+  if (sub.supportsOpus === false) parts.push('Opus');
+  if (sub.supports1M === false) parts.push('1M');
+  return parts.length ? `Без ${parts.join(' и ')}` : null;
 }
 
 // Подписка Claude → общая вью-модель. Окна — напрямую из latestPerWindow: при !hasUtil
@@ -300,8 +310,10 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
     return {
       key, name, color, state: 'ready', isFree: false, dim: ctx.usageError, onRetry: () => {},
       windows: [], labelWidth: 92,
-      // Тариф — в шапке (раскрытия у пустой карточки нет, кроме unauthorized с командой);
-      // рядом — пилюли ограничений аккаунта (false = «Без Opus» / «Без 1M»).
+      // Тариф и ограничения (объединённая «Без Opus и 1M») — в шапке; раскрытия у
+      // пустой карточки нет, кроме unauthorized с loginCommand. На карточке без тарифа
+      // (tier: null) ограничения попадают только в expandedPills — ProviderCard
+      // рендерит их в раскрытии гейтом `data.tier || data.expandedPills?.length`.
       pills: subscriptionPills(sub),
       expandedPills: subscriptionExpandedPills(sub),
       hint: unauthorized
@@ -341,7 +353,7 @@ export function buildSubscriptionCard(key: string, sub: SubscriptionUsage, ctx: 
     targetName: ctx.routingTarget ? (ctx.subs[ctx.routingTarget]?.name ?? ctx.routingTarget) : undefined,
     freeAvailable: ctx.freeAvailable,
     // Ограничения тарифа — третья ось: не ломают бейдж, но подмешиваются в reason
-    // («· не принимает Opus / 1M-ходы»). Подробнее — lib/rotation.ts.
+    // («, кроме ходов Opus и 1M»). Подробнее — lib/rotation.ts.
     supportsOpus: sub.supportsOpus ?? undefined,
     supports1M: sub.supports1M ?? undefined,
   });
@@ -712,7 +724,7 @@ export function QuotasTab({ onClose }: { onClose: () => void }) {
         <>
           <Lane title="Квоты подписок · израсходовано" />
           <div style={{ display: 'grid', gridTemplateColumns: qGridCols, gap: SP.sm }}>
-            {quotaCards.map(c => <ProviderCard key={c.key} data={c} isMobile={isMobile} />)}
+            {quotaCards.map(c => <ProviderCard key={c.key} data={c} />)}
           </div>
         </>
       )}

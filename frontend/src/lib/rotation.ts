@@ -4,7 +4,7 @@
 // Поэтому честный бейдж считается по ДВУМ осям: цель роутинга (routingTarget) × в ротации.
 // Ограничения тарифа (supportsOpus/supports1M) — ТРЕТЬЯ ось: они не двигают бейдж
 // (аккаунт без Opus всё ещё «в ротации» для Sonnet/Haiku), но ВСЕГДА подмешиваются в
-// reason как суффикс «· кроме Opus / 1M-ходов». Pick при роутинге Opus/1M-целей
+// reason как суффикс «, кроме ходов Opus и 1M». Pick при роутинге Opus/1M-целей
 // отсекает этот аккаунт (SupportsModel), и без оговорки бейдж «новые чаты направляются
 // сюда» врёт — на самом деле ~2/3 чатов идут мимо. Tone и label не двигаем: ограничения
 // не «выключают» аккаунт, а только уточняют, какие ходы он примет.
@@ -74,12 +74,14 @@ export function rotationBadgeState(info: RotationInfo): RotationBadgeState {
   };
 }
 
-// Суффикс ограничений: «· кроме Opus / 1M-ходов». undefined — добавлять нечего.
+// Суффикс ограничений: «, кроме ходов Opus и 1M». Это оговорка ко второму пункту reason
+// (исчерпание/назначение), а не третий равноправный — поэтому запятая, не «·», и «и»
+// вместо слэша. undefined — добавлять нечего.
 function capabilitySuffix(info: RotationInfo): string | undefined {
   const parts: string[] = [];
   if (info.supportsOpus === false) parts.push('Opus');
-  if (info.supports1M === false) parts.push('1M-ходов');
-  return parts.length ? ` · кроме ${parts.join(' / ')}` : undefined;
+  if (info.supports1M === false) parts.push('1M');
+  return parts.length ? `, кроме ходов ${parts.join(' и ')}` : undefined;
 }
 
 function appendSuffix(reason: string, suffix: string | undefined): string {

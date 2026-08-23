@@ -17,22 +17,23 @@ describe('subscriptionPills', () => {
     expect(pills).toEqual([{ label: 'Тариф: Max', tone: 'plain' }]);
   });
 
-  it('SupportsOpus=false → warn-пилюля «Без Opus»', () => {
+  it('SupportsOpus=false → plain-пилюля «Без Opus» (ограничение — свойство тарифа, не тревога)', () => {
     const pills = subscriptionPills({ ...baseSub, supportsOpus: false });
-    expect(pills).toEqual([{ label: 'Без Opus', tone: 'warn' }]);
+    expect(pills).toEqual([{ label: 'Без Opus', tone: 'plain' }]);
   });
 
-  it('Supports1M=false → warn-пилюля «Без 1M»', () => {
+  it('Supports1M=false → plain-пилюля «Без 1M»', () => {
     const pills = subscriptionPills({ ...baseSub, supports1M: false });
-    expect(pills).toEqual([{ label: 'Без 1M', tone: 'warn' }]);
+    expect(pills).toEqual([{ label: 'Без 1M', tone: 'plain' }]);
   });
 
-  it('оба false → тариф + обе warn-пилюли в порядке Opus, 1M', () => {
+  // Оба ограничения — одна пилюля «Без Opus и 1M», не две: меньше ширины и одна
+  // «ложная тревога» вместо двух янтарных плашек рядом с бейджем ротации.
+  it('оба false → тариф + одна объединённая plain-пилюля', () => {
     const pills = subscriptionPills({ ...baseSub, tier: 'Pro', supportsOpus: false, supports1M: false });
     expect(pills).toEqual([
       { label: 'Тариф: Pro', tone: 'plain' },
-      { label: 'Без Opus', tone: 'warn' },
-      { label: 'Без 1M', tone: 'warn' },
+      { label: 'Без Opus и 1M', tone: 'plain' },
     ]);
   });
 
@@ -49,6 +50,17 @@ describe('subscriptionPills', () => {
     expect(subscriptionPills({ ...baseSub, supportsOpus: true, supports1M: true, tier: 'Max' }))
       .toEqual([{ label: 'Тариф: Max', tone: 'plain' }]);
   });
+
+  // У подписки без тарифа (tier не задан) + ограничение: третья ось наблюдаемости должна
+  // быть видна на карточке без тарифа. ProviderCard дополнительно гейтит expandedPills
+  // условием `data.tier || data.expandedPills?.length` — здесь проверяем, что сами
+  // пилюли присутствуют в обоих массивах, чтобы ревью не потеряло их на пустой карточке.
+  it('tier пустой + SupportsOpus=false → plain-пилюля ограничения в обоих массивах', () => {
+    expect(subscriptionPills({ ...baseSub, supportsOpus: false }))
+      .toEqual([{ label: 'Без Opus', tone: 'plain' }]);
+    expect(subscriptionExpandedPills({ ...baseSub, supportsOpus: false }))
+      .toEqual([{ label: 'Без Opus', tone: 'plain' }]);
+  });
 });
 
 describe('subscriptionExpandedPills', () => {
@@ -56,12 +68,9 @@ describe('subscriptionExpandedPills', () => {
     expect(subscriptionExpandedPills({ ...baseSub, tier: 'Max' })).toEqual([]);
   });
 
-  it('оба false → обе warn-пилюли (порядок важен для стабильности теста)', () => {
+  it('оба false → одна объединённая plain-пилюля (порядок «Opus и 1M» стабилен)', () => {
     const pills = subscriptionExpandedPills({ ...baseSub, supportsOpus: false, supports1M: false });
-    expect(pills).toEqual([
-      { label: 'Без Opus', tone: 'warn' },
-      { label: 'Без 1M', tone: 'warn' },
-    ]);
+    expect(pills).toEqual([{ label: 'Без Opus и 1M', tone: 'plain' }]);
   });
 
   it('null/undefined флаги → пустой массив', () => {
@@ -71,10 +80,10 @@ describe('subscriptionExpandedPills', () => {
 });
 
 // Покрытие дыры «на мобиле пилюль нет»: buildSubscriptionCard обязана положить
-// expandedPills рядом с pills. На мобиле pills в шапке скрыты (!isMobile → false),
-// и без expandedPills ограничения тарифа не увидеть вообще — именно это и было в
-// исходном ревью Глеба. Если кто-то случайно уберёт expandedPills из билдера —
-// тест сломается.
+// expandedPills рядом с pills. После рефакторинга шапки пилюли показываются на
+// всех ширинах с переносом, но expandedPills остаётся резервом: на узких вьюпортах
+// шапка читается хуже и это единственное место для карточек без тарифа (tier: null).
+// Если кто-то случайно уберёт expandedPills из билдера — тест сломается.
 describe('buildSubscriptionCard → expandedPills', () => {
   // Минимальный SubCtx, которого хватает buildSubscriptionCard для обеих веток
   // (с lastSnap и без). Ничего не дёргает API и не запускает хуки — чистая функция.
@@ -92,50 +101,54 @@ describe('buildSubscriptionCard → expandedPills', () => {
     expect(card.expandedPills).toEqual([]);
   });
 
-  it('SupportsOpus=false — в expandedPills «Без Opus»', () => {
+  it('SupportsOpus=false — в expandedPills plain-пилюля «Без Opus»', () => {
     const card = buildSubscriptionCard('claude', { ...baseSub, supportsOpus: false }, ctx);
-    expect(card.expandedPills).toEqual([{ label: 'Без Opus', tone: 'warn' }]);
+    expect(card.expandedPills).toEqual([{ label: 'Без Opus', tone: 'plain' }]);
   });
 
-  it('Supports1M=false — в expandedPills «Без 1M»', () => {
+  it('Supports1M=false — в expandedPills plain-пилюля «Без 1M»', () => {
     const card = buildSubscriptionCard('claude', { ...baseSub, supports1M: false }, ctx);
-    expect(card.expandedPills).toEqual([{ label: 'Без 1M', tone: 'warn' }]);
+    expect(card.expandedPills).toEqual([{ label: 'Без 1M', tone: 'plain' }]);
   });
 
-  it('оба false — обе warn-пилюли в expandedPills', () => {
+  it('оба false — одна объединённая plain-пилюля в expandedPills', () => {
     const card = buildSubscriptionCard('claude',
       { ...baseSub, supportsOpus: false, supports1M: false }, ctx);
-    expect(card.expandedPills).toEqual([
-      { label: 'Без Opus', tone: 'warn' },
-      { label: 'Без 1M', tone: 'warn' },
-    ]);
+    expect(card.expandedPills).toEqual([{ label: 'Без Opus и 1M', tone: 'plain' }]);
   });
 
   // Дубль с шапкой: pills уже содержит «Тариф: …», expandedPills — нет.
   // Иначе в раскрытии тариф вылезет дважды (строкой `<Pill>Тариф: …</Pill>` + пилюлей
-  // на следующей строке). Это и есть главный момент, который «нет пилюли на мобиле»
-  // скрывал за собой.
+  // на следующей строке).
   it('pills содержит «Тариф: …», а expandedPills — нет (нет дубля в раскрытии)', () => {
     const card = buildSubscriptionCard('claude',
       { ...baseSub, tier: 'Pro', supportsOpus: false, supports1M: false }, ctx);
     expect(card.pills).toEqual([
       { label: 'Тариф: Pro', tone: 'plain' },
-      { label: 'Без Opus', tone: 'warn' },
-      { label: 'Без 1M', tone: 'warn' },
+      { label: 'Без Opus и 1M', tone: 'plain' },
     ]);
-    expect(card.expandedPills).toEqual([
-      { label: 'Без Opus', tone: 'warn' },
-      { label: 'Без 1M', tone: 'warn' },
-    ]);
+    expect(card.expandedPills).toEqual([{ label: 'Без Opus и 1M', tone: 'plain' }]);
     // И никакого «Тариф: …» в expandedPills — иначе ProviderCard нарисует дубль
     expect(card.expandedPills?.some(p => p.label.startsWith('Тариф:'))).toBe(false);
   });
 
-  // Тот же набор проверок для ветки без lastSnap («пустая» карточка до первого хода):
-  // expandedPills должны быть и там, иначе подписка без свежих снимков потеряет
-  // пилюли ограничений на мобиле дважды.
+  // Ветка без lastSnap («пустая» карточка до первого хода): expandedPills должны быть
+  // и там — это единственное место, где видна третья ось при tier: null.
   it('без lastSnap — expandedPills всё равно заполнены', () => {
     const card = buildSubscriptionCard('claude', { ...baseSub, supportsOpus: false }, ctx);
-    expect(card.expandedPills).toEqual([{ label: 'Без Opus', tone: 'warn' }]);
+    expect(card.expandedPills).toEqual([{ label: 'Без Opus', tone: 'plain' }]);
+  });
+
+  // Карточка без тарифа + ограничение: у билдера tier нормализуется в null,
+  // expandedPills содержат пилюлю ограничения. Без этого ProviderCard (с гейтом
+  // `data.tier || data.expandedPills?.length`) рисовал бы пустой блок в раскрытии.
+  it('tier не задан + SupportsOpus=false — expandedPills содержат ограничение, card.tier === null', () => {
+    const card = buildSubscriptionCard('claude',
+      { ...baseSub, supportsOpus: false }, ctx);
+    expect(card.tier).toBeNull();
+    expect(card.expandedPills).toEqual([{ label: 'Без Opus', tone: 'plain' }]);
+    // Условие ProviderCard должно пройти: tier пуст, но expandedPills есть — блок
+    // в раскрытии рендерится, иначе ограничения не видны нигде
+    expect(card.tier || (card.expandedPills && card.expandedPills.length)).toBeTruthy();
   });
 });

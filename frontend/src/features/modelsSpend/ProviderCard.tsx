@@ -42,9 +42,10 @@ export interface ProviderCardData {
   windows: QuotaWindowView[];        // percent-окна на поверхности
   labelWidth?: number;               // подпись QuotaWindow (64 — провайдеры, 92 — подписки)
   pills: PillSpec[];                 // пилюли шапки (planLabel, «бесплатный», «Предел»)
-  // Пилюли, дублирующиеся в раскрытии рядом со строкой тарифа — для мобила, где шапка
-  // тесна (пилюли скрыты) и warn-пилюли об ограничениях тарифа иначе не видны вообще.
-  // Тариф в этот список НЕ входит: он уже идёт отдельной строкой в раскрытии.
+  // Пилюли ограничений (plain «Без Opus и 1M»), дублирующиеся в раскрытии рядом со
+  // строкой тарифа. На узких вьюпортах шапка читается хуже (перенос), а у карточек
+  // без тарифа (tier: null) это единственное место, где ограничения видны вообще.
+  // Тариф в этот список НЕ входит: он уже идёт отдельной строкой `<Pill>Тариф: …</Pill>`.
   expandedPills?: PillSpec[];
   routingBadge?: { tone: 'ok' | 'warn'; label: string };  // бейдж ротации — только карточка-цель
   freshness?: FreshnessSpec;         // свежесть в углу шапки
@@ -80,7 +81,7 @@ function Pill({ children, tone = 'plain' }: { children: ReactNode; tone?: 'plain
     warn:    { background: C.warningBg, border: `1px solid ${C.warning}`, color: C.warningText },
   };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, ...styles[tone] }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: `${SP.xxs}px ${SP.sm}px`, borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, ...styles[tone] }}>
       {children}
     </span>
   );
@@ -92,7 +93,7 @@ function RoutingPill({ tone, label }: { tone: 'ok' | 'warn'; label: string }) {
     ? { background: C.successBg, border: C.success, color: C.successText }
     : { background: C.warningBg, border: C.warning, color: C.warningText };
   return (
-    <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: '2px 8px', borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, border: `1px solid ${s.border}`, background: s.background, color: s.color }}>
+    <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0, whiteSpace: 'nowrap', padding: `${SP.xxs}px ${SP.sm}px`, borderRadius: R.md, fontSize: FS.xs, fontWeight: 600, border: `1px solid ${s.border}`, background: s.background, color: s.color }}>
       {label}
     </span>
   );
@@ -173,7 +174,7 @@ function CopyCommandButton({ cmd }: { cmd: string }) {
   );
 }
 
-export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMobile?: boolean }) {
+export function ProviderCard({ data }: { data: ProviderCardData }) {
   const [open, setOpen] = useState(false);
   const [pressed, setPressed] = useState(false);
   const { name, color, state, isFree, retryAt, onRetry } = data;
@@ -269,24 +270,35 @@ export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMob
         minWidth: 0, overflow: 'hidden',
       }}
     >
-      {/* .top — имя, пилюли, бейдж ротации, свежесть */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-        <Dot color={color} size={7} />
-        <span style={{ ...nameStyle, flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-        {/* На мобиле шапка тесна: точка, имя, пилюля ротации, свежесть (пилюли тарифа — в раскрытии) */}
-        {!isMobile && data.pills.map((p, i) => <Pill key={i} tone={p.tone}>{p.label}</Pill>)}
-        {data.routingBadge && <RoutingPill tone={data.routingBadge.tone} label={data.routingBadge.label} />}
-        <span style={{ marginLeft: 'auto' }} />
-        {data.freshness && (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.xs, color: data.freshness.textTone ?? C.textMuted, whiteSpace: 'nowrap' }}>
-            <Dot color={data.freshness.dot} size={6} />
-            {data.freshness.text}
-          </span>
-        )}
-        {clickable && (
-          <ChevronRight size={15} strokeWidth={ICON_STROKE} style={{
-            flexShrink: 0, color: C.textMuted, transition: 'transform .15s', transform: open ? 'rotate(90deg)' : 'none',
-          }} />
+      {/* .top — имя, пилюли, бейдж ротации (левая группа, переносится на вторую строку)
+          и свежесть+шеврон (правая группа, держится у правого края). Внешний ряд —
+          flex-start, чтобы правая группа не съезжала в центр, когда левая ушла на
+          вторую строку. Раньше пилюли скрывались гейтом !isMobile, но сетка уже
+          двухколоночная от MOBILE_MAX=600 — то есть пилюли пропадали именно там, где
+          карточка уже самая узкая. Разрешаем перенос вместо того, чтобы прятать. */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, flexWrap: 'wrap', minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7, flexWrap: 'wrap', flex: '1 1 auto', minWidth: 0 }}>
+          <Dot color={color} size={7} />
+          {/* minWidth: 80 — иначе имя схлопнется раньше пилюль: имя — единственное, чем
+              аккаунты подписок различаются (точка у всех подписок одного цвета) */}
+          <span style={{ ...nameStyle, flex: '0 1 auto', minWidth: 80, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+          {data.pills.map((p, i) => <Pill key={i} tone={p.tone}>{p.label}</Pill>)}
+          {data.routingBadge && <RoutingPill tone={data.routingBadge.tone} label={data.routingBadge.label} />}
+        </div>
+        {(data.freshness || clickable) && (
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0, marginLeft: 'auto' }}>
+            {data.freshness && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: SP.xs, flexShrink: 0, fontSize: FS.xs, color: data.freshness.textTone ?? C.textMuted, whiteSpace: 'nowrap' }}>
+                <Dot color={data.freshness.dot} size={6} />
+                {data.freshness.text}
+              </span>
+            )}
+            {clickable && (
+              <ChevronRight size={15} strokeWidth={ICON_STROKE} style={{
+                flexShrink: 0, color: C.textMuted, transition: 'transform .15s', transform: open ? 'rotate(90deg)' : 'none',
+              }} />
+            )}
+          </div>
         )}
       </div>
 
@@ -310,12 +322,15 @@ export function ProviderCard({ data, isMobile }: { data: ProviderCardData; isMob
       {/* Раскрытие: count-окна/тренд/кабинет (провайдеры) + тариф/порог/свежесть/команда (подписки) */}
       {open && clickable && (
         <div style={{ marginTop: 10, borderTop: `1px dashed ${C.dashed}`, paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {data.tier && (
-            // Строка тарифа + пилюли ограничений (Без Opus / Без 1M). На мобиле шапка тесна
-            // и пилюли там не показываются — здесь их единственное место на этом устройстве.
-            // Оборачиваем в flex, чтобы пилюли не переносились под длинный тариф, а ужимались
+          {(data.tier || !!data.expandedPills?.length) && (
+            // Тариф и пилюли ограничений независимы: у аккаунта без тарифа (tier: null)
+            // третья ось наблюдаемости должна быть видна всё равно. Приведение к boolean
+            // обязательно: subscriptionExpandedPills возвращает [], а `[]` как ReactNode
+            // рендерится цифрой 0, и при tier: null на экране появлялся лишний «0».
+            // Оборачиваем в flex, чтобы пилюли не переносились под длинный тариф,
+            // а ужимались.
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', minWidth: 0 }}>
-              <Pill>Тариф: {data.tier}</Pill>
+              {data.tier && <Pill>Тариф: {data.tier}</Pill>}
               {data.expandedPills?.map((p, i) => <Pill key={i} tone={p.tone}>{p.label}</Pill>)}
             </div>
           )}

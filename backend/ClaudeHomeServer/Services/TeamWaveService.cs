@@ -6,6 +6,22 @@ using Microsoft.AspNetCore.SignalR;
 
 namespace ClaudeHomeServer.Services;
 
+// Живость волны «Командной реализации» для человека: бейдж «КР · волна N» различает
+// работу и обвал (КР-наблюдаемость, этап 1). Wire-токен — TeamWaveService.LivenessToken.
+internal enum WaveLiveness
+{
+    // Задачи двигаются (или молчат меньше QuietMinutes) — всё в порядке
+    Alive,
+    // Тишина дольше QuietMinutes — работы не видно, но порог зависания ещё не вышел
+    Quiet,
+    // Штаб заявляет работу (Working/Waiting), а живого прогона CLI нет — ход убит
+    // сбоем, статус не разобран. Это обвал, а не тишина.
+    Dead,
+    // Тишина дольше StalledMinutes — до карточки сторожа остались минуты (или она
+    // уже на подходе)
+    Stalled,
+}
+
 // Раздача под-задач и запуск волн режима «Командная реализация» (Э3): по подтверждённому
 // плану бэкенд создаёт задачи (personaId = исполнитель, SourceSessionId = чат-штаб,
 // CreatedByPersonaId = координатор) и ПАКЕТНО стартует исполнителей волны. Дочерние чаты
@@ -30,6 +46,12 @@ public class TeamWaveService
     // роздана и раздачу никто не позвал. Работа не идёт вовсе, поэтому порог короче
     // общего таймаута волны — висеть так долго конвейер не должен ни при каком раскладе.
     private readonly TimeSpan _deadZoneTimeout;
+    // Пороги liveness пульса волны (КР-наблюдаемость, этап 1): quiet — тишина дольше
+    // QuietMinutes (работа вроде жива, но давно не двигалась), stalled — дольше
+    // StalledMinutes (похоже на зависание до срабатывания сторожа). stalled заведомо
+    // тише таймаута волны: пульс должен предупредить РАНЬШЕ карточки, а не дублировать её.
+    private readonly TimeSpan _quietThreshold;
+    private readonly TimeSpan _stalledThreshold;
     // Переходы волны идут из двух независимых потоков (колбэк завершения задачи и сторож),
     // поэтому «кто закрывает волну» решается под этим локом, а не проверкой состояния на глаз.
     private readonly System.Collections.Concurrent.ConcurrentDictionary<string, SemaphoreSlim> _waveLocks = new();
@@ -61,6 +83,10 @@ public class TeamWaveService
             int.TryParse(config?["TeamImplement:WaveTimeoutMinutes"], out var m) && m > 0 ? m : 90);
         _deadZoneTimeout = TimeSpan.FromMinutes(
             int.TryParse(config?["TeamImplement:DeadZoneTimeoutMinutes"], out var dz) && dz > 0 ? dz : 15);
+        _quietThreshold = TimeSpan.FromMinutes(
+            int.TryParse(config?["TeamImplement:QuietMinutes"], out var q) && q > 0 ? q : 15);
+        _stalledThreshold = TimeSpan.FromMinutes(
+            int.TryParse(config?["TeamImplement:StalledMinutes"], out var st) && st > 0 ? st : 30);
         // Хук раздачи в SessionManager: цикл зависимостей (TaskExecutionService → SessionManager)
         // разорван так же, как у подписки TaskExecutionService на OnSessionMessage
         _sessions.TeamWaveStarter = (session, plan, trigger) => StartWaveAsync(session, plan, trigger);
@@ -679,17 +705,144 @@ public class TeamWaveService
 
     // Незакрытые задачи текущей волны — для карточки зависания: заголовки в текст и
     // TaskId кнопке «Снять» (когда молчит ровно одна, D3)
-    private List<TaskItem> StalledWaveTasks(Session session, int wave)
+    private List<TaskItem> StalledWaveTasks(Session session, int wave) =>
+        [.. WaveTasks(session, wave).Where(t => t.Status != TaskItemStatus.Done)];
+
+    // --- Пульс волны (КР-наблюдаемость, этап 1) ---
+
+    // Снимок состояния волны: поля пульса (TeamWavePulseMessage) + задачи и пороги
+    // для REST-снапшота поповера. Собирается ОДНИМ методом для обоих потребителей —
+    // живой пульс и REST обязаны показывать одно и то же.
+    internal sealed record WaveSnapshot(
+        TeamImplementStage Stage,
+        int WaveNumber,
+        int PlannedWaves,
+        int TasksActive,
+        int TasksTotal,
+        DateTime LastActivityAt,
+        long QuietSeconds,
+        WaveLiveness Liveness,
+        IReadOnlyList<TaskItem> WaveTasks,
+        int QuietMinutes,
+        int StalledMinutes);
+
+    // Составить снапшот текущей волны. null — пульса нет: режим выключен либо стадия
+    // не в работе (Wave/Checking) — интервью и «ждёт решения» человек видит карточками,
+    // пульс там добавил бы шум. Дочерние чаты-исполнители собирает вызывающий: тику
+    // дешевле один проход по всем чатам на весь тик (SendWavePulsesAsync), одиночному
+    // вызову (REST-снапшот) дешевле достать их самому.
+    internal WaveSnapshot? BuildWaveSnapshot(Session session) =>
+        BuildWaveSnapshot(session, _sessions.GetAll().Where(s => s.ParentSessionId == session.Id));
+
+    internal WaveSnapshot? BuildWaveSnapshot(Session session, IEnumerable<Session> childSessions)
     {
+        if (session.TeamImplement is not { } team) return null;
+        if (team.Stage is not (TeamImplementStage.Wave or TeamImplementStage.Checking)) return null;
+
+        var children = childSessions as IReadOnlyList<Session> ?? childSessions.ToList();
+        var waveTasks = WaveTasks(session, team.WaveNumber);
+        var now = DateTime.UtcNow;
+        // Последняя активность волны: старт/закрытие/перевыдача её задач (их UpdatedAt —
+        // TaskManager.Update двигает) плюс ходы дочерних чатов-исполнителей (ParentSessionId
+        // вычисляется из Task.SourceSessionId). Max по всем точкам: двигалась ЛЮБАЯ часть
+        // волны — волна жива. Старт волны — нижняя граница: сразу после раздачи это самая
+        // свежая точка (задачи создаются тем же моментом, но и без них якорь нужен).
+        // Живой прогон CLI — активность «сейчас»: все UpdatedAt-якоря двигаются только на
+        // границах ходов (ApplyStatusAsync), и пока ход идёт, они статичны — честная
+        // 35-минутная сборка исполнителя или длинный ход финальной проверки (Checking,
+        // WaveStartedAt уже обнулён) считались бы «зависло». Прогон может идти и в самом
+        // штабе, и у ребёнка-исполнителя — смотрим обоих.
+        var anchors = waveTasks.Select(t => t.UpdatedAt)
+            .Concat(children.Select(s => s.UpdatedAt))
+            .Append(team.WaveStartedAt ?? session.UpdatedAt);
+        if (_sessions.HasLiveTurnProcess(session.Id) || children.Any(c => _sessions.HasLiveTurnProcess(c.Id)))
+            anchors = anchors.Append(now);
+        var lastActivityAt = anchors.Max();
+        var quiet = now - lastActivityAt;
+
+        var liveness = ClassifyLiveness(session, quiet);
+        return new WaveSnapshot(
+            Stage: team.Stage,
+            WaveNumber: team.WaveNumber,
+            PlannedWaves: team.PlannedWaves,
+            TasksActive: waveTasks.Count(t => t.Status != TaskItemStatus.Done),
+            TasksTotal: waveTasks.Count,
+            LastActivityAt: lastActivityAt,
+            QuietSeconds: Math.Max(0, (long)quiet.TotalSeconds),
+            Liveness: liveness,
+            WaveTasks: waveTasks.OrderBy(t => t.CreatedAt).ToList(),
+            QuietMinutes: (int)_quietThreshold.TotalMinutes,
+            StalledMinutes: (int)_stalledThreshold.TotalMinutes);
+    }
+
+    // Задачи волны (включая закрытые): по ним REST-поповер показывает прогресс
+    // «2 из 5 закрыто», а пульс считает активные.
+    private List<TaskItem> WaveTasks(Session session, int wave)
+    {
+        if (wave == 0) return [];
         var ownerId = session.OwnerId
             ?? (session.ProjectId is { } pid ? _projects.GetById(pid)?.OwnerId : null);
         IReadOnlyCollection<TaskItem> pool = session.ProjectId is { } projectId
             ? _tasks.GetByProject(projectId)
             : ownerId is not null ? _tasks.GetByOwner(ownerId) : [];
-        return [.. pool
-            .Where(t => t.SourceSessionId == session.Id
-                && t.Labels.Contains($"волна {wave}")
-                && t.Status != TaskItemStatus.Done)];
+        return [.. pool.Where(t => t.SourceSessionId == session.Id && t.Labels.Contains($"волна {wave}"))];
+    }
+
+    // Классификация живости. dead приоритетнее тишины: «штаб Working без живого прогона»
+    // не зависит от quietSeconds и значит большее — обвал, а не пауза.
+    private WaveLiveness ClassifyLiveness(Session session, TimeSpan quiet) =>
+        session.Status is SessionStatus.Working or SessionStatus.Waiting
+            && !_sessions.HasLiveTurnProcess(session.Id)
+            ? WaveLiveness.Dead
+        : quiet > _stalledThreshold ? WaveLiveness.Stalled
+        : quiet > _quietThreshold ? WaveLiveness.Quiet
+        : WaveLiveness.Alive;
+
+    internal static string LivenessToken(WaveLiveness liveness) => liveness switch
+    {
+        WaveLiveness.Quiet => "quiet",
+        WaveLiveness.Dead => "dead",
+        WaveLiveness.Stalled => "stalled",
+        _ => "alive",
+    };
+
+    // Пульс всех живых волн (TeamWaveWatchdog, тот же тик раз в минуту): снапшот уходит
+    // ТОЛЬКО в session-группу штаба — прямо в хаб, минуя историю и Session.UpdatedAt
+    // (эфемерное событие, см. TeamWavePulseMessage). Порядок в тике: после проверки
+    // зависаний — эскалация могла сменить стадию, и пульс должен честно замолчать.
+    // Шлём каждый тик без дедупа: quietSeconds растёт ежеминутно, «изменения» есть
+    // всегда, а дедуп — лишнее состояние; рассылка в одну пустую группу без зрителей
+    // стоит копейки.
+    public async Task SendWavePulsesAsync()
+    {
+        // Дети всех штабов — одним проходом на тик: собирать их внутри каждого снапшота
+        // значило бы полный GetAll() на каждый штаб (O(N×M), растёт с числом чатов).
+        // ParentSessionId вычисляемый, поэтому фильтруем по нему всех сразу.
+        var childrenByParent = _sessions.GetAll()
+            .Where(s => s.ParentSessionId is not null)
+            .ToLookup(s => s.ParentSessionId!);
+        foreach (var session in _sessions.GetTeamImplementSessions())
+        {
+            try
+            {
+                if (BuildWaveSnapshot(session, childrenByParent[session.Id]) is not { } snap) continue;
+                var msg = new Protocol.TeamWavePulseMessage(
+                    Stage: snap.Stage.ToWireToken(),
+                    WaveNumber: snap.WaveNumber,
+                    PlannedWaves: snap.PlannedWaves,
+                    TasksActive: snap.TasksActive,
+                    TasksTotal: snap.TasksTotal,
+                    LastActivityAt: snap.LastActivityAt,
+                    QuietSeconds: snap.QuietSeconds,
+                    Liveness: LivenessToken(snap.Liveness))
+                    with { SessionId = session.Id };
+                await _hub.Clients.Group(session.Id).SendAsync("message", msg);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex, "Пульс волны чата-штаба {SessionId} не отправлен", session.Id);
+            }
+        }
     }
 
     // --- Повторные напоминания о висящей карточке ---

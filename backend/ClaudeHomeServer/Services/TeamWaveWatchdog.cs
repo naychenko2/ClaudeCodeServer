@@ -28,6 +28,15 @@ public class TeamWaveWatchdog(TeamWaveService waves, ILogger<TeamWaveWatchdog> l
             {
                 log.LogError(ex, "Проверка ожидающих карточек «Командной реализации» не удалась");
             }
+
+            // Пульс волны (КР-наблюдаемость): после проверок — эскалация могла сменить
+            // стадию, и пульс должен честно замолчать. Эфемерное событие в session-группу
+            // штаба, историю чата не трогает.
+            try { await waves.SendWavePulsesAsync(); }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Рассылка пульса волн «Командной реализации» не удалась");
+            }
         }
     }
 }

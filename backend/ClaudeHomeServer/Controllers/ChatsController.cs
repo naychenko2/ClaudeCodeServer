@@ -14,7 +14,8 @@ namespace ClaudeHomeServer.Controllers;
 [Authorize]
 [Route("api/chats")]
 public class ChatsController(SessionManager sessions, FileService files,
-    DefaultAssistantProvisioner provisioner, ILogger<ChatsController> logger) : ControllerBase
+    DefaultAssistantProvisioner provisioner, TeamWaveService teamWaves,
+    ILogger<ChatsController> logger) : ControllerBase
 {
     // DefaultMapInboundClaims = false → sub не ремапится в NameIdentifier, читаем напрямую
     private string UserId => User.FindFirstValue(JwtRegisteredClaimNames.Sub)!;
@@ -238,6 +239,44 @@ public class ChatsController(SessionManager sessions, FileService files,
         if (sessions.GetOwned(id, UserId) is null) return NotFound();
         var updated = await sessions.SetTeamImplementAutoAsync(id, req.AutoWaves, UserId);
         return updated is null ? NotFound() : Ok(updated);
+    }
+
+    // Снапшот волны «Командной реализации» для поповера бейджа (КР-наблюдаемость, этап 1):
+    // поля пульса (те же, что у WS-события team_wave_pulse) + задачи волны + применённые
+    // пороги. 404 — чужой чат, режим выключен либо стадия не в работе (Wave/Checking):
+    // снапшота нет, поповер открывается только у живого бейджа волны. Считается тем же
+    // методом, что и пульс (TeamWaveService.BuildWaveSnapshot), — живая лента и REST
+    // показывают одно и то же. startedAt задачи — ClaudeStartedAt (отметка запуска
+    // исполнителя): отдельного поля старта у задачи нет.
+    [HttpGet("{id}/team-wave-snapshot")]
+    public IActionResult GetTeamWaveSnapshot(string id)
+    {
+        // Сессию берём из GetOwned одним lookup'ом: повторный GetById — двойная работа
+        // и NRE→500, если чат удалён между вызовами (ревью этапа 1).
+        if (sessions.GetOwned(id, UserId) is not { } session) return NotFound();
+        if (teamWaves.BuildWaveSnapshot(session) is not { } snap) return NotFound();
+        return Ok(new
+        {
+            sessionId = id,
+            stage = snap.Stage.ToWireToken(),
+            waveNumber = snap.WaveNumber,
+            plannedWaves = snap.PlannedWaves,
+            tasksActive = snap.TasksActive,
+            tasksTotal = snap.TasksTotal,
+            lastActivityAt = snap.LastActivityAt,
+            quietSeconds = snap.QuietSeconds,
+            liveness = TeamWaveService.LivenessToken(snap.Liveness),
+            tasks = snap.WaveTasks.Select(t => new
+            {
+                id = t.Id,
+                title = t.Title,
+                executorPersonaId = t.PersonaId,
+                status = t.Status,
+                updatedAt = t.UpdatedAt,
+                startedAt = t.ClaudeStartedAt,
+            }),
+            thresholds = new { quietMinutes = snap.QuietMinutes, stalledMinutes = snap.StalledMinutes },
+        });
     }
 
     // Отдельное git worktree чата: вкл — сессия переезжает в изолированное дерево на новой

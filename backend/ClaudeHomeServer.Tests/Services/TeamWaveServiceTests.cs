@@ -32,6 +32,10 @@ public class TeamWaveServiceTests : IDisposable
     // под локом: бродкасты приходят и из фоновых задач
     private readonly List<ClaudeHomeServer.Protocol.NotificationMessage> _notifications = [];
     private readonly object _notificationsLock = new();
+    // Снимок всех broadcast-ов хаба с ГРУППОЙ рассылки: пульс волны обязан идти строго
+    // в группу сессии-штаба (не user_/project_-wide) — группа замыкается прокси
+    private readonly List<(string Group, ClaudeHomeServer.Protocol.ServerMessage Message)> _hubSends = [];
+    private readonly object _hubSendsLock = new();
 
     public TeamWaveServiceTests()
     {
@@ -52,16 +56,23 @@ public class TeamWaveServiceTests : IDisposable
 
         var hub = new Mock<IHubContext<SessionHub>>();
         var clients = new Mock<IHubClients>();
-        var clientProxy = new Mock<IClientProxy>();
-        clientProxy
-            .Setup(c => c.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
-            .Callback<string, object[], CancellationToken>((_, args, _) =>
-            {
-                if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.NotificationMessage n)
-                    lock (_notificationsLock) _notifications.Add(n);
-            })
-            .Returns(Task.CompletedTask);
-        clients.Setup(c => c.Group(It.IsAny<string>())).Returns(clientProxy.Object);
+        // Прокси фабрикуется ПОД ГРУППУ (замыкает её): один общий прокси не различал,
+        // в какую группу ушёл broadcast, а пульс волны адресуется строго в сессию-штаб
+        clients.Setup(c => c.Group(It.IsAny<string>())).Returns((string group) =>
+        {
+            var proxy = new Mock<IClientProxy>();
+            proxy
+                .Setup(p => p.SendCoreAsync(It.IsAny<string>(), It.IsAny<object[]>(), It.IsAny<CancellationToken>()))
+                .Callback<string, object[], CancellationToken>((_, args, _) =>
+                {
+                    if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.NotificationMessage n)
+                        lock (_notificationsLock) _notifications.Add(n);
+                    if (args.Length > 0 && args[0] is ClaudeHomeServer.Protocol.ServerMessage m)
+                        lock (_hubSendsLock) _hubSends.Add((group, m));
+                })
+                .Returns(Task.CompletedTask);
+            return proxy.Object;
+        });
         hub.Setup(h => h.Clients).Returns(clients.Object);
 
         _teamPlanning = new TeamPlanningService(_personas, new StubPlanner(() => _plannerAnswer));
@@ -167,6 +178,17 @@ public class TeamWaveServiceTests : IDisposable
     // «вводная от человека» проставляем явно, как это сделал бы запуск по сообщению человека.
     private static void SetTeamTurnFromHuman(object entry, bool value) =>
         entry.GetType().GetField("TeamTurnFromHuman")!.SetValue(entry, value);
+
+    // Живой прогон CLI у чата (белый ящик, приём StubAdapter из SessionManagerTests): в entry
+    // реестра ставим адаптер с HasLiveTurn=true — реальный claude.exe в юнит-тестах не
+    // поднимается, а пульс обязан считать идущий ход активностью волны.
+    private void MarkLiveTurn(string sessionId)
+    {
+        var entry = GetEntry(sessionId);
+        var adapter = new Mock<ClaudeHomeServer.Services.Llm.ILlmSessionAdapter>();
+        adapter.SetupGet(a => a.HasLiveTurn).Returns(true);
+        entry.GetType().GetField("Process")!.SetValue(entry, adapter.Object);
+    }
 
     // Штаб «после рестарта сервера» с УТВЕРЖДЁННЫМ планом на две под-задачи ОДНОЙ волны:
     // карточка плана лежит в истории на диске, аккумулятора у чата нет (оживает лениво,
@@ -1309,6 +1331,214 @@ public class TeamWaveServiceTests : IDisposable
         ok.Should().BeTrue();
         _tasks.GetByProject(session.ProjectId!).Where(t => t.Labels.Contains("волна 2"))
             .Should().ContainSingle("«Перезапустить» запускает следующую волну — уже честной подписью");
+    }
+
+    // --- Пульс волны (КР-наблюдаемость, этап 1) ---
+
+    private List<(string Group, ClaudeHomeServer.Protocol.ServerMessage Message)> HubSends()
+    {
+        lock (_hubSendsLock) return [.. _hubSends];
+    }
+
+    // Возвращаем штабу «свободный» статус: MakeRunningStabAsync держит его Working, а
+    // Working без живого прогона для пульса — мёртвый штаб (dead), что мешает проверкам
+    // тихих границ liveness.
+    private void FreeStab(string sessionId) =>
+        _sessions.GetById(sessionId)!.Status = SessionStatus.Active;
+
+    // Активность волны = max по UpdatedAt задач волны, дочерних чатов-исполнителей и
+    // старта волны: закрытие/перевыдача двигают UpdatedAt задачи, ход исполнителя —
+    // UpdatedAt его чата. Молчаливая по задачам волна жива, пока работает исполнитель.
+    [Fact]
+    public async Task Пульс_АктивностьСчитаетсяПоВсемТочкамВолны()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-activity");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = _tasks.GetById(created[0].Id)!;
+        // Вся волна молчит 45 минут — за пределами обоих порогов
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        task.UpdatedAt = aged;
+        FreeStab(session.Id);
+
+        _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!.Liveness
+            .Should().Be(WaveLiveness.Stalled);
+
+        // Дочерний чат исполнителя обновился только что — волна снова жива
+        await _sessions.CreateAsync(session.ProjectId!, ClaudeMode.Auto,
+            taskId: task.Id, taskExecution: true);
+        var snap = _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!;
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "ход исполнителя двигает UpdatedAt его чата — это тоже активность волны");
+        snap.LastActivityAt.Should().BeOnOrAfter(DateTime.UtcNow.AddSeconds(-5));
+        snap.QuietSeconds.Should().BeLessThan(60);
+        snap.TasksTotal.Should().Be(1);
+        snap.TasksActive.Should().Be(1, "задача волны ещё не в Done");
+    }
+
+    [Theory]
+    [InlineData(-5, "alive")]
+    [InlineData(-20, "quiet")]
+    [InlineData(-45, "stalled")]
+    public async Task Пульс_ГраницыТишины(int ageMinutes, string expectedToken)
+    {
+        // Дефолтные пороги: quiet > 15 мин, stalled > 30 мин (тишина ≤ порога — прежняя
+        // ступень). Сравниваем по wire-токену: он же уходит фронту.
+        var (session, plan) = await MakeRunningStabAsync("pulse-boundary-" + -ageMinutes);
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var aged = DateTime.UtcNow.AddMinutes(ageMinutes);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        _tasks.GetById(created[0].Id)!.UpdatedAt = aged;
+        FreeStab(session.Id);
+
+        var snap = _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!;
+
+        TeamWaveService.LivenessToken(snap.Liveness).Should().Be(expectedToken);
+        snap.QuietSeconds.Should().BeGreaterThan(0);
+    }
+
+    [Fact]
+    public async Task Пульс_МёртвыйШтаб_WorkingБезЖивогоПрогона()
+    {
+        // Чат заявляет работу (Working), а прогона CLI нет — ход убит сбоем и не разобран.
+        // Это обвал (dead), а не тишина: приоритет выше quiet/stalled.
+        var (session, plan) = await MakeRunningStabAsync("pulse-dead");
+        await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var info = _sessions.GetById(session.Id)!;
+        info.Status.Should().Be(SessionStatus.Working, "предпосылка: штаб числится занятым");
+
+        var snap = _sut.BuildWaveSnapshot(info)!;
+        snap.Liveness.Should().Be(WaveLiveness.Dead,
+            "Working без живого прогона — мёртвый штаб, даже при свежей активности");
+        snap.TasksActive.Should().Be(1);
+
+        // Свободный штаб между ходами — норма волны, не dead
+        FreeStab(session.Id);
+        _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!.Liveness
+            .Should().Be(WaveLiveness.Alive);
+    }
+
+    // Сценарий A (major, ревью этапа 1): последняя задача волны, исполнитель честно
+    // собирает проект 45 минут. Все UpdatedAt-якоря статичны (двигаются только на границах
+    // ходов), но прогон CLI ребёнка жив — это активность «сейчас», а не «зависло».
+    // Родительство чата-исполнителя закрепляем через SetParent, а не вычисляемым по задаче
+    // путём: Session.TaskSourceSessionResolver статический, и параллельный тестовый класс
+    // (WebApplicationFactory со своей TaskManager) переприсваивает его себе — вычисляемый
+    // ParentSessionId флакует в null. Для пульса оба пути — один и тот же ребёнок
+    // (ParentSessionId), авто-резолв отдельно покрыт тестом активности выше.
+    [Fact]
+    public async Task Пульс_ЖивойХодИсполнителяСпасаетОтЛожногоЗависания()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-live-executor");
+        var created = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        var task = _tasks.GetById(created[0].Id)!;
+        // Волна молчит 45 минут — за пределами обоих порогов
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        _sessions.WithTeamState(session.Id, t => { t.WaveStartedAt = aged; t.WaveActivityAt = aged; return true; });
+        task.UpdatedAt = aged;
+        FreeStab(session.Id);
+        // Чат-исполнитель создан давно и молчит (UpdatedAt — с начала хода), но ход идёт
+        var child = await _sessions.CreateAsync(session.ProjectId!, ClaudeMode.Auto,
+            taskId: task.Id, taskExecution: true);
+        _sessions.SetParent(child.Id, session.Id, UserId);
+        _sessions.GetById(child.Id)!.UpdatedAt = aged;
+        MarkLiveTurn(child.Id);
+
+        var snap = _sut.BuildWaveSnapshot(_sessions.GetById(session.Id)!)!;
+
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "живой прогон исполнителя — активность волны, даже когда все якоря UpdatedAt статичны");
+        snap.QuietSeconds.Should().BeLessThan(60);
+    }
+
+    // Сценарий B (major, ревью этапа 1): стадия Checking после закрытия волны
+    // (WaveStartedAt обнулён), ход финальной проверки идёт 45 минут. Прогон штаба жив —
+    // не dead (прогон есть) и не stalled (проверка — тоже работа команды). Заодно фикс:
+    // пульс в Checking штатен, стадия уходит в снапшот как есть.
+    [Fact]
+    public async Task Пульс_ЖивойХодФинальнойПроверкиСпасаетОтЛожногоЗависания()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-live-checking");
+        var first = await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        _tasks.Update(first[0].Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(first[0].Id)!);
+        var second = _tasks.GetByProject(session.ProjectId!).First(t => t.Labels.Contains("волна 2"));
+        _tasks.Update(second.Id, new UpdateTaskRequest(Status: TaskItemStatus.Done));
+        await _sut.OnTeamTaskDoneAsync(_tasks.GetById(second.Id)!);
+        Team(session.Id).Stage.Should().Be(TeamImplementStage.Checking,
+            "предпосылка: обе волны закрыты, координатор проверяет результат");
+
+        // Всё молчит 45 минут, детей нет — единственная активность: идущий ход проверки
+        var aged = DateTime.UtcNow.AddMinutes(-45);
+        foreach (var t in _tasks.GetByProject(session.ProjectId!)) t.UpdatedAt = aged;
+        _sessions.WithTeamState(session.Id, t => { t.WaveActivityAt = aged; return true; });
+        var info = _sessions.GetById(session.Id)!;
+        info.UpdatedAt = aged;
+        info.Status = SessionStatus.Working; // ход финальной проверки идёт
+        MarkLiveTurn(session.Id);
+
+        var snap = _sut.BuildWaveSnapshot(info)!;
+
+        snap.Stage.Should().Be(TeamImplementStage.Checking, "пульс в стадии проверки штатен");
+        snap.Liveness.Should().Be(WaveLiveness.Alive,
+            "живой ход проверки — активность: ни dead (прогон есть), ни stalled (проверка идёт)");
+        snap.QuietSeconds.Should().BeLessThan(60);
+    }
+
+    // Инвариант эфемерности: пульс не пишется в history.json, не двигает MessageCount
+    // и Session.UpdatedAt (по нему сортировка чатов и непрочитанность).
+    [Fact]
+    public async Task Пульс_НеПишетИсториюИНеДвигаетЧат()
+    {
+        var (session, plan) = await MakeRunningStabAsync("pulse-ephemeral");
+        await _sut.StartWaveAsync(session, plan, TeamWaveTrigger.UserCommand);
+        FreeStab(session.Id);
+        var before = _sessions.GetById(session.Id)!;
+        var updatedAtBefore = before.UpdatedAt;
+        var countBefore = before.MessageCount;
+        var historyBefore = await _sessions.GetHistoryAsync(session.Id);
+
+        await _sut.SendWavePulsesAsync();
+
+        var after = _sessions.GetById(session.Id)!;
+        after.UpdatedAt.Should().Be(updatedAtBefore,
+            "по UpdatedAt идут сортировка и непрочитанность — пульс их не двигает");
+        after.MessageCount.Should().Be(countBefore, "пульс — не сообщение чата");
+        (await _sessions.GetHistoryAsync(session.Id)).Should().HaveCount(historyBefore.Count,
+            "пульс эфемерный: в history.json ничего не добавляется");
+    }
+
+    // Пульс адресуется строго в session-группу своего штаба: не owner-wide (user_*),
+    // не project_*, и штаб без работающей волны пульса не получает вовсе.
+    [Fact]
+    public async Task Пульс_УходитТолькоВГруппуСвоегоШтаба()
+    {
+        var (sessionA, planA) = await MakeRunningStabAsync("pulse-hub-a");
+        await _sut.StartWaveAsync(sessionA, planA, TeamWaveTrigger.UserCommand);
+        var (sessionB, planB) = await MakeRunningStabAsync("pulse-hub-b");
+        await _sut.StartWaveAsync(sessionB, planB, TeamWaveTrigger.UserCommand);
+        // Штаб на стадии планирования: волны нет — пульса нет
+        var (sessionC, _, _) = await MakeStabAsync("pulse-hub-c");
+        FreeStab(sessionA.Id);
+        FreeStab(sessionB.Id);
+
+        await _sut.SendWavePulsesAsync();
+
+        var pulses = HubSends()
+            .Where(s => s.Message is ClaudeHomeServer.Protocol.TeamWavePulseMessage)
+            .ToList();
+        pulses.Should().HaveCount(2, "по одному пульсу на штаб с идущей волной");
+        pulses.Should().OnlyContain(p => p.Group == sessionA.Id || p.Group == sessionB.Id,
+            "пульс — в группу сессии-штаба, не в user_/project_-группы");
+        pulses.Select(p => p.Message.SessionId).Should()
+            .BeEquivalentTo([sessionA.Id, sessionB.Id]);
+        var a = (ClaudeHomeServer.Protocol.TeamWavePulseMessage)pulses
+            .Single(p => p.Message.SessionId == sessionA.Id).Message;
+        a.Stage.Should().Be("wave");
+        a.WaveNumber.Should().Be(1);
+        a.PlannedWaves.Should().Be(2);
+        a.TasksTotal.Should().Be(1);
+        a.Liveness.Should().Be("alive");
     }
 
     // --- Приёмка, круг 2 (2026-08-17): обратная сторона гейта авто-волн ---

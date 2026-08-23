@@ -350,6 +350,14 @@ public class SessionManager : IDisposable
     public bool HasViewers(string sessionId) =>
         _sessionViewers.TryGetValue(sessionId, out var conns) && !conns.IsEmpty;
 
+    // Есть ли у сессии живой прогон CLI (ход идёт либо вот-вот начнётся — принят адаптером,
+    // процесс поднимается секунды). Тот же предикат, что stuck-детект Interrupt, вынесен
+    // наружу для пульса волны «Командной реализации»: «штаб заявляет работу (Working/
+    // Waiting), а прогона нет» = мёртвый штаб, а не живая волна.
+    public bool HasLiveTurnProcess(string sessionId) =>
+        _sessions.TryGetValue(sessionId, out var entry)
+        && entry.Process is { HasLiveTurn: true } or { HasQueuedTurn: true };
+
     // Наблюдатель сообщений сессий (Claude-исполнитель задач слушает result/permission).
     // Вызывается после обновления статуса и broadcast; его ошибки не роняют пайплайн
     public event Func<Session, ServerMessage, Task>? OnSessionMessage;

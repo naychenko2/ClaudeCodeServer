@@ -313,9 +313,66 @@ public class DossierDiscussionExportTests : IDisposable
             .Should().NotContain("тайное обсуждение",
                 "для opt-out чата модель не зовётся вовсе — деньги не тратим");
         var files = await BranchFilesAsync(p.RootPath);
-        files.Should().NotContain(f => f.StartsWith("discussions/", StringComparison.Ordinal)
-            && f.Contains("hidden", StringComparison.Ordinal),
+        // Реальный путь конспекта hidden-чата: год — год создания (2026), 7 символов
+        // id («sess-di»), slug — транслитерация имени «Скрытый чат» («skrytyy-chat»).
+        // Прошлый ассерт f.Contains("hidden") был ложнозелёным: «hidden» в slug не входит,
+        // и guard BuildFiles при удалении проходил тест без сопротивления
+        files.Should().NotContain(DossierGitExporter.DiscussionPath(
+                hidden.CreatedAt.Year, hidden.Id, hidden.Name ?? ""),
             "конспект opt-out чата в ветку не едет");
+    }
+
+    // --- (д) сценарий «конспект снят раньше, opt-out включили позже»: конспект лежит
+    // в DossierDiscussionStore (снят старой выгрузкой, когда чат ещё не был скрыт), а
+    // чат теперь ExcludeFromDossiers=true. Guard ShouldExportDossier в BuildFiles обязан
+    // отсечь его на ПОВТОРНОЙ выгрузке — без этого записи, снятые до включения тумблера,
+    // жили бы в ней бессрочно, и единственный работающий предохранитель на фоновом пути
+    // выпал бы из покрытия. По образцу DossierAutoExportTests.ОптАутВключённыйПослеЗахвата. ---
+
+    [Fact]
+    public async Task КонспектСнятРаньше_ОптАутВключёнПозже_НеЕдетВВетку()
+    {
+        var p = await MkRepoProjectAsync("repo_disc_optout_late");
+        // Сначала чат без opt-out — выжимаем конспект, кладём в стор напрямую (имитация
+        // того, что предыдущая ручная выгрузка сняла и записала его)
+        var hidden = Sess("sess-disc-hidden-late", p.Id, "csid-disc-hidden-late", "Скрытый чат");
+        var ok = Sess("sess-disc-ok-late", p.Id, "csid-disc-ok-late", "Обычный чат");
+        WriteHistory("csid-disc-hidden-late", new StoredUserMessage("обсуждение, которое потом скрыли"));
+        WriteHistory("csid-disc-ok-late", new StoredUserMessage("обычное обсуждение"));
+        // Положить конспект hidden-чата в стор напрямую: так делает EnsureAsync при
+        // первой выгрузке. ok-чат оставляем без конспекта, чтобы guard был единственным,
+        // что держит скрытый конспект вне ветки.
+        _digests.Set(Owner, p.Id, new DossierDiscussionRecord(
+            hidden.Id, hidden.Name ?? "Обсуждение", "конспект от прошлой выгрузки",
+            DateTimeOffset.UtcNow));
+        _store.Add(Dossier(p.Id, "f1f2f3f4", "feat: паспорт скрытого чата", hidden.Id));
+        _store.Add(Dossier(p.Id, "a1a2a3a4", "feat: паспорт обычного чата", ok.Id));
+
+        // Между «снят раньше» и «выгружаем сейчас» пользователь включил opt-out у
+        // hidden. Sess() создаёт объект с указанными полями, так что меняем прямо здесь
+        hidden.ExcludeFromDossiers = true;
+        var exporter = MkExporter(MkSessions(hidden, ok));
+
+        await exporter.ExportAsync(Owner, p);
+
+        var files = await BranchFilesAsync(p.RootPath);
+        // Конспект скрытого чата, снятый ДО включения opt-out, не должен появиться в
+        // ветке: BuildFiles перепроверяет ShouldExportDossier для каждого конспекта,
+        // а не доверяет факту записи в стор. Это второй контур защиты после guard'а
+        // EnsureOneAsync (тот вообще не зовёт модель, если чат уже скрыт)
+        files.Should().NotContain(DossierGitExporter.DiscussionPath(
+                hidden.CreatedAt.Year, hidden.Id, hidden.Name ?? ""),
+            "конспект, снятый ДО включения opt-out, отсекается guard'ом BuildFiles");
+        // Паспорт чата, у которого ExcludeFromDossiers=true, тоже не едет в ветку.
+        // В имени файла — 7-символьный префикс sha (DossierPath), не полный sha
+        files.Should().NotContain(f => f.StartsWith("dossiers/", StringComparison.Ordinal)
+            && f.Contains("f1f2f3f", StringComparison.Ordinal),
+            "паспорт скрытого чата в ветку не едет");
+        // А контрольный паспорт обычного чата — едет, чтобы тест не был зелёным по
+        // нерелевантной причине (например, ExportAsync бросил исключение)
+        files.Should().Contain(f => f.StartsWith("dossiers/", StringComparison.Ordinal)
+            && f.Contains("a1a2a3", StringComparison.Ordinal),
+            "паспорт обычного чата едет в ветку");
     }
 
     // --- (г) секреты: из ленты вырезается ДО модели (в промпт не уходит), из ответа

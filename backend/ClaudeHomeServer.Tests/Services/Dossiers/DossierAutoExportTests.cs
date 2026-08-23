@@ -368,7 +368,10 @@ public class DossierAutoExportTests : IDisposable
         _projects.Update(p.Id, name: null, rootPath: null, autoImportDossiers: true);
         var s = Sess("sess-loop-foreign", p.Id);
         var auto = MkAutoExporter(MkSessions(s));
-        await auto.StartAsync(default);
+        // StartAsync НЕ вызываем: тест сам зовёт ExportSafeAsync, а подписка через
+        // OnOwnDossierChanged поставила бы параллельный таймер дебаунса (тестовая пауза
+        // 1 с), который мог бы сработать ПОСЛЕ WriteForeignBranchAsync и перезаписать
+        // чужой tip нашим — ранее это ломало тест на медленных CI-раннерах.
 
         _store.Add(Dossier(user.Id, p.Id, "b2c3d4e5", "feat: свой паспорт", s.Id));
         await auto.ExportSafeAsync(user.Id, p.Id);
@@ -416,5 +419,54 @@ public class DossierAutoExportTests : IDisposable
         tree.Stdout.Should().Contain("ab12cd3").And.Contain("ef56ab7", "паспорта в ветке");
         tree.Stdout.Should().Contain("discussions/",
             "уже снятый конспект из стора едет в ветку и на авто-пути");
+    }
+
+    // --- Сторож: «push никогда не автоматический» (инвариант ADR-004 §6). Bare-репозиторий
+    // как origin — идеальная ловушка: туда уезжает всё, что хоть раз дёрнет «git push». Если
+    // автовыгрузка хоть когда-нибудь сама опубликует ветку паспортов, ls-remote вернёт
+    // непустой список. До этой правки слово push не встречалось ни в одном тесте Dossier. ---
+
+    private async Task<string> InitBareRemoteAsync(string projectRoot, string bareName)
+    {
+        var bare = Path.Combine(_temp, bareName);
+        Directory.CreateDirectory(bare);
+        var init = await GitAsync(bare, "init", "--bare");
+        init.Ok.Should().BeTrue("bare-репозиторий обязан создаться: {0}", init.Stderr);
+        // Настраиваем origin так, чтобы bare был приёмником push: это делает сторож строгим —
+        // пустой bare-репозиторий после ls-remote --heads ДО теста означает «нечему отвечать»
+        var add = await GitAsync(projectRoot, "remote", "add", "origin", bare);
+        add.Ok.Should().BeTrue("remote add origin: {0}", add.Stderr);
+        return bare;
+    }
+
+    [Fact]
+    public async Task Автовыгрузка_НикогдаНеПушитВRemote()
+    {
+        var (p, user) = await MkRepoProjectAsync("repo_push_guard", flagOn: true);
+        var s = Sess("sess-push-guard", p.Id);
+        await InitBareRemoteAsync(p.RootPath, "remote_push_guard.git");
+
+        var auto = MkAutoExporter(MkSessions(s));
+        await auto.StartAsync(default);
+
+        _store.Add(Dossier(user.Id, p.Id, "deadbeef", "feat: проверка сторожа push", s.Id));
+        await AwaitBranchAsync(p.RootPath);
+
+        // Локальная ветка паспортов создана — это нормальная часть автовыгрузки
+        (await HasBranchAsync(p.RootPath)).Should().BeTrue(
+            "автовыгрузка создаёт ветку паспортов локально — это её работа");
+
+        // А вот в origin её быть не должно. ls-remote --heads возвращает ровно
+        // запрошенный ref, если он есть в remote: пустой stdout — гарантия «push не было».
+        var ls = await GitAsync(p.RootPath, "ls-remote", "--heads", "origin", GitService.DossiersRef);
+        ls.Ok.Should().BeTrue("ls-remote не должен падать: {0}", ls.Stderr);
+        ls.Stdout.Trim().Should().BeEmpty(
+            "ветка {0} в origin — это автоматический push, а инвариант «push никогда не автоматический»",
+            GitService.DossiersRef);
+
+        // Контрольный: даже без фильтра по ref в origin нет ни одной ветки
+        var lsAll = await GitAsync(p.RootPath, "ls-remote", "--heads", "origin");
+        lsAll.Stdout.Trim().Should().BeEmpty(
+            "bare-репозиторий полностью пуст — автовыгрузка не отправляла ничего, ни под каким предлогом");
     }
 }

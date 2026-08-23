@@ -133,8 +133,6 @@ export function teamWaveTaskStatusLabel(status: TeamWaveTaskStatus): string {
     case 'todo': return 'в очереди';
     case 'inProgress': return 'в работе';
     case 'done': return 'готово';
-    case 'failed': return 'провалилась';
-    case 'cancelled': return 'отменена';
   }
 }
 

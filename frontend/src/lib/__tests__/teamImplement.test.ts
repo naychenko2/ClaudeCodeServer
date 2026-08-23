@@ -506,10 +506,8 @@ describe('пульс волны: список задач в поповере', (
     expect(teamWaveTaskStatusLabel('todo')).toBe('в очереди');
     expect(teamWaveTaskStatusLabel('inProgress')).toBe('в работе');
     expect(teamWaveTaskStatusLabel('done')).toBe('готово');
-    expect(teamWaveTaskStatusLabel('failed')).toBe('провалилась');
-    expect(teamWaveTaskStatusLabel('cancelled')).toBe('отменена');
-    for (const s of ['todo', 'inProgress', 'done', 'failed', 'cancelled'] as const) {
-      expect(teamWaveTaskStatusLabel(s)).not.toMatch(/\b(todo|inProgress|done|failed|cancelled)\b/);
+    for (const s of ['todo', 'inProgress', 'done'] as const) {
+      expect(teamWaveTaskStatusLabel(s)).not.toMatch(/\b(todo|inProgress|done)\b/);
     }
   });
 

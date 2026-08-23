@@ -401,8 +401,7 @@ function WaveTaskRow({ task, persona }: { task: import('../../types').TeamWaveTa
         fontSize: FS.xs, flexShrink: 0,
         color: task.status === 'inProgress' ? C.accent
           : task.status === 'done' ? C.successText
-            : task.status === 'failed' ? C.dangerText
-              : C.textMuted,
+            : C.textMuted,
         fontWeight: 600,
       }}>
         {statusLabel}

@@ -1425,7 +1425,9 @@ export interface TeamWavePulse {
 }
 
 // Задача волны (расширенный REST-снапшот)
-export type TeamWaveTaskStatus = 'todo' | 'inProgress' | 'done' | 'failed' | 'cancelled';
+// Совпадает с TaskItemStatus на бэке. Шире делать нельзя: бэк пришлёт незнакомый
+// статус, фронт его не распарсит — задача пропадёт из списка молча
+export type TeamWaveTaskStatus = 'todo' | 'inProgress' | 'done';
 
 export interface TeamWaveTask {
   id: string;

@@ -134,9 +134,9 @@ public static class WorkflowMetaResolver
     // Одиночные «Р», «—», «→» в честном русском тексте допустимы — оставляем.
     internal static bool IsMojibake(string text)
     {
-        if (text.IndexOf('') >= 0) return true;
-        if (text.IndexOf('') >= 0) return true;
-        const string CyrillicRPlusNbsp = "Р ";
+        if (text.IndexOf('\u0098') >= 0) return true;
+        if (text.IndexOf('\u009A') >= 0) return true;
+        const string CyrillicRPlusNbsp = "Р\u00A0";
         return text.IndexOf(CyrillicRPlusNbsp, StringComparison.Ordinal) >= 0;
     }
 }

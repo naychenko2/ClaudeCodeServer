@@ -31,6 +31,7 @@ public sealed partial class SubscriptionOAuthUsageService(
     UsageService usage,
     Llm.LlmProviderRegistry providers,
     IHttpClientFactory httpFactory,
+    SubscriptionWindowMismatchGuard guard,
     IConfiguration config) : BackgroundService
 {
     private const string Endpoint = "https://api.anthropic.com/api/oauth/usage";
@@ -276,6 +277,11 @@ public sealed partial class SubscriptionOAuthUsageService(
 
         using var doc = JsonDocument.Parse(r.Body!);
         RecordWindows(key, doc.RootElement);
+
+        // Свежий oauth-снимок записан — сверить сброс окна с setup-токеном того же ключа
+        // (сторож чужого setup-токена). Этот тик идёт независимо от простоя аккаунта,
+        // поэтому ловит расхождение и у активно используемых подписок
+        await guard.CheckAsync(key);
     }
 
     // Экспоненциальный backoff по 429: интервал ×2 с каждым отказом подряд, потолок час;

@@ -43,8 +43,20 @@ public class SubscriptionUsageWarmupServiceTests : IDisposable
         var pool = new ClaudeSubscriptionPool(config, usage);
         var providers = new LlmProviderRegistry(config);
         var activity = new SubscriptionActivityTracker();
-        var svc = new SubscriptionUsageWarmupService(pool, usage, providers, activity, config);
+        var guard = new SubscriptionWindowMismatchGuard(usage, pool, new SubscriptionWindowMismatchGuardTests.SilentNotifier());
+        var svc = new SubscriptionUsageWarmupService(pool, usage, providers, activity, guard, config);
         return (svc, pool, usage, activity);
+    }
+
+    // Синхронный перехват stderr — для проверок строк лога RecordAndGuard
+    private static string CaptureErr(Action action)
+    {
+        var prev = Console.Error;
+        var sw = new StringWriter();
+        Console.SetError(sw);
+        try { action(); }
+        finally { Console.SetError(prev); }
+        return sw.ToString();
     }
 
     // --- Идл-критерий: кто попадает в KeysDueForPing ---

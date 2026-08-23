@@ -54,9 +54,11 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
             ["DataPath"] = Path.Combine(_tempDir, "projects.json"),
         });
         var usage = new UsageService(config);
+        var pool = new ClaudeSubscriptionPool(config);
+        var guard = new SubscriptionWindowMismatchGuard(usage, pool, new SubscriptionWindowMismatchGuardTests.SilentNotifier());
         var svc = new SubscriptionOAuthUsageService(
-            new ClaudeSubscriptionPool(config), usage, new LlmProviderRegistry(config),
-            new StubHttpFactory(handler), config);
+            pool, usage, new LlmProviderRegistry(config),
+            new StubHttpFactory(handler), guard, config);
         svc.OverrideUserAgent("claude-code/test"); // не дёргать `claude --version` в тесте
         return (svc, usage);
     }
@@ -156,9 +158,12 @@ public class SubscriptionOAuthUsageServiceTests : IDisposable
         foreach (var (k, v) in extraConfig) dict[k] = v;
         var config = TestConfig.Build(dict);
         var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.OK));
+        var usage = new UsageService(config);
+        var pool = new ClaudeSubscriptionPool(config);
+        var guard = new SubscriptionWindowMismatchGuard(usage, pool, new SubscriptionWindowMismatchGuardTests.SilentNotifier());
         var svc = new SubscriptionOAuthUsageService(
-            new ClaudeSubscriptionPool(config), new UsageService(config), new LlmProviderRegistry(config),
-            new StubHttpFactory(handler), config);
+            pool, usage, new LlmProviderRegistry(config),
+            new StubHttpFactory(handler), guard, config);
         svc.OverrideUserAgent("claude-code/test");
         return svc;
     }

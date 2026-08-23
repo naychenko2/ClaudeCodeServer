@@ -29,6 +29,7 @@ public sealed class SubscriptionUsageWarmupService(
     UsageService usage,
     LlmProviderRegistry providers,
     SubscriptionActivityTracker activity,
+    SubscriptionWindowMismatchGuard guard,
     IConfiguration config) : BackgroundService
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
@@ -166,6 +167,10 @@ public sealed class SubscriptionUsageWarmupService(
             }
 
             RecordAndGuard(key, last);
+
+            // Свежий probe-снимок записан — сверить сброс окна с oauth-каналом того же
+            // ключа (сторож чужого setup-токена)
+            await guard.CheckAsync(key);
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested && !ct.IsCancellationRequested)
         {

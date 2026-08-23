@@ -194,6 +194,11 @@ builder.Services.AddSingleton(sp => new ClaudeSubscriptionPool(
 // Время последней фактической активности аккаунта пула (живой ход / идл-пинг) —
 // делит SessionManager (RateLimitMessage живого хода) и SubscriptionUsageWarmupService
 builder.Services.AddSingleton<SubscriptionActivityTracker>();
+// Сторож «чужого» setup-токена: расхождение сброса 5h-окна между setup-токеном (probe/turn)
+// и профильным логином (oauth) — алерт админам, без вывода из ротации. Шов нотификатора —
+// для юнит-тестов дедупа (как IKnowledgeAlertNotifier)
+builder.Services.AddSingleton<ISubscriptionAlertNotifier, SubscriptionAlertNotifier>();
+builder.Services.AddSingleton<SubscriptionWindowMismatchGuard>();
 // Стартовый прогрев + идл-пинг утилизации подписок (пробный ход на простаивающий аккаунт)
 AddHosted<SubscriptionUsageWarmupService>();
 // Точная утилизация обоих окон (5ч + неделя) каждого аккаунта через api/oauth/usage;

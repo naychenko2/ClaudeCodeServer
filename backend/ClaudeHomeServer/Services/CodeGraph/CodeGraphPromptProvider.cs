@@ -175,9 +175,11 @@ public sealed class CodeGraphPromptProvider
         }
         // Куда идти за остальным графом. Раньше здесь стояли панель «Граф» и REST-эндпоинт —
         // обе двери для агента закрыты (панель для человека, ключа к REST у него нет).
-        sb.Append("Остальной граф — инструменты codegraph_find (найти тип по имени), "
-                  + "codegraph_neighbors (связи типа: кто зависит и от чего), "
-                  + "codegraph_hubs (хабы по связности).");
+        sb.AppendLine("Когда звать граф вместо Grep:");
+        sb.AppendLine("• «где объявлен X» — codegraph_find: отдаёт файл со строкой и вид типа, без текстового шума совпадений;");
+        sb.AppendLine("• «что сломается, если правлю X» — codegraph_neighbors: входящие связи с типом (Calls/Implements/References);");
+        sb.AppendLine("• «с чего начать в незнакомой подсистеме» — codegraph_hubs.");
+        sb.Append("Grep остаётся для текстовых вхождений и файлов вне графа (конфиги, .md, разметка).");
         return sb.ToString();
     }
 

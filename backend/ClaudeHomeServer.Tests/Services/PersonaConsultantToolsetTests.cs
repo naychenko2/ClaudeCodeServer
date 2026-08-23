@@ -81,6 +81,20 @@ public class PersonaConsultantToolsetTests
     }
 
     [Fact]
+    public void ГрафКода_ТолькоПоЯвномуФлагу()
+    {
+        // Дефолт — выключено: сервер графа ездит лишь в проектные сессии, мёртвые
+        // ссылки mcp__codegraph__* всем персонам подряд не нужны
+        PersonaConsultantToolset.Build(Make(), webAllowed: false)
+            .Should().NotContain(t => t.StartsWith("mcp__codegraph__"));
+
+        PersonaConsultantToolset.Build(Make(), webAllowed: false, codeGraphAllowed: true)
+            .Should().Contain("mcp__codegraph__codegraph_find")
+            .And.Contain("mcp__codegraph__codegraph_neighbors")
+            .And.Contain("mcp__codegraph__codegraph_hubs");
+    }
+
+    [Fact]
     public void Память_ТолькоПриВключеннойПамяти()
     {
         PersonaConsultantToolset.Build(Make(memory: false), webAllowed: false)

@@ -33,6 +33,20 @@ public static class PersonaConsultantToolset
         "mcp__notes__notes_backlinks", "mcp__notes__notes_graph", "mcp__notes__notes_semantic_search",
     ];
 
+    // Ключ сервера графа кода в MCP-конфиге хода (ClaudeSession.BuildTurnMcpConfig)
+    public const string CodeGraphServerKey = "codegraph";
+
+    // Граф кода — три чтения (поиск типа, связи узла, хабы). Включается ТОЛЬКО активной
+    // Tool-привязкой codegraph (PersonaBindingsService.ToolBindingActive): сервер графа
+    // ездит в конфиг хода лишь проектных сессий, дефолт «всем» раскладывал бы мёртвые
+    // ссылки по файлам всех персон подряд
+    public static readonly string[] CodeGraphRead =
+    [
+        $"mcp__{CodeGraphServerKey}__codegraph_find",
+        $"mcp__{CodeGraphServerKey}__codegraph_neighbors",
+        $"mcp__{CodeGraphServerKey}__codegraph_hubs",
+    ];
+
     public static readonly string[] PersonasRead =
     [
         "mcp__personas__personas_list", "mcp__personas__personas_get",
@@ -88,15 +102,17 @@ public static class PersonaConsultantToolset
     // (точное совпадение имени); Access расширить его не может — безопасность сабагента
     // не зависит от профиля, рассчитанного на живой надзор. Единственное расширение —
     // специальность исполнителя (IsExecutor). Гейты tasks/notes/web — эффективные
-    // возможности персоны (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools).
+    // возможности персоны (EffectiveToolEnabled: Tool-привязка приоритетнее Persona.Tools);
+    // граф кода — только явная активная привязка (ToolBindingActive, см. CodeGraphRead).
     public static IReadOnlyList<string> Build(Persona persona, bool webAllowed,
-        bool tasksAllowed = true, bool notesAllowed = true)
+        bool tasksAllowed = true, bool notesAllowed = true, bool codeGraphAllowed = false)
     {
         var tools = new List<string>(BuiltIn);
         if (IsExecutor(persona)) tools.AddRange(Executor);
         if (webAllowed) tools.AddRange(Web);
         if (tasksAllowed) tools.AddRange(TasksRead);
         if (notesAllowed) tools.AddRange(NotesRead);
+        if (codeGraphAllowed) tools.AddRange(CodeGraphRead);
         tools.AddRange(PersonasRead);
         tools.AddRange(WspRead);
         if (persona.MemoryEnabled)

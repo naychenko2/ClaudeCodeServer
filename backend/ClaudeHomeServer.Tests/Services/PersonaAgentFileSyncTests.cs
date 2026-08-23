@@ -117,6 +117,36 @@ public class PersonaAgentFileSyncTests : IDisposable
     }
 
     [Fact]
+    public void ПривязкаГрафаКода_ВыдаётСабагентуИнструментыИСервер()
+    {
+        // Без привязки — ни инструментов графа, ни codegraph в mcpServers, ни подсказки
+        var p = Create("Кодер");
+        var path = AgentPath("shared", p.Handle);
+        File.ReadAllText(path).Should().NotContain("codegraph");
+
+        // Активная Tool-привязка → три инструмента + сервер в шапке (UpdateBindings
+        // поднимает OnPersonaChanged и файл переписывается сам)
+        _personas.UpdateBindings(p.Id, "owner-1",
+        [
+            new PersonaBinding { Type = PersonaBindingType.Tool, Target = "codegraph" },
+        ]);
+        var with = File.ReadAllText(path);
+        with.Should().Contain("mcp__codegraph__codegraph_find")
+            .And.Contain("mcp__codegraph__codegraph_neighbors")
+            .And.Contain("mcp__codegraph__codegraph_hubs");
+        with.Should().Contain($"mcpServers: [pmem_{p.Handle}, codegraph]");
+        with.Should().Contain("применяй инструменты «Граф кода» (codegraph)");
+
+        // Off-привязка убирает и инструменты, и строку-подсказку
+        _personas.UpdateBindings(p.Id, "owner-1",
+        [
+            new PersonaBinding { Type = PersonaBindingType.Tool, Target = "codegraph",
+                Mode = PersonaBindingMode.Off },
+        ]);
+        File.ReadAllText(path).Should().NotContain("codegraph");
+    }
+
+    [Fact]
     public void Reconcile_УдаляетПосторонниеФайлы()
     {
         Create("Настоящий");

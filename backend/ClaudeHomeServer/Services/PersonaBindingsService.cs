@@ -168,6 +168,17 @@ public class PersonaBindingsService
         return FindToolBinding(persona, key) is not { Mode: PersonaBindingMode.Off };
     }
 
+    // Активна ли Tool-привязка ключа у персоны (Mode != Off) — явный opt-in, в отличие от
+    // ServerToolEnabled (deny-only, дефолт «включено» для чатов). Этим флагом файловый
+    // сабагент персоны решает, получать ли инструменты графа кода: его allow-list
+    // deny-by-default, а сервер графа ездит в конфиг хода только проектных сессий —
+    // дефолт «всем» клал бы мёртвые ссылки mcp__codegraph__* в файлы всех персон подряд.
+    // Условие совпадает с источником строки-подсказки BuildSubagentIndex («применяй
+    // инструменты Граф кода» — тоже активная привязка), поэтому подсказка и выданные
+    // инструменты не расходятся.
+    public bool ToolBindingActive(Persona? persona, string key) =>
+        persona is not null && FindToolBinding(persona, key) is { Mode: not PersonaBindingMode.Off };
+
     // Выдан ли персоне сервер личного реестра по allow-модели (флаг mcp-allowlist):
     // выдаёт только явная привязка Mode != Off на ключ каталога «mcp:<ключ>»; отсутствие
     // привязки и режим Off — не выдан. Чат без персоны — не выдан. Инверсия касется ТОЛЬКО

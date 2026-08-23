@@ -215,3 +215,48 @@ describe('доклад о задаче: delegationTaskId доезжает до �
     expect((live.items[0] as { delegationTaskId?: string }).delegationTaskId).toBeUndefined();
   });
 });
+
+// Э2 КР-наблюдаемости: событие team_wave_pulse эфемерное — пишется в ChatState.
+// teamWavePulse, а НЕ в items. Регрессия: счётчик длины ленты (serverHistoryNewer)
+// считает ТОЛЬКО persisted kinds, и если бы pulse стал persisted, перезагрузка истории
+// навсегда признавалась бы «не новее» живой ленты, и ответ оборванного хода залипал бы
+describe('team_wave_pulse: эфемерность', () => {
+  const waveState = (over: Partial<Extract<ServerMessage, { type: 'team_implement' }>> = {}) =>
+    ({
+      type: 'team_implement', active: true, stage: 'wave', waveNumber: 1, plannedWaves: 2,
+      autoWaves: true, coordinatorPersonaId: 'p-coord', plannerPersonaId: 'p-plan',
+      executorPersonaIds: ['p-1'], budget: null, planCardId: null, modeLocked: false,
+      ...over,
+    }) as unknown as ServerMessage;
+
+  const wavePulse = (over: Partial<Extract<ServerMessage, { type: 'team_wave_pulse' }>> = {}) =>
+    ({
+      type: 'team_wave_pulse', stage: 'wave', waveNumber: 1, plannedWaves: 2,
+      tasksActive: 2, tasksTotal: 5,
+      lastActivityAt: '2026-08-23T11:00:00Z', quietSeconds: 240, liveness: 'alive',
+      ...over,
+    }) as unknown as ServerMessage;
+
+  it('не добавляет элементов в items', () => {
+    const before: ChatState = applyServerMessage(initialChatState(), waveState());
+    const after: ChatState = applyServerMessage(before, wavePulse());
+    expect(after.items).toEqual(before.items);
+  });
+
+  it('обновляет ChatState.teamWavePulse (не путать с persisted)', () => {
+    let s: ChatState = applyServerMessage(initialChatState(), waveState());
+    expect(s.teamWavePulse).toBeUndefined();
+    s = applyServerMessage(s, wavePulse({ liveness: 'stalled', quietSeconds: 2400 }));
+    expect(s.teamWavePulse?.liveness).toBe('stalled');
+    expect(s.teamWavePulse?.quietSeconds).toBe(2400);
+    expect(s.teamWavePulse?.waveNumber).toBe(1);
+  });
+
+  it('live-only: сверка «сервер новее?» не считает team_wave_pulse', () => {
+    // Без этой проверки вышло бы: пульс удлиняет items, serverHistoryNewer возвращает
+    // false (live длиннее), и перезагрузка истории не подтягивает оборванный хвост хода
+    const client = feed(initialChatState(), waveState(), wavePulse(), wavePulse());
+    const server = snapshot({ kind: 'text', text: 'ответ, дописанный пока вкладка была в другом чате' });
+    expect(serverHistoryNewer(server, client.items)).toBe(true);
+  });
+});

@@ -954,6 +954,13 @@ export type ServerMessage = { sessionId: string } & (
   // start=false — закончил: success=true → subtaskCount/waveCount/elapsedMs, success=false →
   // failure (готовый текст причины, тот же, что уйдёт в title карточки отказа следом)
   | { type: 'team_planning'; start: boolean; success: boolean; subtaskCount: number; waveCount: number; elapsedMs: number; route: string | null; failure: string | null; promptChars: number; responseChars: number }
+  // Пульс волны командной реализации (Э2 КР-наблюдаемости). Эфемерное: в ленту НЕ
+  // попадает и в историю НЕ пишется, состояние держится в ChatState.teamWavePulse.
+  // Список задач приходит отдельным REST-снапшотом (/chats/{id}/team-wave-snapshot) при
+  // открытии поповера бейджа — иначе пришлось бы раздувать каждое событие массивом.
+  // stage: бэк шлёт пульс и в финальной проверке — она тоже работа команды и может
+  // «зависнуть», отбрасывать её WS-события как мусор было ошибкой
+  | { type: 'team_wave_pulse'; stage: 'wave' | 'checking'; waveNumber: number; plannedWaves: number; tasksActive: number; tasksTotal: number; lastActivityAt: string; quietSeconds: number; liveness: TeamWaveLiveness }
   | { type: 'preview_status'; status: string; port?: number; error?: string; serviceId?: string }
   // Вывод дев-сервера — приходит только подписчикам группы конкретного сервиса
   // (JoinPreviewLog), а не всем вкладкам пользователя. data — накопленное за тик
@@ -1399,6 +1406,48 @@ export interface SessionTeamImplement {
 // Live-состояние режима (из события team_implement)
 export interface TeamImplementState extends SessionTeamImplement {
   active: boolean;
+}
+
+// === Пульс волны командной реализации (Э2 КР-наблюдаемости) ===
+// Эфемерное состояние: приходит WS-событием раз в минуту в чат штаба, в ленту НЕ
+// кладётся, в историю не пишется. Без пульса (старый бэкенд) бейдж показывает только
+// стадию — обратная совместимость.
+export type TeamWaveLiveness = 'alive' | 'quiet' | 'stalled' | 'dead';
+
+// То, что шлёт бэкенд в WS-событии team_wave_pulse (краткая форма, без списка задач).
+// stage ограничен двумя значениями: волна исполнителей и финальная проверка — обе стадии
+// могут «дышать» (задачи ещё крутятся), остальные стадии пульса не шлют
+export interface TeamWavePulse {
+  stage: 'wave' | 'checking';
+  waveNumber: number;
+  plannedWaves: number;
+  tasksActive: number;
+  tasksTotal: number;
+  lastActivityAt: string;       // ISO, момент последней активности штаба
+  quietSeconds: number;
+  liveness: TeamWaveLiveness;
+}
+
+// Задача волны (расширенный REST-снапшот)
+// Совпадает с TaskItemStatus на бэке. Шире делать нельзя: бэк пришлёт незнакомый
+// статус, фронт его не распарсит — задача пропадёт из списка молча
+export type TeamWaveTaskStatus = 'todo' | 'inProgress' | 'done';
+
+export interface TeamWaveTask {
+  id: string;
+  title: string;
+  executorPersonaId: string | null;
+  status: TeamWaveTaskStatus;
+  updatedAt: string;
+  startedAt: string | null;
+}
+
+// Полный снимок пульса + список задач + пороги (REST /api/chats/{id}/team-wave-snapshot)
+// Refetch при КАЖДОМ открытии поповера — после реконнекта кэш протухнет, а человек
+// должен видеть свежее состояние
+export interface TeamWaveSnapshot extends TeamWavePulse {
+  tasks: TeamWaveTask[];
+  thresholds: { quietMinutes: number; stalledMinutes: number };
 }
 
 // Под-задача плана командной реализации: единица раздачи (в Э3 из неё создаётся задача).

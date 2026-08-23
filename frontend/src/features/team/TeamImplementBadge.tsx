@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Gauge, ListChecks, Pause, Power, Users, Zap } from 'lucide-react';
-import type { SessionTeamImplement } from '../../types';
+import type { Persona, SessionTeamImplement, TeamWavePulse, TeamWaveSnapshot } from '../../types';
 import { C, FS, FONT, R, MODAL_W } from '../../lib/design';
 import { Button, ConfirmDialog, Menu, Modal } from '../../components/ui';
 import { ICON_STROKE } from '../../components/ui/icons';
+import { api } from '../../lib/api';
 import {
   teamImplementTone, teamImplementBadgeText, teamImplementStageShort, teamBudgetLine, teamBudgetTight,
   teamImplementModeHeld,
@@ -11,6 +12,8 @@ import {
   TEAM_IMPLEMENT_DISABLE_TITLE, TEAM_IMPLEMENT_DISABLE_TEXT,
   TEAM_IMPLEMENT_NO_CODE_ON, TEAM_IMPLEMENT_NO_CODE_OFF, TEAM_IMPLEMENT_MODE_HELD,
   TEAM_IMPLEMENT_STOP_TITLE, TEAM_IMPLEMENT_STOP_TEXT, TEAM_IMPLEMENT_STOPPED_HINT,
+  teamPulseTone, teamPulseBadgeText, teamPulseBadgeShort,
+  teamPulseMeaning, teamPulseStage, teamWaveTaskStatusLabel, teamWaveTaskRunningLabel, teamWaveTasksSorted,
 } from '../../lib/teamImplement';
 import { teamMechanic } from './teamMechanics';
 import type { Mode } from '../../lib/modes';
@@ -22,15 +25,30 @@ import type { Mode } from '../../lib/modes';
 //   work  (accent)  — планирование / волна N из M / проверка — команда работает
 //   wait  (warning) — ждёт подтверждения / нужно решение — практика стоит и ждёт человека
 //   idle  (muted)   — ждёт задачу — итерация закрыта, режим жив
+// На стадии волны/проверки при ЖИВОМ пульсе (Э2) тон дополнительно корректируется
+// по liveness: alive — work, quiet — warning, stalled/dead — danger. Без пульса
+// (бэк старый) — тон остаётся прежним, обратная совместимость
 // Клик по бейджу — поповер (десктоп) / шторка (мобила) с описанием и выключением режима;
 // выключение — с подтверждением. Чип «Авто» переключается одним кликом без подтверждения.
-export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, onDisable, onStop }: {
+export function TeamImplementBadge({ state, chatMode, isMobile, pulse, sessionId, personas, onToggleAuto, onDisable, onStop }: {
   state: SessionTeamImplement;
   // Текущий режим прав чата: под правилом «координатор не пишет код» он удерживается
   // на «Авто» — иначе гард обходится через терминал. Показываем сноской, чтобы
   // подтверждения действий не выглядели необъяснимыми
   chatMode?: Mode;
   isMobile?: boolean;
+  // Эфемерный пульс волны (Э2 КР-наблюдаемости). undefined — пульса ещё не было
+  // (бэк старый, чат открыт до первой минуты волны). При наличии в стадии волны/
+  // проверки бейдж показывает активность («2/5 · 4 мин»), тон пересчитывается по
+  // liveness
+  pulse?: TeamWavePulse | null;
+  // sessionId нужен для refetch снапшота при открытии поповера — список задач волны
+  // самодостаточен внутри бейджа, чтобы не раздувать пропсы родителя. Без sessionId
+  // список задач не показывается (обратная совместимость при отсутствии данных)
+  sessionId?: string;
+  // Справочник персон (для имён/аватаров исполнителей задач). Уже есть на фронте —
+  // usePersonas() родителя
+  personas?: Record<string, Persona>;
   onToggleAuto: () => void | Promise<void>;
   onDisable: () => void | Promise<void>;
   // «Остановить» прогон (режим при этом остаётся включённым). Без обработчика строки нет
@@ -42,22 +60,76 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
   const [infoAnchor, setInfoAnchor] = useState<DOMRect | null>(null);
   const [disableConfirm, setDisableConfirm] = useState(false);
   const [stopConfirm, setStopConfirm] = useState(false);
+  // Полный снимок волны для поповера: refetch на КАЖДОМ открытии (после реконнекта
+  // кэш протухнет, а человек должен видеть свежее состояние). null — нет данных или
+  // запрос не успел; undefined — открытия ещё не было
+  const [snapshot, setSnapshot] = useState<TeamWaveSnapshot | null | undefined>(undefined);
   const infoOpen = infoAnchor !== null;
   const closeInfo = () => setInfoAnchor(null);
 
-  const tone = teamImplementTone(state.stage);
-  // Короткая форма чипа («КР · волна 1») — полная («Командная реализация · волна 1 из 2»)
-  // вываливается за границы полосы бейджей на узкой ширине; она уходит в title кнопки
+  // Refetch списка задач при КАЖДОМ открытии поповера. Гонку с закрытием (юзер успел
+  // нажать «Остановить» до прихода ответа) переживаем молча: закроется бейдж —
+  // закроется и поповер, и обновление уйдёт в никуда. Не критично: новый открытие
+  // подтянет свежее
+  useEffect(() => {
+    if (!infoOpen || !sessionId || !teamPulseStage(state.stage)) return;
+    let cancelled = false;
+    api.chats.getTeamWaveSnapshot(sessionId)
+      .then(s => { if (!cancelled) setSnapshot(s); })
+      .catch(() => { if (!cancelled) setSnapshot(null); });
+    return () => { cancelled = true; };
+  }, [infoOpen, sessionId, state.stage]);
+
+  // Эффективный тон на стадии волны/проверки: пульс живого бэка перебивает дефолтный
+  // тон стадии. Вне этих стадий или без пульса — как раньше, по стадии
+  const stageTone = teamImplementTone(state.stage);
+  const effectiveTone: 'work' | 'wait' | 'idle' | 'warning' | 'danger' =
+    teamPulseStage(state.stage) && pulse ? teamPulseTone(pulse.liveness) : stageTone;
+
+  // Полная и короткая подпись бейджа при живом пульсе на стадии волны/проверки
+  const pulseFullText = pulse ? teamPulseBadgeText(state, pulse) : null;
+  const pulseShortText = pulse ? teamPulseBadgeShort(pulse) : null;
+
+  // Дефолтные подписи (как раньше, без пульса)
   const fullText = teamImplementBadgeText(state.stage, state.waveNumber, state.plannedWaves);
   const text = `${teamMechanic('implementMode').shortName} · ${teamImplementStageShort(state.stage, state.waveNumber, state.plannedWaves)}`;
   const height = isMobile ? 26 : 24;
 
-  const toneStyle = tone === 'work'
-    ? { background: C.accentLight, color: C.accent }
-    : tone === 'wait'
-      ? { background: C.warningBg, color: C.warningText }
-      : { background: C.bgSelected, color: C.textSecondary };
-  const dotColor = tone === 'work' ? C.accent : tone === 'wait' ? C.warning : C.textMuted;
+  // Тон бейджа: для warning/danger отдельные палитры, work/wait/idle — как раньше
+  const toneStyle = (() => {
+    switch (effectiveTone) {
+      case 'work': return { background: C.accentLight, color: C.accent };
+      case 'wait': return { background: C.warningBg, color: C.warningText };
+      case 'warning': return { background: C.warningBg, color: C.warningText };
+      case 'danger': return { background: C.dangerBg, color: C.dangerText };
+      case 'idle': return { background: C.bgSelected, color: C.textSecondary };
+    }
+  })();
+  const dotColor = (() => {
+    switch (effectiveTone) {
+      case 'work': return C.accent;
+      case 'wait':
+      case 'warning': return C.warning;
+      case 'danger': return C.danger;
+      case 'idle': return C.textMuted;
+    }
+  })();
+  // Пульс точки: только у «живых» стадий. stalled/dead/quiet — статичная точка,
+  // иначе «дышит» поверх сообщения о проблеме сбивает с толку
+  const pulseAnimation = (() => {
+    if (effectiveTone === 'idle') return undefined;
+    if (effectiveTone === 'work') return `pulsedot 1.6s ease-in-out infinite`;
+    if (effectiveTone === 'wait' || effectiveTone === 'warning') return `pulsedot 1.2s ease-in-out infinite`;
+    return undefined; // danger — статика
+  })();
+
+  // Текст и тултип бейджа с учётом пульса
+  const badgeText = teamPulseStage(state.stage) && pulse
+    ? (isMobile ? (pulseShortText ?? text) : (pulseFullText ?? text))
+    : text;
+  const badgeTitle = teamPulseStage(state.stage) && pulse
+    ? `${fullText} — ${teamPulseMeaning(pulse.liveness)}`
+    : `${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`;
 
   const budgetLine = teamBudgetLine(state.budget);
   const budgetTight = teamBudgetTight(state.budget);
@@ -67,6 +139,19 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
       <p style={{ fontSize: FS.sm, color: C.textSecondary, lineHeight: 1.45, margin: 0 }}>
         {TEAM_IMPLEMENT_DESCRIPTION}
       </p>
+      {/* Пульс волны: блок «Что это значит» — объясняет состояние человеческим языком.
+          На стадии волны/проверки при живом пульсе. Тон по liveness: alive — спокойный,
+          quiet — янтарный (это нормально), stalled/dead — красный (нужно внимание) */}
+      {teamPulseStage(state.stage) && pulse && (
+        <PulseBlock pulse={pulse} tone={effectiveTone} />
+      )}
+      {/* Список задач волны: refetch снапшота при КАЖДОМ открытии (живёт в родителе —
+          useTeamWaveSnapshot в ChatPanel). Здесь только рендер: задачи, исполнители,
+          статусы, сколько минут в работе. Без снапшота (бэк старый) — пропускаем.
+          На проверке список тоже показывается — задачи проверки идут тем же путём */}
+      {teamPulseStage(state.stage) && snapshot && (
+        <WaveTaskList snapshot={snapshot} personas={personas ?? {}} />
+      )}
       {/* Правило «любая работа — через задачу»: настройка режима, менять её на ходу нельзя —
           показываем как строку состояния, чтобы поведение штаба не выглядело сюрпризом */}
       <div style={{
@@ -105,7 +190,7 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
         <div style={{ marginTop: 10, paddingTop: 10, borderTop: `1px dashed ${C.divider}` }}>
           {state.stopped ? (
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: FS.xs, color: C.textMuted, lineHeight: 1.4 }}>
-              <Pause size={12} strokeWidth={ICON_STROKE} fill="currentColor" style={{ flexShrink: 0, marginTop: 1 }} />
+                <Pause size={12} strokeWidth={ICON_STROKE} fill="currentColor" style={{ flexShrink: 0, marginTop: 1 }} />
               {TEAM_IMPLEMENT_STOPPED_HINT}
             </div>
           ) : isMobile ? (
@@ -136,7 +221,7 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
           const rect = e.currentTarget.getBoundingClientRect();
           setInfoAnchor(prev => (prev ? null : rect));
         }}
-        title={`${fullText} — ${TEAM_IMPLEMENT_DESCRIPTION}`}
+        title={badgeTitle}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: 6, height,
           padding: '0 9px', borderRadius: R.pill, border: 'none', cursor: 'pointer',
@@ -145,11 +230,10 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
         }}
       >
         <Users size={11} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
-        {text}
+        {badgeText}
         <span style={{
           width: 6, height: 6, borderRadius: '50%', background: dotColor, flexShrink: 0,
-          // Пульс — только у «живых» стадий; у «ждёт задачу» точка статичная
-          ...(tone !== 'idle' ? { animation: `pulsedot ${tone === 'wait' ? '1.2s' : '1.6s'} ease-in-out infinite` } : {}),
+          ...(pulseAnimation ? { animation: pulseAnimation } : {}),
         }} />
       </button>
 
@@ -216,6 +300,126 @@ export function TeamImplementBadge({ state, chatMode, isMobile, onToggleAuto, on
       )}
     </span>
   );
+}
+
+// Блок «Что это значит» в поповере/шторке. Тон по liveness: alive — нейтральный,
+// quiet — янтарный (тишина в пределах нормы), stalled/dead — красный (нужно внимание).
+// Текст готов с бэка в lib/teamImplement.teamPulseMeaning — одной строкой на состояние
+function PulseBlock({ pulse, tone }: {
+  pulse: TeamWavePulse;
+  tone: 'work' | 'wait' | 'idle' | 'warning' | 'danger';
+}) {
+  const bg = tone === 'work' ? C.accentLight
+    : tone === 'warning' ? C.warningBg
+      : tone === 'danger' ? C.dangerBg
+        : C.bgSelected;
+  const fg = tone === 'work' ? C.accent
+    : tone === 'warning' ? C.warningText
+      : tone === 'danger' ? C.dangerText
+        : C.textSecondary;
+  return (
+    <div style={{
+      marginTop: 8, padding: '6px 8px', borderRadius: R.md,
+      background: bg, color: fg,
+      fontSize: FS.xs, lineHeight: 1.4,
+    }}>
+      {teamPulseMeaning(pulse.liveness)}
+    </div>
+  );
+}
+
+// Список задач волны. Только для стадии волны/проверки и при наличии снапшота: бэк
+// старый (без пульса) сюда не доходит — обратная совместимость
+function WaveTaskList({ snapshot, personas }: {
+  snapshot: TeamWaveSnapshot;
+  personas: Record<string, Persona>;
+}) {
+  const tasks = teamWaveTasksSorted(snapshot.tasks);
+  if (tasks.length === 0) return null;
+  return (
+    <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{
+        fontSize: FS.xs, color: C.textMuted, fontWeight: 600,
+        display: 'flex', alignItems: 'center', gap: 5,
+      }}>
+        <ListChecks size={11} strokeWidth={ICON_STROKE} style={{ flexShrink: 0 }} />
+        Задачи волны · {snapshot.tasks.length}
+      </div>
+      {tasks.map(t => (
+        <WaveTaskRow key={t.id} task={t} persona={t.executorPersonaId ? personas[t.executorPersonaId] : undefined} />
+      ))}
+    </div>
+  );
+}
+
+// Строка задачи: исполнитель (аватар/инициалы + имя) — статус — «N мин в работе».
+// Время обновляется раз в минуту (useEffect с setInterval) — дешевле секундных тиков,
+// и точность до минуты соответствует «4 мин назад» в самом бейдже
+function WaveTaskRow({ task, persona }: { task: import('../../types').TeamWaveTask; persona?: Persona }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!task.startedAt || task.status !== 'inProgress') return;
+    const t = setInterval(() => setNow(Date.now()), 60_000);
+    return () => clearInterval(t);
+  }, [task.startedAt, task.status]);
+
+  const name = persona?.name || 'Без исполнителя';
+  const initials = persona
+    ? initialsFromName(persona.name)
+    : '—';
+  const avatarColor = persona?.avatar?.color || C.bgSelected;
+  const statusLabel = teamWaveTaskStatusLabel(task.status);
+  const running = task.status === 'inProgress' && task.startedAt
+    ? teamWaveTaskRunningLabel(task, now)
+    : null;
+
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'center', gap: 7,
+      padding: '4px 6px', borderRadius: R.sm,
+      background: C.bgMain,
+    }}>
+      <span style={{
+        width: 20, height: 20, borderRadius: '50%', flexShrink: 0,
+        display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+        background: avatarColor, color: C.onNavInk,
+        fontSize: 10, fontWeight: 600, fontFamily: FONT.sans,
+      }}>
+        {initials}
+      </span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        fontSize: FS.xs, color: C.textHeading, fontWeight: 600 }}>
+        {task.title}
+      </span>
+      <span style={{
+        fontSize: FS.xs, color: C.textSecondary, flexShrink: 0,
+      }}>
+        {name}
+      </span>
+      <span style={{
+        fontSize: FS.xs, flexShrink: 0,
+        color: task.status === 'inProgress' ? C.accent
+          : task.status === 'done' ? C.successText
+            : C.textMuted,
+        fontWeight: 600,
+      }}>
+        {statusLabel}
+      </span>
+      {running && (
+        <span style={{ fontSize: FS.xs, color: C.textMuted, flexShrink: 0 }}>
+          {running}
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Инициалы для аватара исполнителя: берём первые буквы первых двух слов имени.
+// У латиницы — ASCII, у кириллицы — первые буквы. Дефолт «?» для пустого имени
+function initialsFromName(name: string | undefined | null): string {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/).slice(0, 2);
+  return parts.map(p => p[0] ?? '').join('').toUpperCase() || '?';
 }
 
 // Строка-действие поповера (десктоп): иконка + подпись с hover-подложкой.
